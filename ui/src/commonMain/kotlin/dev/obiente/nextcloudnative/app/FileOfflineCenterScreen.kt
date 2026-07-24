@@ -760,7 +760,7 @@ private fun FolderSyncPairCard(
                 )
             }
             Text(
-                "↔ Nextcloud /${pair.remoteRootPath}",
+                fileSyncRouteLabel(pair.configuration.direction, pair.remoteRootPath),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1355,6 +1355,18 @@ private fun FileSyncDirection.readableSyncDirection(): String = when (this) {
     FileSyncDirection.Bidirectional -> "Two-way"
     FileSyncDirection.DownloadOnly -> "Nextcloud to device"
     FileSyncDirection.UploadOnly -> "Device to Nextcloud"
+}
+
+internal fun fileSyncRouteLabel(
+    direction: FileSyncDirection,
+    remoteRootPath: String,
+): String {
+    val remote = "Nextcloud /${remoteRootPath.trimStart('/')}"
+    return when (direction) {
+        FileSyncDirection.Bidirectional -> "Device ↔ $remote"
+        FileSyncDirection.DownloadOnly -> "$remote → device"
+        FileSyncDirection.UploadOnly -> "Device → $remote"
+    }
 }
 
 private fun MediaSyncFolderKind.readableMediaFolderKind(): String = when (this) {
