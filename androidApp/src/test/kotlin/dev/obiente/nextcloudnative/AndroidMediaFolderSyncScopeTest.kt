@@ -1,11 +1,25 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.FileSyncDirection
+import dev.obiente.nextcloudnative.app.FileSyncConfiguration
+import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
+import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
+import dev.obiente.nextcloudnative.app.FileSyncOperation
+import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.LocalSyncEntry
+import dev.obiente.nextcloudnative.app.RemoteSyncEntry
+import dev.obiente.nextcloudnative.app.SyncEntryKind
+import dev.obiente.nextcloudnative.app.claimNextFileSyncOperation
+import dev.obiente.nextcloudnative.app.resolveFileSyncDecision
+import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class AndroidMediaFolderSyncScopeTest {
@@ -103,5 +117,74 @@ class AndroidMediaFolderSyncScopeTest {
                 FileSyncDirection.Bidirectional,
             ),
         )
+    }
+
+    @Test
+    fun useRemoteTypeConflictCannotDeleteDetectedLocalMedia() {
+        val root = Files.createTempDirectory("media-conflict-").toFile()
+        try {
+            val localFile = root.resolve("photo.jpg").also { it.writeBytes(byteArrayOf(1)) }
+            val pair = FileSyncPair(
+                id = "pair",
+                accountId = "account",
+                localRootId = "media-store://primary/DCIM/Camera",
+                remoteRootPath = "Photos/Camera",
+                configuration = FileSyncConfiguration(
+                    direction = FileSyncDirection.UploadOnly,
+                    deviceLabel = "device",
+                ),
+            )
+            var state = FileSyncCoordinatorState(listOf(pair))
+            state = scanFileSyncPair(
+                state = state,
+                pairId = pair.id,
+                localEntries = listOf(
+                    LocalSyncEntry("photo.jpg", SyncEntryKind.File, "local-revision", size = 1L),
+                ),
+                remoteEntries = listOf(
+                    RemoteSyncEntry("photo.jpg", SyncEntryKind.Directory, "remote-etag"),
+                ),
+                nowEpochMillis = 1L,
+            )
+            val work = state.pairs.single().workItems.single()
+            state = resolveFileSyncDecision(
+                state,
+                pair.id,
+                work.id,
+                FileSyncDecisionChoice.UseRemote,
+            )
+            val command = assertNotNull(
+                claimNextFileSyncOperation(state, pair.id, nowEpochMillis = 2L).command,
+            )
+
+            assertIs<FileSyncOperation.Download>(command.operation)
+            assertFalse(isAndroidFileSyncExecutionAllowed(pair.localRootId, command.operation))
+            val tree = AndroidMediaStoreSyncLocalTree(root)
+            assertFailsWith<UnsupportedOperationException> {
+                tree.delete("photo.jpg", "local-revision")
+            }
+            assertTrue(localFile.exists())
+            assertEquals(byteArrayOf(1).toList(), localFile.readBytes().toList())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun uploaderEnumerationFailsAtOneEntryBeyondItsBound() {
+        val root = Files.createTempDirectory("media-over-limit-").toFile()
+        try {
+            repeat(4) { index ->
+                root.resolve("photo-$index.jpg").writeBytes(byteArrayOf(index.toByte()))
+            }
+
+            val failure = assertFailsWith<IllegalArgumentException> {
+                mediaFolderSyncFiles(root, maximumEntries = 3)
+            }
+
+            assertTrue("too many uploadable files" in failure.message.orEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
     }
 }

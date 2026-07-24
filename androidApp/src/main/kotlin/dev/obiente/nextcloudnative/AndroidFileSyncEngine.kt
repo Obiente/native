@@ -390,6 +390,9 @@ internal class AndroidFileSyncEngine(context: Context) {
     ): FileSyncExecutionSuccess {
         val pair = state.pairs.first { it.id == command.pairId }
         val work = pair.workItems.first { it.id == command.workId }
+        require(isAndroidFileSyncExecutionAllowed(pair.localRootId, command.operation)) {
+            "Detected media folders permit upload operations only."
+        }
         return when (val operation = command.operation) {
             is FileSyncOperation.Upload -> {
                 val source = requireNotNull(work.observedLocal)
@@ -549,3 +552,9 @@ internal fun supportsAndroidFileSyncDirection(
     direction: FileSyncDirection,
 ): Boolean =
     !localRootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX) || direction == FileSyncDirection.UploadOnly
+
+internal fun isAndroidFileSyncExecutionAllowed(
+    localRootId: String,
+    operation: FileSyncOperation,
+): Boolean =
+    !localRootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX) || operation is FileSyncOperation.Upload

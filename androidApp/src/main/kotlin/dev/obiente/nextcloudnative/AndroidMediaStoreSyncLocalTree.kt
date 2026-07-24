@@ -95,11 +95,7 @@ internal class AndroidMediaStoreSyncLocalTree(
     }
 
     override fun delete(path: String, expectedLocalRevision: String) {
-        val current = requireNotNull(resolve(path)) { "The local item was already removed." }
-        require(current.entry.revision == expectedLocalRevision) {
-            "The local item changed after the sync scan."
-        }
-        require(current.uri.toFile().deleteRecursively()) { "The local item could not be removed." }
+        throw UnsupportedOperationException("Detected media folders are upload-only.")
     }
 
     override fun resolve(path: String): AndroidLocalSyncDocument? {
@@ -193,12 +189,23 @@ internal const val MAX_MEDIA_FOLDER_SYNC_ENTRIES = 20_000
  * Only direct, visible, regular media files are included. Subfolders, hidden files, sidecars,
  * documents, and temporary files are deliberately outside automatic media upload.
  */
-internal fun mediaFolderSyncFiles(root: File): List<File> {
+internal fun mediaFolderSyncFiles(
+    root: File,
+    maximumEntries: Int = MAX_MEDIA_FOLDER_SYNC_ENTRIES,
+): List<File> {
+    require(maximumEntries > 0)
     val result = mutableListOf<File>()
+    var exceedsLimit = false
     forEachMediaFolderSyncFile(root) {
-        result += it
-        true
+        if (result.size >= maximumEntries) {
+            exceedsLimit = true
+            false
+        } else {
+            result += it
+            true
+        }
     }
+    require(!exceedsLimit) { "The local media folder contains too many uploadable files." }
     return result.sortedBy { it.name.lowercase() }
 }
 
