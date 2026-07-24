@@ -7,6 +7,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import okhttp3.OkHttpClient
+import okio.Buffer
 
 class AndroidProjectContentClientTest {
     @Test
@@ -20,38 +24,116 @@ class AndroidProjectContentClientTest {
     }
 
     @Test
-    fun failedUpdateVerificationRemovesPartialApk() {
+    fun updateDownloadResumesFromAnExistingPartialFile() {
         val directory = Files.createTempDirectory("project-content-update-test").toFile()
         val temporary = directory.resolve("update.apk.part")
-        val staged = directory.resolve("update.apk")
-        try {
-            assertFailsWith<IllegalStateException> {
-                stageVerifiedUpdate(temporary, staged) {
-                    temporary.writeText("unverified")
-                    error("verification failed")
-                }
-            }
+        MockWebServer().use { server ->
+            temporary.writeText("abc")
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(206)
+                    .setHeader("Content-Range", "bytes 3-5/6")
+                    .body("def")
+                    .build(),
+            )
+            server.start()
+            val progress = mutableListOf<Long>()
+            try {
+                downloadUpdateApk(
+                    client = OkHttpClient(),
+                    url = server.url("/update.apk").toString(),
+                    expectedSize = 6,
+                    target = temporary,
+                    isCancelled = { false },
+                    onProgress = progress::add,
+                )
 
-            assertFalse(temporary.exists())
-            assertFalse(staged.exists())
-        } finally {
-            directory.deleteRecursively()
+                assertEquals("bytes=3-", server.takeRequest().headers["Range"])
+                assertEquals("abcdef", temporary.readText())
+                assertEquals(3, progress.first())
+                assertEquals(6, progress.last())
+            } finally {
+                directory.deleteRecursively()
+            }
         }
     }
 
     @Test
-    fun successfulUpdateStagingPreservesVerifiedApk() {
+    fun serverIgnoringRangeRestartsWithoutDuplicatingBytes() {
         val directory = Files.createTempDirectory("project-content-update-test").toFile()
         val temporary = directory.resolve("update.apk.part")
-        val staged = directory.resolve("update.apk")
-        try {
-            stageVerifiedUpdate(temporary, staged) {
-                temporary.writeText("verified")
-            }
+        MockWebServer().use { server ->
+            temporary.writeText("abc")
+            server.enqueue(MockResponse.Builder().code(200).body("abcdef").build())
+            server.start()
+            try {
+                downloadUpdateApk(
+                    client = OkHttpClient(),
+                    url = server.url("/update.apk").toString(),
+                    expectedSize = 6,
+                    target = temporary,
+                    isCancelled = { false },
+                )
 
+                assertEquals("bytes=3-", server.takeRequest().headers["Range"])
+                assertEquals("abcdef", temporary.readText())
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    fun cancelledDownloadRetainsSafeBytesForResume() {
+        val directory = Files.createTempDirectory("project-content-update-test").toFile()
+        val temporary = directory.resolve("update.apk.part")
+        val payload = ByteArray(96 * 1024) { index -> (index % 251).toByte() }
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(200)
+                    .body(Buffer().write(payload))
+                    .build(),
+            )
+            server.start()
+            var cancelled = false
+            try {
+                assertFailsWith<UpdateDownloadCancelledException> {
+                    downloadUpdateApk(
+                        client = OkHttpClient(),
+                        url = server.url("/update.apk").toString(),
+                        expectedSize = payload.size.toLong(),
+                        target = temporary,
+                        isCancelled = { cancelled },
+                        onProgress = { downloaded -> if (downloaded > 0) cancelled = true },
+                    )
+                }
+
+                assertTrue(temporary.isFile)
+                assertTrue(temporary.length() in 1 until payload.size.toLong())
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    fun rejectedPackageDiscardsPartialWhileRecoverableDownloadRetainsIt() {
+        val directory = Files.createTempDirectory("project-content-update-test").toFile()
+        val temporary = directory.resolve("update.apk.part")
+        try {
+            temporary.writeText("partial")
+            assertEquals(
+                temporary.length(),
+                settleUpdatePartial(temporary, expectedSize = 64, retain = true),
+            )
+            assertTrue(temporary.isFile)
+
+            assertEquals(
+                0,
+                settleUpdatePartial(temporary, expectedSize = 64, retain = false),
+            )
             assertFalse(temporary.exists())
-            assertTrue(staged.isFile)
-            assertEquals("verified", staged.readText())
         } finally {
             directory.deleteRecursively()
         }
@@ -82,6 +164,24 @@ class AndroidProjectContentClientTest {
         assertEquals(
             AppDistributionChannel.Development,
             classifyAndroidDistribution(null, debugBuild = true),
+        )
+        assertTrue(
+            canCheckAndroidDirectUpdates(
+                AppDistributionChannel.DirectApk,
+                directApkBuild = true,
+            ),
+        )
+        assertFalse(
+            canCheckAndroidDirectUpdates(
+                AppDistributionChannel.DirectApk,
+                directApkBuild = false,
+            ),
+        )
+        assertFalse(
+            canCheckAndroidDirectUpdates(
+                AppDistributionChannel.GooglePlay,
+                directApkBuild = true,
+            ),
         )
     }
 }

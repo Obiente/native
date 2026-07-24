@@ -14,6 +14,7 @@ import dev.obiente.nextcloudnative.app.AndroidDirectRelease
 import dev.obiente.nextcloudnative.app.AppDistributionChannel
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
+import dev.obiente.nextcloudnative.app.AppUpdateInstallState
 import dev.obiente.nextcloudnative.app.AppUpdateSupport
 import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_APK_BYTES
 import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_METADATA_BYTES
@@ -26,10 +27,17 @@ import dev.obiente.nextcloudnative.app.parseProjectNewsFeed
 import dev.obiente.nextcloudnative.app.validateAndroidDirectRelease
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -57,6 +65,10 @@ internal class AndroidProjectContentClient(
     private val client = buildProjectContentHttpClient()
     private val newsCache = File(appContext.cacheDir, "project-content/news-feed-v1.json")
     private val updateDirectory = File(appContext.cacheDir, "app-updates")
+    private val updateMutex = Mutex()
+    private val mutableUpdateState = MutableStateFlow<AppUpdateInstallState>(AppUpdateInstallState.Idle)
+    @Volatile private var activeUpdateCall: Call? = null
+    @Volatile private var updateCancellationRequested = false
 
     fun support(): AppUpdateSupport {
         val source = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -70,14 +82,20 @@ internal class AndroidProjectContentClient(
             appContext.packageManager.getInstallerPackageName(appContext.packageName)
         }
         val channel = classifyAndroidDistribution(source, BuildConfig.DEBUG)
+        val directUpdatesEnabled = canCheckAndroidDirectUpdates(
+            channel = channel,
+            directApkBuild = BuildConfig.DIRECT_APK_UPDATES,
+        )
         return AppUpdateSupport(
             channel = channel,
             currentVersionName = BuildConfig.VERSION_NAME,
             currentVersionCode = BuildConfig.VERSION_CODE.toLong(),
-            canCheckDirectUpdates = channel == AppDistributionChannel.DirectApk,
+            canCheckDirectUpdates = directUpdatesEnabled,
             explanation = when (channel) {
-                AppDistributionChannel.DirectApk ->
+                AppDistributionChannel.DirectApk if directUpdatesEnabled ->
                     "This APK was installed directly. Updates are checked securely by Nextcloud Native."
+                AppDistributionChannel.DirectApk ->
+                    "This build does not include direct APK installation. Use its distribution channel for updates."
                 AppDistributionChannel.GooglePlay ->
                     "Google Play owns updates for this installation."
                 AppDistributionChannel.FDroid ->
@@ -90,6 +108,15 @@ internal class AndroidProjectContentClient(
                     "This installation source cannot use direct in-app updates."
             },
         )
+    }
+
+    fun observeUpdateState(): Flow<AppUpdateInstallState> = mutableUpdateState.asStateFlow()
+
+    fun cancelUpdate(): Boolean {
+        if (mutableUpdateState.value !is AppUpdateInstallState.Downloading) return false
+        updateCancellationRequested = true
+        activeUpdateCall?.cancel()
+        return true
     }
 
     fun loadNews(forceRefresh: Boolean): ProjectNewsResult {
@@ -139,6 +166,18 @@ internal class AndroidProjectContentClient(
     }
 
     suspend fun beginUpdate(release: AndroidDirectRelease): AppUpdateInstallResult {
+        if (!updateMutex.tryLock()) {
+            return AppUpdateInstallResult.Rejected("An app update is already in progress.")
+        }
+        try {
+            return beginUpdateLocked(release)
+        } finally {
+            activeUpdateCall = null
+            updateMutex.unlock()
+        }
+    }
+
+    private suspend fun beginUpdateLocked(release: AndroidDirectRelease): AppUpdateInstallResult {
         val support = support()
         if (!support.canCheckDirectUpdates) {
             return AppUpdateInstallResult.Rejected(support.explanation)
@@ -150,6 +189,13 @@ internal class AndroidProjectContentClient(
         val foregroundActivity = activity
             ?: return AppUpdateInstallResult.Rejected("Open the app before installing an update.")
         if (!appContext.packageManager.canRequestPackageInstalls()) {
+            val message =
+                "Allow installs from Nextcloud Native, then return and confirm the update again."
+            mutableUpdateState.value = AppUpdateInstallState.PermissionRequired(
+                versionName = release.versionName,
+                versionCode = release.versionCode,
+                message = message,
+            )
             withContext(Dispatchers.Main.immediate) {
                 foregroundActivity.startActivity(
                     Intent(
@@ -158,19 +204,51 @@ internal class AndroidProjectContentClient(
                     ),
                 )
             }
-            return AppUpdateInstallResult.PermissionRequired(
-                "Allow installs from Nextcloud Native, then return and confirm the update again.",
-            )
+            return AppUpdateInstallResult.PermissionRequired(message)
         }
 
-        return runCatching {
-            updateDirectory.mkdirs()
-            val staged = File(updateDirectory, "nextcloud-native-${release.versionCode}.apk")
-            val temporary = File(updateDirectory, "${staged.name}.part")
-            stageVerifiedUpdate(temporary, staged) {
-                downloadApk(release, temporary)
-                verifyDownloadedApk(release, temporary)
-            }
+        updateDirectory.mkdirs()
+        val staged = File(updateDirectory, "nextcloud-native-${release.versionCode}.apk")
+        val temporary = File(updateDirectory, "${staged.name}.part")
+        updateCancellationRequested = false
+        return try {
+            val resumedFromBytes = settleUpdatePartial(
+                file = temporary,
+                expectedSize = release.apkSize,
+                retain = true,
+            )
+            mutableUpdateState.value = release.downloadingState(
+                downloadedBytes = resumedFromBytes,
+                resumedFromBytes = resumedFromBytes,
+            )
+            var lastReportedBytes = resumedFromBytes
+            downloadUpdateApk(
+                client = client,
+                url = release.apkUrl,
+                expectedSize = release.apkSize,
+                target = temporary,
+                isCancelled = { updateCancellationRequested },
+                onCallChanged = { activeUpdateCall = it },
+                onProgress = { downloadedBytes ->
+                    if (
+                        downloadedBytes == release.apkSize ||
+                        downloadedBytes - lastReportedBytes >= UPDATE_PROGRESS_STEP_BYTES
+                    ) {
+                        lastReportedBytes = downloadedBytes
+                        mutableUpdateState.value = release.downloadingState(
+                            downloadedBytes = downloadedBytes,
+                            resumedFromBytes = resumedFromBytes,
+                        )
+                    }
+                },
+            )
+            mutableUpdateState.value = AppUpdateInstallState.Verifying(
+                versionName = release.versionName,
+                versionCode = release.versionCode,
+            )
+            verifyDownloadedApk(release, temporary)
+            if (staged.exists()) check(staged.delete())
+            check(temporary.renameTo(staged)) { "Could not stage the verified update." }
             val uri = FileProvider.getUriForFile(
                 appContext,
                 "${appContext.packageName}.sharedfiles",
@@ -185,11 +263,68 @@ internal class AndroidProjectContentClient(
                     },
                 )
             }
+            mutableUpdateState.value = AppUpdateInstallState.ConfirmationOpened(
+                versionName = release.versionName,
+                versionCode = release.versionCode,
+            )
             AppUpdateInstallResult.ConfirmationOpened
-        }.getOrElse { failure ->
+        } catch (_: UpdateDownloadCancelledException) {
+            val retainedBytes = settleUpdatePartial(
+                file = temporary,
+                expectedSize = release.apkSize,
+                retain = true,
+            )
+            mutableUpdateState.value = AppUpdateInstallState.Cancelled(
+                versionName = release.versionName,
+                versionCode = release.versionCode,
+                downloadedBytes = retainedBytes,
+                canResume = retainedBytes in 1 until release.apkSize,
+            )
+            AppUpdateInstallResult.Cancelled
+        } catch (cancelled: CancellationException) {
+            activeUpdateCall?.cancel()
+            val retainedBytes = settleUpdatePartial(
+                file = temporary,
+                expectedSize = release.apkSize,
+                retain = true,
+            )
+            mutableUpdateState.value = AppUpdateInstallState.Cancelled(
+                versionName = release.versionName,
+                versionCode = release.versionCode,
+                downloadedBytes = retainedBytes,
+                canResume = retainedBytes in 1 until release.apkSize,
+            )
+            throw cancelled
+        } catch (failure: Exception) {
+            val recoverable = failure is IOException
+            val retainedBytes = settleUpdatePartial(
+                file = temporary,
+                expectedSize = release.apkSize,
+                retain = recoverable,
+            )
+            mutableUpdateState.value = AppUpdateInstallState.Failed(
+                versionName = release.versionName,
+                versionCode = release.versionCode,
+                message = failure.message ?: "The update could not be verified.",
+                downloadedBytes = retainedBytes,
+                canResume = recoverable && retainedBytes in 1 until release.apkSize,
+            )
             AppUpdateInstallResult.Rejected(failure.message ?: "The update could not be verified.")
+        } finally {
+            updateCancellationRequested = false
         }
     }
+
+    private fun AndroidDirectRelease.downloadingState(
+        downloadedBytes: Long,
+        resumedFromBytes: Long,
+    ) = AppUpdateInstallState.Downloading(
+        versionName = versionName,
+        versionCode = versionCode,
+        downloadedBytes = downloadedBytes,
+        totalBytes = apkSize,
+        resumedFromBytes = resumedFromBytes,
+    )
 
     private fun readNewsCache() = runCatching {
         if (!newsCache.isFile || newsCache.length() > MAX_PROJECT_NEWS_FEED_BYTES) return@runCatching null
@@ -214,30 +349,6 @@ internal class AndroidProjectContentClient(
                     output.write(buffer, 0, read)
                 }
                 output.toByteArray()
-            }
-        }
-    }
-
-    private fun downloadApk(release: AndroidDirectRelease, target: File) {
-        check(release.apkUrl.startsWith("https://nc-native.obiente.dev/releases/android/"))
-        client.newCall(Request.Builder().url(release.apkUrl).get().build()).execute().use { response ->
-            check(response.isSuccessful) { "Update download failed (HTTP ${response.code})." }
-            val body = requireNotNull(response.body)
-            check(body.contentLength() == release.apkSize) { "Update size does not match its metadata." }
-            check(release.apkSize <= MAX_ANDROID_UPDATE_APK_BYTES)
-            FileOutputStream(target).use { output ->
-                body.byteStream().use { input ->
-                    val buffer = ByteArray(32 * 1024)
-                    var total = 0L
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        total += read
-                        check(total <= release.apkSize && total <= MAX_ANDROID_UPDATE_APK_BYTES)
-                        output.write(buffer, 0, read)
-                    }
-                    check(total == release.apkSize)
-                }
             }
         }
     }
@@ -319,21 +430,113 @@ internal class AndroidProjectContentClient(
         const val PREFERENCES = "project-content-v1"
         const val KEY_NEWS_FETCHED_AT = "news-fetched-at"
         const val NEWS_CACHE_TTL_MILLIS = 6 * 60 * 60 * 1_000L
+        const val UPDATE_PROGRESS_STEP_BYTES = 256L * 1024L
     }
 }
 
-internal inline fun stageVerifiedUpdate(
-    temporary: File,
-    staged: File,
-    downloadAndVerify: () -> Unit,
+internal class UpdateDownloadCancelledException : IOException("Update download cancelled.")
+
+internal fun settleUpdatePartial(
+    file: File,
+    expectedSize: Long,
+    retain: Boolean,
+): Long {
+    val length = file.takeIf(File::isFile)?.length() ?: return 0
+    if (!retain || length !in 0..expectedSize) {
+        check(file.delete()) { "Could not discard an invalid partial update." }
+        return 0
+    }
+    return length
+}
+
+internal fun downloadUpdateApk(
+    client: OkHttpClient,
+    url: String,
+    expectedSize: Long,
+    target: File,
+    isCancelled: () -> Boolean,
+    onCallChanged: (Call?) -> Unit = {},
+    onProgress: (Long) -> Unit = {},
 ) {
-    temporary.delete()
+    require(expectedSize in 1..MAX_ANDROID_UPDATE_APK_BYTES)
+    target.parentFile?.mkdirs()
+    var existingBytes = target.takeIf(File::isFile)?.length() ?: 0L
+    if (existingBytes !in 0..expectedSize) {
+        check(target.delete()) { "Could not discard an invalid partial update." }
+        existingBytes = 0
+    }
+    onProgress(existingBytes)
+    if (existingBytes == expectedSize) return
+    if (isCancelled()) throw UpdateDownloadCancelledException()
+
+    val request = Request.Builder()
+        .url(url)
+        .get()
+        .header("Accept-Encoding", "identity")
+        .apply {
+            if (existingBytes > 0) header("Range", "bytes=$existingBytes-")
+        }
+        .build()
+    val call = client.newCall(request)
+    onCallChanged(call)
     try {
-        downloadAndVerify()
-        if (staged.exists()) check(staged.delete())
-        check(temporary.renameTo(staged)) { "Could not stage the verified update." }
+        call.execute().use { response ->
+            if (!response.isSuccessful) {
+                val message = "Update download failed (HTTP ${response.code})."
+                if (response.code == 408 || response.code == 429 || response.code >= 500) {
+                    throw IOException(message)
+                }
+                error(message)
+            }
+            val body = requireNotNull(response.body) { "Update download returned no content." }
+            val append = existingBytes > 0 && response.code == 206
+            if (response.code == 206) {
+                check(existingBytes > 0) { "Update server returned an unexpected partial response." }
+                check(
+                    response.header("Content-Range") ==
+                        "bytes $existingBytes-${expectedSize - 1}/$expectedSize",
+                ) {
+                    "Update server returned an invalid byte range."
+                }
+                check(body.contentLength() in setOf(-1L, expectedSize - existingBytes)) {
+                    "Update byte range size does not match its metadata."
+                }
+            } else {
+                check(response.code == 200) { "Update server returned an unsupported response." }
+                check(body.contentLength() in setOf(-1L, expectedSize)) {
+                    "Update size does not match its metadata."
+                }
+                existingBytes = 0
+            }
+
+            FileOutputStream(target, append).use { output ->
+                body.byteStream().use { input ->
+                    val buffer = ByteArray(32 * 1024)
+                    var total = existingBytes
+                    while (true) {
+                        if (isCancelled()) {
+                            call.cancel()
+                            throw UpdateDownloadCancelledException()
+                        }
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        check(total <= expectedSize && total <= MAX_ANDROID_UPDATE_APK_BYTES) {
+                            "Update download exceeded its declared size."
+                        }
+                        output.write(buffer, 0, read)
+                        onProgress(total)
+                    }
+                    check(total == expectedSize) { "Update download ended before it was complete." }
+                }
+                output.fd.sync()
+            }
+        }
+    } catch (failure: IOException) {
+        if (isCancelled()) throw UpdateDownloadCancelledException()
+        throw failure
     } finally {
-        temporary.delete()
+        onCallChanged(null)
     }
 }
 
@@ -353,3 +556,8 @@ internal fun classifyAndroidDistribution(
         ) -> AppDistributionChannel.DirectApk
     else -> AppDistributionChannel.OtherStore
 }
+
+internal fun canCheckAndroidDirectUpdates(
+    channel: AppDistributionChannel,
+    directApkBuild: Boolean,
+): Boolean = directApkBuild && channel == AppDistributionChannel.DirectApk

@@ -48,6 +48,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -7109,9 +7110,28 @@ private fun ProjectNewsArticleScreen(
 private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
     val scope = rememberCoroutineScope()
     val support = remember(services) { services.appUpdateSupport() }
+    val updateState by remember(services) {
+        services.observeAppUpdateInstallState()
+    }.collectAsState(AppUpdateInstallState.Idle)
     var checking by remember { mutableStateOf(false) }
+    var installing by remember { mutableStateOf(false) }
     var checkResult by remember { mutableStateOf<AppUpdateCheckResult?>(null) }
     var installMessage by remember { mutableStateOf<String?>(null) }
+    fun beginInstall(release: AndroidDirectRelease) {
+        installing = true
+        installMessage = null
+        scope.launch {
+            installMessage = when (val install = services.beginAppUpdate(release)) {
+                AppUpdateInstallResult.ConfirmationOpened ->
+                    "Android opened the update confirmation."
+                AppUpdateInstallResult.Cancelled ->
+                    "Download paused. You can resume it without starting over."
+                is AppUpdateInstallResult.PermissionRequired -> install.message
+                is AppUpdateInstallResult.Rejected -> install.message
+            }
+            installing = false
+        }
+    }
     Surface(
         modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Small),
         color = NextcloudTheme.colors.appTile,
@@ -7168,26 +7188,111 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
             )
             when (val checked = checkResult) {
                 is AppUpdateCheckResult.Available -> {
+                    val release = checked.release
+                    val releaseState = updateState.takeIf { state ->
+                        when (state) {
+                            is AppUpdateInstallState.Downloading -> state.versionCode == release.versionCode
+                            is AppUpdateInstallState.Verifying -> state.versionCode == release.versionCode
+                            is AppUpdateInstallState.PermissionRequired -> state.versionCode == release.versionCode
+                            is AppUpdateInstallState.Cancelled -> state.versionCode == release.versionCode
+                            is AppUpdateInstallState.Failed -> state.versionCode == release.versionCode
+                            is AppUpdateInstallState.ConfirmationOpened -> state.versionCode == release.versionCode
+                            AppUpdateInstallState.Idle -> false
+                        }
+                    } ?: AppUpdateInstallState.Idle
                     Text(
-                        "Version ${checked.release.versionName} is available.",
+                        "Version ${release.versionName} is available.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    Button(
-                        onClick = {
-                            checking = true
-                            scope.launch {
-                                installMessage = when (val install = services.beginAppUpdate(checked.release)) {
-                                    AppUpdateInstallResult.ConfirmationOpened ->
-                                        "Android opened the update confirmation."
-                                    is AppUpdateInstallResult.PermissionRequired -> install.message
-                                    is AppUpdateInstallResult.Rejected -> install.message
-                                }
-                                checking = false
+                    when (releaseState) {
+                        is AppUpdateInstallState.Downloading -> {
+                            val progress =
+                                (releaseState.downloadedBytes.toDouble() / releaseState.totalBytes.toDouble())
+                                    .coerceIn(0.0, 1.0)
+                                    .toFloat()
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier.fillMaxWidth().height(6.dp),
+                            )
+                            Text(
+                                buildString {
+                                    append(formatBytes(releaseState.downloadedBytes))
+                                    append(" of ")
+                                    append(formatBytes(releaseState.totalBytes))
+                                    if (releaseState.resumedFromBytes > 0) append(" · resumed")
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            OutlinedButton(onClick = { services.cancelAppUpdate() }) {
+                                Text("Pause download")
                             }
-                        },
-                        enabled = !checking,
-                    ) {
-                        Text("Download, verify, and review")
+                        }
+                        is AppUpdateInstallState.Verifying -> {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            Text(
+                                "Download complete. Verifying package and signing certificate…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        is AppUpdateInstallState.Cancelled -> {
+                            Text(
+                                if (releaseState.canResume) {
+                                    "${formatBytes(releaseState.downloadedBytes)} saved for resume."
+                                } else {
+                                    "The download was paused before any data was saved."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Button(
+                                onClick = { beginInstall(release) },
+                                enabled = !installing,
+                            ) {
+                                Text(if (releaseState.canResume) "Resume download" else "Retry download")
+                            }
+                        }
+                        is AppUpdateInstallState.Failed -> {
+                            Text(
+                                releaseState.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Button(
+                                onClick = { beginInstall(release) },
+                                enabled = !installing,
+                            ) {
+                                Text(if (releaseState.canResume) "Resume download" else "Retry download")
+                            }
+                        }
+                        is AppUpdateInstallState.PermissionRequired -> {
+                            Text(
+                                releaseState.message,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Button(
+                                onClick = { beginInstall(release) },
+                                enabled = !installing,
+                            ) {
+                                Text("Continue update")
+                            }
+                        }
+                        is AppUpdateInstallState.ConfirmationOpened -> Text(
+                            "Android opened the update confirmation.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NextcloudTheme.colors.success,
+                        )
+                        AppUpdateInstallState.Idle -> Button(
+                            onClick = { beginInstall(release) },
+                            enabled = !installing,
+                        ) {
+                            if (installing) {
+                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                            } else {
+                                Text("Download, verify, and review")
+                            }
+                        }
                     }
                 }
                 is AppUpdateCheckResult.Current -> Text(

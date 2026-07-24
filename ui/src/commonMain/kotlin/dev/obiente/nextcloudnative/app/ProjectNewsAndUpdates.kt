@@ -53,6 +53,49 @@ data class AppUpdateSupport(
     val explanation: String,
 )
 
+sealed interface AppUpdateInstallState {
+    data object Idle : AppUpdateInstallState
+
+    data class Downloading(
+        val versionName: String,
+        val versionCode: Long,
+        val downloadedBytes: Long,
+        val totalBytes: Long,
+        val resumedFromBytes: Long,
+    ) : AppUpdateInstallState
+
+    data class Verifying(
+        val versionName: String,
+        val versionCode: Long,
+    ) : AppUpdateInstallState
+
+    data class PermissionRequired(
+        val versionName: String,
+        val versionCode: Long,
+        val message: String,
+    ) : AppUpdateInstallState
+
+    data class Cancelled(
+        val versionName: String,
+        val versionCode: Long,
+        val downloadedBytes: Long,
+        val canResume: Boolean,
+    ) : AppUpdateInstallState
+
+    data class Failed(
+        val versionName: String,
+        val versionCode: Long,
+        val message: String,
+        val downloadedBytes: Long,
+        val canResume: Boolean,
+    ) : AppUpdateInstallState
+
+    data class ConfirmationOpened(
+        val versionName: String,
+        val versionCode: Long,
+    ) : AppUpdateInstallState
+}
+
 @Serializable
 data class AndroidDirectRelease(
     val schemaVersion: Int,
@@ -78,6 +121,7 @@ sealed interface AppUpdateCheckResult {
 
 sealed interface AppUpdateInstallResult {
     data object ConfirmationOpened : AppUpdateInstallResult
+    data object Cancelled : AppUpdateInstallResult
     data class PermissionRequired(val message: String) : AppUpdateInstallResult
     data class Rejected(val message: String) : AppUpdateInstallResult
 }

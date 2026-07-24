@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.serialization.Serializable
 
 enum class ThemePreference {
@@ -316,6 +317,10 @@ interface NextcloudPlatformServices {
     suspend fun checkForAppUpdate(): AppUpdateCheckResult =
         AppUpdateCheckResult.Unavailable(appUpdateSupport())
 
+    /** Observable direct-APK download, verification, cancellation, and retry state. */
+    fun observeAppUpdateInstallState(): Flow<AppUpdateInstallState> =
+        flowOf(AppUpdateInstallState.Idle)
+
     /**
      * Downloads and verifies one direct-APK release before opening the platform confirmation flow.
      *
@@ -323,6 +328,9 @@ interface NextcloudPlatformServices {
      */
     suspend fun beginAppUpdate(release: AndroidDirectRelease): AppUpdateInstallResult =
         AppUpdateInstallResult.Rejected("Direct app updates are unavailable on this platform.")
+
+    /** Cancels the active direct-APK download while retaining a safe resumable partial file. */
+    fun cancelAppUpdate(): Boolean = false
 
     /** True only when this platform has durable app-private offline file storage and execution. */
     val supportsFileOfflineStorage: Boolean get() = false

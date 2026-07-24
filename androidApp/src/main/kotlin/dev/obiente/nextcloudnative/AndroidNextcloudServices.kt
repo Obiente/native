@@ -71,6 +71,7 @@ import dev.obiente.nextcloudnative.app.PlatformCapabilityStatus
 import dev.obiente.nextcloudnative.app.AndroidDirectRelease
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
+import dev.obiente.nextcloudnative.app.AppUpdateInstallState
 import dev.obiente.nextcloudnative.app.AppUpdateSupport
 import dev.obiente.nextcloudnative.app.ProjectNewsResult
 import dev.obiente.nextcloudnative.app.PeopleMutationSurface
@@ -175,8 +176,13 @@ internal class AndroidNextcloudServices(
     override suspend fun checkForAppUpdate(): AppUpdateCheckResult =
         withContext(Dispatchers.IO) { projectContent.checkForUpdate() }
 
+    override fun observeAppUpdateInstallState(): Flow<AppUpdateInstallState> =
+        projectContent.observeUpdateState()
+
     override suspend fun beginAppUpdate(release: AndroidDirectRelease): AppUpdateInstallResult =
         withContext(Dispatchers.IO) { projectContent.beginUpdate(release) }
+
+    override fun cancelAppUpdate(): Boolean = projectContent.cancelUpdate()
 
     override fun loadThemePreference(): ThemePreference = runCatching {
         ThemePreference.valueOf(preferences.getString(KEY_THEME, ThemePreference.System.name).orEmpty())
