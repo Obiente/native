@@ -56,6 +56,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -70,6 +71,7 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -88,6 +90,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudNavigationRail
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
+import dev.obiente.nextcloudnative.app.design.NextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudNavigationStyle
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
@@ -293,31 +296,52 @@ fun NextcloudNativeApp(
  */
 @Composable
 fun NextcloudNativeMarketingCapture(
-    presentation: NextcloudPresentation,
+    scenario: MarketingCaptureScenario,
+    assets: MarketingCaptureAssets,
     fixture: MarketingDemoFixture = nextcloudNativeMarketingFixture,
 ) {
     NextcloudNativeTheme(darkTheme = true) {
         NextcloudAppBackground {
-            val serverInfo = remember(fixture) { fixture.serverInfo() }
-            RootShell(
-                presentation = presentation,
-                selected = NextcloudDestination.Home,
-                onSelected = {},
-                identity = NextcloudDesktopIdentity(
-                    displayName = fixture.displayName,
-                    cloudName = fixture.cloudName,
+            val desktop = scenario.presentation == NextcloudPresentation.Desktop
+            CompositionLocalProvider(
+                LocalNextcloudWorkspaceCapabilities provides NextcloudWorkspaceCapabilities(
+                    isDesktop = desktop,
+                    usesDenseControls = desktop,
+                    supportsAuxiliaryPane = desktop,
                 ),
             ) {
-                HomeScreen(
-                    serverInfo = serverInfo,
-                    error = null,
-                    lastOpenedAppId = "files",
-                    onRetry = {},
-                    onSettings = {},
-                    onSearch = {},
-                    onApps = {},
-                    onOpenApp = {},
-                )
+                when (scenario) {
+                    MarketingCaptureScenario.ObsidianSync -> MarketingObsidianSyncScenario()
+                    MarketingCaptureScenario.MediaBackup -> MarketingMediaBackupScenario()
+                    MarketingCaptureScenario.AdaptiveApp -> MarketingAdaptiveAppScenario()
+                    MarketingCaptureScenario.DesktopHome,
+                    MarketingCaptureScenario.MobileHome,
+                    -> {
+                        val serverInfo = remember(fixture) { fixture.serverInfo() }
+                        RootShell(
+                            presentation = scenario.presentation,
+                            selected = NextcloudDestination.Home,
+                            onSelected = {},
+                            identity = NextcloudDesktopIdentity(
+                                displayName = fixture.displayName,
+                                cloudName = fixture.cloudName,
+                                avatar = assets.avatar,
+                            ),
+                        ) {
+                            HomeScreen(
+                                serverInfo = serverInfo,
+                                error = null,
+                                lastOpenedAppId = "files",
+                                onRetry = {},
+                                onSettings = {},
+                                onSearch = {},
+                                onApps = {},
+                                onOpenApp = {},
+                                marketingAvatar = assets.avatar,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -900,9 +924,15 @@ private fun HomeScreen(
     onSearch: () -> Unit,
     onApps: () -> Unit,
     onOpenApp: (NextcloudAppEntry) -> Unit,
+    marketingAvatar: ImageBitmap? = null,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        ProductHeader(title = "Nextcloud Native", onSettings = onSettings, onSearch = onSearch)
+        ProductHeader(
+            title = "Nextcloud Native",
+            onSettings = onSettings,
+            onSearch = onSearch,
+            accountAvatar = marketingAvatar,
+        )
         when {
             error != null -> ErrorMessage(error, onRetry)
             serverInfo == null -> LoadingMessage("Discovering your cloud…")
@@ -6995,7 +7025,11 @@ private fun ProjectNewsScreen(
                             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                         ) {
                             Text(
-                                article.publishedDate,
+                                if (article.lastUpdated != null) {
+                                    "Published ${article.publishedDate} · Updated ${article.lastUpdated}"
+                                } else {
+                                    article.publishedDate
+                                },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary,
                             )
@@ -7042,7 +7076,11 @@ private fun ProjectNewsArticleScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(
             title = article.title,
-            subtitle = article.publishedDate,
+            subtitle = if (article.lastUpdated != null) {
+                "Published ${article.publishedDate} · Updated ${article.lastUpdated}"
+            } else {
+                article.publishedDate
+            },
             onBack = onBack,
         )
         LazyColumn(
@@ -7455,6 +7493,7 @@ private fun ProductHeader(
     onSettings: (() -> Unit)? = null,
     onSearch: (() -> Unit)? = null,
     showSettings: Boolean = true,
+    accountAvatar: ImageBitmap? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = NextcloudSpacing.XLarge),
@@ -7468,12 +7507,21 @@ private fun ProductHeader(
                     IconButton(onClick = it) { Icon(NextcloudIcons.Search, contentDescription = "Search Nextcloud") }
                 }
                 Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                    Icon(
-                        NextcloudIcons.Profile,
-                        contentDescription = "Account",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(8.dp).size(22.dp),
-                    )
+                    if (accountAvatar != null) {
+                        Image(
+                            bitmap = accountAvatar,
+                            contentDescription = "Obiente account",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(38.dp).clip(CircleShape),
+                        )
+                    } else {
+                        Icon(
+                            NextcloudIcons.Profile,
+                            contentDescription = "Account",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(8.dp).size(22.dp),
+                        )
+                    }
                 }
                 onSettings?.let {
                     IconButton(onClick = it) { Icon(NextcloudIcons.Settings, contentDescription = "Settings") }

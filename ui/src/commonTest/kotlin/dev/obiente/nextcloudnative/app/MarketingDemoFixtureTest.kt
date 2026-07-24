@@ -12,6 +12,8 @@ class MarketingDemoFixtureTest {
 
         assertEquals("https://fixture.invalid", server.serverUrl)
         assertEquals("demo-user", server.userId)
+        assertEquals("Obiente", fixture.displayName)
+        assertEquals("Nextcloud", fixture.cloudName)
         assertTrue(server.apps.isNotEmpty())
         assertTrue(server.apps.all { it.href == null })
         assertTrue(

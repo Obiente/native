@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app.design
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -34,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
@@ -41,6 +43,7 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -49,6 +52,7 @@ import androidx.compose.ui.unit.dp
 data class NextcloudDesktopIdentity(
     val displayName: String,
     val cloudName: String,
+    val avatar: ImageBitmap? = null,
 )
 
 @Immutable
@@ -240,12 +244,21 @@ private fun NextcloudDesktopSidebar(
                             color = NextcloudTheme.colors.appIconContainer,
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = NextcloudIcons.Profile,
-                                    contentDescription = null,
-                                    tint = NextcloudTheme.colors.appIcon,
-                                    modifier = Modifier.size(19.dp),
-                                )
+                                if (account.avatar != null) {
+                                    Image(
+                                        bitmap = account.avatar,
+                                        contentDescription = "Obiente account",
+                                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                        contentScale = ContentScale.Crop,
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = NextcloudIcons.Profile,
+                                        contentDescription = null,
+                                        tint = NextcloudTheme.colors.appIcon,
+                                        modifier = Modifier.size(19.dp),
+                                    )
+                                }
                             }
                         }
                         Column(modifier = Modifier.weight(1f)) {

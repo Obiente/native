@@ -134,9 +134,9 @@ val desktopCaptureCompilation = kotlin.targets
     .compilations
     .getByName("main")
 
-tasks.register<JavaExec>("captureDesktopMarketingScreenshot") {
+tasks.register<JavaExec>("captureMarketingScreenshots") {
     group = "documentation"
-    description = "Renders the real Compose desktop UI with the synthetic marketing fixture."
+    description = "Renders real Compose marketing scenarios from isolated synthetic fixtures."
     dependsOn(desktopCaptureCompilation.compileTaskProvider)
     classpath(
         desktopCaptureCompilation.output.allOutputs,
@@ -147,6 +147,14 @@ tasks.register<JavaExec>("captureDesktopMarketingScreenshot") {
     )
     workingDir(rootProject.projectDir)
     args(
-        rootProject.file("website/public/screenshots/desktop-home.png").absolutePath,
+        listOf(
+        "desktop-home.png",
+        "mobile-home.png",
+        "obsidian-vault-sync.png",
+        "media-backup-queue.png",
+        "adaptive-dynamic-data.png",
+        ).map { fileName ->
+            rootProject.file("website/public/screenshots/$fileName").absolutePath
+        },
     )
 }

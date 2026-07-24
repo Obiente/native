@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "renderer": "Compose ImageComposeScene",
+  "identity": "Obiente",
+  "cloudIdentity": "Nextcloud",
+  "networkAccess": false,
+  "captureSources": ["ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt", "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCenter.kt", "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt", "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt", "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt", "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShell.kt", "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/MarketingCaptureMain.kt", "ui/src/desktopMain/resources/marketing/obiente-avatar.png"],
+  "captureSourceSha256": "183fccad05072ccebcf0eefdf611a264f26c7b3467e6dd745b564900e7ec0afd",
+  "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
+  "captures": [
+    {
+      "scenario": "desktop-home",
+      "file": "desktop-home.png",
+      "width": 1440,
+      "height": 900,
+      "density": 1.0,
+      "sha256": "0e241b28972d37516ef6dbaeba3af734b62b9e2c74369c1e739529183c921231"
+    },
+    {
+      "scenario": "mobile-home",
+      "file": "mobile-home.png",
+      "width": 1080,
+      "height": 2400,
+      "density": 2.625,
+      "sha256": "b754dc8b208db006c8393a15bcd6f84db67fa0259a51e8f14b5404d8947736ef"
+    },
+    {
+      "scenario": "obsidian-vault-sync",
+      "file": "obsidian-vault-sync.png",
+      "width": 1080,
+      "height": 1000,
+      "density": 2.625,
+      "sha256": "e5522281516c7ac2505e9211ce42de2933dcf34e54d3a78cc1036d06df2bee71"
+    },
+    {
+      "scenario": "media-backup-queue",
+      "file": "media-backup-queue.png",
+      "width": 1080,
+      "height": 1800,
+      "density": 2.625,
+      "sha256": "2d2ee2824423ca332dcebb504348b7dd814a67bf991a6862174ae00b67dbd1ca"
+    },
+    {
+      "scenario": "adaptive-dynamic-data",
+      "file": "adaptive-dynamic-data.png",
+      "width": 1440,
+      "height": 360,
+      "density": 1.0,
+      "sha256": "b7fa90c3328d0c47641adc132e368dc5870364e98d8c68d35b1a2974996555c7"
+    }
+  ]
+}

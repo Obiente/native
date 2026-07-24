@@ -23,8 +23,8 @@ data class MarketingDemoFixture(
 }
 
 val nextcloudNativeMarketingFixture = MarketingDemoFixture(
-    displayName = "River Demo",
-    cloudName = "Sample cloud",
+    displayName = "Obiente",
+    cloudName = "Nextcloud",
     apps = listOf(
         NextcloudAppEntry("files", "Files", null),
         NextcloudAppEntry("photos", "Photos", null),

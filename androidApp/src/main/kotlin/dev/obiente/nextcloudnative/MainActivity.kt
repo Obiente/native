@@ -13,29 +13,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import dev.obiente.nextcloudnative.app.NextcloudNativeApp
-import dev.obiente.nextcloudnative.app.NextcloudNativeMarketingCapture
 import dev.obiente.nextcloudnative.app.ThemePreference
-import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (BuildConfig.DEMO_CAPTURE) {
-            WindowCompat.setDecorFitsSystemWindows(window, false)
-            WindowInsetsControllerCompat(window, window.decorView).apply {
-                hide(WindowInsetsCompat.Type.systemBars())
-                systemBarsBehavior =
-                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            }
-            setContent {
-                NextcloudNativeMarketingCapture(NextcloudPresentation.Adaptive)
-            }
-            return
-        }
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         val fileSyncRootPicker = AndroidFileSyncRootPicker(this)
         fileSyncRootPicker.attach(
