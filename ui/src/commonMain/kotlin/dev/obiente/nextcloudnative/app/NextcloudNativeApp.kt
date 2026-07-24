@@ -286,6 +286,43 @@ fun NextcloudNativeApp(
     }
 }
 
+/**
+ * Renders the real root shell and home components against the compile-time synthetic fixture.
+ *
+ * Capture builds call this directly, so they cannot load sessions, caches, endpoints, or media.
+ */
+@Composable
+fun NextcloudNativeMarketingCapture(
+    presentation: NextcloudPresentation,
+    fixture: MarketingDemoFixture = nextcloudNativeMarketingFixture,
+) {
+    NextcloudNativeTheme(darkTheme = true) {
+        NextcloudAppBackground {
+            val serverInfo = remember(fixture) { fixture.serverInfo() }
+            RootShell(
+                presentation = presentation,
+                selected = NextcloudDestination.Home,
+                onSelected = {},
+                identity = NextcloudDesktopIdentity(
+                    displayName = fixture.displayName,
+                    cloudName = fixture.cloudName,
+                ),
+            ) {
+                HomeScreen(
+                    serverInfo = serverInfo,
+                    error = null,
+                    lastOpenedAppId = "files",
+                    onRetry = {},
+                    onSettings = {},
+                    onSearch = {},
+                    onApps = {},
+                    onOpenApp = {},
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun LoginScreen(
     services: NextcloudPlatformServices,

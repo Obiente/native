@@ -128,3 +128,25 @@ compose.desktop {
         }
     }
 }
+
+val desktopCaptureCompilation = kotlin.targets
+    .getByName("desktop")
+    .compilations
+    .getByName("main")
+
+tasks.register<JavaExec>("captureDesktopMarketingScreenshot") {
+    group = "documentation"
+    description = "Renders the real Compose desktop UI with the synthetic marketing fixture."
+    dependsOn(desktopCaptureCompilation.compileTaskProvider)
+    classpath(
+        desktopCaptureCompilation.output.allOutputs,
+        desktopCaptureCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set(
+        "dev.obiente.nextcloudnative.nativeui.preview.MarketingCaptureMainKt",
+    )
+    workingDir(rootProject.projectDir)
+    args(
+        rootProject.file("website/public/screenshots/desktop-home.png").absolutePath,
+    )
+}

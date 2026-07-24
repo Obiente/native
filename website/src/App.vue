@@ -407,44 +407,34 @@ const frequentlyAsked = [
               <p class="eyebrow">Built around real workflows</p>
               <h2>One workspace, without the web-wrapper seams.</h2>
               <p>
-                Explore representative Files, media backup, and Talk experiences.
-                Every image below is generated from a committed synthetic fixture.
+                See the same native workspace on a large screen and in your hand.
+                These are real Compose screens rendered from a built-in demo account.
               </p>
             </div>
             <div class="screenshot-gallery">
-              <figure>
+              <figure class="screenshot-desktop">
                 <img
-                  src="/screenshots/files-workspace.svg"
-                  alt="Synthetic Nextcloud Native Files workspace with folder list, preview inspector, and upload progress"
-                  width="1200"
-                  height="750"
+                  src="/screenshots/desktop-home.png"
+                  alt="Nextcloud Native desktop home rendered by the real Compose application with synthetic demo data"
+                  width="1440"
+                  height="900"
                   loading="lazy"
                 />
-                <figcaption><strong>Files that behave like files</strong><span>Search, inspect, cache, share, and track transfers.</span></figcaption>
+                <figcaption><strong>A workspace made for desktop</strong><span>Persistent navigation, useful density, and room for focused work.</span></figcaption>
               </figure>
-              <figure>
+              <figure class="screenshot-mobile">
                 <img
-                  src="/screenshots/photos-timeline.svg"
-                  alt="Synthetic Nextcloud Native photo timeline with backup status dashboard"
-                  width="1200"
-                  height="750"
+                  src="/screenshots/mobile-home.png"
+                  alt="Nextcloud Native mobile home rendered by the real Android application with synthetic demo data"
+                  width="1080"
+                  height="2400"
                   loading="lazy"
                 />
-                <figcaption><strong>Media backup you can understand</strong><span>Visible local, pending, verified, and cloud-only state.</span></figcaption>
-              </figure>
-              <figure>
-                <img
-                  src="/screenshots/talk-conversation.svg"
-                  alt="Synthetic Nextcloud Native Talk conversation with native conversation list and composer"
-                  width="1200"
-                  height="750"
-                  loading="lazy"
-                />
-                <figcaption><strong>Talk as part of the workspace</strong><span>Messages, shared files, and calls in a native thread.</span></figcaption>
+                <figcaption><strong>The same cloud, shaped for mobile</strong><span>Touch-sized choices and platform navigation without a web view.</span></figcaption>
               </figure>
             </div>
             <p class="fixture-disclosure">
-              Product direction preview. Synthetic names and data only, with no connected account or user media.
+              Captured from the real app with synthetic names and data. No account, server, cache, or user media is read.
             </p>
           </div>
         </section>

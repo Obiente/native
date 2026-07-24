@@ -38,6 +38,7 @@ android {
         targetSdk = 36
         versionCode = ncVersionCode
         versionName = ncVersionName
+        buildConfigField("boolean", "DEMO_CAPTURE", "false")
     }
 
     signingConfigs {
@@ -59,6 +60,17 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    buildTypes {
+        create("screenshot") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".demo"
+            versionNameSuffix = "-demo"
+            buildConfigField("boolean", "DEMO_CAPTURE", "true")
+            matchingFallbacks += listOf("debug")
+        }
     }
 
     compileOptions {

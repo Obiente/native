@@ -36,22 +36,28 @@ The self-contained static output is written to `website/dist/`. It can be
 served by any static web server. Directory index support must remain enabled so
 routes such as `/roadmap/` resolve to their prerendered `index.html`.
 
-## Synthetic product screenshots
+## Product screenshots
 
-The product gallery is generated only from the committed
-`screenshots/fixtures/demo-workspace.json` fixture:
+The gallery is captured from the real Compose UI using the compile-time
+`MarketingDemoFixture`. The fixture contains synthetic names and `.invalid`
+addresses, and the capture entry point never constructs account, session,
+network, cache, or media services.
 
 ```bash
-npm run screenshots
-npm test
+tools/capture-marketing-screenshots.sh
 ```
 
-The generator has no endpoint, session, environment, cache, or home-directory
-input. Guardrails reject credentials, URLs, email-like values, content URIs,
-and absolute home paths. Output is restricted to SVG files under
-`public/screenshots/`. This keeps the workflow deterministic and prevents a
-developer's account, media, or saved Nextcloud state from entering website
-artifacts.
+This produces `public/screenshots/desktop-home.png` offscreen. Android capture
+uses the separate `.demo` application ID and requires an explicit serial:
+
+```bash
+tools/capture-marketing-screenshots.sh --android emulator-5554
+```
+
+Physical devices are rejected unless
+`--allow-physical-demo-capture` is passed deliberately. Tests enforce that the
+fixture cannot contain credentials, real endpoints, local paths, or user
+content.
 
 ## Container
 

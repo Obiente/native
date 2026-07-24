@@ -95,9 +95,8 @@ export async function render(pathname) {
     isAccessibleForFree: true,
     softwareHelp: `${siteUrl}/contributing/`,
     screenshot: [
-      `${siteUrl}/screenshots/files-workspace.svg`,
-      `${siteUrl}/screenshots/photos-timeline.svg`,
-      `${siteUrl}/screenshots/talk-conversation.svg`,
+      `${siteUrl}/screenshots/desktop-home.png`,
+      `${siteUrl}/screenshots/mobile-home.png`,
     ],
   };
   const structuredData = [
