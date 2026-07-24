@@ -8,6 +8,20 @@ generated_pattern='(^|/)(build|target|\.gradle|\.kotlin)/|(^|/)(local\.propertie
 machine_pattern='(/home/[^/[:space:]]+|/Users/[^/[:space:]]+|[A-Za-z]:\\Users\\|192\.168\.[0-9]+\.[0-9]+)'
 credential_pattern='BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[A-Za-z0-9-]+'
 
+gradle_caching="$(
+    awk -F= '
+        /^[[:space:]]*org\.gradle\.caching[[:space:]]*=/ {
+            value = $2
+            gsub(/[[:space:]]/, "", value)
+        }
+        END { print value }
+    ' gradle.properties
+)"
+if [[ "$gradle_caching" != "true" ]]; then
+    printf 'Gradle task-output caching must stay enabled in gradle.properties.\n' >&2
+    exit 1
+fi
+
 mapfile -d '' candidate_files < <(git ls-files -z --cached --others --exclude-standard)
 if [[ "${#candidate_files[@]}" -eq 0 ]]; then
     printf 'No repository files were found.\n' >&2
