@@ -8,6 +8,42 @@ import kotlin.test.assertEquals
 
 class MediaBackupLedgerPersistenceTest {
     @Test
+    fun readOnlyUiConnectionDoesNotRecoverAnActiveUpload() = runBlocking {
+        val directory = Files.createTempDirectory("media-ledger-reader-")
+        val databasePath = directory.resolve("ledger.db").toString()
+        val accountId = "0123456789abcdef0123456789abcdef"
+        val local = LocalMediaObject(
+            key = "external:active",
+            displayName = "active.jpg",
+            size = 2_048,
+            revision = "generation:5",
+        )
+        val writer = MediaBackupLedgerStore(databasePath)
+        writer.upsert(
+            MediaBackupLedgerRecord(
+                accountId = accountId,
+                local = local,
+                receipt = null,
+                transferState = MediaBackupTransferState.Uploading,
+                attemptCount = 1,
+                updatedAtEpochMillis = 2_000,
+            ),
+        )
+
+        val reader = MediaBackupLedgerStore(
+            databasePath = databasePath,
+            recoverInterruptedTransfers = false,
+        )
+        assertEquals(MediaBackupTransferState.Uploading, reader.load(accountId, local.key)?.transferState)
+        reader.close()
+        assertEquals(MediaBackupTransferState.Uploading, writer.load(accountId, local.key)?.transferState)
+
+        writer.close()
+        directory.toFile().deleteRecursively()
+        Unit
+    }
+
+    @Test
     fun fileBackedLedgerSurvivesCloseAndRecoversActiveWork() = runBlocking {
         val directory = Files.createTempDirectory("media-ledger-")
         val databasePath = directory.resolve("ledger.db").toString()

@@ -48,6 +48,62 @@ class MediaBackupLedgerTest {
     }
 
     @Test
+    fun ledgerRecordsResolveEveryUserFacingBackupState() {
+        fun record(
+            state: MediaBackupTransferState,
+            localObject: LocalMediaObject? = local,
+            storedReceipt: MediaBackupReceipt? = null,
+            failure: String? = null,
+        ) = MediaBackupLedgerRecord(
+            accountId = accountId,
+            local = localObject,
+            receipt = storedReceipt,
+            transferState = state,
+            attemptCount = 1,
+            updatedAtEpochMillis = 2_000,
+            failureMessage = failure,
+        )
+
+        assertEquals(
+            MediaBackupStatus.Pending,
+            record(MediaBackupTransferState.Pending).resolveMediaBackupStatus(),
+        )
+        assertEquals(
+            MediaBackupStatus.Uploading,
+            record(MediaBackupTransferState.Uploading).resolveMediaBackupStatus(),
+        )
+        assertEquals(
+            MediaBackupStatus.Failed,
+            record(MediaBackupTransferState.Failed, failure = "Network unavailable")
+                .resolveMediaBackupStatus(),
+        )
+        assertEquals(
+            MediaBackupStatus.BackedUp,
+            record(MediaBackupTransferState.Succeeded, storedReceipt = receipt)
+                .resolveMediaBackupStatus(),
+        )
+        assertEquals(
+            MediaBackupStatus.ChangedAfterBackup,
+            record(
+                MediaBackupTransferState.Pending,
+                storedReceipt = receipt.copy(localRevision = "generation:8"),
+            ).resolveMediaBackupStatus(),
+        )
+        assertEquals(
+            MediaBackupStatus.CloudOnly,
+            record(
+                MediaBackupTransferState.Succeeded,
+                localObject = null,
+                storedReceipt = receipt,
+            ).resolveMediaBackupStatus(),
+        )
+        assertEquals(
+            listOf("Pending", "Uploading", "Backed up", "Changed", "Failed", "Cloud only"),
+            MediaBackupStatus.entries.map { it.presentation().label },
+        )
+    }
+
+    @Test
     fun sqliteLedgerRecoversInterruptedUploadAsPending() = runBlocking {
         val connection = BundledSQLiteDriver().open(":memory:")
         val firstProcess = MediaBackupLedgerStore(connection)
@@ -96,6 +152,47 @@ class MediaBackupLedgerTest {
     }
 
     @Test
+    fun remotePathStatusLookupIsBoundedAccountScopedAndUsesNewestRecord() = runBlocking {
+        val otherAccount = "fedcba9876543210fedcba9876543210"
+        val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))
+        store.upsert(succeededRecord("external:old", 1_000))
+        store.upsert(
+            MediaBackupLedgerRecord(
+                accountId = accountId,
+                local = local.copy(key = "external:new"),
+                receipt = receipt.copy(localKey = "external:new"),
+                transferState = MediaBackupTransferState.Failed,
+                attemptCount = 2,
+                updatedAtEpochMillis = 2_000,
+                failureMessage = "Upload failed",
+            ),
+        )
+        val otherRecord = succeededRecord("external:other", 3_000)
+        store.upsert(
+            otherRecord.copy(
+                accountId = otherAccount,
+                receipt = requireNotNull(otherRecord.receipt).copy(remotePath = receipt.remotePath),
+            ),
+        )
+
+        assertEquals(
+            mapOf(receipt.remotePath to MediaBackupStatus.Failed),
+            store.statusesForRemotePaths(accountId, listOf(receipt.remotePath, "Photos/Absent.jpg")),
+        )
+        assertEquals(
+            mapOf(receipt.remotePath to MediaBackupStatus.BackedUp),
+            store.statusesForRemotePaths(otherAccount, listOf(receipt.remotePath)),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            store.statusesForRemotePaths(
+                accountId,
+                List(MAX_MEDIA_BACKUP_STATUS_PATHS + 1) { "Photos/$it.jpg" },
+            )
+        }
+        store.close()
+    }
+
+    @Test
     fun completedHistoryIsPrunedBeforeUnfinishedWork() = runBlocking {
         val store = MediaBackupLedgerStore(
             connection = BundledSQLiteDriver().open(":memory:"),
@@ -124,11 +221,27 @@ class MediaBackupLedgerTest {
         store.close()
 
         val future = BundledSQLiteDriver().open(":memory:")
-        future.execSQL("PRAGMA user_version = 2")
+        future.execSQL("PRAGMA user_version = 3")
         assertFailsWith<MediaBackupLedgerStoreException> {
             MediaBackupLedgerStore(future)
         }
         Unit
+    }
+
+    @Test
+    fun versionOneLedgerMigratesRemotePathIndex() = runBlocking {
+        val connection = BundledSQLiteDriver().open(":memory:")
+        MediaBackupLedgerStore(connection)
+        connection.execSQL("DROP INDEX media_backup_account_remote_path_updated")
+        connection.execSQL("PRAGMA user_version = 1")
+
+        val migrated = MediaBackupLedgerStore(connection)
+
+        connection.prepare("PRAGMA user_version").use { statement ->
+            check(statement.step())
+            assertEquals(2L, statement.getLong(0))
+        }
+        migrated.close()
     }
 
     @Test

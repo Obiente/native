@@ -20,15 +20,22 @@ class MediaBackupLedgerStoreException(message: String, cause: Throwable? = null)
 class MediaBackupLedgerStore internal constructor(
     private val connection: SQLiteConnection,
     private val maxRecordsPerAccount: Int = MAX_MEDIA_BACKUP_LEDGER_RECORDS_PER_ACCOUNT,
+    recoverInterruptedTransfers: Boolean = true,
 ) {
     private val mutex = Mutex()
 
-    constructor(databasePath: String) : this(BundledSQLiteDriver().open(databasePath))
+    constructor(
+        databasePath: String,
+        recoverInterruptedTransfers: Boolean = true,
+    ) : this(
+        connection = BundledSQLiteDriver().open(databasePath),
+        recoverInterruptedTransfers = recoverInterruptedTransfers,
+    )
 
     init {
         require(maxRecordsPerAccount in 1..MAX_MEDIA_BACKUP_LEDGER_RECORDS_PER_ACCOUNT)
         try {
-            initializeSchema()
+            initializeSchema(recoverInterruptedTransfers)
         } catch (failure: Throwable) {
             connection.close()
             throw if (failure is MediaBackupLedgerStoreException) {
@@ -39,15 +46,24 @@ class MediaBackupLedgerStore internal constructor(
         }
     }
 
-    suspend fun upsert(record: MediaBackupLedgerRecord) = mutex.withLock {
+    suspend fun upsert(record: MediaBackupLedgerRecord) = upsertAll(listOf(record))
+
+    suspend fun upsertAll(records: Collection<MediaBackupLedgerRecord>) = mutex.withLock {
+        require(records.size <= MAX_MEDIA_BACKUP_LEDGER_WRITE_BATCH)
+        require(records.map { it.accountId to it.localKey }.distinct().size == records.size)
+        if (records.isEmpty()) return@withLock
         transaction {
-            connection.prepare(UPSERT_RECORD).use { statement ->
-                statement.bindRecord(record)
-                check(!statement.step()) { "Media ledger upsert returned an unexpected row." }
+            records.forEach { record ->
+                connection.prepare(UPSERT_RECORD).use { statement ->
+                    statement.bindRecord(record)
+                    check(!statement.step()) { "Media ledger upsert returned an unexpected row." }
+                }
             }
-            pruneCompletedHistory(record.accountId)
-            check(countRecords(record.accountId) <= maxRecordsPerAccount) {
-                "The media ledger contains too many unfinished transfers for this account."
+            records.map(MediaBackupLedgerRecord::accountId).distinct().forEach { accountId ->
+                pruneCompletedHistory(accountId)
+                check(countRecords(accountId) <= maxRecordsPerAccount) {
+                    "The media ledger contains too many unfinished transfers for this account."
+                }
             }
         }
     }
@@ -62,6 +78,30 @@ class MediaBackupLedgerStore internal constructor(
             statement.bindText(1, accountId)
             statement.bindText(2, localKey)
             if (statement.step()) statement.readRecord() else null
+        }
+    }
+
+    suspend fun loadMany(
+        accountId: String,
+        localKeys: Collection<String>,
+    ): Map<String, MediaBackupLedgerRecord> = mutex.withLock {
+        requireAccountId(accountId)
+        val keys = localKeys.distinct()
+        require(keys.size <= MAX_MEDIA_BACKUP_LEDGER_QUERY_KEYS)
+        keys.forEach(::requireLocalKey)
+        if (keys.isEmpty()) return@withLock emptyMap()
+        val placeholders = List(keys.size) { "?" }.joinToString()
+        connection.prepare(
+            "$SELECT_COLUMNS WHERE account_id = ? AND local_key IN ($placeholders)",
+        ).use { statement ->
+            statement.bindText(1, accountId)
+            keys.forEachIndexed { index, key -> statement.bindText(index + 2, key) }
+            buildMap {
+                while (statement.step()) {
+                    val record = statement.readRecord()
+                    put(record.localKey, record)
+                }
+            }
         }
     }
 
@@ -134,6 +174,32 @@ class MediaBackupLedgerStore internal constructor(
         )
     }
 
+    suspend fun statusesForRemotePaths(
+        accountId: String,
+        remotePaths: Collection<String>,
+    ): Map<String, MediaBackupStatus> = mutex.withLock {
+        requireAccountId(accountId)
+        val paths = remotePaths.distinct()
+        require(paths.size <= MAX_MEDIA_BACKUP_STATUS_PATHS)
+        paths.forEach(::requireValidSyncPath)
+        if (paths.isEmpty()) return@withLock emptyMap()
+        val placeholders = List(paths.size) { "?" }.joinToString()
+        connection.prepare(
+            "$SELECT_COLUMNS WHERE account_id = ? AND remote_path IN ($placeholders) " +
+                "ORDER BY updated_at DESC, local_key DESC",
+        ).use { statement ->
+            statement.bindText(1, accountId)
+            paths.forEachIndexed { index, path -> statement.bindText(index + 2, path) }
+            buildMap {
+                while (statement.step()) {
+                    val record = statement.readRecord()
+                    val path = requireNotNull(record.receipt).remotePath
+                    putIfAbsent(path, record.resolveMediaBackupStatus())
+                }
+            }
+        }
+    }
+
     suspend fun deleteAccount(accountId: String) = mutex.withLock {
         requireAccountId(accountId)
         transaction {
@@ -148,7 +214,7 @@ class MediaBackupLedgerStore internal constructor(
         connection.close()
     }
 
-    private fun initializeSchema() {
+    private fun initializeSchema(recoverInterruptedTransfers: Boolean) {
         connection.prepare("PRAGMA journal_mode = WAL").use(SQLiteStatement::step)
         connection.execSQL("PRAGMA synchronous = FULL")
         connection.execSQL("PRAGMA foreign_keys = ON")
@@ -161,6 +227,11 @@ class MediaBackupLedgerStore internal constructor(
                 connection.execSQL(CREATE_TABLE)
                 connection.execSQL(CREATE_ACCOUNT_STATE_INDEX)
                 connection.execSQL(CREATE_ACCOUNT_UPDATED_INDEX)
+                connection.execSQL(CREATE_ACCOUNT_REMOTE_PATH_INDEX)
+                connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
+            }
+            1 -> transaction {
+                connection.execSQL(CREATE_ACCOUNT_REMOTE_PATH_INDEX)
                 connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
             }
             SCHEMA_VERSION -> Unit
@@ -168,11 +239,13 @@ class MediaBackupLedgerStore internal constructor(
                 "Media backup ledger schema version $version is unsupported.",
             )
         }
-        transaction {
-            connection.execSQL(
-                "UPDATE media_backup_ledger SET transfer_state = 'Pending', failure_message = NULL " +
-                    "WHERE transfer_state = 'Uploading'",
-            )
+        if (recoverInterruptedTransfers) {
+            transaction {
+                connection.execSQL(
+                    "UPDATE media_backup_ledger SET transfer_state = 'Pending', failure_message = NULL " +
+                        "WHERE transfer_state = 'Uploading'",
+                )
+            }
         }
     }
 
@@ -296,7 +369,7 @@ class MediaBackupLedgerStore internal constructor(
     }
 
     private companion object {
-        const val SCHEMA_VERSION = 1
+        const val SCHEMA_VERSION = 2
 
         const val SELECT_COLUMNS =
             "SELECT account_id, local_key, local_display_name, local_size, local_revision, " +
@@ -347,6 +420,10 @@ class MediaBackupLedgerStore internal constructor(
         const val CREATE_ACCOUNT_UPDATED_INDEX =
             "CREATE INDEX media_backup_account_updated " +
                 "ON media_backup_ledger(account_id, updated_at DESC, local_key DESC)"
+
+        const val CREATE_ACCOUNT_REMOTE_PATH_INDEX =
+            "CREATE INDEX media_backup_account_remote_path_updated " +
+                "ON media_backup_ledger(account_id, remote_path, updated_at DESC, local_key DESC)"
 
         val UPSERT_RECORD =
             """

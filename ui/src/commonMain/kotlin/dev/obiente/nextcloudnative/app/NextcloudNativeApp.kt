@@ -127,6 +127,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -216,6 +217,7 @@ private class MediaCollectionsUiState {
     var dayIndex by mutableStateOf<NativeMediaDayIndex?>(null)
     var collectionItems by mutableStateOf<List<NativeMediaItem>>(emptyList())
     var resolvedFiles by mutableStateOf<Map<Long, NextcloudFile>>(emptyMap())
+    var backupStatuses by mutableStateOf<Map<String, MediaBackupStatus>>(emptyMap())
     var cursor by mutableStateOf<NativeMediaDayCursor?>(null)
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
@@ -4664,6 +4666,9 @@ private fun MediaScreen(
     onOpenPerson: (NextcloudPerson) -> Unit,
 ) {
     var media by remember(userId) { mutableStateOf<List<NextcloudFile>?>(null) }
+    var mediaBackupStatuses by remember(userId) {
+        mutableStateOf<Map<String, MediaBackupStatus>>(emptyMap())
+    }
     val peopleByBackend = remember(userId) {
         mutableStateMapOf<NextcloudPeopleBackend, List<NextcloudPerson>>()
     }
@@ -4690,10 +4695,34 @@ private fun MediaScreen(
     LaunchedEffect(userId, mediaLoadAttempt) {
         if (userId == null) return@LaunchedEffect
         media = null
+        mediaBackupStatuses = emptyMap()
         mediaError = null
-        runCatching { services.listMedia(session, userId) }
-            .onSuccess { media = it }
+        runCatching {
+            val loaded = services.listMedia(session, userId)
+            val statuses = runCatching {
+                services.loadMediaBackupStatuses(session, userId, loaded)
+            }.getOrDefault(emptyMap())
+            loaded to statuses
+        }
+            .onSuccess { (loaded, statuses) ->
+                media = loaded
+                mediaBackupStatuses = statuses
+            }
             .onFailure { mediaError = it.message ?: "Could not load media." }
+    }
+    LaunchedEffect(userId, services) {
+        if (userId == null) return@LaunchedEffect
+        services.observeMediaBackupStatusChanges(session).collectLatest {
+            val visibleFiles = (media.orEmpty() + resolvedFiles.values)
+                .distinctBy { file -> file.path.trim('/') }
+            if (visibleFiles.isNotEmpty()) {
+                val statuses = runCatching {
+                    services.loadMediaBackupStatuses(session, userId, visibleFiles)
+                }.getOrDefault(emptyMap())
+                mediaBackupStatuses = mediaBackupStatuses + statuses
+                backupStatuses = backupStatuses + statuses
+            }
+        }
     }
     LaunchedEffect(mode, peopleBackend, peopleLoadAttempt) {
         if (mode != MediaMode.People || peopleBackend in peopleByBackend) return@LaunchedEffect
@@ -4734,13 +4763,22 @@ private fun MediaScreen(
                     services.resolveFilesById(session, userId, page.items.map(NativeMediaItem::fileId))
                 }.getOrDefault(emptyMap())
             }
-            Triple(index, page, resolved)
+            val statuses = if (userId == null || resolved.isEmpty()) {
+                emptyMap()
+            } else {
+                runCatching {
+                    services.loadMediaBackupStatuses(session, userId, resolved.values)
+                }.getOrDefault(emptyMap())
+            }
+            Triple(index, page, resolved) to statuses
         }
         if (generation != requestGeneration || selectedCollection?.key != collection.key) return
-        result.onSuccess { (index, page, resolved) ->
+        result.onSuccess { (loaded, statuses) ->
+            val (index, page, resolved) = loaded
             dayIndex = index
             collectionItems = if (reset) page.items else (collectionItems + page.items).distinctBy { it.fileId }
             resolvedFiles = if (reset) resolved else resolvedFiles + resolved
+            backupStatuses = if (reset) statuses else backupStatuses + statuses
             cursor = page.nextCursor
         }.onFailure {
             error = it.message ?: "Could not load this collection."
@@ -4756,6 +4794,7 @@ private fun MediaScreen(
             dayIndex = null
             collectionItems = emptyList()
             resolvedFiles = emptyMap()
+            backupStatuses = emptyMap()
             cursor = null
             loading = false
             error = null
@@ -4783,6 +4822,7 @@ private fun MediaScreen(
                     collection = collection,
                     items = collectionItems,
                     resolvedFiles = resolvedFiles,
+                    backupStatuses = backupStatuses,
                     services = services,
                     session = session,
                     loadingMore = loading,
@@ -5183,6 +5223,7 @@ private fun MediaScreen(
                             session = session,
                             file = stack.cover,
                             badge = stack.badge,
+                            backupStatus = mediaBackupStatuses[stack.cover.path.trim('/')],
                             onClick = { onOpenMedia(stack.cover, viewerSequence) },
                             onLongClick = {
                                 mediaToAdd = stack.cover
@@ -5225,6 +5266,7 @@ private fun MediaScreen(
                         dayIndex = null
                         collectionItems = emptyList()
                         resolvedFiles = emptyMap()
+                        backupStatuses = emptyMap()
                         cursor = null
                         loading = true
                         error = null
@@ -5389,6 +5431,9 @@ private fun PersonMediaScreen(
     var resolvedMediaFiles by remember(person.id, person.backend) {
         mutableStateOf<Map<Long, NextcloudFile>>(emptyMap())
     }
+    var mediaBackupStatuses by remember(person.id, person.backend) {
+        mutableStateOf<Map<String, MediaBackupStatus>>(emptyMap())
+    }
     var mediaDayIndex by remember(person.id, person.backend) { mutableStateOf<PersonMediaDayIndex?>(null) }
     var mediaCursor by remember(person.id, person.backend) { mutableStateOf<NativeMediaDayCursor?>(null) }
     var mediaLoadingMore by remember(person.id, person.backend) { mutableStateOf(false) }
@@ -5475,10 +5520,18 @@ private fun PersonMediaScreen(
                     )
                 }.getOrDefault(emptyMap())
             }
-            Triple(index, page, resolved)
+            val statuses = if (resolved.isEmpty()) {
+                emptyMap()
+            } else {
+                runCatching {
+                    services.loadMediaBackupStatuses(session, currentUserId, resolved.values)
+                }.getOrDefault(emptyMap())
+            }
+            Triple(index, page, resolved) to statuses
         }
         if (generation != mediaRequestGeneration) return
-        result.onSuccess { (index, page, resolved) ->
+        result.onSuccess { (loaded, statuses) ->
+            val (index, page, resolved) = loaded
             mediaDayIndex = index
             mediaItems = if (reset) {
                 page.items
@@ -5486,6 +5539,7 @@ private fun PersonMediaScreen(
                 (mediaItems.orEmpty() + page.items).distinctBy(NativeMediaItem::fileId)
             }
             resolvedMediaFiles = if (reset) resolved else resolvedMediaFiles + resolved
+            mediaBackupStatuses = if (reset) statuses else mediaBackupStatuses + statuses
             mediaCursor = page.nextCursor
         }.onFailure { failure ->
             val message = failure.message ?: "Could not load photos for this person."
@@ -5562,6 +5616,17 @@ private fun PersonMediaScreen(
         mediaLoadMoreError = null
         error = null
         loadPersonMediaPage(reset = true)
+    }
+    LaunchedEffect(person.id, person.backend, services) {
+        services.observeMediaBackupStatusChanges(session).collectLatest {
+            val visibleFiles = resolvedMediaFiles.values
+            if (visibleFiles.isNotEmpty()) {
+                val statuses = runCatching {
+                    services.loadMediaBackupStatuses(session, currentUserId, visibleFiles)
+                }.getOrDefault(emptyMap())
+                mediaBackupStatuses = mediaBackupStatuses + statuses
+            }
+        }
     }
     LaunchedEffect(mergePickerVisible, person.id, person.backend) {
         if (!mergePickerVisible || mergeTargets != null) return@LaunchedEffect
@@ -5716,6 +5781,7 @@ private fun PersonMediaScreen(
                             session = session,
                             file = file,
                             badge = if (photoSelectionMode != null && selectable) "Choose" else null,
+                            backupStatus = mediaBackupStatuses[file.path.trim('/')],
                             onClick = {
                                 when (photoSelectionMode) {
                                     PersonPhotoSelectionMode.Cover -> if (selectable) {
@@ -6190,6 +6256,7 @@ private fun MediaTile(
     session: NextcloudSession,
     file: NextcloudFile,
     badge: String? = null,
+    backupStatus: MediaBackupStatus? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -6236,6 +6303,12 @@ private fun MediaTile(
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
+            }
+            backupStatus?.let { status ->
+                MediaBackupStatusIndicator(
+                    status = status,
+                    modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
+                )
             }
         }
     }
