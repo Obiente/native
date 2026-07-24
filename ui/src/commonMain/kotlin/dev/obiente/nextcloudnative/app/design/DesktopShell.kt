@@ -55,6 +55,11 @@ data class NextcloudDesktopIdentity(
     val avatar: ImageBitmap? = null,
 )
 
+internal fun accountAvatarContentDescription(displayName: String?): String {
+    val name = displayName?.trim().orEmpty()
+    return if (name.isEmpty()) "Account avatar" else "Account avatar for $name"
+}
+
 @Immutable
 data class NextcloudWorkspaceCapabilities(
     val isDesktop: Boolean,
@@ -247,7 +252,8 @@ private fun NextcloudDesktopSidebar(
                                 if (account.avatar != null) {
                                     Image(
                                         bitmap = account.avatar,
-                                        contentDescription = "Obiente account",
+                                        contentDescription =
+                                            accountAvatarContentDescription(account.displayName),
                                         modifier = Modifier.fillMaxSize().clip(CircleShape),
                                         contentScale = ContentScale.Crop,
                                     )

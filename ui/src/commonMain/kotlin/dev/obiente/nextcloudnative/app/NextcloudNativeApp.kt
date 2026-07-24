@@ -92,6 +92,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudWorkspaceCapabilities
+import dev.obiente.nextcloudnative.app.design.accountAvatarContentDescription
 import dev.obiente.nextcloudnative.app.design.NextcloudNavigationStyle
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
@@ -7615,7 +7616,7 @@ private fun ProductHeader(
                     if (accountAvatar != null) {
                         Image(
                             bitmap = accountAvatar,
-                            contentDescription = "Obiente account",
+                            contentDescription = accountAvatarContentDescription(null),
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.size(38.dp).clip(CircleShape),
                         )
