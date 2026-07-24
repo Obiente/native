@@ -12,6 +12,7 @@ json = "20250517"
 media3 = "1.10.1"
 javafx = "21.0.12"
 jse = "1.1.0"
+sqlite = "2.7.0"
 
 [libraries]
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
@@ -31,6 +32,7 @@ jse-spi-vorbis = { module = "io.github.jseproject:jse-spi-vorbis", version.ref =
 jse-spi-opus = { module = "io.github.jseproject:jse-spi-opus", version.ref = "jse" }
 jse-spi-mp3 = { module = "io.github.jseproject:jse-spi-mp3", version.ref = "jse" }
 jse-spi-aac = { module = "io.github.jseproject:jse-spi-aac", version.ref = "jse" }
+androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "sqlite" }
 
 [plugins]
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
