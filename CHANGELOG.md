@@ -9,6 +9,8 @@ until the full product sprint is complete.
 
 ## Unreleased
 
+## [0.1.0-alpha.1]
+
 ### Added
 
 - Persistent device-media backup states for pending, uploading, backed-up,

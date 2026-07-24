@@ -55,6 +55,7 @@ jobs:
       - name: Check and test release source
         run: |
           bash tools/check-repository.sh
+          bash tools/test-release-signing-config.sh
           cargo test --locked
           ./gradlew --no-daemon \
             :contractAcquisition:test \

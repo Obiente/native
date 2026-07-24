@@ -2,13 +2,19 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 val ncVersionName = providers.gradleProperty("ncVersionName").get()
 val ncVersionCode = providers.gradleProperty("ncVersionCode").get().toInt()
-val releaseKeystorePath = providers.environmentVariable("NC_ANDROID_KEYSTORE_PATH").orNull
 val releaseSigningEnvironment = listOf(
     "NC_ANDROID_KEYSTORE_PATH",
     "NC_ANDROID_KEYSTORE_PASSWORD",
     "NC_ANDROID_KEY_ALIAS",
     "NC_ANDROID_KEY_PASSWORD",
 )
+val releaseSigningValues = releaseSigningEnvironment.associateWith { name ->
+    providers.environmentVariable(name).orNull
+}
+val releaseKeystorePath = releaseSigningValues.getValue("NC_ANDROID_KEYSTORE_PATH")
+val hasCompleteReleaseSigningEnvironment = releaseSigningValues.values.all { value ->
+    !value.isNullOrBlank()
+}
 
 plugins {
     alias(libs.plugins.androidApplication)
@@ -35,12 +41,12 @@ android {
     }
 
     signingConfigs {
-        if (releaseKeystorePath != null) {
+        if (hasCompleteReleaseSigningEnvironment) {
             create("release") {
-                storeFile = file(releaseKeystorePath)
-                storePassword = providers.environmentVariable("NC_ANDROID_KEYSTORE_PASSWORD").get()
-                keyAlias = providers.environmentVariable("NC_ANDROID_KEY_ALIAS").get()
-                keyPassword = providers.environmentVariable("NC_ANDROID_KEY_PASSWORD").get()
+                storeFile = file(requireNotNull(releaseKeystorePath))
+                storePassword = requireNotNull(releaseSigningValues["NC_ANDROID_KEYSTORE_PASSWORD"])
+                keyAlias = requireNotNull(releaseSigningValues["NC_ANDROID_KEY_ALIAS"])
+                keyPassword = requireNotNull(releaseSigningValues["NC_ANDROID_KEY_PASSWORD"])
             }
         }
     }
@@ -78,10 +84,10 @@ val validateReleaseSigning by tasks.registering {
     description = "Requires complete protected signing input before producing release artifacts."
     doLast {
         val missing = releaseSigningEnvironment.filter { name ->
-            providers.environmentVariable(name).orNull.isNullOrBlank()
+            releaseSigningValues[name].isNullOrBlank()
         }
         check(missing.isEmpty()) {
-            "Android release signing is not configured. Use the protected release environment."
+            "Android release signing is incomplete. Missing: ${missing.joinToString()}."
         }
         check(file(requireNotNull(releaseKeystorePath)).isFile) {
             "The configured Android release keystore does not exist."
