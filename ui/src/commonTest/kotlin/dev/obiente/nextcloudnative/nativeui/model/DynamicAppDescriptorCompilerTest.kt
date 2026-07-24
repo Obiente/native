@@ -225,6 +225,192 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
+    fun `recipe actions recover useful forms when an external schema is unavailable`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Recipes","version":"1"},
+              "paths":{
+                "/apps/example/api/v1/recipes":{
+                  "get":{
+                    "operationId":"getAllRecipes",
+                    "summary":"Get all recipes",
+                    "tags":["Recipes"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array","items":{"type":"object","properties":{"id":{"type":"string"}}}
+                    }}}}}
+                  },
+                  "post":{
+                    "operationId":"newRecipe",
+                    "summary":"Create a new recipe",
+                    "tags":["Recipes"],
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{}}}},
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                },
+                "/apps/example/api/v1/import":{
+                  "post":{
+                    "operationId":"import",
+                    "summary":"Import a recipe using schema.org metadata from a website URL",
+                    "tags":["Recipes"],
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{}}}},
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val create = descriptor.actions.single { it.id == "newrecipe" }
+        val import = descriptor.actions.single { it.id == "import" }
+
+        assertEquals(
+            listOf(
+                "cookTime",
+                "description",
+                "keywords",
+                "name",
+                "prepTime",
+                "recipeCategory",
+                "recipeIngredient",
+                "recipeInstructions",
+                "recipeYield",
+                "tool",
+            ),
+            descriptor.forms.single { it.actionId == create.id }.fields.map(FormField::fieldId),
+        )
+        assertEquals(
+            listOf("url"),
+            descriptor.forms.single { it.actionId == import.id }.fields.map(FormField::fieldId),
+        )
+        assertTrue((assertNotNull(create.binding.body).schema as JsonObject).containsKey("properties"))
+        assertTrue((assertNotNull(import.binding.body).schema as JsonObject).containsKey("properties"))
+        assertEquals("recipes", import.resourceId)
+        assertEquals(
+            setOf("import", "newrecipe"),
+            descriptor.planDynamicNavigation().rootFormActions.map { it.actionId }.toSet(),
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `taxonomy filter responses use the filtered subject resource`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Recipes","version":"1"},
+              "paths":{
+                "/apps/example/api/v1/categories":{
+                  "get":{
+                    "operationId":"getAllCategories",
+                    "summary":"Get all categories",
+                    "tags":["Categories"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array","items":{"type":"string"}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/v1/keywords":{
+                  "get":{
+                    "operationId":"getAllKeywords",
+                    "summary":"Get all keywords",
+                    "tags":["Tags"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array","items":{"type":"string"}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/v1/category/{category}":{
+                  "parameters":[
+                    {"name":"category","in":"path","required":true,"schema":{"type":"string"}}
+                  ],
+                  "get":{
+                    "operationId":"recipesInCategory",
+                    "summary":"Get all recipes in a category",
+                    "tags":["Categories"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{}}}}}
+                  }
+                },
+                "/apps/example/api/v1/tags/{keywords}":{
+                  "parameters":[
+                    {"name":"keywords","in":"path","required":true,"schema":{"type":"string"}}
+                  ],
+                  "get":{
+                    "operationId":"recipesWithKeyword",
+                    "summary":"Get all recipes with a keyword",
+                    "tags":["Tags"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{}}}}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        assertEquals(
+            setOf("recipes"),
+            descriptor.actions
+                .filter { it.id in setOf("recipesincategory", "recipeswithkeyword") }
+                .map(DynamicAction::resourceId)
+                .toSet(),
+        )
+        assertEquals(
+            setOf("categories.recipes.collection", "keywords.recipes.collection"),
+            descriptor.links.map(DynamicLink::id).toSet(),
+        )
+        assertEquals(
+            setOf("recipesincategory", "recipeswithkeyword"),
+            descriptor.layouts
+                .filter { it.resourceId == "recipes" }
+                .mapNotNull(DynamicLayout::sourceActionId)
+                .toSet(),
+        )
+        val keywordRecipes = descriptor.planDynamicNavigation(
+            DynamicResourceRecordContext(
+                resourceId = "keywords",
+                recordId = "sweet",
+                actionSafeIdentity = false,
+            ),
+        ).contextualChildDestinations.single()
+        assertEquals("recipeswithkeyword", keywordRecipes.actionId)
+        assertEquals(mapOf("keywords" to "sweet"), keywordRecipes.pathParameterValues)
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `binary artwork reads are not exposed as JSON detail views`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Recipes","version":"1"},
+              "paths":{
+                "/apps/example/api/v1/recipes/{id}/image":{
+                  "parameters":[
+                    {"name":"id","in":"path","required":true,"schema":{"type":"string"}}
+                  ],
+                  "get":{
+                    "operationId":"getRecipeImage",
+                    "summary":"Get the recipe image",
+                    "tags":["Recipes"],
+                    "responses":{"200":{"description":"Image","content":{
+                      "image/jpeg":{"schema":{"type":"string","format":"binary"}}
+                    }}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        assertEquals(listOf("getrecipeimage"), descriptor.actions.map(DynamicAction::id))
+        assertTrue(descriptor.layouts.isEmpty())
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
     fun terminalIdentityPathOverridesPluralDetailNameWithoutBreakingFilteredCollections() {
         val document = """
             {
@@ -551,6 +737,19 @@ class DynamicAppDescriptorCompilerTest {
             documentUrl = documentUrl,
             document = Json.parseToJsonElement(openApi),
             trust = trust,
+        ),
+    )
+
+    private fun exampleInput(openApi: String) = DynamicDiscoveryInput(
+        app = AppIdentity("example", "Example", "1"),
+        endpointPolicy = EndpointPolicy(
+            serverOrigin = "https://cloud.example.test",
+            approvedApiPrefixes = listOf("/apps/example/api"),
+        ),
+        advertisedOpenApi = AdvertisedOpenApi(
+            documentUrl = "/apps/example/openapi.json",
+            document = Json.parseToJsonElement(openApi),
+            trust = OpenApiTrust.sameOriginAdvertisement,
         ),
     )
 

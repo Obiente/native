@@ -123,6 +123,7 @@ private fun preferredSemanticChildScore(
     val parent = parentResourceId.navigationSemanticIdentity()
     val parentIsAccount = parent.hasNavigationConcept("account") || parent.hasNavigationConcept("container")
     val parentIsMailbox = parent.hasNavigationConcept("mailbox") || parent.hasNavigationConcept("folder")
+    val parentIsTaxonomy = listOf("category", "tag", "keyword", "label").any(parent::hasNavigationConcept)
     val mailboxEvidence = destination.semanticConceptEvidence("mailbox")
     val folderEvidence = destination.semanticConceptEvidence("folder")
     val messageEvidence = maxOf(
@@ -133,6 +134,7 @@ private fun preferredSemanticChildScore(
         parentIsAccount && mailboxEvidence > 0 -> 400 + mailboxEvidence
         parentIsAccount && folderEvidence > 0 -> 300 + folderEvidence
         parentIsMailbox && messageEvidence > 0 -> 400 + messageEvidence
+        parentIsTaxonomy -> 350
         else -> 0
     }
 }

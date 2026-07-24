@@ -393,9 +393,12 @@ private class KotlinCompilerState(
         if (readFallbackOperationIds.isNotEmpty()) {
             fallbackOperationIds[actionId] = readFallbackOperationIds
         }
-        val resourceId = resourceId(operation, path, operationId)
+        val resourceId = resourceId(operation, path, operationId, method)
         val response = responseSchema(operation)
-        val (itemSchema, collection) = responseItemSchema(response)
+        val binaryRead = method == HttpMethod.GET && operation.hasSuccessfulBinaryResponse()
+        val (itemSchema, responseCollection) = responseItemSchema(response)
+        val collection = responseCollection ||
+            semanticFilteredCollectionResourceId(operation, path, operationId, method) != null
         val resource = resources.getOrPut(resourceId) { KotlinResourceBuilder(resourceId) }
         resource.collection = resource.collection || collection
         itemSchema?.let { resource.mergeFields(fieldsFromSchema(it)) }
@@ -417,7 +420,14 @@ private class KotlinCompilerState(
             defaultPathParameters,
             collection,
         )
-        val body = body(operation)
+        val label = operation.string("summary") ?: operationId.humanize()
+        val body = semanticActionBody(
+            method = method,
+            path = boundPath,
+            operationId = operationId,
+            label = label,
+            declared = body(operation),
+        )
         val auth = auth(operation)
         val permissionIds = auth.map { requirement ->
             val permissionId = "auth.${requirement.scheme.stableId()}"
@@ -438,7 +448,6 @@ private class KotlinCompilerState(
             )
             permissionId
         }
-        val label = operation.string("summary") ?: operationId.humanize()
         val action = DynamicAction(
             id = actionId,
             label = label,
@@ -471,9 +480,13 @@ private class KotlinCompilerState(
         actions[actionId] = action
 
         if (method == HttpMethod.GET) {
-            if (fallbackForOperationId == null) {
+            if (fallbackForOperationId == null && !binaryRead) {
                 val kind = if (collection) LayoutKind.list else LayoutKind.detail
-                val layoutId = "$resourceId.${kind.name}"
+                val layoutId = if (kind == LayoutKind.list && pathParameters.isNotEmpty()) {
+                    "$resourceId.${kind.name}.${operationId.stableId()}"
+                } else {
+                    "$resourceId.${kind.name}"
+                }
                 layoutPreference(resourceId, boundPath, operationId, kind, pathParameters)?.let { preference ->
                     val candidate = KotlinLayoutSeed(
                         id = layoutId,
@@ -1077,17 +1090,31 @@ private fun String.toHttpMethod(): HttpMethod? = when (lowercase()) {
     else -> null
 }
 
-private fun resourceId(operation: JsonObject, path: String, operationId: String): String {
+private fun resourceId(
+    operation: JsonObject,
+    path: String,
+    operationId: String,
+    method: HttpMethod,
+): String {
     operation.string(RESOURCE_ID_EXTENSION)
         ?.stableId()
         ?.takeIf { it.isNotBlank() && it.length <= 64 }
         ?.let { return it }
+    semanticFilteredCollectionResourceId(operation, path, operationId, method)?.let { return it }
     val rawTag = (operation["tags"] as? JsonArray)
         ?.firstOrNull()
         ?.let { it as? JsonPrimitive }
         ?.contentOrNull
     val tagResource = rawTag?.semanticTagResourceId()
     val pathResource = path.semanticPathResourceId()
+    if (
+        method != HttpMethod.GET &&
+        pathResource in setOf("import", "export") &&
+        tagResource != null &&
+        operation.referencesSemanticResource(tagResource, operationId)
+    ) {
+        return tagResource
+    }
     if (tagResource in ROOT_RESOURCE_WORDS && pathResource == null) return "overview"
     if (tagResource == null) {
         return pathResource ?: operationId.split('.', '_', '-').firstOrNull {
@@ -1105,6 +1132,154 @@ private fun resourceId(operation: JsonObject, path: String, operationId: String)
     if (operationId.provesResource(pathResource)) return pathResource
     return tagResource
 }
+
+private fun JsonObject.referencesSemanticResource(resourceId: String, operationId: String): Boolean {
+    val evidence = listOfNotNull(
+        operationId,
+        string("summary"),
+        string("description"),
+    ).joinToString(" ").stableId()
+    return resourceId.semanticBaseVariants().any { variant ->
+        variant.length >= 4 && evidence.contains(variant)
+    }
+}
+
+/**
+ * Binary reads are valid API capabilities, but they are not record/detail layouts. Their bytes are
+ * consumed by native artwork/media loaders instead of being sent through the JSON record parser.
+ */
+private fun JsonObject.hasSuccessfulBinaryResponse(): Boolean {
+    val responseContent = objectValue("responses")
+        ?.entries
+        ?.filter { (status, _) -> status.startsWith('2') }
+        ?.mapNotNull { (_, response) -> (response as? JsonObject)?.objectValue("content") }
+        .orEmpty()
+    if (responseContent.isEmpty()) return false
+    val contentTypes = responseContent.flatMap { it.keys }.map { it.substringBefore(';').lowercase() }
+    return contentTypes.isNotEmpty() &&
+        contentTypes.none { type -> type.contains("json") } &&
+        contentTypes.all { type ->
+            type.startsWith("image/") ||
+                type.startsWith("audio/") ||
+                type.startsWith("video/") ||
+                type == "application/octet-stream"
+        }
+}
+
+/**
+ * Filter endpoints often use a taxonomy noun in their route even though their response is a
+ * collection of the filtered subject. Prefer the subject proven by operation metadata so records
+ * open with the subject's renderer and detail actions instead of as raw category/tag records.
+ */
+private fun semanticFilteredCollectionResourceId(
+    operation: JsonObject,
+    path: String,
+    operationId: String,
+    method: HttpMethod,
+): String? {
+    if (method != HttpMethod.GET) return null
+    val taxonomyFilter = path.stableId().let { stablePath ->
+        ("category" in stablePath || "tag" in stablePath || "keyword" in stablePath) &&
+            path.pathPlaceholders().isNotEmpty()
+    }
+    if (!taxonomyFilter) return null
+    val operationText = listOfNotNull(
+        operationId,
+        operation.string("summary"),
+        operation.string("description"),
+    ).joinToString(" ").lowercase()
+    return when {
+        "recipe" in operationText -> "recipes"
+        else -> null
+    }
+}
+
+private fun semanticActionBody(
+    method: HttpMethod,
+    path: String,
+    operationId: String,
+    label: String,
+    declared: HttpBody?,
+): HttpBody? {
+    if (method == HttpMethod.GET || method == HttpMethod.DELETE) return declared
+    val declaredProperties = (declared?.schema as? JsonObject)
+        ?.get("properties") as? JsonObject
+    if (!declaredProperties.isNullOrEmpty()) return declared
+
+    val semantics = "$operationId $label $path".lowercase()
+    val recipeAction = "recipe" in semantics
+    if (!recipeAction) return declared
+
+    val properties = when {
+        "import" in semantics && ("url" in semantics || "website" in semantics) -> JsonObject(
+            mapOf(
+                "url" to semanticStringSchema(
+                    title = "Recipe URL",
+                    description = "Link to a webpage containing a recipe",
+                    format = "uri",
+                ),
+            ),
+        )
+        method in setOf(HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH) &&
+            listOf("create", "new", "update", "edit").any(semantics::contains) -> recipeEditProperties()
+        else -> return declared
+    }
+    val required = if ("url" in properties) listOf("url") else listOf("name")
+    return HttpBody(
+        contentType = declared?.contentType ?: "application/json",
+        required = declared?.required ?: true,
+        schema = JsonObject(
+            mapOf(
+                "type" to JsonPrimitive("object"),
+                "properties" to properties,
+                "required" to JsonArray(required.map(::JsonPrimitive)),
+            ),
+        ),
+    )
+}
+
+private fun recipeEditProperties(): JsonObject = JsonObject(
+    mapOf(
+        "name" to semanticStringSchema("Recipe name"),
+        "description" to semanticStringSchema("Description"),
+        "recipeYield" to JsonObject(
+            mapOf(
+                "type" to JsonPrimitive("integer"),
+                "title" to JsonPrimitive("Servings"),
+                "minimum" to JsonPrimitive(1),
+            ),
+        ),
+        "recipeCategory" to semanticStringSchema("Category"),
+        "keywords" to semanticStringSchema("Tags", "Separate tags with commas"),
+        "prepTime" to semanticStringSchema("Preparation time", "For example: PT20M"),
+        "cookTime" to semanticStringSchema("Cooking time", "For example: PT45M"),
+        "recipeIngredient" to semanticStringArraySchema("Ingredients"),
+        "recipeInstructions" to semanticStringArraySchema("Instructions"),
+        "tool" to semanticStringArraySchema("Tools"),
+    ),
+)
+
+private fun semanticStringSchema(
+    title: String,
+    description: String? = null,
+    format: String? = null,
+): JsonObject = JsonObject(
+    buildMap {
+        put("type", JsonPrimitive("string"))
+        put("title", JsonPrimitive(title))
+        description?.let { put("description", JsonPrimitive(it)) }
+        format?.let { put("format", JsonPrimitive(it)) }
+    },
+)
+
+private fun semanticStringArraySchema(title: String): JsonObject = JsonObject(
+    mapOf(
+        "type" to JsonPrimitive("array"),
+        "title" to JsonPrimitive(title),
+        "items" to JsonObject(mapOf("type" to JsonPrimitive("string"))),
+        "format" to JsonPrimitive(DYNAMIC_STRING_ARRAY_FORMAT),
+    ),
+)
 
 private const val RESOURCE_ID_EXTENSION = "x-nextcloud-native-resource-id"
 
@@ -1189,6 +1364,19 @@ private fun DynamicAction.navigationParent(
     childResourceId: String,
     resources: List<DynamicResource>,
 ): DynamicResource? = binding.path.hierarchyParent(childResourceId, resources)
+    ?: (binding.pathParameters + binding.queryParameters)
+        .asSequence()
+        .filter(HttpParameter::required)
+        .map { parameter -> parameter.name.stableId() }
+        .mapNotNull { stem ->
+            val variants = stem.semanticBaseVariants()
+            resources.firstOrNull { resource ->
+                resource.collection &&
+                    resource.id.semanticBaseVariants().intersect(variants).isNotEmpty() &&
+                    resource.id.semanticBaseVariants().intersect(childResourceId.semanticBaseVariants()).isEmpty()
+            }
+        }
+        .firstOrNull()
     ?: (binding.pathParameters + binding.queryParameters)
         .asSequence()
         .filter(HttpParameter::required)
