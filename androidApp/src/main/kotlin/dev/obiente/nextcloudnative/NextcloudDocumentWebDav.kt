@@ -73,6 +73,7 @@ internal object NoDocumentRequestCancellation : DocumentRequestCancellation {
 /** Bounded read and conflict-aware mutation WebDAV client for the Android DocumentsProvider. */
 internal class NextcloudDocumentWebDav(
     private val client: OkHttpClient = OkHttpClient(),
+    private val cloudMutationsAllowed: () -> Boolean = { true },
 ) {
     fun readFile(
         session: NextcloudSession,
@@ -359,11 +360,15 @@ internal class NextcloudDocumentWebDav(
         execute(builder.delete().build(), "clean up staged upload")
     }
 
-    private fun execute(request: Request, operation: String): DocumentMutationResult =
-        client.newCall(request).execute().use { response ->
+    private fun execute(request: Request, operation: String): DocumentMutationResult {
+        check(cloudMutationsAllowed()) {
+            "This emulator is using a shared read-only test session. Cloud changes are blocked."
+        }
+        return client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw response.toDocumentException(operation)
             DocumentMutationResult(response.header("ETag") ?: response.header("OC-Etag"))
         }
+    }
 
     private fun requestBuilder(session: NextcloudSession, url: String): Request.Builder {
         val credentials = "${session.loginName}:${session.appPassword}"

@@ -31,7 +31,7 @@ import kotlinx.coroutines.runBlocking
 class NextcloudDocumentsProvider : DocumentsProvider() {
     private lateinit var services: AndroidNextcloudServices
     private lateinit var offline: AndroidFileOfflineRepository
-    private val webDav = NextcloudDocumentWebDav()
+    private lateinit var webDav: NextcloudDocumentWebDav
 
     @Volatile
     private var cachedAccount: ResolvedAccount? = null
@@ -40,6 +40,9 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val providerContext = context ?: return false
         services = AndroidNextcloudServices(providerContext)
         offline = AndroidFileOfflineRepository(providerContext)
+        webDav = NextcloudDocumentWebDav(
+            cloudMutationsAllowed = providerContext.cloudMutationGate(),
+        )
         return true
     }
 
@@ -59,8 +62,12 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 },
                 DocumentsContract.Root.COLUMN_FLAGS to (
                     DocumentsContract.Root.FLAG_SUPPORTS_IS_CHILD or
-                        DocumentsContract.Root.FLAG_SUPPORTS_CREATE or
-                        DocumentsContract.Root.FLAG_SUPPORTS_SEARCH
+                        DocumentsContract.Root.FLAG_SUPPORTS_SEARCH or
+                        if (context?.isReadOnlyTestMode() == true) {
+                            0
+                        } else {
+                            DocumentsContract.Root.FLAG_SUPPORTS_CREATE
+                        }
                     ),
                 DocumentsContract.Root.COLUMN_ICON to R.mipmap.ic_launcher,
                 DocumentsContract.Root.COLUMN_MIME_TYPES to "*/*",
