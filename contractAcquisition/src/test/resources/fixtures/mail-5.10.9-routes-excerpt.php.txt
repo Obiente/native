@@ -1,0 +1,15 @@
+<?php
+// Exact resource declarations excerpted from nextcloud/mail v5.10.9 appinfo/routes.php.
+return [
+	'routes' => [
+		['name' => 'mailboxes#sync', 'url' => '/api/mailboxes/{id}/sync', 'verb' => 'POST'],
+		['name' => 'messages#move', 'url' => '/api/messages/{id}/move', 'verb' => 'POST'],
+		['name' => 'messages#setFlags', 'url' => '/api/messages/{id}/flags', 'verb' => 'PUT'],
+		['name' => 'messages#destroy', 'url' => '/api/messages/{id}', 'verb' => 'DELETE'],
+	],
+	'resources' => [
+		'accounts' => ['url' => '/api/accounts'],
+		'mailboxes' => ['url' => '/api/mailboxes'],
+		'messages' => ['url' => '/api/messages'],
+	],
+];

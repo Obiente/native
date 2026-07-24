@@ -1,0 +1,16 @@
+<?php
+// Signature excerpted from nextcloud/mail v5.10.9 lib/Controller/MailboxesController.php.
+use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http\JSONResponse;
+class MailboxesController extends Controller {
+	public function sync(
+		int $id,
+		array $ids = [],
+		?int $lastMessageTimestamp = null,
+		bool $init = false,
+		string $sortOrder = 'newest',
+		?string $query = null,
+	): JSONResponse {
+		return new JSONResponse([]);
+	}
+}

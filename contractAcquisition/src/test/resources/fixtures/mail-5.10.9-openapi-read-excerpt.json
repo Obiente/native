@@ -1,0 +1,63 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "Mail", "version": "5.10.9"},
+  "paths": {
+    "/ocs/v2.php/apps/mail/account/list": {
+      "get": {
+        "operationId": "account_api-list",
+        "summary": "List all email accounts and their aliases of the user which is currently logged-in",
+        "parameters": [
+          {"name": "OCS-APIRequest", "in": "header", "required": true, "schema": {"type": "boolean", "default": true}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Account list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ocs": {
+                      "type": "object",
+                      "properties": {
+                        "data": {"type": "array", "items": {"type": "object"}}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ocs/v2.php/apps/mail/ocs/mailboxes": {
+      "get": {
+        "operationId": "mailboxes_api-list",
+        "parameters": [
+          {"name": "accountId", "in": "query", "required": true, "schema": {"type": "integer"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Mailbox list",
+            "content": {"application/json": {"schema": {"type": "object", "additionalProperties": {"type": "object"}}}}
+          }
+        }
+      }
+    },
+    "/ocs/v2.php/apps/mail/ocs/mailboxes/{id}/messages": {
+      "get": {
+        "operationId": "mailboxes_api-list-messages",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "integer"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Message list",
+            "content": {"application/json": {"schema": {"type": "object", "additionalProperties": {"type": "object"}}}}
+          }
+        }
+      }
+    }
+  }
+}

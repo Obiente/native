@@ -1,0 +1,28 @@
+<?php
+// Signature excerpted from nextcloud/mail v5.10.9 lib/Controller/MessagesController.php.
+use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http\JSONResponse;
+class MessagesController extends Controller {
+	public function index(
+		int $mailboxId,
+		?int $cursor = null,
+		?string $filter = null,
+		?int $limit = null,
+		?string $view = null,
+		?string $v = null,
+	): JSONResponse {
+		return new JSONResponse([]);
+	}
+
+	public function move(int $id, int $destFolderId): JSONResponse {
+		return new JSONResponse([]);
+	}
+
+	public function setFlags(int $id, array $flags): JSONResponse {
+		return new JSONResponse([]);
+	}
+
+	public function destroy(int $id): JSONResponse {
+		return new JSONResponse([]);
+	}
+}

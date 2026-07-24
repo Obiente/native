@@ -1,0 +1,10 @@
+<?php
+// Signatures excerpted from nextcloud/mail v5.10.9 lib/Controller/AccountsController.php.
+use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http\JSONResponse;
+class AccountsController extends Controller {
+	public function index(): JSONResponse { return new JSONResponse([]); }
+	public function show(int $id): JSONResponse { return new JSONResponse([]); }
+	public function create(): JSONResponse { return new JSONResponse([]); }
+	public function destroy(int $id): JSONResponse { return new JSONResponse([]); }
+}
