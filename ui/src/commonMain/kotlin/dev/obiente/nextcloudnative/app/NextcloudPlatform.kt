@@ -1,0 +1,863 @@
+package dev.obiente.nextcloudnative.app
+
+import kotlinx.serialization.Serializable
+
+enum class ThemePreference {
+    System,
+    Light,
+    Dark,
+}
+
+enum class PlatformCapability {
+    Notifications,
+    Camera,
+    Microphone,
+    NearbyAudio,
+    BackgroundSync,
+    FilesAndMedia,
+    AllFilesAccess,
+}
+
+enum class PlatformCapabilityState {
+    Granted,
+    NeedsPermission,
+    Blocked,
+    AvailableWithoutPermission,
+    Unsupported,
+}
+
+data class PlatformCapabilityStatus(
+    val capability: PlatformCapability,
+    val label: String,
+    val description: String,
+    val state: PlatformCapabilityState,
+)
+
+data class NextcloudSession(
+    val serverUrl: String,
+    val loginName: String,
+    val appPassword: String,
+)
+
+data class LoginChallenge(
+    val pollEndpoint: String,
+    val token: String,
+    val loginUrl: String,
+)
+
+@Serializable
+data class NextcloudAppEntry(
+    val id: String,
+    val name: String,
+    val href: String?,
+)
+
+data class NextcloudServerInfo(
+    val serverUrl: String,
+    val displayName: String,
+    val userId: String,
+    val version: String?,
+    val themeName: String?,
+    val themeColor: String?,
+    val apps: List<NextcloudAppEntry>,
+    val recognizeBridge: RecognizeBridgeDiscovery = RecognizeBridgeDiscovery.NotAdvertised,
+    val fileSharing: NextcloudFileSharingCapabilities = NextcloudFileSharingCapabilities.Unavailable,
+)
+
+@Serializable
+data class NextcloudFile(
+    val path: String,
+    val name: String,
+    val isDirectory: Boolean,
+    val mimeType: String?,
+    val size: Long?,
+    val lastModified: String?,
+    val fileId: Long?,
+    val hasPreview: Boolean,
+    val etag: String? = null,
+    /**
+     * Whether callers may read the original object rather than a bounded server preview.
+     *
+     * Ordinary Files/Photos records allow this by default. Shared surfaces such as Talk can
+     * explicitly preserve a server-side no-download policy through generic file handoffs.
+     */
+    val originalAccessAllowed: Boolean = true,
+    /** Raw DAV permission flags. `W` is required before planning an edit session. */
+    val permissions: String? = null,
+    /** Strong content identities supplied by DAV clients, for example `SHA256:<hex>`. */
+    val checksums: List<String> = emptyList(),
+)
+
+data class NextcloudFileContent(
+    val bytes: ByteArray,
+    val mimeType: String?,
+    val etag: String?,
+)
+
+data class SavedTextFile(
+    val etag: String?,
+    val wasCreated: Boolean,
+)
+
+enum class NextcloudApiMethod {
+    GET,
+    POST,
+    PUT,
+    PATCH,
+    DELETE,
+}
+
+/**
+ * Restricted same-origin transport used by schema-declared dynamic app actions.
+ *
+ * Callers cannot supply authentication or arbitrary headers. Platform implementations attach the
+ * authenticated Nextcloud session and reject redirects so credentials never leave the account
+ * origin. The descriptor trust boundary is still responsible for approving the endpoint prefix.
+ */
+data class NextcloudApiRequest(
+    val method: NextcloudApiMethod,
+    val relativePath: String,
+    val queryParameters: Map<String, String> = emptyMap(),
+    val contentType: String? = null,
+    val body: ByteArray? = null,
+    val ocsApiRequest: Boolean = false,
+    val maximumResponseBytes: Long = DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES,
+)
+
+data class NextcloudApiResponse(
+    val status: Int,
+    val body: ByteArray,
+    val contentType: String?,
+    val etag: String?,
+    /** Present only when redirects are disabled and the server returned a Location header. */
+    val location: String? = null,
+)
+
+/**
+ * Stable credential-free identity for a dynamic GET response.
+ *
+ * Length-prefixed query fields avoid ambiguous delimiter collisions while retaining a readable
+ * prefix for diagnostics. Authentication and request bodies are deliberately excluded.
+ */
+fun NextcloudApiRequest.dynamicReadCacheIdentity(): String = buildString {
+    append(method.name)
+    append(' ')
+    append(relativePath)
+    append(" ocs=")
+    append(ocsApiRequest)
+    queryParameters.toSortedMap().forEach { (name, value) ->
+        val encodedName = encodeUrlComponent(name)
+        val encodedValue = encodeUrlComponent(value)
+        append(" q")
+        append(encodedName.length)
+        append(':')
+        append(encodedName)
+        append('=')
+        append(encodedValue.length)
+        append(':')
+        append(encodedValue)
+    }
+}
+
+data class AcquiredOpenApiContract(
+    val appId: String,
+    val appVersion: String,
+    val contractVersion: String,
+    val specFile: String,
+    val document: String,
+    val packageUrl: String,
+    val sourceUrl: String,
+    val sourceKind: AcquiredOpenApiContractSourceKind,
+    val contractKind: AcquiredContractKind = AcquiredContractKind.OpenApi,
+)
+
+enum class AcquiredContractKind {
+    OpenApi,
+    VerifiedReadRoutes,
+    OpenApiWithVerifiedReadRoutes,
+}
+
+enum class AcquiredOpenApiContractSourceKind {
+    SignedAppPackage,
+    SignedCompatibleAppPackage,
+    AppStoreLinkedExactGitHubTag,
+    AppStoreLinkedCompatibleGitHubTag,
+}
+
+@Serializable
+data class TalkRoom(
+    val token: String,
+    val displayName: String,
+    val lastMessage: String?,
+    val unreadMessages: Int,
+)
+
+data class TalkMessage(
+    val id: Long,
+    val actorDisplayName: String,
+    val actorId: String,
+    val actorType: String,
+    val message: String,
+    val timestamp: Long,
+    val messageType: TalkMessageType,
+    val systemMessage: TalkSystemMessageType,
+    val systemMessageName: String?,
+    val parameters: Map<String, TalkRichObjectParameter>,
+    val content: TalkMessageContent,
+) {
+    val isSystemMessage: Boolean get() = systemMessageName != null
+}
+
+data class TalkMessagePage(
+    val messages: List<TalkMessage>,
+    /** Opaque history position returned by Talk for the next older-page request. */
+    val olderCursor: Long?,
+    val hasMoreHistory: Boolean,
+)
+
+data class NextcloudActivity(
+    val id: Long,
+    val app: String,
+    val type: String,
+    val subject: String,
+    val message: String?,
+    val objectType: String?,
+    val objectId: String?,
+    val objectName: String?,
+    val link: String?,
+    val icon: String?,
+    val dateTime: String?,
+)
+
+@Serializable
+data class NextcloudNote(
+    val id: Long,
+    val title: String,
+    val modified: Long,
+    val category: String,
+    val favorite: Boolean,
+    val readOnly: Boolean,
+    val content: String?,
+    val etag: String?,
+    val internalPath: String? = null,
+    val isShared: Boolean = false,
+)
+
+sealed interface NextcloudConditionalRead<out T> {
+    data class Modified<T>(
+        val value: T,
+        val responseEtag: String?,
+    ) : NextcloudConditionalRead<T>
+
+    data object NotModified : NextcloudConditionalRead<Nothing>
+}
+
+@Serializable
+data class NextcloudPerson(
+    val id: Long,
+    val name: String,
+    val userId: String,
+    val queryName: String,
+    val count: Int,
+    val coverFileId: Long?,
+    val coverEtag: String?,
+    val backend: String,
+)
+
+interface NextcloudPlatformServices {
+    /** True only when this platform has durable app-private offline file storage and execution. */
+    val supportsFileOfflineStorage: Boolean get() = false
+
+    /**
+     * True only for one-way recursive folder availability backed by durable platform execution.
+     *
+     * This capability never implies local-to-server upload or bidirectional folder synchronization.
+     */
+    val supportsRecursiveFileOfflineStorage: Boolean get() = false
+
+    /** True only when this platform can execute durable local-folder/remote-folder sync pairs. */
+    val supportsBidirectionalFileSync: Boolean get() = false
+
+    /** Native handoff is opt-in; unsupported platforms must never imply that an action was launched. */
+    val externalFileHandoffSupport: ExternalFileHandoffSupport
+        get() = ExternalFileHandoffSupport.Unsupported("External file handoff is not supported on this platform.")
+
+    fun platformCapabilities(): List<PlatformCapabilityStatus> = emptyList()
+
+    /** Starts a platform permission flow or opens platform settings when the permission is blocked. */
+    fun requestPlatformCapability(capability: PlatformCapability): Boolean = false
+
+    fun loadThemePreference(): ThemePreference
+
+    fun saveThemePreference(preference: ThemePreference)
+
+    fun loadLastOpenedAppId(): String
+
+    fun saveLastOpenedAppId(appId: String)
+
+    fun loadSession(): NextcloudSession?
+
+    fun saveSession(session: NextcloudSession)
+
+    fun clearSession()
+
+    fun openExternalUrl(url: String)
+
+    /** Copies bounded application text without exposing session credentials to another process. */
+    fun copyTextToClipboard(label: String, text: String): Boolean = false
+
+    suspend fun handoffFileToExternalApp(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        action: ExternalFileHandoffAction,
+    ): ExternalFileHandoffResult = ExternalFileHandoffResult.Unsupported(
+        (externalFileHandoffSupport as? ExternalFileHandoffSupport.Unsupported)?.reason
+            ?: "External file handoff is not supported on this platform.",
+    )
+
+    suspend fun beginLogin(serverUrl: String): LoginChallenge
+
+    suspend fun pollLogin(challenge: LoginChallenge): NextcloudSession?
+
+    suspend fun loadServerInfo(session: NextcloudSession): NextcloudServerInfo
+
+    suspend fun listFiles(session: NextcloudSession, userId: String, path: String): List<NextcloudFile>
+
+    /**
+     * Lists a folder while preserving whether the returned snapshot was confirmed by the server.
+     *
+     * Platforms with a persistent read cache override this method. The default keeps existing
+     * service implementations source-compatible but never claims that an unknown result is cached.
+     */
+    suspend fun listFilesWithSource(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+    ): NextcloudFileListing = NextcloudFileListing(
+        files = listFiles(session, userId, path),
+        source = NextcloudFileListingSource.Network,
+    )
+
+    /**
+     * Reads a cached folder listing, if available, without performing a network request.
+     *
+     * Default implementations return null and should be overridden by cache-capable services.
+     */
+    suspend fun listFilesCachedWithSource(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+    ): NextcloudFileListing? = null
+
+    /** Returns persisted availability for the supplied files, keyed by canonical relative path. */
+    suspend fun loadFileOfflineAvailability(
+        session: NextcloudSession,
+        userId: String,
+        files: List<NextcloudFile>,
+    ): Map<String, FileOfflineAvailability> = emptyMap()
+
+    /** Persists pin intent and schedules durable execution; it does not claim immediate availability. */
+    suspend fun setFileAvailableOffline(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        available: Boolean,
+    ): FileOfflineAvailability = error("Offline file storage is not supported on this platform.")
+
+    /**
+     * Returns an account-scoped inventory for the Sync & Offline center.
+     *
+     * The safe default reports the platform limitation instead of returning an empty inventory
+     * that could be mistaken for proof that no files are pinned.
+     */
+    suspend fun loadFileOfflineCenter(
+        session: NextcloudSession,
+        userId: String,
+    ): FileOfflineCenterSnapshot = defaultFileOfflineCenterSnapshot(
+        supportsIndividualOfflineFiles = supportsFileOfflineStorage,
+        supportsRecursiveFolderAvailability = supportsRecursiveFileOfflineStorage,
+    )
+
+    /** Retries only an already-planned offline download; the default never schedules work. */
+    suspend fun retryFileOfflineItem(
+        session: NextcloudSession,
+        userId: String,
+        key: FileOfflineKey,
+    ): FileOfflineCenterActionResult = FileOfflineCenterActionResult.Unsupported(
+        "Retrying offline work is not available on this platform.",
+    )
+
+    /** Removes one app-private offline copy; it must never delete the remote Nextcloud file. */
+    suspend fun removeFileOfflineItem(
+        session: NextcloudSession,
+        userId: String,
+        key: FileOfflineKey,
+    ): FileOfflineCenterActionResult = FileOfflineCenterActionResult.Unsupported(
+        "Removing offline copies from this center is not available on this platform.",
+    )
+
+    /** Opens the native folder chooser and persists a least-privilege folder grant. */
+    suspend fun chooseFileSyncLocalRoot(): FileSyncLocalRoot? = null
+
+    suspend fun loadFileSyncCenter(
+        session: NextcloudSession,
+        userId: String,
+    ): FileSyncCenterSnapshot = FileSyncCenterSnapshot(
+        support = FileSyncCenterSupport.Unsupported,
+        pairs = emptyList(),
+        limitation = "Bidirectional folder synchronization is not available on this platform.",
+    )
+
+    suspend fun addFileSyncPair(
+        session: NextcloudSession,
+        userId: String,
+        localRoot: FileSyncLocalRoot,
+        remoteRootPath: String,
+        configuration: FileSyncConfiguration,
+    ): FileSyncCenterActionResult = FileSyncCenterActionResult.Unsupported(
+        "Bidirectional folder synchronization is not available on this platform.",
+    )
+
+    /** Scans both roots and executes all conflict-free work with revision guards. */
+    suspend fun runFileSyncPair(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+    ): FileSyncCenterActionResult = FileSyncCenterActionResult.Unsupported(
+        "Bidirectional folder synchronization is not available on this platform.",
+    )
+
+    suspend fun resolveFileSyncConflict(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+        workId: Long,
+        choice: FileSyncDecisionChoice,
+    ): FileSyncCenterActionResult = FileSyncCenterActionResult.Unsupported(
+        "Folder sync conflict review is not available on this platform.",
+    )
+
+    suspend fun removeFileSyncPair(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+    ): FileSyncCenterActionResult = FileSyncCenterActionResult.Unsupported(
+        "Bidirectional folder synchronization is not available on this platform.",
+    )
+
+    suspend fun listMedia(session: NextcloudSession, userId: String): List<NextcloudFile>
+
+    /**
+     * Resolves stable server file IDs to current authoritative Files records.
+     *
+     * Missing IDs are omitted. Callers must keep unresolved media preview-only and must not invent
+     * a Files path from a Memories, Talk, album, or search route.
+     */
+    suspend fun resolveFilesById(
+        session: NextcloudSession,
+        userId: String,
+        fileIds: Collection<Long>,
+    ): Map<Long, NextcloudFile> = emptyMap()
+
+    /** Lists the server-wide system tags visible to the authenticated account. */
+    suspend fun listSystemTags(session: NextcloudSession): List<NextcloudSystemTag>
+
+    suspend fun loadPreview(
+        session: NextcloudSession,
+        fileId: Long,
+        width: Int = DEFAULT_PREVIEW_DIMENSION,
+        height: Int = DEFAULT_PREVIEW_DIMENSION,
+    ): ByteArray
+
+    suspend fun downloadFile(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        maxBytes: Long = DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES,
+    ): NextcloudFileContent
+
+    /**
+     * Lists immutable historical generations for the exact Files record.
+     *
+     * Implementations authenticate against the active account and use the official versions DAV
+     * collection. This read must never restore or alter the current server object.
+     */
+    suspend fun listFileVersions(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+    ): FileVersionHistory = error("File version history is not supported on this platform.")
+
+    /**
+     * Downloads at most [maximumBytes] from one generation belonging to [file].
+     *
+     * Both the request range and the transport reader must enforce the bound. The result is a
+     * detached copy and must never be written back to the current file automatically.
+     */
+    suspend fun downloadFileVersion(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        version: NextcloudFileVersion,
+        maximumBytes: Long = MAX_FILE_VERSION_PREVIEW_BYTES,
+    ): NextcloudFileContent = error("Historical file downloads are not supported on this platform.")
+
+    /**
+     * Replaces the current file with the selected historical generation through versions DAV.
+     *
+     * Callers must obtain explicit user confirmation immediately before invoking this mutation.
+     * Implementations must keep both source and destination on the authenticated account origin.
+     */
+    suspend fun restoreFileVersion(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        version: NextcloudFileVersion,
+    ) {
+        error("File version restoration is not supported on this platform.")
+    }
+
+    /**
+     * Opens a detached historical copy in the platform's export/share flow.
+     *
+     * The default deliberately does nothing. Platforms must stage a distinct read-only copy and
+     * must not point another app at the live DAV object.
+     */
+    suspend fun handoffFileVersionToExternalApp(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        version: NextcloudFileVersion,
+        action: ExternalFileHandoffAction,
+    ): ExternalFileHandoffResult = ExternalFileHandoffResult.Unsupported(
+        "Historical file export is not supported on this platform.",
+    )
+
+    suspend fun saveTextFile(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        text: String,
+        expectedEtag: String,
+    ): SavedTextFile
+
+    /** Creates a text file only when the destination does not already exist. */
+    suspend fun createTextFileIfAbsent(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        text: String,
+    ): SavedTextFile
+
+    /** Creates a WebDAV collection only when the destination does not already exist. */
+    suspend fun createDirectoryIfAbsent(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+    ): Boolean
+
+    suspend fun executeFileMutation(
+        session: NextcloudSession,
+        userId: String,
+        mutation: NextcloudFileMutation,
+    ): NextcloudFileMutationResult
+
+    suspend fun executeNextcloudApi(
+        session: NextcloudSession,
+        request: NextcloudApiRequest,
+    ): NextcloudApiResponse
+
+    /**
+     * Dedicated same-origin CalDAV/CardDAV transport.
+     *
+     * DAV needs methods and conditional headers that are intentionally unavailable to dynamic
+     * app contracts. Implementations must keep authentication on the account origin and reject
+     * redirects.
+     */
+    suspend fun executeGroupwareDav(
+        session: NextcloudSession,
+        request: GroupwareDavRequest,
+    ): NextcloudApiResponse {
+        error("Groupware DAV transport is unavailable on this platform.")
+    }
+
+    /**
+     * Dedicated same-origin transport for reviewed Photos DAV collection mutations.
+     *
+     * Implementations must reject redirects and may only attach the request's conflict and
+     * destination headers after rebuilding both URLs against the authenticated account origin.
+     */
+    suspend fun executeMediaCollectionMutation(
+        session: NextcloudSession,
+        request: NativeMediaCollectionTransportRequest,
+    ): NextcloudApiResponse {
+        error("Media collection mutation transport is unavailable on this platform.")
+    }
+
+    /**
+     * Dedicated same-origin transport for a reviewed people mutation.
+     *
+     * Implementations must not redirect, persist the Recognize token, or expose it to generic API
+     * request hooks. Only [PeopleMutationService] should call this after explicit confirmation.
+     */
+    suspend fun executePeopleMutation(
+        session: NextcloudSession,
+        request: PeopleTransportRequest,
+    ): NextcloudApiResponse {
+        error("People mutation transport is unavailable on this platform.")
+    }
+
+    suspend fun acquireSignedOpenApiContract(
+        appId: String,
+        serverVersion: String,
+        installedAppVersion: String?,
+    ): AcquiredOpenApiContract?
+
+    suspend fun listActivities(session: NextcloudSession, limit: Int = DEFAULT_ACTIVITY_LIMIT): List<NextcloudActivity>
+
+    suspend fun listNotes(session: NextcloudSession): List<NextcloudNote>
+
+    /**
+     * Reads the server-wide direct-editing inventory without creating an edit token.
+     *
+     * Implementations should preserve the response ETag so repeated discovery can use a
+     * conditional request. A token-producing document open is a separate explicit action.
+     */
+    suspend fun loadDocumentEditingCapabilities(
+        session: NextcloudSession,
+        expectedEtag: String? = null,
+    ): NextcloudConditionalRead<NextcloudDocumentEditingCapabilities> =
+        NextcloudConditionalRead.Modified(
+            NextcloudDocumentEditingCapabilities.Unavailable,
+            responseEtag = null,
+        )
+
+    /** Lists token-free template metadata for an advertised document creator. */
+    suspend fun listDocumentTemplates(
+        session: NextcloudSession,
+        editorId: String,
+        creatorId: String,
+    ): List<NextcloudDocumentTemplate> = emptyList()
+
+    /**
+     * Creates one short-lived, same-origin edit handoff after a visible user action.
+     *
+     * The request must have been produced by a trusted file-integration planner. Platform
+     * implementations must reject redirects and validate the returned URL against the account
+     * origin.
+     */
+    suspend fun beginDocumentEditSession(
+        session: NextcloudSession,
+        request: NextcloudDocumentEditSessionRequest,
+    ): NextcloudDocumentEditSession = error("Document direct editing is not supported on this platform.")
+
+    suspend fun listNotesConditionally(
+        session: NextcloudSession,
+        expectedEtag: String?,
+    ): NextcloudConditionalRead<List<NextcloudNote>> =
+        NextcloudConditionalRead.Modified(listNotes(session), responseEtag = null)
+
+    suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote
+
+    suspend fun loadNoteConditionally(
+        session: NextcloudSession,
+        noteId: Long,
+        expectedEtag: String?,
+    ): NextcloudConditionalRead<NextcloudNote> =
+        NextcloudConditionalRead.Modified(loadNote(session, noteId), responseEtag = null)
+
+    suspend fun updateNote(
+        session: NextcloudSession,
+        noteId: Long,
+        content: String,
+        category: String,
+        favorite: Boolean,
+        expectedEtag: String?,
+        title: String? = null,
+    ): NextcloudNote
+
+    suspend fun createNote(
+        session: NextcloudSession,
+        title: String,
+        content: String,
+        category: String,
+    ): NextcloudNote = error("Creating notes is not supported on this platform.")
+
+    suspend fun deleteNote(
+        session: NextcloudSession,
+        noteId: Long,
+        expectedEtag: String? = null,
+    ) {
+        error("Deleting notes is not supported on this platform.")
+    }
+
+    suspend fun renameNoteCategory(
+        session: NextcloudSession,
+        oldCategory: String,
+        newCategory: String,
+    ) {
+        val source = normalizeNoteCategory(oldCategory)
+        val destination = normalizeNoteCategory(newCategory)
+        require(source.isNotEmpty() && destination.isNotEmpty() && source != destination) {
+            "Choose a valid destination folder."
+        }
+        require(!destination.startsWith("$source/")) { "A folder cannot be moved inside itself." }
+        val summaries = listNotes(session)
+        executeNoteFolderRename(
+            summaries = summaries,
+            oldCategory = source,
+            newCategory = destination,
+            loadNote = { noteId -> loadNote(session, noteId) },
+            updateNote = { mutation ->
+                val note = mutation.note
+                updateNote(
+                    session = session,
+                    noteId = note.id,
+                    content = requireNotNull(note.content),
+                    category = requireNotNull(mutation.destinationCategory),
+                    favorite = note.favorite,
+                    expectedEtag = requireNotNull(note.etag),
+                    title = note.title,
+                )
+            },
+            reloadSummaries = { listNotes(session) },
+        )
+    }
+
+    suspend fun deleteNoteCategory(
+        session: NextcloudSession,
+        category: String,
+    ) {
+        val path = normalizeNoteCategory(category)
+        require(path.isNotEmpty()) { "The root note folder cannot be deleted." }
+        val summaries = listNotes(session)
+        executeNoteFolderDelete(
+            summaries = summaries,
+            category = path,
+            loadNote = { noteId -> loadNote(session, noteId) },
+            deleteNote = { mutation ->
+                deleteNote(
+                    session = session,
+                    noteId = mutation.note.id,
+                    expectedEtag = requireNotNull(mutation.note.etag),
+                )
+            },
+            reloadSummaries = { listNotes(session) },
+        )
+    }
+
+    suspend fun listPeople(session: NextcloudSession, backend: String = "recognize"): List<NextcloudPerson>
+
+    suspend fun loadPersonCover(session: NextcloudSession, person: NextcloudPerson): ByteArray
+
+    suspend fun listPersonMedia(session: NextcloudSession, person: NextcloudPerson): List<NextcloudFile>
+
+    suspend fun listTalkRooms(session: NextcloudSession): List<TalkRoom>
+
+    suspend fun listTalkMessages(session: NextcloudSession, token: String): List<TalkMessage>
+
+    suspend fun listTalkMessagePage(
+        session: NextcloudSession,
+        token: String,
+        olderCursor: Long? = null,
+        limit: Int = DEFAULT_TALK_MESSAGE_PAGE_SIZE,
+    ): TalkMessagePage = TalkMessagePage(
+        messages = listTalkMessages(session, token),
+        olderCursor = null,
+        hasMoreHistory = false,
+    )
+
+    suspend fun sendTalkMessage(session: NextcloudSession, token: String, message: String)
+
+    suspend fun revokeSession(session: NextcloudSession)
+}
+
+const val DEFAULT_PREVIEW_DIMENSION = 512
+const val MIN_PREVIEW_DIMENSION = 32
+const val MAX_PREVIEW_DIMENSION = 2048
+const val DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES = 64L * 1024L * 1024L
+const val MAX_OFFLINE_FILE_BYTES = 512L * 1024L * 1024L
+const val MAX_EDITABLE_TEXT_BYTES = 4L * 1024L * 1024L
+const val DEFAULT_ACTIVITY_LIMIT = 50
+const val DEFAULT_TALK_MESSAGE_PAGE_SIZE = 100
+const val MAX_TALK_MESSAGE_PAGE_SIZE = 200
+const val MAX_ACTIVITY_LIMIT = 200
+const val MAX_NOTE_BYTES = 4L * 1024L * 1024L
+const val DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 4L * 1024L * 1024L
+const val MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 16L * 1024L * 1024L
+
+fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
+    require(relativePath.startsWith('/') && !relativePath.startsWith("//")) {
+        "Dynamic API paths must be relative to the connected Nextcloud server."
+    }
+    require(relativePath.none { it == '\\' || it == '?' || it == '#' || it.isWhitespace() }) {
+        "Dynamic API paths cannot contain a query, fragment, backslash, or whitespace."
+    }
+    require(relativePath.split('/').none { segment ->
+        val decodedDots = segment.replace("%2e", ".", ignoreCase = true)
+        decodedDots == "." || decodedDots == ".."
+    }) { "Dynamic API paths cannot traverse directories." }
+    require(queryParameters.keys.all { key ->
+        key.isNotBlank() && key.none { it.isWhitespace() || it == '&' || it == '=' || it == '#' }
+    }) { "Dynamic API query parameter names are invalid." }
+    val maximumAllowedResponse = if (
+        relativePath.matches(Regex("^/index\\.php/apps/memories/api/image/decodable/[1-9][0-9]*$"))
+    ) {
+        DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES
+    } else {
+        MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES
+    }
+    require(maximumResponseBytes in 1..maximumAllowedResponse) {
+        "Dynamic API response limit is outside the allowed range."
+    }
+    require(contentType == null || contentType.length <= 160) { "Dynamic API content type is invalid." }
+    return this
+}
+
+fun buildNextcloudApiUrl(serverUrl: String, request: NextcloudApiRequest): String {
+    request.requireSafe()
+    val base = serverUrl.trimEnd('/') + request.relativePath
+    if (request.queryParameters.isEmpty()) return base
+    val query = request.queryParameters.toSortedMap().entries.joinToString("&") { (key, value) ->
+        "${encodeUrlComponent(key)}=${encodeUrlComponent(value)}"
+    }
+    return "$base?$query"
+}
+
+fun boundedActivityLimit(value: Int): Int = value.coerceIn(1, MAX_ACTIVITY_LIMIT)
+
+fun boundedPreviewDimension(value: Int): Int = value.coerceIn(MIN_PREVIEW_DIMENSION, MAX_PREVIEW_DIMENSION)
+
+fun buildNextcloudFileUrl(serverUrl: String, userId: String, path: String): String {
+    val encodedUserId = encodeUrlPathSegment(userId)
+    val encodedPath = path
+        .split('/')
+        .filter(String::isNotEmpty)
+        .onEach { segment ->
+            require(segment != "." && segment != "..") { "The file path contains an invalid segment." }
+        }
+        .joinToString("/") { encodeUrlPathSegment(it) }
+    return serverUrl.trimEnd('/') + "/remote.php/dav/files/$encodedUserId/" + encodedPath
+}
+
+private fun encodeUrlPathSegment(value: String): String = encodeUrlComponent(value)
+
+private fun encodeUrlComponent(value: String): String = buildString {
+    for (byte in value.encodeToByteArray()) {
+        val unsigned = byte.toInt() and 0xff
+        val isUnreserved = unsigned in 'a'.code..'z'.code ||
+            unsigned in 'A'.code..'Z'.code ||
+            unsigned in '0'.code..'9'.code ||
+            unsigned == '-'.code || unsigned == '.'.code || unsigned == '_'.code || unsigned == '~'.code
+        if (isUnreserved) {
+            append(unsigned.toChar())
+        } else {
+            append('%')
+            append(HEX_DIGITS[unsigned ushr 4])
+            append(HEX_DIGITS[unsigned and 0x0f])
+        }
+    }
+}
+
+private const val HEX_DIGITS = "0123456789ABCDEF"

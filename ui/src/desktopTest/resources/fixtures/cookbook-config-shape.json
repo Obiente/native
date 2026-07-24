@@ -1,0 +1,12 @@
+{
+  "folder": "Cookbook",
+  "update_interval": 900,
+  "print_image": true,
+  "visibleInfoBlocks": {
+    "preparation-time": true,
+    "cooking-time": true,
+    "total-time": true,
+    "nutrition-information": false,
+    "tools": true
+  }
+}

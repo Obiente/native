@@ -1,0 +1,5 @@
+Source: https://github.com/julien-nc/cospend-nc/blob/072d40c64d955e71aca7d641461e390f0648a8fa/openapi.json
+Commit: 072d40c64d955e71aca7d641461e390f0648a8fa
+Retrieved: 2026-07-22
+
+This unmodified excerpt contains competing authenticated local, federated, import, public-token, and ping GET operations. It verifies that generic default-surface ranking chooses canonical resource paths without removing alternate operations.

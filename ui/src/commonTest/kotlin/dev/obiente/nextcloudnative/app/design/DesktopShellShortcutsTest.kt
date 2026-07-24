@@ -1,0 +1,42 @@
+package dev.obiente.nextcloudnative.app.design
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+
+class DesktopShellShortcutsTest {
+    @Test
+    fun `number shortcuts map to persistent desktop destinations`() {
+        assertEquals(
+            NextcloudDestination.Home,
+            destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.One, true),
+        )
+        assertEquals(
+            NextcloudDestination.Apps,
+            destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.Two, true),
+        )
+        assertEquals(
+            NextcloudDestination.Activity,
+            destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.Three, true),
+        )
+        assertEquals(
+            NextcloudDestination.Settings,
+            destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.Four, true),
+        )
+    }
+
+    @Test
+    fun `platform settings convention is supported`() {
+        assertEquals(
+            NextcloudDestination.Settings,
+            destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.Comma, true),
+        )
+    }
+
+    @Test
+    fun `plain typing never triggers global navigation`() {
+        NextcloudDesktopShortcutKey.entries.forEach { key ->
+            assertNull(destinationForNextcloudDesktopShortcut(key, false))
+        }
+    }
+}

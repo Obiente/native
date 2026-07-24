@@ -1,0 +1,38 @@
+{
+  "@type": "Recipe",
+  "id": "123",
+  "name": "Baked bananas",
+  "imageUrl": "/index.php/apps/cookbook/recipe/123/image?size=full",
+  "imagePlaceholderUrl": "/index.php/apps/cookbook/recipe/123/image?size=thumb16",
+  "description": "A simple warm dessert.",
+  "dateCreated": "2026-07-20T15:00:00+0000",
+  "dateModified": "2026-07-21T18:30:00+0000",
+  "recipeYield": 4,
+  "prepTime": "PT0H15M",
+  "cookTime": "PT0H25M",
+  "totalTime": "PT0H40M",
+  "recipeCategory": "Dessert",
+  "keywords": "banana,cinnamon",
+  "url": "https://example.test/baked-bananas",
+  "tool": [
+    "Oven dish",
+    "Small bowl"
+  ],
+  "recipeIngredient": [
+    "3 ripe bananas",
+    "100 g sugar",
+    "1 teaspoon cinnamon"
+  ],
+  "recipeInstructions": [
+    "Peel the bananas.",
+    "Coat them with sugar and cinnamon.",
+    "Bake until golden."
+  ],
+  "nutrition": {
+    "@type": "NutritionInformation",
+    "servingSize": "1 portion",
+    "calories": "220 kcal",
+    "carbohydrateContent": "48 g",
+    "proteinContent": "2 g"
+  }
+}

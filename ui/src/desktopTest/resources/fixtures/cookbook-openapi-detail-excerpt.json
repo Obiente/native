@@ -1,0 +1,193 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Cookbook API detail excerpt",
+    "version": "0.11.9"
+  },
+  "paths": {
+    "/apps/cookbook/api/v1/recipes": {
+      "get": {
+        "tags": ["Recipes"],
+        "operationId": "recipes-list",
+        "summary": "List recipes",
+        "responses": {
+          "200": {
+            "description": "Recipes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {"$ref": "#/components/schemas/Recipe"}
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Recipes"],
+        "operationId": "recipes-create",
+        "summary": "Create recipe",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/Recipe"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Created"}
+        }
+      }
+    },
+    "/apps/cookbook/api/v1/recipes/{id}": {
+      "get": {
+        "tags": ["Recipes"],
+        "operationId": "recipes-read",
+        "summary": "Read recipe",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recipe",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Recipe"}
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": ["Recipes"],
+        "operationId": "recipes-update",
+        "summary": "Update recipe",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/Recipe"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Updated"}
+        }
+      },
+      "delete": {
+        "tags": ["Recipes"],
+        "operationId": "recipes-delete",
+        "summary": "Delete recipe",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {"description": "Deleted"}
+        }
+      }
+    },
+    "/apps/cookbook/api/v1/config": {
+      "get": {
+        "tags": ["Configuration"],
+        "operationId": "config-read",
+        "summary": "Read configuration",
+        "responses": {
+          "200": {
+            "description": "Configuration",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Configuration"}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Configuration"],
+        "operationId": "config-update",
+        "summary": "Update configuration",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/Configuration"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Saved"}
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Recipe": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": {"type": "string", "readOnly": true},
+          "name": {"type": "string", "title": "Name"},
+          "description": {"type": "string", "title": "Description"},
+          "recipeYield": {"type": "integer", "title": "Servings"},
+          "prepTime": {"type": "string", "title": "Preparation time"},
+          "cookTime": {"type": "string", "title": "Cooking time"},
+          "totalTime": {"type": "string", "title": "Total time"},
+          "tool": {
+            "type": "array",
+            "title": "Tools",
+            "items": {"type": "string"}
+          },
+          "recipeIngredient": {
+            "type": "array",
+            "title": "Ingredients",
+            "items": {"type": "string"}
+          },
+          "recipeInstructions": {
+            "type": "array",
+            "title": "Instructions",
+            "items": {"type": "string"}
+          },
+          "nutrition": {
+            "type": "object",
+            "title": "Nutrition",
+            "properties": {
+              "servingSize": {"type": "string"},
+              "calories": {"type": "string"},
+              "carbohydrateContent": {"type": "string"},
+              "proteinContent": {"type": "string"}
+            }
+          }
+        }
+      },
+      "Configuration": {
+        "type": "object",
+        "properties": {
+          "folder": {"type": "string", "title": "Recipe folder"},
+          "update_interval": {"type": "integer", "title": "Update interval"},
+          "print_image": {"type": "boolean", "title": "Print recipe image"}
+        }
+      }
+    }
+  }
+}

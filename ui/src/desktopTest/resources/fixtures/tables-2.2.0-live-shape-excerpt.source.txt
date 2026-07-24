@@ -1,0 +1,8 @@
+Source: signed Nextcloud Tables 2.2.0 package openapi.json
+Package archive: /tmp/tables-2.2.0.tar.gz
+OpenAPI SHA-256: 0f7983f2ee58c6631d0520df462196a117774a3290ef3cef93e6cd213f34e148
+Retrieved: 2026-07-22
+
+This unmodified excerpt retains the real signed-package schemas and the root, detail,
+nested column/row, alternate view, generic collection, and competing simple-row routes
+needed to reproduce the live relationship/navigation graph.

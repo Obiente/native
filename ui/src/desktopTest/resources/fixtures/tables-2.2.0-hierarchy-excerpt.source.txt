@@ -1,0 +1,5 @@
+Source: signed Nextcloud Tables 2.2.0 package openapi.json
+Package version: 2.2.0
+Retrieved: 2026-07-22
+
+This unmodified excerpt contains competing v1/v2 root, table, column, and row GET operations. It verifies semantic resource grouping and canonical hierarchy-oriented surface selection.

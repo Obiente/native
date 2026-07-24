@@ -1,0 +1,5 @@
+Source: https://github.com/julien-nc/cospend-nc/blob/072d40c64d955e71aca7d641461e390f0648a8fa/openapi.json
+Commit: 072d40c64d955e71aca7d641461e390f0648a8fa
+Retrieved: 2026-07-22
+
+This is an unmodified excerpt containing the authenticated project and bill GET, POST, and PUT operations plus their complete transitive schema references and security schemes. The reduced fixture stays reviewable and exercises list, detail, create, and update compilation without depending on the network.

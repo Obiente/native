@@ -1,0 +1,9 @@
+Sanitized type-compatible fixture for the Cookbook 0.11.9 configuration response.
+
+Verified read-only against:
+GET /apps/cookbook/api/v1/config
+on 2026-07-23.
+
+Only property names, JSON types, and the documented visibleInfoBlocks keys were
+retained. String, number, and boolean values are synthetic. No recipe content,
+account identifiers, credentials, or private server values are included.

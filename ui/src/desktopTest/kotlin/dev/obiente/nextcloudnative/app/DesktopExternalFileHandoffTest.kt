@@ -1,0 +1,117 @@
+package dev.obiente.nextcloudnative.app
+
+import java.io.File
+import java.nio.file.Files
+import kotlinx.coroutines.runBlocking
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
+
+class DesktopExternalFileHandoffTest {
+    @Test
+    fun `desktop open stages an exact read-only generation outside the live DAV object`() = runBlocking {
+        val root = Files.createTempDirectory("nextcloud-desktop-handoff-").toFile()
+        var launched: File? = null
+        try {
+            val handoff = DesktopExternalFileHandoff(root) { file ->
+                launched = file
+                true
+            }
+
+            val result = handoff.launch(
+                file = file(),
+                action = ExternalFileHandoffAction.OpenWith,
+                capability = capability(),
+                download = {
+                    NextcloudFileContent(
+                        bytes = "detached copy".encodeToByteArray(),
+                        mimeType = "application/pdf",
+                        etag = "\"v1\"",
+                    )
+                },
+            )
+
+            assertIs<ExternalFileHandoffResult.Launched>(result)
+            val staged = requireNotNull(launched)
+            assertEquals("report.pdf", staged.name)
+            assertEquals("detached copy", staged.readText())
+            assertEquals(root.canonicalFile, staged.parentFile?.parentFile?.canonicalFile)
+            assertFalse(staged.canWrite())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `changed generation is rejected before desktop launch or staging`() = runBlocking {
+        val root = Files.createTempDirectory("nextcloud-desktop-handoff-").toFile()
+        var launchCalls = 0
+        try {
+            val result = DesktopExternalFileHandoff(root) {
+                launchCalls += 1
+                true
+            }.launch(
+                file = file(),
+                action = ExternalFileHandoffAction.OpenWith,
+                capability = capability(),
+                download = {
+                    NextcloudFileContent(
+                        bytes = byteArrayOf(1),
+                        mimeType = "application/pdf",
+                        etag = "\"newer\"",
+                    )
+                },
+            )
+
+            assertEquals(
+                ExternalFileHandoffRejection.VersionChanged,
+                assertIs<ExternalFileHandoffResult.Rejected>(result).reason,
+            )
+            assertEquals(0, launchCalls)
+            assertTrue(root.listFiles().orEmpty().isEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `desktop cache pruning removes expired detached copies`() {
+        val root = Files.createTempDirectory("nextcloud-desktop-handoff-").toFile()
+        try {
+            val old = root.resolve("old").apply { mkdir() }
+            old.resolve("payload.bin").writeBytes(byteArrayOf(1, 2, 3))
+            val recent = root.resolve("recent").apply { mkdir() }
+            recent.resolve("payload.bin").writeBytes(byteArrayOf(4, 5, 6))
+            val now = 2L * 24L * 60L * 60L * 1000L
+            old.setLastModified(1L)
+            recent.setLastModified(now)
+
+            pruneDesktopExternalFileCache(root, requiredBytes = 1L, nowMillis = now)
+
+            assertFalse(old.exists())
+            assertTrue(recent.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    private fun capability() = ExternalFileHandoffCapability(
+        supportedActions = setOf(ExternalFileHandoffAction.OpenWith),
+        maximumFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+    )
+
+    private fun file() = NextcloudFile(
+        path = "Documents/report.pdf",
+        name = "report.pdf",
+        isDirectory = false,
+        mimeType = "application/pdf",
+        size = 13,
+        lastModified = null,
+        fileId = 42,
+        hasPreview = true,
+        etag = "\"v1\"",
+        permissions = "RGDNVW",
+    )
+}
