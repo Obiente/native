@@ -14,6 +14,7 @@ import dev.obiente.nextcloudnative.app.FileSyncExecutionSuccess
 import dev.obiente.nextcloudnative.app.FileSyncExecutionState
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
 import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
+import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
 import dev.obiente.nextcloudnative.app.NextcloudSession
@@ -76,6 +77,11 @@ internal class AndroidFileSyncEngine(context: Context) {
         remoteRootPath: String,
         configuration: FileSyncConfiguration,
     ): FileSyncCenterActionResult = ENGINE_LOCK.withLock {
+        if (!supportsAndroidFileSyncDirection(localRoot.localRootId, configuration.direction)) {
+            return@withLock FileSyncCenterActionResult.Rejected(
+                "Detected media folders support upload-only sync.",
+            )
+        }
         // Constructing the adapter verifies that its persisted SAF grant or detected media root is usable.
         createAndroidFileSyncLocalTree(appContext.contentResolver, localRoot.localRootId)
         val normalizedRemote = normalizeRemoteRoot(remoteRootPath)
@@ -176,6 +182,11 @@ internal class AndroidFileSyncEngine(context: Context) {
             ?: return FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
         if (initialPair.accountId != NextcloudDocumentIds.accountKey(session)) {
             return FileSyncCenterActionResult.Rejected("This folder sync pair belongs to another account.")
+        }
+        if (!supportsAndroidFileSyncDirection(initialPair.localRootId, initialPair.configuration.direction)) {
+            return FileSyncCenterActionResult.Rejected(
+                "This detected media-folder pair is not upload-only. Remove it and add it again.",
+            )
         }
         return withAndroidMediaBackupLedger(appContext, initialPair) { mediaLedger ->
         val remote = AndroidFileSyncRemoteTree(
@@ -532,3 +543,9 @@ internal class AndroidFileSyncEngine(context: Context) {
         val ENGINE_LOCK = Mutex()
     }
 }
+
+internal fun supportsAndroidFileSyncDirection(
+    localRootId: String,
+    direction: FileSyncDirection,
+): Boolean =
+    !localRootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX) || direction == FileSyncDirection.UploadOnly

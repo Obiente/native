@@ -78,24 +78,6 @@ class AndroidMediaSyncFolderDetectorTest {
                 )
             },
         )
-        assertTrue(
-            hasFullMediaFolderAccess(
-                sdk = 36,
-                includesImages = true,
-                includesVideos = false,
-            ) { permission ->
-                permission == android.Manifest.permission.READ_MEDIA_IMAGES
-            },
-        )
-        assertFalse(
-            hasFullMediaFolderAccess(
-                sdk = 36,
-                includesImages = true,
-                includesVideos = true,
-            ) { permission ->
-                permission == android.Manifest.permission.READ_MEDIA_IMAGES
-            },
-        )
     }
 
     @Test

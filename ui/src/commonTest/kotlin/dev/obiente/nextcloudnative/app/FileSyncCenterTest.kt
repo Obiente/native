@@ -58,6 +58,52 @@ class FileSyncCenterTest {
     }
 
     @Test
+    fun automaticMediaSyncRequiresCompleteLibraryVisibilityAndAUsablePreview() {
+        val suggestion = MediaSyncFolderSuggestion(
+            localRootHint = "media-store://primary/DCIM/Camera",
+            displayName = "Camera",
+            relativePath = "DCIM/Camera",
+            kind = MediaSyncFolderKind.Camera,
+            imageCount = 1,
+            videoCount = 1,
+            suggestedRemoteRootPath = "Photos/Camera",
+        )
+        fun preview(access: MediaSyncFolderAccess, state: MediaSyncFolderPreviewState) =
+            MediaSyncFolderPreview(
+                localRootHint = suggestion.localRootHint,
+                state = state,
+                access = access,
+                totalItems = if (state == MediaSyncFolderPreviewState.Empty) 0 else 2,
+                totalBytes = 20L,
+                items = emptyList(),
+                message = null,
+            )
+
+        assertEquals(
+            false,
+            isMediaFolderPreviewReady(
+                suggestion,
+                preview(MediaSyncFolderAccess.LimitedSelection, MediaSyncFolderPreviewState.Available),
+            ),
+        )
+        assertEquals(
+            false,
+            isMediaFolderPreviewReady(
+                suggestion,
+                preview(MediaSyncFolderAccess.FullLibrary, MediaSyncFolderPreviewState.Empty),
+            ),
+        )
+        assertEquals(
+            true,
+            isMediaFolderPreviewReady(
+                suggestion,
+                preview(MediaSyncFolderAccess.FullLibrary, MediaSyncFolderPreviewState.Changed),
+            ),
+        )
+        assertEquals(true, isMediaFolderPreviewReady(null, null))
+    }
+
+    @Test
     fun `summary exposes actionable work counts without leaking the root grant`() {
         val pair = FileSyncPair(
             id = "pair",

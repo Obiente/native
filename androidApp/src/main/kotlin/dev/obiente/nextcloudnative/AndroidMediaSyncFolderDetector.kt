@@ -1,17 +1,16 @@
 package dev.obiente.nextcloudnative
 
 import android.Manifest
-import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
-import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Size
+import android.webkit.MimeTypeMap
 import androidx.core.content.ContextCompat
 import dev.obiente.nextcloudnative.app.MAX_MEDIA_PREVIEW_THUMBNAIL_BYTES
 import dev.obiente.nextcloudnative.app.MAX_MEDIA_SYNC_FOLDER_PREVIEW_ITEMS
@@ -25,6 +24,7 @@ import dev.obiente.nextcloudnative.app.MediaSyncFolderPreviewState
 import dev.obiente.nextcloudnative.app.MediaSyncFolderSuggestion
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.security.MessageDigest
 import java.util.LinkedHashMap
 
 internal data class DetectedMediaFolderItem(
@@ -67,10 +67,26 @@ internal class AndroidMediaSyncFolderDetector(private val context: Context) {
                 "Photo and video access is required to preview this folder.",
             )
         }
-        val current = runCatching {
-            queryMediaFolderAggregates().firstOrNull {
-                it.relativePath == suggestion.relativePath.trim('/')
-            }
+        if (mediaLibraryAccess() != MediaSyncFolderAccess.FullLibrary) {
+            return unavailablePreview(
+                suggestion,
+                MediaSyncFolderPreviewState.Inaccessible,
+                "Full photo and video library access is required before automatic folder upload can be enabled.",
+            )
+        }
+        val unresolvedRoot = File(Environment.getExternalStorageDirectory(), suggestion.relativePath)
+        if (!unresolvedRoot.isDirectory) {
+            return unavailablePreview(
+                suggestion,
+                MediaSyncFolderPreviewState.Removed,
+                "This media folder was removed from the device.",
+            )
+        }
+        val root = runCatching {
+            resolveMediaStoreSyncRoot(
+                suggestion.localRootHint,
+                Environment.getExternalStorageDirectory(),
+            )
         }.getOrElse {
             return unavailablePreview(
                 suggestion,
@@ -78,32 +94,39 @@ internal class AndroidMediaSyncFolderDetector(private val context: Context) {
                 "Android could not read this media folder.",
             )
         }
-        if (current == null) {
-            if (mediaFolderAccess(suggestion) == MediaSyncFolderAccess.LimitedSelection) {
-                return unavailablePreview(
-                    suggestion,
-                    MediaSyncFolderPreviewState.Empty,
-                    "No items from this folder are included in Android's current media permission.",
-                )
-            }
-            val folderExists = runCatching {
-                File(Environment.getExternalStorageDirectory(), suggestion.relativePath).isDirectory
-            }.getOrDefault(false)
+        val inspection = runCatching {
+            inspectMediaFolderSyncScope(root, MAX_MEDIA_SYNC_FOLDER_PREVIEW_ITEMS)
+        }.getOrElse {
             return unavailablePreview(
                 suggestion,
-                if (folderExists) MediaSyncFolderPreviewState.Empty else MediaSyncFolderPreviewState.Removed,
-                if (folderExists) {
-                    "This media folder is currently empty."
-                } else {
-                    "This media folder was removed from the device."
-                },
+                MediaSyncFolderPreviewState.Inaccessible,
+                "Android could not inspect the files this sync would upload.",
+            )
+        }
+        if (inspection.exceedsSyncLimit) {
+            return unavailablePreview(
+                suggestion,
+                MediaSyncFolderPreviewState.Inaccessible,
+                "This folder has too many uploadable media files to sync safely.",
+            )
+        }
+        if (inspection.totalItems == 0) {
+            return unavailablePreview(
+                suggestion,
+                MediaSyncFolderPreviewState.Empty,
+                "No direct, visible photo, video, or RAW files are available to upload. " +
+                    "Subfolders, hidden files, and other file types are excluded.",
             )
         }
         val changed =
-            current.imageCount != suggestion.imageCount ||
-                current.videoCount != suggestion.videoCount ||
-                current.totalBytes != suggestion.totalBytes
-        val items = runCatching { queryPreviewItems(suggestion.relativePath) }.getOrElse {
+            inspection.imageCount != suggestion.imageCount ||
+                inspection.videoCount != suggestion.videoCount ||
+                inspection.totalBytes != suggestion.totalBytes
+        val items = runCatching {
+            inspection.previewFiles.asSequence()
+                .map { file -> file.toMediaSyncFolderPreviewItem(suggestion.relativePath) }
+                .toList()
+        }.getOrElse {
             return unavailablePreview(
                 suggestion,
                 MediaSyncFolderPreviewState.Inaccessible,
@@ -113,15 +136,16 @@ internal class AndroidMediaSyncFolderDetector(private val context: Context) {
         return MediaSyncFolderPreview(
             localRootHint = suggestion.localRootHint,
             state = if (changed) MediaSyncFolderPreviewState.Changed else MediaSyncFolderPreviewState.Available,
-            access = mediaFolderAccess(suggestion),
-            totalItems = saturatingMediaItemCount(current.imageCount, current.videoCount),
-            totalBytes = current.totalBytes,
+            access = MediaSyncFolderAccess.FullLibrary,
+            totalItems = inspection.totalItems,
+            totalBytes = inspection.totalBytes,
             items = items,
-            message = when {
-                mediaFolderAccess(suggestion) == MediaSyncFolderAccess.LimitedSelection ->
-                    "Only photos and videos included in Android's current media permission are represented."
-                changed -> "The folder changed since it was detected. These are the latest totals."
-                else -> null
+            message = if (changed) {
+                "The upload scope changed since detection. These are the exact current totals. " +
+                    "Only direct, visible photo, video, and RAW files are included."
+            } else {
+                "Only direct, visible photo, video, and RAW files are included. " +
+                    "Subfolders, hidden files, sidecars, and other file types are excluded."
             },
         )
     }
@@ -134,21 +158,6 @@ internal class AndroidMediaSyncFolderDetector(private val context: Context) {
     private fun mediaLibraryAccess(): MediaSyncFolderAccess =
         if (
             hasFullMediaLibraryAccess(Build.VERSION.SDK_INT) { permission ->
-                ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-            }
-        ) {
-            MediaSyncFolderAccess.FullLibrary
-        } else {
-            MediaSyncFolderAccess.LimitedSelection
-        }
-
-    private fun mediaFolderAccess(suggestion: MediaSyncFolderSuggestion): MediaSyncFolderAccess =
-        if (
-            hasFullMediaFolderAccess(
-                sdk = Build.VERSION.SDK_INT,
-                includesImages = suggestion.imageCount > 0,
-                includesVideos = suggestion.videoCount > 0,
-            ) { permission ->
                 ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
             }
         ) {
@@ -206,84 +215,57 @@ internal class AndroidMediaSyncFolderDetector(private val context: Context) {
         return folders.values.map(MutableDetectedMediaFolderAggregate::toImmutable)
     }
 
-    private fun queryPreviewItems(relativePath: String): List<MediaSyncFolderPreviewItem> {
+    private fun File.toMediaSyncFolderPreviewItem(relativePath: String): MediaSyncFolderPreviewItem {
+        val identity = findMediaStoreIdentity(this, relativePath)
+        val cacheKey = identity?.let { "${it.id}:${lastModified()}:${length()}:${it.mediaType}" }
+        val thumbnail = if (identity == null || cacheKey == null) {
+            null
+        } else {
+            thumbnailCache.get(cacheKey) ?: loadThumbnailBytes(
+                identity.uri,
+                identity.id,
+                identity.mediaType,
+            )?.also { thumbnailCache.put(cacheKey, it) }
+        }
+        val extension = extension.lowercase()
+        val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+            ?: if (isMediaFolderSyncVideo(this)) "video/$extension" else "image/x-$extension"
+        return MediaSyncFolderPreviewItem(
+            stableId = stableMediaFileId(name, length(), lastModified()),
+            displayName = safeMediaDisplayName(name),
+            mimeType = mimeType,
+            sizeBytes = length().coerceAtLeast(0L),
+            modifiedAtEpochMillis = lastModified().coerceAtLeast(0L),
+            thumbnailBytes = thumbnail,
+        )
+    }
+
+    private fun findMediaStoreIdentity(
+        file: File,
+        relativePath: String,
+    ): MediaStorePreviewIdentity? {
         val collection = externalMediaCollection()
         val modernStorage = Build.VERSION.SDK_INT >= 29
-        val pathColumn = if (modernStorage) MediaStore.Files.FileColumns.RELATIVE_PATH
-        else MediaStore.Files.FileColumns.DATA
         val mediaTypeColumn = MediaStore.Files.FileColumns.MEDIA_TYPE
-        val selection = if (modernStorage) {
-            "($pathColumn = ? OR $pathColumn = ?) AND ($mediaTypeColumn = ? OR $mediaTypeColumn = ?)"
-        } else {
-            "$pathColumn LIKE ? AND ($mediaTypeColumn = ? OR $mediaTypeColumn = ?)"
-        }
-        val normalized = normalizeMediaStoreRelativePath(relativePath)
-        val selectionArgs = if (modernStorage) {
-            arrayOf(
-                normalized,
-                "$normalized/",
-                MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
-                MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
-            )
-        } else {
-            arrayOf(
-                File(Environment.getExternalStorageDirectory(), normalized).absolutePath + "/%",
-                MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
-                MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
-            )
-        }
-        val queryArgs = Bundle().apply {
-            putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
-            putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
-            putStringArray(
-                ContentResolver.QUERY_ARG_SORT_COLUMNS,
-                arrayOf(MediaStore.Files.FileColumns.DATE_MODIFIED, MediaStore.Files.FileColumns._ID),
-            )
-            putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
-            putInt(ContentResolver.QUERY_ARG_LIMIT, MAX_MEDIA_SYNC_FOLDER_PREVIEW_ITEMS)
-        }
-        val projection = arrayOf(
-            MediaStore.Files.FileColumns._ID,
-            MediaStore.Files.FileColumns.DISPLAY_NAME,
-            MediaStore.Files.FileColumns.MIME_TYPE,
-            MediaStore.Files.FileColumns.SIZE,
-            MediaStore.Files.FileColumns.DATE_MODIFIED,
-            mediaTypeColumn,
-        )
-        return buildList {
-            context.contentResolver.query(collection, projection, queryArgs, null)?.use { cursor ->
+        val lookup = mediaStorePreviewSelection(modernStorage, relativePath, file)
+        return context.contentResolver.query(
+            collection,
+            arrayOf(MediaStore.Files.FileColumns._ID, mediaTypeColumn),
+            lookup.selection,
+            lookup.arguments.toTypedArray(),
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
                 val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
-                val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
-                val mimeIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns.MIME_TYPE)
-                val sizeIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns.SIZE)
-                val modifiedIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns.DATE_MODIFIED)
                 val typeIndex = cursor.getColumnIndexOrThrow(mediaTypeColumn)
-                while (cursor.moveToNext() && size < MAX_MEDIA_SYNC_FOLDER_PREVIEW_ITEMS) {
-                    val id = cursor.getLong(idIndex)
-                    val modifiedSeconds = nullableLong(cursor, modifiedIndex)
-                    val mediaType = cursor.getInt(typeIndex)
-                    val cacheKey = "$id:${modifiedSeconds ?: 0L}:$mediaType"
-                    val thumbnail = thumbnailCache.get(cacheKey) ?: loadThumbnailBytes(
-                        ContentUris.withAppendedId(collection, id),
-                        id,
-                        mediaType,
-                    )?.also { thumbnailCache.put(cacheKey, it) }
-                    add(
-                        MediaSyncFolderPreviewItem(
-                            stableId = "media:$cacheKey",
-                            displayName = safeMediaDisplayName(cursor.getString(nameIndex)),
-                            mimeType = nullableString(cursor, mimeIndex)
-                                ?.filterNot(Char::isISOControl)
-                                ?.take(256)
-                                ?.takeIf(String::isNotBlank),
-                            sizeBytes = nullableLong(cursor, sizeIndex)?.coerceAtLeast(0L),
-                            modifiedAtEpochMillis = modifiedSeconds?.coerceAtLeast(0L)?.let {
-                                if (it > Long.MAX_VALUE / 1_000L) Long.MAX_VALUE else it * 1_000L
-                            },
-                            thumbnailBytes = thumbnail,
-                        ),
-                    )
-                }
+                val id = cursor.getLong(idIndex)
+                MediaStorePreviewIdentity(
+                    id = id,
+                    mediaType = cursor.getInt(typeIndex),
+                    uri = ContentUris.withAppendedId(collection, id),
+                )
+            } else {
+                null
             }
         }
     }
@@ -322,7 +304,7 @@ internal class AndroidMediaSyncFolderDetector(private val context: Context) {
     ) = MediaSyncFolderPreview(
         localRootHint = suggestion.localRootHint,
         state = state,
-        access = mediaFolderAccess(suggestion),
+        access = mediaLibraryAccess(),
         totalItems = 0,
         totalBytes = 0L,
         items = emptyList(),
@@ -333,11 +315,39 @@ internal class AndroidMediaSyncFolderDetector(private val context: Context) {
         if (Build.VERSION.SDK_INT >= 29) MediaStore.VOLUME_EXTERNAL else "external",
     )
 
-    private fun nullableLong(cursor: android.database.Cursor, index: Int): Long? =
-        if (index < 0 || cursor.isNull(index)) null else cursor.getLong(index)
+}
 
-    private fun nullableString(cursor: android.database.Cursor, index: Int): String? =
-        if (index < 0 || cursor.isNull(index)) null else cursor.getString(index)
+private data class MediaStorePreviewIdentity(
+    val id: Long,
+    val mediaType: Int,
+    val uri: Uri,
+)
+
+internal data class MediaStorePreviewSelection(
+    val selection: String,
+    val arguments: List<String>,
+)
+
+internal fun mediaStorePreviewSelection(
+    modernStorage: Boolean,
+    relativePath: String,
+    file: File,
+): MediaStorePreviewSelection {
+    val normalized = normalizeMediaStoreRelativePath(relativePath)
+    return if (modernStorage) {
+        MediaStorePreviewSelection(
+            selection =
+                "(${MediaStore.Files.FileColumns.RELATIVE_PATH} = ? OR " +
+                    "${MediaStore.Files.FileColumns.RELATIVE_PATH} = ?) AND " +
+                    "${MediaStore.Files.FileColumns.DISPLAY_NAME} = ?",
+            arguments = listOf(normalized, "$normalized/", file.name),
+        )
+    } else {
+        MediaStorePreviewSelection(
+            selection = "${MediaStore.Files.FileColumns.DATA} = ?",
+            arguments = listOf(file.absolutePath),
+        )
+    }
 }
 
 internal data class DetectedMediaFolderAggregate(
@@ -488,18 +498,6 @@ internal fun hasFullMediaLibraryAccess(
     else -> permissionGranted(Manifest.permission.READ_EXTERNAL_STORAGE)
 }
 
-internal fun hasFullMediaFolderAccess(
-    sdk: Int,
-    includesImages: Boolean,
-    includesVideos: Boolean,
-    permissionGranted: (String) -> Boolean,
-): Boolean = when {
-    sdk >= 33 ->
-        (!includesImages || permissionGranted(Manifest.permission.READ_MEDIA_IMAGES)) &&
-            (!includesVideos || permissionGranted(Manifest.permission.READ_MEDIA_VIDEO))
-    else -> permissionGranted(Manifest.permission.READ_EXTERNAL_STORAGE)
-}
-
 internal fun safeMediaDisplayName(value: String?): String =
     value
         ?.filterNot(Char::isISOControl)
@@ -507,5 +505,8 @@ internal fun safeMediaDisplayName(value: String?): String =
         ?.takeIf(String::isNotBlank)
         ?: "Media item"
 
-private fun saturatingMediaItemCount(images: Int, videos: Int): Int =
-    (images.toLong() + videos.toLong()).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+internal fun stableMediaFileId(name: String, size: Long, modifiedAt: Long): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+        .digest("$name\u0000$size\u0000$modifiedAt".encodeToByteArray())
+    return "media-file-" + digest.take(16).joinToString("") { "%02x".format(it) }
+}

@@ -1020,11 +1020,23 @@ private fun AddFolderSyncDialog(
                     }
                 }
                 Text("Direction", style = MaterialTheme.typography.labelLarge)
-                FileSyncDirection.entries.forEach { option ->
+                val directionOptions = if (mediaSuggestion == null) {
+                    FileSyncDirection.entries
+                } else {
+                    listOf(FileSyncDirection.UploadOnly)
+                }
+                directionOptions.forEach { option ->
                     FilterChip(
                         selected = configuration.direction == option,
                         onClick = { onConfigurationChanged(configuration.copy(direction = option)) },
                         label = { Text(option.readableSyncDirection()) },
+                    )
+                }
+                if (mediaSuggestion != null) {
+                    Text(
+                        "Detected media folders are upload-only. Nextcloud never writes into this local folder.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Text("When both copies changed", style = MaterialTheme.typography.labelLarge)
@@ -1071,17 +1083,10 @@ private fun AddFolderSyncDialog(
             }
         },
         confirmButton = {
-            val mediaPreviewReady = mediaSuggestion == null ||
-                (
-                    mediaPreview != null &&
-                        mediaPreview.access == MediaSyncFolderAccess.FullLibrary &&
-                        mediaPreview.state in setOf(
-                            MediaSyncFolderPreviewState.Available,
-                            MediaSyncFolderPreviewState.Changed,
-                        )
-                )
             Button(
-                enabled = !busy && configuration.deviceLabel.isNotBlank() && mediaPreviewReady,
+                enabled = !busy &&
+                    configuration.deviceLabel.isNotBlank() &&
+                    isMediaFolderPreviewReady(mediaSuggestion, mediaPreview),
                 onClick = onAdd,
             ) {
                 if (busy) CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -1103,6 +1108,20 @@ private fun defaultFileSyncConfiguration(isMediaSuggestion: Boolean): FileSyncCo
         networkPolicy = FileSyncNetworkPolicy.AnyConnection,
         powerPolicy = FileSyncPowerPolicy.BatteryNotLow,
     )
+
+internal fun isMediaFolderPreviewReady(
+    suggestion: MediaSyncFolderSuggestion?,
+    preview: MediaSyncFolderPreview?,
+): Boolean =
+    suggestion == null ||
+        (
+            preview != null &&
+                preview.access == MediaSyncFolderAccess.FullLibrary &&
+                preview.state in setOf(
+                    MediaSyncFolderPreviewState.Available,
+                    MediaSyncFolderPreviewState.Changed,
+                )
+        )
 
 @Composable
 private fun OfflineCenterSummaryCard(
