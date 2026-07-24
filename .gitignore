@@ -36,3 +36,11 @@ Thumbs.db
 /design/icon-concepts/
 /design/qa/
 /design/references/
+
+# Provider-neutral static homepage output
+/website/node_modules/
+/website/dist/
+/website/dist-ssr/
+/website/.npm-cache/
+/website/src/generated/
+/website/public/search-index.json
