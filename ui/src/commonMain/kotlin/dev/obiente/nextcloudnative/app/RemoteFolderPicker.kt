@@ -29,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -141,6 +142,39 @@ internal fun newRemoteFolderPath(parentPath: String, name: String): String? {
     return canonicalRemoteFolderPath(if (parent.isEmpty()) name else "$parent/$name")
 }
 
+internal data class MissingRemoteFolderDestination(
+    val intendedPath: String,
+    val accessibleParentPath: String,
+    val pathsToCreate: List<String>,
+)
+
+internal fun missingRemoteFolderDestination(
+    intendedPath: String,
+    accessibleParentPath: String,
+): MissingRemoteFolderDestination? {
+    val intended = canonicalRemoteFolderPath(intendedPath) ?: return null
+    val parent = canonicalRemoteFolderPath(accessibleParentPath) ?: return null
+    if (intended.isEmpty() || intended == parent) return null
+    if (parent.isNotEmpty() && !intended.startsWith("$parent/")) return null
+
+    val parentSegmentCount = parent.split('/').count(String::isNotEmpty)
+    val intendedSegments = intended.split('/')
+    val paths = intendedSegments.indices
+        .drop(parentSegmentCount)
+        .map { index -> intendedSegments.take(index + 1).joinToString("/") }
+    if (paths.isEmpty() || paths.any { canonicalRemoteFolderPath(it) != it }) return null
+    return MissingRemoteFolderDestination(
+        intendedPath = intended,
+        accessibleParentPath = parent,
+        pathsToCreate = paths,
+    )
+}
+
+internal fun missingRemoteFolderParentAfter(failure: Throwable, path: String): String? {
+    if (failure !is NextcloudFileListingHttpException || failure.status != 404) return null
+    return remoteFolderParentPath(path)
+}
+
 internal fun <T> Result<T>.rethrowRemoteFolderCancellation(): Result<T> {
     val failure = exceptionOrNull()
     if (failure is CancellationException) throw failure
@@ -154,8 +188,11 @@ internal fun remoteFolderSelectionStatus(
     listingSource: NextcloudFileListingSource?,
     manualPathVisible: Boolean,
     manualPathDraft: String,
+    missingDestinationPath: String? = null,
 ): String = when {
     loading -> "Loading this Nextcloud folder before it can be selected."
+    missingDestinationPath != null ->
+        "/$missingDestinationPath will be created when you confirm."
     manualPathVisible && normalizeRemoteFolderInput(manualPathDraft) != currentPath ->
         "Open and verify the advanced path before selecting it."
     canConfirm && currentPath.isEmpty() -> "The Files root is ready to select."
@@ -175,7 +212,14 @@ internal fun RemoteFolderPickerDialog(
     onSelected: (String) -> Unit,
 ) {
     val safeInitialPath = remember(initialPath) { normalizeRemoteFolderInput(initialPath).orEmpty() }
-    var currentPath by remember(session, userId, safeInitialPath) { mutableStateOf(safeInitialPath) }
+    var currentPath by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        userId,
+        safeInitialPath,
+    ) {
+        mutableStateOf(safeInitialPath)
+    }
     var files by remember(session, userId) { mutableStateOf<List<NextcloudFile>?>(null) }
     var listingSource by remember(session, userId) {
         mutableStateOf<NextcloudFileListingSource?>(null)
@@ -184,15 +228,36 @@ internal fun RemoteFolderPickerDialog(
     var loading by remember(session, userId) { mutableStateOf(true) }
     var refreshing by remember(session, userId) { mutableStateOf(false) }
     var error by remember(session, userId) { mutableStateOf<String?>(null) }
-    var query by remember(session, userId) { mutableStateOf("") }
-    var loadAttempt by remember(session, userId) { mutableStateOf(0) }
-    var createVisible by remember(session, userId) { mutableStateOf(false) }
-    var createName by remember(session, userId) { mutableStateOf("") }
+    var query by rememberSaveable(session.serverUrl, session.loginName, userId) { mutableStateOf("") }
+    var loadAttempt by rememberSaveable(session.serverUrl, session.loginName, userId) {
+        mutableStateOf(0)
+    }
+    var createVisible by rememberSaveable(session.serverUrl, session.loginName, userId) {
+        mutableStateOf(false)
+    }
+    var createName by rememberSaveable(session.serverUrl, session.loginName, userId) {
+        mutableStateOf("")
+    }
     var createError by remember(session, userId) { mutableStateOf<String?>(null) }
     var createRunning by remember(session, userId) { mutableStateOf(false) }
-    var manualVisible by remember(session, userId) { mutableStateOf(false) }
-    var manualPath by remember(session, userId) { mutableStateOf(safeInitialPath) }
+    var manualVisible by rememberSaveable(session.serverUrl, session.loginName, userId) {
+        mutableStateOf(false)
+    }
+    var manualPath by rememberSaveable(session.serverUrl, session.loginName, userId) {
+        mutableStateOf(safeInitialPath)
+    }
     var manualError by remember(session, userId) { mutableStateOf<String?>(null) }
+    var recoveryTarget by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        userId,
+        safeInitialPath,
+    ) {
+        mutableStateOf(safeInitialPath.takeIf(String::isNotEmpty))
+    }
+    var missingDestination by remember(session, userId, safeInitialPath) {
+        mutableStateOf<MissingRemoteFolderDestination?>(null)
+    }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(session, userId, currentPath, loadAttempt) {
@@ -224,11 +289,23 @@ internal fun RemoteFolderPickerDialog(
                 refreshing = false
                 if (listing.source != NextcloudFileListingSource.Network) {
                     error = "Connect to Nextcloud to confirm this destination."
+                } else {
+                    missingDestination = recoveryTarget?.let { intended ->
+                        missingRemoteFolderDestination(intended, currentPath)
+                    }
                 }
             }
             .onFailure { failure ->
                 loading = false
                 refreshing = false
+                val recoveryParent = recoveryTarget?.let {
+                    missingRemoteFolderParentAfter(failure, currentPath)
+                }
+                if (recoveryParent != null) {
+                    currentPath = recoveryParent
+                    manualPath = recoveryParent
+                    return@onFailure
+                }
                 error = if (files == null) {
                     failure.message ?: "Could not open this Nextcloud folder."
                 } else {
@@ -274,6 +351,8 @@ internal fun RemoteFolderPickerDialog(
                             TextButton(
                                 enabled = !createRunning && breadcrumb.path != currentPath,
                                 onClick = {
+                                    recoveryTarget = null
+                                    missingDestination = null
                                     currentPath = breadcrumb.path
                                     manualPath = breadcrumb.path
                                 },
@@ -369,6 +448,8 @@ internal fun RemoteFolderPickerDialog(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable(enabled = !createRunning) {
+                                            recoveryTarget = null
+                                            missingDestination = null
                                             currentPath = directory.path
                                             manualPath = directory.path
                                         }
@@ -394,6 +475,45 @@ internal fun RemoteFolderPickerDialog(
                         }
                     }
                 }
+                missingDestination?.let { destination ->
+                    item(key = "missing-destination") {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(NextcloudRadii.Small),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(NextcloudSpacing.Large),
+                                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            ) {
+                                Text(
+                                    "/${destination.intendedPath}",
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                )
+                                Text(
+                                    "This folder will be created when you confirm it here.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                )
+                                if (destination.pathsToCreate.size > 1) {
+                                    Text(
+                                        "${destination.pathsToCreate.size} missing folders will be created safely.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    )
+                                }
+                                createError?.let { message ->
+                                    Text(
+                                        message,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 item(key = "folder-actions") {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -402,6 +522,8 @@ internal fun RemoteFolderPickerDialog(
                         OutlinedButton(
                             enabled = !createRunning && networkConfirmedPath == currentPath,
                             onClick = {
+                                recoveryTarget = null
+                                missingDestination = null
                                 createVisible = !createVisible
                                 manualVisible = false
                                 createError = null
@@ -504,6 +626,8 @@ internal fun RemoteFolderPickerDialog(
                                     if (target == null) {
                                         manualError = "Enter a valid relative Nextcloud path."
                                     } else {
+                                        recoveryTarget = null
+                                        missingDestination = null
                                         manualVisible = false
                                         currentPath = target
                                         manualPath = target
@@ -524,6 +648,7 @@ internal fun RemoteFolderPickerDialog(
                             listingSource = listingSource,
                             manualPathVisible = manualVisible,
                             manualPathDraft = manualPath,
+                            missingDestinationPath = missingDestination?.intendedPath,
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = if (canConfirm) FontWeight.Medium else FontWeight.Normal,
@@ -538,10 +663,41 @@ internal fun RemoteFolderPickerDialog(
         },
         confirmButton = {
             Button(
-                enabled = canConfirm,
-                onClick = { onSelected(currentPath) },
+                enabled = canConfirm || (
+                    !createRunning &&
+                        missingDestination?.accessibleParentPath == networkConfirmedPath
+                    ),
+                onClick = {
+                    val destination = missingDestination
+                    if (destination == null) {
+                        onSelected(currentPath)
+                        return@Button
+                    }
+                    createRunning = true
+                    createError = null
+                    scope.launch {
+                        runCatching {
+                            destination.pathsToCreate.forEach { path ->
+                                services.createDirectoryIfAbsent(session, userId, path)
+                            }
+                        }.rethrowRemoteFolderCancellation().onSuccess {
+                            recoveryTarget = null
+                            missingDestination = null
+                            onSelected(destination.intendedPath)
+                        }.onFailure { failure ->
+                            createError = failure.message ?: "Could not create this destination."
+                        }
+                        createRunning = false
+                    }
+                },
             ) {
-                Text(if (currentPath.isEmpty()) "Use Files root" else "Use this folder")
+                Text(
+                    when {
+                        missingDestination != null -> "Create and use this folder"
+                        currentPath.isEmpty() -> "Use Files root"
+                        else -> "Use this folder"
+                    },
+                )
             }
         },
         dismissButton = {

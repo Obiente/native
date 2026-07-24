@@ -6,6 +6,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class RemoteFolderPickerTest {
     @Test
@@ -169,6 +170,69 @@ class RemoteFolderPickerTest {
     }
 
     @Test
+    fun `missing suggested destinations recover through ancestors and retain all segments`() {
+        val missing = NextcloudFileListingHttpException(404)
+
+        assertEquals("Photos", missingRemoteFolderParentAfter(missing, "Photos/Camera"))
+        assertEquals("", missingRemoteFolderParentAfter(missing, "Photos"))
+        assertNull(missingRemoteFolderParentAfter(missing, ""))
+
+        assertEquals(
+            MissingRemoteFolderDestination(
+                intendedPath = "Photos/Camera",
+                accessibleParentPath = "",
+                pathsToCreate = listOf("Photos", "Photos/Camera"),
+            ),
+            missingRemoteFolderDestination("Photos/Camera", ""),
+        )
+        assertEquals(
+            MissingRemoteFolderDestination(
+                intendedPath = "Photos/Camera/2026",
+                accessibleParentPath = "Photos",
+                pathsToCreate = listOf("Photos/Camera", "Photos/Camera/2026"),
+            ),
+            missingRemoteFolderDestination("Photos/Camera/2026", "Photos"),
+        )
+        assertEquals(
+            MissingRemoteFolderDestination(
+                intendedPath = "Photos",
+                accessibleParentPath = "",
+                pathsToCreate = listOf("Photos"),
+            ),
+            missingRemoteFolderDestination("Photos", ""),
+        )
+    }
+
+    @Test
+    fun `only typed not found responses trigger suggested destination recovery`() {
+        assertNull(
+            missingRemoteFolderParentAfter(
+                NextcloudFileListingHttpException(403),
+                "Photos/Camera",
+            ),
+        )
+        assertNull(
+            missingRemoteFolderParentAfter(
+                IllegalStateException("WebDAV folder listing failed (HTTP 404)."),
+                "Photos/Camera",
+            ),
+        )
+        assertNull(missingRemoteFolderDestination("Photos/Camera", "Documents"))
+        assertNull(missingRemoteFolderDestination("../Photos", ""))
+    }
+
+    @Test
+    fun `folder listing HTTP errors retain validated status`() {
+        val failure = NextcloudFileListingHttpException(404)
+
+        assertEquals(404, failure.status)
+        assertTrue(failure.message.orEmpty().contains("404"))
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudFileListingHttpException(207)
+        }
+    }
+
+    @Test
     fun `folder operations preserve coroutine cancellation`() {
         val cancellation = CancellationException("folder changed")
 
@@ -195,6 +259,18 @@ class RemoteFolderPickerTest {
                 listingSource = null,
                 manualPathVisible = false,
                 manualPathDraft = "Photos",
+            ),
+        )
+        assertEquals(
+            "/Photos/Camera will be created when you confirm.",
+            remoteFolderSelectionStatus(
+                loading = false,
+                currentPath = "Photos",
+                canConfirm = true,
+                listingSource = NextcloudFileListingSource.Network,
+                manualPathVisible = false,
+                manualPathDraft = "Photos",
+                missingDestinationPath = "Photos/Camera",
             ),
         )
     }
