@@ -3,6 +3,7 @@ import { createServerApp } from "./site.js";
 import { docs } from "./generated/docs.js";
 import { docsContent } from "./generated/docs-content.js";
 import { news } from "./generated/news.js";
+import { changelog } from "./generated/changelog.js";
 
 const siteUrl = "https://nc-native.obiente.dev";
 
@@ -36,7 +37,10 @@ function metadataFor(path) {
       canonical: `${siteUrl}${post.path}`,
       type: "article",
       published: post.date,
+      modified: post.lastUpdated,
       tags: post.tags,
+      image: `${siteUrl}${post.image}`,
+      imageAlt: post.imageAlt,
     };
   }
   if (path === "/news/") {
@@ -45,6 +49,14 @@ function metadataFor(path) {
       description:
         "See how Nextcloud Native is improving phone photo backup, Files, Talk, Photos, notes sync, offline access, and safe storage cleanup.",
       canonical: `${siteUrl}/news/`,
+      type: "website",
+    };
+  }
+  if (path === changelog.path) {
+    return {
+      title: "Changelog · Nextcloud Native",
+      description: changelog.description,
+      canonical: `${siteUrl}${changelog.path}`,
       type: "website",
     };
   }
@@ -116,11 +128,12 @@ export async function render(pathname) {
       headline: metadata.title.replace(" · Nextcloud Native", ""),
       description: metadata.description,
       datePublished: metadata.published,
-      dateModified: metadata.published,
+      dateModified: metadata.modified,
       mainEntityOfPage: metadata.canonical,
       author: { "@type": "Organization", name: "Obiente", url: "https://obiente.dev" },
       publisher: { "@type": "Organization", name: "Obiente", url: "https://obiente.dev" },
       keywords: metadata.tags?.join(", "),
+      image: metadata.image,
       isAccessibleForFree: true,
     });
   }
@@ -133,8 +146,12 @@ export async function render(pathname) {
     `<meta property="og:type" content="${metadata.type}">`,
     `<meta property="og:url" content="${metadata.canonical}">`,
     `<meta property="og:site_name" content="Nextcloud Native">`,
-    `<meta property="og:image" content="${siteUrl}/social-preview.png">`,
-    `<meta property="og:image:alt" content="Nextcloud Native, one adaptive native experience for Nextcloud">`,
+    `<meta property="og:image" content="${metadata.image ?? `${siteUrl}/social-preview.png`}">`,
+    `<meta property="og:image:alt" content="${
+      metadata.imageAlt
+        ? escapeHtml(metadata.imageAlt)
+        : "Nextcloud Native, one adaptive native experience for Nextcloud"
+    }">`,
     `<meta name="twitter:card" content="summary_large_image">`,
     `<meta name="twitter:title" content="${escapeHtml(metadata.title)}">`,
     `<meta name="twitter:description" content="${escapeHtml(metadata.description)}">`,
@@ -144,6 +161,7 @@ export async function render(pathname) {
     ...(metadata.published
       ? [
           `<meta property="article:published_time" content="${metadata.published}">`,
+          `<meta property="article:modified_time" content="${metadata.modified}">`,
           ...metadata.tags.map((tag) => `<meta property="article:tag" content="${escapeHtml(tag)}">`),
         ]
       : []),
@@ -157,5 +175,11 @@ export async function render(pathname) {
   };
 }
 
-export const routes = ["/", "/news/", ...news.map((post) => post.path), ...docs.map((doc) => doc.path)];
+export const routes = [
+  "/",
+  "/news/",
+  changelog.path,
+  ...news.map((post) => post.path),
+  ...docs.map((doc) => doc.path),
+];
 export const newsEntries = news;

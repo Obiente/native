@@ -11,6 +11,20 @@ const repositoryRoot = path.resolve(websiteRoot, "..");
 const generatedDirectory = path.join(websiteRoot, "src", "generated");
 const publicDirectory = path.join(websiteRoot, "public");
 const newsDirectory = path.join(websiteRoot, "content", "news");
+const changelogFile = path.join(repositoryRoot, "CHANGELOG.md");
+const changelogRoute = "/changelog/";
+const captureManifest = JSON.parse(
+  await readFile(
+    path.join(publicDirectory, "screenshots", "capture-manifest.json"),
+    "utf8",
+  ),
+);
+const captureByImage = new Map(
+  captureManifest.captures.map((capture) => [
+    `/screenshots/${capture.file}`,
+    capture,
+  ]),
+);
 
 const sources = [
   {
@@ -79,6 +93,7 @@ const sources = [
   },
 ];
 const routeByFile = new Map(sources.map((source) => [source.file, source.path]));
+routeByFile.set("CHANGELOG.md", changelogRoute);
 
 function slugify(value) {
   return value
@@ -149,11 +164,33 @@ function parseFrontmatter(source, file) {
       return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
     }),
   );
-  for (const key of ["title", "slug", "date", "description", "tags"]) {
+  for (const key of [
+    "title",
+    "slug",
+    "date",
+    "lastUpdated",
+    "description",
+    "tags",
+    "image",
+    "imageAlt",
+    "imageCaption",
+  ]) {
     if (!metadata[key]) throw new Error(`${file} is missing ${key} frontmatter.`);
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(metadata.date) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(metadata.slug)) {
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(metadata.date) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(metadata.lastUpdated) ||
+    metadata.lastUpdated < metadata.date ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(metadata.slug)
+  ) {
     throw new Error(`${file} has an invalid date or slug.`);
+  }
+  if (
+    !/^\/screenshots\/[a-z0-9-]+\.png$/.test(metadata.image) ||
+    metadata.imageAlt.length > 240 ||
+    metadata.imageCaption.length > 240
+  ) {
+    throw new Error(`${file} has invalid screenshot metadata.`);
   }
   return { metadata, body: match[2] };
 }
@@ -183,6 +220,51 @@ await writeFile(
   `// Generated from repository Markdown. Do not edit.\nexport const docsContent = ${JSON.stringify(docs, null, 2)};\n`,
 );
 
+let changelogSource;
+let changelogAvailable = true;
+try {
+  changelogSource = await readFile(changelogFile, "utf8");
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+  changelogAvailable = false;
+  changelogSource = [
+    "# Changelog",
+    "",
+    "The first curated release history will appear here with the first public release.",
+  ].join("\n");
+}
+if (
+  changelogAvailable &&
+  (
+    !/^#\s+Changelog\s*$/im.test(changelogSource) ||
+    !/^##\s+.+$/m.test(changelogSource) ||
+    !/^###\s+(Added|Changed|Deprecated|Removed|Fixed|Security)\s*$/m.test(changelogSource)
+  )
+) {
+  throw new Error(
+    "CHANGELOG.md must contain a Changelog title, a release section, and a Keep a Changelog category.",
+  );
+}
+const changelogBody = changelogSource.replace(/^#\s+Changelog\s*\n+/i, "");
+const changelogText = textOnly(changelogBody);
+const changelog = {
+  file: "CHANGELOG.md",
+  path: changelogRoute,
+  title: "Changelog",
+  shortTitle: "Changelog",
+  description:
+    "Concise Added, Changed, Fixed, and Security records for each Nextcloud Native release.",
+  html: markdown.render(changelogBody),
+  text: changelogText,
+  headings: headingsFrom(changelogBody),
+  readingMinutes: Math.max(1, Math.ceil(changelogText.split(/\s+/).length / 220)),
+  available: changelogAvailable,
+};
+await writeFile(
+  path.join(generatedDirectory, "changelog.js"),
+  `// Generated from the canonical root CHANGELOG.md when available. Do not edit.\nexport const changelog = ${JSON.stringify(changelog, null, 2)};\n`,
+);
+
 const newsFiles = (await readdir(newsDirectory))
   .filter((file) => file.endsWith(".md"))
   .sort()
@@ -193,6 +275,10 @@ const news = await Promise.all(
     const { metadata, body } = parseFrontmatter(source, file);
     const text = textOnly(body);
     const articleBody = body.replace(/^# .+\n+/, "");
+    const capture = captureByImage.get(metadata.image);
+    if (!capture) {
+      throw new Error(`${file}: image must reference a declared Compose capture.`);
+    }
     return {
       file,
       path: `/news/${metadata.slug}/`,
@@ -200,7 +286,13 @@ const news = await Promise.all(
       shortTitle: metadata.title,
       description: metadata.description,
       date: metadata.date,
+      lastUpdated: metadata.lastUpdated,
       tags: metadata.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+      image: metadata.image,
+      imageAlt: metadata.imageAlt,
+      imageCaption: metadata.imageCaption,
+      imageWidth: capture.width,
+      imageHeight: capture.height,
       html: markdown.render(articleBody),
       text,
       headings: headingsFrom(articleBody),
@@ -221,6 +313,7 @@ const newsFeedEntries = await Promise.all(
     title: post.title,
     description: post.description,
     publishedDate: post.date,
+    lastUpdated: post.lastUpdated,
     tags: post.tags,
     bodyMarkdown: parseFrontmatter(
       // Re-read from the single canonical source rather than reconstructing Markdown from HTML.
@@ -247,6 +340,7 @@ await writeFile(
 const searchIndex = [
   ...docs.map(({ html, ...doc }) => ({ ...doc, contentType: "Documentation" })),
   ...news.map(({ html, ...post }) => ({ ...post, contentType: "News" })),
+  { ...changelog, html: undefined, contentType: "Changelog" },
 ];
 
 const githubApiHeaders = {

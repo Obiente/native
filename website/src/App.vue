@@ -23,6 +23,7 @@ import {
 } from "@phosphor-icons/vue";
 import { docs } from "./generated/docs.js";
 import { news } from "./generated/news.js";
+import { changelog } from "./generated/changelog.js";
 import NativePreview from "./components/NativePreview.vue";
 import RoadmapDashboard from "./components/RoadmapDashboard.vue";
 
@@ -53,6 +54,7 @@ const currentPost = computed(
   () => props.initialNews ?? news.find((post) => post.path === normalizedPath),
 );
 const isNewsIndex = computed(() => normalizedPath === "/news/");
+const isChangelog = computed(() => normalizedPath === "/changelog/");
 const isHome = computed(() => normalizedPath === "/");
 const searchOpen = ref(false);
 const searchQuery = ref("");
@@ -219,6 +221,7 @@ const frequentlyAsked = [
         <a href="/#platforms">Platforms</a>
         <a href="/roadmap/">Roadmap</a>
         <a href="/news/">News</a>
+        <a href="/changelog/">Changelog</a>
         <a href="/#docs">Docs</a>
       </nav>
 
@@ -436,7 +439,7 @@ const frequentlyAsked = [
               <figure class="screenshot-mobile">
                 <img
                   src="/screenshots/mobile-home.png"
-                  alt="Nextcloud Native mobile home rendered by the real Android application with synthetic demo data"
+                  alt="Nextcloud Native mobile home rendered offscreen by the real Compose UI with synthetic demo data"
                   width="1080"
                   height="2400"
                   loading="lazy"
@@ -477,12 +480,13 @@ const frequentlyAsked = [
           <div class="news-heading">
             <div class="section-heading compact">
               <p class="eyebrow">What we are building</p>
-              <h2>Plain-language progress, with the details when you want them.</h2>
+              <h2>See Nextcloud Native taking shape.</h2>
             </div>
             <a class="text-link" href="/news/">All project news <ArrowRight :size="18" weight="bold" /></a>
           </div>
           <div class="news-grid">
             <a v-for="post in news.slice(0, 3)" :key="post.path" class="news-card" :href="post.path">
+              <img :src="post.image" :alt="post.imageAlt" loading="lazy" />
               <time :datetime="post.date">{{ post.date }}</time>
               <h3>{{ post.title }}</h3>
               <p>{{ post.description }}</p>
@@ -527,13 +531,30 @@ const frequentlyAsked = [
         <article class="news-article">
           <a class="doc-back" href="/news/">Project news</a>
           <header class="doc-heading">
-            <p class="eyebrow">Development note</p>
+            <p class="eyebrow">Product story</p>
             <h1>{{ currentPost.title }}</h1>
             <p>{{ currentPost.description }}</p>
-            <span><time :datetime="currentPost.date">{{ currentPost.date }}</time> · {{ currentPost.readingMinutes }} minute read</span>
+            <span>
+              Published <time :datetime="currentPost.date">{{ currentPost.date }}</time>
+              · Updated <time :datetime="currentPost.lastUpdated">{{ currentPost.lastUpdated }}</time>
+              · {{ currentPost.readingMinutes }} minute read
+            </span>
             <div class="article-tags"><span v-for="tag in currentPost.tags" :key="tag">{{ tag }}</span></div>
           </header>
+          <figure class="article-hero">
+            <img
+              :src="currentPost.image"
+              :alt="currentPost.imageAlt"
+              :width="currentPost.imageWidth"
+              :height="currentPost.imageHeight"
+            />
+            <figcaption>{{ currentPost.imageCaption }}</figcaption>
+          </figure>
           <div class="markdown-body" v-html="currentPost.html"></div>
+          <p class="article-release-link">
+            Looking for concise version-by-version changes?
+            <a href="/changelog/">Read the changelog</a>.
+          </p>
         </article>
       </section>
 
@@ -542,15 +563,36 @@ const frequentlyAsked = [
           <p class="eyebrow">Nextcloud Native news</p>
           <h1>What is getting better, and why it matters.</h1>
           <p>Start with the everyday benefit, then dig into the technical decisions if you want the detail.</p>
+          <a class="text-link" href="/changelog/">
+            Looking for release changes? Read the changelog
+            <ArrowRight :size="18" weight="bold" />
+          </a>
         </header>
         <div class="news-grid news-index-grid">
           <a v-for="post in news" :key="post.path" class="news-card" :href="post.path">
-            <time :datetime="post.date">{{ post.date }}</time>
+            <img :src="post.image" :alt="post.imageAlt" loading="lazy" />
+            <time :datetime="post.lastUpdated">Updated {{ post.lastUpdated }}</time>
             <h2>{{ post.title }}</h2>
             <p>{{ post.description }}</p>
             <span>{{ post.readingMinutes }} min read <ArrowRight :size="16" weight="bold" /></span>
           </a>
         </div>
+      </section>
+
+      <section v-else-if="isChangelog" class="article-page section-width">
+        <article class="news-article changelog-article">
+          <a class="doc-back" href="/news/">Project news</a>
+          <header class="doc-heading">
+            <p class="eyebrow">Release history</p>
+            <h1>{{ changelog.title }}</h1>
+            <p>{{ changelog.description }}</p>
+            <span>
+              Sourced from {{ changelog.file }}
+              <template v-if="!changelog.available"> · awaiting the first public release</template>
+            </span>
+          </header>
+          <div class="markdown-body" v-html="changelog.html"></div>
+        </article>
       </section>
 
       <section
@@ -602,6 +644,7 @@ const frequentlyAsked = [
       <p>An independent AGPL-3.0-or-later project by Obiente.</p>
       <div class="footer-links">
         <a :href="githubUrl">GitHub</a>
+        <a href="/changelog/">Changelog</a>
         <a href="/security/">Security</a>
         <a :href="`${githubUrl}/blob/main/LICENSE`">License</a>
       </div>

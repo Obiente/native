@@ -24,6 +24,7 @@ data class ProjectNewsArticle(
     val title: String,
     val description: String,
     val publishedDate: String,
+    val lastUpdated: String? = null,
     val tags: List<String>,
     val bodyMarkdown: String,
     val webUrl: String,
@@ -98,6 +99,10 @@ fun parseProjectNewsFeed(bytes: ByteArray): ProjectNewsFeed {
         require(article.title.isBoundedPublicText(160))
         require(article.description.isBoundedPublicText(320))
         require(article.publishedDate.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")))
+        article.lastUpdated?.let { updated ->
+            require(updated.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")))
+            require(updated >= article.publishedDate)
+        }
         require(article.tags.size <= 12 && article.tags.all { it.isBoundedPublicText(48) })
         require(article.bodyMarkdown.isBoundedPublicText(64 * 1024))
         require(
@@ -127,7 +132,7 @@ fun validateAndroidDirectRelease(release: AndroidDirectRelease): AndroidDirectRe
     require(release.apkSize in 1..MAX_ANDROID_UPDATE_APK_BYTES)
     require(release.apkSha256.isSha256() && release.signingCertificateSha256.isSha256())
     require(release.apkUrl.isCanonicalUpdateUrl())
-    require(release.releaseNotesUrl.isCanonicalNewsUrl())
+    require(release.releaseNotesUrl.isCanonicalReleaseNotesUrl())
     return release
 }
 
@@ -138,8 +143,8 @@ private fun String.isCanonicalUpdateUrl(): Boolean =
     startsWith("https://nc-native.obiente.dev/releases/android/") &&
         none { it == '#' || it == '?' || it == '\\' }
 
-private fun String.isCanonicalNewsUrl(): Boolean =
-    startsWith("https://nc-native.obiente.dev/news/") &&
+private fun String.isCanonicalReleaseNotesUrl(): Boolean =
+    startsWith("https://nc-native.obiente.dev/releases/") &&
         endsWith('/') &&
         none { it == '#' || it == '?' || it == '\\' }
 

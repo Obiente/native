@@ -39,7 +39,7 @@ const rss = [
   '<rss version="2.0"><channel>',
   "<title>Nextcloud Native project news</title>",
   `<link>${baseUrl}/news/</link>`,
-  "<description>Engineering notes and product decisions from Nextcloud Native.</description>",
+  "<description>Product stories about how Nextcloud Native is taking shape across phones and desktops.</description>",
   "<language>en</language>",
   ...serverEntry.newsEntries.map(
     (post) =>

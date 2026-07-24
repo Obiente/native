@@ -16,6 +16,7 @@ class ProjectNewsAndUpdatesTest {
             title = "Native project news",
             description = "A fixture-only development update.",
             publishedDate = "2026-07-24",
+            lastUpdated = "2026-07-25",
             tags = listOf("native UI"),
             bodyMarkdown = "News is rendered with native Compose components.",
             webUrl = "https://nc-native.obiente.dev/news/native-news/",
@@ -57,7 +58,7 @@ class ProjectNewsAndUpdatesTest {
             apkSize = 12_345,
             apkSha256 = "c".repeat(64),
             signingCertificateSha256 = "d".repeat(64),
-            releaseNotesUrl = "https://nc-native.obiente.dev/news/release-0-2-0/",
+            releaseNotesUrl = "https://nc-native.obiente.dev/releases/android/0.2.0/",
         )
         val encoded = Json.encodeToString(release).encodeToByteArray()
 
