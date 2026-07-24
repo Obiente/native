@@ -467,7 +467,7 @@ class DesktopNextcloudServices(
                         return@withContext NextcloudFileListing(it, NextcloudFileListingSource.Cache)
                     }
                 }
-                error("WebDAV folder listing failed (HTTP ${response.status}).")
+                throw NextcloudFileListingHttpException(response.status)
             }
         } catch (failure: IOException) {
             fileReadCache.cachedListing(accountId, path)

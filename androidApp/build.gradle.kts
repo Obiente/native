@@ -39,6 +39,7 @@ android {
         versionCode = ncVersionCode
         versionName = ncVersionName
         buildConfigField("boolean", "DIRECT_APK_UPDATES", "false")
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -85,6 +86,10 @@ dependencies {
     implementation(libs.okhttp)
     testImplementation(kotlin("test"))
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.3.0")
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.uiautomator)
 }
 
 val validateReleaseSigning by tasks.registering {

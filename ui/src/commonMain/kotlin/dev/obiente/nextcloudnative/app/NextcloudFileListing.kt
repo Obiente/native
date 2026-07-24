@@ -10,6 +10,22 @@ data class NextcloudFileListing(
     val source: NextcloudFileListingSource,
 )
 
+/**
+ * A WebDAV folder listing was rejected by the server.
+ *
+ * The typed status lets shared UI distinguish a missing folder from permission and server failures
+ * without inspecting platform-specific exception messages.
+ */
+class NextcloudFileListingHttpException(
+    val status: Int,
+) : Exception("WebDAV folder listing failed (HTTP $status).") {
+    init {
+        require(status in 100..599 && status !in 200..299) {
+            "A folder-listing HTTP failure requires a non-success status."
+        }
+    }
+}
+
 internal fun nextcloudFileListingSummary(
     source: NextcloudFileListingSource?,
     visibleCount: Int,
