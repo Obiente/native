@@ -1,6 +1,5 @@
 package dev.obiente.nextcloudnative
 
-import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -43,16 +42,10 @@ internal class AndroidMediaSyncFolderDetector(private val context: Context) {
         )
     }
 
-    private fun hasMediaPermission(): Boolean {
-        val permissions = if (Build.VERSION.SDK_INT >= 33) {
-            listOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
-        } else {
-            listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
-        return permissions.all { permission ->
+    private fun hasMediaPermission(): Boolean =
+        hasMediaLibraryAccess(Build.VERSION.SDK_INT) { permission ->
             ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
         }
-    }
 
     private fun queryMediaFolders(): List<DetectedMediaFolderItem> {
         val modernStorage = Build.VERSION.SDK_INT >= 29

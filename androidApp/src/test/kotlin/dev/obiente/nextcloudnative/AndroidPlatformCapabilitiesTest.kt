@@ -25,7 +25,11 @@ class AndroidPlatformCapabilitiesTest {
     fun filesAndMediaNeverRequestsBroadStorageAccess() {
         assertTrue(PlatformCapability.FilesAndMedia.permissions(36).isEmpty())
         assertEquals(
-            listOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO),
+            listOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+            ),
             PlatformCapability.MediaLibrary.permissions(36),
         )
         assertEquals(
@@ -39,6 +43,20 @@ class AndroidPlatformCapabilitiesTest {
         assertEquals(
             listOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE),
             PlatformCapability.AllFilesAccess.permissions(29),
+        )
+    }
+
+    @Test
+    fun selectedMediaPermissionCountsAsMediaLibraryAccess() {
+        assertTrue(
+            hasMediaLibraryAccess(36) { permission ->
+                permission == Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            },
+        )
+        assertTrue(
+            hasMediaLibraryAccess(33) { permission ->
+                permission == Manifest.permission.READ_MEDIA_IMAGES
+            },
         )
     }
 }

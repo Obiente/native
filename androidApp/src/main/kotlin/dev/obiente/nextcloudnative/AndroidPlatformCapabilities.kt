@@ -67,10 +67,16 @@ internal class AndroidPlatformCapabilities(
         if (capability == PlatformCapability.BackgroundSync) return PlatformCapabilityState.Granted
         val permissions = capability.permissions(Build.VERSION.SDK_INT)
         if (permissions.isEmpty()) return PlatformCapabilityState.Granted
-        if (permissions.all { permission ->
+        val hasPermission = if (capability == PlatformCapability.MediaLibrary) {
+            hasMediaLibraryAccess(Build.VERSION.SDK_INT) { permission ->
                 ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
             }
-        ) {
+        } else {
+            permissions.all { permission ->
+                ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+        if (hasPermission) {
             return PlatformCapabilityState.Granted
         }
         val wasRequested = preferences.getBoolean(capability.requestedKey(), false)
@@ -91,6 +97,11 @@ internal fun PlatformCapability.permissions(sdk: Int): List<String> = when (this
     PlatformCapability.FilesAndMedia,
     -> emptyList()
     PlatformCapability.MediaLibrary -> when {
+        sdk >= 34 -> listOf(
+            Manifest.permission.READ_MEDIA_IMAGES,
+            Manifest.permission.READ_MEDIA_VIDEO,
+            Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+        )
         sdk >= 33 -> listOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
         sdk >= 23 -> listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
         else -> emptyList()
@@ -101,6 +112,11 @@ internal fun PlatformCapability.permissions(sdk: Int): List<String> = when (this
         else -> emptyList()
     }
 }
+
+internal fun hasMediaLibraryAccess(
+    sdk: Int,
+    permissionGranted: (String) -> Boolean,
+): Boolean = PlatformCapability.MediaLibrary.permissions(sdk).any(permissionGranted)
 
 private fun PlatformCapability.label(): String = when (this) {
     PlatformCapability.Notifications -> "Notifications"
