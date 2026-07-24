@@ -1,9 +1,10 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.MediaSyncFolderKind
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 class AndroidMediaSyncFolderDetectorTest {
     @Test
@@ -23,7 +24,8 @@ class AndroidMediaSyncFolderDetectorTest {
         assertEquals(1, suggestions[0].imageCount)
         assertEquals(1, suggestions[0].videoCount)
         assertEquals("Photos/Camera", suggestions[0].suggestedRemoteRootPath)
-        assertTrue(suggestions[0].localRootHint.endsWith("primary%3ADCIM%2FCamera"))
+        assertEquals("media-store://primary/DCIM/Camera", suggestions[0].localRootHint)
+        assertEquals("Camera", suggestions[0].localRoot.displayName)
     }
 
     @Test
@@ -34,5 +36,20 @@ class AndroidMediaSyncFolderDetectorTest {
 
         assertEquals(MediaSyncFolderKind.Videos, suggestion.kind)
         assertEquals("Videos/Clips", suggestion.suggestedRemoteRootPath)
+    }
+
+    @Test
+    fun mediaStoreRootResolutionStaysInsideSharedStorage() {
+        val storage = Files.createTempDirectory("media-root-").toFile()
+        val camera = storage.resolve("DCIM/Camera")
+        camera.mkdirs()
+
+        assertEquals(
+            camera.canonicalFile,
+            resolveMediaStoreSyncRoot("media-store://primary/DCIM/Camera", storage),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            resolveMediaStoreSyncRoot("media-store://primary/DCIM/../Secrets", storage)
+        }
     }
 }

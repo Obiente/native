@@ -11,8 +11,6 @@ import dev.obiente.nextcloudnative.app.MediaSyncFolderDiscoverySupport
 import dev.obiente.nextcloudnative.app.MediaSyncFolderKind
 import dev.obiente.nextcloudnative.app.MediaSyncFolderSuggestion
 import java.io.File
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 
 internal data class DetectedMediaFolderItem(
     val relativePath: String,
@@ -102,7 +100,7 @@ internal fun buildMediaSyncFolderSuggestions(
             val kind = classifyMediaSyncFolder(relativePath, imageCount, videoCount)
             val remoteCategory = if (kind == MediaSyncFolderKind.Videos) "Videos" else "Photos"
             MediaSyncFolderSuggestion(
-                localRootHint = externalStorageTreeHint(relativePath),
+                localRootHint = mediaStoreSyncRootId(relativePath),
                 displayName = displayName,
                 relativePath = relativePath,
                 kind = kind,
@@ -143,11 +141,20 @@ private fun MediaSyncFolderKind.sortPriority(): Int = when (this) {
     MediaSyncFolderKind.Videos -> 4
 }
 
-private fun externalStorageTreeHint(relativePath: String): String {
-    val documentId = "primary:$relativePath"
-    val encoded = URLEncoder.encode(documentId, StandardCharsets.UTF_8.name()).replace("+", "%20")
-    return "content://$EXTERNAL_STORAGE_AUTHORITY/tree/$encoded"
+internal fun mediaStoreSyncRootId(relativePath: String): String =
+    MEDIA_STORE_SYNC_ROOT_PREFIX + normalizeMediaStoreRelativePath(relativePath)
+
+internal fun normalizeMediaStoreRelativePath(relativePath: String): String {
+    val segments = relativePath.trim('/').split('/')
+    require(segments.isNotEmpty())
+    require(segments.all { segment ->
+        segment.isNotBlank() &&
+            segment !in setOf(".", "..") &&
+            '\\' !in segment &&
+            segment.none(Char::isISOControl)
+    }) { "The detected media folder path is invalid." }
+    return segments.joinToString("/")
 }
 
-private const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
+internal const val MEDIA_STORE_SYNC_ROOT_PREFIX = "media-store://primary/"
 private const val MAX_MEDIA_FOLDER_SUGGESTIONS = 24

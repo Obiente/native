@@ -36,10 +36,10 @@ enum class MediaSyncFolderKind {
 }
 
 /**
- * A platform-discovered local media folder that can seed the native folder picker.
+ * A platform-discovered local media folder that can be proposed without another folder browser.
  *
- * [localRootHint] is opaque outside the platform implementation. It is not a persisted grant and
- * must never be used for sync until the user confirms it in the system folder picker.
+ * [localRootHint] is an opaque platform-owned sync root. Common code may pass it back to the
+ * platform, but must never interpret it as a path.
  */
 data class MediaSyncFolderSuggestion(
     val localRootHint: String,
@@ -57,6 +57,9 @@ data class MediaSyncFolderSuggestion(
         require(imageCount >= 0 && videoCount >= 0 && imageCount + videoCount > 0)
         requireValidSyncPath(suggestedRemoteRootPath)
     }
+
+    val localRoot: FileSyncLocalRoot
+        get() = FileSyncLocalRoot(localRootHint, displayName)
 }
 
 data class MediaSyncFolderDiscovery(

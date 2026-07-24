@@ -232,16 +232,8 @@ internal fun FileOfflineCenterScreen(
                         },
                         onOpenMediaSuggestion = { suggestion ->
                             if (syncBusyPairId == null) {
-                                scope.launch {
-                                    runCatching {
-                                        services.chooseFileSyncLocalRoot(suggestion.localRootHint)
-                                    }.onSuccess { selected ->
-                                        pendingMediaSuggestion = suggestion
-                                        pendingLocalRoot = selected
-                                    }.onFailure { failure ->
-                                        actionMessage = failure.message ?: "Could not select this media folder."
-                                    }
-                                }
+                                pendingMediaSuggestion = suggestion
+                                pendingLocalRoot = suggestion.localRoot
                             }
                         },
                         onRequestMediaPermission = {
@@ -553,7 +545,7 @@ private fun MediaFolderSuggestions(
             } else {
                 Text("Suggested media folders", style = MaterialTheme.typography.labelLarge)
                 Text(
-                    "Choose a detected folder to prefill a safe upload-only sync. Android will ask you to confirm access.",
+                    "Choose a detected folder to review a prefilled, upload-only sync.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -752,7 +744,7 @@ private fun AddFolderSyncDialog(
                 modifier = Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
-                Text("Local folder: ${localRoot.displayName}")
+                Text("Local folder: ${mediaSuggestion?.relativePath ?: localRoot.displayName}")
                 OutlinedTextField(
                     value = remotePath,
                     onValueChange = { remotePath = it },

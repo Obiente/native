@@ -18,17 +18,26 @@ internal data class AndroidLocalSyncDocument(
     val displayName: String,
 )
 
+internal interface AndroidFileSyncLocalTree {
+    fun scan(): List<AndroidLocalSyncDocument>
+    fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry
+    fun createDirectory(path: String, expectedLocalRevision: String?)
+    fun writeFile(path: String, source: File, expectedLocalRevision: String?)
+    fun delete(path: String, expectedLocalRevision: String)
+    fun resolve(path: String): AndroidLocalSyncDocument?
+}
+
 /**
  * Revision-guarded adapter over one persisted Storage Access Framework tree.
  *
  * Downloads are staged as siblings. Existing content is renamed to a recovery backup before the
  * staged generation takes its name, so interruption never silently truncates the user's file.
  */
-internal class AndroidFileSyncLocalTree(
+internal class AndroidSafFileSyncLocalTree(
     private val resolver: ContentResolver,
     rootId: String,
     private val contentHashPaths: Set<String> = emptySet(),
-) {
+) : AndroidFileSyncLocalTree {
     private val treeUri = Uri.parse(rootId)
     private val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
     private val rootUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocumentId)
@@ -42,7 +51,7 @@ internal class AndroidFileSyncLocalTree(
         ) { "Access to the selected local folder has expired. Select it again." }
     }
 
-    fun scan(): List<AndroidLocalSyncDocument> {
+    override fun scan(): List<AndroidLocalSyncDocument> {
         val result = ArrayList<AndroidLocalSyncDocument>()
         val pending = ArrayDeque<Pair<String, Uri>>()
         pending += "" to rootUri
@@ -60,7 +69,7 @@ internal class AndroidFileSyncLocalTree(
         return result.sortedBy { it.entry.relativePath }
     }
 
-    fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {
+    override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {
         val document = requireNotNull(resolve(path)) { "The local file no longer exists." }
         require(document.entry.kind == SyncEntryKind.File) { "Only files can be uploaded as file content." }
         require((document.entry.size ?: 0L) <= maximumBytes) { "The local file exceeds the sync size limit." }
@@ -86,7 +95,7 @@ internal class AndroidFileSyncLocalTree(
         return after.entry
     }
 
-    fun createDirectory(path: String, expectedLocalRevision: String?) {
+    override fun createDirectory(path: String, expectedLocalRevision: String?) {
         val existing = resolve(path)
         if (expectedLocalRevision == null) {
             require(existing == null) { "The local folder appeared after the sync scan." }
@@ -107,7 +116,7 @@ internal class AndroidFileSyncLocalTree(
         requireNotNull(created) { "The local folder could not be created." }
     }
 
-    fun writeFile(path: String, source: File, expectedLocalRevision: String?) {
+    override fun writeFile(path: String, source: File, expectedLocalRevision: String?) {
         require(source.isFile)
         val current = resolve(path)
         if (expectedLocalRevision == null) {
@@ -155,7 +164,7 @@ internal class AndroidFileSyncLocalTree(
         }
     }
 
-    fun delete(path: String, expectedLocalRevision: String) {
+    override fun delete(path: String, expectedLocalRevision: String) {
         val current = requireNotNull(resolve(path)) { "The local item was already removed." }
         require(current.entry.revision == expectedLocalRevision) {
             "The local item changed after the sync scan."
@@ -165,7 +174,7 @@ internal class AndroidFileSyncLocalTree(
         }
     }
 
-    fun resolve(path: String): AndroidLocalSyncDocument? {
+    override fun resolve(path: String): AndroidLocalSyncDocument? {
         if (path.isBlank()) return null
         var parentPath = ""
         var parentUri = rootUri
