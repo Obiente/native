@@ -1,8 +1,11 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 
 class RemoteFolderPickerTest {
     @Test
@@ -163,6 +166,37 @@ class RemoteFolderPickerTest {
         assertNull(newRemoteFolderPath("Photos", "../Camera"))
         assertNull(newRemoteFolderPath("Photos", "Camera/2026"))
         assertNull(newRemoteFolderPath("../Outside", "Camera"))
+    }
+
+    @Test
+    fun `folder operations preserve coroutine cancellation`() {
+        val cancellation = CancellationException("folder changed")
+
+        val thrown = assertFailsWith<CancellationException> {
+            Result.failure<Unit>(cancellation).rethrowRemoteFolderCancellation()
+        }
+
+        assertSame(cancellation, thrown)
+        assertNull(
+            Result.failure<Unit>(IllegalStateException("offline"))
+                .rethrowRemoteFolderCancellation()
+                .getOrNull(),
+        )
+    }
+
+    @Test
+    fun `selection status explains that the folder is still loading`() {
+        assertEquals(
+            "Loading this Nextcloud folder before it can be selected.",
+            remoteFolderSelectionStatus(
+                loading = true,
+                currentPath = "Photos",
+                canConfirm = false,
+                listingSource = null,
+                manualPathVisible = false,
+                manualPathDraft = "Photos",
+            ),
+        )
     }
 
     private fun directory(path: String, name: String) = nextcloudFile(path, name, isDirectory = true)

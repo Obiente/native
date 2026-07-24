@@ -40,6 +40,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 internal data class RemoteFolderBreadcrumb(
@@ -140,6 +141,30 @@ internal fun newRemoteFolderPath(parentPath: String, name: String): String? {
     return canonicalRemoteFolderPath(if (parent.isEmpty()) name else "$parent/$name")
 }
 
+internal fun <T> Result<T>.rethrowRemoteFolderCancellation(): Result<T> {
+    val failure = exceptionOrNull()
+    if (failure is CancellationException) throw failure
+    return this
+}
+
+internal fun remoteFolderSelectionStatus(
+    loading: Boolean,
+    currentPath: String,
+    canConfirm: Boolean,
+    listingSource: NextcloudFileListingSource?,
+    manualPathVisible: Boolean,
+    manualPathDraft: String,
+): String = when {
+    loading -> "Loading this Nextcloud folder before it can be selected."
+    manualPathVisible && normalizeRemoteFolderInput(manualPathDraft) != currentPath ->
+        "Open and verify the advanced path before selecting it."
+    canConfirm && currentPath.isEmpty() -> "The Files root is ready to select."
+    canConfirm -> "/$currentPath is ready to select."
+    listingSource == NextcloudFileListingSource.Cache ->
+        "This cached destination must be confirmed online before selection."
+    else -> "Open an accessible folder before confirming."
+}
+
 @Composable
 internal fun RemoteFolderPickerDialog(
     services: NextcloudPlatformServices,
@@ -180,7 +205,7 @@ internal fun RemoteFolderPickerDialog(
         query = ""
         val cached = runCatching {
             services.listFilesCachedWithSource(session, userId, currentPath)
-        }.getOrNull()
+        }.rethrowRemoteFolderCancellation().getOrNull()
         if (cached != null) {
             files = cached.files
             listingSource = cached.source
@@ -188,6 +213,7 @@ internal fun RemoteFolderPickerDialog(
             refreshing = true
         }
         runCatching { services.listFilesWithSource(session, userId, currentPath) }
+            .rethrowRemoteFolderCancellation()
             .onSuccess { listing ->
                 files = listing.files
                 listingSource = listing.source
@@ -430,7 +456,7 @@ internal fun RemoteFolderPickerDialog(
                                     scope.launch {
                                         runCatching {
                                             services.createDirectoryIfAbsent(session, userId, target)
-                                        }.onSuccess {
+                                        }.rethrowRemoteFolderCancellation().onSuccess {
                                             createVisible = false
                                             createName = ""
                                             currentPath = target
@@ -491,15 +517,14 @@ internal fun RemoteFolderPickerDialog(
                 }
                 item(key = "selection-status") {
                     Text(
-                        when {
-                            manualVisible && normalizeRemoteFolderInput(manualPath) != currentPath ->
-                                "Open and verify the advanced path before selecting it."
-                            canConfirm && currentPath.isEmpty() -> "The Files root is ready to select."
-                            canConfirm -> "/$currentPath is ready to select."
-                            listingSource == NextcloudFileListingSource.Cache ->
-                                "This cached destination must be confirmed online before selection."
-                            else -> "Open an accessible folder before confirming."
-                        },
+                        remoteFolderSelectionStatus(
+                            loading = loading,
+                            currentPath = currentPath,
+                            canConfirm = canConfirm,
+                            listingSource = listingSource,
+                            manualPathVisible = manualVisible,
+                            manualPathDraft = manualPath,
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = if (canConfirm) FontWeight.Medium else FontWeight.Normal,
                         color = if (canConfirm) {
