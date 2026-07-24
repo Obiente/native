@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nextcloud Native</string>
+    <string name="documents_provider_label">Nextcloud Native files</string>
+    <string name="documents_provider_root_name">Nextcloud Native</string>
+</resources>
