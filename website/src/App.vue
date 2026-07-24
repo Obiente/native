@@ -23,6 +23,7 @@ import {
 } from "@phosphor-icons/vue";
 import { docs } from "./generated/docs.js";
 import NativePreview from "./components/NativePreview.vue";
+import RoadmapDashboard from "./components/RoadmapDashboard.vue";
 
 const props = defineProps({
   initialPath: {
@@ -196,6 +197,7 @@ const frequentlyAsked = [
         <a href="/#approach">Approach</a>
         <a href="/#apps">Apps</a>
         <a href="/#platforms">Platforms</a>
+        <a href="/roadmap/">Roadmap</a>
         <a href="/#docs">Docs</a>
       </nav>
 
@@ -440,7 +442,11 @@ const frequentlyAsked = [
         </section>
       </template>
 
-      <section v-else class="doc-page section-width">
+      <section
+        v-else
+        class="doc-page section-width"
+        :class="{ 'roadmap-page': currentDoc.path === '/roadmap/' }"
+      >
         <aside class="doc-sidebar" aria-label="Project documentation">
           <p>Documentation</p>
           <nav>
@@ -463,6 +469,7 @@ const frequentlyAsked = [
             <p>{{ currentDoc.description }}</p>
             <span>{{ currentDoc.readingMinutes }} minute read · sourced from {{ currentDoc.file }}</span>
           </header>
+          <RoadmapDashboard v-if="currentDoc.path === '/roadmap/'" />
           <div class="markdown-body" v-html="currentDoc.html"></div>
         </article>
       </section>
