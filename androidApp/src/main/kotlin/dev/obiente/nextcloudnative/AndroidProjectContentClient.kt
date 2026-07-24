@@ -28,6 +28,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -136,7 +138,7 @@ internal class AndroidProjectContentClient(
         }
     }
 
-    fun beginUpdate(release: AndroidDirectRelease): AppUpdateInstallResult {
+    suspend fun beginUpdate(release: AndroidDirectRelease): AppUpdateInstallResult {
         val support = support()
         if (!support.canCheckDirectUpdates) {
             return AppUpdateInstallResult.Rejected(support.explanation)
@@ -148,12 +150,14 @@ internal class AndroidProjectContentClient(
         val foregroundActivity = activity
             ?: return AppUpdateInstallResult.Rejected("Open the app before installing an update.")
         if (!appContext.packageManager.canRequestPackageInstalls()) {
-            foregroundActivity.startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:${appContext.packageName}"),
-                ),
-            )
+            withContext(Dispatchers.Main.immediate) {
+                foregroundActivity.startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${appContext.packageName}"),
+                    ),
+                )
+            }
             return AppUpdateInstallResult.PermissionRequired(
                 "Allow installs from Nextcloud Native, then return and confirm the update again.",
             )
@@ -172,13 +176,15 @@ internal class AndroidProjectContentClient(
                 "${appContext.packageName}.sharedfiles",
                 staged,
             )
-            foregroundActivity.startActivity(
-                Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
-                    setDataAndType(uri, "application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    putExtra(Intent.EXTRA_RETURN_RESULT, false)
-                },
-            )
+            withContext(Dispatchers.Main.immediate) {
+                foregroundActivity.startActivity(
+                    Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+                        setDataAndType(uri, "application/vnd.android.package-archive")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        putExtra(Intent.EXTRA_RETURN_RESULT, false)
+                    },
+                )
+            }
             AppUpdateInstallResult.ConfirmationOpened
         }.getOrElse { failure ->
             AppUpdateInstallResult.Rejected(failure.message ?: "The update could not be verified.")

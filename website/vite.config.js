@@ -31,7 +31,11 @@ function captureMetadataPlugin() {
             ),
           )
           .then(() => server.ws.send({ type: "full-reload" }))
-          .catch((error) => server.config.logger.error(error.message));
+          .catch((error) => {
+            const detail =
+              error instanceof Error ? (error.stack ?? error.message) : String(error);
+            server.config.logger.error(detail);
+          });
       });
     },
   };
