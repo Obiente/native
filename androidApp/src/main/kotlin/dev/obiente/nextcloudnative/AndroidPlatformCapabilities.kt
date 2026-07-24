@@ -90,6 +90,11 @@ internal fun PlatformCapability.permissions(sdk: Int): List<String> = when (this
     PlatformCapability.BackgroundSync,
     PlatformCapability.FilesAndMedia,
     -> emptyList()
+    PlatformCapability.MediaLibrary -> when {
+        sdk >= 33 -> listOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+        sdk >= 23 -> listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        else -> emptyList()
+    }
     PlatformCapability.AllFilesAccess -> when {
         sdk >= 30 -> emptyList()
         sdk >= 23 -> listOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -104,6 +109,7 @@ private fun PlatformCapability.label(): String = when (this) {
     PlatformCapability.NearbyAudio -> "Bluetooth call audio"
     PlatformCapability.BackgroundSync -> "Background file sync"
     PlatformCapability.FilesAndMedia -> "Files and media"
+    PlatformCapability.MediaLibrary -> "Photos and videos"
     PlatformCapability.AllFilesAccess -> "All files access for advanced sync"
 }
 
@@ -114,6 +120,7 @@ private fun PlatformCapability.description(): String = when (this) {
     PlatformCapability.NearbyAudio -> "Routes Talk call audio to paired Bluetooth devices."
     PlatformCapability.BackgroundSync -> "Uses a foreground data-sync service only while active work is running."
     PlatformCapability.FilesAndMedia -> "Uses Android's system picker and cloud DocumentsProvider without broad storage access."
+    PlatformCapability.MediaLibrary -> "Finds camera, screenshot, image, and video folders for automatic upload."
     PlatformCapability.AllFilesAccess -> "Optional access for syncing arbitrary folders such as an Obsidian vault."
 }
 

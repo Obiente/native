@@ -19,6 +19,17 @@ enum class FileSyncDeletionPolicy {
     RestoreMissing,
 }
 
+enum class FileSyncNetworkPolicy {
+    AnyConnection,
+    Unmetered,
+}
+
+enum class FileSyncPowerPolicy {
+    AnyPower,
+    BatteryNotLow,
+    Charging,
+}
+
 enum class SyncEntryKind { File, Directory }
 
 data class LocalSyncEntry(
@@ -97,6 +108,8 @@ data class FileSyncConfiguration(
     val conflictPolicy: FileSyncConflictPolicy = FileSyncConflictPolicy.Ask,
     val deletionPolicy: FileSyncDeletionPolicy = FileSyncDeletionPolicy.Ask,
     val deviceLabel: String,
+    val networkPolicy: FileSyncNetworkPolicy = FileSyncNetworkPolicy.AnyConnection,
+    val powerPolicy: FileSyncPowerPolicy = FileSyncPowerPolicy.BatteryNotLow,
 ) {
     init {
         require(deviceLabel.isNotBlank())

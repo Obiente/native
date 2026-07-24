@@ -15,6 +15,7 @@ enum class PlatformCapability {
     NearbyAudio,
     BackgroundSync,
     FilesAndMedia,
+    MediaLibrary,
     AllFilesAccess,
 }
 
@@ -204,8 +205,40 @@ data class TalkMessage(
     val systemMessageName: String?,
     val parameters: Map<String, TalkRichObjectParameter>,
     val content: TalkMessageContent,
+    val threadId: Long? = null,
+    val isThread: Boolean = false,
+    val threadTitle: String? = null,
+    val threadReplies: Int = 0,
+    val isReplyable: Boolean = false,
+    val parent: TalkMessageQuote? = null,
+    val reactions: List<TalkReaction> = emptyList(),
+    val editedAt: Long? = null,
+    val editedBy: String? = null,
+    val deleted: Boolean = false,
+    val silent: Boolean = false,
+    val expiresAt: Long? = null,
+    val scheduledAt: Long? = null,
+    val referenceId: String? = null,
 ) {
     val isSystemMessage: Boolean get() = systemMessageName != null
+}
+
+data class TalkMessageQuote(
+    val id: Long,
+    val actorDisplayName: String,
+    val summary: String,
+    val deleted: Boolean,
+)
+
+data class TalkReaction(
+    val emoji: String,
+    val count: Int,
+    val reactedByMe: Boolean,
+) {
+    init {
+        require(emoji.isNotBlank())
+        require(count > 0)
+    }
 }
 
 data class TalkMessagePage(
@@ -398,7 +431,13 @@ interface NextcloudPlatformServices {
     )
 
     /** Opens the native folder chooser and persists a least-privilege folder grant. */
-    suspend fun chooseFileSyncLocalRoot(): FileSyncLocalRoot? = null
+    suspend fun chooseFileSyncLocalRoot(initialRootHint: String? = null): FileSyncLocalRoot? = null
+
+    suspend fun discoverMediaSyncFolders(): MediaSyncFolderDiscovery = MediaSyncFolderDiscovery(
+        support = MediaSyncFolderDiscoverySupport.Unsupported,
+        suggestions = emptyList(),
+        message = "Automatic media folder discovery is not available on this platform.",
+    )
 
     suspend fun loadFileSyncCenter(
         session: NextcloudSession,

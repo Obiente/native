@@ -21,6 +21,57 @@ enum class FileSyncCenterSupport {
     Unsupported,
 }
 
+enum class MediaSyncFolderDiscoverySupport {
+    Available,
+    NeedsPermission,
+    Unsupported,
+}
+
+enum class MediaSyncFolderKind {
+    Camera,
+    Screenshots,
+    Images,
+    Videos,
+    Mixed,
+}
+
+/**
+ * A platform-discovered local media folder that can seed the native folder picker.
+ *
+ * [localRootHint] is opaque outside the platform implementation. It is not a persisted grant and
+ * must never be used for sync until the user confirms it in the system folder picker.
+ */
+data class MediaSyncFolderSuggestion(
+    val localRootHint: String,
+    val displayName: String,
+    val relativePath: String,
+    val kind: MediaSyncFolderKind,
+    val imageCount: Int,
+    val videoCount: Int,
+    val suggestedRemoteRootPath: String,
+) {
+    init {
+        require(localRootHint.isSafeFileSyncCenterText(2_048))
+        require(displayName.isSafeFileSyncCenterText(256))
+        require(relativePath.isSafeFileSyncCenterText(1_024))
+        require(imageCount >= 0 && videoCount >= 0 && imageCount + videoCount > 0)
+        requireValidSyncPath(suggestedRemoteRootPath)
+    }
+}
+
+data class MediaSyncFolderDiscovery(
+    val support: MediaSyncFolderDiscoverySupport,
+    val suggestions: List<MediaSyncFolderSuggestion>,
+    val message: String? = null,
+) {
+    init {
+        require(suggestions.size <= 128)
+        require(suggestions.map(MediaSyncFolderSuggestion::localRootHint).distinct().size == suggestions.size)
+        require(support == MediaSyncFolderDiscoverySupport.Available || suggestions.isEmpty())
+        require(message == null || message.isSafeFileSyncCenterText(1_024))
+    }
+}
+
 data class FileSyncPairSummary(
     val id: String,
     val localDisplayName: String,

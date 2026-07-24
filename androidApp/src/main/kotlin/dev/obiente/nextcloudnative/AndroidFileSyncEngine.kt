@@ -50,7 +50,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         val persisted = store.load()
         persisted.coordinator.pairs
             .filter { it.accountId == accountId }
-            .forEach { scheduler.schedule(it.id, accountId, userId) }
+            .forEach { scheduler.schedule(it.id, accountId, userId, it.configuration) }
         FileSyncCenterSnapshot(
             support = FileSyncCenterSupport.Available,
             pairs = persisted.coordinator.pairs
@@ -58,7 +58,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 .map { pair ->
                     pair.toCenterSummary(
                         persisted.localDisplayNames[pair.id] ?: "Selected folder",
-                        scheduleDescription = "Automatic checks about every 15 minutes when online and battery is not low",
+                        scheduleDescription = pair.configuration.scheduleDescription(),
                     )
                 },
         )
@@ -97,8 +97,24 @@ internal class AndroidFileSyncEngine(context: Context) {
                 localDisplayNames = current.localDisplayNames + (pair.id to localRoot.displayName),
             ),
         )
-        scheduler.schedule(pair.id, accountId, userId)
+        scheduler.schedule(pair.id, accountId, userId, pair.configuration)
         FileSyncCenterActionResult.Completed("Folder sync pair added. Run it to review the first sync.")
+    }
+
+    private fun FileSyncConfiguration.scheduleDescription(): String {
+        val network = when (networkPolicy) {
+            dev.obiente.nextcloudnative.app.FileSyncNetworkPolicy.AnyConnection -> "online"
+            dev.obiente.nextcloudnative.app.FileSyncNetworkPolicy.Unmetered -> "on unmetered networks"
+        }
+        val power = when (powerPolicy) {
+            dev.obiente.nextcloudnative.app.FileSyncPowerPolicy.AnyPower -> null
+            dev.obiente.nextcloudnative.app.FileSyncPowerPolicy.BatteryNotLow -> "when battery is not low"
+            dev.obiente.nextcloudnative.app.FileSyncPowerPolicy.Charging -> "while charging"
+        }
+        return buildString {
+            append("Automatic checks about every 15 minutes ").append(network)
+            power?.let { append(" and ").append(it) }
+        }
     }
 
     fun removePair(session: NextcloudSession, pairId: String): FileSyncCenterActionResult =

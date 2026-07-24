@@ -124,7 +124,11 @@ class FileSyncCoordinatorSnapshotTest {
         accountId = "account-a",
         localRootId = "bookmark-$id",
         remoteRootPath = "Notes",
-        configuration = FileSyncConfiguration(deviceLabel = "Test phone"),
+        configuration = FileSyncConfiguration(
+            deviceLabel = "Test phone",
+            networkPolicy = FileSyncNetworkPolicy.Unmetered,
+            powerPolicy = FileSyncPowerPolicy.Charging,
+        ),
         baselines = baselines,
     )
 

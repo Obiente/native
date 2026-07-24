@@ -16,6 +16,7 @@ import dev.obiente.nextcloudnative.app.LoginChallenge
 import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
 import dev.obiente.nextcloudnative.app.MAX_NOTE_BYTES
+import dev.obiente.nextcloudnative.app.MAX_TALK_MESSAGE_PAGE_SIZE
 import dev.obiente.nextcloudnative.app.NextcloudApiRequest
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
 import dev.obiente.nextcloudnative.app.GroupwareDavRequest
@@ -37,6 +38,7 @@ import dev.obiente.nextcloudnative.app.FileSyncCenterSnapshot
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
+import dev.obiente.nextcloudnative.app.MediaSyncFolderDiscovery
 import dev.obiente.nextcloudnative.app.filesByIdDavSearchRequest
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffAction
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffCapability
@@ -57,6 +59,7 @@ import dev.obiente.nextcloudnative.app.NextcloudSystemTag
 import dev.obiente.nextcloudnative.app.SavedTextFile
 import dev.obiente.nextcloudnative.app.SystemTagDavRecord
 import dev.obiente.nextcloudnative.app.TalkMessage
+import dev.obiente.nextcloudnative.app.TalkMessagePage
 import dev.obiente.nextcloudnative.app.TalkRoom
 import dev.obiente.nextcloudnative.app.ThemePreference
 import dev.obiente.nextcloudnative.app.PlatformCapability
@@ -132,6 +135,7 @@ internal class AndroidNextcloudServices(
     private val dynamicApiReadCache = DynamicApiResponseCache(File(appContext.cacheDir, "dynamic-api-v1"))
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
     private val fileSyncEngine = AndroidFileSyncEngine(appContext)
+    private val mediaSyncFolderDetector = AndroidMediaSyncFolderDetector(appContext)
     private val externalFileHandoff = AndroidExternalFileHandoff(appContext)
     private val platformCapabilities = AndroidPlatformCapabilities(appContext, context as? Activity)
 
@@ -378,10 +382,15 @@ internal class AndroidNextcloudServices(
         fileOfflineRepository.removeCenterItem(session, userId, key)
     }
 
-    override suspend fun chooseFileSyncLocalRoot(): FileSyncLocalRoot? =
+    override suspend fun chooseFileSyncLocalRoot(initialRootHint: String?): FileSyncLocalRoot? =
         checkNotNull(fileSyncRootPicker) {
             "The native folder chooser is not available from this Android component."
-        }.choose()
+        }.choose(initialRootHint)
+
+    override suspend fun discoverMediaSyncFolders(): MediaSyncFolderDiscovery =
+        withContext(Dispatchers.IO) {
+            mediaSyncFolderDetector.discover()
+        }
 
     override suspend fun loadFileSyncCenter(
         session: NextcloudSession,
@@ -1225,19 +1234,50 @@ internal class AndroidNextcloudServices(
     override suspend fun listTalkMessages(
         session: NextcloudSession,
         token: String,
-    ): List<TalkMessage> = withContext(Dispatchers.IO) {
+    ): List<TalkMessage> = listTalkMessagePage(session, token).messages
+
+    override suspend fun listTalkMessagePage(
+        session: NextcloudSession,
+        token: String,
+        olderCursor: Long?,
+        limit: Int,
+    ): TalkMessagePage = withContext(Dispatchers.IO) {
+        require(limit in 1..MAX_TALK_MESSAGE_PAGE_SIZE) {
+            "Talk message page size must be between 1 and $MAX_TALK_MESSAGE_PAGE_SIZE."
+        }
+        require(olderCursor == null || olderCursor >= 0L) {
+            "Talk history cursor must not be negative."
+        }
         try {
             val encodedToken = encodePathSegment(token)
-            val data = ocsGet(
-                session,
-                "/ocs/v2.php/apps/spreed/api/v1/chat/$encodedToken" +
-                    "?lookIntoFuture=0&limit=100&setReadMarker=0&markNotificationsAsRead=0&noStatusUpdate=1",
-            ).getJSONObject("ocs").getJSONArray("data")
+            val response = request(
+                method = "GET",
+                url = session.serverUrl + "/ocs/v2.php/apps/spreed/api/v1/chat/$encodedToken" +
+                    "?format=json&lookIntoFuture=0&limit=$limit&lastKnownMessageId=${olderCursor ?: 0L}" +
+                    "&includeLastKnown=0&setReadMarker=0&markNotificationsAsRead=0&noStatusUpdate=1",
+                session = session,
+                ocsRequest = true,
+            )
+            val data = if (response.status == 304) {
+                JSONArray()
+            } else {
+                check(response.status in 200..299) {
+                    "Loading Talk history failed (HTTP ${response.status})."
+                }
+                JSONObject(response.text).getJSONObject("ocs").getJSONArray("data")
+            }
             buildList {
                 for (index in 0 until data.length()) {
                     val message = data.optJSONObject(index) ?: continue
                     parseTalkMessageJson(message.toString())?.let(::add)
                 }
+            }.let { messages ->
+                val nextCursor = response.chatLastGiven?.toLongOrNull()
+                TalkMessagePage(
+                    messages = messages,
+                    olderCursor = nextCursor,
+                    hasMoreHistory = response.status != 304 && nextCursor != null,
+                )
             }
         } catch (failure: Throwable) {
             Log.e(LOG_TAG, "Loading Talk messages failed", failure)
@@ -1341,6 +1381,7 @@ internal class AndroidNextcloudServices(
                 contentType = responseBody.contentType()?.toString(),
                 etag = response.header("ETag") ?: response.header("OC-Etag"),
                 location = response.header("Location"),
+                chatLastGiven = response.header("X-Chat-Last-Given"),
             )
         }
     }
@@ -1495,6 +1536,7 @@ internal class AndroidNextcloudServices(
         val contentType: String? = null,
         val etag: String? = null,
         val location: String? = null,
+        val chatLastGiven: String? = null,
     ) {
         val text: String get() = body.toString(StandardCharsets.UTF_8)
     }

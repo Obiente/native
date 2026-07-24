@@ -24,6 +24,14 @@ class AndroidPlatformCapabilitiesTest {
     @Test
     fun filesAndMediaNeverRequestsBroadStorageAccess() {
         assertTrue(PlatformCapability.FilesAndMedia.permissions(36).isEmpty())
+        assertEquals(
+            listOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO),
+            PlatformCapability.MediaLibrary.permissions(36),
+        )
+        assertEquals(
+            listOf(Manifest.permission.READ_EXTERNAL_STORAGE),
+            PlatformCapability.MediaLibrary.permissions(32),
+        )
         assertTrue(PlatformCapability.BackgroundSync.permissions(36).isEmpty())
         assertEquals(listOf(Manifest.permission.CAMERA), PlatformCapability.Camera.permissions(36))
         assertEquals(listOf(Manifest.permission.RECORD_AUDIO), PlatformCapability.Microphone.permissions(36))

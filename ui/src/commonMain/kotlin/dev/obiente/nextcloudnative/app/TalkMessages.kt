@@ -3,10 +3,12 @@ package dev.obiente.nextcloudnative.app
 import dev.obiente.nextcloudnative.template.replaceBracedTemplateTokens
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 
@@ -258,6 +260,17 @@ private fun parseTalkMessage(json: JsonObject): TalkMessage {
     val sharedObject = parameters["object"] ?: parameters.entries
         .firstOrNull { (key, parameter) -> key.startsWith("object") && parameter.type != "file" }
         ?.value
+    val reactionsByMe = json.arrayValue("reactionsSelf")
+        ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+        ?.toSet()
+        .orEmpty()
+    val reactions = json.objectValue("reactions")
+        ?.mapNotNull { (emoji, value) ->
+            val count = (value as? JsonPrimitive)?.intOrNull ?: return@mapNotNull null
+            if (emoji.isBlank() || count <= 0) return@mapNotNull null
+            TalkReaction(emoji, count, emoji in reactionsByMe)
+        }
+        .orEmpty()
     val callType = systemMessage.toCallEventType()
     val content = when {
         files.isNotEmpty() -> TalkMessageContent.FileShare(
@@ -291,6 +304,39 @@ private fun parseTalkMessage(json: JsonObject): TalkMessage {
         systemMessageName = rawSystemMessage,
         parameters = parameters,
         content = content,
+        threadId = json.longValue("threadId"),
+        isThread = json.booleanValue("isThread") ?: false,
+        threadTitle = json.stringValue("threadTitle")?.takeIf(String::isNotBlank),
+        threadReplies = json.longValue("threadReplies")?.toInt()?.coerceAtLeast(0) ?: 0,
+        isReplyable = json.booleanValue("isReplyable") ?: false,
+        parent = json.objectValue("parent")?.toTalkMessageQuote(),
+        reactions = reactions,
+        editedAt = json.longValue("lastEditTimestamp")?.takeIf { it > 0L },
+        editedBy = json.stringValue("lastEditActorDisplayName")?.takeIf(String::isNotBlank),
+        deleted = json.booleanValue("deleted") == true || messageType == TalkMessageType.CommentDeleted,
+        silent = json.booleanValue("silent") ?: false,
+        expiresAt = json.longValue("expirationTimestamp")?.takeIf { it > 0L },
+        scheduledAt = json.longValue("sendAt")?.takeIf { it > 0L },
+        referenceId = json.stringValue("referenceId")?.takeIf(String::isNotBlank),
+    )
+}
+
+private fun JsonObject.toTalkMessageQuote(): TalkMessageQuote {
+    val quoteParameters = objectValue("messageParameters")
+        ?.mapNotNull { (key, value) ->
+            val parameter = value as? JsonObject ?: return@mapNotNull null
+            key to parameter.toTalkRichObjectParameter()
+        }
+        ?.toMap()
+        .orEmpty()
+    val summary = stringValue("message").orEmpty().replaceBracedTemplateTokens { name, original ->
+        quoteParameters[name]?.name?.takeIf(String::isNotBlank) ?: original
+    }
+    return TalkMessageQuote(
+        id = longValue("id") ?: 0L,
+        actorDisplayName = stringValue("actorDisplayName").orEmpty().ifBlank { "Nextcloud" },
+        summary = summary.ifBlank { "Message" },
+        deleted = booleanValue("deleted") ?: false,
     )
 }
 
@@ -376,6 +422,8 @@ private fun JsonObject.booleanValue(key: String): Boolean? =
     (get(key) as? JsonPrimitive)?.let { it.booleanOrNull ?: it.contentOrNull?.toBooleanStrictOrNull() }
 
 private fun JsonObject.objectValue(key: String): JsonObject? = get(key) as? JsonObject
+
+private fun JsonObject.arrayValue(key: String): JsonArray? = get(key) as? JsonArray
 
 private fun String.toBinaryBoolean(): Boolean? = when (this) {
     "1" -> true
