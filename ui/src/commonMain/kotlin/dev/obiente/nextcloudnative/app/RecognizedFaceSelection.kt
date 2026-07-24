@@ -273,7 +273,13 @@ private fun JsonObject.positiveInt(key: String): Int? =
 private fun JsonObject.nonNegativeInt(key: String): Int? =
     (this[key] as? JsonPrimitive)?.intOrNull?.takeIf { it >= 0 }
 
-private fun JsonObject.faceRectangleOrNull(): NativeFaceRectangle? {
+/**
+ * Parses the common normalized face rectangle returned by Memories day payloads.
+ *
+ * This stays shared between the read-only person gallery and the exact face-removal picker so
+ * both surfaces clip detector overflow identically.
+ */
+internal fun JsonObject.faceRectangleOrNull(): NativeFaceRectangle? {
     val rectangle = this["facerect"] as? JsonObject ?: return null
     val rawX = rectangle.finiteDouble("x") ?: return null
     val rawY = rectangle.finiteDouble("y") ?: return null

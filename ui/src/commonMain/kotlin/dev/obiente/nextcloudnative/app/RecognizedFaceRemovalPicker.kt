@@ -277,7 +277,7 @@ private fun RecognizedFaceTile(
 }
 
 @Composable
-private fun FaceRectangleOverlay(
+internal fun FaceRectangleOverlay(
     rectangle: NativeFaceRectangle?,
     sourceWidth: Int?,
     sourceHeight: Int?,
