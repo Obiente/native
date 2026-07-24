@@ -363,6 +363,12 @@ internal class AndroidProjectContentClient(
         check(archive.longVersionCodeCompat() == release.versionCode) {
             "Update package version does not match its metadata."
         }
+        val sdkRequirements = archive.sdkRequirements()
+        androidSdkCompatibilityFailure(
+            minSdk = sdkRequirements.minSdk,
+            maxSdk = sdkRequirements.maxSdk,
+            deviceSdk = Build.VERSION.SDK_INT,
+        )?.let { failure -> error(failure) }
         val expected = release.signingCertificateSha256
         check(expected in installed.signingCertificateDigests()) {
             "Release metadata does not match the installed app signer."
@@ -410,6 +416,19 @@ internal class AndroidProjectContentClient(
     private fun PackageInfo.longVersionCodeCompat(): Long =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) longVersionCode else versionCode.toLong()
 
+    @Suppress("DEPRECATION")
+    private fun PackageInfo.sdkRequirements(): AndroidSdkRequirements {
+        val archiveApplication = requireNotNull(applicationInfo) {
+            "The update package does not expose its Android compatibility requirements."
+        }
+        val minimum = archiveApplication.minSdkVersion
+        check(minimum > 0) {
+            "The update package declares invalid Android compatibility requirements."
+        }
+        // PackageManager exposes minSdkVersion for archives but no public maxSdkVersion field.
+        return AndroidSdkRequirements(minSdk = minimum, maxSdk = null)
+    }
+
     private fun File.sha256(): String {
         val digest = MessageDigest.getInstance("SHA-256")
         inputStream().use { input ->
@@ -435,6 +454,28 @@ internal class AndroidProjectContentClient(
 }
 
 internal class UpdateDownloadCancelledException : IOException("Update download cancelled.")
+
+internal data class AndroidSdkRequirements(
+    val minSdk: Int,
+    val maxSdk: Int?,
+)
+
+internal fun androidSdkCompatibilityFailure(
+    minSdk: Int,
+    maxSdk: Int?,
+    deviceSdk: Int,
+): String? {
+    require(minSdk > 0)
+    require(deviceSdk > 0)
+    require(maxSdk == null || maxSdk >= minSdk)
+    return when {
+        deviceSdk < minSdk ->
+            "This update requires Android API $minSdk or newer, but this device uses API $deviceSdk."
+        maxSdk != null && deviceSdk > maxSdk ->
+            "This update supports Android API $maxSdk or older, but this device uses API $deviceSdk."
+        else -> null
+    }
+}
 
 internal fun settleUpdatePartial(
     file: File,

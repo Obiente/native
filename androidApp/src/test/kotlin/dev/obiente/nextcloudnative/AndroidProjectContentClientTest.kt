@@ -3,9 +3,11 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.AppDistributionChannel
 import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -183,5 +185,30 @@ class AndroidProjectContentClientTest {
                 directApkBuild = true,
             ),
         )
+    }
+
+    @Test
+    fun updateSdkCompatibilityRejectsUnsupportedDevicesBeforeInstallation() {
+        assertNull(androidSdkCompatibilityFailure(minSdk = 26, maxSdk = null, deviceSdk = 36))
+        assertNull(androidSdkCompatibilityFailure(minSdk = 26, maxSdk = 36, deviceSdk = 36))
+
+        val deviceTooOld = requireNotNull(
+            androidSdkCompatibilityFailure(minSdk = 35, maxSdk = null, deviceSdk = 34),
+        )
+        assertContains(deviceTooOld, "requires Android API 35 or newer")
+        assertContains(deviceTooOld, "device uses API 34")
+
+        val deviceTooNew = requireNotNull(
+            androidSdkCompatibilityFailure(minSdk = 26, maxSdk = 34, deviceSdk = 35),
+        )
+        assertContains(deviceTooNew, "supports Android API 34 or older")
+        assertContains(deviceTooNew, "device uses API 35")
+    }
+
+    @Test
+    fun updateSdkCompatibilityRejectsInvalidArchiveRequirements() {
+        assertFailsWith<IllegalArgumentException> {
+            androidSdkCompatibilityFailure(minSdk = 35, maxSdk = 34, deviceSdk = 34)
+        }
     }
 }
