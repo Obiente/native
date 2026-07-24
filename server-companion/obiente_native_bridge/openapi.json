@@ -1,0 +1,147 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Obiente Native Bridge",
+    "version": "0.1.0",
+    "description": "Optional authenticated server capabilities for independent Obiente native clients.",
+    "license": {
+      "name": "AGPL-3.0-or-later"
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "basic_auth": {
+        "type": "http",
+        "scheme": "basic"
+      },
+      "bearer_auth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "OCSMeta": {
+        "type": "object",
+        "required": ["status", "statuscode"],
+        "properties": {
+          "status": { "type": "string" },
+          "statuscode": { "type": "integer" },
+          "message": { "type": "string" }
+        }
+      },
+      "RecognizeToken": {
+        "type": "object",
+        "required": ["token", "header_name", "expires_in", "expires_at", "recognize_version"],
+        "properties": {
+          "token": {
+            "type": "string",
+            "format": "password",
+            "description": "Opaque short-lived secondary key. Never log or cache this value."
+          },
+          "header_name": {
+            "type": "string",
+            "enum": ["X-Recognize-Api-Key"]
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int32",
+            "enum": [86400]
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "recognize_version": {
+            "type": "string"
+          }
+        }
+      },
+      "Unavailable": {
+        "type": "object",
+        "required": ["error", "available"],
+        "properties": {
+          "error": { "type": "string" },
+          "available": { "type": "boolean", "enum": [false] }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/ocs/v2.php/apps/obiente_native_bridge/api/v1/recognize/token": {
+      "post": {
+        "operationId": "recognize-token-mint",
+        "summary": "Mint a short-lived Recognize DAV key",
+        "description": "Requires normal Nextcloud authentication. The returned secondary key does not replace DAV authentication or ownership checks.",
+        "tags": ["recognize"],
+        "security": [
+          { "bearer_auth": [] },
+          { "basic_auth": [] }
+        ],
+        "parameters": [
+          {
+            "name": "OCS-APIRequest",
+            "in": "header",
+            "description": "Must be true for an OCS API request.",
+            "required": true,
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The secondary DAV key was minted.",
+            "headers": {
+              "Cache-Control": {
+                "schema": { "type": "string", "enum": ["no-store, private"] }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ocs"],
+                  "properties": {
+                    "ocs": {
+                      "type": "object",
+                      "required": ["meta", "data"],
+                      "properties": {
+                        "meta": { "$ref": "#/components/schemas/OCSMeta" },
+                        "data": { "$ref": "#/components/schemas/RecognizeToken" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Normal Nextcloud authentication is missing."
+          },
+          "503": {
+            "description": "Recognize or its supported public key API is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ocs"],
+                  "properties": {
+                    "ocs": {
+                      "type": "object",
+                      "required": ["meta", "data"],
+                      "properties": {
+                        "meta": { "$ref": "#/components/schemas/OCSMeta" },
+                        "data": { "$ref": "#/components/schemas/Unavailable" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

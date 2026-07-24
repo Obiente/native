@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+    <id>obiente_native_bridge</id>
+    <name>Obiente Native Bridge</name>
+    <summary>Optional, authenticated server capabilities for Obiente native clients</summary>
+    <description><![CDATA[
+Obiente Native Bridge is an optional companion for independent Obiente native
+clients. It exposes narrowly scoped APIs only where an installed server app
+does not already provide a suitable authenticated client API.
+
+The first bridge capability lets an authenticated user mint the short-lived
+secondary key required by Recognize 11 and newer for its DAV people API. The
+key does not replace normal Nextcloud authentication or DAV ownership checks.
+
+This is an independent, unofficial Obiente project. It is not affiliated with
+or endorsed by Nextcloud GmbH.
+]]></description>
+    <version>0.1.0</version>
+    <licence>AGPL-3.0-or-later</licence>
+    <author homepage="https://obiente.dev">Obiente</author>
+    <namespace>ObienteNativeBridge</namespace>
+    <category>integration</category>
+    <category>tools</category>
+    <website>https://obiente.dev</website>
+    <bugs>https://obiente.dev</bugs>
+    <dependencies>
+        <php min-version="8.2" max-version="8.5"/>
+        <nextcloud min-version="33" max-version="35"/>
+    </dependencies>
+</info>

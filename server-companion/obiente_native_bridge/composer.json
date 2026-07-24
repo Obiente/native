@@ -1,0 +1,19 @@
+{
+  "name": "obiente/obiente-native-bridge",
+  "description": "Optional authenticated server capabilities for Obiente native clients",
+  "type": "nextcloud-app",
+  "license": "AGPL-3.0-or-later",
+  "require": {
+    "php": ">=8.2 <=8.5"
+  },
+  "autoload": {
+    "psr-4": {
+      "OCA\\ObienteNativeBridge\\": "lib/"
+    }
+  },
+  "scripts": {
+    "lint": "find appinfo lib tests -name '*.php' -print0 | xargs -0 -n1 php -l",
+    "test": "php tests/VersionPolicyTest.php && php tests/SecurityContractTest.php",
+    "check": "./tools/check.sh"
+  }
+}
