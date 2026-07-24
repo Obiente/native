@@ -34,6 +34,35 @@ data class NativeFaceRectangle(
 }
 
 /**
+ * Complete geometry required to place a normalized face outline over a source image.
+ *
+ * Keeping this as one value prevents callers from switching presentation modes when only a
+ * rectangle or only source dimensions are available.
+ */
+data class NativeFaceOutlineGeometry(
+    val rectangle: NativeFaceRectangle,
+    val sourceWidth: Int,
+    val sourceHeight: Int,
+) {
+    init {
+        require(sourceWidth > 0 && sourceHeight > 0)
+    }
+}
+
+internal fun nativeFaceOutlineGeometryOrNull(
+    rectangle: NativeFaceRectangle?,
+    sourceWidth: Int?,
+    sourceHeight: Int?,
+): NativeFaceOutlineGeometry? {
+    if (rectangle == null || sourceWidth == null || sourceHeight == null) return null
+    if (sourceWidth <= 0 || sourceHeight <= 0) return null
+    return NativeFaceOutlineGeometry(rectangle, sourceWidth, sourceHeight)
+}
+
+internal fun NativeMediaItem.faceOutlineGeometryOrNull(): NativeFaceOutlineGeometry? =
+    nativeFaceOutlineGeometryOrNull(faceRectangle, width, height)
+
+/**
  * One actionable Recognize detection. [file] identifies the source photo, while [detectionId]
  * identifies only the face assignment. They must never be treated as interchangeable IDs.
  */
@@ -273,7 +302,13 @@ private fun JsonObject.positiveInt(key: String): Int? =
 private fun JsonObject.nonNegativeInt(key: String): Int? =
     (this[key] as? JsonPrimitive)?.intOrNull?.takeIf { it >= 0 }
 
-private fun JsonObject.faceRectangleOrNull(): NativeFaceRectangle? {
+/**
+ * Parses the common normalized face rectangle returned by Memories day payloads.
+ *
+ * This stays shared between the read-only person gallery and the exact face-removal picker so
+ * both surfaces clip detector overflow identically.
+ */
+internal fun JsonObject.faceRectangleOrNull(): NativeFaceRectangle? {
     val rectangle = this["facerect"] as? JsonObject ?: return null
     val rawX = rectangle.finiteDouble("x") ?: return null
     val rawY = rectangle.finiteDouble("y") ?: return null

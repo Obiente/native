@@ -9,6 +9,19 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class RecognizedFaceSelectionTest {
+    @Test
+    fun `face outline requires both normalized rectangle and complete source dimensions`() {
+        val rectangle = NativeFaceRectangle(x = 0.2f, y = 0.1f, width = 0.3f, height = 0.4f)
+
+        assertEquals(
+            NativeFaceOutlineGeometry(rectangle, sourceWidth = 6240, sourceHeight = 4160),
+            nativeFaceOutlineGeometryOrNull(rectangle, sourceWidth = 6240, sourceHeight = 4160),
+        )
+        assertNull(nativeFaceOutlineGeometryOrNull(rectangle, sourceWidth = null, sourceHeight = 4160))
+        assertNull(nativeFaceOutlineGeometryOrNull(rectangle, sourceWidth = 6240, sourceHeight = null))
+        assertNull(nativeFaceOutlineGeometryOrNull(null, sourceWidth = 6240, sourceHeight = 4160))
+    }
+
     private val person = PersonMediaReference(
         backend = NextcloudPeopleBackend.Recognize,
         clusterId = 42,
