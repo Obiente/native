@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "content": "node scripts/generate-content.mjs",
+    "screenshots": "node scripts/generate-screenshots.mjs",
+    "test": "node --test scripts/*.test.mjs",
     "predev": "npm run content",
     "dev": "vite",
-    "build": "npm run content && vite build && vite build --ssr src/entry-server.js --outDir dist-ssr && node scripts/prerender.mjs",
+    "build": "npm run test && npm run screenshots && npm run content && vite build && vite build --ssr src/entry-server.js --outDir dist-ssr && node scripts/prerender.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

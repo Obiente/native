@@ -1,0 +1,25 @@
+{
+  "fixtureVersion": 1,
+  "account": {
+    "displayName": "Demo Workspace",
+    "serverLabel": "Sample cloud",
+    "avatar": "D"
+  },
+  "files": [
+    { "name": "Trail photos", "kind": "Folder", "detail": "24 items", "status": "Synced" },
+    { "name": "Trip notes.md", "kind": "Markdown", "detail": "18 KB", "status": "Available offline" },
+    { "name": "Morning ride.mov", "kind": "Video", "detail": "1.2 GB", "status": "Uploading 68%" },
+    { "name": "Packing list.pdf", "kind": "PDF", "detail": "2.4 MB", "status": "Shared" }
+  ],
+  "photos": [
+    { "label": "Forest trail", "color": "#4f725e", "status": "RAW + JPEG" },
+    { "label": "North Sea", "color": "#63788b", "status": "Backed up" },
+    { "label": "Field notes", "color": "#8a705d", "status": "Favourite" },
+    { "label": "Cycling route", "color": "#6f6858", "status": "Cloud only" }
+  ],
+  "conversations": [
+    { "name": "Design review", "message": "The gallery flow is ready", "unread": "2" },
+    { "name": "Weekend plans", "message": "Call ended, 24 minutes", "unread": "" },
+    { "name": "Project updates", "message": "Ready for review", "unread": "" }
+  ]
+}

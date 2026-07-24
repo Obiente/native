@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="750" viewBox="0 0 1200 750">
+  <rect width="1200" height="750" fill="#0d0f13"/>
+  <rect x="24" y="24" width="1152" height="702" rx="24" fill="#111319" stroke="#3d3d47"/>
+  <rect x="24" y="24" width="1152" height="66" rx="24" fill="#1a1c22"/>
+  <path d="M24 66h1152v24H24z" fill="#1a1c22"/>
+  <circle cx="57" cy="57" r="7" fill="#cbb3fd"/><circle cx="80" cy="57" r="7" fill="#6fd5c3"/>
+  <text x="108" y="53" fill="#f7f5fa" font-family="Inter,system-ui,sans-serif" font-size="15" font-weight="700">Nextcloud Native</text>
+  <text x="108" y="71" fill="#8f8d98" font-family="Inter,system-ui,sans-serif" font-size="10">Synthetic product preview</text>
+  <rect x="42" y="108" width="205" height="598" rx="16" fill="#101217"/>
+  <text x="64" y="143" fill="#777680" font-family="Inter,system-ui,sans-serif" font-size="10" font-weight="700" letter-spacing="1.4">WORKSPACE</text>
+  <rect x="54" y="160" width="181" height="42" rx="10" fill="transparent"/>
+  <circle cx="76" cy="181" r="8" fill="#56545e"/>
+  <text x="96" y="186" fill="#a8a6b0" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600">Files</text><rect x="54" y="212" width="181" height="42" rx="10" fill="transparent"/>
+  <circle cx="76" cy="233" r="8" fill="#56545e"/>
+  <text x="96" y="238" fill="#a8a6b0" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600">Photos</text><rect x="54" y="264" width="181" height="42" rx="10" fill="#373044"/>
+  <circle cx="76" cy="285" r="8" fill="#cbb3fd"/>
+  <text x="96" y="290" fill="#f7f5fa" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600">Talk</text><rect x="54" y="316" width="181" height="42" rx="10" fill="transparent"/>
+  <circle cx="76" cy="337" r="8" fill="#56545e"/>
+  <text x="96" y="342" fill="#a8a6b0" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600">Calendar</text><rect x="54" y="368" width="181" height="42" rx="10" fill="transparent"/>
+  <circle cx="76" cy="389" r="8" fill="#56545e"/>
+  <text x="96" y="394" fill="#a8a6b0" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600">Music</text>
+  <circle cx="74" cy="665" r="17" fill="#373044"/>
+  <text x="74" y="671" text-anchor="middle" fill="#cbb3fd" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="700">D</text>
+  <text x="100" y="660" fill="#f7f5fa" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="700">Demo Workspace</text>
+  <text x="100" y="678" fill="#6fd5c3" font-family="Inter,system-ui,sans-serif" font-size="9">Sample cloud · connected</text>
+  <text x="274" y="143" fill="#8f8d98" font-family="Inter,system-ui,sans-serif" font-size="10">Talk</text>
+    <text x="274" y="176" fill="#f7f5fa" font-family="Inter,system-ui,sans-serif" font-size="24" font-weight="700">Conversations</text>
+    <rect x="274" y="204" width="285" height="62" rx="12" fill="#373044"/>
+      <circle cx="303" cy="235" r="17" fill="#24232e"/>
+      <text x="329" y="230" fill="#f7f5fa" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="700">Design review</text>
+      <text x="329" y="248" fill="#a8a6b0" font-family="Inter,system-ui,sans-serif" font-size="9">The gallery flow is ready</text>
+      <circle cx="538" cy="235" r="10" fill="#cbb3fd"/><text x="538" y="239" text-anchor="middle" fill="#2c1746" font-family="Inter,system-ui,sans-serif" font-size="9" font-weight="700">2</text><rect x="274" y="276" width="285" height="62" rx="12" fill="#1a1c22"/>
+      <circle cx="303" cy="307" r="17" fill="#24232e"/>
+      <text x="329" y="302" fill="#f7f5fa" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="700">Weekend plans</text>
+      <text x="329" y="320" fill="#a8a6b0" font-family="Inter,system-ui,sans-serif" font-size="9">Call ended, 24 minutes</text>
+      <rect x="274" y="348" width="285" height="62" rx="12" fill="#1a1c22"/>
+      <circle cx="303" cy="379" r="17" fill="#24232e"/>
+      <text x="329" y="374" fill="#f7f5fa" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="700">Project updates</text>
+      <text x="329" y="392" fill="#a8a6b0" font-family="Inter,system-ui,sans-serif" font-size="9">Ready for review</text>
+      
+    <line x1="580" y1="112" x2="580" y2="690" stroke="#292b31"/>
+    <text x="610" y="154" fill="#f7f5fa" font-family="Inter,system-ui,sans-serif" font-size="15" font-weight="700">Design review</text>
+    <text x="610" y="175" fill="#6fd5c3" font-family="Inter,system-ui,sans-serif" font-size="9">3 participants · active now</text>
+    <rect x="620" y="225" width="345" height="74" rx="16" fill="#1a1c22"/>
+    <text x="638" y="250" fill="#cbb3fd" font-family="Inter,system-ui,sans-serif" font-size="9">RIVER</text>
+    <text x="638" y="274" fill="#f7f5fa" font-family="Inter,system-ui,sans-serif" font-size="11">The new gallery flow is ready to review.</text>
+    <rect x="741" y="325" width="365" height="82" rx="16" fill="#373044"/>
+    <text x="759" y="353" fill="#f7f5fa" font-family="Inter,system-ui,sans-serif" font-size="11">I will check the full-quality view.</text>
+    <text x="1087" y="390" text-anchor="end" fill="#a8a6b0" font-family="Inter,system-ui,sans-serif" font-size="9">14:31</text>
+    <rect x="610" y="611" width="500" height="48" rx="15" fill="#1a1c22" stroke="#3d3d47"/>
+    <text x="630" y="640" fill="#777680" font-family="Inter,system-ui,sans-serif" font-size="11">Write a message</text>
+    <circle cx="1082" cy="635" r="16" fill="#cbb3fd"/>
+</svg>

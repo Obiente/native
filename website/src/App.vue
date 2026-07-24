@@ -22,6 +22,7 @@ import {
   PhX as X,
 } from "@phosphor-icons/vue";
 import { docs } from "./generated/docs.js";
+import { news } from "./generated/news.js";
 import NativePreview from "./components/NativePreview.vue";
 import RoadmapDashboard from "./components/RoadmapDashboard.vue";
 
@@ -31,6 +32,10 @@ const props = defineProps({
     default: "/",
   },
   initialDoc: {
+    type: Object,
+    default: null,
+  },
+  initialNews: {
     type: Object,
     default: null,
   },
@@ -44,6 +49,11 @@ const normalizedPath =
 const currentDoc = computed(
   () => props.initialDoc ?? docs.find((doc) => doc.path === normalizedPath),
 );
+const currentPost = computed(
+  () => props.initialNews ?? news.find((post) => post.path === normalizedPath),
+);
+const isNewsIndex = computed(() => normalizedPath === "/news/");
+const isHome = computed(() => normalizedPath === "/");
 const searchOpen = ref(false);
 const searchQuery = ref("");
 const searchDocuments = ref(docs);
@@ -198,6 +208,7 @@ const frequentlyAsked = [
         <a href="/#apps">Apps</a>
         <a href="/#platforms">Platforms</a>
         <a href="/roadmap/">Roadmap</a>
+        <a href="/news/">News</a>
         <a href="/#docs">Docs</a>
       </nav>
 
@@ -261,7 +272,7 @@ const frequentlyAsked = [
     </div>
 
     <main id="main">
-      <template v-if="!currentDoc">
+      <template v-if="isHome">
         <section class="hero section-width">
           <div class="hero-copy">
             <p class="eyebrow">
@@ -390,6 +401,54 @@ const frequentlyAsked = [
           </div>
         </section>
 
+        <section class="screenshots-section">
+          <div class="section-width">
+            <div class="section-heading">
+              <p class="eyebrow">Built around real workflows</p>
+              <h2>One workspace, without the web-wrapper seams.</h2>
+              <p>
+                Explore representative Files, media backup, and Talk experiences.
+                Every image below is generated from a committed synthetic fixture.
+              </p>
+            </div>
+            <div class="screenshot-gallery">
+              <figure>
+                <img
+                  src="/screenshots/files-workspace.svg"
+                  alt="Synthetic Nextcloud Native Files workspace with folder list, preview inspector, and upload progress"
+                  width="1200"
+                  height="750"
+                  loading="lazy"
+                />
+                <figcaption><strong>Files that behave like files</strong><span>Search, inspect, cache, share, and track transfers.</span></figcaption>
+              </figure>
+              <figure>
+                <img
+                  src="/screenshots/photos-timeline.svg"
+                  alt="Synthetic Nextcloud Native photo timeline with backup status dashboard"
+                  width="1200"
+                  height="750"
+                  loading="lazy"
+                />
+                <figcaption><strong>Media backup you can understand</strong><span>Visible local, pending, verified, and cloud-only state.</span></figcaption>
+              </figure>
+              <figure>
+                <img
+                  src="/screenshots/talk-conversation.svg"
+                  alt="Synthetic Nextcloud Native Talk conversation with native conversation list and composer"
+                  width="1200"
+                  height="750"
+                  loading="lazy"
+                />
+                <figcaption><strong>Talk as part of the workspace</strong><span>Messages, shared files, and calls in a native thread.</span></figcaption>
+              </figure>
+            </div>
+            <p class="fixture-disclosure">
+              Product direction preview. Synthetic names and data only, with no connected account or user media.
+            </p>
+          </div>
+        </section>
+
         <section id="docs" class="docs-section">
           <div class="section-width">
             <div class="section-heading">
@@ -410,6 +469,24 @@ const frequentlyAsked = [
                 <span class="read-time">{{ doc.readingMinutes }} min</span>
               </a>
             </div>
+          </div>
+        </section>
+
+        <section class="news-section section-width">
+          <div class="news-heading">
+            <div class="section-heading compact">
+              <p class="eyebrow">Development notes</p>
+              <h2>Follow the decisions behind the client.</h2>
+            </div>
+            <a class="text-link" href="/news/">All project news <ArrowRight :size="18" weight="bold" /></a>
+          </div>
+          <div class="news-grid">
+            <a v-for="post in news.slice(0, 3)" :key="post.path" class="news-card" :href="post.path">
+              <time :datetime="post.date">{{ post.date }}</time>
+              <h3>{{ post.title }}</h3>
+              <p>{{ post.description }}</p>
+              <span>{{ post.readingMinutes }} min read <ArrowRight :size="16" weight="bold" /></span>
+            </a>
           </div>
         </section>
 
@@ -443,7 +520,40 @@ const frequentlyAsked = [
       </template>
 
       <section
-        v-else
+        v-else-if="currentPost"
+        class="article-page section-width"
+      >
+        <article class="news-article">
+          <a class="doc-back" href="/news/">Project news</a>
+          <header class="doc-heading">
+            <p class="eyebrow">Development note</p>
+            <h1>{{ currentPost.title }}</h1>
+            <p>{{ currentPost.description }}</p>
+            <span><time :datetime="currentPost.date">{{ currentPost.date }}</time> · {{ currentPost.readingMinutes }} minute read</span>
+            <div class="article-tags"><span v-for="tag in currentPost.tags" :key="tag">{{ tag }}</span></div>
+          </header>
+          <div class="markdown-body" v-html="currentPost.html"></div>
+        </article>
+      </section>
+
+      <section v-else-if="isNewsIndex" class="news-index section-width">
+        <header class="doc-heading">
+          <p class="eyebrow">Nextcloud Native news</p>
+          <h1>Building in the open.</h1>
+          <p>Engineering notes, product decisions, and honest progress from the independent open-source client.</p>
+        </header>
+        <div class="news-grid news-index-grid">
+          <a v-for="post in news" :key="post.path" class="news-card" :href="post.path">
+            <time :datetime="post.date">{{ post.date }}</time>
+            <h2>{{ post.title }}</h2>
+            <p>{{ post.description }}</p>
+            <span>{{ post.readingMinutes }} min read <ArrowRight :size="16" weight="bold" /></span>
+          </a>
+        </div>
+      </section>
+
+      <section
+        v-else-if="currentDoc"
         class="doc-page section-width"
         :class="{ 'roadmap-page': currentDoc.path === '/roadmap/' }"
       >
@@ -472,6 +582,12 @@ const frequentlyAsked = [
           <RoadmapDashboard v-if="currentDoc.path === '/roadmap/'" />
           <div class="markdown-body" v-html="currentDoc.html"></div>
         </article>
+      </section>
+
+      <section v-else class="not-found section-width">
+        <p class="eyebrow">Not found</p>
+        <h1>This page is not part of the workspace.</h1>
+        <a class="button button-primary" href="/">Return home</a>
       </section>
     </main>
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import MarkdownIt from "markdown-it";
@@ -9,6 +9,7 @@ const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const repositoryRoot = path.resolve(websiteRoot, "..");
 const generatedDirectory = path.join(websiteRoot, "src", "generated");
 const publicDirectory = path.join(websiteRoot, "public");
+const newsDirectory = path.join(websiteRoot, "content", "news");
 
 const sources = [
   {
@@ -137,6 +138,25 @@ function headingsFrom(source) {
   }));
 }
 
+function parseFrontmatter(source, file) {
+  const match = source.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!match) throw new Error(`${file} must start with YAML-like frontmatter.`);
+  const metadata = Object.fromEntries(
+    match[1].split("\n").map((line) => {
+      const separator = line.indexOf(":");
+      if (separator <= 0) throw new Error(`${file} contains invalid frontmatter.`);
+      return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
+    }),
+  );
+  for (const key of ["title", "slug", "date", "description", "tags"]) {
+    if (!metadata[key]) throw new Error(`${file} is missing ${key} frontmatter.`);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(metadata.date) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(metadata.slug)) {
+    throw new Error(`${file} has an invalid date or slug.`);
+  }
+  return { metadata, body: match[2] };
+}
+
 await mkdir(generatedDirectory, { recursive: true });
 
 const docs = await Promise.all(
@@ -162,7 +182,43 @@ await writeFile(
   `// Generated from repository Markdown. Do not edit.\nexport const docsContent = ${JSON.stringify(docs, null, 2)};\n`,
 );
 
-const searchIndex = docs.map(({ html, ...doc }) => doc);
+const newsFiles = (await readdir(newsDirectory))
+  .filter((file) => file.endsWith(".md"))
+  .sort()
+  .reverse();
+const news = await Promise.all(
+  newsFiles.map(async (file) => {
+    const source = await readFile(path.join(newsDirectory, file), "utf8");
+    const { metadata, body } = parseFrontmatter(source, file);
+    const text = textOnly(body);
+    const articleBody = body.replace(/^# .+\n+/, "");
+    return {
+      file,
+      path: `/news/${metadata.slug}/`,
+      title: metadata.title,
+      shortTitle: metadata.title,
+      description: metadata.description,
+      date: metadata.date,
+      tags: metadata.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+      html: markdown.render(articleBody),
+      text,
+      headings: headingsFrom(articleBody),
+      readingMinutes: Math.max(1, Math.ceil(text.split(/\s+/).length / 220)),
+    };
+  }),
+);
+if (new Set(news.map((post) => post.path)).size !== news.length) {
+  throw new Error("News slugs must be unique.");
+}
+await writeFile(
+  path.join(generatedDirectory, "news.js"),
+  `// Generated from fixture-safe repository news. Do not edit.\nexport const news = ${JSON.stringify(news, null, 2)};\n`,
+);
+
+const searchIndex = [
+  ...docs.map(({ html, ...doc }) => ({ ...doc, contentType: "Documentation" })),
+  ...news.map(({ html, ...post }) => ({ ...post, contentType: "News" })),
+];
 
 const githubApiHeaders = {
   Accept: "application/vnd.github+json",

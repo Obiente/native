@@ -26,11 +26,32 @@ const baseUrl = "https://nc-native.obiente.dev";
 const sitemap = [
   '<?xml version="1.0" encoding="UTF-8"?>',
   '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-  ...serverEntry.routes.map((route) => `  <url><loc>${baseUrl}${route}</loc></url>`),
+  ...serverEntry.routes.map((route) => {
+    const post = serverEntry.newsEntries.find((entry) => entry.path === route);
+    return `  <url><loc>${baseUrl}${route}</loc>${post ? `<lastmod>${post.date}</lastmod>` : ""}</url>`;
+  }),
   "</urlset>",
   "",
 ].join("\n");
 await writeFile(path.join(root, "dist", "sitemap.xml"), sitemap);
+const rss = [
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  '<rss version="2.0"><channel>',
+  "<title>Nextcloud Native project news</title>",
+  `<link>${baseUrl}/news/</link>`,
+  "<description>Engineering notes and product decisions from Nextcloud Native.</description>",
+  "<language>en</language>",
+  ...serverEntry.newsEntries.map(
+    (post) =>
+      `<item><title>${post.title.replaceAll("&", "&amp;")}</title>` +
+      `<link>${baseUrl}${post.path}</link><guid>${baseUrl}${post.path}</guid>` +
+      `<pubDate>${new Date(`${post.date}T12:00:00Z`).toUTCString()}</pubDate>` +
+      `<description>${post.description.replaceAll("&", "&amp;")}</description></item>`,
+  ),
+  "</channel></rss>",
+  "",
+].join("\n");
+await writeFile(path.join(root, "dist", "news.xml"), rss);
 await rm(path.join(root, "dist-ssr"), { recursive: true, force: true });
 
 console.log(`Prerendered ${serverEntry.routes.length} crawlable routes.`);
