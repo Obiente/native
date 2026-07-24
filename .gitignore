@@ -1,0 +1,38 @@
+# Build systems and compiler state
+**/build/
+/target/
+/.gradle/
+/.kotlin/
+
+# IDE and editor state
+/.idea/
+/.fleet/
+/.vscode/
+*.iml
+*.swp
+*~
+
+# Local SDK, credentials, signing, and environment configuration
+/local.properties
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+
+# Crash dumps and platform metadata
+*.hprof
+*.log
+.DS_Store
+Thumbs.db
+
+# Local product research and generated visual review artifacts
+/research/
+/design-qa.md
+/design/icon-concepts/
+/design/qa/
+/design/references/

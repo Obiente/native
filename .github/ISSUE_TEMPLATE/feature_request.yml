@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose a native workflow or reusable semantic capability
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the workflow that is difficult or missing.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired native experience
+      description: Explain the useful interaction, not only the returned API fields.
+    validations:
+      required: true
+  - type: input
+    id: apps
+    attributes:
+      label: Relevant Nextcloud apps or data models
+  - type: textarea
+    id: reuse
+    attributes:
+      label: Reusable semantics
+      description: Note similar models or actions that could share this implementation.
+  - type: textarea
+    id: references
+    attributes:
+      label: Protocol or open-source references
+      description: Link official APIs or existing open-source implementations when available.

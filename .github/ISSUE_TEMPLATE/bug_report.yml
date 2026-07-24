@@ -1,0 +1,62 @@
+name: Bug report
+description: Report reproducible incorrect behavior without sharing private cloud data
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include app passwords, share tokens, private URLs, filenames, message contents, or personal media.
+        Report security vulnerabilities through the private process in SECURITY.md.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the behavior and what you expected instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: true
+      options:
+        - Android
+        - Linux
+        - Windows
+        - macOS
+        - iOS or iPadOS
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Nextcloud Native version or commit
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Nextcloud server and affected app versions
+      placeholder: "Server 34.0.1, Memories 8.x"
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Use synthetic or redacted names and data.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs or screenshots
+      description: Remove credentials, URLs, identifiers, paths, and personal content first.
+      render: shell
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed credentials and private account data from this report.
+          required: true

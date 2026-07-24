@@ -1,0 +1,68 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+
+      - name: Check repository hygiene
+        run: bash tools/check-repository.sh
+
+      - name: Test semantic compiler
+        run: cargo test --locked
+
+      - name: Test shared UI and build desktop plus Android
+        run: |
+          ./gradlew --no-daemon \
+            :contractAcquisition:test \
+            :ui:desktopTest \
+            :androidApp:testDebugUnitTest \
+            :ui:createDistributable \
+            :androidApp:assembleDebug
+
+      - name: Upload Linux desktop app
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextcloud-native-linux
+          path: ui/build/compose/binaries/main/app/NextcloudNative
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Android debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextcloud-native-android-debug
+          path: androidApp/build/outputs/apk/debug/androidApp-debug.apk
+          if-no-files-found: error
+          retention-days: 7
