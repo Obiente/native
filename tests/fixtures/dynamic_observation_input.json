@@ -1,0 +1,45 @@
+{
+  "app": {
+    "id": "chores",
+    "name": "Chores",
+    "version": "0.9.0"
+  },
+  "endpointPolicy": {
+    "serverOrigin": "https://cloud.example.test",
+    "approvedApiPrefixes": ["/index.php/apps/chores/api"]
+  },
+  "capabilities": [],
+  "advertisedOpenApi": null,
+  "successfulReads": [
+    {
+      "operationId": "chores.list.observed",
+      "label": "List chores",
+      "path": "/index.php/apps/chores/api/v1/chores",
+      "queryParameters": [
+        { "name": "completed", "required": false, "schema": { "type": "boolean" } }
+      ],
+      "status": 200,
+      "contentType": "application/json; charset=utf-8",
+      "response": {
+        "data": [
+          {
+            "id": 1,
+            "title": "Bins",
+            "completed": false,
+            "dueDate": "2026-07-23T09:00:00Z",
+            "iconUrl": "https://cloud.example.test/apps/chores/icon.svg"
+          },
+          {
+            "id": 2,
+            "title": "Kitchen",
+            "completed": true,
+            "dueDate": null,
+            "iconUrl": "https://cloud.example.test/apps/chores/icon.svg"
+          }
+        ]
+      },
+      "permissionIds": ["chores.read"],
+      "ocs": false
+    }
+  ]
+}

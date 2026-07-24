@@ -1,0 +1,131 @@
+{
+  "app": {
+    "id": "tables",
+    "name": "Tables",
+    "version": "1.2.3"
+  },
+  "endpointPolicy": {
+    "serverOrigin": "https://cloud.example.test",
+    "approvedApiPrefixes": ["/ocs/v2.php/apps/tables/api"]
+  },
+  "capabilities": [
+    {
+      "id": "tables.apiVersion",
+      "value": 2,
+      "confidence": "high",
+      "provenance": {
+        "kind": "capability",
+        "source": "ocs-capabilities",
+        "detail": "tables.apiVersion"
+      }
+    }
+  ],
+  "advertisedOpenApi": {
+    "documentUrl": "/apps/tables/openapi.json",
+    "document": {
+      "openapi": "3.0.3",
+      "servers": [
+        { "url": "/ocs/v2.php/apps/tables/api/2" }
+      ],
+      "security": [
+        { "basicAuth": [] }
+      ],
+      "paths": {
+        "/tables": {
+          "get": {
+            "operationId": "tables.list",
+            "summary": "List tables",
+            "tags": ["tables"],
+            "parameters": [
+              { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+              { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["json"] } }
+            ],
+            "responses": {
+              "200": {
+                "description": "OK",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "ocs": {
+                          "type": "object",
+                          "properties": {
+                            "data": {
+                              "type": "array",
+                              "items": { "$ref": "#/components/schemas/Table" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "post": {
+            "operationId": "tables.create",
+            "summary": "Create table",
+            "tags": ["tables"],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/TableInput" }
+                }
+              }
+            },
+            "responses": { "201": { "description": "Created" } }
+          }
+        },
+        "/tables/{tableId}": {
+          "parameters": [
+            { "name": "tableId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          ],
+          "get": {
+            "operationId": "tables.get",
+            "summary": "Get table",
+            "tags": ["tables"],
+            "responses": {
+              "200": {
+                "description": "OK",
+                "content": {
+                  "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Table" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "components": {
+        "securitySchemes": {
+          "basicAuth": { "type": "http", "scheme": "basic" }
+        },
+        "schemas": {
+          "Table": {
+            "type": "object",
+            "required": ["id", "title"],
+            "properties": {
+              "id": { "type": "integer", "readOnly": true },
+              "title": { "type": "string" },
+              "description": { "type": "string" },
+              "iconUrl": { "type": "string", "format": "uri" }
+            }
+          },
+          "TableInput": {
+            "type": "object",
+            "required": ["title"],
+            "properties": {
+              "title": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "successfulReads": []
+}
