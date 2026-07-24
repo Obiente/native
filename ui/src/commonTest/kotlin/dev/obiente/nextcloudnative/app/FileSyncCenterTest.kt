@@ -143,4 +143,31 @@ class FileSyncCenterTest {
         assertEquals(1, summary.conflicts.size)
         assertEquals(0, summary.failedCount)
     }
+
+    @Test
+    fun `summary counts verified sync baselines as completed paths`() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "content://opaque-grant",
+            remoteRootPath = "Photos",
+            configuration = FileSyncConfiguration(deviceLabel = "phone"),
+            baselines = listOf(
+                FileSyncBaseline(
+                    relativePath = "photo.jpg",
+                    kind = SyncEntryKind.File,
+                    localRevision = "local-photo",
+                    remoteEtag = "remote-photo",
+                ),
+                FileSyncBaseline(
+                    relativePath = "clip.mov",
+                    kind = SyncEntryKind.File,
+                    localRevision = "local-clip",
+                    remoteEtag = "remote-clip",
+                ),
+            ),
+        )
+
+        assertEquals(2, pair.toCenterSummary("Camera").completedCount)
+    }
 }

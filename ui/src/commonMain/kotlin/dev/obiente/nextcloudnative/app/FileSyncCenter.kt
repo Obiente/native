@@ -239,7 +239,7 @@ fun FileSyncPair.toCenterSummary(
         },
         failedCount = workItems.count { it.state == FileSyncExecutionState.Failed },
         skippedCount = workItems.count { it.state == FileSyncExecutionState.Skipped },
-        completedCount = 0,
+        completedCount = baselines.size,
         lastScanEpochMillis = lastScanEpochMillis,
         scheduleDescription = scheduleDescription,
     )

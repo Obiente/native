@@ -27,8 +27,24 @@ import dev.obiente.nextcloudnative.app.validateAndroidDirectRelease
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 import okhttp3.Request
+
+internal const val PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS = 10L
+internal const val PROJECT_CONTENT_READ_TIMEOUT_SECONDS = 30L
+internal const val PROJECT_CONTENT_WRITE_TIMEOUT_SECONDS = 30L
+internal const val PROJECT_CONTENT_CALL_TIMEOUT_SECONDS = 10L * 60L
+
+internal fun buildProjectContentHttpClient(): OkHttpClient =
+    OkHttpClient.Builder()
+        .connectTimeout(PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(PROJECT_CONTENT_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .writeTimeout(PROJECT_CONTENT_WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .callTimeout(PROJECT_CONTENT_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
 
 internal class AndroidProjectContentClient(
     context: Context,
@@ -36,10 +52,7 @@ internal class AndroidProjectContentClient(
 ) {
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-    private val client = OkHttpClient.Builder()
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .build()
+    private val client = buildProjectContentHttpClient()
     private val newsCache = File(appContext.cacheDir, "project-content/news-feed-v1.json")
     private val updateDirectory = File(appContext.cacheDir, "app-updates")
 
@@ -150,11 +163,10 @@ internal class AndroidProjectContentClient(
             updateDirectory.mkdirs()
             val staged = File(updateDirectory, "nextcloud-native-${release.versionCode}.apk")
             val temporary = File(updateDirectory, "${staged.name}.part")
-            temporary.delete()
-            downloadApk(release, temporary)
-            verifyDownloadedApk(release, temporary)
-            if (staged.exists()) check(staged.delete())
-            check(temporary.renameTo(staged)) { "Could not stage the verified update." }
+            stageVerifiedUpdate(temporary, staged) {
+                downloadApk(release, temporary)
+                verifyDownloadedApk(release, temporary)
+            }
             val uri = FileProvider.getUriForFile(
                 appContext,
                 "${appContext.packageName}.sharedfiles",
@@ -301,6 +313,21 @@ internal class AndroidProjectContentClient(
         const val PREFERENCES = "project-content-v1"
         const val KEY_NEWS_FETCHED_AT = "news-fetched-at"
         const val NEWS_CACHE_TTL_MILLIS = 6 * 60 * 60 * 1_000L
+    }
+}
+
+internal inline fun stageVerifiedUpdate(
+    temporary: File,
+    staged: File,
+    downloadAndVerify: () -> Unit,
+) {
+    temporary.delete()
+    try {
+        downloadAndVerify()
+        if (staged.exists()) check(staged.delete())
+        check(temporary.renameTo(staged)) { "Could not stage the verified update." }
+    } finally {
+        temporary.delete()
     }
 }
 

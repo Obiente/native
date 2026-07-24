@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "content": "node scripts/generate-content.mjs",
     "test": "node --test scripts/*.test.mjs",
