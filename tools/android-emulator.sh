@@ -395,7 +395,7 @@ smoke_test() {
     "$adb" -s "$serial" shell settings put system accelerometer_rotation 1
     "$adb" -s "$serial" logcat -d >"$report_dir/logcat.txt"
 
-    if rg -n \
+    if grep -En \
         'FATAL EXCEPTION|The coroutine scope left the composition|Required value was null' \
         "$report_dir/logcat.txt" \
         "$report_dir"/window-rotation-*.xml; then

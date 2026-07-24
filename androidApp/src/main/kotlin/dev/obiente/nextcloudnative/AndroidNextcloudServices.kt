@@ -108,6 +108,7 @@ import java.io.IOException
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filter
@@ -1636,8 +1637,11 @@ internal class AndroidNextcloudServices(
     }
 }
 
+private val READ_ONLY_TEST_REQUEST_METHODS =
+    setOf("GET", "HEAD", "OPTIONS", "PROPFIND", "REPORT", "SEARCH")
+
 internal fun String.isReadOnlyTestRequestMethod(): Boolean =
-    uppercase() in setOf("GET", "HEAD", "OPTIONS", "PROPFIND", "REPORT", "SEARCH")
+    uppercase(Locale.ROOT) in READ_ONLY_TEST_REQUEST_METHODS
 
 internal fun parseAndroidFileVersionDavRecords(xml: ByteArray): List<FileVersionDavRecord> {
     val responses = SafeXmlParser.parse(xml).getElementsByTagNameNS(FILE_VERSION_DAV_NAMESPACE, "response")
