@@ -515,6 +515,41 @@ class DynamicNavigationPlannerTest {
     }
 
     @Test
+    fun `taxonomy records prefer their filtered content collection over raw detail`() {
+        val descriptor = hierarchyDescriptor().copy(
+            app = AppIdentity("library", "Library", "test"),
+            resources = listOf(resource("categories"), resource("recipes")),
+            layouts = listOf(
+                layout("categories", "list-categories"),
+                layout("recipes", "list-recipes-in-category"),
+            ),
+            links = listOf(
+                actionLink(
+                    "categories.recipes",
+                    "Recipes",
+                    "categories",
+                    "list-recipes-in-category",
+                ),
+            ),
+            forms = emptyList(),
+            actions = listOf(
+                action("list-categories", "categories", ActionIntent.list),
+                action("list-recipes-in-category", "recipes", ActionIntent.list, "category"),
+            ),
+        )
+        val context = DynamicResourceRecordContext(
+            resourceId = "categories",
+            recordId = "sweet",
+            actionSafeIdentity = false,
+        )
+
+        val preferred = assertNotNull(descriptor.preferredSemanticContextualChild(context))
+
+        assertEquals("recipes", preferred.resourceId)
+        assertEquals(mapOf("category" to "sweet"), preferred.pathParameterValues)
+    }
+
+    @Test
     fun `message protocol helpers are secondary while useful content stays primary`() {
         val descriptor = hierarchyDescriptor().copy(
             app = AppIdentity("communications", "Communications", "test"),
