@@ -393,12 +393,19 @@ private class KotlinCompilerState(
         if (readFallbackOperationIds.isNotEmpty()) {
             fallbackOperationIds[actionId] = readFallbackOperationIds
         }
-        val resourceId = resourceId(operation, path, operationId, method)
+        val filteredCollectionResourceId =
+            semanticFilteredCollectionResourceId(operation, path, operationId, method)
+        val resourceId = resourceId(
+            operation = operation,
+            path = path,
+            operationId = operationId,
+            method = method,
+            filteredCollectionResourceId = filteredCollectionResourceId,
+        )
         val response = responseSchema(operation)
         val binaryRead = method == HttpMethod.GET && operation.hasSuccessfulBinaryResponse()
         val (itemSchema, responseCollection) = responseItemSchema(response)
-        val collection = responseCollection ||
-            semanticFilteredCollectionResourceId(operation, path, operationId, method) != null
+        val collection = responseCollection || filteredCollectionResourceId != null
         val resource = resources.getOrPut(resourceId) { KotlinResourceBuilder(resourceId) }
         resource.collection = resource.collection || collection
         itemSchema?.let { resource.mergeFields(fieldsFromSchema(it)) }
@@ -482,7 +489,7 @@ private class KotlinCompilerState(
         if (method == HttpMethod.GET) {
             if (fallbackForOperationId == null && !binaryRead) {
                 val kind = if (collection) LayoutKind.list else LayoutKind.detail
-                val layoutId = if (kind == LayoutKind.list && pathParameters.isNotEmpty()) {
+                val layoutId = if (kind == LayoutKind.list && filteredCollectionResourceId != null) {
                     "$resourceId.${kind.name}.${operationId.stableId()}"
                 } else {
                     "$resourceId.${kind.name}"
@@ -1095,12 +1102,14 @@ private fun resourceId(
     path: String,
     operationId: String,
     method: HttpMethod,
+    filteredCollectionResourceId: String? =
+        semanticFilteredCollectionResourceId(operation, path, operationId, method),
 ): String {
     operation.string(RESOURCE_ID_EXTENSION)
         ?.stableId()
         ?.takeIf { it.isNotBlank() && it.length <= 64 }
         ?.let { return it }
-    semanticFilteredCollectionResourceId(operation, path, operationId, method)?.let { return it }
+    filteredCollectionResourceId?.let { return it }
     val rawTag = (operation["tags"] as? JsonArray)
         ?.firstOrNull()
         ?.let { it as? JsonPrimitive }
