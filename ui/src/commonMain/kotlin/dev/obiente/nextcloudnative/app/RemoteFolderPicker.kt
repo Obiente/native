@@ -268,6 +268,7 @@ internal fun RemoteFolderPickerDialog(
         refreshing = false
         error = null
         query = ""
+        missingDestination = null
         val cached = runCatching {
             services.listFilesCachedWithSource(session, userId, currentPath)
         }.rethrowRemoteFolderCancellation().getOrNull()
@@ -298,7 +299,7 @@ internal fun RemoteFolderPickerDialog(
             .onFailure { failure ->
                 loading = false
                 refreshing = false
-                val recoveryParent = recoveryTarget?.let {
+                val recoveryParent = recoveryTarget?.let { _ ->
                     missingRemoteFolderParentAfter(failure, currentPath)
                 }
                 if (recoveryParent != null) {
