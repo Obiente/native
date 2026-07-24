@@ -25,6 +25,7 @@ import dev.obiente.nextcloudnative.app.NextcloudActivity
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudFileListing
+import dev.obiente.nextcloudnative.app.NextcloudFileListingHttpException
 import dev.obiente.nextcloudnative.app.NextcloudFileListingSource
 import dev.obiente.nextcloudnative.app.FileVersionDavRecord
 import dev.obiente.nextcloudnative.app.FileVersionHistory
@@ -337,7 +338,7 @@ internal class AndroidNextcloudServices(
                         return@withContext NextcloudFileListing(it, NextcloudFileListingSource.Cache)
                     }
                 }
-                error("WebDAV folder listing failed (HTTP ${response.status}).")
+                throw NextcloudFileListingHttpException(response.status)
             }
         } catch (failure: IOException) {
             fileReadCache.cachedListing(accountId, path)?.files
