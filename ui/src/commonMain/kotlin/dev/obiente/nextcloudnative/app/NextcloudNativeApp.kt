@@ -5657,8 +5657,8 @@ private fun PersonMediaScreen(
         hasDirectFaceReferences =
             NextcloudPeopleBackend.fromApiValue(person.backend) == NextcloudPeopleBackend.Recognize,
     )
-    val faceRectanglesAvailable = mediaItems.orEmpty().any { item ->
-        item.faceRectangle != null && item.width != null && item.height != null
+    val faceRectanglesAvailable = remember(mediaItems) {
+        mediaItems.orEmpty().any { item -> item.faceOutlineGeometryOrNull() != null }
     }
 
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -6292,6 +6292,9 @@ private fun MediaTile(
     onLongClick: (() -> Unit)? = null,
 ) {
     var image by remember(file.fileId) { mutableStateOf<ImageBitmap?>(null) }
+    val faceOutlineGeometry = remember(faceRectangle, sourceWidth, sourceHeight) {
+        nativeFaceOutlineGeometryOrNull(faceRectangle, sourceWidth, sourceHeight)
+    }
     LaunchedEffect(file.fileId) {
         file.fileId ?: return@LaunchedEffect
         if (!file.hasPreview) return@LaunchedEffect
@@ -6315,12 +6318,10 @@ private fun MediaTile(
                     modifier = Modifier.fillMaxSize(),
                     // A face outline must map to the complete source image. Switching to Fit while
                     // it is visible avoids drawing a plausible-looking box over a cropped preview.
-                    contentScale = if (faceRectangle == null) ContentScale.Crop else ContentScale.Fit,
+                    contentScale = if (faceOutlineGeometry == null) ContentScale.Crop else ContentScale.Fit,
                 )
                 FaceRectangleOverlay(
-                    rectangle = faceRectangle,
-                    sourceWidth = sourceWidth,
-                    sourceHeight = sourceHeight,
+                    geometry = faceOutlineGeometry,
                     color = MaterialTheme.colorScheme.primary,
                 )
             } ?: Icon(

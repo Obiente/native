@@ -34,6 +34,35 @@ data class NativeFaceRectangle(
 }
 
 /**
+ * Complete geometry required to place a normalized face outline over a source image.
+ *
+ * Keeping this as one value prevents callers from switching presentation modes when only a
+ * rectangle or only source dimensions are available.
+ */
+data class NativeFaceOutlineGeometry(
+    val rectangle: NativeFaceRectangle,
+    val sourceWidth: Int,
+    val sourceHeight: Int,
+) {
+    init {
+        require(sourceWidth > 0 && sourceHeight > 0)
+    }
+}
+
+internal fun nativeFaceOutlineGeometryOrNull(
+    rectangle: NativeFaceRectangle?,
+    sourceWidth: Int?,
+    sourceHeight: Int?,
+): NativeFaceOutlineGeometry? {
+    if (rectangle == null || sourceWidth == null || sourceHeight == null) return null
+    if (sourceWidth <= 0 || sourceHeight <= 0) return null
+    return NativeFaceOutlineGeometry(rectangle, sourceWidth, sourceHeight)
+}
+
+internal fun NativeMediaItem.faceOutlineGeometryOrNull(): NativeFaceOutlineGeometry? =
+    nativeFaceOutlineGeometryOrNull(faceRectangle, width, height)
+
+/**
  * One actionable Recognize detection. [file] identifies the source photo, while [detectionId]
  * identifies only the face assignment. They must never be treated as interchangeable IDs.
  */

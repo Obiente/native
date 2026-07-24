@@ -236,9 +236,11 @@ private fun RecognizedFaceTile(
                     )
                     val outlineColor = MaterialTheme.colorScheme.primary
                     FaceRectangleOverlay(
-                        rectangle = face.rectangle,
-                        sourceWidth = face.sourceWidth,
-                        sourceHeight = face.sourceHeight,
+                        geometry = nativeFaceOutlineGeometryOrNull(
+                            rectangle = face.rectangle,
+                            sourceWidth = face.sourceWidth,
+                            sourceHeight = face.sourceHeight,
+                        ),
                         color = outlineColor,
                     )
                 } ?: Icon(
@@ -278,27 +280,28 @@ private fun RecognizedFaceTile(
 
 @Composable
 internal fun FaceRectangleOverlay(
-    rectangle: NativeFaceRectangle?,
-    sourceWidth: Int?,
-    sourceHeight: Int?,
+    geometry: NativeFaceOutlineGeometry?,
     color: Color,
 ) {
-    if (rectangle == null || sourceWidth == null || sourceHeight == null) return
+    if (geometry == null) return
     Canvas(modifier = Modifier.fillMaxSize()) {
-        val scale = min(size.width / sourceWidth.toFloat(), size.height / sourceHeight.toFloat())
-        val displayedWidth = sourceWidth * scale
-        val displayedHeight = sourceHeight * scale
+        val scale = min(
+            size.width / geometry.sourceWidth.toFloat(),
+            size.height / geometry.sourceHeight.toFloat(),
+        )
+        val displayedWidth = geometry.sourceWidth * scale
+        val displayedHeight = geometry.sourceHeight * scale
         val offsetX = (size.width - displayedWidth) / 2f
         val offsetY = (size.height - displayedHeight) / 2f
         drawRect(
             color = color,
             topLeft = Offset(
-                x = offsetX + rectangle.x * displayedWidth,
-                y = offsetY + rectangle.y * displayedHeight,
+                x = offsetX + geometry.rectangle.x * displayedWidth,
+                y = offsetY + geometry.rectangle.y * displayedHeight,
             ),
             size = Size(
-                width = rectangle.width * displayedWidth,
-                height = rectangle.height * displayedHeight,
+                width = geometry.rectangle.width * displayedWidth,
+                height = geometry.rectangle.height * displayedHeight,
             ),
             style = Stroke(width = 3.dp.toPx()),
         )
