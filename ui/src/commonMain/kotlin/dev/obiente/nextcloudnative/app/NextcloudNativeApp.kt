@@ -198,6 +198,22 @@ private sealed interface Screen {
     data class TextEditor(val file: NextcloudFile, val parentPath: String) : Screen
 }
 
+internal enum class RootDestinationContent {
+    HomeWorkspace,
+    Apps,
+    Activity,
+    Settings,
+}
+
+internal fun rootDestinationContent(
+    destination: NextcloudDestination,
+): RootDestinationContent = when (destination) {
+    NextcloudDestination.Home -> RootDestinationContent.HomeWorkspace
+    NextcloudDestination.Apps -> RootDestinationContent.Apps
+    NextcloudDestination.Activity -> RootDestinationContent.Activity
+    NextcloudDestination.Settings -> RootDestinationContent.Settings
+}
+
 private val navigationStateJson = Json {
     ignoreUnknownKeys = true
     encodeDefaults = true
@@ -330,7 +346,7 @@ fun NextcloudNativeMarketingCapture(
                                 avatar = assets.avatar,
                             ),
                         ) {
-                            HomeScreen(
+                            MarketingHomeScreen(
                                 serverInfo = serverInfo,
                                 error = null,
                                 lastOpenedAppId = "files",
@@ -449,7 +465,6 @@ private fun AuthenticatedApp(
         session.loginName,
         stateSaver = enumSaver<NextcloudDestination>(),
     ) { mutableStateOf(NextcloudDestination.Home) }
-    var lastOpenedAppId by remember { mutableStateOf(services.loadLastOpenedAppId()) }
     var serverInfo by remember(session) { mutableStateOf<NextcloudServerInfo?>(null) }
     val cachedAppDiscoveries = remember(session) { mutableStateMapOf<String, DynamicDescriptorDiscovery>() }
     var discoveryError by remember(session) { mutableStateOf<String?>(null) }
@@ -469,14 +484,16 @@ private fun AuthenticatedApp(
 
     fun openApp(app: NextcloudAppEntry, from: NextcloudDestination) {
         returnDestination = from
-        lastOpenedAppId = app.id
         services.saveLastOpenedAppId(app.id)
         screen = when (app.id) {
             "files" -> Screen.Files("")
             "photos", "memories" -> Screen.Media
             "spreed", "talk" -> Screen.Talk
             "notes" -> Screen.Notes
-            "dashboard" -> Screen.Dashboard
+            "dashboard" -> {
+                destination = NextcloudDestination.Home
+                Screen.Root
+            }
             "user_status" -> Screen.UserStatus
             "calendar" -> Screen.Calendar
             "contacts" -> Screen.Contacts
@@ -554,18 +571,22 @@ private fun AuthenticatedApp(
     }
     val screenContent: @Composable () -> Unit = {
         when (val current = screen) {
-            Screen.Root -> when (destination) {
-                NextcloudDestination.Home -> HomeScreen(
-                    serverInfo = serverInfo,
-                    error = discoveryError,
-                    lastOpenedAppId = lastOpenedAppId,
-                    onRetry = { discoveryAttempt += 1 },
-                    onSettings = { destination = NextcloudDestination.Settings },
-                    onSearch = ::openSearch,
-                    onApps = { destination = NextcloudDestination.Apps },
+            Screen.Root -> when (rootDestinationContent(destination)) {
+                RootDestinationContent.HomeWorkspace -> NativeDashboardScreen(
+                    services = services,
+                    session = session,
+                    installedApps = serverInfo?.apps.orEmpty(),
                     onOpenApp = { openApp(it, NextcloudDestination.Home) },
+                    onOpenStatus = serverInfo?.apps
+                        ?.firstOrNull { it.id == "user_status" }
+                        ?.let { statusApp ->
+                            { openApp(statusApp, NextcloudDestination.Home) }
+                        },
+                    onBack = null,
+                    onSearch = ::openSearch,
+                    onSettings = { destination = NextcloudDestination.Settings },
                 )
-                NextcloudDestination.Apps -> AppsScreen(
+                RootDestinationContent.Apps -> AppsScreen(
                     serverInfo = serverInfo,
                     error = discoveryError,
                     onRetry = { discoveryAttempt += 1 },
@@ -573,7 +594,7 @@ private fun AuthenticatedApp(
                     onSearch = ::openSearch,
                     onOpenApp = { openApp(it, NextcloudDestination.Apps) },
                 )
-                NextcloudDestination.Activity -> ActivityScreen(
+                RootDestinationContent.Activity -> ActivityScreen(
                     services = services,
                     session = session,
                     activityInstalled = serverInfo?.apps?.any { it.id == "activity" } == true,
@@ -581,7 +602,7 @@ private fun AuthenticatedApp(
                     onApps = { destination = NextcloudDestination.Apps },
                     onOpenApp = { app -> openApp(app, NextcloudDestination.Activity) },
                 )
-                NextcloudDestination.Settings -> SettingsScreen(
+                RootDestinationContent.Settings -> SettingsScreen(
                     services = services,
                     session = session,
                     serverInfo = serverInfo,
@@ -917,7 +938,7 @@ private fun RootShell(
 }
 
 @Composable
-private fun HomeScreen(
+private fun MarketingHomeScreen(
     serverInfo: NextcloudServerInfo?,
     error: String?,
     lastOpenedAppId: String,
@@ -1136,7 +1157,10 @@ private fun AppsScreen(
             error != null -> ErrorMessage(error, onRetry)
             serverInfo == null -> LoadingMessage("Loading installed apps…")
             else -> {
-                val apps = serverInfo.apps.filter { search.isBlank() || it.name.contains(search, ignoreCase = true) }
+                val apps = serverInfo.apps.filter { app ->
+                    app.id != "dashboard" &&
+                        (search.isBlank() || app.name.contains(search, ignoreCase = true))
+                }
                 OutlinedTextField(
                     value = search,
                     onValueChange = { search = it },
