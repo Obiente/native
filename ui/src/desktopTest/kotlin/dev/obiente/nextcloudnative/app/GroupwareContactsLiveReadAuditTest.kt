@@ -11,6 +11,7 @@ import kotlin.test.assertTrue
 class GroupwareContactsLiveReadAuditTest {
     @Test
     fun `saved session discovers and parses real carddav contacts`() = runBlocking {
+        if (System.getenv("RUN_LIVE_NEXTCLOUD_CONTACTS_AUDIT") != "1") return@runBlocking
         val services = DesktopNextcloudServices()
         val session = assertNotNull(services.loadSession())
 
