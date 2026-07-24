@@ -1187,15 +1187,9 @@ private fun semanticFilteredCollectionResourceId(
     method: HttpMethod,
 ): String? {
     if (method != HttpMethod.GET) return null
-    val taxonomyFilter = path.stableId().let { stablePath ->
-        (
-            "category" in stablePath ||
-                "tag" in stablePath ||
-                "keyword" in stablePath ||
-                "label" in stablePath
-            ) &&
+    val taxonomyFilter =
+        path.hasAnySemanticConcept(SEMANTIC_TAXONOMY_CONCEPTS) &&
             path.pathPlaceholders().isNotEmpty()
-    }
     if (!taxonomyFilter) return null
     val operationText = listOfNotNull(
         operationId,

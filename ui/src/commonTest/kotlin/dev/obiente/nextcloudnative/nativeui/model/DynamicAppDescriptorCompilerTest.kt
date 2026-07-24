@@ -365,7 +365,7 @@ class DynamicAppDescriptorCompilerTest {
                     }}}}}
                   }
                 },
-                "/apps/example/api/v1/category/{category}":{
+                "/apps/example/api/v1/categories/{category}":{
                   "parameters":[
                     {"name":"category","in":"path","required":true,"schema":{"type":"string"}}
                   ],
@@ -397,6 +397,17 @@ class DynamicAppDescriptorCompilerTest {
                     "tags":["Labels"],
                     "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{}}}}}
                   }
+                },
+                "/apps/example/api/v1/staging/{id}":{
+                  "parameters":[
+                    {"name":"id","in":"path","required":true,"schema":{"type":"string"}}
+                  ],
+                  "get":{
+                    "operationId":"recipesInStaging",
+                    "summary":"Get a recipe from staging",
+                    "tags":["Staging"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{}}}}}
+                  }
                 }
               }
             }
@@ -421,6 +432,10 @@ class DynamicAppDescriptorCompilerTest {
                 .filter { it.resourceId == "recipes" }
                 .mapNotNull(DynamicLayout::sourceActionId)
                 .toSet(),
+        )
+        assertEquals(
+            "staging",
+            descriptor.actions.single { it.id == "recipesinstaging" }.resourceId,
         )
         val keywordRecipes = descriptor.planDynamicNavigation(
             DynamicResourceRecordContext(

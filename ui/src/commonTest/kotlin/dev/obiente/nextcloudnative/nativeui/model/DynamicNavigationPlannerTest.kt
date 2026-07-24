@@ -518,27 +518,27 @@ class DynamicNavigationPlannerTest {
     fun `taxonomy records prefer their filtered content collection over raw detail`() {
         val descriptor = hierarchyDescriptor().copy(
             app = AppIdentity("library", "Library", "test"),
-            resources = listOf(resource("keywords"), resource("recipes")),
+            resources = listOf(resource("categories"), resource("recipes")),
             layouts = listOf(
-                layout("keywords", "list-keywords"),
-                layout("recipes", "list-recipes-with-keyword"),
+                layout("categories", "list-categories"),
+                layout("recipes", "list-recipes-in-category"),
             ),
             links = listOf(
                 actionLink(
-                    "keywords.recipes",
+                    "categories.recipes",
                     "Recipes",
-                    "keywords",
-                    "list-recipes-with-keyword",
+                    "categories",
+                    "list-recipes-in-category",
                 ),
             ),
             forms = emptyList(),
             actions = listOf(
-                action("list-keywords", "keywords", ActionIntent.list),
-                action("list-recipes-with-keyword", "recipes", ActionIntent.list, "keywords"),
+                action("list-categories", "categories", ActionIntent.list),
+                action("list-recipes-in-category", "recipes", ActionIntent.list, "category"),
             ),
         )
         val context = DynamicResourceRecordContext(
-            resourceId = "keywords",
+            resourceId = "categories",
             recordId = "sweet",
             actionSafeIdentity = false,
         )
@@ -546,7 +546,7 @@ class DynamicNavigationPlannerTest {
         val preferred = assertNotNull(descriptor.preferredSemanticContextualChild(context))
 
         assertEquals("recipes", preferred.resourceId)
-        assertEquals(mapOf("keywords" to "sweet"), preferred.pathParameterValues)
+        assertEquals(mapOf("category" to "sweet"), preferred.pathParameterValues)
     }
 
     @Test
