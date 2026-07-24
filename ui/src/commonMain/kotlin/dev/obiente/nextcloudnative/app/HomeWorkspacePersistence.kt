@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.runtime.Composable
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -12,6 +13,8 @@ internal interface HomeWorkspaceLayoutStorage {
 
 internal class HomeWorkspaceLayoutRepository(
     private val storage: HomeWorkspaceLayoutStorage,
+    private val encodeSnapshot: (HomeWorkspaceLayout) -> String =
+        ::encodeHomeWorkspaceLayoutSnapshot,
 ) {
     fun load(scope: HomeWorkspaceScope): HomeWorkspaceLayout {
         val encoded = runCatching { storage.read(scope.persistenceKey) }.getOrNull()
@@ -24,8 +27,8 @@ internal class HomeWorkspaceLayoutRepository(
      * without crashing or pretending it was durably saved.
      */
     fun save(layout: HomeWorkspaceLayout): Boolean {
-        val encoded = encodeHomeWorkspaceLayoutSnapshot(layout)
         return runCatching {
+            val encoded = encodeSnapshot(layout)
             storage.write(layout.scope.persistenceKey, encoded)
         }.isSuccess
     }

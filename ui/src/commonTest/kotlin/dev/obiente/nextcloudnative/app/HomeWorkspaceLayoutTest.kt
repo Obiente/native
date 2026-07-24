@@ -252,6 +252,19 @@ class HomeWorkspaceLayoutTest {
     }
 
     @Test
+    fun `repository reports snapshot encoding failures without touching storage`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(
+            storage = storage,
+            encodeSnapshot = { error("The encoded snapshot exceeds its safe bound.") },
+        )
+
+        assertFalse(repository.save(defaultHomeWorkspaceLayout(scope(HomeFormFactor.Phone))))
+        assertEquals(null, storage.lastKey)
+        assertEquals(null, storage.lastValue)
+    }
+
+    @Test
     fun `corrupt oversized and cross account snapshots restore safe defaults`() {
         val validScope = scope(HomeFormFactor.Phone)
         val otherScope = scope(HomeFormFactor.Phone, digit = 'b')

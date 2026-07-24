@@ -72,7 +72,9 @@ internal fun NativeDashboardScreen(
     installedApps: List<NextcloudAppEntry>,
     onOpenApp: (NextcloudAppEntry) -> Unit,
     onOpenStatus: (() -> Unit)?,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
+    onSearch: (() -> Unit)? = null,
+    onSettings: (() -> Unit)? = null,
 ) {
     var refreshAttempt by remember(session) { mutableStateOf(0) }
     var customizeWorkspace by remember(session) { mutableStateOf(false) }
@@ -104,6 +106,8 @@ internal fun NativeDashboardScreen(
             onBack = onBack,
             onRefresh = { refreshAttempt += 1 },
             onCustomize = { customizeWorkspace = true },
+            onSearch = onSearch,
+            onSettings = onSettings,
         )
         when (val current = state) {
             DashboardSurfaceState.Loading -> DashboardLoading()
@@ -262,9 +266,11 @@ internal fun rememberNativeDashboardState(
 private fun DashboardHeader(
     title: String,
     subtitle: String,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
     onRefresh: () -> Unit,
     onCustomize: (() -> Unit)? = null,
+    onSearch: (() -> Unit)? = null,
+    onSettings: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(
@@ -273,8 +279,10 @@ private fun DashboardHeader(
         ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onBack) {
-            Icon(NextcloudIcons.Back, contentDescription = "Back")
+        if (onBack != null) {
+            IconButton(onClick = onBack) {
+                Icon(NextcloudIcons.Back, contentDescription = "Back")
+            }
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.headlineSmall)
@@ -289,8 +297,18 @@ private fun DashboardHeader(
                 Icon(NextcloudIcons.Edit, contentDescription = "Customize home")
             }
         }
+        if (onSearch != null) {
+            IconButton(onClick = onSearch) {
+                Icon(NextcloudIcons.Search, contentDescription = "Search Nextcloud")
+            }
+        }
         IconButton(onClick = onRefresh) {
             Icon(NextcloudIcons.Refresh, contentDescription = "Refresh dashboard")
+        }
+        if (onSettings != null) {
+            IconButton(onClick = onSettings) {
+                Icon(NextcloudIcons.Settings, contentDescription = "Settings")
+            }
         }
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -351,12 +369,7 @@ internal fun homeDashboardWidgetBindings(
 ): List<HomeDashboardWidgetBinding> {
     val occupied = mutableSetOf<HomeSectionId>()
     return widgets.map { widget ->
-        val preferred = widget.preferredHomeSectionId()
-        val sectionId = if (preferred !in occupied) {
-            preferred
-        } else {
-            widget.dynamicHomeSectionId()
-        }
+        val sectionId = widget.availableHomeSectionId(occupied)
         occupied += sectionId
         HomeDashboardWidgetBinding(sectionId = sectionId, widget = widget)
     }
@@ -625,7 +638,21 @@ private fun NativeDashboardWidget.preferredHomeSectionId(): HomeSectionId = when
     else -> dynamicHomeSectionId()
 }
 
-private fun NativeDashboardWidget.dynamicHomeSectionId(): HomeSectionId {
+private fun NativeDashboardWidget.availableHomeSectionId(
+    occupied: Set<HomeSectionId>,
+): HomeSectionId {
+    val preferred = preferredHomeSectionId()
+    if (preferred !in occupied) return preferred
+    repeat(MAX_HOME_WORKSPACE_SECTIONS) { disambiguation ->
+        val candidate = dynamicHomeSectionId(disambiguation)
+        if (candidate !in occupied) return candidate
+    }
+    error("The dashboard has no available bounded section ID.")
+}
+
+private fun NativeDashboardWidget.dynamicHomeSectionId(
+    disambiguation: Int = 0,
+): HomeSectionId {
     val readable = id.lowercase()
         .map { character ->
             if (
@@ -644,7 +671,8 @@ private fun NativeDashboardWidget.dynamicHomeSectionId(): HomeSectionId {
         .trim('-')
         .take(MAX_DASHBOARD_SECTION_READABLE_ID_LENGTH)
         .ifEmpty { "widget" }
-    val hash = id.encodeToByteArray().fold(FNV_OFFSET_BASIS) { current, byte ->
+    val hashSource = if (disambiguation == 0) id else "$id#$disambiguation"
+    val hash = hashSource.encodeToByteArray().fold(FNV_OFFSET_BASIS) { current, byte ->
         (current xor byte.toUByte().toUInt()) * FNV_PRIME
     }
     return HomeSectionId("dashboard:$readable:${hash.toString(16).padStart(8, '0')}")

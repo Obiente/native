@@ -1,11 +1,32 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class HomeDashboardPresentationTest {
+    @Test
+    fun `root home renders the customizable workspace instead of the legacy launcher`() {
+        assertEquals(
+            RootDestinationContent.HomeWorkspace,
+            rootDestinationContent(NextcloudDestination.Home),
+        )
+        assertEquals(
+            RootDestinationContent.Apps,
+            rootDestinationContent(NextcloudDestination.Apps),
+        )
+        assertEquals(
+            RootDestinationContent.Activity,
+            rootDestinationContent(NextcloudDestination.Activity),
+        )
+        assertEquals(
+            RootDestinationContent.Settings,
+            rootDestinationContent(NextcloudDestination.Settings),
+        )
+    }
+
     @Test
     fun `known dashboard widgets use reusable semantic home sections`() {
         val bindings = homeDashboardWidgetBindings(
@@ -40,6 +61,28 @@ class HomeDashboardPresentationTest {
         assertEquals(first.map(HomeDashboardWidgetBinding::sectionId), second.map(HomeDashboardWidgetBinding::sectionId))
         assertEquals(HomeSectionIds.PhotoBackup, first[1].sectionId)
         assertNotEquals(first[1].sectionId, first[2].sectionId)
+        first.forEach { binding ->
+            assertTrue(binding.sectionId.value.length <= 80)
+        }
+    }
+
+    @Test
+    fun `dynamically hashed section collisions are disambiguated deterministically`() {
+        val collidingWidgets = List(4) { index ->
+            widget(id = "weather", title = "Weather source $index")
+        }
+
+        val first = homeDashboardWidgetBindings(collidingWidgets)
+        val second = homeDashboardWidgetBindings(collidingWidgets)
+
+        assertEquals(
+            first.map(HomeDashboardWidgetBinding::sectionId),
+            second.map(HomeDashboardWidgetBinding::sectionId),
+        )
+        assertEquals(
+            collidingWidgets.size,
+            first.map(HomeDashboardWidgetBinding::sectionId).distinct().size,
+        )
         first.forEach { binding ->
             assertTrue(binding.sectionId.value.length <= 80)
         }
