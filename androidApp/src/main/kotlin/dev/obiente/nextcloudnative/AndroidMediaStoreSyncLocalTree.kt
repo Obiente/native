@@ -8,8 +8,8 @@ import dev.obiente.nextcloudnative.app.SyncEntryKind
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.nio.file.Files
 import java.security.MessageDigest
-import java.util.UUID
 
 internal fun createAndroidFileSyncLocalTree(
     resolver: ContentResolver,
@@ -54,27 +54,7 @@ internal class AndroidMediaStoreSyncLocalTree(
     }
 
     override fun scan(): List<AndroidLocalSyncDocument> {
-        val result = ArrayList<AndroidLocalSyncDocument>()
-        val pending = ArrayDeque<Pair<String, File>>()
-        pending += "" to root
-        while (pending.isNotEmpty()) {
-            val (parentPath, parent) = pending.removeFirst()
-            require(parentPath.count { it == '/' } < MAX_DEPTH) { "The local folder is nested too deeply." }
-            val children = parent.listFiles()
-                ?.asSequence()
-                ?.filter { it.name.isSafeLocalName() }
-                ?.sortedBy { it.name.lowercase() }
-                ?.toList()
-                .orEmpty()
-            for (child in children) {
-                require(result.size < MAX_ENTRIES) { "The local folder contains too many entries." }
-                val path = if (parentPath.isBlank()) child.name else "$parentPath/${child.name}"
-                val document = child.toSyncDocument(path)
-                result += document
-                if (document.entry.kind == SyncEntryKind.Directory) pending += path to child
-            }
-        }
-        return result.sortedBy { it.entry.relativePath }
+        return mediaFolderSyncFiles(root).map { file -> file.toSyncDocument(file.name) }
     }
 
     override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {
@@ -103,72 +83,22 @@ internal class AndroidMediaStoreSyncLocalTree(
     }
 
     override fun createDirectory(path: String, expectedLocalRevision: String?) {
-        val existing = resolve(path)
-        if (expectedLocalRevision != null) {
-            require(existing?.entry?.revision == expectedLocalRevision) {
-                "The local folder changed after the sync scan."
-            }
-            require(existing.entry.kind == SyncEntryKind.Directory)
-            return
-        }
-        require(existing == null) { "The local folder appeared after the sync scan." }
-        val target = safeFile(path)
-        require(target.mkdirs()) { "The local folder could not be created." }
+        throw UnsupportedOperationException("Detected media folders are upload-only.")
     }
 
     override fun writeFile(path: String, source: File, expectedLocalRevision: String?) {
-        require(source.isFile)
-        val current = resolve(path)
-        if (expectedLocalRevision == null) {
-            require(current == null) { "The local file appeared after the sync scan." }
-        } else {
-            require(current?.entry?.revision == expectedLocalRevision) {
-                "The local file changed after the sync scan."
-            }
-            require(current.entry.kind == SyncEntryKind.File) { "The local item changed type." }
-        }
-        val target = safeFile(path)
-        val parent = requireNotNull(target.parentFile)
-        require(parent.isDirectory || parent.mkdirs()) { "A local parent folder could not be created." }
-        val token = UUID.randomUUID().toString()
-        val staged = File(parent, ".${target.name}.nextcloud-native-download-$token")
-        val backup = File(parent, ".${target.name}.nextcloud-native-backup-$token")
-        try {
-            FileInputStream(source).use { input ->
-                FileOutputStream(staged).use { output ->
-                    input.copyTo(output, BUFFER_BYTES)
-                    output.fd.sync()
-                }
-            }
-            if (target.exists()) {
-                require(target.renameTo(backup)) {
-                    "The existing local file could not be protected before replacement."
-                }
-            }
-            require(staged.renameTo(target)) { "The staged local file could not be published." }
-            if (backup.exists()) {
-                require(backup.delete()) { "The replaced local file could not be cleaned up." }
-            }
-        } catch (failure: Throwable) {
-            staged.delete()
-            if (backup.exists() && !target.exists()) backup.renameTo(target)
-            throw failure
-        }
+        throw UnsupportedOperationException("Detected media folders are upload-only.")
     }
 
     override fun delete(path: String, expectedLocalRevision: String) {
-        val current = requireNotNull(resolve(path)) { "The local item was already removed." }
-        require(current.entry.revision == expectedLocalRevision) {
-            "The local item changed after the sync scan."
-        }
-        require(current.uri.toFile().deleteRecursively()) { "The local item could not be removed." }
+        throw UnsupportedOperationException("Detected media folders are upload-only.")
     }
 
     override fun resolve(path: String): AndroidLocalSyncDocument? {
         if (path.isBlank()) return null
         val normalized = normalizeRelativeSyncPath(path)
         val file = safeFile(normalized)
-        if (!file.exists()) return null
+        if (!file.isMediaFolderSyncFile(root)) return null
         return file.toSyncDocument(normalized)
     }
 
@@ -217,7 +147,7 @@ internal class AndroidMediaStoreSyncLocalTree(
 
     private fun normalizeRelativeSyncPath(path: String): String {
         val segments = path.trim('/').split('/')
-        require(segments.isNotEmpty() && segments.size <= MAX_DEPTH)
+        require(segments.size == 1)
         require(segments.all { it.isSafeLocalName() }) { "The local sync path is invalid." }
         return segments.joinToString("/")
     }
@@ -243,8 +173,125 @@ internal class AndroidMediaStoreSyncLocalTree(
     private fun Uri.toFile(): File = File(requireNotNull(path))
 
     private companion object {
-        const val MAX_ENTRIES = 20_000
-        const val MAX_DEPTH = 64
         const val BUFFER_BYTES = 64 * 1024
     }
 }
+
+internal const val MAX_MEDIA_FOLDER_SYNC_ENTRIES = 20_000
+
+/**
+ * The exact upload scope used by detected media-folder sync and its confirmation preview.
+ *
+ * Only direct, visible, regular media files are included. Subfolders, hidden files, sidecars,
+ * documents, and temporary files are deliberately outside automatic media upload.
+ */
+internal fun mediaFolderSyncFiles(
+    root: File,
+    maximumEntries: Int = MAX_MEDIA_FOLDER_SYNC_ENTRIES,
+): List<File> {
+    require(maximumEntries > 0)
+    val result = mutableListOf<File>()
+    var exceedsLimit = false
+    forEachMediaFolderSyncFile(root) {
+        if (result.size >= maximumEntries) {
+            exceedsLimit = true
+            false
+        } else {
+            result += it
+            true
+        }
+    }
+    require(!exceedsLimit) { "The local media folder contains too many uploadable files." }
+    return result.sortedBy { it.name.lowercase() }
+}
+
+internal data class MediaFolderSyncScopeInspection(
+    val previewFiles: List<File>,
+    val imageCount: Int,
+    val videoCount: Int,
+    val totalBytes: Long,
+    val exceedsSyncLimit: Boolean,
+) {
+    val totalItems: Int get() = imageCount + videoCount
+}
+
+internal fun inspectMediaFolderSyncScope(
+    root: File,
+    maximumPreviewItems: Int,
+): MediaFolderSyncScopeInspection {
+    require(maximumPreviewItems >= 0)
+    val previews = mutableListOf<File>()
+    var imageCount = 0
+    var videoCount = 0
+    var totalBytes = 0L
+    var exceedsSyncLimit = false
+    forEachMediaFolderSyncFile(root) { file ->
+        if (imageCount + videoCount >= MAX_MEDIA_FOLDER_SYNC_ENTRIES) {
+            exceedsSyncLimit = true
+            return@forEachMediaFolderSyncFile false
+        }
+        if (isMediaFolderSyncVideo(file)) videoCount++ else imageCount++
+        val size = file.length().coerceAtLeast(0L)
+        totalBytes = if (Long.MAX_VALUE - totalBytes < size) Long.MAX_VALUE else totalBytes + size
+        previews += file
+        previews.sortWith(compareByDescending<File>(File::lastModified).thenBy { it.name.lowercase() })
+        if (previews.size > maximumPreviewItems) previews.removeAt(previews.lastIndex)
+        true
+    }
+    return MediaFolderSyncScopeInspection(
+        previewFiles = previews,
+        imageCount = imageCount,
+        videoCount = videoCount,
+        totalBytes = totalBytes,
+        exceedsSyncLimit = exceedsSyncLimit,
+    )
+}
+
+private inline fun forEachMediaFolderSyncFile(
+    root: File,
+    visit: (File) -> Boolean = { true },
+) {
+    val canonicalRoot = root.canonicalFile
+    Files.newDirectoryStream(canonicalRoot.toPath()).use { entries ->
+        for (entry in entries) {
+            val file = entry.toFile()
+            if (file.isMediaFolderSyncFile(canonicalRoot) && !visit(file)) return
+        }
+    }
+}
+
+private fun File.isMediaFolderSyncFile(root: File): Boolean {
+    if (
+        !isFile ||
+        Files.isSymbolicLink(toPath()) ||
+        isHidden ||
+        name.startsWith('.') ||
+        !name.isSafeMediaFolderSyncName()
+    ) {
+        return false
+    }
+    val canonicalRoot = root.canonicalFile
+    val canonicalFile = runCatching { canonicalFile }.getOrNull() ?: return false
+    if (canonicalFile.parentFile != canonicalRoot) return false
+    return extension.lowercase() in MEDIA_FOLDER_SYNC_IMAGE_EXTENSIONS ||
+        extension.lowercase() in MEDIA_FOLDER_SYNC_VIDEO_EXTENSIONS
+}
+
+private fun String.isSafeMediaFolderSyncName(): Boolean =
+    isNotBlank() &&
+        this !in setOf(".", "..") &&
+        '/' !in this &&
+        '\\' !in this &&
+        none(Char::isISOControl)
+
+internal fun isMediaFolderSyncVideo(file: File): Boolean =
+    file.extension.lowercase() in MEDIA_FOLDER_SYNC_VIDEO_EXTENSIONS
+
+private val MEDIA_FOLDER_SYNC_IMAGE_EXTENSIONS = setOf(
+    "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "avif", "bmp", "tif", "tiff", "jxl",
+    "dng", "arw", "cr2", "cr3", "nef", "nrw", "orf", "raf", "rw2", "pef", "srw", "x3f",
+)
+
+private val MEDIA_FOLDER_SYNC_VIDEO_EXTENSIONS = setOf(
+    "mp4", "m4v", "mkv", "webm", "mov", "avi", "3gp", "3gpp", "mpg", "mpeg", "ts", "mts", "m2ts", "ogv",
+)

@@ -5,6 +5,8 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class AndroidMediaSyncFolderDetectorTest {
     @Test
@@ -36,6 +38,46 @@ class AndroidMediaSyncFolderDetectorTest {
 
         assertEquals(MediaSyncFolderKind.Videos, suggestion.kind)
         assertEquals("Videos/Clips", suggestion.suggestedRemoteRootPath)
+    }
+
+    @Test
+    fun suggestionsAggregateBytesWithoutKeepingPerItemState() {
+        val suggestions = buildMediaSyncFolderSuggestions(
+            listOf(
+                DetectedMediaFolderItem("DCIM/Camera", isImage = true, sizeBytes = 4_000L),
+                DetectedMediaFolderItem("DCIM/Camera", isImage = false, sizeBytes = 12_000L),
+            ),
+        )
+
+        assertEquals(16_000L, suggestions.single().totalBytes)
+    }
+
+    @Test
+    fun thumbnailCacheEvictsLeastRecentlyUsedEntry() {
+        val cache = MediaFolderThumbnailCache(maximumEntries = 2)
+        cache.put("old", byteArrayOf(1))
+        cache.put("kept", byteArrayOf(2))
+        cache.get("old")
+        cache.put("new", byteArrayOf(3))
+
+        assertEquals(setOf("old", "new"), cache.keys())
+    }
+
+    @Test
+    fun fullLibraryAccessRequiresBothMediaTypesOnModernAndroid() {
+        assertFalse(
+            hasFullMediaLibraryAccess(36) { permission ->
+                permission == android.Manifest.permission.READ_MEDIA_IMAGES
+            },
+        )
+        assertTrue(
+            hasFullMediaLibraryAccess(36) { permission ->
+                permission in setOf(
+                    android.Manifest.permission.READ_MEDIA_IMAGES,
+                    android.Manifest.permission.READ_MEDIA_VIDEO,
+                )
+            },
+        )
     }
 
     @Test

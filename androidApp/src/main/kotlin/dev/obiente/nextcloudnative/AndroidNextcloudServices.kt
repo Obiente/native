@@ -41,6 +41,8 @@ import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
 import dev.obiente.nextcloudnative.app.MediaSyncFolderDiscovery
 import dev.obiente.nextcloudnative.app.MAX_MEDIA_BACKUP_STATUS_PATHS
 import dev.obiente.nextcloudnative.app.MediaBackupStatus
+import dev.obiente.nextcloudnative.app.MediaSyncFolderPreview
+import dev.obiente.nextcloudnative.app.MediaSyncFolderSuggestion
 import dev.obiente.nextcloudnative.app.filesByIdDavSearchRequest
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffAction
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffCapability
@@ -396,6 +398,12 @@ internal class AndroidNextcloudServices(
         withContext(Dispatchers.IO) {
             mediaSyncFolderDetector.discover()
         }
+
+    override suspend fun previewMediaSyncFolder(
+        suggestion: MediaSyncFolderSuggestion,
+    ): MediaSyncFolderPreview = withContext(Dispatchers.IO) {
+        mediaSyncFolderDetector.preview(suggestion)
+    }
 
     override suspend fun loadFileSyncCenter(
         session: NextcloudSession,
