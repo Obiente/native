@@ -122,6 +122,13 @@ internal fun remoteFolderDirectories(
         .toList()
 }
 
+internal fun remoteFolderRowKey(path: String): String {
+    val canonical = requireNotNull(canonicalRemoteFolderPath(path)) {
+        "The remote folder path is invalid."
+    }
+    return "remote-folder:${canonical.length}:$canonical"
+}
+
 internal fun newRemoteFolderPath(parentPath: String, name: String): String? {
     val parent = canonicalRemoteFolderPath(parentPath) ?: return null
     if (name.isBlank() || name != name.trim() ||
@@ -331,7 +338,7 @@ internal fun RemoteFolderPickerDialog(
                                 )
                             }
                         } else {
-                            items(directories, key = NextcloudFile::path) { directory ->
+                            items(directories, key = { directory -> remoteFolderRowKey(directory.path) }) { directory ->
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()

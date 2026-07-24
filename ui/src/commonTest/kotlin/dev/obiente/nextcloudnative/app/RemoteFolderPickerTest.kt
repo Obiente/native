@@ -128,6 +128,33 @@ class RemoteFolderPickerTest {
     }
 
     @Test
+    fun `directory row keys cannot collide with static picker item keys`() {
+        val staticKeys = setOf(
+            "breadcrumbs",
+            "current-path",
+            "search",
+            "loading",
+            "load-error",
+            "refreshing",
+            "listing-error",
+            "empty-folders",
+            "folder-actions",
+            "create-folder",
+            "manual-path",
+            "selection-status",
+        )
+        val collisionPronePaths = staticKeys + setOf(
+            "remote-folder:11:breadcrumbs",
+            "folder-actions/selection-status",
+        )
+        val directoryKeys = collisionPronePaths.map(::remoteFolderRowKey)
+
+        assertEquals(directoryKeys.size, directoryKeys.distinct().size)
+        assertEquals(emptySet(), directoryKeys.toSet().intersect(staticKeys))
+        assertEquals("remote-folder:11:breadcrumbs", remoteFolderRowKey("breadcrumbs"))
+    }
+
+    @Test
     fun `new folders are canonical children and unsafe names are rejected`() {
         assertEquals("Photos/Camera", newRemoteFolderPath("Photos", "Camera"))
         assertEquals("Photos", newRemoteFolderPath("", "Photos"))
