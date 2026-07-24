@@ -10,13 +10,84 @@ class RemoteFolderPickerTest {
         assertEquals("", canonicalRemoteFolderPath(""))
         assertEquals(" Photos / Camera ", canonicalRemoteFolderPath(" Photos / Camera "))
         assertNull(canonicalRemoteFolderPath("/Photos/Camera/"))
-        assertEquals("", normalizeRemoteFolderInput(" / "))
-        assertEquals("Photos/Camera", normalizeRemoteFolderInput(" /Photos/Camera/ "))
+        assertEquals("", normalizeRemoteFolderInput("/"))
+        assertEquals("Photos/Camera", normalizeRemoteFolderInput("/Photos/Camera/"))
+        assertEquals(" Photos ", normalizeRemoteFolderInput("/ Photos /"))
+        assertEquals(" Photos ", normalizeRemoteFolderInput(" Photos "))
+        assertEquals(" Photos /Camera ", normalizeRemoteFolderInput("/ Photos /Camera /"))
+        assertEquals(
+            listOf(RemoteFolderBreadcrumb("Files", ""), RemoteFolderBreadcrumb(" Photos ", " Photos ")),
+            remoteFolderBreadcrumbs(requireNotNull(normalizeRemoteFolderInput("/ Photos /"))),
+        )
 
         assertNull(canonicalRemoteFolderPath("Photos//Camera"))
         assertNull(canonicalRemoteFolderPath("Photos/../Secrets"))
         assertNull(canonicalRemoteFolderPath("Photos\\Camera"))
         assertNull(canonicalRemoteFolderPath("Photos/\u0000Camera"))
+    }
+
+    @Test
+    fun `unopened advanced path draft cannot confirm the previously verified folder`() {
+        assertEquals(
+            true,
+            canConfirmRemoteFolderSelection(
+                currentPath = "Photos",
+                networkConfirmedPath = "Photos",
+                manualPathVisible = false,
+                manualPathDraft = "Photos",
+                busy = false,
+            ),
+        )
+        assertEquals(
+            false,
+            canConfirmRemoteFolderSelection(
+                currentPath = "Documents",
+                networkConfirmedPath = null,
+                manualPathVisible = false,
+                manualPathDraft = "Documents",
+                busy = false,
+            ),
+        )
+        assertEquals(
+            true,
+            canConfirmRemoteFolderSelection(
+                currentPath = "Documents",
+                networkConfirmedPath = "Documents",
+                manualPathVisible = false,
+                manualPathDraft = "Documents",
+                busy = false,
+            ),
+        )
+        assertEquals(
+            false,
+            canConfirmRemoteFolderSelection(
+                currentPath = "Photos",
+                networkConfirmedPath = "Photos",
+                manualPathVisible = true,
+                manualPathDraft = "Documents",
+                busy = false,
+            ),
+        )
+        assertEquals(
+            false,
+            canConfirmRemoteFolderSelection(
+                currentPath = "Photos",
+                networkConfirmedPath = "Photos",
+                manualPathVisible = true,
+                manualPathDraft = "../Photos",
+                busy = false,
+            ),
+        )
+        assertEquals(
+            true,
+            canConfirmRemoteFolderSelection(
+                currentPath = " Photos ",
+                networkConfirmedPath = " Photos ",
+                manualPathVisible = true,
+                manualPathDraft = "/ Photos /",
+                busy = false,
+            ),
+        )
     }
 
     @Test

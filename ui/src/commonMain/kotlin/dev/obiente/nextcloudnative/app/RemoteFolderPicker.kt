@@ -64,7 +64,19 @@ internal fun canonicalRemoteFolderPath(value: String): String? {
 }
 
 internal fun normalizeRemoteFolderInput(value: String): String? =
-    canonicalRemoteFolderPath(value.trim().trim('/'))
+    canonicalRemoteFolderPath(value.trim('/'))
+
+internal fun canConfirmRemoteFolderSelection(
+    currentPath: String,
+    networkConfirmedPath: String?,
+    manualPathVisible: Boolean,
+    manualPathDraft: String,
+    busy: Boolean,
+): Boolean {
+    if (busy || networkConfirmedPath != currentPath) return false
+    if (!manualPathVisible) return true
+    return normalizeRemoteFolderInput(manualPathDraft) == currentPath
+}
 
 internal fun remoteFolderBreadcrumbs(path: String): List<RemoteFolderBreadcrumb> {
     val canonical = requireNotNull(canonicalRemoteFolderPath(path)) {
@@ -196,272 +208,300 @@ internal fun RemoteFolderPickerDialog(
         remoteFolderDirectories(files.orEmpty(), currentPath, query)
     }
     val breadcrumbs = remember(currentPath) { remoteFolderBreadcrumbs(currentPath) }
-    val canConfirm = networkConfirmedPath == currentPath && !createRunning
+    val canConfirm = canConfirmRemoteFolderSelection(
+        currentPath = currentPath,
+        networkConfirmedPath = networkConfirmedPath,
+        manualPathVisible = manualVisible,
+        manualPathDraft = manualPath,
+        busy = createRunning,
+    )
 
     AlertDialog(
         onDismissRequest = { if (!createRunning) onDismiss() },
         title = { Text("Choose Nextcloud folder") },
         text = {
-            Column(
+            LazyColumn(
                 modifier = Modifier.fillMaxWidth().heightIn(max = 590.dp),
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    breadcrumbs.forEachIndexed { index, breadcrumb ->
-                        if (index > 0) {
-                            Text(
-                                " / ",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        TextButton(
-                            enabled = !createRunning && breadcrumb.path != currentPath,
-                            onClick = {
-                                currentPath = breadcrumb.path
-                                manualPath = breadcrumb.path
-                            },
-                        ) {
-                            Text(
-                                breadcrumb.label,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                item(key = "breadcrumbs") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        breadcrumbs.forEachIndexed { index, breadcrumb ->
+                            if (index > 0) {
+                                Text(
+                                    " / ",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(
+                                enabled = !createRunning && breadcrumb.path != currentPath,
+                                onClick = {
+                                    currentPath = breadcrumb.path
+                                    manualPath = breadcrumb.path
+                                },
+                            ) {
+                                Text(
+                                    breadcrumb.label,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }
-                Text(
-                    if (currentPath.isEmpty()) "Files root" else "/$currentPath",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it.take(MAX_REMOTE_FOLDER_SEARCH_LENGTH) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Search this folder") },
-                    leadingIcon = {
-                        Icon(NextcloudIcons.Search, contentDescription = null)
-                    },
-                    singleLine = true,
-                )
+                item(key = "current-path") {
+                    Text(
+                        if (currentPath.isEmpty()) "Files root" else "/$currentPath",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                item(key = "search") {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it.take(MAX_REMOTE_FOLDER_SEARCH_LENGTH) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Search this folder") },
+                        leadingIcon = {
+                            Icon(NextcloudIcons.Search, contentDescription = null)
+                        },
+                        singleLine = true,
+                    )
+                }
                 when {
                     loading -> {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                            horizontalArrangement = Arrangement.Center,
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        item(key = "loading") {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                                horizontalArrangement = Arrangement.Center,
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            }
                         }
                     }
                     files == null -> {
-                        PickerMessage(
-                            message = error ?: "Could not open this folder.",
-                            parentPath = remoteFolderParentPath(currentPath),
-                            onParent = { parent ->
-                                currentPath = parent
-                                manualPath = parent
-                            },
-                            onRetry = { loadAttempt += 1 },
-                        )
+                        item(key = "load-error") {
+                            PickerMessage(
+                                message = error ?: "Could not open this folder.",
+                                parentPath = remoteFolderParentPath(currentPath),
+                                onParent = { parent ->
+                                    currentPath = parent
+                                    manualPath = parent
+                                },
+                                onRetry = { loadAttempt += 1 },
+                            )
+                        }
                     }
                     else -> {
                         if (refreshing) {
-                            Text(
-                                "Showing cached folders while refreshing…",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            item(key = "refreshing") {
+                                Text(
+                                    "Showing cached folders while refreshing…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                         error?.let {
-                            Text(
-                                it,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
+                            item(key = "listing-error") {
+                                Text(
+                                    it,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
                         }
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(
-                                    min = 96.dp,
-                                    max = if (createVisible || manualVisible) 150.dp else 280.dp,
-                                ),
-                        ) {
-                            if (directories.isEmpty()) {
-                                item {
-                                    Text(
-                                        if (query.isBlank()) {
-                                            "No folders here. You can select this folder or create one."
-                                        } else {
-                                            "No folders match your search."
-                                        },
-                                        modifier = Modifier.padding(NextcloudSpacing.Large),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        if (directories.isEmpty()) {
+                            item(key = "empty-folders") {
+                                Text(
+                                    if (query.isBlank()) {
+                                        "No folders here. You can select this folder or create one."
+                                    } else {
+                                        "No folders match your search."
+                                    },
+                                    modifier = Modifier.padding(NextcloudSpacing.Large),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        } else {
+                            items(directories, key = NextcloudFile::path) { directory ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(enabled = !createRunning) {
+                                            currentPath = directory.path
+                                            manualPath = directory.path
+                                        }
+                                        .padding(vertical = NextcloudSpacing.Medium),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                                ) {
+                                    Icon(
+                                        NextcloudIcons.Folder,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
                                     )
+                                    Text(
+                                        directory.name,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Icon(NextcloudIcons.ChevronRight, contentDescription = "Open folder")
                                 }
-                            } else {
-                                items(directories, key = NextcloudFile::path) { directory ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable(enabled = !createRunning) {
-                                                currentPath = directory.path
-                                                manualPath = directory.path
-                                            }
-                                            .padding(vertical = NextcloudSpacing.Medium),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                                    ) {
-                                        Icon(
-                                            NextcloudIcons.Folder,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                        )
-                                        Text(
-                                            directory.name,
-                                            modifier = Modifier.weight(1f),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        Icon(NextcloudIcons.ChevronRight, contentDescription = "Open folder")
-                                    }
-                                    HorizontalDivider()
-                                }
+                                HorizontalDivider()
                             }
                         }
                     }
                 }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    OutlinedButton(
-                        enabled = !createRunning && networkConfirmedPath == currentPath,
-                        onClick = {
-                            createVisible = !createVisible
-                            manualVisible = false
-                            createError = null
-                            createName = ""
-                        },
+                item(key = "folder-actions") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                     ) {
-                        Icon(
-                            NextcloudIcons.Add,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Text(" New folder")
-                    }
-                    TextButton(
-                        enabled = !createRunning,
-                        onClick = {
-                            manualVisible = !manualVisible
-                            createVisible = false
-                            manualPath = currentPath
-                            manualError = null
-                        },
-                    ) {
-                        Text("Advanced path")
+                        OutlinedButton(
+                            enabled = !createRunning && networkConfirmedPath == currentPath,
+                            onClick = {
+                                createVisible = !createVisible
+                                manualVisible = false
+                                createError = null
+                                createName = ""
+                            },
+                        ) {
+                            Icon(
+                                NextcloudIcons.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(" New folder")
+                        }
+                        TextButton(
+                            enabled = !createRunning,
+                            onClick = {
+                                manualVisible = !manualVisible
+                                createVisible = false
+                                manualPath = currentPath
+                                manualError = null
+                            },
+                        ) {
+                            Text("Advanced path")
+                        }
                     }
                 }
                 if (createVisible) {
-                    OutlinedTextField(
-                        value = createName,
-                        onValueChange = {
-                            createName = it.take(MAX_REMOTE_FOLDER_NAME_LENGTH)
-                            createError = null
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("New folder name") },
-                        supportingText = createError?.let { message -> { Text(message) } },
-                        isError = createError != null,
-                        singleLine = true,
-                    )
-                    Button(
-                        enabled = !createRunning && newRemoteFolderPath(currentPath, createName) != null,
-                        onClick = {
-                            val target = newRemoteFolderPath(currentPath, createName)
-                            if (target == null) {
-                                createError = "Enter a valid folder name."
-                                return@Button
-                            }
-                            createRunning = true
-                            createError = null
-                            scope.launch {
-                                runCatching {
-                                    services.createDirectoryIfAbsent(session, userId, target)
-                                }.onSuccess {
-                                    createVisible = false
-                                    createName = ""
-                                    currentPath = target
-                                    manualPath = target
-                                }.onFailure { failure ->
-                                    createError = failure.message ?: "Could not create this folder."
+                    item(key = "create-folder") {
+                        Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                            OutlinedTextField(
+                                value = createName,
+                                onValueChange = {
+                                    createName = it.take(MAX_REMOTE_FOLDER_NAME_LENGTH)
+                                    createError = null
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("New folder name") },
+                                supportingText = createError?.let { message -> { Text(message) } },
+                                isError = createError != null,
+                                singleLine = true,
+                            )
+                            Button(
+                                enabled = !createRunning && newRemoteFolderPath(currentPath, createName) != null,
+                                onClick = {
+                                    val target = newRemoteFolderPath(currentPath, createName)
+                                    if (target == null) {
+                                        createError = "Enter a valid folder name."
+                                        return@Button
+                                    }
+                                    createRunning = true
+                                    createError = null
+                                    scope.launch {
+                                        runCatching {
+                                            services.createDirectoryIfAbsent(session, userId, target)
+                                        }.onSuccess {
+                                            createVisible = false
+                                            createName = ""
+                                            currentPath = target
+                                            manualPath = target
+                                        }.onFailure { failure ->
+                                            createError = failure.message ?: "Could not create this folder."
+                                        }
+                                        createRunning = false
+                                    }
+                                },
+                            ) {
+                                if (createRunning) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Text("Create and open")
                                 }
-                                createRunning = false
                             }
-                        },
-                    ) {
-                        if (createRunning) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        } else {
-                            Text("Create and open")
                         }
                     }
                 }
                 if (manualVisible) {
-                    OutlinedTextField(
-                        value = manualPath,
-                        onValueChange = {
-                            manualPath = it.take(MAX_REMOTE_FOLDER_PATH_LENGTH)
-                            manualError = null
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Advanced Nextcloud path") },
-                        supportingText = {
-                            Text(manualError ?: "This path is opened and verified before it can be selected.")
-                        },
-                        isError = manualError != null,
-                        singleLine = true,
-                    )
-                    OutlinedButton(
-                        enabled = !createRunning,
-                        onClick = {
-                            val target = normalizeRemoteFolderInput(manualPath)
-                            if (target == null) {
-                                manualError = "Enter a valid relative Nextcloud path."
-                            } else {
-                                manualVisible = false
-                                currentPath = target
-                                manualPath = target
+                    item(key = "manual-path") {
+                        Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                            OutlinedTextField(
+                                value = manualPath,
+                                onValueChange = {
+                                    manualPath = it.take(MAX_REMOTE_FOLDER_PATH_LENGTH)
+                                    manualError = null
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Advanced Nextcloud path") },
+                                supportingText = {
+                                    Text(
+                                        manualError
+                                            ?: "Open and verify this path before selecting the destination.",
+                                    )
+                                },
+                                isError = manualError != null,
+                                singleLine = true,
+                            )
+                            OutlinedButton(
+                                enabled = !createRunning,
+                                onClick = {
+                                    val target = normalizeRemoteFolderInput(manualPath)
+                                    if (target == null) {
+                                        manualError = "Enter a valid relative Nextcloud path."
+                                    } else {
+                                        manualVisible = false
+                                        currentPath = target
+                                        manualPath = target
+                                    }
+                                },
+                            ) {
+                                Text("Open and verify")
                             }
-                        },
-                    ) {
-                        Text("Open path")
+                        }
                     }
                 }
-                Text(
-                    when {
-                        canConfirm && currentPath.isEmpty() -> "The Files root is ready to select."
-                        canConfirm -> "/$currentPath is ready to select."
-                        listingSource == NextcloudFileListingSource.Cache ->
-                            "This cached destination must be confirmed online before selection."
-                        else -> "Open an accessible folder before confirming."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = if (canConfirm) FontWeight.Medium else FontWeight.Normal,
-                    color = if (canConfirm) {
-                        NextcloudTheme.colors.success
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
+                item(key = "selection-status") {
+                    Text(
+                        when {
+                            manualVisible && normalizeRemoteFolderInput(manualPath) != currentPath ->
+                                "Open and verify the advanced path before selecting it."
+                            canConfirm && currentPath.isEmpty() -> "The Files root is ready to select."
+                            canConfirm -> "/$currentPath is ready to select."
+                            listingSource == NextcloudFileListingSource.Cache ->
+                                "This cached destination must be confirmed online before selection."
+                            else -> "Open an accessible folder before confirming."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = if (canConfirm) FontWeight.Medium else FontWeight.Normal,
+                        color = if (canConfirm) {
+                            NextcloudTheme.colors.success
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
             }
         },
         confirmButton = {
