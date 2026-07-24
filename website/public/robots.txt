@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://nc-native.obiente.dev/sitemap.xml
