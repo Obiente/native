@@ -6,10 +6,10 @@ issue.
 
 ## Reporting a vulnerability
 
-Use GitHub private vulnerability reporting for
-`https://github.com/obiente/nc-native` once the repository is public. If that
-channel is unavailable, contact the Obiente maintainers privately before
-sharing technical details.
+Report vulnerabilities privately through
+[GitHub private vulnerability reporting](https://github.com/Obiente/nc-native/security/advisories/new).
+If that channel is unavailable, contact the Obiente maintainers privately
+before sharing technical details.
 
 Include:
 

@@ -307,6 +307,7 @@ fun NativeMediaCollectionContent(
     collection: NativeMediaCollection,
     items: List<NativeMediaItem>,
     resolvedFiles: Map<Long, NextcloudFile> = emptyMap(),
+    backupStatuses: Map<String, MediaBackupStatus> = emptyMap(),
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     loadingMore: Boolean,
@@ -336,6 +337,7 @@ fun NativeMediaCollectionContent(
             NativeMediaItemTile(
                 media = media,
                 file = file,
+                backupStatus = backupStatuses[file.path.trim('/')],
                 services = services,
                 session = session,
                 onClick = { onOpenMedia(file, files) },
@@ -350,6 +352,7 @@ fun NativeMediaCollectionContent(
 private fun NativeMediaItemTile(
     media: NativeMediaItem,
     file: NextcloudFile,
+    backupStatus: MediaBackupStatus?,
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     onClick: () -> Unit,
@@ -429,6 +432,12 @@ private fun NativeMediaItemTile(
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
                 )
             }
+        }
+        backupStatus?.let { status ->
+            MediaBackupStatusIndicator(
+                status = status,
+                modifier = Modifier.align(Alignment.BottomStart).padding(5.dp),
+            )
         }
     }
 }

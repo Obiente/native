@@ -14,6 +14,7 @@ import dev.obiente.nextcloudnative.app.FileSyncExecutionSuccess
 import dev.obiente.nextcloudnative.app.FileSyncExecutionState
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
 import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
+import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
 import dev.obiente.nextcloudnative.app.NextcloudSession
@@ -29,6 +30,8 @@ import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import dev.obiente.nextcloudnative.app.toCenterSummary
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Foreground execution engine for SAF-backed sync pairs.
@@ -45,12 +48,15 @@ internal class AndroidFileSyncEngine(context: Context) {
     }
     private val stagingRoot = File(appContext.cacheDir, "file-sync-staging")
 
-    fun loadCenter(session: NextcloudSession, userId: String): FileSyncCenterSnapshot = synchronized(ENGINE_LOCK) {
+    suspend fun loadCenter(
+        session: NextcloudSession,
+        userId: String,
+    ): FileSyncCenterSnapshot = ENGINE_LOCK.withLock {
         val accountId = NextcloudDocumentIds.accountKey(session)
         val persisted = store.load()
         persisted.coordinator.pairs
             .filter { it.accountId == accountId }
-            .forEach { scheduler.schedule(it.id, accountId, userId) }
+            .forEach { scheduler.schedule(it.id, accountId, userId, it.configuration) }
         FileSyncCenterSnapshot(
             support = FileSyncCenterSupport.Available,
             pairs = persisted.coordinator.pairs
@@ -58,21 +64,26 @@ internal class AndroidFileSyncEngine(context: Context) {
                 .map { pair ->
                     pair.toCenterSummary(
                         persisted.localDisplayNames[pair.id] ?: "Selected folder",
-                        scheduleDescription = "Automatic checks about every 15 minutes when online and battery is not low",
+                        scheduleDescription = pair.configuration.scheduleDescription(),
                     )
                 },
         )
     }
 
-    fun addPair(
+    suspend fun addPair(
         session: NextcloudSession,
         userId: String,
         localRoot: FileSyncLocalRoot,
         remoteRootPath: String,
         configuration: FileSyncConfiguration,
-    ): FileSyncCenterActionResult = synchronized(ENGINE_LOCK) {
-        // Constructing the adapter verifies that the durable read/write grant still exists.
-        AndroidFileSyncLocalTree(appContext.contentResolver, localRoot.localRootId)
+    ): FileSyncCenterActionResult = ENGINE_LOCK.withLock {
+        if (!supportsAndroidFileSyncDirection(localRoot.localRootId, configuration.direction)) {
+            return@withLock FileSyncCenterActionResult.Rejected(
+                "Detected media folders support upload-only sync.",
+            )
+        }
+        // Constructing the adapter verifies that its persisted SAF grant or detected media root is usable.
+        createAndroidFileSyncLocalTree(appContext.contentResolver, localRoot.localRootId)
         val normalizedRemote = normalizeRemoteRoot(remoteRootPath)
         val accountId = NextcloudDocumentIds.accountKey(session)
         val current = store.load()
@@ -82,7 +93,9 @@ internal class AndroidFileSyncEngine(context: Context) {
                     it.remoteRootPath == normalizedRemote
             }
         ) {
-            return FileSyncCenterActionResult.Rejected("That local and Nextcloud folder pair already exists.")
+            return@withLock FileSyncCenterActionResult.Rejected(
+                "That local and Nextcloud folder pair already exists.",
+            )
         }
         val pair = FileSyncPair(
             id = UUID.randomUUID().toString(),
@@ -97,17 +110,37 @@ internal class AndroidFileSyncEngine(context: Context) {
                 localDisplayNames = current.localDisplayNames + (pair.id to localRoot.displayName),
             ),
         )
-        scheduler.schedule(pair.id, accountId, userId)
+        scheduler.schedule(pair.id, accountId, userId, pair.configuration)
         FileSyncCenterActionResult.Completed("Folder sync pair added. Run it to review the first sync.")
     }
 
-    fun removePair(session: NextcloudSession, pairId: String): FileSyncCenterActionResult =
-        synchronized(ENGINE_LOCK) {
+    private fun FileSyncConfiguration.scheduleDescription(): String {
+        val network = when (networkPolicy) {
+            dev.obiente.nextcloudnative.app.FileSyncNetworkPolicy.AnyConnection -> "online"
+            dev.obiente.nextcloudnative.app.FileSyncNetworkPolicy.Unmetered -> "on unmetered networks"
+        }
+        val power = when (powerPolicy) {
+            dev.obiente.nextcloudnative.app.FileSyncPowerPolicy.AnyPower -> null
+            dev.obiente.nextcloudnative.app.FileSyncPowerPolicy.BatteryNotLow -> "when battery is not low"
+            dev.obiente.nextcloudnative.app.FileSyncPowerPolicy.Charging -> "while charging"
+        }
+        return buildString {
+            append("Automatic checks about every 15 minutes ").append(network)
+            power?.let { append(" and ").append(it) }
+        }
+    }
+
+    suspend fun removePair(session: NextcloudSession, pairId: String): FileSyncCenterActionResult =
+        ENGINE_LOCK.withLock {
             val current = store.load()
             val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
-                ?: return FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
+                ?: return@withLock FileSyncCenterActionResult.Rejected(
+                    "The folder sync pair no longer exists.",
+                )
             if (pair.accountId != NextcloudDocumentIds.accountKey(session)) {
-                return FileSyncCenterActionResult.Rejected("This folder sync pair belongs to another account.")
+                return@withLock FileSyncCenterActionResult.Rejected(
+                    "This folder sync pair belongs to another account.",
+                )
             }
             val remaining = removeFileSyncPair(current.coordinator, pairId)
             store.save(
@@ -116,7 +149,10 @@ internal class AndroidFileSyncEngine(context: Context) {
                     localDisplayNames = current.localDisplayNames - pairId,
                 ),
             )
-            if (remaining.pairs.none { it.localRootId == pair.localRootId }) {
+            if (
+                pair.localRootId.startsWith("content://") &&
+                remaining.pairs.none { it.localRootId == pair.localRootId }
+            ) {
                 runCatching {
                     appContext.contentResolver.releasePersistableUriPermission(
                         Uri.parse(pair.localRootId),
@@ -128,17 +164,31 @@ internal class AndroidFileSyncEngine(context: Context) {
             FileSyncCenterActionResult.Completed("Folder sync pair removed. No local or server files were deleted.")
         }
 
-    fun runPair(
+    suspend fun runPair(
         session: NextcloudSession,
         userId: String,
         pairId: String,
-    ): FileSyncCenterActionResult = synchronized(ENGINE_LOCK) {
+    ): FileSyncCenterActionResult = ENGINE_LOCK.withLock {
+        runPairLocked(session, userId, pairId)
+    }
+
+    private suspend fun runPairLocked(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+    ): FileSyncCenterActionResult {
         var persisted = store.load()
         val initialPair = persisted.coordinator.pairs.firstOrNull { it.id == pairId }
             ?: return FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
         if (initialPair.accountId != NextcloudDocumentIds.accountKey(session)) {
             return FileSyncCenterActionResult.Rejected("This folder sync pair belongs to another account.")
         }
+        if (!supportsAndroidFileSyncDirection(initialPair.localRootId, initialPair.configuration.direction)) {
+            return FileSyncCenterActionResult.Rejected(
+                "This detected media-folder pair is not upload-only. Remove it and add it again.",
+            )
+        }
+        return withAndroidMediaBackupLedger(appContext, initialPair) { mediaLedger ->
         val remote = AndroidFileSyncRemoteTree(
             session,
             userId,
@@ -150,7 +200,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             .asSequence()
             .filter { it.kind == SyncEntryKind.File && it.contentHash != null }
             .mapTo(mutableSetOf()) { it.relativePath }
-        val local = AndroidFileSyncLocalTree(
+        val local = createAndroidFileSyncLocalTree(
             appContext.contentResolver,
             initialPair.localRootId,
             contentHashPaths,
@@ -213,8 +263,18 @@ internal class AndroidFileSyncEngine(context: Context) {
                         work.id,
                     ),
                 )
-            }
+        }
         store.save(persisted)
+        mediaLedger?.recordVerifiedBaselines(
+            baselines = persisted.coordinator.pairs.first { it.id == pairId }.baselines,
+            localEntries = localEntries,
+            remoteEntries = remoteEntries,
+            nowEpochMillis = System.currentTimeMillis(),
+        )
+        mediaLedger?.recordPlanned(
+            persisted.coordinator.pairs.first { it.id == pairId }.workItems,
+            System.currentTimeMillis(),
+        )
 
         var completed = 0
         while (true) {
@@ -226,9 +286,17 @@ internal class AndroidFileSyncEngine(context: Context) {
             persisted = persisted.copy(coordinator = claim.state)
             store.save(persisted)
             val command = claim.command ?: break
-            runCatching {
+            val claimedWork = persisted.coordinator.pairs
+                .first { it.id == pairId }
+                .workItems
+                .first { it.id == command.workId }
+            mediaLedger?.recordPlanned(listOf(claimedWork), System.currentTimeMillis())
+            val execution = runCatching {
                 execute(command, persisted.coordinator, local, remote)
-            }.onSuccess { success ->
+            }
+            val failure = execution.exceptionOrNull()
+            if (failure == null) {
+                val success = execution.getOrThrow()
                 persisted = persisted.copy(
                     coordinator = completeFileSyncOperation(
                         persisted.coordinator,
@@ -238,7 +306,20 @@ internal class AndroidFileSyncEngine(context: Context) {
                     ),
                 )
                 completed += 1
-            }.onFailure { failure ->
+                store.save(persisted)
+                if (claimedWork.operation is FileSyncOperation.Upload) {
+                    val baseline = success.synchronizedBaselines.single {
+                        it.relativePath == claimedWork.relativePath
+                    }
+                    val verifiedLocal = requireNotNull(local.resolve(claimedWork.relativePath)).entry
+                    mediaLedger?.recordSucceeded(
+                        work = claimedWork,
+                        local = verifiedLocal,
+                        baseline = baseline,
+                        nowEpochMillis = System.currentTimeMillis(),
+                    )
+                }
+            } else {
                 persisted = persisted.copy(
                     coordinator = failFileSyncOperation(
                         persisted.coordinator,
@@ -247,8 +328,13 @@ internal class AndroidFileSyncEngine(context: Context) {
                         safeFailureMessage(failure, "The sync operation failed."),
                     ),
                 )
+                store.save(persisted)
+                val failedWork = persisted.coordinator.pairs
+                    .first { it.id == pairId }
+                    .workItems
+                    .first { it.id == command.workId }
+                mediaLedger?.recordPlanned(listOf(failedWork), System.currentTimeMillis())
             }
-            store.save(persisted)
         }
         val pair = persisted.coordinator.pairs.first { it.id == pairId }
         val conflicts = pair.workItems.count { it.state == FileSyncExecutionState.AwaitingDecision }
@@ -262,25 +348,30 @@ internal class AndroidFileSyncEngine(context: Context) {
         }
         if (failures > 0) FileSyncCenterActionResult.Rejected(message)
         else FileSyncCenterActionResult.Completed(message)
+        }
     }
 
-    fun resolveConflictAndRun(
+    suspend fun resolveConflictAndRun(
         session: NextcloudSession,
         userId: String,
         pairId: String,
         workId: Long,
         choice: FileSyncDecisionChoice,
-    ): FileSyncCenterActionResult = synchronized(ENGINE_LOCK) {
+    ): FileSyncCenterActionResult = ENGINE_LOCK.withLock {
         val current = store.load()
         val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
-            ?: return FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
+            ?: return@withLock FileSyncCenterActionResult.Rejected(
+                "The folder sync pair no longer exists.",
+            )
         if (pair.accountId != NextcloudDocumentIds.accountKey(session)) {
-            return FileSyncCenterActionResult.Rejected("This folder sync pair belongs to another account.")
+            return@withLock FileSyncCenterActionResult.Rejected(
+                "This folder sync pair belongs to another account.",
+            )
         }
         val resolved = runCatching {
             resolveFileSyncDecision(current.coordinator, pairId, workId, choice)
         }.getOrElse { failure ->
-            return FileSyncCenterActionResult.Rejected(
+            return@withLock FileSyncCenterActionResult.Rejected(
                 safeFailureMessage(
                     failure,
                     "That conflict decision is no longer valid. Scan again.",
@@ -288,7 +379,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             )
         }
         store.save(current.copy(coordinator = resolved))
-        runPair(session, userId, pairId)
+        runPairLocked(session, userId, pairId)
     }
 
     private fun execute(
@@ -299,6 +390,9 @@ internal class AndroidFileSyncEngine(context: Context) {
     ): FileSyncExecutionSuccess {
         val pair = state.pairs.first { it.id == command.pairId }
         val work = pair.workItems.first { it.id == command.workId }
+        require(isAndroidFileSyncExecutionAllowed(pair.localRootId, command.operation)) {
+            "Detected media folders permit upload operations only."
+        }
         return when (val operation = command.operation) {
             is FileSyncOperation.Upload -> {
                 val source = requireNotNull(work.observedLocal)
@@ -449,6 +543,18 @@ internal class AndroidFileSyncEngine(context: Context) {
 
     private companion object {
         const val MAX_SYNC_FILE_BYTES = 8L * 1024L * 1024L * 1024L
-        val ENGINE_LOCK = Any()
+        val ENGINE_LOCK = Mutex()
     }
 }
+
+internal fun supportsAndroidFileSyncDirection(
+    localRootId: String,
+    direction: FileSyncDirection,
+): Boolean =
+    !localRootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX) || direction == FileSyncDirection.UploadOnly
+
+internal fun isAndroidFileSyncExecutionAllowed(
+    localRootId: String,
+    operation: FileSyncOperation,
+): Boolean =
+    !localRootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX) || operation is FileSyncOperation.Upload

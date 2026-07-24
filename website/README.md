@@ -16,6 +16,11 @@ The content generator reads the canonical Markdown files from the repository
 root before starting Vite. Changes to those files require restarting the local
 server or running `npm run content`.
 
+The roadmap page also reads the public GitHub project views and milestones at
+build time. It never needs or embeds a GitHub token. If GitHub is unavailable
+or rate-limited, generation falls back to the repository-owned workstream
+links so local and production builds remain deterministic.
+
 ## Production build
 
 ```bash

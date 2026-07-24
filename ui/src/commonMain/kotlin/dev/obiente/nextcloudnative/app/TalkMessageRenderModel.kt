@@ -105,7 +105,7 @@ sealed interface TalkMessageRenderModel {
 }
 
 fun TalkMessage.toRenderModel(): TalkMessageRenderModel {
-    if (messageType == TalkMessageType.CommentDeleted) {
+    if (deleted || messageType == TalkMessageType.CommentDeleted) {
         return TalkMessageRenderModel.Deleted()
     }
 

@@ -21,6 +21,127 @@ enum class FileSyncCenterSupport {
     Unsupported,
 }
 
+enum class MediaSyncFolderDiscoverySupport {
+    Available,
+    NeedsPermission,
+    Unsupported,
+}
+
+enum class MediaSyncFolderKind {
+    Camera,
+    Screenshots,
+    Images,
+    Videos,
+    Mixed,
+}
+
+enum class MediaSyncFolderAccess {
+    FullLibrary,
+    LimitedSelection,
+}
+
+/**
+ * A platform-discovered local media folder that can be proposed without another folder browser.
+ *
+ * [localRootHint] is an opaque platform-owned sync root. Common code may pass it back to the
+ * platform, but must never interpret it as a path.
+ */
+data class MediaSyncFolderSuggestion(
+    val localRootHint: String,
+    val displayName: String,
+    val relativePath: String,
+    val kind: MediaSyncFolderKind,
+    val imageCount: Int,
+    val videoCount: Int,
+    val suggestedRemoteRootPath: String,
+    val totalBytes: Long = 0L,
+) {
+    init {
+        require(localRootHint.isSafeFileSyncCenterText(2_048))
+        require(displayName.isSafeFileSyncCenterText(256))
+        require(relativePath.isSafeFileSyncCenterText(1_024))
+        require(imageCount >= 0 && videoCount >= 0 && imageCount.toLong() + videoCount.toLong() > 0L)
+        require(totalBytes >= 0L)
+        requireValidSyncPath(suggestedRemoteRootPath)
+    }
+
+    val localRoot: FileSyncLocalRoot
+        get() = FileSyncLocalRoot(localRootHint, displayName)
+}
+
+data class MediaSyncFolderDiscovery(
+    val support: MediaSyncFolderDiscoverySupport,
+    val suggestions: List<MediaSyncFolderSuggestion>,
+    val message: String? = null,
+    val access: MediaSyncFolderAccess? =
+        if (support == MediaSyncFolderDiscoverySupport.Available) {
+            MediaSyncFolderAccess.FullLibrary
+        } else {
+            null
+        },
+) {
+    init {
+        require(suggestions.size <= 128)
+        require(suggestions.map(MediaSyncFolderSuggestion::localRootHint).distinct().size == suggestions.size)
+        require(support == MediaSyncFolderDiscoverySupport.Available || suggestions.isEmpty())
+        require(message == null || message.isSafeFileSyncCenterText(1_024))
+        require((support == MediaSyncFolderDiscoverySupport.Available) == (access != null))
+    }
+}
+
+enum class MediaSyncFolderPreviewState {
+    Available,
+    Empty,
+    Inaccessible,
+    Changed,
+    Removed,
+}
+
+data class MediaSyncFolderPreviewItem(
+    val stableId: String,
+    val displayName: String,
+    val mimeType: String?,
+    val sizeBytes: Long?,
+    val modifiedAtEpochMillis: Long?,
+    val thumbnailBytes: ByteArray?,
+) {
+    init {
+        require(stableId.isSafeFileSyncCenterText(256))
+        require(displayName.isSafeFileSyncCenterText(512))
+        require(mimeType == null || mimeType.isSafeFileSyncCenterText(256))
+        require(sizeBytes == null || sizeBytes >= 0L)
+        require(modifiedAtEpochMillis == null || modifiedAtEpochMillis >= 0L)
+        require(thumbnailBytes == null || thumbnailBytes.size <= MAX_MEDIA_PREVIEW_THUMBNAIL_BYTES)
+    }
+}
+
+data class MediaSyncFolderPreview(
+    val localRootHint: String,
+    val state: MediaSyncFolderPreviewState,
+    val access: MediaSyncFolderAccess,
+    val totalItems: Int,
+    val totalBytes: Long,
+    val items: List<MediaSyncFolderPreviewItem>,
+    val message: String? = null,
+) {
+    init {
+        require(localRootHint.isSafeFileSyncCenterText(2_048))
+        require(totalItems >= 0)
+        require(totalBytes >= 0L)
+        require(items.size <= MAX_MEDIA_SYNC_FOLDER_PREVIEW_ITEMS)
+        require(items.map(MediaSyncFolderPreviewItem::stableId).distinct().size == items.size)
+        require(message == null || message.isSafeFileSyncCenterText(1_024))
+        require(
+            state == MediaSyncFolderPreviewState.Available ||
+                state == MediaSyncFolderPreviewState.Changed ||
+                items.isEmpty(),
+        )
+    }
+}
+
+const val MAX_MEDIA_SYNC_FOLDER_PREVIEW_ITEMS = 12
+const val MAX_MEDIA_PREVIEW_THUMBNAIL_BYTES = 256 * 1_024
+
 data class FileSyncPairSummary(
     val id: String,
     val localDisplayName: String,
