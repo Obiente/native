@@ -184,13 +184,31 @@ fun isNewerAndroidRelease(currentVersionCode: Long, release: AndroidDirectReleas
     release.versionCode > currentVersionCode
 
 private fun String.isCanonicalUpdateUrl(): Boolean =
-    startsWith("https://nc-native.obiente.dev/releases/android/") &&
-        none { it == '#' || it == '?' || it == '\\' }
+    hasCanonicalPathUnder("https://nc-native.obiente.dev/releases/android/", trailingSlash = false) &&
+        endsWith(".apk")
 
 private fun String.isCanonicalReleaseNotesUrl(): Boolean =
-    startsWith("https://nc-native.obiente.dev/releases/") &&
-        endsWith('/') &&
-        none { it == '#' || it == '?' || it == '\\' }
+    hasCanonicalPathUnder("https://nc-native.obiente.dev/releases/", trailingSlash = true)
+
+private fun String.hasCanonicalPathUnder(
+    requiredPrefix: String,
+    trailingSlash: Boolean,
+): Boolean {
+    if (!startsWith(requiredPrefix) || any { it == '%' || it == '?' || it == '#' || it == '\\' }) {
+        return false
+    }
+    val relativePath = removePrefix(requiredPrefix)
+    if (relativePath.isEmpty() || endsWith('/') != trailingSlash) return false
+    val pathWithoutTrailingSlash = if (trailingSlash) relativePath.dropLast(1) else relativePath
+    if (pathWithoutTrailingSlash.isEmpty()) return false
+    return pathWithoutTrailingSlash
+        .split('/')
+        .all { segment ->
+            segment != "." &&
+                segment != ".." &&
+                segment.matches(Regex("[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"))
+        }
+}
 
 private fun String.isSha256(): Boolean =
     length == 64 && all { it in '0'..'9' || it in 'a'..'f' }

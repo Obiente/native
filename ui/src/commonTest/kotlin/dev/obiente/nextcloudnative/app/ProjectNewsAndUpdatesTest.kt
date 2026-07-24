@@ -99,5 +99,31 @@ class ProjectNewsAndUpdatesTest {
                 release.copy(signingCertificateSha256 = "unknown"),
             )
         }
+        listOf(
+            "https://nc-native.obiente.dev/releases/android/../update.apk",
+            "https://nc-native.obiente.dev/releases/android/%2e%2e/update.apk",
+            "https://nc-native.obiente.dev/releases/android/update%2Fescaped.apk",
+            "https://nc-native.obiente.dev/releases/android//update.apk",
+            "https://nc-native.obiente.dev/releases/android/folder\\update.apk",
+            "https://nc-native.obiente.dev/releases/android/update.apk?download=1",
+            "https://nc-native.obiente.dev/releases/android/update.apk#download",
+            "https://nc-native.obiente.dev/releases/android/update.zip",
+            "https://nc-native.obiente.dev.evil.invalid/releases/android/update.apk",
+        ).forEach { invalidUrl ->
+            assertFailsWith<IllegalArgumentException>(invalidUrl) {
+                validateAndroidDirectRelease(release.copy(apkUrl = invalidUrl))
+            }
+        }
+        listOf(
+            "https://nc-native.obiente.dev/releases/../private/",
+            "https://nc-native.obiente.dev/releases/%2e%2e/private/",
+            "https://nc-native.obiente.dev/releases/android//0.2.0/",
+            "https://nc-native.obiente.dev/releases/android/0.2.0",
+            "https://nc-native.obiente.dev/releases/android/0.2.0/?source=app",
+        ).forEach { invalidUrl ->
+            assertFailsWith<IllegalArgumentException>(invalidUrl) {
+                validateAndroidDirectRelease(release.copy(releaseNotesUrl = invalidUrl))
+            }
+        }
     }
 }
