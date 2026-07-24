@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.npm-cache/
+dist-ssr/
+src/generated/
+public/search-index.json
