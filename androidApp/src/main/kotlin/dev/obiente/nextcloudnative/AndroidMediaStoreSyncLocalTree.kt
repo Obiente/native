@@ -54,11 +54,7 @@ internal class AndroidMediaStoreSyncLocalTree(
     }
 
     override fun scan(): List<AndroidLocalSyncDocument> {
-        val files = mediaFolderSyncFiles(root)
-        require(files.size <= MAX_MEDIA_FOLDER_SYNC_ENTRIES) {
-            "The local media folder contains too many uploadable files."
-        }
-        return files.map { file -> file.toSyncDocument(file.name) }
+        return mediaFolderSyncFiles(root).map { file -> file.toSyncDocument(file.name) }
     }
 
     override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {

@@ -50,6 +50,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @Composable
@@ -198,12 +199,15 @@ internal fun FileOfflineCenterScreen(
         mediaPreviewLoading = true
         mediaPreviewError = null
         pendingMediaPreview = null
-        runCatching { services.previewMediaSyncFolder(suggestion) }
-            .onSuccess { pendingMediaPreview = it }
-            .onFailure { failure ->
-                mediaPreviewError = failure.message ?: "Could not preview this media folder."
-            }
-        mediaPreviewLoading = false
+        try {
+            pendingMediaPreview = services.previewMediaSyncFolder(suggestion)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            mediaPreviewError = failure.message ?: "Could not preview this media folder."
+        } finally {
+            mediaPreviewLoading = false
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
