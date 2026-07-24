@@ -4,6 +4,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # These releases require compileSdk 37 and Android Gradle Plugin 9.1.
+      # Remove the ceilings when the Android toolchain is upgraded together.
+      - dependency-name: "com.mikepenz:multiplatform-markdown-renderer"
+        versions: ["[0.43,0.44)"]
+      - dependency-name: "com.mikepenz:multiplatform-markdown-renderer-m3"
+        versions: ["[0.43,0.44)"]
+      - dependency-name: "org.jetbrains.compose.material3:material3"
+        versions: ["[1.12.0-alpha01,1.13)"]
     open-pull-requests-limit: 5
   - package-ecosystem: cargo
     directory: /
