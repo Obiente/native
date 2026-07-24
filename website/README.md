@@ -40,10 +40,10 @@ routes such as `/roadmap/` resolve to their prerendered `index.html`.
 
 These surfaces intentionally serve different readers:
 
-- `content/news/*.md` contains long, visual product stories written in plain
-  language, with technical detail last. News is living documentation: keep its
-  `lastUpdated` date, screenshots, walkthroughs, limitations, and UI wording
-  current when the product changes.
+- `content/news/*.md` contains long, visual product stories for people who use
+  Nextcloud and contributors who want the implementation context. News is
+  living documentation: keep its `lastUpdated` date, screenshots, capability
+  boundaries, and UI wording current when the product changes.
 - per-version release notes are short installer-facing summaries and
   limitations under `/releases/`.
 - the dedicated `/changelog/` page renders the canonical root `CHANGELOG.md` as
@@ -73,6 +73,10 @@ density, but the workflow does not use adb, an emulator, or a phone. Tests
 enforce that every article screenshot appears in the capture manifest and that
 the fixture cannot contain credentials, real endpoints, local paths, or user
 content.
+
+The canonical Obiente organization avatar lives with the desktop capture
+resources. Content generation copies it into `public/` for static hosting, so
+the repository does not carry two independent binaries.
 
 ## Container
 

@@ -84,16 +84,7 @@ private fun writeCaptureManifest(
     repositoryRoot: Path,
     outputs: List<Path>,
 ) {
-    val captureSources = listOf(
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCenter.kt",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShell.kt",
-        "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/MarketingCaptureMain.kt",
-        "ui/src/desktopMain/resources/marketing/obiente-avatar.png",
-    )
+    val captureSources = discoverCaptureSources(repositoryRoot)
     val sourceDigest = MessageDigest.getInstance("SHA-256")
     captureSources.forEach { relative ->
         sourceDigest.update(relative.encodeToByteArray())
@@ -140,6 +131,28 @@ private fun writeCaptureManifest(
         repositoryRoot.resolve("website/public/screenshots/capture-manifest.json"),
         manifest,
     )
+}
+
+private fun discoverCaptureSources(repositoryRoot: Path): List<String> {
+    val sourceRoots = listOf(
+        "ui/src/commonMain/kotlin",
+        "ui/src/commonMain/resources",
+        "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview",
+        "ui/src/desktopMain/resources/marketing",
+    )
+    val discovered = sourceRoots.flatMap { relativeRoot ->
+        val root = repositoryRoot.resolve(relativeRoot)
+        if (!Files.exists(root)) {
+            emptyList()
+        } else {
+            Files.walk(root).use { paths ->
+                paths.filter { path -> Files.isRegularFile(path) }
+                    .map { repositoryRoot.relativize(it).toString().replace('\\', '/') }
+                    .toList()
+            }
+        }
+    }
+    return (discovered + "ui/build.gradle.kts").distinct().sorted()
 }
 
 private fun ByteArray.sha256(): String =

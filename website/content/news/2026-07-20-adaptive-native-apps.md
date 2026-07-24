@@ -23,7 +23,7 @@ goal is not to place every web page inside an app. It is to understand the verif
 information and actions an installed Nextcloud app exposes, then present them with
 native components that are familiar on a phone or desktop.
 
-## Why this matters
+## A cloud made of more than files
 
 Switching between apps creates more friction than another icon on the home screen
 might suggest. A file shared in Talk may preview differently from the same file in
@@ -38,7 +38,7 @@ A shared native workspace can solve both problems. Files, people, dates, media,
 tables, messages, and editable records are concepts that appear across many apps.
 They should behave consistently without erasing the parts that make each app useful.
 
-## What changed in the product direction
+## From API-shaped screens to reusable native views
 
 The first experiments proved that Nextcloud Native could discover API data, but they
 also exposed a bad failure mode: technically correct screens that felt like an API
@@ -59,7 +59,7 @@ Small app-aware hints are allowed when they materially improve the experience. T
 important boundary is that an adapter must verify an endpoint and its permissions. It
 may never invent an action because a field happened to have a promising name.
 
-## An everyday-use walkthrough
+## Following a file across the workspace
 
 Imagine a colleague shares a photograph and a document in Talk. You open the
 conversation from the native Conversations area, read the message, and open the
@@ -77,7 +77,7 @@ shared rules stay the same, but the desktop is not merely a stretched phone scre
 ![Nextcloud Native mobile home with Files, Photos and Memories, Conversations, and app discovery](/screenshots/mobile-home.png)
 *The mobile home uses the same deterministic fixture and real Compose components as the product gallery. It is rendered offscreen without a server, account, cache, device, or user media.*
 
-## What works today, and what does not
+## Where the developer build stands
 
 The developer build already has native paths for core files, photos and Memories,
 Talk, activity, notes, and several dynamically discovered app shapes. It can connect
@@ -90,7 +90,7 @@ music playback queues, and complex dashboards require more work. The compatibili
 page is the source of truth for tested behavior. A promising screen is not counted as
 complete without real read, write, navigation, error, and state-restoration evidence.
 
-## What comes next
+## The next reusable experiences
 
 The next step is to deepen the reusable experiences rather than add more shallow
 cards. That includes context-aware forms that already know the current item and

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
@@ -13,6 +13,18 @@ const publicDirectory = path.join(websiteRoot, "public");
 const newsDirectory = path.join(websiteRoot, "content", "news");
 const changelogFile = path.join(repositoryRoot, "CHANGELOG.md");
 const changelogRoute = "/changelog/";
+await mkdir(generatedDirectory, { recursive: true });
+await mkdir(publicDirectory, { recursive: true });
+const canonicalObienteAvatar = path.join(
+  repositoryRoot,
+  "ui",
+  "src",
+  "desktopMain",
+  "resources",
+  "marketing",
+  "obiente-avatar.png",
+);
+await copyFile(canonicalObienteAvatar, path.join(publicDirectory, "obiente-avatar.png"));
 const captureManifest = JSON.parse(
   await readFile(
     path.join(publicDirectory, "screenshots", "capture-manifest.json"),
@@ -24,6 +36,14 @@ const captureByImage = new Map(
     `/screenshots/${capture.file}`,
     capture,
   ]),
+);
+const marketingCaptures = captureManifest.captures.map((capture) => ({
+  ...capture,
+  path: `/screenshots/${capture.file}`,
+}));
+await writeFile(
+  path.join(generatedDirectory, "captures.js"),
+  `// Generated from the Compose capture manifest. Do not edit.\nexport const marketingCaptures = ${JSON.stringify(marketingCaptures, null, 2)};\n`,
 );
 
 const sources = [
@@ -194,8 +214,6 @@ function parseFrontmatter(source, file) {
   }
   return { metadata, body: match[2] };
 }
-
-await mkdir(generatedDirectory, { recursive: true });
 
 const docs = await Promise.all(
   sources.map(async (source) => {

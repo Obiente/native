@@ -1,14 +1,31 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { changelog } from "../src/generated/changelog.js";
+import { marketingCaptures } from "../src/generated/captures.js";
 import { news } from "../src/generated/news.js";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(websiteRoot, "..");
+
+async function filesBelow(relativeRoot) {
+  const root = path.join(repositoryRoot, relativeRoot);
+  let entries;
+  try {
+    entries = await readdir(root, { recursive: true, withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) =>
+      path.relative(repositoryRoot, path.join(entry.parentPath, entry.name)).replaceAll("\\", "/"),
+    );
+}
 
 test("news stays long-form, visual, and separate from release history", async () => {
   assert.ok(news.length > 0);
@@ -17,15 +34,9 @@ test("news stays long-form, visual, and separate from release history", async ()
     assert.match(post.image, /^\/screenshots\/[a-z0-9-]+\.png$/);
     assert.ok(post.imageAlt.length >= 40);
     assert.ok(post.imageCaption.length >= 40);
-    assert.match(post.html, /why/i);
-    assert.match(post.html, /what changed/i);
-    assert.match(post.html, /walkthrough/i);
-    assert.match(post.html, /limitation|does not/i);
-    assert.match(post.html, /what comes next/i);
-    assert.ok(
-      (post.html.match(/<h2\b/g) ?? []).length >= 6,
-      `${post.file} needs enough structure to explain the workflow and engineering`,
-    );
+    assert.ok(post.text.split(/\s+/).filter(Boolean).length >= 700);
+    assert.ok(post.headings.length >= 3);
+    assert.equal(new Set(post.headings.map((heading) => heading.anchor)).size, post.headings.length);
     assert.doesNotMatch(post.title, /changelog|release notes/i);
     assert.match(post.lastUpdated, /^\d{4}-\d{2}-\d{2}$/);
     assert.ok(post.lastUpdated >= post.date);
@@ -107,7 +118,7 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   assert.equal(manifest.cloudIdentity, "Nextcloud");
   assert.equal(manifest.networkAccess, false);
   assert.deepEqual(
-    manifest.captures.map((capture) => capture.scenario),
+    marketingCaptures.map((capture) => capture.scenario),
     [
       "desktop-home",
       "mobile-home",
@@ -116,12 +127,16 @@ test("marketing screenshots are rendered offscreen without an Android device", a
       "adaptive-dynamic-data",
     ],
   );
+  assert.deepEqual(
+    marketingCaptures.map((capture) => capture.path),
+    manifest.captures.map((capture) => `/screenshots/${capture.file}`),
+  );
   const expectedDimensions = new Map([
     ["desktop-home", [1440, 900]],
     ["mobile-home", [1080, 2400]],
     ["obsidian-vault-sync", [1080, 1000]],
     ["media-backup-queue", [1080, 1800]],
-    ["adaptive-dynamic-data", [1440, 360]],
+    ["adaptive-dynamic-data", [960, 360]],
   ]);
   for (const capture of manifest.captures) {
     assert.deepEqual(
@@ -133,6 +148,14 @@ test("marketing screenshots are rendered offscreen without an Android device", a
     manifest.captures.map((capture) => `/screenshots/${capture.file}`),
   );
   assert.ok(news.every((post) => capturedImages.has(post.image)));
+  const expectedCaptureSources = [
+    ...(await filesBelow("ui/src/commonMain/kotlin")),
+    ...(await filesBelow("ui/src/commonMain/resources")),
+    ...(await filesBelow("ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview")),
+    ...(await filesBelow("ui/src/desktopMain/resources/marketing")),
+    "ui/build.gradle.kts",
+  ].sort();
+  assert.deepEqual(manifest.captureSources, expectedCaptureSources);
   const sourceDigest = createHash("sha256");
   for (const relative of manifest.captureSources) {
     sourceDigest.update(relative);

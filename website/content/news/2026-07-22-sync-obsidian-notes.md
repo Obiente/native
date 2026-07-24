@@ -22,7 +22,7 @@ experience. A useful client has to notice changes on both sides, work in the
 background, survive restarts, explain conflicts, and leave the local files where
 Obsidian and other Android apps can still see them.
 
-## Why the obvious approaches fall short
+## A vault needs more than storage
 
 Putting a vault inside an app-private directory makes access easy for the sync client
 and difficult for everything else. Obsidian cannot treat that private directory as a
@@ -38,7 +38,7 @@ stops.
 The design therefore treats folder access, durable transfer state, conflict safety,
 and scalable history as one feature.
 
-## What changed
+## Four parts of dependable folder sync
 
 The sync direction now separates four responsibilities:
 
@@ -54,7 +54,7 @@ Suggested folders such as an Obsidian vault should be selectable directly. The a
 must not open its own unrelated file browser and make the user find the same folder a
 second time.
 
-## The target everyday walkthrough
+## Pairing a vault from start to finish
 
 You open My stuff, choose **Add folder sync**, and select the existing Obsidian vault
 with Android's own folder picker. Next, you browse your Nextcloud folders and choose
@@ -72,7 +72,7 @@ both reconnect, the app sees that neither side still matches the revision record
 the previous successful sync. It preserves both versions, marks one conflict, and
 offers a clear choice instead of silently choosing a winner.
 
-## Keeping files useful outside Nextcloud Native
+## Files stay visible to other Android apps
 
 The local folder remains a normal Android document tree. Obsidian can open it, a
 Markdown editor can share a note, and the system file picker can expose an attachment
@@ -83,7 +83,7 @@ Android still controls the folder permission. If access is revoked, the app paus
 the pair and explains how to reconnect it. It does not request broad storage access
 when a narrower system grant can safely cover the selected tree.
 
-## Current limitations
+## Work still ahead
 
 This is not release-ready Obsidian sync yet. Folder-pair models, guarded transfer
 planning, and conflict foundations are being built, but dependable background
@@ -95,7 +95,7 @@ first release must document exclusions and test renames, deletes, case differenc
 and rapid edit bursts rather than promise that every plugin directory is safe by
 default.
 
-## What comes next
+## From background execution to conflict review
 
 The next product slice connects the native local and remote pickers to durable SQLite
 state, adds a folder preview before pairing, and exposes paged pending, failed, and

@@ -22,7 +22,7 @@ first upload, or a background transfer stopped halfway through a large camera fo
 Nextcloud Native is being designed around visible evidence rather than optimistic
 queue state.
 
-## Why this matters
+## A backup badge has to mean something
 
 Many backup tools reduce every file to uploaded or not uploaded. Real life has more
 states: waiting for Wi-Fi, currently transferring, uploaded but not yet verified,
@@ -37,7 +37,7 @@ from WhatsApp, Instagram, Discord, editors, and Android's normal media picker.
 Our direction keeps current media in the normal Android library. Backup status is
 metadata about the file, not a new place the user has to keep it.
 
-## What changed
+## Transfer state and backup evidence are different
 
 The media sync design now separates the transfer queue from backup evidence. A
 successful upload job is not enough to label a photo safe. The app records which
@@ -57,7 +57,7 @@ The UI can then present meaningful states:
 These states belong in a compact summary and paged history. The app should remain
 responsive even when a camera roll contains tens of thousands of completed items.
 
-## An everyday-use walkthrough
+## From camera folder to verified copy
 
 You enable backup for the Camera folder. Before saving, Nextcloud Native shows a
 small preview of the folder contents, the selected account, and a native picker for
@@ -89,7 +89,7 @@ This preserves the storage benefit while keeping ordinary sharing with messaging
 social apps practical. It also avoids pretending that a cloud-only item is instantly
 available when the phone is offline.
 
-## Current limitations
+## Formats and devices still to prove
 
 The current developer build has media browsing, preview, and transfer foundations,
 but the complete evidence-backed backup flow is not ready for everyday use. Folder
@@ -101,7 +101,7 @@ photos, edited derivatives, bursts, and RAW/JPEG pairs also need explicit test
 matrices. A feature is not complete merely because a single JPEG reaches a test
 server.
 
-## What comes next
+## The path to safe storage cleanup
 
 The next slice connects folder discovery and preview to a durable SQLite transfer
 store, adds native local and remote destination pickers, and exposes compact pending,

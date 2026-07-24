@@ -24,6 +24,7 @@ import {
 import { docs } from "./generated/docs.js";
 import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
+import { marketingCaptures } from "./generated/captures.js";
 import NativePreview from "./components/NativePreview.vue";
 import RoadmapDashboard from "./components/RoadmapDashboard.vue";
 
@@ -43,6 +44,26 @@ const props = defineProps({
 });
 
 const githubUrl = "https://github.com/Obiente/nc-native";
+const workflowCaptureCopy = {
+  "obsidian-vault-sync": {
+    title: "Keep an Obsidian vault in sync",
+    body: "A real folder pair shows direction, destination, network policy, and bounded transfer counts.",
+    alt: "Nextcloud Native Obsidian vault two-way sync pair with pending and completed transfer counts",
+  },
+  "media-backup-queue": {
+    title: "See what your phone still needs to back up",
+    body: "Detected media folders and the active Camera pair stay visible without loading an unbounded history.",
+    alt: "Nextcloud Native media backup view with Camera and Screenshots suggestions and active transfer counts",
+  },
+  "adaptive-dynamic-data": {
+    title: "Turn discovered data into a useful native view",
+    body: "The adaptive renderer maps typed fields into a compact table instead of exposing raw API data.",
+    alt: "Nextcloud Native adaptive table with item, category, value, status, and updated columns",
+  },
+};
+const workflowCaptures = marketingCaptures
+  .filter((capture) => workflowCaptureCopy[capture.scenario])
+  .map((capture) => ({ ...capture, ...workflowCaptureCopy[capture.scenario] }));
 const normalizedPath =
   props.initialPath === "/"
     ? "/"
@@ -415,15 +436,32 @@ const frequentlyAsked = [
           </div>
         </section>
 
-        <section class="screenshots-section">
+        <section id="workflows" class="screenshots-section">
           <div class="section-width">
             <div class="section-heading">
               <p class="eyebrow">Built around real workflows</p>
-              <h2>One workspace, without the web-wrapper seams.</h2>
+              <h2>See native workflows, not placeholder screens.</h2>
               <p>
-                See the same native workspace on a large screen and in your hand.
-                These are real Compose screens rendered from a built-in demo account.
+                Explore folder sync, media backup, and adaptive app data through
+                production Compose components driven by deterministic sample data.
               </p>
+            </div>
+            <div class="workflow-showcase">
+              <figure v-for="capture in workflowCaptures" :key="capture.scenario">
+                <div class="workflow-capture-media">
+                  <img
+                    :src="capture.path"
+                    :alt="capture.alt"
+                    :width="capture.width"
+                    :height="capture.height"
+                    loading="lazy"
+                  />
+                </div>
+                <figcaption>
+                  <strong>{{ capture.title }}</strong>
+                  <span>{{ capture.body }}</span>
+                </figcaption>
+              </figure>
             </div>
             <div class="screenshot-gallery">
               <figure class="screenshot-desktop">
@@ -486,11 +524,21 @@ const frequentlyAsked = [
           </div>
           <div class="news-grid">
             <a v-for="post in news.slice(0, 3)" :key="post.path" class="news-card" :href="post.path">
-              <img :src="post.image" :alt="post.imageAlt" loading="lazy" />
-              <time :datetime="post.date">{{ post.date }}</time>
-              <h3>{{ post.title }}</h3>
-              <p>{{ post.description }}</p>
-              <span>{{ post.readingMinutes }} min read <ArrowRight :size="16" weight="bold" /></span>
+              <div class="news-card-media">
+                <img
+                  :src="post.image"
+                  :alt="post.imageAlt"
+                  :width="post.imageWidth"
+                  :height="post.imageHeight"
+                  loading="lazy"
+                />
+              </div>
+              <div class="news-card-copy">
+                <time :datetime="post.date">{{ post.date }}</time>
+                <h3>{{ post.title }}</h3>
+                <p>{{ post.description }}</p>
+                <span class="news-card-link">{{ post.readingMinutes }} min read <ArrowRight :size="16" weight="bold" /></span>
+              </div>
             </a>
           </div>
         </section>
@@ -562,7 +610,7 @@ const frequentlyAsked = [
         <header class="doc-heading">
           <p class="eyebrow">Nextcloud Native news</p>
           <h1>What is getting better, and why it matters.</h1>
-          <p>Start with the everyday benefit, then dig into the technical decisions if you want the detail.</p>
+          <p>Stories connect everyday Nextcloud workflows to the architecture taking shape underneath them.</p>
           <a class="text-link" href="/changelog/">
             Looking for release changes? Read the changelog
             <ArrowRight :size="18" weight="bold" />
@@ -570,11 +618,21 @@ const frequentlyAsked = [
         </header>
         <div class="news-grid news-index-grid">
           <a v-for="post in news" :key="post.path" class="news-card" :href="post.path">
-            <img :src="post.image" :alt="post.imageAlt" loading="lazy" />
-            <time :datetime="post.lastUpdated">Updated {{ post.lastUpdated }}</time>
-            <h2>{{ post.title }}</h2>
-            <p>{{ post.description }}</p>
-            <span>{{ post.readingMinutes }} min read <ArrowRight :size="16" weight="bold" /></span>
+            <div class="news-card-media">
+              <img
+                :src="post.image"
+                :alt="post.imageAlt"
+                :width="post.imageWidth"
+                :height="post.imageHeight"
+                loading="lazy"
+              />
+            </div>
+            <div class="news-card-copy">
+              <time :datetime="post.lastUpdated">Updated {{ post.lastUpdated }}</time>
+              <h2>{{ post.title }}</h2>
+              <p>{{ post.description }}</p>
+              <span class="news-card-link">{{ post.readingMinutes }} min read <ArrowRight :size="16" weight="bold" /></span>
+            </div>
           </a>
         </div>
       </section>
