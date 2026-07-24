@@ -64,8 +64,11 @@ internal fun FileOfflineCenterScreen(
     var removeTarget by remember(session, userId) { mutableStateOf<FileOfflineCenterItem?>(null) }
     var syncSnapshot by remember(session, userId) { mutableStateOf<FileSyncCenterSnapshot?>(null) }
     var syncLoading by remember(session, userId) { mutableStateOf(false) }
+    var mediaFolderDiscovery by remember(session, userId) { mutableStateOf<MediaSyncFolderDiscovery?>(null) }
+    var mediaDiscoveryLoading by remember(session, userId) { mutableStateOf(false) }
     var syncBusyPairId by remember(session, userId) { mutableStateOf<String?>(null) }
     var pendingLocalRoot by remember(session, userId) { mutableStateOf<FileSyncLocalRoot?>(null) }
+    var pendingMediaSuggestion by remember(session, userId) { mutableStateOf<MediaSyncFolderSuggestion?>(null) }
     var removeSyncPair by remember(session, userId) { mutableStateOf<FileSyncPairSummary?>(null) }
     var pendingSyncDecision by remember(session, userId) {
         mutableStateOf<PendingFileSyncDecision?>(null)
@@ -152,12 +155,23 @@ internal fun FileOfflineCenterScreen(
             }
         if (services.supportsBidirectionalFileSync) {
             syncLoading = true
+            mediaDiscoveryLoading = true
             runCatching { services.loadFileSyncCenter(session, userId) }
                 .onSuccess { syncSnapshot = it }
                 .onFailure { failure ->
                     actionMessage = failure.message ?: "Could not load folder sync pairs."
                 }
+            runCatching { services.discoverMediaSyncFolders() }
+                .onSuccess { mediaFolderDiscovery = it }
+                .onFailure { failure ->
+                    mediaFolderDiscovery = MediaSyncFolderDiscovery(
+                        support = MediaSyncFolderDiscoverySupport.Unsupported,
+                        suggestions = emptyList(),
+                        message = failure.message ?: "Could not inspect local media folders.",
+                    )
+                }
             syncLoading = false
+            mediaDiscoveryLoading = false
         }
         loading = false
     }
@@ -199,16 +213,40 @@ internal fun FileOfflineCenterScreen(
                     FolderSyncSection(
                         snapshot = syncSnapshot,
                         loading = syncLoading,
+                        mediaDiscovery = mediaFolderDiscovery,
+                        mediaDiscoveryLoading = mediaDiscoveryLoading,
                         busyPairId = syncBusyPairId,
                         onAdd = {
                             if (syncBusyPairId == null) {
                                 scope.launch {
                                     runCatching { services.chooseFileSyncLocalRoot() }
-                                        .onSuccess { selected -> pendingLocalRoot = selected }
+                                        .onSuccess { selected ->
+                                            pendingMediaSuggestion = null
+                                            pendingLocalRoot = selected
+                                        }
                                         .onFailure { failure ->
                                             actionMessage = failure.message ?: "Could not select a local folder."
                                         }
                                 }
+                            }
+                        },
+                        onOpenMediaSuggestion = { suggestion ->
+                            if (syncBusyPairId == null) {
+                                scope.launch {
+                                    runCatching {
+                                        services.chooseFileSyncLocalRoot(suggestion.localRootHint)
+                                    }.onSuccess { selected ->
+                                        pendingMediaSuggestion = suggestion
+                                        pendingLocalRoot = selected
+                                    }.onFailure { failure ->
+                                        actionMessage = failure.message ?: "Could not select this media folder."
+                                    }
+                                }
+                            }
+                        },
+                        onRequestMediaPermission = {
+                            if (services.requestPlatformCapability(PlatformCapability.MediaLibrary)) {
+                                actionMessage = "After allowing access, refresh to discover media folders."
                             }
                         },
                         onRun = { pair -> runSyncAction(pair.id, remove = false) },
@@ -316,9 +354,13 @@ internal fun FileOfflineCenterScreen(
     pendingLocalRoot?.let { localRoot ->
         AddFolderSyncDialog(
             localRoot = localRoot,
+            mediaSuggestion = pendingMediaSuggestion,
             busy = syncBusyPairId == ADD_PAIR_BUSY_ID,
             onDismiss = {
-                if (syncBusyPairId == null) pendingLocalRoot = null
+                if (syncBusyPairId == null) {
+                    pendingLocalRoot = null
+                    pendingMediaSuggestion = null
+                }
             },
             onAdd = { remotePath, configuration ->
                 if (syncBusyPairId != null) return@AddFolderSyncDialog
@@ -337,6 +379,7 @@ internal fun FileOfflineCenterScreen(
                         actionMessage = result.fileSyncCenterMessage()
                         if (result is FileSyncCenterActionResult.Completed) {
                             pendingLocalRoot = null
+                            pendingMediaSuggestion = null
                             refreshAttempt += 1
                         }
                     }.onFailure { failure ->
@@ -412,8 +455,12 @@ internal fun FileOfflineCenterScreen(
 private fun FolderSyncSection(
     snapshot: FileSyncCenterSnapshot?,
     loading: Boolean,
+    mediaDiscovery: MediaSyncFolderDiscovery?,
+    mediaDiscoveryLoading: Boolean,
     busyPairId: String?,
     onAdd: () -> Unit,
+    onOpenMediaSuggestion: (MediaSyncFolderSuggestion) -> Unit,
+    onRequestMediaPermission: () -> Unit,
     onRun: (FileSyncPairSummary) -> Unit,
     onRemove: (FileSyncPairSummary) -> Unit,
     onResolve: (FileSyncPairSummary, FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
@@ -443,6 +490,13 @@ private fun FolderSyncSection(
         if (loading && snapshot == null) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
+        MediaFolderSuggestions(
+            discovery = mediaDiscovery,
+            loading = mediaDiscoveryLoading,
+            enabled = busyPairId == null,
+            onOpen = onOpenMediaSuggestion,
+            onRequestPermission = onRequestMediaPermission,
+        )
         val pairs = snapshot?.pairs.orEmpty()
         if (!loading && pairs.isEmpty()) {
             OfflineCenterMessageCard(
@@ -460,6 +514,102 @@ private fun FolderSyncSection(
                 onResolve = { conflict, choice -> onResolve(pair, conflict, choice) },
             )
         }
+    }
+}
+
+@Composable
+private fun MediaFolderSuggestions(
+    discovery: MediaSyncFolderDiscovery?,
+    loading: Boolean,
+    enabled: Boolean,
+    onOpen: (MediaSyncFolderSuggestion) -> Unit,
+    onRequestPermission: () -> Unit,
+) {
+    if (loading && discovery == null) {
+        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        return
+    }
+    when (discovery?.support) {
+        MediaSyncFolderDiscoverySupport.NeedsPermission -> {
+            OfflineCenterMessageCard(
+                discovery.message ?: "Allow media access to find folders for automatic upload.",
+                errorTone = false,
+            ) {
+                OutlinedButton(enabled = enabled, onClick = onRequestPermission) {
+                    Text("Allow photos and videos")
+                }
+            }
+        }
+
+        MediaSyncFolderDiscoverySupport.Available -> {
+            if (discovery.suggestions.isEmpty()) {
+                discovery.message?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                Text("Suggested media folders", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    "Choose a detected folder to prefill a safe upload-only sync. Android will ask you to confirm access.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OfflineCenterMessageCard(
+                    "Originals stay in their current Android media folders, so Instagram, WhatsApp, Discord, " +
+                        "and other media pickers can still see them. Upload status is tracked separately. " +
+                        "Future storage cleanup will only remove verified copies after an explicit review.",
+                    errorTone = false,
+                )
+                discovery.suggestions.take(MAX_VISIBLE_MEDIA_FOLDER_SUGGESTIONS).forEach { suggestion ->
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+                            onOpen = { if (enabled) onOpen(suggestion) },
+                            onShowActions = null,
+                            actionsLabel = null,
+                        ),
+                        color = NextcloudTheme.colors.appTile,
+                        shape = RoundedCornerShape(NextcloudRadii.Card),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(NextcloudSpacing.Large),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(suggestion.displayName, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "${suggestion.kind.readableMediaFolderKind()} · " +
+                                        "${suggestion.imageCount} photos · ${suggestion.videoCount} videos",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    "Upload to /${suggestion.suggestedRemoteRootPath}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            Text("Choose", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                }
+            }
+        }
+
+        MediaSyncFolderDiscoverySupport.Unsupported -> {
+            discovery.message?.let { message ->
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        null -> Unit
     }
 }
 
@@ -534,6 +684,12 @@ private fun FolderSyncPairCard(
                     MaterialTheme.colorScheme.onSurfaceVariant
                 },
             )
+            Text(
+                "${pair.configuration.networkPolicy.readableNetworkPolicy()} · " +
+                    pair.configuration.powerPolicy.readablePowerPolicy(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             pair.scheduleDescription?.let { schedule ->
                 Text(
                     schedule,
@@ -570,14 +726,23 @@ private fun FolderSyncPairCard(
 @Composable
 private fun AddFolderSyncDialog(
     localRoot: FileSyncLocalRoot,
+    mediaSuggestion: MediaSyncFolderSuggestion?,
     busy: Boolean,
     onDismiss: () -> Unit,
     onAdd: (String, FileSyncConfiguration) -> Unit,
 ) {
-    var remotePath by remember(localRoot) { mutableStateOf("") }
-    var direction by remember(localRoot) { mutableStateOf(FileSyncDirection.Bidirectional) }
+    var remotePath by remember(localRoot, mediaSuggestion) {
+        mutableStateOf(mediaSuggestion?.suggestedRemoteRootPath.orEmpty())
+    }
+    var direction by remember(localRoot, mediaSuggestion) {
+        mutableStateOf(
+            if (mediaSuggestion == null) FileSyncDirection.Bidirectional else FileSyncDirection.UploadOnly,
+        )
+    }
     var conflictPolicy by remember(localRoot) { mutableStateOf(FileSyncConflictPolicy.Ask) }
     var deletionPolicy by remember(localRoot) { mutableStateOf(FileSyncDeletionPolicy.Ask) }
+    var networkPolicy by remember(localRoot) { mutableStateOf(FileSyncNetworkPolicy.AnyConnection) }
+    var powerPolicy by remember(localRoot) { mutableStateOf(FileSyncPowerPolicy.BatteryNotLow) }
     var deviceLabel by remember(localRoot) { mutableStateOf("mobile") }
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
@@ -620,6 +785,22 @@ private fun AddFolderSyncDialog(
                         label = { Text(option.readableDeletionPolicy()) },
                     )
                 }
+                Text("Connection", style = MaterialTheme.typography.labelLarge)
+                FileSyncNetworkPolicy.entries.forEach { option ->
+                    FilterChip(
+                        selected = networkPolicy == option,
+                        onClick = { networkPolicy = option },
+                        label = { Text(option.readableNetworkPolicy()) },
+                    )
+                }
+                Text("Power", style = MaterialTheme.typography.labelLarge)
+                FileSyncPowerPolicy.entries.forEach { option ->
+                    FilterChip(
+                        selected = powerPolicy == option,
+                        onClick = { powerPolicy = option },
+                        label = { Text(option.readablePowerPolicy()) },
+                    )
+                }
                 OutlinedTextField(
                     value = deviceLabel,
                     onValueChange = { deviceLabel = it.take(128) },
@@ -635,7 +816,14 @@ private fun AddFolderSyncDialog(
                 onClick = {
                     onAdd(
                         remotePath,
-                        FileSyncConfiguration(direction, conflictPolicy, deletionPolicy, deviceLabel.trim()),
+                        FileSyncConfiguration(
+                            direction = direction,
+                            conflictPolicy = conflictPolicy,
+                            deletionPolicy = deletionPolicy,
+                            deviceLabel = deviceLabel.trim(),
+                            networkPolicy = networkPolicy,
+                            powerPolicy = powerPolicy,
+                        ),
                     )
                 },
             ) {
@@ -874,6 +1062,14 @@ private fun FileSyncDirection.readableSyncDirection(): String = when (this) {
     FileSyncDirection.UploadOnly -> "Device to Nextcloud"
 }
 
+private fun MediaSyncFolderKind.readableMediaFolderKind(): String = when (this) {
+    MediaSyncFolderKind.Camera -> "Camera"
+    MediaSyncFolderKind.Screenshots -> "Screenshots"
+    MediaSyncFolderKind.Images -> "Images"
+    MediaSyncFolderKind.Videos -> "Videos"
+    MediaSyncFolderKind.Mixed -> "Photos and videos"
+}
+
 private fun FileSyncConflictPolicy.readableConflictPolicy(): String = when (this) {
     FileSyncConflictPolicy.Ask -> "Ask before changing either copy"
     FileSyncConflictPolicy.KeepBoth -> "Keep both copies"
@@ -885,6 +1081,17 @@ private fun FileSyncDeletionPolicy.readableDeletionPolicy(): String = when (this
     FileSyncDeletionPolicy.Ask -> "Ask"
     FileSyncDeletionPolicy.Propagate -> "Delete the other copy"
     FileSyncDeletionPolicy.RestoreMissing -> "Restore the missing copy"
+}
+
+private fun FileSyncNetworkPolicy.readableNetworkPolicy(): String = when (this) {
+    FileSyncNetworkPolicy.AnyConnection -> "Wi-Fi or mobile data"
+    FileSyncNetworkPolicy.Unmetered -> "Unmetered network only"
+}
+
+private fun FileSyncPowerPolicy.readablePowerPolicy(): String = when (this) {
+    FileSyncPowerPolicy.AnyPower -> "Any battery level"
+    FileSyncPowerPolicy.BatteryNotLow -> "Pause when battery is low"
+    FileSyncPowerPolicy.Charging -> "Only while charging"
 }
 
 private fun FileSyncDecisionReason.readableDecisionReason(): String = when (this) {
@@ -936,6 +1143,7 @@ private fun formatOfflineBytes(bytes: Long): String = when {
 
 private const val ADD_PAIR_BUSY_ID = "__adding_sync_pair__"
 private const val MAX_VISIBLE_PAIR_CONFLICTS = 5
+private const val MAX_VISIBLE_MEDIA_FOLDER_SUGGESTIONS = 6
 
 private data class PendingFileSyncDecision(
     val pair: FileSyncPairSummary,

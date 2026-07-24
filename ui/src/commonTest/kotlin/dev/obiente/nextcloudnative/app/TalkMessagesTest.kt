@@ -156,6 +156,80 @@ class TalkMessagesTest {
     }
 
     @Test
+    fun preservesThreadReplyReactionAndEditState() {
+        val message = parseTalkMessageJson(
+            """
+            {
+              "id": 72,
+              "actorDisplayName": "Ada",
+              "actorId": "ada",
+              "actorType": "users",
+              "message": "Updated answer",
+              "messageType": "comment",
+              "timestamp": 200,
+              "threadId": 41,
+              "isThread": true,
+              "threadTitle": "Release planning",
+              "threadReplies": 3,
+              "isReplyable": true,
+              "reactions": {"👍": 4, "🎉": 1, "ignored": 0},
+              "reactionsSelf": ["👍"],
+              "lastEditTimestamp": 201,
+              "lastEditActorDisplayName": "Ada",
+              "silent": true,
+              "expirationTimestamp": 900,
+              "referenceId": "local-72",
+              "parent": {
+                "id": 41,
+                "actorDisplayName": "Lin",
+                "message": "Ship {file}",
+                "messageParameters": {
+                  "file": {"type": "file", "id": "5", "name": "roadmap.md"}
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        assertNotNull(message)
+        assertEquals(41L, message.threadId)
+        assertTrue(message.isThread)
+        assertEquals("Release planning", message.threadTitle)
+        assertEquals(3, message.threadReplies)
+        assertTrue(message.isReplyable)
+        assertEquals("Ship roadmap.md", message.parent?.summary)
+        assertEquals("Lin", message.parent?.actorDisplayName)
+        assertEquals(listOf("👍", "🎉"), message.reactions.map(TalkReaction::emoji))
+        assertTrue(message.reactions.first().reactedByMe)
+        assertEquals(4, message.reactions.first().count)
+        assertEquals(201L, message.editedAt)
+        assertTrue(message.silent)
+        assertEquals(900L, message.expiresAt)
+        assertEquals("local-72", message.referenceId)
+    }
+
+    @Test
+    fun preservesDeletedAndScheduledState() {
+        val message = parseTalkMessageJson(
+            """
+            {
+              "id": 73,
+              "actorDisplayName": "Ada",
+              "message": "Later",
+              "messageType": "comment_deleted",
+              "deleted": true,
+              "sendAt": 450,
+              "timestamp": 205
+            }
+            """.trimIndent(),
+        )
+
+        assertNotNull(message)
+        assertTrue(message.deleted, message.toString())
+        assertEquals(450L, message.scheduledAt)
+    }
+
+    @Test
     fun rejectsMalformedJson() {
         assertNull(parseTalkMessageJson("not-json"))
     }

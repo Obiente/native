@@ -56,7 +56,7 @@ fun TalkMessageCard(
 ) {
     when (val model = remember(message) { message.toRenderModel() }) {
         is TalkMessageRenderModel.Text -> TalkNativeTextBubble(
-            actorDisplayName = message.actorDisplayName,
+            message = message,
             model = model,
             mine = mine,
             modifier = modifier,
@@ -64,7 +64,7 @@ fun TalkMessageCard(
         is TalkMessageRenderModel.Attachments -> TalkAttachmentsBubble(
             services = services,
             session = session,
-            actorDisplayName = message.actorDisplayName,
+            message = message,
             model = model,
             mine = mine,
             onOpenAttachment = onOpenAttachment,
@@ -96,7 +96,7 @@ fun TalkMessageCard(
 
 @Composable
 private fun TalkNativeTextBubble(
-    actorDisplayName: String,
+    message: TalkMessage,
     model: TalkMessageRenderModel.Text,
     mine: Boolean,
     modifier: Modifier,
@@ -110,13 +110,18 @@ private fun TalkNativeTextBubble(
             color = talkBubbleColor(mine),
             shape = RoundedCornerShape(NextcloudRadii.Card),
         ) {
-            Column(modifier = Modifier.padding(NextcloudSpacing.Medium)) {
-                Text(actorDisplayName, style = MaterialTheme.typography.labelMedium)
+            Column(
+                modifier = Modifier.padding(NextcloudSpacing.Medium),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+            ) {
+                TalkReplyPreview(message.parent)
+                Text(message.actorDisplayName, style = MaterialTheme.typography.labelMedium)
                 if (model.markdown) {
                     Markdown(content = model.summary)
                 } else {
                     Text(model.summary, style = MaterialTheme.typography.bodyMedium)
                 }
+                TalkMessageFooter(message)
             }
         }
     }
@@ -126,7 +131,7 @@ private fun TalkNativeTextBubble(
 private fun TalkAttachmentsBubble(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
-    actorDisplayName: String,
+    message: TalkMessage,
     model: TalkMessageRenderModel.Attachments,
     mine: Boolean,
     onOpenAttachment: (TalkAttachmentRenderModel) -> Unit,
@@ -145,8 +150,9 @@ private fun TalkAttachmentsBubble(
                 modifier = Modifier.padding(NextcloudSpacing.Small),
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             ) {
+                TalkReplyPreview(message.parent)
                 Text(
-                    actorDisplayName,
+                    message.actorDisplayName,
                     modifier = Modifier.padding(horizontal = NextcloudSpacing.XSmall, vertical = 2.dp),
                     style = MaterialTheme.typography.labelMedium,
                 )
@@ -166,7 +172,98 @@ private fun TalkAttachmentsBubble(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                TalkMessageFooter(message)
             }
+        }
+    }
+}
+
+@Composable
+private fun TalkReplyPreview(parent: TalkMessageQuote?) {
+    if (parent == null) return
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.58f),
+        shape = RoundedCornerShape(NextcloudRadii.Small),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = NextcloudSpacing.Medium, vertical = NextcloudSpacing.Small),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                parent.actorDisplayName,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                if (parent.deleted) "Message deleted" else parent.summary,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TalkMessageFooter(message: TalkMessage) {
+    if (
+        message.reactions.isEmpty() &&
+        message.editedAt == null &&
+        !message.silent &&
+        !message.isThread &&
+        message.threadId == null &&
+        message.scheduledAt == null
+    ) {
+        return
+    }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+    ) {
+        if (message.reactions.isNotEmpty()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+                message.reactions.take(MAX_VISIBLE_REACTIONS).forEach { reaction ->
+                    Surface(
+                        color = if (reaction.reactedByMe) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                        } else {
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.66f)
+                        },
+                        shape = CircleShape,
+                    ) {
+                        Text(
+                            "${reaction.emoji} ${reaction.count}",
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
+        }
+        val context = buildList {
+            if (message.editedAt != null) add("Edited")
+            if (message.silent) add("Silent")
+            if (message.scheduledAt != null) add("Scheduled")
+            if (message.isThread || message.threadId != null) {
+                val threadLabel = message.threadTitle?.takeIf(String::isNotBlank) ?: "Thread"
+                add(
+                    if (message.threadReplies > 0) {
+                        "$threadLabel · ${message.threadReplies} replies"
+                    } else {
+                        threadLabel
+                    },
+                )
+            }
+        }
+        if (context.isNotEmpty()) {
+            Text(
+                context.joinToString(" · "),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -385,6 +482,8 @@ private fun formatTalkBytes(bytes: Long): String = when {
     bytes < 1_024L * 1_024L * 1_024L -> "${bytes / (1_024L * 1_024L)} MiB"
     else -> "${bytes / (1_024L * 1_024L * 1_024L)} GiB"
 }
+
+private const val MAX_VISIBLE_REACTIONS = 5
 
 private sealed interface TalkAttachmentPreviewState {
     data object None : TalkAttachmentPreviewState

@@ -87,6 +87,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import dev.obiente.nextcloudnative.app.design.NextcloudNavigationRail
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
+import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudNavigationStyle
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
@@ -94,6 +95,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.isNextcloudDarkTheme
 import dev.obiente.nextcloudnative.app.design.resolveNextcloudRootShellLayout
+import dev.obiente.nextcloudnative.app.design.shouldUseNextcloudRootShell
 import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.DynamicResourceRecordContext
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
@@ -470,19 +472,15 @@ private fun AuthenticatedApp(
         onBack = ::navigateBack,
     )
 
-    when (val current = screen) {
-        Screen.Root -> RootShell(
-            presentation = presentation,
-            selected = destination,
-            onSelected = { destination = it },
-            identity = serverInfo?.let { info ->
-                NextcloudDesktopIdentity(
-                    displayName = info.displayName,
-                    cloudName = info.themeName ?: "Nextcloud",
-                )
-            },
-        ) {
-            when (destination) {
+    val desktopIdentity = serverInfo?.let { info ->
+        NextcloudDesktopIdentity(
+            displayName = info.displayName,
+            cloudName = info.themeName ?: "Nextcloud",
+        )
+    }
+    val screenContent: @Composable () -> Unit = {
+        when (val current = screen) {
+            Screen.Root -> when (destination) {
                 NextcloudDestination.Home -> HomeScreen(
                     serverInfo = serverInfo,
                     error = discoveryError,
@@ -520,8 +518,7 @@ private fun AuthenticatedApp(
                     onLoggedOut = onLoggedOut,
                 )
             }
-        }
-        Screen.OfflineCenter -> FileOfflineCenterScreen(
+            Screen.OfflineCenter -> FileOfflineCenterScreen(
             services = services,
             session = session,
             userId = serverInfo?.userId.orEmpty(),
@@ -759,13 +756,28 @@ private fun AuthenticatedApp(
                 modifier = Modifier.weight(1f),
             )
         }
-        is Screen.TextEditor -> TextEditorScreen(
+            is Screen.TextEditor -> TextEditorScreen(
             services = services,
             session = session,
             userId = serverInfo?.userId.orEmpty(),
             file = current.file,
             onBack = ::navigateBack,
+            )
+        }
+    }
+    if (shouldUseNextcloudRootShell(presentation, screen == Screen.Root)) {
+        RootShell(
+            presentation = presentation,
+            selected = destination,
+            onSelected = {
+                destination = it
+                screen = Screen.Root
+            },
+            identity = desktopIdentity,
+            content = screenContent,
         )
+    } else {
+        screenContent()
     }
 }
 
@@ -7096,23 +7108,58 @@ internal fun ScreenHeader(
     compact: Boolean = false,
     trailingContent: @Composable () -> Unit = {},
 ) {
+    val workspace = LocalNextcloudWorkspaceCapabilities.current
+    val desktop = workspace.isDesktop
     Row(
         modifier = Modifier.fillMaxWidth()
-            .heightIn(min = if (compact) 54.dp else 76.dp)
-            .padding(horizontal = NextcloudSpacing.Medium),
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            .heightIn(
+                min = when {
+                    desktop -> 62.dp
+                    compact -> 54.dp
+                    else -> 76.dp
+                },
+            )
+            .padding(horizontal = if (desktop) NextcloudSpacing.Large else NextcloudSpacing.Medium),
+        horizontalArrangement = Arrangement.spacedBy(if (desktop) NextcloudSpacing.Medium else NextcloudSpacing.Small),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onBack) { Icon(NextcloudIcons.Back, contentDescription = "Back") }
+        if (desktop) {
+            Surface(
+                onClick = onBack,
+                modifier = Modifier.size(36.dp),
+                shape = RoundedCornerShape(NextcloudRadii.Small),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        NextcloudIcons.Back,
+                        contentDescription = "Back",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        } else {
+            IconButton(onClick = onBack) { Icon(NextcloudIcons.Back, contentDescription = "Back") }
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 title,
-                style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineSmall,
+                style = when {
+                    desktop -> MaterialTheme.typography.titleLarge
+                    compact -> MaterialTheme.typography.titleLarge
+                    else -> MaterialTheme.typography.headlineSmall
+                },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             subtitle?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
         trailingContent()

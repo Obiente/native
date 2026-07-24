@@ -26,14 +26,15 @@ internal class AndroidFileSyncRootPicker(private val context: Context) {
         this.launcher = launcher
     }
 
-    suspend fun choose(): FileSyncLocalRoot? = suspendCancellableCoroutine { continuation ->
+    suspend fun choose(initialRootHint: String? = null): FileSyncLocalRoot? =
+        suspendCancellableCoroutine { continuation ->
         check(pending == null) { "A folder chooser is already open." }
         val activeLauncher = checkNotNull(launcher) { "The folder chooser is not attached." }
         pending = continuation
         continuation.invokeOnCancellation {
             if (pending === continuation) pending = null
         }
-        activeLauncher.launch(null)
+        activeLauncher.launch(initialRootHint?.let(Uri::parse))
     }
 
     fun complete(uri: Uri?) {

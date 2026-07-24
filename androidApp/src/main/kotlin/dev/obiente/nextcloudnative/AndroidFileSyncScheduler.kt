@@ -8,13 +8,31 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import dev.obiente.nextcloudnative.app.FileSyncConfiguration
+import dev.obiente.nextcloudnative.app.FileSyncNetworkPolicy
+import dev.obiente.nextcloudnative.app.FileSyncPowerPolicy
 import java.util.concurrent.TimeUnit
 
 /** Durable WorkManager schedule for one sync pair. WorkManager restores it after reboot. */
 internal class AndroidFileSyncScheduler(context: Context) {
     private val workManager = WorkManager.getInstance(context.applicationContext)
 
-    fun schedule(pairId: String, accountId: String, userId: String) {
+    fun schedule(
+        pairId: String,
+        accountId: String,
+        userId: String,
+        configuration: FileSyncConfiguration,
+    ) {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(
+                when (configuration.networkPolicy) {
+                    FileSyncNetworkPolicy.AnyConnection -> NetworkType.CONNECTED
+                    FileSyncNetworkPolicy.Unmetered -> NetworkType.UNMETERED
+                },
+            )
+            .setRequiresBatteryNotLow(configuration.powerPolicy == FileSyncPowerPolicy.BatteryNotLow)
+            .setRequiresCharging(configuration.powerPolicy == FileSyncPowerPolicy.Charging)
+            .build()
         val request = PeriodicWorkRequestBuilder<NextcloudFileSyncWorker>(
             REPEAT_MINUTES,
             TimeUnit.MINUTES,
@@ -26,19 +44,14 @@ internal class AndroidFileSyncScheduler(context: Context) {
                     .putString(NextcloudFileSyncWorker.KEY_USER_ID, userId)
                     .build(),
             )
-            .setConstraints(
-                Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.CONNECTED)
-                    .setRequiresBatteryNotLow(true)
-                    .build(),
-            )
+            .setConstraints(constraints)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .addTag(TAG)
             .addTag(pairTag(pairId))
             .build()
         workManager.enqueueUniquePeriodicWork(
             workName(pairId),
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             request,
         )
     }

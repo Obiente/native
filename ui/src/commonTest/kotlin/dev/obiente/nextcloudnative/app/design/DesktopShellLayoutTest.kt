@@ -64,4 +64,30 @@ class DesktopShellLayoutTest {
         assertEquals(76, layout.navigationWidthDp)
         assertNull(layout.contentMaximumWidthDp)
     }
+
+    @Test
+    fun `desktop shell persists while app and detail screens are open`() {
+        assertTrue(
+            shouldUseNextcloudRootShell(
+                presentation = NextcloudPresentation.Desktop,
+                isRootScreen = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `adaptive shell remains limited to root destinations`() {
+        assertTrue(
+            shouldUseNextcloudRootShell(
+                presentation = NextcloudPresentation.Adaptive,
+                isRootScreen = true,
+            ),
+        )
+        assertFalse(
+            shouldUseNextcloudRootShell(
+                presentation = NextcloudPresentation.Adaptive,
+                isRootScreen = false,
+            ),
+        )
+    }
 }
