@@ -1,4 +1,12 @@
-# Nextcloud Native
+<p align="center">
+  <img src="design/app-icon/cloud.svg" width="112" height="112" alt="Nextcloud Native cloud icon">
+</p>
+
+<h1 align="center">Nextcloud Native</h1>
+
+<p align="center">
+  One adaptive, native client for your whole Nextcloud.
+</p>
 
 [![Build and test](https://github.com/obiente/nc-native/actions/workflows/ci.yml/badge.svg)](https://github.com/obiente/nc-native/actions/workflows/ci.yml)
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
