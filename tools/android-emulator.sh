@@ -340,7 +340,7 @@ reuse_desktop_session() {
         fail "install a debuggable Nextcloud Native APK on '$instance' first"
 
     java "$project_root/tools/DesktopSessionExport.java" |
-        "$adb" -s "$serial" exec-in \
+        "$adb" -s "$serial" shell \
             run-as "$package_name" \
             sh -c 'umask 077; cat > files/nc-native-test-session.json'
     "$adb" -s "$serial" shell am force-stop "$package_name"
