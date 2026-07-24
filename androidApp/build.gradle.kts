@@ -38,6 +38,7 @@ android {
         targetSdk = 36
         versionCode = ncVersionCode
         versionName = ncVersionName
+        buildConfigField("boolean", "DIRECT_APK_UPDATES", "false")
     }
 
     signingConfigs {
@@ -54,6 +55,12 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.findByName("release")
+        }
+        create("directApk") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            signingConfig = signingConfigs.findByName("release")
+            buildConfigField("boolean", "DIRECT_APK_UPDATES", "true")
         }
     }
 
@@ -97,7 +104,9 @@ val validateReleaseSigning by tasks.registering {
 }
 
 tasks.matching { task ->
-    task.name == "assembleRelease" || task.name == "bundleRelease"
+    task.name == "assembleRelease" ||
+        task.name == "bundleRelease" ||
+        task.name == "assembleDirectApk"
 }.configureEach {
     dependsOn(validateReleaseSigning)
 }

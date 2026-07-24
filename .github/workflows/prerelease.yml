@@ -150,7 +150,7 @@ jobs:
           NC_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
         run: |
           set -o pipefail
-          ./gradlew --no-daemon :androidApp:assembleRelease :androidApp:bundleRelease 2>&1 |
+          ./gradlew --no-daemon :androidApp:assembleDirectApk :androidApp:bundleRelease 2>&1 |
             tee "${RUNNER_TEMP}/android-release-build.log"
           if grep -Fq "compiled with an incompatible version of Kotlin" \
             "${RUNNER_TEMP}/android-release-build.log"; then
@@ -164,7 +164,7 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           mkdir -p dist
-          cp androidApp/build/outputs/apk/release/androidApp-release.apk \
+          cp androidApp/build/outputs/apk/directApk/androidApp-directApk.apk \
             "dist/nextcloud-native-${version}-android.apk"
           cp androidApp/build/outputs/bundle/release/androidApp-release.aab \
             "dist/nextcloud-native-${version}-android.aab"
