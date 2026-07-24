@@ -43,6 +43,76 @@ data class MediaBackupReceipt(
     }
 }
 
+enum class MediaBackupTransferState {
+    Pending,
+    Uploading,
+    Failed,
+    Succeeded,
+}
+
+data class MediaBackupLedgerRecord(
+    val accountId: String,
+    val local: LocalMediaObject?,
+    val receipt: MediaBackupReceipt?,
+    val transferState: MediaBackupTransferState,
+    val attemptCount: Int,
+    val updatedAtEpochMillis: Long,
+    val failureMessage: String? = null,
+) {
+    init {
+        require(accountId.isSafeMediaLedgerText(256))
+        require(local != null || receipt != null)
+        require(local == null || receipt == null || local.key == receipt.localKey)
+        require(attemptCount in 0..MAX_MEDIA_BACKUP_ATTEMPTS)
+        require(updatedAtEpochMillis >= 0L)
+        require(failureMessage == null || failureMessage.isSafeMediaLedgerText(1_024))
+        require((transferState == MediaBackupTransferState.Failed) == (failureMessage != null))
+        require(transferState != MediaBackupTransferState.Uploading || local != null)
+        require(transferState != MediaBackupTransferState.Pending || local != null)
+        require(
+            transferState != MediaBackupTransferState.Succeeded ||
+                receipt != null && (local == null || receipt.matches(local)),
+        )
+    }
+
+    val localKey: String
+        get() = local?.key ?: requireNotNull(receipt).localKey
+}
+
+data class MediaBackupLedgerCursor(
+    val updatedAtEpochMillis: Long,
+    val localKey: String,
+) {
+    init {
+        require(updatedAtEpochMillis >= 0L)
+        require(localKey.isSafeMediaLedgerText(2_048))
+    }
+}
+
+data class MediaBackupLedgerPage(
+    val records: List<MediaBackupLedgerRecord>,
+    val nextCursor: MediaBackupLedgerCursor?,
+) {
+    init {
+        require(records.size <= MAX_MEDIA_BACKUP_LEDGER_PAGE_SIZE)
+        require(records.map { it.accountId to it.localKey }.distinct().size == records.size)
+    }
+}
+
+data class MediaBackupLedgerSummary(
+    val pending: Int,
+    val uploading: Int,
+    val failed: Int,
+    val succeeded: Int,
+) {
+    init {
+        require(listOf(pending, uploading, failed, succeeded).all { it >= 0 })
+    }
+
+    val total: Int
+        get() = pending + uploading + failed + succeeded
+}
+
 enum class MediaBackupStatus {
     Pending,
     Uploading,
@@ -93,8 +163,12 @@ fun mediaReclaimEligibility(
     return MediaReclaimEligibility.Eligible(local.size)
 }
 
-private fun MediaBackupReceipt.matches(local: LocalMediaObject): Boolean =
+internal fun MediaBackupReceipt.matches(local: LocalMediaObject): Boolean =
     localKey == local.key && localRevision == local.revision && localSize == local.size
 
 private fun String.isSafeMediaLedgerText(maxLength: Int): Boolean =
     isNotBlank() && length <= maxLength && none(Char::isISOControl)
+
+internal const val MAX_MEDIA_BACKUP_LEDGER_RECORDS_PER_ACCOUNT = 25_000
+internal const val MAX_MEDIA_BACKUP_LEDGER_PAGE_SIZE = 200
+private const val MAX_MEDIA_BACKUP_ATTEMPTS = 1_000

@@ -68,6 +68,7 @@ kotlin {
             implementation("com.fleeksoft.ksoup:ksoup:0.2.6")
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.androidx.sqlite.bundled)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
