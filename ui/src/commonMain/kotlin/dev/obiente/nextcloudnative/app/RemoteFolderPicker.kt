@@ -191,16 +191,30 @@ internal fun remoteFolderSelectionStatus(
     missingDestinationPath: String? = null,
 ): String = when {
     loading -> "Loading this Nextcloud folder before it can be selected."
-    missingDestinationPath != null ->
-        "/$missingDestinationPath will be created when you confirm."
     manualPathVisible && normalizeRemoteFolderInput(manualPathDraft) != currentPath ->
         "Open and verify the advanced path before selecting it."
+    missingDestinationPath != null ->
+        "/$missingDestinationPath will be created when you confirm."
     canConfirm && currentPath.isEmpty() -> "The Files root is ready to select."
     canConfirm -> "/$currentPath is ready to select."
     listingSource == NextcloudFileListingSource.Cache ->
         "This cached destination must be confirmed online before selection."
     else -> "Open an accessible folder before confirming."
 }
+
+internal fun canCreateMissingRemoteFolderDestination(
+    missingDestination: MissingRemoteFolderDestination?,
+    networkConfirmedPath: String?,
+    currentPath: String,
+    manualPathVisible: Boolean,
+    manualPathDraft: String,
+    busy: Boolean,
+): Boolean = !busy &&
+    missingDestination?.accessibleParentPath == networkConfirmedPath &&
+    (
+        !manualPathVisible ||
+            normalizeRemoteFolderInput(manualPathDraft) == currentPath
+        )
 
 @Composable
 internal fun RemoteFolderPickerDialog(
@@ -664,10 +678,14 @@ internal fun RemoteFolderPickerDialog(
         },
         confirmButton = {
             Button(
-                enabled = canConfirm || (
-                    !createRunning &&
-                        missingDestination?.accessibleParentPath == networkConfirmedPath
-                    ),
+                enabled = canConfirm || canCreateMissingRemoteFolderDestination(
+                    missingDestination = missingDestination,
+                    networkConfirmedPath = networkConfirmedPath,
+                    currentPath = currentPath,
+                    manualPathVisible = manualVisible,
+                    manualPathDraft = manualPath,
+                    busy = createRunning,
+                ),
                 onClick = {
                     val destination = missingDestination
                     if (destination == null) {
@@ -677,18 +695,21 @@ internal fun RemoteFolderPickerDialog(
                     createRunning = true
                     createError = null
                     scope.launch {
-                        runCatching {
-                            destination.pathsToCreate.forEach { path ->
-                                services.createDirectoryIfAbsent(session, userId, path)
+                        try {
+                            runCatching {
+                                destination.pathsToCreate.forEach { path ->
+                                    services.createDirectoryIfAbsent(session, userId, path)
+                                }
+                            }.rethrowRemoteFolderCancellation().onSuccess {
+                                recoveryTarget = null
+                                missingDestination = null
+                                onSelected(destination.intendedPath)
+                            }.onFailure { failure ->
+                                createError = failure.message ?: "Could not create this destination."
                             }
-                        }.rethrowRemoteFolderCancellation().onSuccess {
-                            recoveryTarget = null
-                            missingDestination = null
-                            onSelected(destination.intendedPath)
-                        }.onFailure { failure ->
-                            createError = failure.message ?: "Could not create this destination."
+                        } finally {
+                            createRunning = false
                         }
-                        createRunning = false
                     }
                 },
             ) {

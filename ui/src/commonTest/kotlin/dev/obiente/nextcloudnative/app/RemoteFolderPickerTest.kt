@@ -273,6 +273,61 @@ class RemoteFolderPickerTest {
                 missingDestinationPath = "Photos/Camera",
             ),
         )
+        assertEquals(
+            "Open and verify the advanced path before selecting it.",
+            remoteFolderSelectionStatus(
+                loading = false,
+                currentPath = "Photos",
+                canConfirm = false,
+                listingSource = NextcloudFileListingSource.Network,
+                manualPathVisible = true,
+                manualPathDraft = "Documents",
+                missingDestinationPath = "Photos/Camera",
+            ),
+        )
+    }
+
+    @Test
+    fun `missing destination creation requires the verified path and matching manual draft`() {
+        val missing = requireNotNull(
+            missingRemoteFolderDestination(
+                intendedPath = "Photos/Camera",
+                accessibleParentPath = "Photos",
+            ),
+        )
+
+        assertTrue(
+            canCreateMissingRemoteFolderDestination(
+                missingDestination = missing,
+                networkConfirmedPath = "Photos",
+                currentPath = "Photos",
+                manualPathVisible = false,
+                manualPathDraft = "Photos",
+                busy = false,
+            ),
+        )
+        assertEquals(
+            false,
+            canCreateMissingRemoteFolderDestination(
+                missingDestination = missing,
+                networkConfirmedPath = "Photos",
+                currentPath = "Photos",
+                manualPathVisible = true,
+                manualPathDraft = "Documents",
+                busy = false,
+            ),
+        )
+        assertEquals(
+            false,
+            canCreateMissingRemoteFolderDestination(
+                missingDestination = missing,
+                networkConfirmedPath = null,
+                currentPath = "Photos",
+                manualPathVisible = false,
+                manualPathDraft = "Photos",
+                busy = false,
+            ),
+        )
     }
 
     private fun directory(path: String, name: String) = nextcloudFile(path, name, isDirectory = true)
