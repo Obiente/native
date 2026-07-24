@@ -41,7 +41,9 @@ test("news stays long-form, visual, and separate from release history", async ()
     assert.match(post.lastUpdated, /^\d{4}-\d{2}-\d{2}$/);
     assert.ok(post.lastUpdated >= post.date);
 
-    const image = await readFile(path.join(websiteRoot, "public", post.image));
+    const image = await readFile(
+      path.join(websiteRoot, "public", post.image.replace(/^\/+/, "")),
+    );
     assert.deepEqual([...image.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
   }
 });

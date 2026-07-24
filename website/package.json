@@ -8,7 +8,7 @@
   },
   "scripts": {
     "content": "node scripts/generate-content.mjs",
-    "test": "node --test scripts/*.test.mjs",
+    "test": "node scripts/run-tests.mjs",
     "predev": "npm run content",
     "dev": "vite",
     "build": "npm run content && npm run test && vite build && vite build --ssr src/entry-server.js --outDir dist-ssr && node scripts/prerender.mjs",
