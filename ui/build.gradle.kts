@@ -1,6 +1,7 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 val desktopArchitecture = System.getProperty("os.arch").lowercase()
+val ncDesktopPackageVersion = providers.gradleProperty("ncDesktopPackageVersion").get()
 val javafxClassifier = when {
     System.getProperty("os.name").startsWith("Mac", ignoreCase = true) &&
         desktopArchitecture in setOf("aarch64", "arm64") -> "mac-aarch64"
@@ -116,7 +117,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
             packageName = "NextcloudNative"
-            packageVersion = "0.1.0"
+            packageVersion = ncDesktopPackageVersion
 
             linux {
                 iconFile.set(project.file("src/desktopMain/resources/nextcloud-native.png"))
