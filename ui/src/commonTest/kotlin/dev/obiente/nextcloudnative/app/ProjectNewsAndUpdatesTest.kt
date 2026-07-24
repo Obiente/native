@@ -31,6 +31,19 @@ class ProjectNewsAndUpdatesTest {
         ).encodeToByteArray()
 
         assertEquals(article, parseProjectNewsFeed(bytes).entries.single())
+        val multilineArticle = article.copy(bodyMarkdown = "A heading\n\nA Markdown paragraph.")
+        assertEquals(
+            multilineArticle,
+            parseProjectNewsFeed(
+                Json.encodeToString(
+                    ProjectNewsFeed(
+                        schemaVersion = 1,
+                        feedRevision = "b".repeat(64),
+                        entries = listOf(multilineArticle),
+                    ),
+                ).encodeToByteArray(),
+            ).entries.single(),
+        )
         assertFailsWith<IllegalArgumentException> {
             parseProjectNewsFeed(
                 Json.encodeToString(
@@ -44,6 +57,17 @@ class ProjectNewsAndUpdatesTest {
         }
         assertFailsWith<IllegalArgumentException> {
             parseProjectNewsFeed(ByteArray(MAX_PROJECT_NEWS_FEED_BYTES + 1))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            parseProjectNewsFeed(
+                Json.encodeToString(
+                    ProjectNewsFeed(
+                        schemaVersion = 1,
+                        feedRevision = "b".repeat(64),
+                        entries = listOf(article.copy(bodyMarkdown = "Invalid\u0000Markdown")),
+                    ),
+                ).encodeToByteArray(),
+            )
         }
     }
 

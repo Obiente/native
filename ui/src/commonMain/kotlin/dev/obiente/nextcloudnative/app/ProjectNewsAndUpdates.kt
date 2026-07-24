@@ -148,7 +148,7 @@ fun parseProjectNewsFeed(bytes: ByteArray): ProjectNewsFeed {
             require(updated >= article.publishedDate)
         }
         require(article.tags.size <= 12 && article.tags.all { it.isBoundedPublicText(48) })
-        require(article.bodyMarkdown.isBoundedPublicText(64 * 1024))
+        require(article.bodyMarkdown.isBoundedMarkdown(64 * 1024))
         require(
             article.webUrl == "https://nc-native.obiente.dev/news/${article.id}/",
         )
@@ -197,3 +197,10 @@ private fun String.isSha256(): Boolean =
 
 private fun String.isBoundedPublicText(maxLength: Int): Boolean =
     isNotBlank() && length <= maxLength && none(Char::isISOControl)
+
+private fun String.isBoundedMarkdown(maxLength: Int): Boolean =
+    isNotBlank() &&
+        length <= maxLength &&
+        none { character ->
+            character.isISOControl() && character != '\n' && character != '\r' && character != '\t'
+        }

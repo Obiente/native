@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import MarkdownIt from "markdown-it";
 import markdownItAnchor from "markdown-it-anchor";
+import { assertValidNativeNewsFeed } from "./news-feed-contract.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(websiteRoot, "..");
@@ -350,9 +351,11 @@ const newsFeed = {
     contentSha256: createHash("sha256").update(entry.bodyMarkdown).digest("hex"),
   })),
 };
+const serializedNewsFeed = `${JSON.stringify(newsFeed, null, 2)}\n`;
+assertValidNativeNewsFeed(newsFeed, Buffer.byteLength(serializedNewsFeed));
 await writeFile(
   path.join(publicDirectory, "news-feed-v1.json"),
-  `${JSON.stringify(newsFeed, null, 2)}\n`,
+  serializedNewsFeed,
 );
 
 const searchIndex = [
