@@ -167,3 +167,125 @@ await writeFile(
   path.join(publicDirectory, "search-index.json"),
   `${JSON.stringify(searchIndex)}\n`,
 );
+
+const githubApiHeaders = {
+  Accept: "application/vnd.github+json",
+  "X-GitHub-Api-Version": "2026-03-10",
+  "User-Agent": "nextcloud-native-website-build",
+};
+const projectUrl = "https://github.com/orgs/Obiente/projects/4";
+const projectApi = "https://api.github.com/orgs/Obiente/projectsV2/4";
+const projectFieldQuery = "fields=372340503,372340864,372340888,372340889";
+
+async function githubJson(url) {
+  const response = await fetch(url, {
+    headers: githubApiHeaders,
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub roadmap request failed with HTTP ${response.status}.`);
+  }
+  return response.json();
+}
+
+function projectField(item, name) {
+  const value = item.fields?.find((field) => field.name === name)?.value;
+  return value?.name?.raw ?? value?.raw ?? null;
+}
+
+function roadmapItem(item) {
+  const issue = item.content;
+  return {
+    number: issue.number,
+    taskId: projectField(item, "Task ID"),
+    title: issue.title.replace(/^\[[^\]]+]\s*/, ""),
+    url: issue.html_url,
+    priority: projectField(item, "Priority"),
+    area: projectField(item, "Area"),
+    status: projectField(item, "Status"),
+    milestone: issue.milestone?.title ?? null,
+    progress: issue.sub_issues_summary ?? null,
+  };
+}
+
+const fallbackRoadmap = {
+  source: "repository",
+  projectUrl,
+  epics: [
+    [10, "EPIC-MEDIA", "Safe media backup and storage", "Media"],
+    [11, "EPIC-SYNC", "Files client and advanced sync", "Files and sync"],
+    [12, "EPIC-DAV", "DAV device sync and native groupware", "DAV"],
+    [13, "EPIC-TALK", "Native Talk replacement", "Talk"],
+    [14, "EPIC-PHOTO", "Photos and Memories", "Photos and Memories"],
+    [15, "EPIC-DYN", "Adaptive Nextcloud apps", "Adaptive apps"],
+    [16, "EPIC-PLATFORM", "Platform UX, quality, and releases", "Release"],
+  ].map(([number, taskId, title, area]) => ({
+    number,
+    taskId,
+    title,
+    area,
+    priority: "P0",
+    status: "In Progress",
+    milestone: null,
+    progress: null,
+    url: `https://github.com/Obiente/nc-native/issues/${number}`,
+  })),
+  milestones: [],
+  priorities: [],
+  verification: [],
+};
+
+let roadmap = fallbackRoadmap;
+try {
+  const [epics, priorities, verification, milestones] = await Promise.all([
+    githubJson(`${projectApi}/views/5/items?per_page=100&${projectFieldQuery}`),
+    githubJson(`${projectApi}/views/3/items?per_page=100&${projectFieldQuery}`),
+    githubJson(`${projectApi}/views/4/items?per_page=100&${projectFieldQuery}`),
+    githubJson(
+      "https://api.github.com/repos/Obiente/nc-native/milestones?state=all&per_page=100",
+    ),
+  ]);
+  roadmap = {
+    source: "github",
+    projectUrl,
+    epics: epics.map(roadmapItem),
+    priorities: priorities
+      .map(roadmapItem)
+      .filter((item) => !item.taskId?.startsWith("EPIC-"))
+      .sort((left, right) => left.priority.localeCompare(right.priority) || left.taskId.localeCompare(right.taskId)),
+    verification: verification.map(roadmapItem),
+    milestones: milestones.map((milestone) => ({
+      number: milestone.number,
+      title: milestone.title,
+      url: milestone.html_url,
+      open: milestone.open_issues,
+      closed: milestone.closed_issues,
+    })),
+  };
+} catch (error) {
+  console.warn(`Using repository roadmap fallback: ${error.message}`);
+}
+
+await writeFile(
+  path.join(generatedDirectory, "roadmap.js"),
+  `// Generated from public GitHub roadmap data with a repository fallback. Do not edit.\nexport const roadmap = ${JSON.stringify(roadmap, null, 2)};\n`,
+);
+
+const roadmapSearchText = [
+  ...roadmap.epics,
+  ...roadmap.priorities,
+  ...roadmap.verification,
+  ...roadmap.milestones,
+]
+  .map((item) => `${item.taskId ?? ""} ${item.title ?? ""} ${item.area ?? ""}`)
+  .join(" ");
+await writeFile(
+  path.join(publicDirectory, "search-index.json"),
+  `${JSON.stringify(
+    searchIndex.map((doc) =>
+      doc.path === "/roadmap/"
+        ? { ...doc, text: `${doc.text} ${roadmapSearchText}`.trim() }
+        : doc,
+    ),
+  )}\n`,
+);
