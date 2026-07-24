@@ -3,10 +3,12 @@ package dev.obiente.nextcloudnative.nativeui.model
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DynamicAppDescriptorCompilerTest {
@@ -295,6 +297,48 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
+    fun `recipe action recovery preserves undeclared and non object bodies`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Recipes","version":"1"},
+              "paths":{
+                "/apps/example/api/v1/recipes/draft":{
+                  "post":{
+                    "operationId":"createRecipeDraft",
+                    "summary":"Create a recipe draft",
+                    "tags":["Recipes"],
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                },
+                "/apps/example/api/v1/recipes/batch":{
+                  "post":{
+                    "operationId":"createRecipeBatch",
+                    "summary":"Create recipes in a batch",
+                    "tags":["Recipes"],
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"array","items":{"type":"string"}
+                    }}}},
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        assertNull(descriptor.actions.single { it.id == "createrecipedraft" }.binding.body)
+        assertEquals(
+            "array",
+            (assertNotNull(
+                descriptor.actions.single { it.id == "createrecipebatch" }.binding.body,
+            ).schema as JsonObject)["type"]?.jsonPrimitive?.content,
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
     fun `taxonomy filter responses use the filtered subject resource`() {
         val document = """
             {
@@ -342,6 +386,17 @@ class DynamicAppDescriptorCompilerTest {
                     "tags":["Tags"],
                     "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{}}}}}
                   }
+                },
+                "/apps/example/api/v1/labels/{label}":{
+                  "parameters":[
+                    {"name":"label","in":"path","required":true,"schema":{"type":"string"}}
+                  ],
+                  "get":{
+                    "operationId":"recipesWithLabel",
+                    "summary":"Get all recipes with a label",
+                    "tags":["Labels"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{}}}}}
+                  }
                 }
               }
             }
@@ -352,7 +407,7 @@ class DynamicAppDescriptorCompilerTest {
         assertEquals(
             setOf("recipes"),
             descriptor.actions
-                .filter { it.id in setOf("recipesincategory", "recipeswithkeyword") }
+                .filter { it.id in setOf("recipesincategory", "recipeswithkeyword", "recipeswithlabel") }
                 .map(DynamicAction::resourceId)
                 .toSet(),
         )
@@ -361,7 +416,7 @@ class DynamicAppDescriptorCompilerTest {
             descriptor.links.map(DynamicLink::id).toSet(),
         )
         assertEquals(
-            setOf("recipesincategory", "recipeswithkeyword"),
+            setOf("recipesincategory", "recipeswithkeyword", "recipeswithlabel"),
             descriptor.layouts
                 .filter { it.resourceId == "recipes" }
                 .mapNotNull(DynamicLayout::sourceActionId)

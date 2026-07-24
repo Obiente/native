@@ -1188,7 +1188,12 @@ private fun semanticFilteredCollectionResourceId(
 ): String? {
     if (method != HttpMethod.GET) return null
     val taxonomyFilter = path.stableId().let { stablePath ->
-        ("category" in stablePath || "tag" in stablePath || "keyword" in stablePath) &&
+        (
+            "category" in stablePath ||
+                "tag" in stablePath ||
+                "keyword" in stablePath ||
+                "label" in stablePath
+            ) &&
             path.pathPlaceholders().isNotEmpty()
     }
     if (!taxonomyFilter) return null
@@ -1211,8 +1216,11 @@ private fun semanticActionBody(
     declared: HttpBody?,
 ): HttpBody? {
     if (method == HttpMethod.GET || method == HttpMethod.DELETE) return declared
-    val declaredProperties = (declared?.schema as? JsonObject)
-        ?.get("properties") as? JsonObject
+    val declaredBody = declared ?: return null
+    val declaredSchema = declaredBody.schema as? JsonObject ?: return declared
+    val declaredType = declaredSchema.string("type")
+    if (declaredType != null && declaredType != "object") return declared
+    val declaredProperties = declaredSchema["properties"] as? JsonObject
     if (!declaredProperties.isNullOrEmpty()) return declared
 
     val semantics = "$operationId $label $path".lowercase()
@@ -1235,8 +1243,8 @@ private fun semanticActionBody(
     }
     val required = if ("url" in properties) listOf("url") else listOf("name")
     return HttpBody(
-        contentType = declared?.contentType ?: "application/json",
-        required = declared?.required ?: true,
+        contentType = declaredBody.contentType,
+        required = declaredBody.required,
         schema = JsonObject(
             mapOf(
                 "type" to JsonPrimitive("object"),
