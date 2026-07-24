@@ -194,12 +194,18 @@ internal class AndroidNextcloudServices(
             .put("loginName", session.loginName)
             .put("appPassword", session.appPassword)
             .toString()
-        preferences.edit().putString(KEY_SESSION, sessionCipher.encrypt(json)).apply()
+        preferences.edit()
+            .putString(KEY_SESSION, sessionCipher.encrypt(json))
+            .remove(KEY_TEST_READ_ONLY)
+            .apply()
         notifyDocumentsRootsChanged()
     }
 
     override fun clearSession() {
-        preferences.edit().remove(KEY_SESSION).apply()
+        preferences.edit()
+            .remove(KEY_SESSION)
+            .remove(KEY_TEST_READ_ONLY)
+            .apply()
         AndroidFileSyncScheduler(appContext).cancelAll()
         notifyDocumentsRootsChanged()
     }
@@ -1402,6 +1408,12 @@ internal class AndroidNextcloudServices(
         maxResponseBytes: Long = MAX_API_RESPONSE_BYTES,
         client: OkHttpClient = httpClient,
     ): HttpResponse {
+        check(
+            !appContext.isReadOnlyTestMode() ||
+                method.isReadOnlyTestRequestMethod(),
+        ) {
+            "This emulator is using a shared read-only test session. Cloud changes are blocked."
+        }
         val requestBody = when {
             rawBody != null -> rawBody.toRequestBody(contentType?.toMediaType())
             body != null -> body.toRequestBody(contentType?.toMediaType())
@@ -1597,6 +1609,7 @@ internal class AndroidNextcloudServices(
         const val KEY_THEME = "theme_preference"
         const val KEY_LAST_OPENED_APP = "last_opened_app"
         const val KEY_SESSION = "encrypted_session"
+        const val KEY_TEST_READ_ONLY = "emulator_test_read_only"
         const val USER_AGENT = "Nextcloud-Native/0.1.0 (Android)"
         const val DAV_NAMESPACE = "DAV:"
         const val OWNCLOUD_NAMESPACE = "http://owncloud.org/ns"
@@ -1622,6 +1635,9 @@ internal class AndroidNextcloudServices(
         val NON_APP_CAPABILITIES = setOf("core", "theming")
     }
 }
+
+internal fun String.isReadOnlyTestRequestMethod(): Boolean =
+    uppercase() in setOf("GET", "HEAD", "OPTIONS", "PROPFIND", "REPORT", "SEARCH")
 
 internal fun parseAndroidFileVersionDavRecords(xml: ByteArray): List<FileVersionDavRecord> {
     val responses = SafeXmlParser.parse(xml).getElementsByTagNameNS(FILE_VERSION_DAV_NAMESPACE, "response")

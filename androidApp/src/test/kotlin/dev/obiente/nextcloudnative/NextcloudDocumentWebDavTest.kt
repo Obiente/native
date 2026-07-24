@@ -138,6 +138,18 @@ class NextcloudDocumentWebDavTest {
     }
 
     @Test
+    fun readOnlyGateBlocksMutationBeforeAnyNetworkRequest() = RecordingServer().use { server ->
+        val client = NextcloudDocumentWebDav(cloudMutationsAllowed = { false })
+
+        val failure = assertFailsWith<IllegalStateException> {
+            client.createFolder(server.session, "alice", "Documents/New folder")
+        }
+
+        assertTrue(failure.message.orEmpty().contains("read-only"))
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
     fun createFileUsesCreateOnlyConditionalPut() = RecordingServer().use { server ->
         server.enqueue(201, mapOf("ETag" to "\"created-1\""))
         val source = Files.createTempFile("ncn-create-", ".txt").toFile()
@@ -403,6 +415,9 @@ class NextcloudDocumentWebDavTest {
         }
 
         fun enqueue(response: MockResponse) = server.enqueue(response)
+
+        val requestCount: Int
+            get() = server.requestCount
 
         fun request(index: Int): RecordedRequest {
             while (requests.size <= index) {

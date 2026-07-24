@@ -71,7 +71,9 @@ internal class AndroidFileOfflineRepository(context: Context) {
     private val appContext = context.applicationContext
     private val store = AndroidFileOfflineQueueStore(appContext)
     private val contentRoot = File(appContext.filesDir, CONTENT_DIRECTORY)
-    private val webDav = NextcloudDocumentWebDav()
+    private val webDav = NextcloudDocumentWebDav(
+        cloudMutationsAllowed = appContext.cloudMutationGate(),
+    )
 
     fun loadAvailability(
         session: NextcloudSession,

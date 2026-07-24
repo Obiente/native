@@ -49,6 +49,65 @@ bash tools/check-repository.sh
 Focused tests are useful while iterating, but the full suite must pass before a
 pull request is ready for review.
 
+### Isolated Android emulator tests
+
+The emulator helper gives each contributor, worktree, or automated agent a
+separate Android data directory, ADB port, and visible emulator window. It discovers the SDK through
+`ANDROID_SDK_ROOT`, `ANDROID_HOME`, or the shared `/opt/android-sdk` convention;
+no SDK path is stored in the project. The default uses host GPU acceleration;
+headless CI hosts may select a supported software backend with
+`NC_NATIVE_EMULATOR_GPU`.
+
+Install the API 36 AOSP x86_64 system image, then assign a unique slot to each
+concurrent test:
+
+```bash
+tools/android-emulator.sh start files-change 0 --fresh
+tools/android-emulator.sh start media-change 1 --fresh
+
+./gradlew :androidApp:assembleDebug
+tools/android-emulator.sh smoke files-change
+tools/android-emulator.sh smoke media-change
+
+tools/android-emulator.sh stop files-change
+tools/android-emulator.sh stop media-change
+```
+
+The window opens visibly by default and remains available to scripted ADB
+checks. Add `--headless` only for unattended runs without a desktop session.
+
+### Shared account safety
+
+An emulator may reuse the account already stored by the desktop app when
+authenticated read behavior must be tested:
+
+```bash
+tools/android-emulator.sh install files-change
+tools/android-emulator.sh reuse-desktop-session files-change
+```
+
+This command streams the desktop keyring entry directly into the private data
+directory of that debuggable emulator app. It is re-encrypted with the
+emulator's Android Keystore key and the temporary import is immediately
+deleted. The resulting session is forced into read-only test mode at the
+Android HTTP boundary.
+
+Treat this as a strict safety boundary:
+
+- Never inspect, print, copy, record, or commit the imported credentials.
+- Never use personal filenames, contacts, messages, photos, server addresses,
+  responses, screenshots, or UI dumps as fixtures or review artifacts.
+- Never attempt uploads, edits, deletes, moves, shares, app administration,
+  calls, messages, sync writes, or any other cloud mutation with a shared
+  account.
+- Never bypass or weaken read-only test mode. Write-path tests require a
+  synthetic account on an isolated test server containing disposable data.
+- Stop and ask before any action whose server-side effect is uncertain.
+
+The smoke report contains synthetic screenshots, UI hierarchies, launch timing,
+and logcat output under `build/reports/android-emulator/`. Never run it with a
+real account or copy those generated artifacts into the repository.
+
 ## Pull requests
 
 - Keep changes focused and explain the user-facing outcome.

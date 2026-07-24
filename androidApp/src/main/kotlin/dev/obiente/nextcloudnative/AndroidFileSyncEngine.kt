@@ -42,7 +42,9 @@ import kotlinx.coroutines.sync.withLock
 internal class AndroidFileSyncEngine(context: Context) {
     private val appContext = context.applicationContext
     private val store = AndroidFileSyncStore(appContext)
-    private val webDav = NextcloudDocumentWebDav()
+    private val webDav = NextcloudDocumentWebDav(
+        cloudMutationsAllowed = appContext.cloudMutationGate(),
+    )
     private val scheduler by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         AndroidFileSyncScheduler(appContext)
     }

@@ -19,6 +19,7 @@ import dev.obiente.nextcloudnative.app.ThemePreference
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        SessionTestBootstrap.importIfPresent(applicationContext)
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         val fileSyncRootPicker = AndroidFileSyncRootPicker(this)
         fileSyncRootPicker.attach(
