@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import MarkdownIt from "markdown-it";
 import markdownItAnchor from "markdown-it-anchor";
+import { parseNewsFrontmatter } from "./content-frontmatter.mjs";
 import { assertValidNativeNewsFeed } from "./news-feed-contract.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -175,47 +176,6 @@ function headingsFrom(source) {
   }));
 }
 
-function parseFrontmatter(source, file) {
-  const match = source.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!match) throw new Error(`${file} must start with YAML-like frontmatter.`);
-  const metadata = Object.fromEntries(
-    match[1].split("\n").map((line) => {
-      const separator = line.indexOf(":");
-      if (separator <= 0) throw new Error(`${file} contains invalid frontmatter.`);
-      return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
-    }),
-  );
-  for (const key of [
-    "title",
-    "slug",
-    "date",
-    "lastUpdated",
-    "description",
-    "tags",
-    "image",
-    "imageAlt",
-    "imageCaption",
-  ]) {
-    if (!metadata[key]) throw new Error(`${file} is missing ${key} frontmatter.`);
-  }
-  if (
-    !/^\d{4}-\d{2}-\d{2}$/.test(metadata.date) ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(metadata.lastUpdated) ||
-    metadata.lastUpdated < metadata.date ||
-    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(metadata.slug)
-  ) {
-    throw new Error(`${file} has an invalid date or slug.`);
-  }
-  if (
-    !/^\/screenshots\/[a-z0-9-]+\.png$/.test(metadata.image) ||
-    metadata.imageAlt.length > 240 ||
-    metadata.imageCaption.length > 240
-  ) {
-    throw new Error(`${file} has invalid screenshot metadata.`);
-  }
-  return { metadata, body: match[2] };
-}
-
 const docs = await Promise.all(
   sources.map(async (source) => {
     const markdownSource = await readFile(path.join(repositoryRoot, source.file), "utf8");
@@ -291,7 +251,7 @@ const newsFiles = (await readdir(newsDirectory))
 const news = await Promise.all(
   newsFiles.map(async (file) => {
     const source = await readFile(path.join(newsDirectory, file), "utf8");
-    const { metadata, body } = parseFrontmatter(source, file);
+    const { metadata, body } = parseNewsFrontmatter(source, file);
     const text = textOnly(body);
     const articleBody = body.replace(/^# .+\n+/, "");
     const capture = captureByImage.get(metadata.image);
@@ -334,7 +294,7 @@ const newsFeedEntries = await Promise.all(
     publishedDate: post.date,
     lastUpdated: post.lastUpdated,
     tags: post.tags,
-    bodyMarkdown: parseFrontmatter(
+    bodyMarkdown: parseNewsFrontmatter(
       // Re-read from the single canonical source rather than reconstructing Markdown from HTML.
       await readFile(path.join(newsDirectory, post.file), "utf8"),
       post.file,
