@@ -113,6 +113,15 @@ data class MediaBackupLedgerSummary(
         get() = pending + uploading + failed + succeeded
 }
 
+fun MediaBackupLedgerRecord.resolveMediaBackupStatus(): MediaBackupStatus = when {
+    transferState == MediaBackupTransferState.Uploading -> MediaBackupStatus.Uploading
+    transferState == MediaBackupTransferState.Failed -> MediaBackupStatus.Failed
+    local == null -> MediaBackupStatus.CloudOnly
+    receipt == null -> MediaBackupStatus.Pending
+    receipt.matches(local) -> MediaBackupStatus.BackedUp
+    else -> MediaBackupStatus.ChangedAfterBackup
+}
+
 enum class MediaBackupStatus {
     Pending,
     Uploading,
@@ -171,4 +180,7 @@ private fun String.isSafeMediaLedgerText(maxLength: Int): Boolean =
 
 internal const val MAX_MEDIA_BACKUP_LEDGER_RECORDS_PER_ACCOUNT = 25_000
 internal const val MAX_MEDIA_BACKUP_LEDGER_PAGE_SIZE = 200
+const val MAX_MEDIA_BACKUP_STATUS_PATHS = 500
+const val MAX_MEDIA_BACKUP_LEDGER_QUERY_KEYS = 500
+const val MAX_MEDIA_BACKUP_LEDGER_WRITE_BATCH = 500
 private const val MAX_MEDIA_BACKUP_ATTEMPTS = 1_000

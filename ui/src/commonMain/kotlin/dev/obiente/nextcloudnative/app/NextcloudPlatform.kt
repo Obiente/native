@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.Serializable
 
 enum class ThemePreference {
@@ -486,6 +488,21 @@ interface NextcloudPlatformServices {
     )
 
     suspend fun listMedia(session: NextcloudSession, userId: String): List<NextcloudFile>
+
+    /**
+     * Returns locally known backup state for authoritative server paths.
+     *
+     * Missing paths mean this platform has no device-local backup evidence. Callers must not infer
+     * a successful backup from a missing entry.
+     */
+    suspend fun loadMediaBackupStatuses(
+        session: NextcloudSession,
+        userId: String,
+        files: Collection<NextcloudFile>,
+    ): Map<String, MediaBackupStatus> = emptyMap()
+
+    /** Emits after this device changes backup evidence for the active account. */
+    fun observeMediaBackupStatusChanges(session: NextcloudSession): Flow<Unit> = emptyFlow()
 
     /**
      * Resolves stable server file IDs to current authoritative Files records.

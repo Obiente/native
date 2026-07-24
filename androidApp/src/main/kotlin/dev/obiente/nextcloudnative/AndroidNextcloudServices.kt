@@ -39,6 +39,8 @@ import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
 import dev.obiente.nextcloudnative.app.MediaSyncFolderDiscovery
+import dev.obiente.nextcloudnative.app.MAX_MEDIA_BACKUP_STATUS_PATHS
+import dev.obiente.nextcloudnative.app.MediaBackupStatus
 import dev.obiente.nextcloudnative.app.filesByIdDavSearchRequest
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffAction
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffCapability
@@ -105,6 +107,9 @@ import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -467,6 +472,45 @@ internal class AndroidNextcloudServices(
         )
         check(response.status == 207) { "WebDAV media search failed (HTTP ${response.status})." }
         parseDavFiles(response.body, userId).take(80)
+    }
+
+    override suspend fun loadMediaBackupStatuses(
+        session: NextcloudSession,
+        userId: String,
+        files: Collection<NextcloudFile>,
+    ): Map<String, MediaBackupStatus> = withContext(Dispatchers.IO) {
+        val paths = files.asSequence()
+            .filterNot(NextcloudFile::isDirectory)
+            .map { it.path.trim('/') }
+            .filter(String::isNotBlank)
+            .distinct()
+            .toList()
+        if (paths.isEmpty()) return@withContext emptyMap()
+        val store = createAndroidMediaBackupLedgerStore(
+            context = appContext,
+            recoverInterruptedTransfers = false,
+        )
+        try {
+            buildMap {
+                paths.chunked(MAX_MEDIA_BACKUP_STATUS_PATHS).forEach { chunk ->
+                    putAll(
+                        store.statusesForRemotePaths(
+                            accountId = NextcloudDocumentIds.accountKey(session),
+                            remotePaths = chunk,
+                        ),
+                    )
+                }
+            }
+        } finally {
+            store.close()
+        }
+    }
+
+    override fun observeMediaBackupStatusChanges(session: NextcloudSession): Flow<Unit> {
+        val accountId = NextcloudDocumentIds.accountKey(session)
+        return MediaBackupStatusUpdates.changes
+            .filter { changedAccountId -> changedAccountId == accountId }
+            .map { }
     }
 
     override suspend fun listSystemTags(session: NextcloudSession): List<NextcloudSystemTag> =
