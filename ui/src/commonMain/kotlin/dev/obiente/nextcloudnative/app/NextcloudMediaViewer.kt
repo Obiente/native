@@ -5,18 +5,22 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChevronLeft
@@ -60,6 +64,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import kotlinx.coroutines.launch
@@ -308,6 +313,12 @@ fun NextcloudMediaViewer(
         val readyPreview = previewState as? MediaPreviewState.Ready
         val fullQuality = fullQualityState as? FullQualityState.Ready
         val displayImage = fullQuality?.image ?: readyPreview?.image
+        val viewerLayout = remember(sourcePlan.choices.size) {
+            resolveMediaViewerLayout(sourcePlan.choices.size)
+        }
+        val mediaCanvasModifier = when (viewerLayout.contentLayout) {
+            MediaViewerContentLayout.FullCanvasBehindChrome -> Modifier.fillMaxSize()
+        }
         if (editing && displayImage != null) {
             NextcloudPhotoEditor(
                 image = displayImage,
@@ -327,7 +338,7 @@ fun NextcloudMediaViewer(
                 userId = userId,
                 file = selected,
                 onError = { message -> nativeVideoError = message },
-                modifier = Modifier.fillMaxSize().padding(vertical = 76.dp),
+                modifier = mediaCanvasModifier,
             )
         } else when (val state = previewState) {
             MediaPreviewState.Loading -> CircularProgressIndicator(
@@ -338,9 +349,7 @@ fun NextcloudMediaViewer(
             is MediaPreviewState.Ready -> Image(
                 bitmap = displayImage ?: state.image,
                 contentDescription = selected.name,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(vertical = 76.dp)
+                modifier = mediaCanvasModifier
                     .pointerInput(selected.path) {
                         detectTransformGestures { _, pan, gestureZoom, _ ->
                             val nextZoom = (zoom * gestureZoom).coerceIn(1f, 5f)
@@ -485,6 +494,7 @@ fun NextcloudMediaViewer(
                     }
                 },
                 onClose = onClose,
+                layout = viewerLayout,
                 modifier = Modifier.align(Alignment.TopCenter),
             )
 
@@ -585,86 +595,142 @@ private fun ViewerHeader(
     actions: List<MediaViewerAction>,
     onAction: (MediaViewerAction) -> Unit,
     onClose: () -> Unit,
+    layout: MediaViewerLayout,
     modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember(filename) { mutableStateOf(false) }
-    Row(
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .background(Color.Black.copy(alpha = 0.62f))
             .statusBarsPadding()
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp),
     ) {
-        IconButton(
-            onClick = onClose,
-            colors = viewerIconButtonColors(),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(layout.primaryRowHeight),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Icon(
-                imageVector = Icons.Outlined.Close,
-                contentDescription = "Close preview",
-            )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = filename,
-                color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = counter,
-                color = Color.White.copy(alpha = 0.72f),
-                style = MaterialTheme.typography.bodySmall,
-            )
-            if (sourceChoices.size > 1) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    sourceChoices.forEach { choice ->
-                        TextButton(
-                            onClick = { onSelectSource(choice) },
-                            enabled = choice.file.path != selectedSourcePath,
-                        ) {
-                            Text(choice.pickerLabel)
-                        }
+            IconButton(
+                onClick = onClose,
+                colors = viewerIconButtonColors(),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Close,
+                    contentDescription = "Close preview",
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = filename,
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = counter,
+                    color = Color.White.copy(alpha = 0.72f),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            onEdit?.let {
+                IconButton(onClick = it, colors = viewerIconButtonColors()) {
+                    Icon(NextcloudIcons.Edit, contentDescription = "Edit $filename")
+                }
+            }
+            onTags?.let {
+                IconButton(onClick = it, colors = viewerIconButtonColors()) {
+                    Icon(NextcloudIcons.Tag, contentDescription = "Edit tags for $filename")
+                }
+            }
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    colors = viewerIconButtonColors(),
+                ) {
+                    Icon(NextcloudIcons.More, contentDescription = "More actions for $filename")
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    actions.forEach { action ->
+                        DropdownMenuItem(
+                            text = { Text(action.label) },
+                            onClick = {
+                                menuExpanded = false
+                                onAction(action)
+                            },
+                        )
                     }
                 }
             }
         }
-        onEdit?.let {
-            IconButton(onClick = it, colors = viewerIconButtonColors()) {
-                Icon(NextcloudIcons.Edit, contentDescription = "Edit $filename")
-            }
-        }
-        onTags?.let {
-            IconButton(onClick = it, colors = viewerIconButtonColors()) {
-                Icon(NextcloudIcons.Tag, contentDescription = "Edit tags for $filename")
-            }
-        }
-        Box {
-            IconButton(
-                onClick = { menuExpanded = true },
-                colors = viewerIconButtonColors(),
+        if (layout.sourceChoiceLayout == MediaViewerSourceChoiceLayout.SeparateScrollableRow) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(checkNotNull(layout.sourceChoiceRowHeight))
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Icon(NextcloudIcons.More, contentDescription = "More actions for $filename")
-            }
-            DropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false },
-            ) {
-                actions.forEach { action ->
-                    DropdownMenuItem(
-                        text = { Text(action.label) },
-                        onClick = {
-                            menuExpanded = false
-                            onAction(action)
-                        },
-                    )
+                sourceChoices.forEach { choice ->
+                    TextButton(
+                        onClick = { onSelectSource(choice) },
+                        enabled = choice.file.path != selectedSourcePath,
+                        modifier = Modifier.defaultMinSize(minHeight = 48.dp),
+                    ) {
+                        Text(
+                            text = choice.pickerLabel,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+internal enum class MediaViewerContentLayout {
+    FullCanvasBehindChrome,
+}
+
+internal enum class MediaViewerSourceChoiceLayout {
+    Hidden,
+    SeparateScrollableRow,
+}
+
+internal data class MediaViewerLayout(
+    val contentLayout: MediaViewerContentLayout,
+    val sourceChoiceLayout: MediaViewerSourceChoiceLayout,
+    val primaryRowHeight: Dp,
+    val sourceChoiceRowHeight: Dp?,
+) {
+    val chromeContentHeight: Dp
+        get() = primaryRowHeight + (sourceChoiceRowHeight ?: 0.dp)
+}
+
+internal fun resolveMediaViewerLayout(sourceChoiceCount: Int): MediaViewerLayout {
+    require(sourceChoiceCount >= 0) { "Source choice count cannot be negative." }
+    val showsSourceChoices = sourceChoiceCount > 1
+    return MediaViewerLayout(
+        contentLayout = MediaViewerContentLayout.FullCanvasBehindChrome,
+        sourceChoiceLayout = if (showsSourceChoices) {
+            MediaViewerSourceChoiceLayout.SeparateScrollableRow
+        } else {
+            MediaViewerSourceChoiceLayout.Hidden
+        },
+        primaryRowHeight = 56.dp,
+        sourceChoiceRowHeight = if (showsSourceChoices) 48.dp else null,
+    )
 }
 
 @Composable
