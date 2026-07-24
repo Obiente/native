@@ -356,6 +356,7 @@ fun NextcloudNativeMarketingCapture(
                                 onApps = {},
                                 onOpenApp = {},
                                 marketingAvatar = assets.avatar,
+                                accountDisplayName = fixture.displayName,
                             )
                         }
                     }
@@ -948,6 +949,7 @@ private fun MarketingHomeScreen(
     onApps: () -> Unit,
     onOpenApp: (NextcloudAppEntry) -> Unit,
     marketingAvatar: ImageBitmap? = null,
+    accountDisplayName: String? = null,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ProductHeader(
@@ -955,6 +957,7 @@ private fun MarketingHomeScreen(
             onSettings = onSettings,
             onSearch = onSearch,
             accountAvatar = marketingAvatar,
+            accountDisplayName = accountDisplayName,
         )
         when {
             error != null -> ErrorMessage(error, onRetry)
@@ -7624,6 +7627,7 @@ private fun ProductHeader(
     onSearch: (() -> Unit)? = null,
     showSettings: Boolean = true,
     accountAvatar: ImageBitmap? = null,
+    accountDisplayName: String? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = NextcloudSpacing.XLarge),
@@ -7640,7 +7644,7 @@ private fun ProductHeader(
                     if (accountAvatar != null) {
                         Image(
                             bitmap = accountAvatar,
-                            contentDescription = accountAvatarContentDescription(null),
+                            contentDescription = accountAvatarContentDescription(accountDisplayName),
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.size(38.dp).clip(CircleShape),
                         )
