@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +39,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -74,6 +78,9 @@ internal fun FileOfflineCenterScreen(
         mutableStateOf<FileSyncConfiguration?>(null)
     }
     var remoteFolderPickerVisible by remember(session, userId) { mutableStateOf(false) }
+    var pendingMediaPreview by remember(session, userId) { mutableStateOf<MediaSyncFolderPreview?>(null) }
+    var mediaPreviewLoading by remember(session, userId) { mutableStateOf(false) }
+    var mediaPreviewError by remember(session, userId) { mutableStateOf<String?>(null) }
     var removeSyncPair by remember(session, userId) { mutableStateOf<FileSyncPairSummary?>(null) }
     var pendingSyncDecision by remember(session, userId) {
         mutableStateOf<PendingFileSyncDecision?>(null)
@@ -181,6 +188,24 @@ internal fun FileOfflineCenterScreen(
         loading = false
     }
 
+    LaunchedEffect(pendingMediaSuggestion) {
+        val suggestion = pendingMediaSuggestion ?: run {
+            pendingMediaPreview = null
+            mediaPreviewLoading = false
+            mediaPreviewError = null
+            return@LaunchedEffect
+        }
+        mediaPreviewLoading = true
+        mediaPreviewError = null
+        pendingMediaPreview = null
+        runCatching { services.previewMediaSyncFolder(suggestion) }
+            .onSuccess { pendingMediaPreview = it }
+            .onFailure { failure ->
+                mediaPreviewError = failure.message ?: "Could not preview this media folder."
+            }
+        mediaPreviewLoading = false
+    }
+
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         ScreenHeader(
             title = "Sync & offline",
@@ -242,6 +267,8 @@ internal fun FileOfflineCenterScreen(
                         },
                         onOpenMediaSuggestion = { suggestion ->
                             if (syncBusyPairId == null) {
+                                pendingMediaPreview = null
+                                mediaPreviewError = null
                                 pendingMediaSuggestion = suggestion
                                 pendingLocalRoot = suggestion.localRoot
                                 pendingRemotePath = null
@@ -387,6 +414,9 @@ internal fun FileOfflineCenterScreen(
             mediaSuggestion = pendingMediaSuggestion,
             remotePath = requireNotNull(pendingRemotePath),
             configuration = requireNotNull(pendingSyncConfiguration),
+            mediaPreview = pendingMediaPreview,
+            mediaPreviewLoading = mediaPreviewLoading,
+            mediaPreviewError = mediaPreviewError,
             busy = syncBusyPairId == ADD_PAIR_BUSY_ID,
             onDismiss = {
                 if (syncBusyPairId == null) {
@@ -394,6 +424,7 @@ internal fun FileOfflineCenterScreen(
                     pendingMediaSuggestion = null
                     pendingRemotePath = null
                     pendingSyncConfiguration = null
+                    pendingMediaPreview = null
                 }
             },
             onChooseDestination = {
@@ -422,6 +453,7 @@ internal fun FileOfflineCenterScreen(
                             pendingMediaSuggestion = null
                             pendingRemotePath = null
                             pendingSyncConfiguration = null
+                            pendingMediaPreview = null
                             refreshAttempt += 1
                         }
                     }.onFailure { failure ->
@@ -605,6 +637,13 @@ private fun MediaFolderSuggestions(
                         "Future storage cleanup will only remove verified copies after an explicit review.",
                     errorTone = false,
                 )
+                if (discovery.access == MediaSyncFolderAccess.LimitedSelection) {
+                    OfflineCenterMessageCard(
+                        "Android granted partial media access. Counts and previews cover only permitted " +
+                            "photos and videos, not necessarily every item stored in these folders.",
+                        errorTone = true,
+                    )
+                }
                 discovery.suggestions.take(MAX_VISIBLE_MEDIA_FOLDER_SUGGESTIONS).forEach { suggestion ->
                     Surface(
                         modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
@@ -625,6 +664,11 @@ private fun MediaFolderSuggestions(
                                 Text(
                                     "${suggestion.kind.readableMediaFolderKind()} · " +
                                         "${suggestion.imageCount} photos · ${suggestion.videoCount} videos",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    "Estimated size ${formatOfflineBytes(suggestion.totalBytes)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -766,11 +810,171 @@ private fun FolderSyncPairCard(
 }
 
 @Composable
+private fun MediaFolderPreview(
+    suggestion: MediaSyncFolderSuggestion,
+    preview: MediaSyncFolderPreview?,
+    loading: Boolean,
+    error: String?,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = NextcloudTheme.colors.appTile,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Column(
+            modifier = Modifier.padding(NextcloudSpacing.Medium),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            Text("Review what will upload", style = MaterialTheme.typography.labelLarge)
+            when {
+                loading -> {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text(
+                        "Loading a bounded preview…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                error != null -> {
+                    Text(error, color = MaterialTheme.colorScheme.error)
+                    Text(
+                        "Sync cannot be enabled until the folder can be reviewed.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                preview != null -> {
+                    val totalLabel = buildString {
+                        append(preview.totalItems).append(if (preview.totalItems == 1) " item" else " items")
+                        append(" · ").append(formatOfflineBytes(preview.totalBytes))
+                    }
+                    Text(totalLabel, style = MaterialTheme.typography.titleSmall)
+                    preview.message?.let { message ->
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (
+                                preview.access == MediaSyncFolderAccess.LimitedSelection ||
+                                preview.state != MediaSyncFolderPreviewState.Available
+                            ) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
+                    if (preview.access == MediaSyncFolderAccess.LimitedSelection) {
+                        Text(
+                            "Grant full access for this folder’s media types before enabling automatic upload.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (preview.items.isNotEmpty()) {
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            contentPadding = PaddingValues(vertical = NextcloudSpacing.XSmall),
+                        ) {
+                            items(
+                                items = preview.items,
+                                key = MediaSyncFolderPreviewItem::stableId,
+                            ) { item ->
+                                MediaFolderPreviewTile(item)
+                            }
+                        }
+                        if (preview.totalItems > preview.items.size) {
+                            Text(
+                                "Showing ${preview.items.size} recent items. " +
+                                    "${preview.totalItems - preview.items.size} more are included.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    } else if (
+                        preview.state == MediaSyncFolderPreviewState.Available ||
+                        preview.state == MediaSyncFolderPreviewState.Changed
+                    ) {
+                        Text(
+                            "No representative thumbnails are available, but the folder metadata was verified.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                else -> Text(
+                    "${suggestion.imageCount.toLong() + suggestion.videoCount.toLong()} detected items",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaFolderPreviewTile(item: MediaSyncFolderPreviewItem) {
+    Column(
+        modifier = Modifier.size(width = 112.dp, height = 142.dp),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+    ) {
+        val image = remember(item.stableId, item.thumbnailBytes) {
+            item.thumbnailBytes?.let(::decodePlatformImage)
+        }
+        Surface(
+            modifier = Modifier.size(112.dp, 96.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = RoundedCornerShape(NextcloudRadii.Small),
+        ) {
+            if (image != null) {
+                Image(
+                    bitmap = image,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(NextcloudRadii.Small)),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Small),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        if (item.mimeType?.startsWith("video/") == true) "Video" else "Photo",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
+        }
+        Text(
+            item.displayName,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        Text(
+            buildString {
+                append(if (item.mimeType?.startsWith("video/") == true) "Video" else "Photo")
+                item.sizeBytes?.let { append(" · ").append(formatOfflineBytes(it)) }
+            },
+            maxLines = 1,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
 private fun AddFolderSyncDialog(
     localRoot: FileSyncLocalRoot,
     mediaSuggestion: MediaSyncFolderSuggestion?,
     remotePath: String,
     configuration: FileSyncConfiguration,
+    mediaPreview: MediaSyncFolderPreview?,
+    mediaPreviewLoading: Boolean,
+    mediaPreviewError: String?,
     busy: Boolean,
     onDismiss: () -> Unit,
     onChooseDestination: () -> Unit,
@@ -786,6 +990,14 @@ private fun AddFolderSyncDialog(
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
                 Text("Local folder: ${mediaSuggestion?.relativePath ?: localRoot.displayName}")
+                if (mediaSuggestion != null) {
+                    MediaFolderPreview(
+                        suggestion = mediaSuggestion,
+                        preview = mediaPreview,
+                        loading = mediaPreviewLoading,
+                        error = mediaPreviewError,
+                    )
+                }
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     color = NextcloudTheme.colors.appTile,
@@ -859,8 +1071,17 @@ private fun AddFolderSyncDialog(
             }
         },
         confirmButton = {
+            val mediaPreviewReady = mediaSuggestion == null ||
+                (
+                    mediaPreview != null &&
+                        mediaPreview.access == MediaSyncFolderAccess.FullLibrary &&
+                        mediaPreview.state in setOf(
+                            MediaSyncFolderPreviewState.Available,
+                            MediaSyncFolderPreviewState.Changed,
+                        )
+                )
             Button(
-                enabled = !busy && configuration.deviceLabel.isNotBlank(),
+                enabled = !busy && configuration.deviceLabel.isNotBlank() && mediaPreviewReady,
                 onClick = onAdd,
             ) {
                 if (busy) CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)

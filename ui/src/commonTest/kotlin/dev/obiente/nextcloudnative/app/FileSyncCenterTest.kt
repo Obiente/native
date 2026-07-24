@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class FileSyncCenterTest {
     @Test
@@ -20,6 +21,40 @@ class FileSyncCenterTest {
             FileSyncLocalRoot("media-store://primary/DCIM/Camera", "Camera"),
             suggestion.localRoot,
         )
+    }
+
+    @Test
+    fun previewModelBoundsThumbnailPayloadsAndItemCount() {
+        assertFailsWith<IllegalArgumentException> {
+            MediaSyncFolderPreviewItem(
+                stableId = "media:1",
+                displayName = "Photo.jpg",
+                mimeType = "image/jpeg",
+                sizeBytes = 10L,
+                modifiedAtEpochMillis = 1L,
+                thumbnailBytes = ByteArray(MAX_MEDIA_PREVIEW_THUMBNAIL_BYTES + 1),
+            )
+        }
+        val item = MediaSyncFolderPreviewItem(
+            stableId = "media:1",
+            displayName = "Photo.jpg",
+            mimeType = "image/jpeg",
+            sizeBytes = 10L,
+            modifiedAtEpochMillis = 1L,
+            thumbnailBytes = null,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            MediaSyncFolderPreview(
+                localRootHint = "media-store://primary/DCIM/Camera",
+                state = MediaSyncFolderPreviewState.Available,
+                access = MediaSyncFolderAccess.FullLibrary,
+                totalItems = MAX_MEDIA_SYNC_FOLDER_PREVIEW_ITEMS + 1,
+                totalBytes = 100L,
+                items = List(MAX_MEDIA_SYNC_FOLDER_PREVIEW_ITEMS + 1) { index ->
+                    item.copy(stableId = "media:$index")
+                },
+            )
+        }
     }
 
     @Test

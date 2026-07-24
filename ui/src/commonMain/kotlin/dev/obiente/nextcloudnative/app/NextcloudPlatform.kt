@@ -441,6 +441,18 @@ interface NextcloudPlatformServices {
         message = "Automatic media folder discovery is not available on this platform.",
     )
 
+    suspend fun previewMediaSyncFolder(
+        suggestion: MediaSyncFolderSuggestion,
+    ): MediaSyncFolderPreview = MediaSyncFolderPreview(
+        localRootHint = suggestion.localRootHint,
+        state = MediaSyncFolderPreviewState.Inaccessible,
+        access = MediaSyncFolderAccess.LimitedSelection,
+        totalItems = 0,
+        totalBytes = 0L,
+        items = emptyList(),
+        message = "Media folder previews are not available on this platform.",
+    )
+
     suspend fun loadFileSyncCenter(
         session: NextcloudSession,
         userId: String,
