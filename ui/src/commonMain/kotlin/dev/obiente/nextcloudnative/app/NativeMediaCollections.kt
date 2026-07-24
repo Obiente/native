@@ -180,6 +180,8 @@ data class NativeMediaItem(
     val videoDurationSeconds: Int?,
     val isFavorite: Boolean,
     val rawStackFileIds: List<Long> = emptyList(),
+    /** Normalized recognized-face geometry when the active Memories filter supplied one. */
+    val faceRectangle: NativeFaceRectangle? = null,
 ) {
     init {
         require(fileId > 0L) { "The media file ID is invalid." }
@@ -526,6 +528,7 @@ private fun parseMemoriesMediaItem(
         videoDurationSeconds = item.optionalNonNegativeInt("video_duration"),
         isFavorite = item.optionalBoolean("isfavorite") ?: false,
         rawStackFileIds = rawStackIds,
+        faceRectangle = item.faceRectangleOrNull(),
     )
 }
 

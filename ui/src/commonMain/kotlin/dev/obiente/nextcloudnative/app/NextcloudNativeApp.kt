@@ -5557,6 +5557,7 @@ private fun PersonMediaScreen(
     var error by remember(person.id, person.backend) { mutableStateOf<String?>(null) }
     var loadAttempt by remember(person.id, person.backend) { mutableStateOf(0) }
     var actionMenuExpanded by remember(person.id) { mutableStateOf(false) }
+    var showFaceRectangles by rememberSaveable(currentUserId, person.id, person.backend) { mutableStateOf(false) }
     var photoSelectionMode by remember(person.id) { mutableStateOf<PersonPhotoSelectionMode?>(null) }
     var renameDialogVisible by remember(person.id) { mutableStateOf(false) }
     var renameDraft by remember(person.id) { mutableStateOf(person.name) }
@@ -5771,6 +5772,9 @@ private fun PersonMediaScreen(
         hasDirectFaceReferences =
             NextcloudPeopleBackend.fromApiValue(person.backend) == NextcloudPeopleBackend.Recognize,
     )
+    val faceRectanglesAvailable = remember(mediaItems) {
+        mediaItems.orEmpty().any { item -> item.faceOutlineGeometryOrNull() != null }
+    }
 
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         ScreenHeader(
@@ -5793,6 +5797,27 @@ private fun PersonMediaScreen(
                         onDismissRequest = { actionMenuExpanded = false },
                         modifier = Modifier.widthIn(min = 280.dp, max = 360.dp),
                     ) {
+                        if (faceRectanglesAvailable) {
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(if (showFaceRectangles) "Hide face outlines" else "Show face outlines")
+                                        Text(
+                                            "See which recognized face matched each photo",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(NextcloudIcons.People, contentDescription = null)
+                                },
+                                onClick = {
+                                    showFaceRectangles = !showFaceRectangles
+                                    actionMenuExpanded = false
+                                },
+                            )
+                        }
                         menuItems.forEach { item ->
                             DropdownMenuItem(
                                 text = {
@@ -5897,6 +5922,9 @@ private fun PersonMediaScreen(
                             file = file,
                             badge = if (photoSelectionMode != null && selectable) "Choose" else null,
                             backupStatus = mediaBackupStatuses[file.path.trim('/')],
+                            faceRectangle = item.faceRectangle.takeIf { showFaceRectangles },
+                            sourceWidth = item.width,
+                            sourceHeight = item.height,
                             onClick = {
                                 when (photoSelectionMode) {
                                     PersonPhotoSelectionMode.Cover -> if (selectable) {
@@ -6372,10 +6400,16 @@ private fun MediaTile(
     file: NextcloudFile,
     badge: String? = null,
     backupStatus: MediaBackupStatus? = null,
+    faceRectangle: NativeFaceRectangle? = null,
+    sourceWidth: Int? = null,
+    sourceHeight: Int? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
     var image by remember(file.fileId) { mutableStateOf<ImageBitmap?>(null) }
+    val faceOutlineGeometry = remember(faceRectangle, sourceWidth, sourceHeight) {
+        nativeFaceOutlineGeometryOrNull(faceRectangle, sourceWidth, sourceHeight)
+    }
     LaunchedEffect(file.fileId) {
         file.fileId ?: return@LaunchedEffect
         if (!file.hasPreview) return@LaunchedEffect
@@ -6397,7 +6431,13 @@ private fun MediaTile(
                     bitmap = it,
                     contentDescription = file.name,
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
+                    // A face outline must map to the complete source image. Switching to Fit while
+                    // it is visible avoids drawing a plausible-looking box over a cropped preview.
+                    contentScale = if (faceOutlineGeometry == null) ContentScale.Crop else ContentScale.Fit,
+                )
+                FaceRectangleOverlay(
+                    geometry = faceOutlineGeometry,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             } ?: Icon(
                 NextcloudIcons.Image,

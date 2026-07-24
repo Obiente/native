@@ -62,6 +62,10 @@ class PersonMediaPagingTest {
         assertEquals(NativeMediaDayCursor(dayIds[11]), second.nextCursor)
         assertEquals("photo-${dayIds.first()}.jpg", first.items.first().name)
         assertEquals(
+            NativeFaceRectangle(x = 0.2f, y = 0.1f, width = 0.3f, height = 0.4f),
+            first.items.first().faceRectangle,
+        )
+        assertEquals(
             "memories/people/recognize/42/${dayIds.first()}/${dayIds.first()}",
             first.items.first().toPersonMediaFile(person).path,
         )
