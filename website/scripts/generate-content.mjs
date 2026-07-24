@@ -163,10 +163,6 @@ await writeFile(
 );
 
 const searchIndex = docs.map(({ html, ...doc }) => doc);
-await writeFile(
-  path.join(publicDirectory, "search-index.json"),
-  `${JSON.stringify(searchIndex)}\n`,
-);
 
 const githubApiHeaders = {
   Accept: "application/vnd.github+json",
@@ -195,6 +191,15 @@ function projectField(item, name) {
 
 function roadmapItem(item) {
   const issue = item.content;
+  if (
+    item.content_type !== "Issue" ||
+    !issue ||
+    typeof issue.number !== "number" ||
+    typeof issue.title !== "string" ||
+    typeof issue.html_url !== "string"
+  ) {
+    return null;
+  }
   return {
     number: issue.number,
     taskId: projectField(item, "Task ID"),
@@ -248,12 +253,17 @@ try {
   roadmap = {
     source: "github",
     projectUrl,
-    epics: epics.map(roadmapItem),
+    epics: epics.map(roadmapItem).filter(Boolean),
     priorities: priorities
       .map(roadmapItem)
+      .filter(Boolean)
       .filter((item) => !item.taskId?.startsWith("EPIC-"))
-      .sort((left, right) => left.priority.localeCompare(right.priority) || left.taskId.localeCompare(right.taskId)),
-    verification: verification.map(roadmapItem),
+      .sort(
+        (left, right) =>
+          (left.priority ?? "").localeCompare(right.priority ?? "") ||
+          (left.taskId ?? "").localeCompare(right.taskId ?? ""),
+      ),
+    verification: verification.map(roadmapItem).filter(Boolean),
     milestones: milestones.map((milestone) => ({
       number: milestone.number,
       title: milestone.title,

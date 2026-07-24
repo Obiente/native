@@ -15,6 +15,7 @@ const milestoneProgress = (milestone) => {
 };
 
 const epicProgress = (epic) => epic.progress?.percent_completed ?? 0;
+const issueMetadata = (item) => [item.area, item.milestone].filter(Boolean).join(" · ");
 const priorityPreview = computed(() => roadmap.priorities.slice(0, 10));
 const verificationPreview = computed(() => roadmap.verification.slice(0, 6));
 </script>
@@ -39,7 +40,7 @@ const verificationPreview = computed(() => roadmap.verification.slice(0, 6));
     <div class="roadmap-summary" aria-label="Roadmap summary">
       <article>
         <Flag :size="22" weight="duotone" aria-hidden="true" />
-        <strong>{{ roadmap.milestones.length || 6 }}</strong>
+        <strong>{{ roadmap.milestones.length }}</strong>
         <span>release tracks</span>
       </article>
       <article>
@@ -145,7 +146,7 @@ const verificationPreview = computed(() => roadmap.verification.slice(0, 6));
             <span class="roadmap-issue-id">{{ item.taskId }}</span>
             <span>
               <strong>{{ item.title }}</strong>
-              <small>{{ item.area }} · {{ item.milestone }}</small>
+              <small v-if="issueMetadata(item)">{{ issueMetadata(item) }}</small>
             </span>
             <span class="roadmap-priority">{{ item.priority }}</span>
           </a>
