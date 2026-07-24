@@ -69,6 +69,11 @@ internal fun FileOfflineCenterScreen(
     var syncBusyPairId by remember(session, userId) { mutableStateOf<String?>(null) }
     var pendingLocalRoot by remember(session, userId) { mutableStateOf<FileSyncLocalRoot?>(null) }
     var pendingMediaSuggestion by remember(session, userId) { mutableStateOf<MediaSyncFolderSuggestion?>(null) }
+    var pendingRemotePath by remember(session, userId) { mutableStateOf<String?>(null) }
+    var pendingSyncConfiguration by remember(session, userId) {
+        mutableStateOf<FileSyncConfiguration?>(null)
+    }
+    var remoteFolderPickerVisible by remember(session, userId) { mutableStateOf(false) }
     var removeSyncPair by remember(session, userId) { mutableStateOf<FileSyncPairSummary?>(null) }
     var pendingSyncDecision by remember(session, userId) {
         mutableStateOf<PendingFileSyncDecision?>(null)
@@ -223,6 +228,11 @@ internal fun FileOfflineCenterScreen(
                                         .onSuccess { selected ->
                                             pendingMediaSuggestion = null
                                             pendingLocalRoot = selected
+                                            pendingRemotePath = null
+                                            pendingSyncConfiguration = selected?.let {
+                                                defaultFileSyncConfiguration(isMediaSuggestion = false)
+                                            }
+                                            remoteFolderPickerVisible = selected != null
                                         }
                                         .onFailure { failure ->
                                             actionMessage = failure.message ?: "Could not select a local folder."
@@ -234,6 +244,9 @@ internal fun FileOfflineCenterScreen(
                             if (syncBusyPairId == null) {
                                 pendingMediaSuggestion = suggestion
                                 pendingLocalRoot = suggestion.localRoot
+                                pendingRemotePath = null
+                                pendingSyncConfiguration = defaultFileSyncConfiguration(isMediaSuggestion = true)
+                                remoteFolderPickerVisible = true
                             }
                         },
                         onRequestMediaPermission = {
@@ -343,18 +356,51 @@ internal fun FileOfflineCenterScreen(
         )
     }
 
-    pendingLocalRoot?.let { localRoot ->
+    val localRootForDestination = pendingLocalRoot
+    if (remoteFolderPickerVisible && localRootForDestination != null) {
+        RemoteFolderPickerDialog(
+            services = services,
+            session = session,
+            userId = userId,
+            initialPath = pendingRemotePath
+                ?: pendingMediaSuggestion?.suggestedRemoteRootPath.orEmpty(),
+            onDismiss = {
+                remoteFolderPickerVisible = false
+                if (pendingRemotePath == null) {
+                    pendingLocalRoot = null
+                    pendingMediaSuggestion = null
+                    pendingSyncConfiguration = null
+                }
+            },
+            onSelected = { selectedPath ->
+                pendingRemotePath = selectedPath
+                remoteFolderPickerVisible = false
+            },
+        )
+    }
+
+    pendingLocalRoot?.takeIf {
+        !remoteFolderPickerVisible && pendingRemotePath != null && pendingSyncConfiguration != null
+    }?.let { localRoot ->
         AddFolderSyncDialog(
             localRoot = localRoot,
             mediaSuggestion = pendingMediaSuggestion,
+            remotePath = requireNotNull(pendingRemotePath),
+            configuration = requireNotNull(pendingSyncConfiguration),
             busy = syncBusyPairId == ADD_PAIR_BUSY_ID,
             onDismiss = {
                 if (syncBusyPairId == null) {
                     pendingLocalRoot = null
                     pendingMediaSuggestion = null
+                    pendingRemotePath = null
+                    pendingSyncConfiguration = null
                 }
             },
-            onAdd = { remotePath, configuration ->
+            onChooseDestination = {
+                if (syncBusyPairId == null) remoteFolderPickerVisible = true
+            },
+            onConfigurationChanged = { pendingSyncConfiguration = it },
+            onAdd = {
                 if (syncBusyPairId != null) return@AddFolderSyncDialog
                 syncBusyPairId = ADD_PAIR_BUSY_ID
                 actionMessage = null
@@ -364,14 +410,18 @@ internal fun FileOfflineCenterScreen(
                             session,
                             userId,
                             localRoot,
-                            remotePath,
-                            configuration,
+                            requireNotNull(pendingRemotePath),
+                            requireNotNull(pendingSyncConfiguration).let { configuration ->
+                                configuration.copy(deviceLabel = configuration.deviceLabel.trim())
+                            },
                         )
                     }.onSuccess { result ->
                         actionMessage = result.fileSyncCenterMessage()
                         if (result is FileSyncCenterActionResult.Completed) {
                             pendingLocalRoot = null
                             pendingMediaSuggestion = null
+                            pendingRemotePath = null
+                            pendingSyncConfiguration = null
                             refreshAttempt += 1
                         }
                     }.onFailure { failure ->
@@ -719,23 +769,14 @@ private fun FolderSyncPairCard(
 private fun AddFolderSyncDialog(
     localRoot: FileSyncLocalRoot,
     mediaSuggestion: MediaSyncFolderSuggestion?,
+    remotePath: String,
+    configuration: FileSyncConfiguration,
     busy: Boolean,
     onDismiss: () -> Unit,
-    onAdd: (String, FileSyncConfiguration) -> Unit,
+    onChooseDestination: () -> Unit,
+    onConfigurationChanged: (FileSyncConfiguration) -> Unit,
+    onAdd: () -> Unit,
 ) {
-    var remotePath by remember(localRoot, mediaSuggestion) {
-        mutableStateOf(mediaSuggestion?.suggestedRemoteRootPath.orEmpty())
-    }
-    var direction by remember(localRoot, mediaSuggestion) {
-        mutableStateOf(
-            if (mediaSuggestion == null) FileSyncDirection.Bidirectional else FileSyncDirection.UploadOnly,
-        )
-    }
-    var conflictPolicy by remember(localRoot) { mutableStateOf(FileSyncConflictPolicy.Ask) }
-    var deletionPolicy by remember(localRoot) { mutableStateOf(FileSyncDeletionPolicy.Ask) }
-    var networkPolicy by remember(localRoot) { mutableStateOf(FileSyncNetworkPolicy.AnyConnection) }
-    var powerPolicy by remember(localRoot) { mutableStateOf(FileSyncPowerPolicy.BatteryNotLow) }
-    var deviceLabel by remember(localRoot) { mutableStateOf("mobile") }
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         title = { Text("Add folder sync") },
@@ -745,57 +786,72 @@ private fun AddFolderSyncDialog(
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
                 Text("Local folder: ${mediaSuggestion?.relativePath ?: localRoot.displayName}")
-                OutlinedTextField(
-                    value = remotePath,
-                    onValueChange = { remotePath = it },
+                Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Nextcloud folder path") },
-                    supportingText = { Text("For example Notes/Obsidian. Leave empty for the Files root.") },
-                    singleLine = true,
-                )
+                    color = NextcloudTheme.colors.appTile,
+                    shape = RoundedCornerShape(NextcloudRadii.Small),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(NextcloudSpacing.Medium),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        Text("Nextcloud destination", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            if (remotePath.isEmpty()) "Files root" else "/$remotePath",
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        OutlinedButton(enabled = !busy, onClick = onChooseDestination) {
+                            Text("Choose another folder")
+                        }
+                    }
+                }
                 Text("Direction", style = MaterialTheme.typography.labelLarge)
                 FileSyncDirection.entries.forEach { option ->
                     FilterChip(
-                        selected = direction == option,
-                        onClick = { direction = option },
+                        selected = configuration.direction == option,
+                        onClick = { onConfigurationChanged(configuration.copy(direction = option)) },
                         label = { Text(option.readableSyncDirection()) },
                     )
                 }
                 Text("When both copies changed", style = MaterialTheme.typography.labelLarge)
                 FileSyncConflictPolicy.entries.forEach { option ->
                     FilterChip(
-                        selected = conflictPolicy == option,
-                        onClick = { conflictPolicy = option },
+                        selected = configuration.conflictPolicy == option,
+                        onClick = { onConfigurationChanged(configuration.copy(conflictPolicy = option)) },
                         label = { Text(option.readableConflictPolicy()) },
                     )
                 }
                 Text("When a file was deleted", style = MaterialTheme.typography.labelLarge)
                 FileSyncDeletionPolicy.entries.forEach { option ->
                     FilterChip(
-                        selected = deletionPolicy == option,
-                        onClick = { deletionPolicy = option },
+                        selected = configuration.deletionPolicy == option,
+                        onClick = { onConfigurationChanged(configuration.copy(deletionPolicy = option)) },
                         label = { Text(option.readableDeletionPolicy()) },
                     )
                 }
                 Text("Connection", style = MaterialTheme.typography.labelLarge)
                 FileSyncNetworkPolicy.entries.forEach { option ->
                     FilterChip(
-                        selected = networkPolicy == option,
-                        onClick = { networkPolicy = option },
+                        selected = configuration.networkPolicy == option,
+                        onClick = { onConfigurationChanged(configuration.copy(networkPolicy = option)) },
                         label = { Text(option.readableNetworkPolicy()) },
                     )
                 }
                 Text("Power", style = MaterialTheme.typography.labelLarge)
                 FileSyncPowerPolicy.entries.forEach { option ->
                     FilterChip(
-                        selected = powerPolicy == option,
-                        onClick = { powerPolicy = option },
+                        selected = configuration.powerPolicy == option,
+                        onClick = { onConfigurationChanged(configuration.copy(powerPolicy = option)) },
                         label = { Text(option.readablePowerPolicy()) },
                     )
                 }
                 OutlinedTextField(
-                    value = deviceLabel,
-                    onValueChange = { deviceLabel = it.take(128) },
+                    value = configuration.deviceLabel,
+                    onValueChange = {
+                        onConfigurationChanged(configuration.copy(deviceLabel = it.take(128)))
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Device label for conflict copies") },
                     singleLine = true,
@@ -804,20 +860,8 @@ private fun AddFolderSyncDialog(
         },
         confirmButton = {
             Button(
-                enabled = !busy && deviceLabel.isNotBlank(),
-                onClick = {
-                    onAdd(
-                        remotePath,
-                        FileSyncConfiguration(
-                            direction = direction,
-                            conflictPolicy = conflictPolicy,
-                            deletionPolicy = deletionPolicy,
-                            deviceLabel = deviceLabel.trim(),
-                            networkPolicy = networkPolicy,
-                            powerPolicy = powerPolicy,
-                        ),
-                    )
-                },
+                enabled = !busy && configuration.deviceLabel.isNotBlank(),
+                onClick = onAdd,
             ) {
                 if (busy) CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                 else Text("Add sync")
@@ -828,6 +872,16 @@ private fun AddFolderSyncDialog(
         },
     )
 }
+
+private fun defaultFileSyncConfiguration(isMediaSuggestion: Boolean): FileSyncConfiguration =
+    FileSyncConfiguration(
+        direction = if (isMediaSuggestion) FileSyncDirection.UploadOnly else FileSyncDirection.Bidirectional,
+        conflictPolicy = FileSyncConflictPolicy.Ask,
+        deletionPolicy = FileSyncDeletionPolicy.Ask,
+        deviceLabel = "mobile",
+        networkPolicy = FileSyncNetworkPolicy.AnyConnection,
+        powerPolicy = FileSyncPowerPolicy.BatteryNotLow,
+    )
 
 @Composable
 private fun OfflineCenterSummaryCard(
