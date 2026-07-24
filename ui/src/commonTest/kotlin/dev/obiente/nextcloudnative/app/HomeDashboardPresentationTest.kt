@@ -8,6 +8,12 @@ import kotlin.test.assertTrue
 
 class HomeDashboardPresentationTest {
     @Test
+    fun `home refresh accessibility label follows the visible title`() {
+        assertEquals("Refresh Home", dashboardRefreshDescription("Home"))
+        assertEquals("Refresh User Status", dashboardRefreshDescription("User Status"))
+    }
+
+    @Test
     fun `root home renders the customizable workspace instead of the legacy launcher`() {
         assertEquals(
             RootDestinationContent.HomeWorkspace,

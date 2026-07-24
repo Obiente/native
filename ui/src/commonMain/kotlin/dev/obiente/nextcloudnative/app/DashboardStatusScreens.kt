@@ -303,7 +303,7 @@ private fun DashboardHeader(
             }
         }
         IconButton(onClick = onRefresh) {
-            Icon(NextcloudIcons.Refresh, contentDescription = "Refresh dashboard")
+            Icon(NextcloudIcons.Refresh, contentDescription = dashboardRefreshDescription(title))
         }
         if (onSettings != null) {
             IconButton(onClick = onSettings) {
@@ -313,6 +313,8 @@ private fun DashboardHeader(
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
+
+internal fun dashboardRefreshDescription(title: String): String = "Refresh $title"
 
 @Composable
 private fun CurrentStatusStrip(
