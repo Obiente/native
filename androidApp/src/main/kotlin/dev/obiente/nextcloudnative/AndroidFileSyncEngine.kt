@@ -71,8 +71,8 @@ internal class AndroidFileSyncEngine(context: Context) {
         remoteRootPath: String,
         configuration: FileSyncConfiguration,
     ): FileSyncCenterActionResult = synchronized(ENGINE_LOCK) {
-        // Constructing the adapter verifies that the durable read/write grant still exists.
-        AndroidFileSyncLocalTree(appContext.contentResolver, localRoot.localRootId)
+        // Constructing the adapter verifies that its persisted SAF grant or detected media root is usable.
+        createAndroidFileSyncLocalTree(appContext.contentResolver, localRoot.localRootId)
         val normalizedRemote = normalizeRemoteRoot(remoteRootPath)
         val accountId = NextcloudDocumentIds.accountKey(session)
         val current = store.load()
@@ -132,7 +132,10 @@ internal class AndroidFileSyncEngine(context: Context) {
                     localDisplayNames = current.localDisplayNames - pairId,
                 ),
             )
-            if (remaining.pairs.none { it.localRootId == pair.localRootId }) {
+            if (
+                pair.localRootId.startsWith("content://") &&
+                remaining.pairs.none { it.localRootId == pair.localRootId }
+            ) {
                 runCatching {
                     appContext.contentResolver.releasePersistableUriPermission(
                         Uri.parse(pair.localRootId),
@@ -166,7 +169,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             .asSequence()
             .filter { it.kind == SyncEntryKind.File && it.contentHash != null }
             .mapTo(mutableSetOf()) { it.relativePath }
-        val local = AndroidFileSyncLocalTree(
+        val local = createAndroidFileSyncLocalTree(
             appContext.contentResolver,
             initialPair.localRootId,
             contentHashPaths,

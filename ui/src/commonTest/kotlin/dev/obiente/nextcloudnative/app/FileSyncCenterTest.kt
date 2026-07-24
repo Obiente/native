@@ -5,6 +5,24 @@ import kotlin.test.assertEquals
 
 class FileSyncCenterTest {
     @Test
+    fun `media suggestion exposes its detected root directly`() {
+        val suggestion = MediaSyncFolderSuggestion(
+            localRootHint = "media-store://primary/DCIM/Camera",
+            displayName = "Camera",
+            relativePath = "DCIM/Camera",
+            kind = MediaSyncFolderKind.Camera,
+            imageCount = 4,
+            videoCount = 1,
+            suggestedRemoteRootPath = "Photos/Camera",
+        )
+
+        assertEquals(
+            FileSyncLocalRoot("media-store://primary/DCIM/Camera", "Camera"),
+            suggestion.localRoot,
+        )
+    }
+
+    @Test
     fun `summary exposes actionable work counts without leaking the root grant`() {
         val pair = FileSyncPair(
             id = "pair",
