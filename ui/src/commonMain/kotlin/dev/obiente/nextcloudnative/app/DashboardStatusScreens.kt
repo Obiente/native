@@ -56,7 +56,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
-private sealed interface DashboardSurfaceState {
+internal sealed interface DashboardSurfaceState {
     data object Loading : DashboardSurfaceState
     data class Available(
         val snapshot: NativeDashboardSnapshot,
@@ -72,11 +72,151 @@ internal fun NativeDashboardScreen(
     installedApps: List<NextcloudAppEntry>,
     onOpenApp: (NextcloudAppEntry) -> Unit,
     onOpenStatus: (() -> Unit)?,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
+    onSearch: (() -> Unit)? = null,
+    onSettings: (() -> Unit)? = null,
 ) {
-    var state by remember(session) { mutableStateOf<DashboardSurfaceState>(DashboardSurfaceState.Loading) }
     var refreshAttempt by remember(session) { mutableStateOf(0) }
+    var customizeWorkspace by remember(session) { mutableStateOf(false) }
+    var workspacePersistenceError by remember(session) { mutableStateOf<String?>(null) }
+    val state = rememberNativeDashboardState(
+        services = services,
+        session = session,
+        refreshAttempt = refreshAttempt,
+    )
+    val formFactor = rememberHomeFormFactor()
+    val workspaceStorage = rememberHomeWorkspaceLayoutStorage()
+    val workspaceRepository = remember(workspaceStorage) {
+        HomeWorkspaceLayoutRepository(workspaceStorage)
+    }
+    val workspaceScope = remember(session.serverUrl, session.loginName, formFactor) {
+        HomeWorkspaceScope(
+            accountScopeDigest = previewCacheDigest(session),
+            formFactor = formFactor,
+        )
+    }
+    var workspaceLayout by remember(workspaceScope) {
+        mutableStateOf(workspaceRepository.load(workspaceScope))
+    }
 
+    Column(modifier = Modifier.fillMaxSize()) {
+        DashboardHeader(
+            title = "Home",
+            subtitle = "Your cloud at a glance",
+            onBack = onBack,
+            onRefresh = { refreshAttempt += 1 },
+            onCustomize = { customizeWorkspace = true },
+            onSearch = onSearch,
+            onSettings = onSettings,
+        )
+        when (val current = state) {
+            DashboardSurfaceState.Loading -> DashboardLoading()
+            is DashboardSurfaceState.Failed -> DashboardFailure(
+                message = current.message,
+                onRetry = { refreshAttempt += 1 },
+            )
+            is DashboardSurfaceState.Available -> {
+                val bindings = remember(current.snapshot.widgets) {
+                    homeDashboardWidgetBindings(current.snapshot.widgets)
+                }
+                val availableSectionIds = remember(bindings) {
+                    buildList {
+                        add(HomeSectionIds.QuickActions)
+                        bindings.forEach { binding ->
+                            if (size < MAX_HOME_WORKSPACE_SECTIONS) add(binding.sectionId)
+                        }
+                    }
+                }
+                val effectiveLayout = remember(workspaceLayout, availableSectionIds) {
+                    workspaceLayout.reconcileAvailableSections(availableSectionIds)
+                }
+                LaunchedEffect(effectiveLayout) {
+                    if (effectiveLayout != workspaceLayout) {
+                        workspaceLayout = effectiveLayout
+                        workspaceRepository.save(effectiveLayout)
+                    }
+                }
+                val bindingsBySection = remember(bindings) {
+                    bindings.associateBy(HomeDashboardWidgetBinding::sectionId)
+                }
+                current.status?.let { status ->
+                    CurrentStatusStrip(status = status, onClick = onOpenStatus)
+                }
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(330.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(NextcloudSpacing.XLarge),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+                ) {
+                    items(
+                        effectiveLayout.visibleSections,
+                        key = { section -> section.id.value },
+                    ) { section ->
+                        when (section.id) {
+                            HomeSectionIds.QuickActions -> DashboardQuickActionsCard(
+                                installedApps = installedApps,
+                                onOpenApp = onOpenApp,
+                            )
+
+                            else -> bindingsBySection[section.id]?.let { binding ->
+                                DashboardWidgetCard(
+                                    widget = binding.widget,
+                                    items = current.snapshot.itemsByWidget[binding.widget.id].orEmpty(),
+                                    size = section.size,
+                                    onOpenLink = { link ->
+                                        val appId = dashboardAppIdForLink(session, link)
+                                        val nativeApp = installedApps.firstOrNull { it.id == appId }
+                                        if (nativeApp != null) {
+                                            onOpenApp(nativeApp)
+                                        } else {
+                                            services.openExternalUrl(dashboardBrowserUrl(session, link))
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (customizeWorkspace) {
+                    HomeWorkspaceCustomizerDialog(
+                        layout = effectiveLayout,
+                        sectionLabels = buildMap {
+                            put(HomeSectionIds.QuickActions, "Quick actions")
+                            bindings.forEach { put(it.sectionId, it.widget.title) }
+                        },
+                        persistenceError = workspacePersistenceError,
+                        onDismiss = {
+                            customizeWorkspace = false
+                            workspacePersistenceError = null
+                        },
+                        onSave = { updated ->
+                            workspaceLayout = updated
+                            if (workspaceRepository.save(updated)) {
+                                customizeWorkspace = false
+                                workspacePersistenceError = null
+                            } else {
+                                workspacePersistenceError =
+                                    "Your changes are active, but could not be saved on this device."
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun rememberNativeDashboardState(
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+    refreshAttempt: Int,
+): DashboardSurfaceState {
+    var state by remember(session) {
+        mutableStateOf<DashboardSurfaceState>(DashboardSurfaceState.Loading)
+    }
     LaunchedEffect(session, refreshAttempt) {
         val now = currentDashboardEpochSeconds()
         sharedDashboardStatusMemoryCache.get(session, now)?.let { cached ->
@@ -119,58 +259,18 @@ internal fun NativeDashboardScreen(
             }
         }
     }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        DashboardHeader(
-            title = "Dashboard",
-            subtitle = "Your cloud at a glance",
-            onBack = onBack,
-            onRefresh = { refreshAttempt += 1 },
-        )
-        when (val current = state) {
-            DashboardSurfaceState.Loading -> DashboardLoading()
-            is DashboardSurfaceState.Failed -> DashboardFailure(
-                message = current.message,
-                onRetry = { refreshAttempt += 1 },
-            )
-            is DashboardSurfaceState.Available -> {
-                current.status?.let { status ->
-                    CurrentStatusStrip(status = status, onClick = onOpenStatus)
-                }
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(330.dp),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(NextcloudSpacing.XLarge),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                ) {
-                    items(current.snapshot.widgets, key = NativeDashboardWidget::id) { widget ->
-                        DashboardWidgetCard(
-                            widget = widget,
-                            items = current.snapshot.itemsByWidget[widget.id].orEmpty(),
-                            onOpenLink = { link ->
-                                val appId = dashboardAppIdForLink(session, link)
-                                val nativeApp = installedApps.firstOrNull { it.id == appId }
-                                if (nativeApp != null) {
-                                    onOpenApp(nativeApp)
-                                } else {
-                                    services.openExternalUrl(dashboardBrowserUrl(session, link))
-                                }
-                            },
-                        )
-                    }
-                }
-            }
-        }
-    }
+    return state
 }
 
 @Composable
 private fun DashboardHeader(
     title: String,
     subtitle: String,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
     onRefresh: () -> Unit,
+    onCustomize: (() -> Unit)? = null,
+    onSearch: (() -> Unit)? = null,
+    onSettings: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(
@@ -179,8 +279,10 @@ private fun DashboardHeader(
         ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onBack) {
-            Icon(NextcloudIcons.Back, contentDescription = "Back")
+        if (onBack != null) {
+            IconButton(onClick = onBack) {
+                Icon(NextcloudIcons.Back, contentDescription = "Back")
+            }
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.headlineSmall)
@@ -190,12 +292,29 @@ private fun DashboardHeader(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        if (onCustomize != null) {
+            IconButton(onClick = onCustomize) {
+                Icon(NextcloudIcons.Edit, contentDescription = "Customize home")
+            }
+        }
+        if (onSearch != null) {
+            IconButton(onClick = onSearch) {
+                Icon(NextcloudIcons.Search, contentDescription = "Search Nextcloud")
+            }
+        }
         IconButton(onClick = onRefresh) {
-            Icon(NextcloudIcons.Refresh, contentDescription = "Refresh dashboard")
+            Icon(NextcloudIcons.Refresh, contentDescription = dashboardRefreshDescription(title))
+        }
+        if (onSettings != null) {
+            IconButton(onClick = onSettings) {
+                Icon(NextcloudIcons.Settings, contentDescription = "Settings")
+            }
         }
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
+
+internal fun dashboardRefreshDescription(title: String): String = "Refresh $title"
 
 @Composable
 private fun CurrentStatusStrip(
@@ -242,16 +361,196 @@ private fun CurrentStatusStrip(
     }
 }
 
+internal data class HomeDashboardWidgetBinding(
+    val sectionId: HomeSectionId,
+    val widget: NativeDashboardWidget,
+)
+
+internal fun homeDashboardWidgetBindings(
+    widgets: List<NativeDashboardWidget>,
+): List<HomeDashboardWidgetBinding> {
+    val occupied = mutableSetOf<HomeSectionId>()
+    return widgets.map { widget ->
+        val sectionId = widget.availableHomeSectionId(occupied)
+        occupied += sectionId
+        HomeDashboardWidgetBinding(sectionId = sectionId, widget = widget)
+    }
+}
+
+@Composable
+private fun DashboardQuickActionsCard(
+    installedApps: List<NextcloudAppEntry>,
+    onOpenApp: (NextcloudAppEntry) -> Unit,
+) {
+    val quickApps = remember(installedApps) {
+        installedApps
+            .filter { it.id in DASHBOARD_QUICK_ACTION_APP_IDS }
+            .sortedBy { DASHBOARD_QUICK_ACTION_APP_IDS.indexOf(it.id) }
+            .take(MAX_DASHBOARD_QUICK_ACTIONS)
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 112.dp),
+        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large)) {
+            Text(
+                "Quick actions",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (quickApps.isEmpty()) {
+                Text(
+                    "Your shortcuts will appear as native apps become available.",
+                    modifier = Modifier.padding(top = NextcloudSpacing.Medium),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                ) {
+                    items(quickApps, key = NextcloudAppEntry::id) { app ->
+                        FilterChip(
+                            selected = false,
+                            onClick = { onOpenApp(app) },
+                            label = { Text(app.name, maxLines = 1) },
+                            leadingIcon = {
+                                Icon(
+                                    NextcloudIcons.app(app.id),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeWorkspaceCustomizerDialog(
+    layout: HomeWorkspaceLayout,
+    sectionLabels: Map<HomeSectionId, String>,
+    persistenceError: String?,
+    onDismiss: () -> Unit,
+    onSave: (HomeWorkspaceLayout) -> Unit,
+) {
+    var draft by remember(layout) { mutableStateOf(layout) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Customize home") },
+        text = {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 540.dp),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            ) {
+                persistenceError?.let { message ->
+                    item {
+                        Text(message, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                items(draft.sections, key = { section -> section.id.value }) { section ->
+                    val index = draft.sections.indexOfFirst { it.id == section.id }
+                    Surface(
+                        color = NextcloudTheme.colors.appTile,
+                        shape = RoundedCornerShape(NextcloudRadii.Card),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    sectionLabels[section.id] ?: "Dashboard section",
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                TextButton(
+                                    enabled = index > 0,
+                                    onClick = { draft = draft.move(section.id, index - 1) },
+                                ) {
+                                    Text("Up")
+                                }
+                                TextButton(
+                                    enabled = index < draft.sections.lastIndex,
+                                    onClick = { draft = draft.move(section.id, index + 1) },
+                                ) {
+                                    Text("Down")
+                                }
+                            }
+                            FilterChip(
+                                selected = section.visible,
+                                onClick = {
+                                    draft = if (section.visible) {
+                                        draft.hide(section.id)
+                                    } else {
+                                        draft.show(section.id)
+                                    }
+                                },
+                                label = { Text(if (section.visible) "Shown" else "Hidden") },
+                            )
+                            LazyRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            ) {
+                                items(HomeSectionSize.entries) { size ->
+                                    FilterChip(
+                                        selected = section.size == size,
+                                        onClick = { draft = draft.resize(section.id, size) },
+                                        label = { Text(size.name) },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(
+                    onClick = {
+                        draft = draft.restoreDefaults()
+                            .reconcileAvailableSections(layout.sections.map(HomeWorkspaceSection::id))
+                    },
+                ) {
+                    Text("Restore defaults")
+                }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onSave(draft) }) { Text("Save") }
+        },
+    )
+}
+
 @Composable
 private fun DashboardWidgetCard(
     widget: NativeDashboardWidget,
     items: List<NativeDashboardItem>,
+    size: HomeSectionSize,
     onOpenLink: (String) -> Unit,
 ) {
     var expanded by remember(widget.id) { mutableStateOf(false) }
-    val visibleItems = if (expanded) items else items.take(DASHBOARD_COLLAPSED_ITEM_COUNT)
+    val collapsedItemCount = dashboardCollapsedItemCount(size)
+    val visibleItems = if (expanded) items else items.take(collapsedItemCount)
     Card(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(
+            min = when (size) {
+                HomeSectionSize.Compact -> 112.dp
+                HomeSectionSize.Comfortable -> 150.dp
+                HomeSectionSize.Dense -> 180.dp
+            },
+        ),
         colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
         shape = RoundedCornerShape(NextcloudRadii.Card),
     ) {
@@ -297,13 +596,13 @@ private fun DashboardWidgetCard(
                     }
                     DashboardItemRow(item = item, onOpenLink = onOpenLink)
                 }
-                if (items.size > DASHBOARD_COLLAPSED_ITEM_COUNT) {
+                if (items.size > collapsedItemCount) {
                     TextButton(onClick = { expanded = !expanded }) {
                         Text(
                             if (expanded) {
                                 "Show less"
                             } else {
-                                "Show ${items.size - DASHBOARD_COLLAPSED_ITEM_COUNT} more"
+                                "Show ${items.size - collapsedItemCount} more"
                             },
                         )
                     }
@@ -323,6 +622,62 @@ private fun DashboardWidgetCard(
             }
         }
     }
+}
+
+internal fun dashboardCollapsedItemCount(size: HomeSectionSize): Int = when (size) {
+    HomeSectionSize.Compact -> 2
+    HomeSectionSize.Comfortable -> 4
+    HomeSectionSize.Dense -> 8
+}
+
+private fun NativeDashboardWidget.preferredHomeSectionId(): HomeSectionId = when (id.lowercase()) {
+    "activity" -> HomeSectionIds.Activity
+    "calendar", "upcoming" -> HomeSectionIds.Upcoming
+    "recommendations", "recent-files", "recent_files", "recentfiles" -> HomeSectionIds.RecentFiles
+    "photos", "memories", "photo-backup", "photo_backup" -> HomeSectionIds.PhotoBackup
+    "favorites", "favourites" -> HomeSectionIds.Favorites
+    "quota", "storage", "storage-quota", "storage_quota" -> HomeSectionIds.Storage
+    else -> dynamicHomeSectionId()
+}
+
+private fun NativeDashboardWidget.availableHomeSectionId(
+    occupied: Set<HomeSectionId>,
+): HomeSectionId {
+    val preferred = preferredHomeSectionId()
+    if (preferred !in occupied) return preferred
+    repeat(MAX_HOME_WORKSPACE_SECTIONS) { disambiguation ->
+        val candidate = dynamicHomeSectionId(disambiguation)
+        if (candidate !in occupied) return candidate
+    }
+    error("The dashboard has no available bounded section ID.")
+}
+
+private fun NativeDashboardWidget.dynamicHomeSectionId(
+    disambiguation: Int = 0,
+): HomeSectionId {
+    val readable = id.lowercase()
+        .map { character ->
+            if (
+                character in 'a'..'z' ||
+                character in '0'..'9' ||
+                character == '-' ||
+                character == '_' ||
+                character == '.'
+            ) {
+                character
+            } else {
+                '-'
+            }
+        }
+        .joinToString("")
+        .trim('-')
+        .take(MAX_DASHBOARD_SECTION_READABLE_ID_LENGTH)
+        .ifEmpty { "widget" }
+    val hashSource = if (disambiguation == 0) id else "$id#$disambiguation"
+    val hash = hashSource.encodeToByteArray().fold(FNV_OFFSET_BASIS) { current, byte ->
+        (current xor byte.toUByte().toUInt()) * FNV_PRIME
+    }
+    return HomeSectionId("dashboard:$readable:${hash.toString(16).padStart(8, '0')}")
 }
 
 @Composable
@@ -785,4 +1140,16 @@ private fun StatusExpiryChoice.expiryEpochSeconds(): Long? =
 
 private fun currentDashboardEpochSeconds(): Long = Clock.System.now().epochSeconds
 
-private const val DASHBOARD_COLLAPSED_ITEM_COUNT = 8
+private val DASHBOARD_QUICK_ACTION_APP_IDS = listOf(
+    "files",
+    "photos",
+    "memories",
+    "notes",
+    "calendar",
+    "spreed",
+    "talk",
+)
+private const val MAX_DASHBOARD_QUICK_ACTIONS = 6
+private const val MAX_DASHBOARD_SECTION_READABLE_ID_LENGTH = 48
+private const val FNV_OFFSET_BASIS: UInt = 2_166_136_261u
+private const val FNV_PRIME: UInt = 16_777_619u

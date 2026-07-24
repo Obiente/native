@@ -189,6 +189,22 @@ private sealed interface Screen {
     data class TextEditor(val file: NextcloudFile, val parentPath: String) : Screen
 }
 
+internal enum class RootDestinationContent {
+    HomeWorkspace,
+    Apps,
+    Activity,
+    Settings,
+}
+
+internal fun rootDestinationContent(
+    destination: NextcloudDestination,
+): RootDestinationContent = when (destination) {
+    NextcloudDestination.Home -> RootDestinationContent.HomeWorkspace
+    NextcloudDestination.Apps -> RootDestinationContent.Apps
+    NextcloudDestination.Activity -> RootDestinationContent.Activity
+    NextcloudDestination.Settings -> RootDestinationContent.Settings
+}
+
 private val navigationStateJson = Json {
     ignoreUnknownKeys = true
     encodeDefaults = true
@@ -382,7 +398,6 @@ private fun AuthenticatedApp(
         session.loginName,
         stateSaver = enumSaver<NextcloudDestination>(),
     ) { mutableStateOf(NextcloudDestination.Home) }
-    var lastOpenedAppId by remember { mutableStateOf(services.loadLastOpenedAppId()) }
     var serverInfo by remember(session) { mutableStateOf<NextcloudServerInfo?>(null) }
     val cachedAppDiscoveries = remember(session) { mutableStateMapOf<String, DynamicDescriptorDiscovery>() }
     var discoveryError by remember(session) { mutableStateOf<String?>(null) }
@@ -402,14 +417,16 @@ private fun AuthenticatedApp(
 
     fun openApp(app: NextcloudAppEntry, from: NextcloudDestination) {
         returnDestination = from
-        lastOpenedAppId = app.id
         services.saveLastOpenedAppId(app.id)
         screen = when (app.id) {
             "files" -> Screen.Files("")
             "photos", "memories" -> Screen.Media
             "spreed", "talk" -> Screen.Talk
             "notes" -> Screen.Notes
-            "dashboard" -> Screen.Dashboard
+            "dashboard" -> {
+                destination = NextcloudDestination.Home
+                Screen.Root
+            }
             "user_status" -> Screen.UserStatus
             "calendar" -> Screen.Calendar
             "contacts" -> Screen.Contacts
@@ -482,18 +499,22 @@ private fun AuthenticatedApp(
     }
     val screenContent: @Composable () -> Unit = {
         when (val current = screen) {
-            Screen.Root -> when (destination) {
-                NextcloudDestination.Home -> HomeScreen(
-                    serverInfo = serverInfo,
-                    error = discoveryError,
-                    lastOpenedAppId = lastOpenedAppId,
-                    onRetry = { discoveryAttempt += 1 },
-                    onSettings = { destination = NextcloudDestination.Settings },
-                    onSearch = ::openSearch,
-                    onApps = { destination = NextcloudDestination.Apps },
+            Screen.Root -> when (rootDestinationContent(destination)) {
+                RootDestinationContent.HomeWorkspace -> NativeDashboardScreen(
+                    services = services,
+                    session = session,
+                    installedApps = serverInfo?.apps.orEmpty(),
                     onOpenApp = { openApp(it, NextcloudDestination.Home) },
+                    onOpenStatus = serverInfo?.apps
+                        ?.firstOrNull { it.id == "user_status" }
+                        ?.let { statusApp ->
+                            { openApp(statusApp, NextcloudDestination.Home) }
+                        },
+                    onBack = null,
+                    onSearch = ::openSearch,
+                    onSettings = { destination = NextcloudDestination.Settings },
                 )
-                NextcloudDestination.Apps -> AppsScreen(
+                RootDestinationContent.Apps -> AppsScreen(
                     serverInfo = serverInfo,
                     error = discoveryError,
                     onRetry = { discoveryAttempt += 1 },
@@ -501,7 +522,7 @@ private fun AuthenticatedApp(
                     onSearch = ::openSearch,
                     onOpenApp = { openApp(it, NextcloudDestination.Apps) },
                 )
-                NextcloudDestination.Activity -> ActivityScreen(
+                RootDestinationContent.Activity -> ActivityScreen(
                     services = services,
                     session = session,
                     activityInstalled = serverInfo?.apps?.any { it.id == "activity" } == true,
@@ -509,7 +530,7 @@ private fun AuthenticatedApp(
                     onApps = { destination = NextcloudDestination.Apps },
                     onOpenApp = { app -> openApp(app, NextcloudDestination.Activity) },
                 )
-                NextcloudDestination.Settings -> SettingsScreen(
+                RootDestinationContent.Settings -> SettingsScreen(
                     services = services,
                     session = session,
                     serverInfo = serverInfo,
@@ -835,204 +856,6 @@ private fun RootShell(
 }
 
 @Composable
-private fun HomeScreen(
-    serverInfo: NextcloudServerInfo?,
-    error: String?,
-    lastOpenedAppId: String,
-    onRetry: () -> Unit,
-    onSettings: () -> Unit,
-    onSearch: () -> Unit,
-    onApps: () -> Unit,
-    onOpenApp: (NextcloudAppEntry) -> Unit,
-) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        ProductHeader(title = "Nextcloud Native", onSettings = onSettings, onSearch = onSearch)
-        when {
-            error != null -> ErrorMessage(error, onRetry)
-            serverInfo == null -> LoadingMessage("Discovering your cloud…")
-            else -> {
-                val apps = serverInfo.apps
-                val files = apps.firstOrNull { it.id == "files" }
-                val media = apps.firstOrNull { it.id == "photos" || it.id == "memories" }
-                val talk = apps.firstOrNull { it.id == "spreed" || it.id == "talk" }
-                val lastOpened = apps.firstOrNull { it.id == lastOpenedAppId && it.id in nativeAppIds } ?: files
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(
-                        start = NextcloudSpacing.XLarge,
-                        top = NextcloudSpacing.XLarge,
-                        end = NextcloudSpacing.XLarge,
-                        bottom = NextcloudSpacing.XXLarge,
-                    ),
-                ) {
-                    item {
-                        Text(
-                            "Welcome back, ${serverInfo.displayName.substringBefore(' ')}",
-                            style = MaterialTheme.typography.displaySmall,
-                        )
-                        Row(
-                            modifier = Modifier.padding(top = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        ) {
-                            Icon(
-                                NextcloudIcons.CheckCircle,
-                                contentDescription = null,
-                                tint = NextcloudTheme.colors.success,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Text(
-                                "Connected to ${serverInfo.themeName ?: "Nextcloud"}",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    lastOpened?.let { app ->
-                        item {
-                            SectionTitle("Continue", Modifier.padding(top = 34.dp, bottom = 12.dp))
-                            ContinueCard(app = app, onClick = { onOpenApp(app) })
-                        }
-                    }
-                    item { SectionTitle("Your cloud", Modifier.padding(top = 32.dp, bottom = 8.dp)) }
-                    files?.let { app ->
-                        item {
-                            CloudRow(
-                                title = "My stuff",
-                                subtitle = "Files, photos and notes",
-                                icon = NextcloudIcons.Folder,
-                                onClick = { onOpenApp(app) },
-                            )
-                        }
-                    }
-                    media?.let { app ->
-                        item {
-                            CloudRow(
-                                title = "Photos & Memories",
-                                subtitle = "Albums and RAW previews",
-                                icon = NextcloudIcons.Photo,
-                                onClick = { onOpenApp(app) },
-                            )
-                        }
-                    }
-                    talk?.let { app ->
-                        item {
-                            CloudRow(
-                                title = "Conversations",
-                                subtitle = "Talk and messages",
-                                icon = NextcloudIcons.app(app.id),
-                                onClick = { onOpenApp(app) },
-                            )
-                        }
-                    }
-                    item {
-                        SectionTitle("Discover", Modifier.padding(top = 32.dp, bottom = 8.dp))
-                        TimelineRow(
-                            title = "Your native apps are ready",
-                            subtitle = "${apps.count { it.id in nativeAppIds }} connected experiences",
-                            icon = NextcloudIcons.CheckCircle,
-                            accent = true,
-                            onClick = onApps,
-                        )
-                        TimelineRow(
-                            title = "Explore every installed app",
-                            subtitle = "Discovery stays separate from your home",
-                            icon = NextcloudIcons.Apps,
-                            accent = false,
-                            onClick = onApps,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ContinueCard(app: NextcloudAppEntry, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp),
-        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-        ) {
-            Surface(color = NextcloudTheme.colors.appIconContainer, shape = RoundedCornerShape(12.dp)) {
-                Icon(
-                    NextcloudIcons.app(app.id),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(10.dp).size(28.dp),
-                )
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(app.name, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    nativeSubtitle(app.id),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Icon(NextcloudIcons.ChevronRight, contentDescription = "Open ${app.name}")
-        }
-    }
-}
-
-@Composable
-private fun CloudRow(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-    ) {
-        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(36.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Icon(NextcloudIcons.ChevronRight, contentDescription = "Open $title", modifier = Modifier.size(20.dp))
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-}
-
-@Composable
-private fun TimelineRow(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    accent: Boolean,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-    ) {
-        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = if (accent) NextcloudTheme.colors.success else MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(11.dp).size(24.dp),
-            )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Icon(NextcloudIcons.ChevronRight, contentDescription = "Open $title", modifier = Modifier.size(20.dp))
-    }
-}
-
-@Composable
 private fun AppsScreen(
     serverInfo: NextcloudServerInfo?,
     error: String?,
@@ -1048,7 +871,10 @@ private fun AppsScreen(
             error != null -> ErrorMessage(error, onRetry)
             serverInfo == null -> LoadingMessage("Loading installed apps…")
             else -> {
-                val apps = serverInfo.apps.filter { search.isBlank() || it.name.contains(search, ignoreCase = true) }
+                val apps = serverInfo.apps.filter { app ->
+                    app.id != "dashboard" &&
+                        (search.isBlank() || app.name.contains(search, ignoreCase = true))
+                }
                 OutlinedTextField(
                     value = search,
                     onValueChange = { search = it },
