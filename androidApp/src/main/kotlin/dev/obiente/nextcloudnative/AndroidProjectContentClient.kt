@@ -400,7 +400,7 @@ internal class AndroidProjectContentClient(
     @Suppress("DEPRECATION")
     private fun PackageInfo.signingCertificateDigests(): Set<String> {
         val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val info = requireNotNull(signingInfo)
+            val info = requireSigningCertificateInfo(signingInfo, packageName)
             if (info.hasMultipleSigners()) info.apkContentsSigners else info.signingCertificateHistory
         } else {
             signatures.orEmpty()
@@ -459,6 +459,15 @@ internal data class AndroidSdkRequirements(
     val minSdk: Int,
     val maxSdk: Int?,
 )
+
+internal fun <T : Any> requireSigningCertificateInfo(
+    signingInfo: T?,
+    packageIdentity: String?,
+): T = requireNotNull(signingInfo) {
+    val identity = packageIdentity?.takeIf(String::isNotBlank) ?: "the update package"
+    "Android could not read signing certificate information for $identity. " +
+        "Download the update again and retry. If this continues, reinstall from a trusted release."
+}
 
 internal fun androidSdkCompatibilityFailure(
     minSdk: Int,

@@ -211,4 +211,18 @@ class AndroidProjectContentClientTest {
             androidSdkCompatibilityFailure(minSdk = 35, maxSdk = 34, deviceSdk = 34)
         }
     }
+
+    @Test
+    fun missingSigningInformationExplainsHowToRecover() {
+        val failure = assertFailsWith<IllegalArgumentException> {
+            requireSigningCertificateInfo<Any>(
+                signingInfo = null,
+                packageIdentity = "dev.example.fixture",
+            )
+        }
+
+        assertContains(failure.message.orEmpty(), "could not read signing certificate information")
+        assertContains(failure.message.orEmpty(), "Download the update again and retry")
+        assertContains(failure.message.orEmpty(), "trusted release")
+    }
 }
