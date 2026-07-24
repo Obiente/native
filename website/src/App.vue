@@ -96,18 +96,18 @@ const searchResults = computed(() => {
 const capabilities = [
   {
     icon: SquaresFour,
-    title: "Adaptive by design",
-    body: "It reads app contracts, data shapes and actions, then composes a useful native experience.",
+    title: "Your apps in one place",
+    body: "Open Files, Photos, Talk, notes, calendars, boards, and more without learning a different interface each time.",
   },
   {
     icon: Sparkle,
-    title: "Native where it matters",
-    body: "Files, photos, messages, tables and media use reusable platform components, not embedded pages.",
+    title: "Made for your device",
+    body: "Preview and edit files, browse photos, reply to messages, and work offline in interfaces built for phone and desktop.",
   },
   {
     icon: ShieldCheck,
-    title: "Your server stays yours",
-    body: "Credentials and learned app knowledge stay local. There is no Obiente cloud in the middle.",
+    title: "Your cloud stays yours",
+    body: "The app connects directly to your Nextcloud. There is no Obiente account, subscription, or cloud service in the middle.",
   },
 ];
 
@@ -150,20 +150,20 @@ const adaptiveSteps = [
   {
     icon: GitBranch,
     step: "01",
-    title: "Discover the contract",
-    body: "Capabilities, OpenAPI, app metadata and observed safe reads describe what the server can actually do.",
+    title: "See what your server offers",
+    body: "The app checks the features and apps your own Nextcloud safely makes available.",
   },
   {
     icon: Stack,
     step: "02",
-    title: "Compile the semantics",
-    body: "Resources, fields, relations and actions become a typed platform-neutral native schema.",
+    title: "Understand the information",
+    body: "Dates, people, files, rows, messages, and actions are recognized from verified data.",
   },
   {
     icon: Desktop,
     step: "03",
-    title: "Compose the experience",
-    body: "Reusable native components choose the right list, gallery, editor, table, conversation or dashboard.",
+    title: "Choose the right native view",
+    body: "The result becomes a useful gallery, editor, table, conversation, calendar, board, or dashboard.",
   },
 ];
 
@@ -172,6 +172,16 @@ const frequentlyAsked = [
     question: "Is this a web wrapper?",
     answer:
       "No. Nextcloud Native consumes server APIs and renders native Compose interfaces. Web content is reserved for formats that genuinely require a document renderer, not app navigation.",
+  },
+  {
+    question: "Can I sync an Obsidian notes folder with Nextcloud?",
+    answer:
+      "That is a core goal. The planned experience pairs a normal Android folder with a Nextcloud folder, supports two-way sync, keeps notes visible to Obsidian, and asks before resolving conflicts. The foundations are under development and are not release-ready yet.",
+  },
+  {
+    question: "Can it back up photos and safely free phone storage?",
+    answer:
+      "That is also a core goal. The app will distinguish waiting, uploading, verified, changed, failed, and cloud-only photos. Storage cleanup will only be offered for an exact version verified on the server, followed by Android's own confirmation.",
   },
   {
     question: "Does every Nextcloud app work already?",
@@ -281,9 +291,9 @@ const frequentlyAsked = [
             </p>
             <h1>Your cloud.<br /><span>One native experience.</span></h1>
             <p class="hero-lede">
-              Nextcloud Native is one adaptive client for your whole Nextcloud.
-              It turns app data and actions into interfaces that feel built for
-              your phone and desktop.
+              Back up phone photos, sync files and notes, chat in Talk, and use
+              more of your Nextcloud apps from one consistent client for phone
+              and desktop.
             </p>
             <div class="hero-actions">
               <a class="button button-primary" :href="githubUrl" target="_blank" rel="noreferrer">
@@ -302,11 +312,11 @@ const frequentlyAsked = [
 
         <section id="approach" class="approach section-width">
           <div class="section-heading">
-            <p class="eyebrow">A different kind of client</p>
-            <h2>Native does not have to mean narrow.</h2>
+            <p class="eyebrow">One app for everyday Nextcloud</p>
+            <h2>Spend less time jumping between apps.</h2>
             <p>
-              Custom experiences stay possible, but shared semantics do the heavy lifting.
-              New apps can inherit the right patterns without waiting for a one-off rewrite.
+              Your photos, files, messages, notes, calendars, and other apps should
+              share familiar navigation, previews, search, editing, and offline behavior.
             </p>
           </div>
 
@@ -324,11 +334,12 @@ const frequentlyAsked = [
         <section class="adaptive-section">
           <div class="section-width adaptive-layout">
             <div class="section-heading compact">
-              <p class="eyebrow">From unknown API to useful UI</p>
-              <h2>The interface is compiled, not guessed.</h2>
+              <p class="eyebrow">How unfamiliar apps can still feel native</p>
+              <h2>The right screen for the information in front of you.</h2>
               <p>
-                Deterministic discovery comes first. Semantic inference can improve the
-                result, but it may never invent an endpoint, payload or permission.
+                A less common Nextcloud app should not fall back to a technical data
+                dump. Verified information can become a useful native screen without
+                the app guessing permissions or unsafe actions.
               </p>
               <a class="text-link" href="/architecture/">
                 Read the architecture
@@ -354,11 +365,11 @@ const frequentlyAsked = [
         <section id="apps" class="apps-section">
           <div class="section-width apps-layout">
             <div class="section-heading compact">
-              <p class="eyebrow">One coherent workspace</p>
-              <h2>Apps should feel connected.</h2>
+              <p class="eyebrow">Files, Talk, Photos, and more</p>
+              <h2>Your work should follow you across apps.</h2>
               <p>
-                Shared search, previews, people, files and actions can move through the
-                whole client instead of stopping at app boundaries.
+                Open a file shared in Talk with the same preview and actions as Files.
+                Find a person, note, photo, or calendar item from one search.
               </p>
               <a class="text-link" href="/compatibility/">
                 See the compatibility work
@@ -377,11 +388,11 @@ const frequentlyAsked = [
 
         <section id="platforms" class="platform-section section-width">
           <div class="section-heading">
-            <p class="eyebrow">One core, platform-native edges</p>
-            <h2>Designed beyond a single screen.</h2>
+            <p class="eyebrow">Phone and desktop</p>
+            <h2>At home on every device you use.</h2>
             <p>
-              The shared runtime keeps behavior consistent. Each operating system still
-              owns credentials, files, background work, notifications and calls.
+              Behavior stays familiar while Android, iOS, Windows, macOS, and Linux
+              keep control of their own files, notifications, background work, and calls.
             </p>
           </div>
 
@@ -465,8 +476,8 @@ const frequentlyAsked = [
         <section class="news-section section-width">
           <div class="news-heading">
             <div class="section-heading compact">
-              <p class="eyebrow">Development notes</p>
-              <h2>Follow the decisions behind the client.</h2>
+              <p class="eyebrow">What we are building</p>
+              <h2>Plain-language progress, with the details when you want them.</h2>
             </div>
             <a class="text-link" href="/news/">All project news <ArrowRight :size="18" weight="bold" /></a>
           </div>
@@ -529,8 +540,8 @@ const frequentlyAsked = [
       <section v-else-if="isNewsIndex" class="news-index section-width">
         <header class="doc-heading">
           <p class="eyebrow">Nextcloud Native news</p>
-          <h1>Building in the open.</h1>
-          <p>Engineering notes, product decisions, and honest progress from the independent open-source client.</p>
+          <h1>What is getting better, and why it matters.</h1>
+          <p>Start with the everyday benefit, then dig into the technical decisions if you want the detail.</p>
         </header>
         <div class="news-grid news-index-grid">
           <a v-for="post in news" :key="post.path" class="news-card" :href="post.path">

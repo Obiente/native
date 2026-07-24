@@ -43,7 +43,7 @@ function metadataFor(path) {
     return {
       title: "Project news · Nextcloud Native",
       description:
-        "Engineering notes, product decisions, and progress updates from the independent open-source Nextcloud Native client.",
+        "See how Nextcloud Native is improving phone photo backup, Files, Talk, Photos, notes sync, offline access, and safe storage cleanup.",
       canonical: `${siteUrl}/news/`,
       type: "website",
     };
@@ -61,7 +61,7 @@ function metadataFor(path) {
   return {
     title: "Nextcloud Native · Obiente",
     description:
-      "An independent, adaptive native client for your entire Nextcloud. Explore the architecture, compatibility work and open-source roadmap.",
+      "Back up phone photos, sync files and Obsidian notes, use Talk, Photos, Files, and more Nextcloud apps in one native phone and desktop client.",
     canonical: `${siteUrl}/`,
     type: "website",
   };
