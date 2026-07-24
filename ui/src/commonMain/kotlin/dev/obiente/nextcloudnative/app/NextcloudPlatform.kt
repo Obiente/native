@@ -300,6 +300,30 @@ data class NextcloudPerson(
 )
 
 interface NextcloudPlatformServices {
+    /** Loads public project news from the fixed Obiente feed, with a bounded platform cache. */
+    suspend fun loadProjectNews(forceRefresh: Boolean = false): ProjectNewsResult =
+        error("Project news is unavailable on this platform.")
+
+    /** Describes who owns app updates. Store-owned installs must remain with their store. */
+    fun appUpdateSupport(): AppUpdateSupport = AppUpdateSupport(
+        channel = AppDistributionChannel.Unsupported,
+        currentVersionName = "Unknown",
+        currentVersionCode = 0,
+        canCheckDirectUpdates = false,
+        explanation = "In-app update checks are unavailable on this platform.",
+    )
+
+    suspend fun checkForAppUpdate(): AppUpdateCheckResult =
+        AppUpdateCheckResult.Unavailable(appUpdateSupport())
+
+    /**
+     * Downloads and verifies one direct-APK release before opening the platform confirmation flow.
+     *
+     * Implementations may never silently install or invoke this for store-owned installs.
+     */
+    suspend fun beginAppUpdate(release: AndroidDirectRelease): AppUpdateInstallResult =
+        AppUpdateInstallResult.Rejected("Direct app updates are unavailable on this platform.")
+
     /** True only when this platform has durable app-private offline file storage and execution. */
     val supportsFileOfflineStorage: Boolean get() = false
 

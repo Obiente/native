@@ -2,6 +2,7 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import MarkdownIt from "markdown-it";
 import markdownItAnchor from "markdown-it-anchor";
 
@@ -213,6 +214,34 @@ if (new Set(news.map((post) => post.path)).size !== news.length) {
 await writeFile(
   path.join(generatedDirectory, "news.js"),
   `// Generated from fixture-safe repository news. Do not edit.\nexport const news = ${JSON.stringify(news, null, 2)};\n`,
+);
+const newsFeedEntries = await Promise.all(
+  news.map(async (post) => ({
+    id: post.path.slice("/news/".length, -1),
+    title: post.title,
+    description: post.description,
+    publishedDate: post.date,
+    tags: post.tags,
+    bodyMarkdown: parseFrontmatter(
+      // Re-read from the single canonical source rather than reconstructing Markdown from HTML.
+      await readFile(path.join(newsDirectory, post.file), "utf8"),
+      post.file,
+    ).body.replace(/^# .+\n+/, ""),
+    webUrl: `https://nc-native.obiente.dev${post.path}`,
+  })),
+);
+const revisionSource = JSON.stringify(newsFeedEntries);
+const newsFeed = {
+  schemaVersion: 1,
+  feedRevision: createHash("sha256").update(revisionSource).digest("hex"),
+  entries: newsFeedEntries.map((entry) => ({
+    ...entry,
+    contentSha256: createHash("sha256").update(entry.bodyMarkdown).digest("hex"),
+  })),
+};
+await writeFile(
+  path.join(publicDirectory, "news-feed-v1.json"),
+  `${JSON.stringify(newsFeed, null, 2)}\n`,
 );
 
 const searchIndex = [

@@ -3,4 +3,7 @@
     <cache-path
         name="external_share_files"
         path="external-share/" />
+    <cache-path
+        name="verified_app_updates"
+        path="app-updates/" />
 </paths>

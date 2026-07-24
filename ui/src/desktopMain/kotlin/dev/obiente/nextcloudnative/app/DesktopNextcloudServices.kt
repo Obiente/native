@@ -274,6 +274,10 @@ class DesktopNextcloudServices(
     )
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
     private val externalFileHandoff = DesktopExternalFileHandoff()
+    private val projectNewsCache = File(
+        desktopContractCacheDirectory("responses").parentFile,
+        "project-content/news-feed-v1.json",
+    )
 
     override val externalFileHandoffSupport: ExternalFileHandoffSupport = ExternalFileHandoffSupport.Available(
         ExternalFileHandoffCapability(
@@ -290,6 +294,44 @@ class DesktopNextcloudServices(
         preferences.put(KEY_THEME, preference.name)
         onThemePreferenceChanged(preference)
     }
+
+    override suspend fun loadProjectNews(forceRefresh: Boolean): ProjectNewsResult =
+        withContext(Dispatchers.IO) {
+            val cached = runCatching {
+                projectNewsCache
+                    .takeIf { it.isFile && it.length() <= MAX_PROJECT_NEWS_FEED_BYTES }
+                    ?.readBytes()
+                    ?.let(::parseProjectNewsFeed)
+            }.getOrNull()
+            val cacheAge = System.currentTimeMillis() - projectNewsCache.lastModified()
+            if (!forceRefresh && cached != null && cacheAge in 0..6 * 60 * 60 * 1_000L) {
+                return@withContext ProjectNewsResult(cached, cached = true)
+            }
+            runCatching {
+                noRedirectHttpClient.newCall(
+                    Request.Builder().url(PROJECT_NEWS_FEED_URL).get().build(),
+                ).execute().use { response ->
+                    check(response.isSuccessful) {
+                        "Project news request failed (HTTP ${response.code})."
+                    }
+                    val body = requireNotNull(response.body)
+                    check(body.contentLength() in -1..MAX_PROJECT_NEWS_FEED_BYTES.toLong())
+                    val bytes = body.byteStream().readBounded(MAX_PROJECT_NEWS_FEED_BYTES.toLong())
+                    val feed = parseProjectNewsFeed(bytes)
+                    projectNewsCache.parentFile.mkdirs()
+                    val temporary = File(projectNewsCache.parentFile, "${projectNewsCache.name}.part")
+                    temporary.writeBytes(bytes)
+                    check(temporary.renameTo(projectNewsCache))
+                    ProjectNewsResult(feed, cached = false)
+                }
+            }.getOrElse { failure ->
+                cached?.let { ProjectNewsResult(it, cached = true) }
+                    ?: throw IllegalStateException(
+                        failure.message ?: "Could not load project news.",
+                        failure,
+                    )
+            }
+        }
 
     override fun loadLastOpenedAppId(): String = preferences.get(KEY_LAST_OPENED_APP, "files")
 
