@@ -19,7 +19,11 @@ import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Base64
+import java.util.concurrent.TimeUnit
 import java.util.prefs.Preferences
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.coroutines.Dispatchers
@@ -255,6 +259,40 @@ private fun desktopContractCacheDirectory(name: String): File {
     return File(cacheRoot, "nextcloud-native/contracts/$name")
 }
 
+internal const val DESKTOP_PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS = 10L
+internal const val DESKTOP_PROJECT_CONTENT_READ_TIMEOUT_SECONDS = 30L
+internal const val DESKTOP_PROJECT_CONTENT_WRITE_TIMEOUT_SECONDS = 30L
+internal const val DESKTOP_PROJECT_CONTENT_CALL_TIMEOUT_SECONDS = 10L * 60L
+
+internal fun buildDesktopProjectContentHttpClient(): OkHttpClient =
+    OkHttpClient.Builder()
+        .connectTimeout(DESKTOP_PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(DESKTOP_PROJECT_CONTENT_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .writeTimeout(DESKTOP_PROJECT_CONTENT_WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .callTimeout(DESKTOP_PROJECT_CONTENT_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+
+internal fun publishDesktopProjectContentCache(temporary: File, destination: File) {
+    require(temporary.isFile)
+    destination.parentFile?.mkdirs()
+    try {
+        Files.move(
+            temporary.toPath(),
+            destination.toPath(),
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING,
+        )
+    } catch (_: AtomicMoveNotSupportedException) {
+        Files.move(
+            temporary.toPath(),
+            destination.toPath(),
+            StandardCopyOption.REPLACE_EXISTING,
+        )
+    }
+}
+
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
 ) : NextcloudPlatformServices {
@@ -264,6 +302,7 @@ class DesktopNextcloudServices(
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
+    private val projectContentHttpClient = buildDesktopProjectContentHttpClient()
     private val contractAcquirer = SignedAppStoreContractAcquirer(
         catalogCache = FileAppStoreCatalogCache(desktopContractCacheDirectory("catalogs")),
         verifiedContractCache = FileVerifiedContractCache(desktopContractCacheDirectory("verified")),
@@ -278,6 +317,7 @@ class DesktopNextcloudServices(
         desktopContractCacheDirectory("responses").parentFile,
         "project-content/news-feed-v1.json",
     )
+    private val projectNewsImageDirectory = File(projectNewsCache.parentFile, "news-images")
 
     override val externalFileHandoffSupport: ExternalFileHandoffSupport = ExternalFileHandoffSupport.Available(
         ExternalFileHandoffCapability(
@@ -308,7 +348,7 @@ class DesktopNextcloudServices(
                 return@withContext ProjectNewsResult(cached, cached = true)
             }
             runCatching {
-                noRedirectHttpClient.newCall(
+                projectContentHttpClient.newCall(
                     Request.Builder().url(PROJECT_NEWS_FEED_URL).get().build(),
                 ).execute().use { response ->
                     check(response.isSuccessful) {
@@ -321,7 +361,7 @@ class DesktopNextcloudServices(
                     projectNewsCache.parentFile.mkdirs()
                     val temporary = File(projectNewsCache.parentFile, "${projectNewsCache.name}.part")
                     temporary.writeBytes(bytes)
-                    check(temporary.renameTo(projectNewsCache))
+                    publishDesktopProjectContentCache(temporary, projectNewsCache)
                     ProjectNewsResult(feed, cached = false)
                 }
             }.getOrElse { failure ->
@@ -331,6 +371,33 @@ class DesktopNextcloudServices(
                         failure,
                     )
             }
+        }
+
+    override suspend fun loadProjectNewsImage(image: ProjectNewsImage): ByteArray =
+        withContext(Dispatchers.IO) {
+            require(isCanonicalProjectNewsImageUrl(image.url))
+            val cached = File(projectNewsImageDirectory, "${image.sha256}.png")
+            if (cached.isFile && cached.length() <= MAX_PROJECT_NEWS_IMAGE_BYTES) {
+                cached.readBytes().takeIf { publicContentSha256(it) == image.sha256 }
+                    ?.let { return@withContext it }
+            }
+            projectContentHttpClient.newCall(Request.Builder().url(image.url).get().build())
+                .execute().use { response ->
+                    check(response.isSuccessful) {
+                        "Project news image request failed (HTTP ${response.code})."
+                    }
+                    val body = requireNotNull(response.body)
+                    check(body.contentLength() in -1..MAX_PROJECT_NEWS_IMAGE_BYTES.toLong())
+                    val bytes = body.byteStream().readBounded(MAX_PROJECT_NEWS_IMAGE_BYTES.toLong())
+                    check(publicContentSha256(bytes) == image.sha256) {
+                        "Project news image verification failed."
+                    }
+                    projectNewsImageDirectory.mkdirs()
+                    val temporary = File(projectNewsImageDirectory, "${image.sha256}.part")
+                    temporary.writeBytes(bytes)
+                    publishDesktopProjectContentCache(temporary, cached)
+                    bytes
+                }
         }
 
     override fun loadLastOpenedAppId(): String = preferences.get(KEY_LAST_OPENED_APP, "files")

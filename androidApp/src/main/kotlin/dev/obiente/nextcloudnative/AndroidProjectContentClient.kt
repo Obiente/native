@@ -9,7 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
-import dev.obiente.nextcloudnative.app.ANDROID_DIRECT_UPDATE_METADATA_URL
+import dev.obiente.nextcloudnative.app.ANDROID_PRERELEASE_DISCOVERY_URL
 import dev.obiente.nextcloudnative.app.AndroidDirectRelease
 import dev.obiente.nextcloudnative.app.AppDistributionChannel
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
@@ -17,11 +17,17 @@ import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallState
 import dev.obiente.nextcloudnative.app.AppUpdateSupport
 import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_APK_BYTES
+import dev.obiente.nextcloudnative.app.MAX_ANDROID_RELEASE_DISCOVERY_BYTES
 import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_METADATA_BYTES
 import dev.obiente.nextcloudnative.app.MAX_PROJECT_NEWS_FEED_BYTES
+import dev.obiente.nextcloudnative.app.MAX_PROJECT_NEWS_IMAGE_BYTES
 import dev.obiente.nextcloudnative.app.PROJECT_NEWS_FEED_URL
 import dev.obiente.nextcloudnative.app.ProjectNewsResult
+import dev.obiente.nextcloudnative.app.ProjectNewsImage
 import dev.obiente.nextcloudnative.app.isNewerAndroidRelease
+import dev.obiente.nextcloudnative.app.isCanonicalAndroidPrereleaseManifestUrl
+import dev.obiente.nextcloudnative.app.isCanonicalProjectNewsImageUrl
+import dev.obiente.nextcloudnative.app.parseAndroidPrereleaseManifestUrl
 import dev.obiente.nextcloudnative.app.parseAndroidDirectRelease
 import dev.obiente.nextcloudnative.app.parseProjectNewsFeed
 import dev.obiente.nextcloudnative.app.validateAndroidDirectRelease
@@ -40,6 +46,8 @@ import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 internal const val PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS = 10L
 internal const val PROJECT_CONTENT_READ_TIMEOUT_SECONDS = 30L
@@ -64,6 +72,7 @@ internal class AndroidProjectContentClient(
     private val preferences = appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     private val client = buildProjectContentHttpClient()
     private val newsCache = File(appContext.cacheDir, "project-content/news-feed-v1.json")
+    private val newsImageDirectory = File(appContext.cacheDir, "project-content/news-images")
     private val updateDirectory = File(appContext.cacheDir, "app-updates")
     private val updateMutex = Mutex()
     private val mutableUpdateState = MutableStateFlow<AppUpdateInstallState>(AppUpdateInstallState.Idle)
@@ -143,15 +152,35 @@ internal class AndroidProjectContentClient(
         }
     }
 
+    fun loadNewsImage(image: ProjectNewsImage): ByteArray {
+        require(isCanonicalProjectNewsImageUrl(image.url))
+        val cached = File(newsImageDirectory, "${image.sha256}.png")
+        if (cached.isFile && cached.length() <= MAX_PROJECT_NEWS_IMAGE_BYTES) {
+            cached.readBytes().takeIf { publicContent ->
+                publicContent.sha256() == image.sha256
+            }?.let { return it }
+        }
+        val bytes = getBounded(image.url, MAX_PROJECT_NEWS_IMAGE_BYTES.toLong())
+        check(bytes.sha256() == image.sha256) { "Project news image verification failed." }
+        newsImageDirectory.mkdirs()
+        val temporary = File(newsImageDirectory, "${image.sha256}.part")
+        temporary.writeBytes(bytes)
+        if (cached.exists()) check(cached.delete())
+        check(temporary.renameTo(cached)) { "Could not cache the project news image." }
+        return bytes
+    }
+
     fun checkForUpdate(): AppUpdateCheckResult {
         val support = support()
         if (!support.canCheckDirectUpdates) return AppUpdateCheckResult.Unavailable(support)
         return runCatching {
             val bytes = getBounded(
-                ANDROID_DIRECT_UPDATE_METADATA_URL,
-                MAX_ANDROID_UPDATE_METADATA_BYTES.toLong(),
+                ANDROID_PRERELEASE_DISCOVERY_URL,
+                MAX_ANDROID_RELEASE_DISCOVERY_BYTES.toLong(),
             )
-            val release = parseAndroidDirectRelease(bytes)
+            val metadataUrl = parseAndroidPrereleaseManifestUrl(bytes)
+            val metadata = getBounded(metadataUrl, MAX_ANDROID_UPDATE_METADATA_BYTES.toLong())
+            val release = parseAndroidDirectRelease(metadata, metadataUrl)
             if (isNewerAndroidRelease(support.currentVersionCode, release)) {
                 AppUpdateCheckResult.Available(support, release)
             } else {
@@ -332,8 +361,19 @@ internal class AndroidProjectContentClient(
     }.getOrNull()
 
     private fun getBounded(url: String, maximumBytes: Long): ByteArray {
-        require(url == PROJECT_NEWS_FEED_URL || url == ANDROID_DIRECT_UPDATE_METADATA_URL)
-        client.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
+        require(
+            url == PROJECT_NEWS_FEED_URL ||
+                url == ANDROID_PRERELEASE_DISCOVERY_URL ||
+                isCanonicalAndroidPrereleaseManifestUrl(url) ||
+                isCanonicalProjectNewsImageUrl(url),
+        )
+        val request = Request.Builder().url(url).get().apply {
+            if (url == ANDROID_PRERELEASE_DISCOVERY_URL) {
+                header("Accept", "application/vnd.github+json")
+                header("X-GitHub-Api-Version", "2022-11-28")
+            }
+        }.build()
+        executeWithTrustedGitHubReleaseRedirect(client, request).use { response ->
             check(response.isSuccessful) { "Public content request failed (HTTP ${response.code})." }
             val body = requireNotNull(response.body)
             check(body.contentLength() in -1..maximumBytes)
@@ -364,53 +404,77 @@ internal class AndroidProjectContentClient(
             "Update package version does not match its metadata."
         }
         val sdkRequirements = archive.sdkRequirements()
+        check(sdkRequirements.minSdk == release.minimumAndroidSdk) {
+            "Update package Android compatibility does not match its metadata."
+        }
         androidSdkCompatibilityFailure(
             minSdk = sdkRequirements.minSdk,
             maxSdk = sdkRequirements.maxSdk,
             deviceSdk = Build.VERSION.SDK_INT,
         )?.let { failure -> error(failure) }
-        val expected = release.signingCertificateSha256
-        check(expected in installed.signingCertificateDigests()) {
-            "Release metadata does not match the installed app signer."
-        }
-        check(expected in archive.signingCertificateDigests()) {
-            "Update signing certificate does not match the installed app."
-        }
+        val installedIdentity = installed.signingCertificateIdentity()
+        val archiveIdentity = archive.signingCertificateIdentity()
+        androidSignerCompatibilityFailure(
+            metadataCurrentSigners = release.signingCertificateSha256Digests.toSet(),
+            installed = installedIdentity,
+            archive = archiveIdentity,
+        )?.let { failure -> error(failure) }
     }
 
-    @Suppress("DEPRECATION")
     private fun PackageManager.packageInfo(packageName: String): PackageInfo =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()))
-        } else {
-            getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+        requireNotNull(packageInfoWithSignatures(AndroidPackageInfoTarget.Installed(packageName))) {
+            "Android could not inspect the installed app package."
         }
 
-    @Suppress("DEPRECATION")
     private fun PackageManager.archiveInfo(apk: File): PackageInfo? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            getPackageArchiveInfo(
-                apk.absolutePath,
-                PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()),
-            )
-        } else {
-            getPackageArchiveInfo(apk.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES)
-        }
+        packageInfoWithSignatures(AndroidPackageInfoTarget.Archive(apk.absolutePath))
 
     @Suppress("DEPRECATION")
-    private fun PackageInfo.signingCertificateDigests(): Set<String> {
-        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val info = requireSigningCertificateInfo(signingInfo, packageName)
-            if (info.hasMultipleSigners()) info.apkContentsSigners else info.signingCertificateHistory
+    private fun PackageManager.packageInfoWithSignatures(
+        target: AndroidPackageInfoTarget,
+    ): PackageInfo? {
+        val query = androidPackageInfoSignatureQuery(
+            lookup = when (target) {
+                is AndroidPackageInfoTarget.Installed -> AndroidPackageInfoLookup.Installed
+                is AndroidPackageInfoTarget.Archive -> AndroidPackageInfoLookup.Archive
+            },
+            sdkInt = Build.VERSION.SDK_INT,
+        )
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val flags = PackageManager.PackageInfoFlags.of(query.flags.toLong())
+            when (target) {
+                is AndroidPackageInfoTarget.Installed -> getPackageInfo(target.packageName, flags)
+                is AndroidPackageInfoTarget.Archive -> getPackageArchiveInfo(target.apkPath, flags)
+            }
         } else {
-            signatures.orEmpty()
-        }
-        return signatures.mapTo(mutableSetOf()) { signature ->
-            MessageDigest.getInstance("SHA-256")
-                .digest(signature.toByteArray())
-                .toHex()
+            when (target) {
+                is AndroidPackageInfoTarget.Installed -> getPackageInfo(target.packageName, query.flags)
+                is AndroidPackageInfoTarget.Archive -> getPackageArchiveInfo(target.apkPath, query.flags)
+            }
         }
     }
+
+    @Suppress("DEPRECATION")
+    private fun PackageInfo.signingCertificateIdentity(): SigningCertificateIdentity {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val info = requireSigningCertificateInfo(signingInfo, packageName)
+            val current = info.apkContentsSigners.orEmpty().mapTo(mutableSetOf(), ::signatureSha256)
+            val multiple = info.hasMultipleSigners()
+            val lineage = if (multiple) {
+                current
+            } else {
+                info.signingCertificateHistory.orEmpty().mapTo(mutableSetOf(), ::signatureSha256)
+            }
+            return SigningCertificateIdentity(current, lineage, multiple)
+        }
+        val current = signatures.orEmpty().mapTo(mutableSetOf(), ::signatureSha256)
+        return SigningCertificateIdentity(current, current, current.size > 1)
+    }
+
+    private fun signatureSha256(signature: android.content.pm.Signature): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(signature.toByteArray())
+            .toHex()
 
     @Suppress("DEPRECATION")
     private fun PackageInfo.longVersionCodeCompat(): Long =
@@ -442,6 +506,9 @@ internal class AndroidProjectContentClient(
         return digest.digest().toHex()
     }
 
+    private fun ByteArray.sha256(): String =
+        MessageDigest.getInstance("SHA-256").digest(this).toHex()
+
     private fun ByteArray.toHex(): String =
         joinToString("") { byte -> (byte.toInt() and 0xff).toString(16).padStart(2, '0') }
 
@@ -455,10 +522,81 @@ internal class AndroidProjectContentClient(
 
 internal class UpdateDownloadCancelledException : IOException("Update download cancelled.")
 
+private sealed interface AndroidPackageInfoTarget {
+    data class Installed(val packageName: String) : AndroidPackageInfoTarget
+    data class Archive(val apkPath: String) : AndroidPackageInfoTarget
+}
+
+internal enum class AndroidPackageInfoLookup {
+    Installed,
+    Archive,
+}
+
+internal data class AndroidPackageInfoSignatureQuery(
+    val lookup: AndroidPackageInfoLookup,
+    val flags: Int,
+)
+
+@Suppress("DEPRECATION")
+internal fun androidPackageInfoSignatureQuery(
+    lookup: AndroidPackageInfoLookup,
+    sdkInt: Int,
+): AndroidPackageInfoSignatureQuery {
+    require(sdkInt >= Build.VERSION_CODES.O)
+    val flags = if (sdkInt >= Build.VERSION_CODES.P) {
+        PackageManager.GET_SIGNING_CERTIFICATES
+    } else {
+        PackageManager.GET_SIGNATURES
+    }
+    return AndroidPackageInfoSignatureQuery(lookup = lookup, flags = flags)
+}
+
 internal data class AndroidSdkRequirements(
     val minSdk: Int,
     val maxSdk: Int?,
 )
+
+internal data class SigningCertificateIdentity(
+    val currentSigners: Set<String>,
+    val lineage: Set<String>,
+    val hasMultipleSigners: Boolean,
+)
+
+internal fun androidSignerCompatibilityFailure(
+    metadataCurrentSigners: Set<String>,
+    installed: SigningCertificateIdentity,
+    archive: SigningCertificateIdentity,
+): String? {
+    if (
+        metadataCurrentSigners.isEmpty() ||
+        installed.currentSigners.isEmpty() ||
+        archive.currentSigners.isEmpty() ||
+        archive.lineage.isEmpty()
+    ) {
+        return "Signing certificate information is incomplete."
+    }
+    if (metadataCurrentSigners != archive.currentSigners) {
+        return "Update signing certificates do not match the release metadata."
+    }
+    if (installed.hasMultipleSigners || archive.hasMultipleSigners) {
+        return if (
+            installed.hasMultipleSigners &&
+            archive.hasMultipleSigners &&
+            installed.currentSigners == archive.currentSigners
+        ) {
+            null
+        } else {
+            "Multi-signer updates require an exact current signer-set match."
+        }
+    }
+    val installedCurrent = installed.currentSigners.singleOrNull()
+        ?: return "The installed app signer is ambiguous."
+    return if (installedCurrent in archive.lineage) {
+        null
+    } else {
+        "The update signer lineage is not a forward-compatible rotation of the installed app signer."
+    }
+}
 
 internal fun <T : Any> requireSigningCertificateInfo(
     signingInfo: T?,
@@ -527,10 +665,8 @@ internal fun downloadUpdateApk(
             if (existingBytes > 0) header("Range", "bytes=$existingBytes-")
         }
         .build()
-    val call = client.newCall(request)
-    onCallChanged(call)
     try {
-        call.execute().use { response ->
+        executeWithTrustedGitHubReleaseRedirect(client, request, onCallChanged).use { response ->
             if (!response.isSuccessful) {
                 val message = "Update download failed (HTTP ${response.code})."
                 if (response.code == 408 || response.code == 429 || response.code >= 500) {
@@ -565,7 +701,7 @@ internal fun downloadUpdateApk(
                     var total = existingBytes
                     while (true) {
                         if (isCancelled()) {
-                            call.cancel()
+                            onCallChanged(null)
                             throw UpdateDownloadCancelledException()
                         }
                         val read = input.read(buffer)
@@ -587,6 +723,54 @@ internal fun downloadUpdateApk(
         throw failure
     } finally {
         onCallChanged(null)
+    }
+}
+
+internal fun isTrustedGitHubReleaseAssetRedirect(url: String): Boolean {
+    val parsed = url.toHttpUrlOrNull() ?: return false
+    return parsed.isHttps &&
+        parsed.host == "release-assets.githubusercontent.com" &&
+        parsed.port == 443 &&
+        parsed.username.isEmpty() &&
+        parsed.password.isEmpty() &&
+        parsed.fragment == null &&
+        parsed.encodedPath.startsWith('/') &&
+        parsed.encodedPath != "/" &&
+        '\\' !in parsed.encodedPath
+}
+
+internal fun executeWithTrustedGitHubReleaseRedirect(
+    client: OkHttpClient,
+    request: Request,
+    onCallChanged: (Call?) -> Unit = {},
+): Response {
+    val initialCall = client.newCall(request)
+    onCallChanged(initialCall)
+    val initialResponse = initialCall.execute()
+    if (initialResponse.code !in setOf(302, 307, 308)) return initialResponse
+    return try {
+        check(
+            request.url.host == "github.com" &&
+                request.url.encodedPath.startsWith("/Obiente/nc-native/releases/download/"),
+        ) {
+            "Unexpected redirect while loading public project content."
+        }
+        val location = requireNotNull(initialResponse.header("Location")) {
+            "GitHub release download redirect did not include a destination."
+        }
+        val redirectedUrl = requireNotNull(request.url.resolve(location)) {
+            "GitHub release download redirect was invalid."
+        }
+        check(isTrustedGitHubReleaseAssetRedirect(redirectedUrl.toString())) {
+            "GitHub release download redirected to an untrusted destination."
+        }
+        initialResponse.close()
+        val redirectedCall = client.newCall(request.newBuilder().url(redirectedUrl).build())
+        onCallChanged(redirectedCall)
+        redirectedCall.execute()
+    } catch (failure: Exception) {
+        initialResponse.close()
+        throw failure
     }
 }
 

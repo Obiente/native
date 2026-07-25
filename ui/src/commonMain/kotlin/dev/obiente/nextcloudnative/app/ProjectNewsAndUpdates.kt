@@ -5,10 +5,12 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 
 const val PROJECT_NEWS_FEED_URL = "https://nc-native.obiente.dev/news-feed-v1.json"
-const val ANDROID_DIRECT_UPDATE_METADATA_URL =
-    "https://nc-native.obiente.dev/releases/android/stable-v1.json"
+const val ANDROID_PRERELEASE_DISCOVERY_URL =
+    "https://api.github.com/repos/Obiente/nc-native/releases?per_page=20"
 const val MAX_PROJECT_NEWS_FEED_BYTES = 512 * 1024
+const val MAX_PROJECT_NEWS_IMAGE_BYTES = 8 * 1024 * 1024
 const val MAX_ANDROID_UPDATE_METADATA_BYTES = 64 * 1024
+const val MAX_ANDROID_RELEASE_DISCOVERY_BYTES = 512 * 1024
 const val MAX_ANDROID_UPDATE_APK_BYTES = 256L * 1024L * 1024L
 
 @Serializable
@@ -29,12 +31,29 @@ data class ProjectNewsArticle(
     val bodyMarkdown: String,
     val webUrl: String,
     val contentSha256: String,
+    val image: ProjectNewsImage,
+)
+
+@Serializable
+data class ProjectNewsImage(
+    val url: String,
+    val alt: String,
+    val width: Int,
+    val height: Int,
+    val sha256: String,
 )
 
 data class ProjectNewsResult(
     val feed: ProjectNewsFeed,
     val cached: Boolean,
 )
+
+data class ProjectNewsArticlePresentation(
+    val heroImage: ProjectNewsImage,
+)
+
+fun projectNewsArticlePresentation(article: ProjectNewsArticle): ProjectNewsArticlePresentation =
+    ProjectNewsArticlePresentation(heroImage = article.image)
 
 enum class AppDistributionChannel {
     DirectApk,
@@ -102,10 +121,12 @@ data class AndroidDirectRelease(
     val channel: String,
     val versionName: String,
     val versionCode: Long,
+    val packageName: String,
+    val minimumAndroidSdk: Int,
     val apkUrl: String,
     val apkSize: Long,
     val apkSha256: String,
-    val signingCertificateSha256: String,
+    val signingCertificateSha256Digests: List<String>,
     val releaseNotesUrl: String,
 )
 
@@ -131,6 +152,25 @@ private val publicContentJson = Json {
     isLenient = false
 }
 
+private val githubDiscoveryJson = Json {
+    ignoreUnknownKeys = true
+    isLenient = false
+}
+
+@Serializable
+private data class GitHubReleaseDiscovery(
+    val tag_name: String,
+    val draft: Boolean,
+    val prerelease: Boolean,
+    val assets: List<GitHubReleaseAsset>,
+)
+
+@Serializable
+private data class GitHubReleaseAsset(
+    val name: String,
+    val browser_download_url: String,
+)
+
 fun parseProjectNewsFeed(bytes: ByteArray): ProjectNewsFeed {
     require(bytes.isNotEmpty() && bytes.size <= MAX_PROJECT_NEWS_FEED_BYTES)
     val feed = publicContentJson.decodeFromString<ProjectNewsFeed>(bytes.decodeToString())
@@ -153,42 +193,131 @@ fun parseProjectNewsFeed(bytes: ByteArray): ProjectNewsFeed {
             article.webUrl == "https://nc-native.obiente.dev/news/${article.id}/",
         )
         require(article.contentSha256.isSha256())
+        require(
+            publicContentSha256(article.bodyMarkdown.encodeToByteArray()) ==
+                article.contentSha256,
+        )
+        require(isCanonicalProjectNewsImageUrl(article.image.url))
+        require(article.image.alt.isBoundedPublicText(240))
+        require(article.image.width in 1..8_192 && article.image.height in 1..8_192)
+        require(article.image.sha256.isSha256())
     }
     require(feed.entries.zipWithNext().all { (left, right) ->
         left.publishedDate >= right.publishedDate
     })
+    require(feed.feedRevision == projectNewsFeedRevision(feed.entries))
     return feed
+}
+
+fun projectNewsFeedRevision(entries: List<ProjectNewsArticle>): String =
+    publicContentSha256(
+        buildString {
+            append("project-news-revision-v1\n")
+            entries.forEach { article ->
+                appendRevisionField(article.id)
+                appendRevisionField(article.title)
+                appendRevisionField(article.description)
+                appendRevisionField(article.publishedDate)
+                appendRevisionField(article.lastUpdated.orEmpty())
+                appendRevisionField(article.tags.size.toString())
+                article.tags.forEach(::appendRevisionField)
+                appendRevisionField(article.contentSha256)
+                appendRevisionField(article.webUrl)
+                appendRevisionField(article.image.url)
+                appendRevisionField(article.image.alt)
+                appendRevisionField(article.image.width.toString())
+                appendRevisionField(article.image.height.toString())
+                appendRevisionField(article.image.sha256)
+            }
+        }.encodeToByteArray(),
+    )
+
+private fun StringBuilder.appendRevisionField(value: String) {
+    append(value.encodeToByteArray().size)
+    append(':')
+    append(value)
+    append('\n')
+}
+
+fun parseAndroidPrereleaseManifestUrl(bytes: ByteArray): String {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_ANDROID_RELEASE_DISCOVERY_BYTES)
+    val releases = githubDiscoveryJson.decodeFromString<List<GitHubReleaseDiscovery>>(bytes.decodeToString())
+    val release = releases.firstOrNull { candidate ->
+        !candidate.draft &&
+            candidate.prerelease &&
+            candidate.tag_name.matches(Regex("v0\\.[0-9]+\\.[0-9]+-(?:alpha|beta|rc)\\.[0-9]+"))
+    } ?: error("No supported Nextcloud Native prerelease was found.")
+    val expectedUrl =
+        "https://github.com/Obiente/nc-native/releases/download/${release.tag_name}/update-manifest.json"
+    require(
+        release.assets.count { asset ->
+            asset.name == "update-manifest.json" && asset.browser_download_url == expectedUrl
+        } == 1,
+    )
+    return expectedUrl
 }
 
 fun parseAndroidDirectRelease(
     bytes: ByteArray,
-    metadataUrl: String = ANDROID_DIRECT_UPDATE_METADATA_URL,
+    metadataUrl: String,
 ): AndroidDirectRelease {
     require(bytes.isNotEmpty() && bytes.size <= MAX_ANDROID_UPDATE_METADATA_BYTES)
-    require(metadataUrl == ANDROID_DIRECT_UPDATE_METADATA_URL)
+    require(isCanonicalAndroidPrereleaseManifestUrl(metadataUrl))
     val release = publicContentJson.decodeFromString<AndroidDirectRelease>(bytes.decodeToString())
-    return validateAndroidDirectRelease(release)
+    return validateAndroidDirectRelease(release, metadataUrl)
 }
 
-fun validateAndroidDirectRelease(release: AndroidDirectRelease): AndroidDirectRelease {
-    require(release.schemaVersion == 1 && release.channel == "direct")
+fun validateAndroidDirectRelease(
+    release: AndroidDirectRelease,
+    metadataUrl: String =
+        "https://github.com/Obiente/nc-native/releases/download/v${release.versionName}/update-manifest.json",
+): AndroidDirectRelease {
+    require(release.schemaVersion == 1 && release.channel == "prerelease-v1")
     require(release.versionName.isBoundedPublicText(64) && release.versionCode > 0)
+    require(release.packageName == "dev.obiente.nextcloudnative")
+    require(release.minimumAndroidSdk in 26..64)
     require(release.apkSize in 1..MAX_ANDROID_UPDATE_APK_BYTES)
-    require(release.apkSha256.isSha256() && release.signingCertificateSha256.isSha256())
-    require(release.apkUrl.isCanonicalUpdateUrl())
-    require(release.releaseNotesUrl.isCanonicalReleaseNotesUrl())
+    require(release.apkSha256.isSha256())
+    require(
+        release.signingCertificateSha256Digests.isNotEmpty() &&
+            release.signingCertificateSha256Digests.size <= 8 &&
+            release.signingCertificateSha256Digests.distinct().size ==
+            release.signingCertificateSha256Digests.size &&
+            release.signingCertificateSha256Digests.all(String::isSha256),
+    )
+    val tag = "v${release.versionName}"
+    require(
+        metadataUrl ==
+            "https://github.com/Obiente/nc-native/releases/download/$tag/update-manifest.json",
+    )
+    require(
+        release.apkUrl.hasCanonicalPathUnder(
+            "https://github.com/Obiente/nc-native/releases/download/$tag/",
+            trailingSlash = false,
+        ) && release.apkUrl.endsWith(".apk"),
+    )
+    require(
+        release.releaseNotesUrl ==
+            "https://github.com/Obiente/nc-native/releases/tag/$tag",
+    )
     return release
 }
 
 fun isNewerAndroidRelease(currentVersionCode: Long, release: AndroidDirectRelease): Boolean =
     release.versionCode > currentVersionCode
 
-private fun String.isCanonicalUpdateUrl(): Boolean =
-    hasCanonicalPathUnder("https://nc-native.obiente.dev/releases/android/", trailingSlash = false) &&
-        endsWith(".apk")
+fun isCanonicalAndroidPrereleaseManifestUrl(url: String): Boolean {
+    val prefix = "https://github.com/Obiente/nc-native/releases/download/"
+    if (!url.hasCanonicalPathUnder(prefix, trailingSlash = false)) return false
+    val path = url.removePrefix(prefix).split('/')
+    return path.size == 2 &&
+        path[0].matches(Regex("v0\\.[0-9]+\\.[0-9]+-(?:alpha|beta|rc)\\.[0-9]+")) &&
+        path[1] == "update-manifest.json"
+}
 
-private fun String.isCanonicalReleaseNotesUrl(): Boolean =
-    hasCanonicalPathUnder("https://nc-native.obiente.dev/releases/", trailingSlash = true)
+fun isCanonicalProjectNewsImageUrl(url: String): Boolean =
+    url.hasCanonicalPathUnder("https://nc-native.obiente.dev/screenshots/", trailingSlash = false) &&
+        url.endsWith(".png")
 
 private fun String.hasCanonicalPathUnder(
     requiredPrefix: String,

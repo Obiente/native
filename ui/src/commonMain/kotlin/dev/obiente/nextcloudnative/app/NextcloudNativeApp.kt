@@ -621,6 +621,7 @@ private fun AuthenticatedApp(
                 onOpenArticle = { screen = Screen.ProjectNewsArticleView(it) },
             )
             is Screen.ProjectNewsArticleView -> ProjectNewsArticleScreen(
+                services = services,
                 article = current.article,
                 onBack = ::navigateBack,
             )
@@ -7139,9 +7140,17 @@ private fun ProjectNewsScreen(
 
 @Composable
 private fun ProjectNewsArticleScreen(
+    services: NextcloudPlatformServices,
     article: ProjectNewsArticle,
     onBack: () -> Unit,
 ) {
+    val presentation = remember(article) { projectNewsArticlePresentation(article) }
+    var heroImage by remember(article.image.sha256) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(article.image.sha256) {
+        heroImage = runCatching {
+            decodePlatformImage(services.loadProjectNewsImage(presentation.heroImage))
+        }.getOrNull()
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(
             title = article.title,
@@ -7157,6 +7166,22 @@ private fun ProjectNewsArticleScreen(
             contentPadding = PaddingValues(NextcloudSpacing.XLarge),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
         ) {
+            heroImage?.let { image ->
+                item {
+                    Image(
+                        bitmap = image,
+                        contentDescription = presentation.heroImage.alt,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(
+                                presentation.heroImage.width.toFloat() /
+                                    presentation.heroImage.height.toFloat(),
+                            )
+                            .clip(RoundedCornerShape(NextcloudRadii.Card)),
+                    )
+                }
+            }
             item {
                 Text(
                     article.description,

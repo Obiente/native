@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import android.content.pm.PackageManager
 import dev.obiente.nextcloudnative.app.AppDistributionChannel
 import java.nio.file.Files
 import kotlin.test.Test
@@ -12,6 +13,7 @@ import kotlin.test.assertTrue
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import okio.Buffer
 
 class AndroidProjectContentClientTest {
@@ -224,5 +226,120 @@ class AndroidProjectContentClientTest {
         assertContains(failure.message.orEmpty(), "could not read signing certificate information")
         assertContains(failure.message.orEmpty(), "Download the update again and retry")
         assertContains(failure.message.orEmpty(), "trusted release")
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun installedAndArchiveVerificationUseVersionAwareSignatureFlags() {
+        listOf(AndroidPackageInfoLookup.Installed, AndroidPackageInfoLookup.Archive).forEach { lookup ->
+            listOf(26, 27).forEach { sdkInt ->
+                assertEquals(
+                    AndroidPackageInfoSignatureQuery(lookup, PackageManager.GET_SIGNATURES),
+                    androidPackageInfoSignatureQuery(lookup, sdkInt),
+                )
+            }
+            listOf(28, 32, 33, 36).forEach { sdkInt ->
+                assertEquals(
+                    AndroidPackageInfoSignatureQuery(lookup, PackageManager.GET_SIGNING_CERTIFICATES),
+                    androidPackageInfoSignatureQuery(lookup, sdkInt),
+                )
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            androidPackageInfoSignatureQuery(AndroidPackageInfoLookup.Installed, sdkInt = 25)
+        }
+    }
+
+    @Test
+    fun signerCompatibilityAcceptsSameSignerAndForwardRotationOnly() {
+        val signerA = "a".repeat(64)
+        val signerB = "b".repeat(64)
+        val signerC = "c".repeat(64)
+        fun single(current: String, lineage: Set<String>) =
+            SigningCertificateIdentity(setOf(current), lineage, hasMultipleSigners = false)
+
+        assertNull(
+            androidSignerCompatibilityFailure(
+                metadataCurrentSigners = setOf(signerA),
+                installed = single(signerA, setOf(signerA)),
+                archive = single(signerA, setOf(signerA)),
+            ),
+        )
+        assertNull(
+            androidSignerCompatibilityFailure(
+                metadataCurrentSigners = setOf(signerC),
+                installed = single(signerB, setOf(signerA, signerB)),
+                archive = single(signerC, setOf(signerA, signerB, signerC)),
+            ),
+        )
+        assertContains(
+            requireNotNull(
+                androidSignerCompatibilityFailure(
+                    metadataCurrentSigners = setOf(signerC),
+                    installed = single(signerB, setOf(signerA, signerB)),
+                    archive = single(signerC, setOf(signerA, signerC)),
+                ),
+            ),
+            "not a forward-compatible rotation",
+        )
+    }
+
+    @Test
+    fun multiSignerCompatibilityRejectsPartialOverlap() {
+        val signerA = "a".repeat(64)
+        val signerB = "b".repeat(64)
+        val signerC = "c".repeat(64)
+        fun multiple(vararg signers: String) = SigningCertificateIdentity(
+            currentSigners = signers.toSet(),
+            lineage = signers.toSet(),
+            hasMultipleSigners = true,
+        )
+
+        assertNull(
+            androidSignerCompatibilityFailure(
+                metadataCurrentSigners = setOf(signerA, signerB),
+                installed = multiple(signerA, signerB),
+                archive = multiple(signerA, signerB),
+            ),
+        )
+        assertContains(
+            requireNotNull(
+                androidSignerCompatibilityFailure(
+                    metadataCurrentSigners = setOf(signerA, signerC),
+                    installed = multiple(signerA, signerB),
+                    archive = multiple(signerA, signerC),
+                ),
+            ),
+            "exact current signer-set match",
+        )
+    }
+
+    @Test
+    fun releaseDownloadsOnlyFollowTrustedGitHubAssetRedirects() {
+        assertTrue(
+            isTrustedGitHubReleaseAssetRedirect(
+                "https://release-assets.githubusercontent.com/github-production-release-asset/" +
+                    "123/file.apk?sp=read&sig=fixture",
+            ),
+        )
+        assertFalse(isTrustedGitHubReleaseAssetRedirect("https://github.com/redirected.apk"))
+        assertFalse(isTrustedGitHubReleaseAssetRedirect("http://release-assets.githubusercontent.com/file.apk"))
+        assertFalse(isTrustedGitHubReleaseAssetRedirect("https://release-assets.githubusercontent.com/"))
+
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(302)
+                    .setHeader("Location", "https://downloads.invalid/update.apk")
+                    .build(),
+            )
+            server.start()
+            assertFailsWith<IllegalStateException> {
+                executeWithTrustedGitHubReleaseRedirect(
+                    buildProjectContentHttpClient(),
+                    Request.Builder().url(server.url("/update.apk")).build(),
+                ).close()
+            }
+        }
     }
 }

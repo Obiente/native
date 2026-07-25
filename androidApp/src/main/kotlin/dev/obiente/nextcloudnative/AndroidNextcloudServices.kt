@@ -75,6 +75,7 @@ import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallState
 import dev.obiente.nextcloudnative.app.AppUpdateSupport
 import dev.obiente.nextcloudnative.app.ProjectNewsResult
+import dev.obiente.nextcloudnative.app.ProjectNewsImage
 import dev.obiente.nextcloudnative.app.PeopleMutationSurface
 import dev.obiente.nextcloudnative.app.PeopleTransportAuthorization
 import dev.obiente.nextcloudnative.app.PeopleTransportRequest
@@ -172,6 +173,9 @@ internal class AndroidNextcloudServices(
 
     override suspend fun loadProjectNews(forceRefresh: Boolean): ProjectNewsResult =
         withContext(Dispatchers.IO) { projectContent.loadNews(forceRefresh) }
+
+    override suspend fun loadProjectNewsImage(image: ProjectNewsImage): ByteArray =
+        withContext(Dispatchers.IO) { projectContent.loadNewsImage(image) }
 
     override fun appUpdateSupport(): AppUpdateSupport = projectContent.support()
 

@@ -305,6 +305,10 @@ interface NextcloudPlatformServices {
     suspend fun loadProjectNews(forceRefresh: Boolean = false): ProjectNewsResult =
         error("Project news is unavailable on this platform.")
 
+    /** Loads one hash-verified, canonical public image referenced by the project news feed. */
+    suspend fun loadProjectNewsImage(image: ProjectNewsImage): ByteArray =
+        error("Project news images are unavailable on this platform.")
+
     /** Describes who owns app updates. Store-owned installs must remain with their store. */
     fun appUpdateSupport(): AppUpdateSupport = AppUpdateSupport(
         channel = AppDistributionChannel.Unsupported,
