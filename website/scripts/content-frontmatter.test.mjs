@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseNewsFrontmatter } from "./content-frontmatter.mjs";
+import {
+  normalizeNewsArticleBody,
+  parseNewsFrontmatter,
+} from "./content-frontmatter.mjs";
 
 const metadataLines = [
   "title: A native update",
@@ -33,4 +36,16 @@ test("news frontmatter accepts LF and CRLF without leaking carriage returns", ()
   assert.equal(lf.metadata.title, "A native update");
   assert.equal(crlf.body, "# Update\r\n\r\nDetails from the native app.");
   assert.equal(Object.values(crlf.metadata).some((value) => value.includes("\r")), false);
+});
+
+test("article body strips leading blanks and exactly one matching title heading", () => {
+  const body = "\n\n# A native update\n\nFirst paragraph.\n\n# Keep this heading";
+  const normalized = normalizeNewsArticleBody(body, "A native update");
+
+  assert.equal(normalized, "First paragraph.\n\n# Keep this heading");
+  assert.equal(normalized.startsWith("# A native update"), false);
+  assert.equal(
+    normalizeNewsArticleBody("\n# Different title\n\nText", "A native update"),
+    "# Different title\n\nText",
+  );
 });

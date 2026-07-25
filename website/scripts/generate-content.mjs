@@ -5,8 +5,14 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import MarkdownIt from "markdown-it";
 import markdownItAnchor from "markdown-it-anchor";
-import { parseNewsFrontmatter } from "./content-frontmatter.mjs";
-import { assertValidNativeNewsFeed } from "./news-feed-contract.mjs";
+import {
+  normalizeNewsArticleBody,
+  parseNewsFrontmatter,
+} from "./content-frontmatter.mjs";
+import {
+  assertValidNativeNewsFeed,
+  nativeNewsFeedRevision,
+} from "./news-feed-contract.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(websiteRoot, "..");
@@ -253,7 +259,7 @@ const news = await Promise.all(
     const source = await readFile(path.join(newsDirectory, file), "utf8");
     const { metadata, body } = parseNewsFrontmatter(source, file);
     const text = textOnly(body);
-    const articleBody = body.replace(/^# .+\n+/, "");
+    const articleBody = normalizeNewsArticleBody(body, metadata.title);
     const capture = captureByImage.get(metadata.image);
     if (!capture) {
       throw new Error(`${file}: image must reference a declared Compose capture.`);
@@ -294,22 +300,34 @@ const newsFeedEntries = await Promise.all(
     publishedDate: post.date,
     lastUpdated: post.lastUpdated,
     tags: post.tags,
-    bodyMarkdown: parseNewsFrontmatter(
+    bodyMarkdown: normalizeNewsArticleBody(
+      parseNewsFrontmatter(
       // Re-read from the single canonical source rather than reconstructing Markdown from HTML.
-      await readFile(path.join(newsDirectory, post.file), "utf8"),
-      post.file,
-    ).body.replace(/^# .+\n+/, ""),
+        await readFile(path.join(newsDirectory, post.file), "utf8"),
+        post.file,
+      ).body,
+      post.title,
+    ),
     webUrl: `https://nc-native.obiente.dev${post.path}`,
+    image: {
+      url: `https://nc-native.obiente.dev${post.image}`,
+      alt: post.imageAlt,
+      width: post.imageWidth,
+      height: post.imageHeight,
+      sha256: createHash("sha256")
+        .update(await readFile(path.join(publicDirectory, post.image.slice(1))))
+        .digest("hex"),
+    },
   })),
 );
-const revisionSource = JSON.stringify(newsFeedEntries);
+const hashedNewsFeedEntries = newsFeedEntries.map((entry) => ({
+  ...entry,
+  contentSha256: createHash("sha256").update(entry.bodyMarkdown).digest("hex"),
+}));
 const newsFeed = {
   schemaVersion: 1,
-  feedRevision: createHash("sha256").update(revisionSource).digest("hex"),
-  entries: newsFeedEntries.map((entry) => ({
-    ...entry,
-    contentSha256: createHash("sha256").update(entry.bodyMarkdown).digest("hex"),
-  })),
+  feedRevision: nativeNewsFeedRevision(hashedNewsFeedEntries),
+  entries: hashedNewsFeedEntries,
 };
 const serializedNewsFeed = `${JSON.stringify(newsFeed, null, 2)}\n`;
 assertValidNativeNewsFeed(newsFeed, Buffer.byteLength(serializedNewsFeed));

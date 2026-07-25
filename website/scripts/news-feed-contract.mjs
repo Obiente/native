@@ -8,6 +8,7 @@ export const NATIVE_NEWS_FEED_LIMITS = Object.freeze({
   maximumTagCount: 12,
   maximumTagLength: 48,
   maximumBodyLength: 64 * 1024,
+  maximumImageDimension: 8192,
 });
 
 const sha256Pattern = /^[a-f0-9]{64}$/;
@@ -78,6 +79,54 @@ export function assertValidNativeNewsArticle(article) {
     article.contentSha256 === createHash("sha256").update(article.bodyMarkdown).digest("hex"),
     "News article content hash does not match its Markdown body.",
   );
+  requireCondition(
+    /^https:\/\/nc-native\.obiente\.dev\/screenshots\/[a-z0-9-]+\.png$/u.test(article.image?.url),
+    "News article image URL is not canonical.",
+  );
+  requireCondition(
+    isBoundedPublicText(article.image.alt, 240),
+    "News article image alt text is invalid.",
+  );
+  requireCondition(
+    Number.isInteger(article.image.width) &&
+      article.image.width > 0 &&
+      article.image.width <= limits.maximumImageDimension &&
+      Number.isInteger(article.image.height) &&
+      article.image.height > 0 &&
+      article.image.height <= limits.maximumImageDimension,
+    "News article image dimensions are invalid.",
+  );
+  requireCondition(sha256Pattern.test(article.image.sha256), "News article image hash is invalid.");
+}
+
+function revisionField(value) {
+  const text = String(value);
+  return `${Buffer.byteLength(text, "utf8")}:${text}\n`;
+}
+
+export function nativeNewsFeedRevision(entries) {
+  let preimage = "project-news-revision-v1\n";
+  for (const article of entries) {
+    for (const value of [
+      article.id,
+      article.title,
+      article.description,
+      article.publishedDate,
+      article.lastUpdated ?? "",
+      article.tags.length,
+      ...article.tags,
+      article.contentSha256,
+      article.webUrl,
+      article.image.url,
+      article.image.alt,
+      article.image.width,
+      article.image.height,
+      article.image.sha256,
+    ]) {
+      preimage += revisionField(value);
+    }
+  }
+  return createHash("sha256").update(preimage, "utf8").digest("hex");
 }
 
 export function assertValidNativeNewsFeed(feed, serializedBytes) {
@@ -103,6 +152,10 @@ export function assertValidNativeNewsFeed(feed, serializedBytes) {
         article.publishedDate >= feed.entries[index + 1].publishedDate,
     ),
     "Native news feed entries must be sorted by descending published date.",
+  );
+  requireCondition(
+    feed.feedRevision === nativeNewsFeedRevision(feed.entries),
+    "Native news feed revision does not match its canonical entries.",
   );
   if (serializedBytes != null) {
     requireCondition(

@@ -40,3 +40,10 @@ export function parseNewsFrontmatter(source, file) {
   }
   return { metadata, body: match[2] };
 }
+
+export function normalizeNewsArticleBody(body, title) {
+  const withoutLeadingBlankLines = body.replace(/^(?:[ \t]*\r?\n)+/u, "");
+  const heading = withoutLeadingBlankLines.match(/^#\s+([^\r\n]+)\r?\n/u);
+  if (!heading || heading[1].trim() !== title.trim()) return withoutLeadingBlankLines;
+  return withoutLeadingBlankLines.slice(heading[0].length).replace(/^(?:[ \t]*\r?\n)+/u, "");
+}
