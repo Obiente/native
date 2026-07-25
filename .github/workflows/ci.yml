@@ -30,7 +30,6 @@ jobs:
           filters: |
             app:
               - ".github/workflows/ci.yml"
-              - ".github/workflows/prerelease.yml"
               - "androidApp/**"
               - "contractAcquisition/**"
               - "ui/**"
