@@ -30,7 +30,7 @@ changed after upload, failed with a retry, intentionally excluded, or stored onl
 the cloud after local cleanup.
 
 Without those distinctions, people have to open the server, compare folders, and
-guess before deleting anything. The problem becomes worse when an app “organizes”
+guess before deleting anything. The problem becomes worse when an app "organizes"
 uploaded media by moving it into a private app folder. That can hide recent photos
 from WhatsApp, Instagram, Discord, editors, and Android's normal media picker.
 
@@ -111,7 +111,7 @@ or two Nextcloud servers safely separate.
 The storage review flow derives candidates from exact verification evidence.
 Temporary cloud-only sharing, RAW/JPEG grouping, and bounded history remain part of
 the same model. The public roadmap beneath this article tracks the acceptance gates
-behind the experience rather than hiding them behind one “photo backup” checkbox.
+behind the experience rather than hiding them behind one "photo backup" checkbox.
 
 ## Proof belongs outside the queue
 

@@ -142,7 +142,7 @@ function focusAppSwitcher() {
           <small>{{ activeAppMeta.description }}</small>
         </span>
       </div>
-      <p>Safe sample content, modeled on the app’s real resources and workflows.</p>
+      <p>Safe sample content, modeled on the app's real resources and workflows.</p>
     </footer>
   </section>
 </template>

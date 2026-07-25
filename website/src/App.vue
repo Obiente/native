@@ -352,7 +352,7 @@ const frequentlyAsked = [
             v-model="searchQuery"
             type="search"
             name="documentation-search"
-            placeholder="Search roadmap, apps, schema, security…"
+            placeholder="Search roadmap, apps, schema, security..."
             autocomplete="off"
           />
         </label>
@@ -538,7 +538,7 @@ const frequentlyAsked = [
               <p class="eyebrow">Captured from the application</p>
               <h2>Real Compose UI, repeatable sample data.</h2>
               <p>
-                These captures are rendered from the application’s own UI. A local
+                These captures are rendered from the application's own UI. A local
                 fixture server supplies safe, deterministic content for screenshots,
                 tests, documentation, and release notes.
               </p>

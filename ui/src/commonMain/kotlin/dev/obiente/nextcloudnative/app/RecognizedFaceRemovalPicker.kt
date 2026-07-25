@@ -207,6 +207,7 @@ private fun RecognizedFaceTile(
                     width = 512,
                     height = 512,
                 ),
+                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
             )
         }.getOrNull()
     }

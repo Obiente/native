@@ -12,7 +12,7 @@ import kotlin.math.round
  */
 internal fun parseRecipeServingCount(value: String?): Double? {
     val text = value?.trim()?.takeIf(String::isNotBlank) ?: return null
-    if ('-' in text || '–' in text || '—' in text) return null
+    if ('-' in text || '\u2013' in text || '\u2014' in text) return null
     val withoutPrefix = SERVING_PREFIXES.firstNotNullOfOrNull { prefix ->
         text.takeIf { it.startsWith(prefix, ignoreCase = true) }
             ?.drop(prefix.length)

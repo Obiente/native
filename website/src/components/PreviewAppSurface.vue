@@ -98,7 +98,7 @@ const conversations = [
 const messages = [
   { sender: "Mina", body: "The new gallery flow is ready to review.", time: "14:28" },
   { sender: "Mina", body: "Shared 3 photos from Project photos", time: "14:29", attachment: true },
-  { sender: "You", body: "Nice. I’ll check the full-quality view.", time: "14:31", own: true },
+  { sender: "You", body: "Nice. I'll check the full-quality view.", time: "14:31", own: true },
 ];
 
 const mails = [
@@ -332,7 +332,7 @@ function notify(message) {
 
     <div v-else-if="app === 'cookbook'" class="cookbook-layout">
       <aside class="recipe-list"><header><strong>Recipes</strong><button @click="notify('Recipe URL importer opened')">Import URL</button></header><button v-for="recipe in recipes" :key="recipe.id" :class="{ active: selectedRecipe === recipe.id }" @click="selectedRecipe = recipe.id"><span><PhForkKnife :size="20" weight="duotone" /></span><span><strong>{{ recipe.name }}</strong><small>{{ recipe.time }}</small></span></button></aside>
-      <article class="recipe-detail"><p class="kicker">Dessert · Community cookbook</p><h3>{{ currentRecipe.name }}</h3><p>{{ currentRecipe.tags }}</p><div class="servings"><button aria-label="Decrease servings" @click="servings = Math.max(1, servings - 1)">−</button><span><strong>{{ servings }}</strong><small>servings</small></span><button aria-label="Increase servings" @click="servings += 1">+</button></div><section><h4>Ingredients</h4><ul><li>{{ servings / 2 }} egg whites</li><li>{{ Math.round(servings * 27.5) }} g caster sugar</li><li>{{ (servings / 8).toFixed(1) }} tsp vanilla</li><li>Fresh berries to serve</li></ul></section><section><h4>Method</h4><ol><li>Whisk the egg whites until firm.</li><li>Add sugar gradually and fold gently.</li><li>Bake until crisp outside and soft inside.</li></ol></section></article>
+      <article class="recipe-detail"><p class="kicker">Dessert · Community cookbook</p><h3>{{ currentRecipe.name }}</h3><p>{{ currentRecipe.tags }}</p><div class="servings"><button aria-label="Decrease servings" @click="servings = Math.max(1, servings - 1)">-</button><span><strong>{{ servings }}</strong><small>servings</small></span><button aria-label="Increase servings" @click="servings += 1">+</button></div><section><h4>Ingredients</h4><ul><li>{{ servings / 2 }} egg whites</li><li>{{ Math.round(servings * 27.5) }} g caster sugar</li><li>{{ (servings / 8).toFixed(1) }} tsp vanilla</li><li>Fresh berries to serve</li></ul></section><section><h4>Method</h4><ol><li>Whisk the egg whites until firm.</li><li>Add sugar gradually and fold gently.</li><li>Bake until crisp outside and soft inside.</li></ol></section></article>
     </div>
 
     <div v-else-if="app === 'cospend'" class="cospend-layout">
@@ -350,7 +350,7 @@ function notify(message) {
     <div v-else-if="app === 'calendar'" class="calendar-layout">
       <aside><button class="new-event"><PhPlus :size="15" /> New event</button><strong>Calendars</strong><label><input checked type="checkbox" /> Personal</label><label><input checked type="checkbox" /> Obiente</label><label><input type="checkbox" /> Birthdays</label></aside>
       <section class="calendar-month"><header><button type="button" aria-label="Previous month">‹</button><h3>July 2026</h3><button type="button" aria-label="Next month">›</button><button type="button">Today</button></header><div class="weekdays"><span v-for="day in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']" :key="day">{{ day }}</span></div><div class="month-grid"><button v-for="(day, index) in monthDays" :key="index" type="button" :disabled="!day" :aria-label="day ? `July ${day}, 2026${day === 25 ? ', Workshop' : day === 28 ? ', Review call' : ''}` : 'Outside July 2026'" :class="{ muted: !day, today: day === 25 }"><span>{{ day }}</span><b v-if="day === 25">Workshop</b><b v-if="day === 28">Review call</b></button></div></section>
-      <aside class="event-inspector"><p class="kicker">Friday 25 July</p><h3>Community workshop</h3><p>09:30–12:30 · Studio</p><dl><div><dt>Calendar</dt><dd>Obiente</dd></div><div><dt>Guests</dt><dd>4 attending</dd></div><div><dt>Reminder</dt><dd>30 minutes before</dd></div></dl><button>Edit event</button></aside>
+      <aside class="event-inspector"><p class="kicker">Friday 25 July</p><h3>Community workshop</h3><p>09:30-12:30 · Studio</p><dl><div><dt>Calendar</dt><dd>Obiente</dd></div><div><dt>Guests</dt><dd>4 attending</dd></div><div><dt>Reminder</dt><dd>30 minutes before</dd></div></dl><button>Edit event</button></aside>
     </div>
 
     <div v-else-if="app === 'admin'" class="admin-layout">

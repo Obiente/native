@@ -142,7 +142,7 @@ fun NextcloudDocumentPreview(
             }
 
             DocumentPreviewUiState.Error -> DocumentPreviewMessage(
-                title = "Couldn’t load this preview",
+                title = "Couldn't load this preview",
                 detail = "The server did not return a usable document preview.",
                 action = "Retry",
                 onAction = { attempt += 1 },
@@ -183,7 +183,7 @@ private fun DocumentWorkflowBar(
                             strokeWidth = 2.dp,
                         )
                     }
-                    Text(if (editStatus == DocumentEditUiState.Starting) "Starting Office…" else "Edit in Office")
+                    Text(if (editStatus == DocumentEditUiState.Starting) "Starting Office..." else "Edit in Office")
                 }
                 is OfficeEditSessionPlan.Blocked -> Text(
                     officePlan.reason.userMessage(),
@@ -322,7 +322,12 @@ private fun RenderedMarkdownDocument(preview: DocumentPreview.Text, filename: St
 
 @Composable
 private fun RasterDocument(preview: DocumentPreview.Raster, filename: String) {
-    val image = remember(preview) { decodePlatformImage(preview.encodedImage) }
+    val image = remember(preview) {
+        decodePlatformImage(
+            preview.encodedImage,
+            EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+        )
+    }
     if (image == null) {
         DocumentPreviewMessage(
             title = "Preview unavailable",

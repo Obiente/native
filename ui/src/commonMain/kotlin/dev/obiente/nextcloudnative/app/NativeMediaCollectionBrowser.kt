@@ -260,7 +260,10 @@ fun NativeMediaCollectionCover(
     LaunchedEffect(session, coverFile?.fileId, coverFile?.etag) {
         image = coverFile?.let { file ->
             runCatching {
-                decodePlatformImage(services.loadPreviewCached(session, file, width = 480, height = 480))
+                decodePlatformImage(
+                    services.loadPreviewCached(session, file, width = 480, height = 480),
+                    EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+                )
             }.getOrNull()
         }
     }
@@ -361,7 +364,10 @@ private fun NativeMediaItemTile(
     var image by remember(file.fileId, file.etag) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(session, file.fileId, file.etag) {
         image = runCatching {
-            decodePlatformImage(services.loadPreviewCached(session, file, width = 384, height = 384))
+            decodePlatformImage(
+                services.loadPreviewCached(session, file, width = 384, height = 384),
+                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+            )
         }.getOrNull()
     }
     Box(

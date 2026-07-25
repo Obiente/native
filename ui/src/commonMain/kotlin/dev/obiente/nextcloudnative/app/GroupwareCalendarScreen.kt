@@ -692,7 +692,7 @@ private fun GroupwareCalendarEvent.displayTimeRange(): String {
     if (allDay) return "All day"
     val startTime = start.compactTime()
     val endTime = end?.compactTime()
-    return if (endTime == null) startTime else "$startTime – $endTime"
+    return if (endTime == null) startTime else "$startTime - $endTime"
 }
 
 private fun String.compactTime(): String =

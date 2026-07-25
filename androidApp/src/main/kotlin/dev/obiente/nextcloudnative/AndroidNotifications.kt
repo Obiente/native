@@ -210,7 +210,7 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
                     ((event.completedBytes.coerceIn(0, total) * 100L) / total).toInt()
                 }
                 builder.setContentTitle(if (event.uploading) "Uploading ${event.name}" else "Downloading ${event.name}")
-                    .setContentText(progress?.let { "$it% complete" } ?: "Working…")
+                    .setContentText(progress?.let { "$it% complete" } ?: "Working...")
                     .setProgress(100, progress ?: 0, progress == null)
             }
             is NextcloudNotificationEvent.SyncConflict -> builder

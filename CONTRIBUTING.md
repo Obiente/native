@@ -15,6 +15,40 @@ versions.
   cannot be inferred safely.
 - Reads may be explored against a test server. Writes require an explicit,
   reviewed contract and tests for permission, conflict, and failure behavior.
+- Read [AI_POLICY.md](AI_POLICY.md) before using AI assistance. Contributions
+  must be human-led; autonomous agent submissions are not accepted.
+
+## Human authorship and DCO sign-off
+
+The human contributor is responsible for every line they submit, including
+code, documentation, and tests prepared with AI assistance. You must understand
+the change well enough to explain, defend, debug, and modify it.
+
+Every submitted commit must include your human `Signed-off-by` trailer under
+the [Developer Certificate of Origin](https://developercertificate.org/):
+
+```bash
+git commit --signoff
+```
+
+Cryptographic commit signing and DCO sign-off are separate. Follow the
+repository's configured signing policy in addition to using `--signoff`.
+
+AI tools are assistants, not co-authors:
+
+- Do not add an AI tool through a `Co-authored-by` trailer.
+- An AI tool must not add or fabricate your `Signed-off-by` trailer. Add it only
+  after you have reviewed and accepted the complete commit.
+- AI use may be disclosed in the PR description or with an optional
+  `Assisted-by: Tool[:model]` trailer. Disclosure is appreciated but not
+  required.
+- Do not include prompts, credentials, private account data, or sensitive
+  context in a disclosure.
+
+The idea, intent, decisions, and communication must remain yours. AI agents may
+work only on a concrete task under active human guidance. They may not
+autonomously claim issues, create or publish contributions, choose project
+direction, or speak on your behalf.
 
 ## Card interaction guardrail
 
@@ -48,6 +82,11 @@ bash tools/check-repository.sh
 
 Focused tests are useful while iterating, but the full suite must pass before a
 pull request is ready for review.
+
+Repository-authored text uses ordinary ASCII punctuation. Run
+`bash tools/check-repository.sh` to catch smart quotes, typographic dashes,
+Unicode ellipses, Unicode minus signs, no-break spaces, and invisible
+formatting characters. Normal UTF-8 letters and translations remain supported.
 
 ### Isolated Android emulator tests
 
@@ -117,6 +156,8 @@ real account or copy those generated artifacts into the repository.
 - Call out destructive or permission-sensitive paths explicitly.
 - Do not commit generated build output, IDE state, crash dumps, local
   credentials, or signing material.
+- If AI helped, ensure the PR still reflects your own reasoning and that you can
+  answer reviewer questions without delegating your understanding to the tool.
 
 By contributing, you agree that your contribution is licensed under the
 GNU Affero General Public License, version 3 or later.

@@ -128,7 +128,7 @@ internal fun FileVersionHistorySection(
                     ) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp))
                         Text(
-                            if (history == null) "Loading older versions…" else "Refreshing version history…",
+                            if (history == null) "Loading older versions..." else "Refreshing version history...",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -253,7 +253,7 @@ internal fun FileVersionHistorySection(
                         is FileVersionConfirmation.Restore -> runCatching {
                             services.restoreFileVersion(session, userId, file, version)
                         }.onSuccess {
-                            actionMessage = "Version restored. Refreshing the current file…"
+                            actionMessage = "Version restored. Refreshing the current file..."
                             runCatching { services.listFileVersions(session, userId, file) }
                                 .onSuccess { refreshed ->
                                     history = refreshed
@@ -324,7 +324,7 @@ private fun FileVersionRow(
                     CircularProgressIndicator(modifier = Modifier.size(16.dp))
                     Spacer(Modifier.size(8.dp))
                 }
-                Text(if (previewLoading) "Working…" else if (file.isEditableText()) "Read copy" else "Preview copy")
+                Text(if (previewLoading) "Working..." else if (file.isEditableText()) "Read copy" else "Preview copy")
             }
             if (canExport) {
                 Button(enabled = !previewLoading, onClick = onDownload) {

@@ -77,6 +77,7 @@ kotlin {
         val androidMain by getting
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
+            implementation("androidx.exifinterface:exifinterface:1.4.2")
             implementation(libs.androidx.media3.exoplayer)
             implementation(libs.androidx.media3.datasource.okhttp)
             implementation(libs.androidx.media3.ui)
