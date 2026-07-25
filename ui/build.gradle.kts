@@ -127,8 +127,9 @@ compose.desktop {
             }
             macOS {
                 // Apple's package metadata requires the first numeric component
-                // to be greater than zero, independently of our prerelease name.
-                packageVersion = "1.0.1"
+                // to be greater than zero. Keep this monotonic even when public
+                // prerelease tags are reset so installed packages can upgrade.
+                packageVersion = "1.0.5"
             }
         }
     }
