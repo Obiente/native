@@ -27,6 +27,7 @@ import { changelog } from "./generated/changelog.js";
 import { marketingCaptures } from "./generated/captures.js";
 import NativePreview from "./components/NativePreview.vue";
 import RoadmapDashboard from "./components/RoadmapDashboard.vue";
+import ArticleRoadmap from "./components/ArticleRoadmap.vue";
 
 const props = defineProps({
   initialPath: {
@@ -73,6 +74,9 @@ const currentDoc = computed(
 );
 const currentPost = computed(
   () => props.initialNews ?? news.find((post) => post.path === normalizedPath),
+);
+const relatedPosts = computed(() =>
+  news.filter((post) => post.path !== currentPost.value?.path).slice(0, 2),
 );
 const isNewsIndex = computed(() => normalizedPath === "/news/");
 const isChangelog = computed(() => normalizedPath === "/changelog/");
@@ -140,31 +144,93 @@ const appFamilies = [
   { icon: ChatCircleDots, name: "Talk" },
   { icon: CalendarBlank, name: "Calendar" },
   { icon: UsersThree, name: "Contacts" },
+  { icon: File, name: "Mail" },
   { icon: MusicNotes, name: "Music" },
   { icon: ListChecks, name: "Deck & Tables" },
+  { icon: BookOpen, name: "Cookbook" },
+  { icon: Stack, name: "Cospend" },
+  { icon: ShieldCheck, name: "Administration" },
   { icon: SquaresFour, name: "Dynamic apps" },
+];
+
+const featureAreas = [
+  {
+    icon: File,
+    title: "Files, WebDAV, and advanced sync",
+    stage: "In active development",
+    body: "The product direction covers browsing, previews, editing, sharing, offline files, and revision-safe folder pairs. The alpha currently provides real WebDAV browsing, previews, and guarded text editing while the broader sync workflow is completed.",
+    link: "/news/sync-obsidian-notes/",
+    label: "How folder sync works",
+  },
+  {
+    icon: Camera,
+    title: "Photos, Memories, and Recognize",
+    stage: "In active development",
+    body: "The alpha already browses real media, RAW previews, and recognized people. Verified backup, albums, Live Photos, non-destructive editing, and cloud-only sharing remain tracked delivery work.",
+    link: "/news/media-sync-foundations/",
+    label: "How photo backup stays trustworthy",
+  },
+  {
+    icon: ChatCircleDots,
+    title: "Talk messages and calls",
+    stage: "In active development",
+    body: "The alpha provides native rooms, read-only history, attachments, and typed call or system events. Sending, richer interactions, notifications, and full audio or video calling remain on the public roadmap.",
+    link: "/compatibility/",
+    label: "Explore app compatibility",
+  },
+  {
+    icon: CalendarBlank,
+    title: "Calendar, Contacts, and Mail",
+    stage: "In active development",
+    body: "Native calendar, contact, and mailbox components are being connected to CalDAV, CardDAV, and Mail data. Full editing, composition, search, and device synchronization are tracked work.",
+    link: "/architecture/",
+    label: "See how native views are selected",
+  },
+  {
+    icon: ListChecks,
+    title: "Tables, Deck, Cookbook, Cospend, and Music",
+    stage: "In active development",
+    body: "Adaptive views already recognize these resource families. Editing tables, moving Kanban cards, recipe workflows, budget actions, and complete system playback integration are being verified app by app.",
+    link: "/news/adaptive-native-apps/",
+    label: "Read about adaptive native apps",
+  },
+  {
+    icon: ShieldCheck,
+    title: "Native Nextcloud administration",
+    stage: "Planned",
+    body: "The planned administration workspace covers users, groups, quotas, apps, server settings, background jobs, security status, and app-specific administration with explicit permission checks.",
+    link: "/roadmap/",
+    label: "Follow the public delivery roadmap",
+  },
 ];
 
 const platforms = [
   {
     icon: Desktop,
     name: "Android",
-    status: "Developer build",
-    body: "Native login, media, filesystem integration and background work.",
+    status: "Alpha build",
+    body: "The current Android alpha provides native account, app, file, media, and system integration foundations while broader sync and communication work continues.",
     available: true,
   },
   {
     icon: Desktop,
     name: "Linux",
-    status: "Developer build",
-    body: "A real desktop workspace with platform credential storage.",
+    status: "Alpha build",
+    body: "The current Linux desktop alpha provides the native workspace used for development and integration testing.",
     available: true,
   },
   {
     icon: Code,
-    name: "iOS · macOS · Windows",
-    status: "Architecture ready",
-    body: "Shared domain logic with thin, genuinely native platform integrations.",
+    name: "Windows and macOS",
+    status: "Packaging preview",
+    body: "Prerelease MSI and DMG artifacts prove the packaging pipeline. Native credential storage and supported authenticated use are not implemented yet.",
+    available: false,
+  },
+  {
+    icon: Code,
+    name: "iOS and iPadOS",
+    status: "Planned",
+    body: "The shared architecture targets Apple mobile platforms, but no supported launcher is shipped yet.",
     available: false,
   },
 ];
@@ -199,17 +265,17 @@ const frequentlyAsked = [
   {
     question: "Can I sync an Obsidian notes folder with Nextcloud?",
     answer:
-      "That is a core goal. The planned experience pairs a normal Android folder with a Nextcloud folder, supports two-way sync, keeps notes visible to Obsidian, and asks before resolving conflicts. The foundations are under development and are not release-ready yet.",
+      "Revision-safe folder-pair sync is in active development. The intended workflow pairs a normal device folder with a Nextcloud folder, keeps Markdown visible to Obsidian and other editors, and preserves both versions when changes conflict.",
   },
   {
     question: "Can it back up photos and safely free phone storage?",
     answer:
-      "That is also a core goal. The app will distinguish waiting, uploading, verified, changed, failed, and cloud-only photos. Storage cleanup will only be offered for an exact version verified on the server, followed by Android's own confirmation.",
+      "Verified photo backup and storage recovery are in active development. The design distinguishes waiting, uploading, verified, changed, failed, and cloud-only files, and only offers cleanup for exact versions verified on the selected server.",
   },
   {
-    question: "Does every Nextcloud app work already?",
+    question: "How does it work with so many Nextcloud apps?",
     answer:
-      "Not yet. This is an early developer preview. Files, Photos and Memories, Talk, Activity, Notes and several dynamically discovered apps have working paths, while the compatibility matrix records what still needs evidence or deeper interaction support.",
+      "Reusable native components understand common resources such as files, messages, people, events, tables, boards, media, forms, and actions. Verified app knowledge improves specialized workflows without turning every integration into a separate client.",
   },
   {
     question: "Why use adaptive components instead of only app-specific clients?",
@@ -311,24 +377,25 @@ const frequentlyAsked = [
           <div class="hero-copy">
             <p class="eyebrow">
               <span class="status-dot" aria-hidden="true"></span>
-              Independent · open source · early preview
+              Open source · Android and desktop
             </p>
-            <h1>Your cloud.<br /><span>One native experience.</span></h1>
+            <h1>One native client for your <span>Nextcloud.</span></h1>
             <p class="hero-lede">
-              Back up phone photos, sync files and notes, chat in Talk, and use
-              more of your Nextcloud apps from one consistent client for phone
-              and desktop.
+              One consistent home for Files, Photos, Memories, Talk, Calendar,
+              Contacts, Mail, Music, Deck, Tables, Cookbook, Cospend, and server
+              administration. Android and Linux alpha builds are available now,
+              with completion status tracked on the public roadmap.
             </p>
             <div class="hero-actions">
-              <a class="button button-primary" :href="githubUrl" target="_blank" rel="noreferrer">
-                Explore the source
+              <a class="button button-primary" href="https://github.com/Obiente/nc-native/releases" target="_blank" rel="noreferrer">
+                Download the alpha
                 <ArrowRight :size="19" weight="bold" aria-hidden="true" />
               </a>
-              <a class="button button-secondary" href="/roadmap/">
-                Read the roadmap
+              <a class="button button-secondary" href="/#apps">
+                Explore supported apps
               </a>
             </div>
-            <p class="hero-note">Built by Obiente. Not affiliated with Nextcloud GmbH.</p>
+            <p class="hero-note">An independent Obiente project. Connects directly to your own Nextcloud.</p>
           </div>
 
           <NativePreview />
@@ -336,11 +403,12 @@ const frequentlyAsked = [
 
         <section id="approach" class="approach section-width">
           <div class="section-heading">
-            <p class="eyebrow">One app for everyday Nextcloud</p>
-            <h2>Spend less time jumping between apps.</h2>
+            <p class="eyebrow">A complete Nextcloud client</p>
+            <h2>Familiar controls across every part of your cloud.</h2>
             <p>
-              Your photos, files, messages, notes, calendars, and other apps should
-              share familiar navigation, previews, search, editing, and offline behavior.
+              The same search, selection, sharing, editing, caching, and offline
+              behavior follows you from files to messages, photos, calendars, and
+              installed apps.
             </p>
           </div>
 
@@ -358,12 +426,12 @@ const frequentlyAsked = [
         <section class="adaptive-section">
           <div class="section-width adaptive-layout">
             <div class="section-heading compact">
-              <p class="eyebrow">How unfamiliar apps can still feel native</p>
-              <h2>The right screen for the information in front of you.</h2>
+              <p class="eyebrow">Adaptive native views</p>
+              <h2>Installed apps become useful interfaces, not API output.</h2>
               <p>
-                A less common Nextcloud app should not fall back to a technical data
-                dump. Verified information can become a useful native screen without
-                the app guessing permissions or unsafe actions.
+                Nextcloud Native recognizes resources such as records, files,
+                messages, events, media, forms, and actions. It selects a suitable
+                native view and adds specialized app knowledge where it improves the workflow.
               </p>
               <a class="text-link" href="/architecture/">
                 Read the architecture
@@ -389,11 +457,12 @@ const frequentlyAsked = [
         <section id="apps" class="apps-section">
           <div class="section-width apps-layout">
             <div class="section-heading compact">
-              <p class="eyebrow">Files, Talk, Photos, and more</p>
-              <h2>Your work should follow you across apps.</h2>
+              <p class="eyebrow">Nextcloud apps</p>
+              <h2>Each app keeps its purpose.</h2>
               <p>
-                Open a file shared in Talk with the same preview and actions as Files.
-                Find a person, note, photo, or calendar item from one search.
+                Mail stays a mailbox. Deck stays a board. Tables stays a table.
+                Shared building blocks keep navigation and actions consistent without
+                flattening every app into the same generic screen.
               </p>
               <a class="text-link" href="/compatibility/">
                 See the compatibility work
@@ -412,11 +481,12 @@ const frequentlyAsked = [
 
         <section id="platforms" class="platform-section section-width">
           <div class="section-heading">
-            <p class="eyebrow">Phone and desktop</p>
-            <h2>At home on every device you use.</h2>
+            <p class="eyebrow">Phone and desktop clients</p>
+            <h2>Designed for the screen it runs on.</h2>
             <p>
-              Behavior stays familiar while Android, iOS, Windows, macOS, and Linux
-              keep control of their own files, notifications, background work, and calls.
+              Mobile uses touch navigation, system sharing, background work, and media
+              controls. Desktop uses persistent navigation, dense tables, keyboard
+              shortcuts, inspectors, and resizable workspaces.
             </p>
           </div>
 
@@ -436,14 +506,42 @@ const frequentlyAsked = [
           </div>
         </section>
 
+        <section class="feature-overview">
+          <div class="section-width">
+            <div class="section-heading">
+              <p class="eyebrow">Product capabilities</p>
+              <h2>More than a viewer for server data.</h2>
+              <p>
+                Each area includes the controls and system integrations needed to
+                browse, create, edit, share, synchronize, and administer real work.
+              </p>
+            </div>
+            <div class="feature-overview-grid">
+              <article v-for="feature in featureAreas" :key="feature.title">
+                <span class="feature-icon">
+                  <component :is="feature.icon" :size="24" weight="duotone" aria-hidden="true" />
+                </span>
+                <span class="feature-stage">{{ feature.stage }}</span>
+                <h3>{{ feature.title }}</h3>
+                <p>{{ feature.body }}</p>
+                <a :href="feature.link">
+                  {{ feature.label }}
+                  <ArrowRight :size="16" weight="bold" aria-hidden="true" />
+                </a>
+              </article>
+            </div>
+          </div>
+        </section>
+
         <section id="workflows" class="screenshots-section">
           <div class="section-width">
             <div class="section-heading">
-              <p class="eyebrow">Built around real workflows</p>
-              <h2>See native workflows, not placeholder screens.</h2>
+              <p class="eyebrow">Captured from the application</p>
+              <h2>Real Compose UI, repeatable sample data.</h2>
               <p>
-                Explore folder sync, media backup, and adaptive app data through
-                production Compose components driven by deterministic sample data.
+                These captures are rendered from the application's own UI. A local
+                fixture server supplies safe, deterministic content for screenshots,
+                tests, documentation, and release notes.
               </p>
             </div>
             <div class="workflow-showcase">
@@ -494,11 +592,12 @@ const frequentlyAsked = [
         <section id="docs" class="docs-section">
           <div class="section-width">
             <div class="section-heading">
-              <p class="eyebrow">The work behind the promise</p>
-              <h2>Read the project, not just the pitch.</h2>
+              <p class="eyebrow">Documentation</p>
+              <h2>Architecture, security, compatibility, and contribution guides.</h2>
               <p>
-                The public documentation is built directly from the repository, so
-                architecture decisions, current limitations and acceptance gates stay visible.
+                Documentation is built from the repository alongside the site.
+                Architecture decisions, security boundaries, compatibility work,
+                and public acceptance gates stay searchable.
               </p>
             </div>
             <div class="docs-grid">
@@ -517,8 +616,8 @@ const frequentlyAsked = [
         <section class="news-section section-width">
           <div class="news-heading">
             <div class="section-heading compact">
-              <p class="eyebrow">What we are building</p>
-              <h2>See Nextcloud Native taking shape.</h2>
+              <p class="eyebrow">Product guides and project news</p>
+              <h2>How Nextcloud Native handles everyday work.</h2>
             </div>
             <a class="text-link" href="/news/">All project news <ArrowRight :size="18" weight="bold" /></a>
           </div>
@@ -558,8 +657,8 @@ const frequentlyAsked = [
 
         <section class="contribute section-width">
           <div>
-            <p class="eyebrow">Built in the open</p>
-            <h2>Help make the best Nextcloud client possible.</h2>
+            <p class="eyebrow">AGPL-3.0 open source</p>
+            <h2>Build and test Nextcloud Native with us.</h2>
             <p>
               Read the architecture, run the clients, test another app contract,
               or bring a platform integration you care about.
@@ -599,6 +698,21 @@ const frequentlyAsked = [
             <figcaption>{{ currentPost.imageCaption }}</figcaption>
           </figure>
           <div class="markdown-body" v-html="currentPost.html"></div>
+          <ArticleRoadmap :slug="currentPost.path.split('/').filter(Boolean).at(-1)" />
+          <aside class="article-related" aria-labelledby="article-related-title">
+            <div>
+              <p class="eyebrow">Continue exploring</p>
+              <h2 id="article-related-title">Related Nextcloud Native guides</h2>
+            </div>
+            <a v-for="post in relatedPosts" :key="post.path" :href="post.path">
+              <span>{{ post.title }}</span>
+              <ArrowRight :size="16" weight="bold" aria-hidden="true" />
+            </a>
+            <a href="/architecture/">
+              <span>How adaptive native app rendering works</span>
+              <ArrowRight :size="16" weight="bold" aria-hidden="true" />
+            </a>
+          </aside>
           <p class="article-release-link">
             Looking for concise version-by-version changes?
             <a href="/changelog/">Read the changelog</a>.
@@ -609,8 +723,8 @@ const frequentlyAsked = [
       <section v-else-if="isNewsIndex" class="news-index section-width">
         <header class="doc-heading">
           <p class="eyebrow">Nextcloud Native news</p>
-          <h1>What is getting better, and why it matters.</h1>
-          <p>Stories connect everyday Nextcloud workflows to the architecture taking shape underneath them.</p>
+          <h1>What your Nextcloud can do in one native client.</h1>
+          <p>Practical guides explain everyday workflows, the technology behind them, and the public roadmap for each area.</p>
           <a class="text-link" href="/changelog/">
             Looking for release changes? Read the changelog
             <ArrowRight :size="18" weight="bold" />
@@ -673,15 +787,30 @@ const frequentlyAsked = [
         </aside>
 
         <article class="doc-article">
-          <a class="doc-back" href="/#docs">Nextcloud Native documentation</a>
-          <header class="doc-heading">
-            <p class="eyebrow">Repository documentation</p>
-            <h1>{{ currentDoc.title }}</h1>
-            <p>{{ currentDoc.description }}</p>
-            <span>{{ currentDoc.readingMinutes }} minute read · sourced from {{ currentDoc.file }}</span>
-          </header>
-          <RoadmapDashboard v-if="currentDoc.path === '/roadmap/'" />
-          <div class="markdown-body" v-html="currentDoc.html"></div>
+          <template v-if="currentDoc.path === '/roadmap/'">
+            <header class="roadmap-route-heading">
+              <p class="eyebrow">Product roadmap</p>
+              <h1>Roadmap</h1>
+              <p>
+                Release targets and feature work linked directly to the public GitHub project.
+              </p>
+            </header>
+            <RoadmapDashboard />
+            <details class="roadmap-source-document">
+              <summary>Read the detailed product and engineering roadmap</summary>
+              <div class="markdown-body" v-html="currentDoc.html"></div>
+            </details>
+          </template>
+          <template v-else>
+            <a class="doc-back" href="/#docs">Nextcloud Native documentation</a>
+            <header class="doc-heading">
+              <p class="eyebrow">Repository documentation</p>
+              <h1>{{ currentDoc.title }}</h1>
+              <p>{{ currentDoc.description }}</p>
+              <span>{{ currentDoc.readingMinutes }} minute read · sourced from {{ currentDoc.file }}</span>
+            </header>
+            <div class="markdown-body" v-html="currentDoc.html"></div>
+          </template>
         </article>
       </section>
 

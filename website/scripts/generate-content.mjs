@@ -13,12 +13,20 @@ import {
   assertValidNativeNewsFeed,
   nativeNewsFeedRevision,
 } from "./news-feed-contract.mjs";
+import {
+  githubJsonPages,
+  normalizeRoadmapSnapshot,
+  repositoryRoadmapFallback,
+  roadmapSnapshotFromLive,
+  shippedPriorityItems,
+} from "./roadmap-data.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(websiteRoot, "..");
 const generatedDirectory = path.join(websiteRoot, "src", "generated");
 const publicDirectory = path.join(websiteRoot, "public");
 const newsDirectory = path.join(websiteRoot, "content", "news");
+const roadmapSnapshotFile = path.join(websiteRoot, "data", "roadmap-snapshot.json");
 const changelogFile = path.join(repositoryRoot, "CHANGELOG.md");
 const changelogRoute = "/changelog/";
 await mkdir(generatedDirectory, { recursive: true });
@@ -337,6 +345,16 @@ await writeFile(
 );
 
 const searchIndex = [
+  {
+    path: "/",
+    title: "Nextcloud Native mobile and desktop client",
+    shortTitle: "Nextcloud Native",
+    description:
+      "Explore the Android and Linux alpha plus the public delivery roadmap for Files, sync, Photos, Memories, Talk, groupware, installed apps, and administration.",
+    text:
+      "Android Linux alpha native Nextcloud client public roadmap planned iOS macOS Windows offline cache multiple accounts background sync global search photo backup Live Photos RAW editing Talk calls Obsidian folder sync administration",
+    contentType: "Product",
+  },
   ...docs.map(({ html, ...doc }) => ({ ...doc, contentType: "Documentation" })),
   ...news.map(({ html, ...post }) => ({ ...post, contentType: "News" })),
   { ...changelog, html: undefined, contentType: "Changelog" },
@@ -360,6 +378,10 @@ async function githubJson(url) {
     throw new Error(`GitHub roadmap request failed with HTTP ${response.status}.`);
   }
   return response.json();
+}
+
+function githubProjectItems(url) {
+  return githubJsonPages(url, { headers: githubApiHeaders });
 }
 
 function projectField(item, name) {
@@ -388,54 +410,50 @@ function roadmapItem(item) {
     status: projectField(item, "Status"),
     milestone: issue.milestone?.title ?? null,
     progress: issue.sub_issues_summary ?? null,
+    labels: (issue.labels ?? []).map((label) => label.name).filter(Boolean),
+    updatedAt: issue.updated_at ?? null,
+    closedAt: issue.closed_at ?? null,
   };
 }
 
-const fallbackRoadmap = {
-  source: "repository",
-  projectUrl,
-  epics: [
-    [10, "EPIC-MEDIA", "Safe media backup and storage", "Media"],
-    [11, "EPIC-SYNC", "Files client and advanced sync", "Files and sync"],
-    [12, "EPIC-DAV", "DAV device sync and native groupware", "DAV"],
-    [13, "EPIC-TALK", "Native Talk replacement", "Talk"],
-    [14, "EPIC-PHOTO", "Photos and Memories", "Photos and Memories"],
-    [15, "EPIC-DYN", "Adaptive Nextcloud apps", "Adaptive apps"],
-    [16, "EPIC-PLATFORM", "Platform UX, quality, and releases", "Release"],
-  ].map(([number, taskId, title, area]) => ({
-    number,
-    taskId,
-    title,
-    area,
-    priority: "P0",
-    status: "In Progress",
-    milestone: null,
-    progress: null,
-    url: `https://github.com/Obiente/nc-native/issues/${number}`,
-  })),
-  milestones: [],
-  priorities: [],
-  verification: [],
-};
+async function allProjectItems() {
+  return githubProjectItems(`${projectApi}/items?per_page=100&${projectFieldQuery}`);
+}
+
+const fallbackRoadmap = repositoryRoadmapFallback(projectUrl);
 
 let roadmap = fallbackRoadmap;
 try {
-  const [epics, priorities, verification, milestones] = await Promise.all([
-    githubJson(`${projectApi}/views/5/items?per_page=100&${projectFieldQuery}`),
-    githubJson(`${projectApi}/views/3/items?per_page=100&${projectFieldQuery}`),
-    githubJson(`${projectApi}/views/4/items?per_page=100&${projectFieldQuery}`),
+  const [epics, priorities, projectItems, verification, milestones] = await Promise.all([
+    githubProjectItems(`${projectApi}/views/5/items?per_page=100&${projectFieldQuery}`),
+    githubProjectItems(`${projectApi}/views/3/items?per_page=100&${projectFieldQuery}`),
+    allProjectItems(),
+    githubProjectItems(`${projectApi}/views/4/items?per_page=100&${projectFieldQuery}`),
     githubJson(
       "https://api.github.com/repos/Obiente/nc-native/milestones?state=all&per_page=100",
     ),
   ]);
+  const projectRoadmapItems = projectItems.map(roadmapItem).filter(Boolean);
+  const projectUpdatedAt = [
+    ...projectRoadmapItems.map((item) => item.updatedAt),
+    ...milestones.map((milestone) => milestone.updated_at),
+  ]
+    .filter(Boolean)
+    .sort()
+    .at(-1) ?? null;
   roadmap = {
     source: "github",
+    syncState: "live",
     projectUrl,
+    updatedAt: projectUpdatedAt,
     epics: epics.map(roadmapItem).filter(Boolean),
+    shipped: shippedPriorityItems(projectRoadmapItems)
+      .sort((left, right) => (right.closedAt ?? "").localeCompare(left.closedAt ?? "")),
     priorities: priorities
       .map(roadmapItem)
       .filter(Boolean)
       .filter((item) => !item.taskId?.startsWith("EPIC-"))
+      .filter((item) => item.status !== "Done")
       .sort(
         (left, right) =>
           (left.priority ?? "").localeCompare(right.priority ?? "") ||
@@ -446,12 +464,31 @@ try {
       number: milestone.number,
       title: milestone.title,
       url: milestone.html_url,
+      description: milestone.description,
+      state: milestone.state,
+      dueOn: milestone.due_on,
+      updatedAt: milestone.updated_at,
       open: milestone.open_issues,
       closed: milestone.closed_issues,
     })),
   };
+  await mkdir(path.dirname(roadmapSnapshotFile), { recursive: true });
+  await writeFile(
+    roadmapSnapshotFile,
+    `${JSON.stringify(roadmapSnapshotFromLive(roadmap), null, 2)}\n`,
+  );
 } catch (error) {
-  console.warn(`Using repository roadmap fallback: ${error.message}`);
+  try {
+    roadmap = normalizeRoadmapSnapshot(
+      JSON.parse(await readFile(roadmapSnapshotFile, "utf8")),
+    );
+    console.warn(`Using bundled GitHub roadmap snapshot: ${error.message}`);
+  } catch (snapshotError) {
+    roadmap = fallbackRoadmap;
+    console.warn(
+      `Using repository roadmap fallback: ${error.message}; ${snapshotError.message}`,
+    );
+  }
 }
 
 await writeFile(
@@ -461,6 +498,7 @@ await writeFile(
 
 const roadmapSearchText = [
   ...roadmap.epics,
+  ...roadmap.shipped,
   ...roadmap.priorities,
   ...roadmap.verification,
   ...roadmap.milestones,

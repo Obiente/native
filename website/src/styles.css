@@ -21,6 +21,11 @@
   --primary-container: #373044;
   --on-primary: #2c1746;
   --success: #6fd5c3;
+  --status-active: #e1ba62;
+  --status-planned: #96949d;
+  --radius-control: 7px;
+  --radius-surface: 12px;
+  --radius-large: 16px;
   --content-width: 1320px;
 }
 
@@ -82,12 +87,12 @@ svg {
 
 .section-width,
 .site-header {
-  width: min(calc(100% - 40px), var(--content-width));
+  width: min(calc(100% - 56px), var(--content-width));
   margin-inline: auto;
 }
 
 .site-header {
-  min-height: 80px;
+  min-height: 72px;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
@@ -117,15 +122,15 @@ svg {
 }
 
 .brand-mark {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
 }
 
 .desktop-nav {
   display: flex;
   align-items: center;
-  gap: 32px;
+  gap: 26px;
 }
 
 .desktop-nav a,
@@ -151,7 +156,7 @@ svg {
   gap: 8px;
   padding: 10px 14px;
   border: 1px solid var(--outline-strong);
-  border-radius: 12px;
+  border-radius: 8px;
   font-size: 14px;
   font-weight: 650;
   transition:
@@ -328,15 +333,15 @@ svg {
 
 .hero {
   display: grid;
-  grid-template-columns: minmax(400px, 0.82fr) minmax(620px, 1.18fr);
+  grid-template-columns: minmax(330px, 0.72fr) minmax(0, 1.28fr);
   align-items: center;
-  gap: clamp(48px, 5vw, 76px);
-  min-height: 720px;
-  padding-block: 88px;
+  gap: 44px;
+  min-height: auto;
+  padding-block: 72px 96px;
 }
 
 .hero-copy {
-  max-width: 590px;
+  max-width: 500px;
 }
 
 .eyebrow,
@@ -373,9 +378,9 @@ p {
 
 h1 {
   margin: 0;
-  font-size: clamp(52px, 6vw, 80px);
-  line-height: 0.98;
-  letter-spacing: -0.055em;
+  font-size: clamp(48px, 4.9vw, 68px);
+  line-height: 1.01;
+  letter-spacing: -0.052em;
   font-weight: 720;
 }
 
@@ -406,7 +411,7 @@ h1 span {
   gap: 9px;
   padding: 0 19px;
   border: 1px solid transparent;
-  border-radius: 14px;
+  border-radius: 9px;
   font-size: 14px;
   font-weight: 750;
   transition:
@@ -686,6 +691,81 @@ h1 span {
   background: var(--surface-low);
 }
 
+.feature-overview {
+  padding-block: 110px;
+  border-block: 1px solid var(--outline);
+  background: var(--surface-low);
+}
+
+.feature-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 44px;
+}
+
+.feature-overview-grid article {
+  min-height: 290px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 28px;
+  border: 1px solid var(--outline);
+  border-radius: 18px;
+  background: var(--background);
+}
+
+.feature-overview-grid h3 {
+  margin: 10px 0 0;
+  font-size: 20px;
+  line-height: 1.25;
+  letter-spacing: -0.03em;
+}
+
+.feature-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 20px;
+  color: var(--status-active);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.feature-stage::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.feature-overview-grid article:last-child .feature-stage {
+  color: var(--status-planned);
+}
+
+.feature-overview-grid p {
+  margin: 14px 0 24px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.feature-overview-grid a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: auto;
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.feature-overview-grid a:hover,
+.feature-overview-grid a:focus-visible {
+  color: var(--text);
+}
+
 .adaptive-section {
   padding-block: 110px;
   border-top: 1px solid var(--outline);
@@ -825,9 +905,7 @@ h1 span {
 .screenshots-section {
   padding-block: 120px;
   border-block: 1px solid var(--outline);
-  background:
-    radial-gradient(circle at 50% 0%, rgb(203 179 253 / 9%), transparent 38%),
-    var(--surface-low);
+  background: var(--surface-low);
 }
 
 .screenshot-gallery {
@@ -848,7 +926,7 @@ h1 span {
   margin: 0;
   overflow: hidden;
   border: 1px solid var(--outline);
-  border-radius: 20px;
+  border-radius: 10px;
   background: var(--surface);
 }
 
@@ -887,7 +965,7 @@ h1 span {
   margin: 0;
   overflow: hidden;
   border: 1px solid var(--outline);
-  border-radius: 20px;
+  border-radius: 10px;
   background: var(--surface);
 }
 
@@ -958,7 +1036,7 @@ h1 span {
   grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.1fr);
   overflow: hidden;
   border: 1px solid var(--outline);
-  border-radius: 18px;
+  border-radius: 10px;
   background: var(--surface-low);
   transition: border-color 150ms ease, transform 150ms ease;
 }
@@ -1043,7 +1121,9 @@ h1 span {
     "back back"
     "heading figure"
     "body figure"
-    "release figure";
+    "roadmap roadmap"
+    "related related"
+    "release release";
   gap: 0 56px;
   align-items: start;
 }
@@ -1064,13 +1144,12 @@ h1 span {
 
 .article-hero {
   grid-area: figure;
-  position: sticky;
-  top: 92px;
+  position: static;
   min-width: 0;
   margin: 0;
   overflow: hidden;
   border: 1px solid var(--outline);
-  border-radius: 22px;
+  border-radius: 10px;
   background: var(--background);
 }
 
@@ -1096,6 +1175,59 @@ h1 span {
   border-radius: 14px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.article-related {
+  grid-area: related;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(180px, 0.75fr));
+  gap: 0;
+  margin-top: 26px;
+  border: 1px solid var(--outline);
+  border-radius: 10px;
+  background: var(--surface-low);
+}
+
+.article-related > div,
+.article-related > a {
+  min-width: 0;
+  padding: 20px;
+}
+
+.article-related > div {
+  border-right: 1px solid var(--outline);
+}
+
+.article-related .eyebrow {
+  margin-bottom: 7px;
+}
+
+.article-related h2 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.25;
+  letter-spacing: -0.025em;
+}
+
+.article-related > a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-right: 1px solid var(--outline);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.article-related > a:last-child {
+  border-right: 0;
+}
+
+.article-related > a:hover,
+.article-related > a:focus-visible {
+  background: var(--surface);
+  color: var(--primary);
 }
 
 .article-release-link a {
@@ -1371,7 +1503,79 @@ h1 span {
 }
 
 .doc-page.roadmap-page {
-  grid-template-columns: 220px minmax(0, 1040px);
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch;
+  padding-block: 38px 96px;
+}
+
+.roadmap-page .doc-sidebar {
+  display: none;
+}
+
+.roadmap-page .doc-article {
+  width: 100%;
+}
+
+.roadmap-route-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 6px 22px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--outline);
+}
+
+.roadmap-route-heading .eyebrow {
+  grid-row: 1;
+  margin: 0;
+}
+
+.roadmap-route-heading h1 {
+  grid-column: 1;
+  grid-row: 2;
+  margin: 0;
+  font-size: clamp(34px, 4vw, 48px);
+  line-height: 1;
+  letter-spacing: -0.045em;
+}
+
+.roadmap-route-heading > p:not(.eyebrow) {
+  grid-column: 2;
+  grid-row: 2;
+  max-width: 680px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.roadmap-source-document {
+  margin-top: 24px;
+  overflow: hidden;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-large);
+  background: var(--surface-low);
+}
+
+.roadmap-source-document > summary {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  padding: 0 26px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.roadmap-source-document > summary:hover,
+.roadmap-source-document > summary:focus-visible {
+  background: var(--surface);
+}
+
+.roadmap-source-document > .markdown-body {
+  padding: 10px 26px 34px;
+  border-top: 1px solid var(--outline);
 }
 
 .doc-back {
@@ -1949,6 +2153,10 @@ h1 span {
     grid-template-columns: 1fr;
     gap: 0;
   }
+
+  .feature-overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -2075,6 +2283,8 @@ h1 span {
       "heading"
       "figure"
       "body"
+      "roadmap"
+      "related"
       "release";
     gap: 0;
   }
@@ -2082,6 +2292,20 @@ h1 span {
   .article-hero {
     position: static;
     margin: 34px 0 8px;
+  }
+
+  .article-related {
+    grid-template-columns: 1fr;
+  }
+
+  .article-related > div,
+  .article-related > a {
+    border-right: 0;
+    border-bottom: 1px solid var(--outline);
+  }
+
+  .article-related > a:last-child {
+    border-bottom: 0;
   }
 
   .app-family-grid {
@@ -2094,8 +2318,13 @@ h1 span {
 
   .adaptive-section,
   .docs-section,
-  .faq-section {
+  .faq-section,
+  .feature-overview {
     padding-block: 86px;
+  }
+
+  .feature-overview-grid {
+    grid-template-columns: 1fr;
   }
 
   .approach,
@@ -2152,6 +2381,17 @@ h1 span {
 
   .doc-page.roadmap-page {
     grid-template-columns: 1fr;
+  }
+
+  .roadmap-route-heading {
+    grid-template-columns: 1fr;
+  }
+
+  .roadmap-route-heading .eyebrow,
+  .roadmap-route-heading h1,
+  .roadmap-route-heading > p:not(.eyebrow) {
+    grid-column: 1;
+    grid-row: auto;
   }
 
   .roadmap-dashboard-heading {

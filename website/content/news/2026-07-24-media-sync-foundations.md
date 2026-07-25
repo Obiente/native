@@ -2,8 +2,8 @@
 title: Backing up your phone photos should feel trustworthy
 slug: media-sync-foundations
 date: 2026-07-24
-lastUpdated: 2026-07-24
-description: See which photos are safely backed up to Nextcloud, which still need attention, and when it is safe to free phone storage.
+lastUpdated: 2026-07-25
+description: The verified-backup design distinguishes safe Nextcloud copies, files that need attention, and storage that can be reviewed for cleanup.
 tags: phone photo backup, Nextcloud Photos, Android, free phone storage
 image: /screenshots/media-backup-queue.png
 imageAlt: Nextcloud Native showing detected Camera and Screenshots folders plus pending and completed photo backup counts on mobile
@@ -19,8 +19,8 @@ server. It should not mean that a file with the same name was uploaded once.
 
 That distinction matters when the phone is full, a photograph was edited after its
 first upload, or a background transfer stopped halfway through a large camera folder.
-Nextcloud Native is being designed around visible evidence rather than optimistic
-queue state.
+Nextcloud Native organizes photo backup around visible evidence rather than
+optimistic queue state.
 
 ## A backup badge has to mean something
 
@@ -34,7 +34,7 @@ guess before deleting anything. The problem becomes worse when an app "organizes
 uploaded media by moving it into a private app folder. That can hide recent photos
 from WhatsApp, Instagram, Discord, editors, and Android's normal media picker.
 
-Our direction keeps current media in the normal Android library. Backup status is
+Nextcloud Native keeps current media in the normal Android library. Backup status is
 metadata about the file, not a new place the user has to keep it.
 
 ## Transfer state and backup evidence are different
@@ -54,8 +54,8 @@ The UI can then present meaningful states:
 - **Failed** keeps the reason and offers a safe retry.
 - **Cloud only** means the verified local copy was removed with user confirmation.
 
-These states belong in a compact summary and paged history. The app should remain
-responsive even when a camera roll contains tens of thousands of completed items.
+These states live in a compact summary and paged history. The app remains responsive
+even when a camera roll contains tens of thousands of completed items.
 
 ## From camera folder to verified copy
 
@@ -80,7 +80,7 @@ confirmation. The app never silently removes the only local original.
 
 ## Sharing after local cleanup
 
-Cloud-only should not mean trapped. A cleaned-up photograph remains visible in the
+Cloud-only does not mean trapped. A cleaned-up photograph remains visible in the
 native gallery with an honest cloud indicator. Selecting Share downloads a temporary
 verified copy, hands it to Android's share sheet, and manages that temporary storage
 without restoring the entire camera folder.
@@ -89,29 +89,31 @@ This preserves the storage benefit while keeping ordinary sharing with messaging
 social apps practical. It also avoids pretending that a cloud-only item is instantly
 available when the phone is offline.
 
-## Formats and devices still to prove
+## Formats and devices keep their meaning
 
-The current developer build has media browsing, preview, and transfer foundations,
-but the complete evidence-backed backup flow is not ready for everyday use. Folder
-preview, durable paged history, background policy controls, multiple-account routing,
-verified cleanup, and cloud-only sharing still require integration and device tests.
+RAW originals remain distinct from JPEG fallbacks, while matching RAW/JPEG pairs can
+appear as one stack without hiding either file. The roadmap covers Android and iOS Live
+Photos as paired still-image and motion-video assets rather than claiming that support
+is already shipped. Edited derivatives, bursts, videos, HEIC, and broader image formats
+use explicit format metadata instead of being treated as interchangeable JPEG files.
 
-Android vendors impose different background and battery rules. RAW formats, motion
-photos, edited derivatives, bursts, and RAW/JPEG pairs also need explicit test
-matrices. A feature is not complete merely because a single JPEG reaches a test
-server.
+Android vendors impose different background and battery rules, so folder status also
+explains when the operating system paused work. Recovery and retry are visible
+without turning every completed upload into a live card.
 
-## The path to safe storage cleanup
+## A complete storage cleanup path
 
-The next slice connects folder discovery and preview to a durable SQLite transfer
-store, adds native local and remote destination pickers, and exposes compact pending,
-failed, and completed views. Multiple account identity will be present in every queue
-and verification record.
+The storage-cleanup design connects folder discovery and preview to a durable SQLite
+transfer store. Native local and remote destination pickers feed compact pending,
+failed, and completed views, while account identity belongs in every queue and
+verification record. The remaining persistence, background execution, and recovery
+gates are still active implementation work and are tracked below.
 
-After reliable background execution, the project can add the storage review flow,
-temporary cloud-only sharing, richer RAW/JPEG grouping, and stress tests against
-large camera libraries. The roadmap tracks each acceptance gate rather than hiding
-the work behind one "photo backup" checkbox.
+The storage review flow is designed to derive candidates from exact verification
+evidence. Temporary cloud-only sharing, RAW/JPEG grouping, and bounded history remain
+part of the same model. The public roadmap beneath this article tracks the acceptance
+gates behind the experience rather than hiding them behind one "photo backup"
+checkbox.
 
 ## Proof belongs outside the queue
 

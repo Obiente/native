@@ -1,0 +1,3859 @@
+{
+  "source": "github-snapshot",
+  "syncState": "snapshot",
+  "projectUrl": "https://github.com/orgs/Obiente/projects/4",
+  "updatedAt": "2026-07-25T13:34:31Z",
+  "epics": [
+    {
+      "number": 10,
+      "taskId": "EPIC-MEDIA",
+      "title": "Safe media backup and storage",
+      "url": "https://github.com/Obiente/nc-native/issues/10",
+      "priority": "P0",
+      "area": "Media",
+      "status": "In Progress",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 18,
+        "completed": 4,
+        "percent_completed": 22
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "epic"
+      ],
+      "updatedAt": "2026-07-24T16:00:29Z",
+      "closedAt": null
+    },
+    {
+      "number": 11,
+      "taskId": "EPIC-SYNC",
+      "title": "Files client and advanced sync",
+      "url": "https://github.com/Obiente/nc-native/issues/11",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "In Progress",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 20,
+        "completed": 1,
+        "percent_completed": 5
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "epic"
+      ],
+      "updatedAt": "2026-07-24T16:00:32Z",
+      "closedAt": null
+    },
+    {
+      "number": 12,
+      "taskId": "EPIC-DAV",
+      "title": "DAV device sync and native groupware",
+      "url": "https://github.com/Obiente/nc-native/issues/12",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "In Progress",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 21,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "epic"
+      ],
+      "updatedAt": "2026-07-24T16:00:36Z",
+      "closedAt": null
+    },
+    {
+      "number": 13,
+      "taskId": "EPIC-TALK",
+      "title": "Native Talk replacement",
+      "url": "https://github.com/Obiente/nc-native/issues/13",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "In Progress",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 21,
+        "completed": 2,
+        "percent_completed": 9
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "epic"
+      ],
+      "updatedAt": "2026-07-24T16:00:39Z",
+      "closedAt": null
+    },
+    {
+      "number": 14,
+      "taskId": "EPIC-PHOTO",
+      "title": "Photos and Memories",
+      "url": "https://github.com/Obiente/nc-native/issues/14",
+      "priority": "P0",
+      "area": "Photos and Memories",
+      "status": "In Progress",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 15,
+        "completed": 1,
+        "percent_completed": 6
+      },
+      "labels": [
+        "priority:P0",
+        "area:photos",
+        "epic"
+      ],
+      "updatedAt": "2026-07-24T16:00:45Z",
+      "closedAt": null
+    },
+    {
+      "number": 15,
+      "taskId": "EPIC-DYN",
+      "title": "Adaptive Nextcloud apps",
+      "url": "https://github.com/Obiente/nc-native/issues/15",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "In Progress",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 20,
+        "completed": 1,
+        "percent_completed": 5
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "epic"
+      ],
+      "updatedAt": "2026-07-24T16:00:50Z",
+      "closedAt": null
+    },
+    {
+      "number": 16,
+      "taskId": "EPIC-PLATFORM",
+      "title": "Platform UX, quality, and releases",
+      "url": "https://github.com/Obiente/nc-native/issues/16",
+      "priority": "P0",
+      "area": "Release",
+      "status": "In Progress",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 27,
+        "completed": 4,
+        "percent_completed": 14
+      },
+      "labels": [
+        "priority:P0",
+        "area:release",
+        "epic"
+      ],
+      "updatedAt": "2026-07-24T16:01:03Z",
+      "closedAt": null
+    },
+    {
+      "number": 185,
+      "taskId": null,
+      "title": "epic(admin): manage a Nextcloud server natively",
+      "url": "https://github.com/Obiente/nc-native/issues/185",
+      "priority": "P1",
+      "area": "Platform",
+      "status": "Todo",
+      "milestone": null,
+      "progress": {
+        "total": 5,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "enhancement",
+        "priority:P1",
+        "area:dynamic-apps",
+        "area:platform",
+        "type:feature",
+        "platform:android",
+        "platform:desktop",
+        "needs-design",
+        "needs-protocol-review",
+        "epic"
+      ],
+      "updatedAt": "2026-07-24T20:46:23Z",
+      "closedAt": null
+    }
+  ],
+  "shipped": [
+    {
+      "number": 82,
+      "taskId": "PHOTO-001",
+      "title": "Full-quality orientation correctness",
+      "url": "https://github.com/Obiente/nc-native/issues/82",
+      "priority": "P0",
+      "area": "Photos and Memories",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:photos",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-25T13:34:31Z",
+      "closedAt": "2026-07-25T13:34:31Z"
+    },
+    {
+      "number": 55,
+      "taskId": "DYN-015",
+      "title": "Cookbook presentation",
+      "url": "https://github.com/Obiente/nc-native/issues/55",
+      "priority": "P1",
+      "area": "Adaptive apps",
+      "status": "Done",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T23:41:18Z",
+      "closedAt": "2026-07-24T23:41:18Z"
+    },
+    {
+      "number": 170,
+      "taskId": "MEDIA-021",
+      "title": "Preview detected media before enabling sync",
+      "url": "https://github.com/Obiente/nc-native/issues/170",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T21:05:10Z",
+      "closedAt": "2026-07-24T21:05:10Z"
+    },
+    {
+      "number": 171,
+      "taskId": "MEDIA-022",
+      "title": "Add a native Nextcloud destination folder picker",
+      "url": "https://github.com/Obiente/nc-native/issues/171",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "area:files-sync",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T20:52:21Z",
+      "closedAt": "2026-07-24T20:52:21Z"
+    },
+    {
+      "number": 100,
+      "taskId": "RELEASE-001",
+      "title": "Pre-release checklist",
+      "url": "https://github.com/Obiente/nc-native/issues/100",
+      "priority": "P0",
+      "area": "Release",
+      "status": "Done",
+      "milestone": "1.0 Release readiness",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:release",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T20:52:17Z",
+      "closedAt": "2026-07-24T20:52:17Z"
+    },
+    {
+      "number": 64,
+      "taskId": "MEDIA-004",
+      "title": "Show backup state in native media UI",
+      "url": "https://github.com/Obiente/nc-native/issues/64",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T19:19:22Z",
+      "closedAt": "2026-07-24T19:19:22Z"
+    },
+    {
+      "number": 63,
+      "taskId": "MEDIA-003",
+      "title": "Persist the media ledger",
+      "url": "https://github.com/Obiente/nc-native/issues/63",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T18:18:17Z",
+      "closedAt": "2026-07-24T18:18:17Z"
+    },
+    {
+      "number": 167,
+      "taskId": "MEDIA-019",
+      "title": "Apply suggested media folders directly",
+      "url": "https://github.com/Obiente/nc-native/issues/167",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "platform:android",
+        "type:bug"
+      ],
+      "updatedAt": "2026-07-24T17:41:40Z",
+      "closedAt": "2026-07-24T17:41:40Z"
+    },
+    {
+      "number": 128,
+      "taskId": "TALK-002",
+      "title": "Preserve interaction metadata",
+      "url": "https://github.com/Obiente/nc-native/issues/128",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Done",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T17:18:07Z",
+      "closedAt": "2026-07-24T17:18:06Z"
+    },
+    {
+      "number": 127,
+      "taskId": "TALK-001",
+      "title": "Correct Android history pagination",
+      "url": "https://github.com/Obiente/nc-native/issues/127",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Done",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T17:17:58Z",
+      "closedAt": "2026-07-24T17:17:58Z"
+    },
+    {
+      "number": 107,
+      "taskId": "SYNC-001",
+      "title": "Functional network and power policies",
+      "url": "https://github.com/Obiente/nc-native/issues/107",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T17:17:52Z",
+      "closedAt": "2026-07-24T17:17:52Z"
+    },
+    {
+      "number": 62,
+      "taskId": "MEDIA-002",
+      "title": "Verified media backup ledger",
+      "url": "https://github.com/Obiente/nc-native/issues/62",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T17:17:46Z",
+      "closedAt": "2026-07-24T17:17:45Z"
+    },
+    {
+      "number": 61,
+      "taskId": "MEDIA-001",
+      "title": "Detect Android media folders",
+      "url": "https://github.com/Obiente/nc-native/issues/61",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T17:17:36Z",
+      "closedAt": "2026-07-24T17:17:36Z"
+    },
+    {
+      "number": 158,
+      "taskId": "WEB-001",
+      "title": "Embed the public GitHub roadmap on the website",
+      "url": "https://github.com/Obiente/nc-native/issues/158",
+      "priority": "P1",
+      "area": "UX",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "type:feature",
+        "needs-design",
+        "verification",
+        "area:website"
+      ],
+      "updatedAt": "2026-07-24T17:05:08Z",
+      "closedAt": "2026-07-24T17:05:08Z"
+    },
+    {
+      "number": 19,
+      "taskId": "CORE-001",
+      "title": "Source-derived parity audit",
+      "url": "https://github.com/Obiente/nc-native/issues/19",
+      "priority": "P0",
+      "area": "Release",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:release",
+        "type:reliability"
+      ],
+      "updatedAt": "2026-07-24T16:12:07Z",
+      "closedAt": "2026-07-24T16:12:06Z"
+    },
+    {
+      "number": 99,
+      "taskId": "REL-003",
+      "title": "Live API audits are opt-in",
+      "url": "https://github.com/Obiente/nc-native/issues/99",
+      "priority": "P0",
+      "area": "Release",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:release",
+        "type:reliability"
+      ],
+      "updatedAt": "2026-07-24T16:12:04Z",
+      "closedAt": "2026-07-24T16:12:04Z"
+    }
+  ],
+  "priorities": [
+    {
+      "number": 172,
+      "taskId": "CORE-002",
+      "title": "Make accounts a first-class isolated runtime context",
+      "url": "https://github.com/Obiente/nc-native/issues/172",
+      "priority": "P0",
+      "area": "Platform",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "area:platform",
+        "type:feature",
+        "type:security"
+      ],
+      "updatedAt": "2026-07-24T17:50:32Z",
+      "closedAt": null
+    },
+    {
+      "number": 20,
+      "taskId": "DAV-001",
+      "title": "Android account model",
+      "url": "https://github.com/Obiente/nc-native/issues/20",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:03:31Z",
+      "closedAt": null
+    },
+    {
+      "number": 21,
+      "taskId": "DAV-002",
+      "title": "Principal, home-set, and collection discovery store",
+      "url": "https://github.com/Obiente/nc-native/issues/21",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:03:32Z",
+      "closedAt": null
+    },
+    {
+      "number": 22,
+      "taskId": "DAV-003",
+      "title": "Collection selection UI",
+      "url": "https://github.com/Obiente/nc-native/issues/22",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-design",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:03:34Z",
+      "closedAt": null
+    },
+    {
+      "number": 23,
+      "taskId": "DAV-004",
+      "title": "Android calendar provider integration",
+      "url": "https://github.com/Obiente/nc-native/issues/23",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:03:35Z",
+      "closedAt": null
+    },
+    {
+      "number": 24,
+      "taskId": "DAV-005",
+      "title": "Android contacts provider integration",
+      "url": "https://github.com/Obiente/nc-native/issues/24",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:03:37Z",
+      "closedAt": null
+    },
+    {
+      "number": 26,
+      "taskId": "DAV-007",
+      "title": "Incremental sync-token engine",
+      "url": "https://github.com/Obiente/nc-native/issues/26",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:11Z",
+      "closedAt": null
+    },
+    {
+      "number": 27,
+      "taskId": "DAV-008",
+      "title": "CTag/PROPFIND fallback",
+      "url": "https://github.com/Obiente/nc-native/issues/27",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:13Z",
+      "closedAt": null
+    },
+    {
+      "number": 28,
+      "taskId": "DAV-009",
+      "title": "Conflict-safe DAV upload/delete",
+      "url": "https://github.com/Obiente/nc-native/issues/28",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:15Z",
+      "closedAt": null
+    },
+    {
+      "number": 29,
+      "taskId": "DAV-010",
+      "title": "Recurring calendar events",
+      "url": "https://github.com/Obiente/nc-native/issues/29",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:18Z",
+      "closedAt": null
+    },
+    {
+      "number": 31,
+      "taskId": "DAV-012",
+      "title": "Contact field fidelity",
+      "url": "https://github.com/Obiente/nc-native/issues/31",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:29Z",
+      "closedAt": null
+    },
+    {
+      "number": 32,
+      "taskId": "DAV-013",
+      "title": "Contact groups",
+      "url": "https://github.com/Obiente/nc-native/issues/32",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:42Z",
+      "closedAt": null
+    },
+    {
+      "number": 33,
+      "taskId": "DAV-014",
+      "title": "Per-data-type interval settings",
+      "url": "https://github.com/Obiente/nc-native/issues/33",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-design",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:43Z",
+      "closedAt": null
+    },
+    {
+      "number": 37,
+      "taskId": "DAV-018",
+      "title": "Credential and certificate settings",
+      "url": "https://github.com/Obiente/nc-native/issues/37",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-design",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:53Z",
+      "closedAt": null
+    },
+    {
+      "number": 38,
+      "taskId": "DAV-019",
+      "title": "Sync status and error UI",
+      "url": "https://github.com/Obiente/nc-native/issues/38",
+      "priority": "P0",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-design",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:55Z",
+      "closedAt": null
+    },
+    {
+      "number": 41,
+      "taskId": "DYN-001",
+      "title": "Contract cache performance",
+      "url": "https://github.com/Obiente/nc-native/issues/41",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:05:01Z",
+      "closedAt": null
+    },
+    {
+      "number": 42,
+      "taskId": "DYN-002",
+      "title": "Contract fallback chain",
+      "url": "https://github.com/Obiente/nc-native/issues/42",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:05:02Z",
+      "closedAt": null
+    },
+    {
+      "number": 43,
+      "taskId": "DYN-003",
+      "title": "API version negotiation",
+      "url": "https://github.com/Obiente/nc-native/issues/43",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:05:04Z",
+      "closedAt": null
+    },
+    {
+      "number": 44,
+      "taskId": "DYN-004",
+      "title": "Semantic entity recognition",
+      "url": "https://github.com/Obiente/nc-native/issues/44",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:05:07Z",
+      "closedAt": null
+    },
+    {
+      "number": 45,
+      "taskId": "DYN-005",
+      "title": "Context-aware action binding",
+      "url": "https://github.com/Obiente/nc-native/issues/45",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:05:11Z",
+      "closedAt": null
+    },
+    {
+      "number": 46,
+      "taskId": "DYN-006",
+      "title": "Relationship and nested-resource planner",
+      "url": "https://github.com/Obiente/nc-native/issues/46",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:05:13Z",
+      "closedAt": null
+    },
+    {
+      "number": 47,
+      "taskId": "DYN-007",
+      "title": "Native list/detail/table/board/dashboard selection",
+      "url": "https://github.com/Obiente/nc-native/issues/47",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:05:15Z",
+      "closedAt": null
+    },
+    {
+      "number": 48,
+      "taskId": "DYN-008",
+      "title": "Editable structured forms",
+      "url": "https://github.com/Obiente/nc-native/issues/48",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:05:16Z",
+      "closedAt": null
+    },
+    {
+      "number": 50,
+      "taskId": "DYN-010",
+      "title": "Global search",
+      "url": "https://github.com/Obiente/nc-native/issues/50",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:05:20Z",
+      "closedAt": null
+    },
+    {
+      "number": 51,
+      "taskId": "DYN-011",
+      "title": "Tables presentation",
+      "url": "https://github.com/Obiente/nc-native/issues/51",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:05:23Z",
+      "closedAt": null
+    },
+    {
+      "number": 52,
+      "taskId": "DYN-012",
+      "title": "Deck presentation",
+      "url": "https://github.com/Obiente/nc-native/issues/52",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:05:26Z",
+      "closedAt": null
+    },
+    {
+      "number": 53,
+      "taskId": "DYN-013",
+      "title": "Cospend/budget presentation",
+      "url": "https://github.com/Obiente/nc-native/issues/53",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:05:30Z",
+      "closedAt": null
+    },
+    {
+      "number": 54,
+      "taskId": "DYN-014",
+      "title": "Mail presentation",
+      "url": "https://github.com/Obiente/nc-native/issues/54",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:05:34Z",
+      "closedAt": null
+    },
+    {
+      "number": 56,
+      "taskId": "DYN-016",
+      "title": "Music presentation",
+      "url": "https://github.com/Obiente/nc-native/issues/56",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:05:38Z",
+      "closedAt": null
+    },
+    {
+      "number": 57,
+      "taskId": "DYN-017",
+      "title": "Notes presentation",
+      "url": "https://github.com/Obiente/nc-native/issues/57",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:05:40Z",
+      "closedAt": null
+    },
+    {
+      "number": 66,
+      "taskId": "MEDIA-006",
+      "title": "Preserve third-party media picker visibility",
+      "url": "https://github.com/Obiente/nc-native/issues/66",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:00Z",
+      "closedAt": null
+    },
+    {
+      "number": 67,
+      "taskId": "MEDIA-007",
+      "title": "Reviewed Android storage reclaim",
+      "url": "https://github.com/Obiente/nc-native/issues/67",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:02Z",
+      "closedAt": null
+    },
+    {
+      "number": 68,
+      "taskId": "MEDIA-008",
+      "title": "Cloud-only media restore",
+      "url": "https://github.com/Obiente/nc-native/issues/68",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:05Z",
+      "closedAt": null
+    },
+    {
+      "number": 69,
+      "taskId": "MEDIA-009",
+      "title": "Share cloud-only media",
+      "url": "https://github.com/Obiente/nc-native/issues/69",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:09Z",
+      "closedAt": null
+    },
+    {
+      "number": 73,
+      "taskId": "MEDIA-013",
+      "title": "Media collision policy",
+      "url": "https://github.com/Obiente/nc-native/issues/73",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:25Z",
+      "closedAt": null
+    },
+    {
+      "number": 77,
+      "taskId": "MEDIA-017",
+      "title": "Limited photo permission behavior",
+      "url": "https://github.com/Obiente/nc-native/issues/77",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:35Z",
+      "closedAt": null
+    },
+    {
+      "number": 78,
+      "taskId": "MEDIA-018",
+      "title": "Media backup recovery and retry",
+      "url": "https://github.com/Obiente/nc-native/issues/78",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:37Z",
+      "closedAt": null
+    },
+    {
+      "number": 168,
+      "taskId": "MEDIA-020",
+      "title": "Add a scalable media upload transfer center",
+      "url": "https://github.com/Obiente/nc-native/issues/168",
+      "priority": "P0",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T17:29:14Z",
+      "closedAt": null
+    },
+    {
+      "number": 79,
+      "taskId": "PERF-001",
+      "title": "Startup performance",
+      "url": "https://github.com/Obiente/nc-native/issues/79",
+      "priority": "P0",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:performance"
+      ],
+      "updatedAt": "2026-07-24T16:06:39Z",
+      "closedAt": null
+    },
+    {
+      "number": 80,
+      "taskId": "PERF-002",
+      "title": "Image memory and cache budgets",
+      "url": "https://github.com/Obiente/nc-native/issues/80",
+      "priority": "P0",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:performance"
+      ],
+      "updatedAt": "2026-07-24T16:06:40Z",
+      "closedAt": null
+    },
+    {
+      "number": 81,
+      "taskId": "PERF-003",
+      "title": "Request coalescing and pagination",
+      "url": "https://github.com/Obiente/nc-native/issues/81",
+      "priority": "P0",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:performance"
+      ],
+      "updatedAt": "2026-07-24T16:06:41Z",
+      "closedAt": null
+    },
+    {
+      "number": 83,
+      "taskId": "PHOTO-002",
+      "title": "Video playback",
+      "url": "https://github.com/Obiente/nc-native/issues/83",
+      "priority": "P0",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:photos",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:06:45Z",
+      "closedAt": null
+    },
+    {
+      "number": 85,
+      "taskId": "PHOTO-004",
+      "title": "RAW original and JPEG fallback distinction",
+      "url": "https://github.com/Obiente/nc-native/issues/85",
+      "priority": "P0",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:photos",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:06:52Z",
+      "closedAt": null
+    },
+    {
+      "number": 86,
+      "taskId": "PHOTO-005",
+      "title": "Full-resolution progressive loading",
+      "url": "https://github.com/Obiente/nc-native/issues/86",
+      "priority": "P0",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:photos",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:06:53Z",
+      "closedAt": null
+    },
+    {
+      "number": 87,
+      "taskId": "PHOTO-006",
+      "title": "Native albums and shared albums",
+      "url": "https://github.com/Obiente/nc-native/issues/87",
+      "priority": "P0",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:photos",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:06:59Z",
+      "closedAt": null
+    },
+    {
+      "number": 88,
+      "taskId": "PHOTO-007",
+      "title": "Tags",
+      "url": "https://github.com/Obiente/nc-native/issues/88",
+      "priority": "P0",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:photos",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:03Z",
+      "closedAt": null
+    },
+    {
+      "number": 89,
+      "taskId": "PHOTO-008",
+      "title": "People ordering and search",
+      "url": "https://github.com/Obiente/nc-native/issues/89",
+      "priority": "P0",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:photos",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:05Z",
+      "closedAt": null
+    },
+    {
+      "number": 90,
+      "taskId": "PHOTO-009",
+      "title": "Person photo view",
+      "url": "https://github.com/Obiente/nc-native/issues/90",
+      "priority": "P0",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:photos",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:07:06Z",
+      "closedAt": null
+    },
+    {
+      "number": 91,
+      "taskId": "PHOTO-010",
+      "title": "People rename, merge, and remove face",
+      "url": "https://github.com/Obiente/nc-native/issues/91",
+      "priority": "P0",
+      "area": "Photos and Memories",
+      "status": "In Progress",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:photos",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:07Z",
+      "closedAt": null
+    },
+    {
+      "number": 92,
+      "taskId": "PHOTO-011",
+      "title": "Photo edit pipeline",
+      "url": "https://github.com/Obiente/nc-native/issues/92",
+      "priority": "P0",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:photos",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:08Z",
+      "closedAt": null
+    },
+    {
+      "number": 94,
+      "taskId": "PHOTO-013",
+      "title": "Native media action menu",
+      "url": "https://github.com/Obiente/nc-native/issues/94",
+      "priority": "P0",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:photos",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:07:12Z",
+      "closedAt": null
+    },
+    {
+      "number": 97,
+      "taskId": "REL-001",
+      "title": "Crash and required-value audit",
+      "url": "https://github.com/Obiente/nc-native/issues/97",
+      "priority": "P0",
+      "area": "Release",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:release",
+        "type:reliability"
+      ],
+      "updatedAt": "2026-07-24T16:07:17Z",
+      "closedAt": null
+    },
+    {
+      "number": 98,
+      "taskId": "REL-002",
+      "title": "Rotation/process-death test suite",
+      "url": "https://github.com/Obiente/nc-native/issues/98",
+      "priority": "P0",
+      "area": "Release",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:release",
+        "type:reliability"
+      ],
+      "updatedAt": "2026-07-24T16:07:18Z",
+      "closedAt": null
+    },
+    {
+      "number": 104,
+      "taskId": "SEC-001",
+      "title": "Secret and personal-data hygiene",
+      "url": "https://github.com/Obiente/nc-native/issues/104",
+      "priority": "P0",
+      "area": "Release",
+      "status": "In Progress",
+      "milestone": "1.0 Release readiness",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:release",
+        "type:security",
+        "in-progress"
+      ],
+      "updatedAt": "2026-07-24T16:07:35Z",
+      "closedAt": null
+    },
+    {
+      "number": 105,
+      "taskId": "SEC-002",
+      "title": "Cache/account isolation",
+      "url": "https://github.com/Obiente/nc-native/issues/105",
+      "priority": "P0",
+      "area": "Release",
+      "status": "Todo",
+      "milestone": "1.0 Release readiness",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:release",
+        "type:security"
+      ],
+      "updatedAt": "2026-07-24T16:07:37Z",
+      "closedAt": null
+    },
+    {
+      "number": 106,
+      "taskId": "SEC-003",
+      "title": "Transport and redirect policy",
+      "url": "https://github.com/Obiente/nc-native/issues/106",
+      "priority": "P0",
+      "area": "Release",
+      "status": "Todo",
+      "milestone": "1.0 Release readiness",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:release",
+        "type:security"
+      ],
+      "updatedAt": "2026-07-24T16:07:39Z",
+      "closedAt": null
+    },
+    {
+      "number": 108,
+      "taskId": "SYNC-002",
+      "title": "Initial sync policy",
+      "url": "https://github.com/Obiente/nc-native/issues/108",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:43Z",
+      "closedAt": null
+    },
+    {
+      "number": 110,
+      "taskId": "SYNC-004",
+      "title": "Update existing sync-pair settings",
+      "url": "https://github.com/Obiente/nc-native/issues/110",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:07:45Z",
+      "closedAt": null
+    },
+    {
+      "number": 111,
+      "taskId": "SYNC-005",
+      "title": "Sync status dashboard",
+      "url": "https://github.com/Obiente/nc-native/issues/111",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:07:48Z",
+      "closedAt": null
+    },
+    {
+      "number": 112,
+      "taskId": "SYNC-006",
+      "title": "Transfer progress and cancellation",
+      "url": "https://github.com/Obiente/nc-native/issues/112",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:50Z",
+      "closedAt": null
+    },
+    {
+      "number": 113,
+      "taskId": "SYNC-007",
+      "title": "Resumable large uploads",
+      "url": "https://github.com/Obiente/nc-native/issues/113",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:51Z",
+      "closedAt": null
+    },
+    {
+      "number": 115,
+      "taskId": "SYNC-009",
+      "title": "Conflict review center",
+      "url": "https://github.com/Obiente/nc-native/issues/115",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:07:54Z",
+      "closedAt": null
+    },
+    {
+      "number": 116,
+      "taskId": "SYNC-010",
+      "title": "Offline operation queue",
+      "url": "https://github.com/Obiente/nc-native/issues/116",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:55Z",
+      "closedAt": null
+    },
+    {
+      "number": 117,
+      "taskId": "SYNC-011",
+      "title": "Version-aware overwrite protection",
+      "url": "https://github.com/Obiente/nc-native/issues/117",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:58Z",
+      "closedAt": null
+    },
+    {
+      "number": 121,
+      "taskId": "SYNC-015",
+      "title": "End-to-end encrypted folders",
+      "url": "https://github.com/Obiente/nc-native/issues/121",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:08:08Z",
+      "closedAt": null
+    },
+    {
+      "number": 122,
+      "taskId": "SYNC-016",
+      "title": "Android DocumentsProvider parity",
+      "url": "https://github.com/Obiente/nc-native/issues/122",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:13Z",
+      "closedAt": null
+    },
+    {
+      "number": 123,
+      "taskId": "SYNC-017",
+      "title": "Multiple account roots",
+      "url": "https://github.com/Obiente/nc-native/issues/123",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:08:14Z",
+      "closedAt": null
+    },
+    {
+      "number": 124,
+      "taskId": "SYNC-018",
+      "title": "File sharing and sharee search",
+      "url": "https://github.com/Obiente/nc-native/issues/124",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:08:15Z",
+      "closedAt": null
+    },
+    {
+      "number": 125,
+      "taskId": "SYNC-019",
+      "title": "External app open/share lifecycle",
+      "url": "https://github.com/Obiente/nc-native/issues/125",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:16Z",
+      "closedAt": null
+    },
+    {
+      "number": 129,
+      "taskId": "TALK-003",
+      "title": "Message context menu",
+      "url": "https://github.com/Obiente/nc-native/issues/129",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:08:23Z",
+      "closedAt": null
+    },
+    {
+      "number": 130,
+      "taskId": "TALK-004",
+      "title": "Reply, edit, and delete",
+      "url": "https://github.com/Obiente/nc-native/issues/130",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:25Z",
+      "closedAt": null
+    },
+    {
+      "number": 131,
+      "taskId": "TALK-005",
+      "title": "Reactions",
+      "url": "https://github.com/Obiente/nc-native/issues/131",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:27Z",
+      "closedAt": null
+    },
+    {
+      "number": 132,
+      "taskId": "TALK-006",
+      "title": "Threads",
+      "url": "https://github.com/Obiente/nc-native/issues/132",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:29Z",
+      "closedAt": null
+    },
+    {
+      "number": 135,
+      "taskId": "TALK-009",
+      "title": "Message sending state",
+      "url": "https://github.com/Obiente/nc-native/issues/135",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:36Z",
+      "closedAt": null
+    },
+    {
+      "number": 136,
+      "taskId": "TALK-010",
+      "title": "Read markers and unread navigation",
+      "url": "https://github.com/Obiente/nc-native/issues/136",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:38Z",
+      "closedAt": null
+    },
+    {
+      "number": 137,
+      "taskId": "TALK-011",
+      "title": "Native voice messages",
+      "url": "https://github.com/Obiente/nc-native/issues/137",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:40Z",
+      "closedAt": null
+    },
+    {
+      "number": 138,
+      "taskId": "TALK-012",
+      "title": "Rich attachments",
+      "url": "https://github.com/Obiente/nc-native/issues/138",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:42Z",
+      "closedAt": null
+    },
+    {
+      "number": 142,
+      "taskId": "TALK-016",
+      "title": "Conversation list parity",
+      "url": "https://github.com/Obiente/nc-native/issues/142",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:54Z",
+      "closedAt": null
+    },
+    {
+      "number": 143,
+      "taskId": "TALK-017",
+      "title": "WebRTC call foundation",
+      "url": "https://github.com/Obiente/nc-native/issues/143",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:08:57Z",
+      "closedAt": null
+    },
+    {
+      "number": 144,
+      "taskId": "TALK-018",
+      "title": "One-to-one and group call UI",
+      "url": "https://github.com/Obiente/nc-native/issues/144",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android",
+        "needs-design",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:08:59Z",
+      "closedAt": null
+    },
+    {
+      "number": 145,
+      "taskId": "TALK-019",
+      "title": "Incoming and background calls",
+      "url": "https://github.com/Obiente/nc-native/issues/145",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:09:00Z",
+      "closedAt": null
+    },
+    {
+      "number": 147,
+      "taskId": "TALK-021",
+      "title": "Push and signaling updates",
+      "url": "https://github.com/Obiente/nc-native/issues/147",
+      "priority": "P0",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:talk",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:09:09Z",
+      "closedAt": null
+    },
+    {
+      "number": 148,
+      "taskId": "UX-001",
+      "title": "Navigation state persistence",
+      "url": "https://github.com/Obiente/nc-native/issues/148",
+      "priority": "P0",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:09:10Z",
+      "closedAt": null
+    },
+    {
+      "number": 149,
+      "taskId": "UX-002",
+      "title": "Correct Android back behavior",
+      "url": "https://github.com/Obiente/nc-native/issues/149",
+      "priority": "P0",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:09:12Z",
+      "closedAt": null
+    },
+    {
+      "number": 150,
+      "taskId": "UX-003",
+      "title": "Insets and status-bar safety",
+      "url": "https://github.com/Obiente/nc-native/issues/150",
+      "priority": "P0",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:09:15Z",
+      "closedAt": null
+    },
+    {
+      "number": 151,
+      "taskId": "UX-004",
+      "title": "Landscape interaction and layout",
+      "url": "https://github.com/Obiente/nc-native/issues/151",
+      "priority": "P0",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:09:16Z",
+      "closedAt": null
+    },
+    {
+      "number": 152,
+      "taskId": "UX-005",
+      "title": "No duplicate headers",
+      "url": "https://github.com/Obiente/nc-native/issues/152",
+      "priority": "P0",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:09:18Z",
+      "closedAt": null
+    },
+    {
+      "number": 153,
+      "taskId": "UX-006",
+      "title": "Card action guardrail",
+      "url": "https://github.com/Obiente/nc-native/issues/153",
+      "priority": "P0",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:09:19Z",
+      "closedAt": null
+    },
+    {
+      "number": 154,
+      "taskId": "UX-007",
+      "title": "Adaptive desktop workspace",
+      "url": "https://github.com/Obiente/nc-native/issues/154",
+      "priority": "P0",
+      "area": "UX",
+      "status": "In Progress",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:feature",
+        "platform:desktop",
+        "in-progress",
+        "verification"
+      ],
+      "updatedAt": "2026-07-24T16:29:08Z",
+      "closedAt": null
+    },
+    {
+      "number": 155,
+      "taskId": "UX-008",
+      "title": "Accessibility",
+      "url": "https://github.com/Obiente/nc-native/issues/155",
+      "priority": "P0",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:09:21Z",
+      "closedAt": null
+    },
+    {
+      "number": 156,
+      "taskId": "UX-009",
+      "title": "Loading and cache UX",
+      "url": "https://github.com/Obiente/nc-native/issues/156",
+      "priority": "P0",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:09:24Z",
+      "closedAt": null
+    },
+    {
+      "number": 182,
+      "taskId": null,
+      "title": "feat(media): preserve Android Motion Photos and Apple Live Photos",
+      "url": "https://github.com/Obiente/nc-native/issues/182",
+      "priority": "P1",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": null,
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "enhancement",
+        "priority:P1",
+        "area:media",
+        "area:photos",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T20:24:43Z",
+      "closedAt": null
+    },
+    {
+      "number": 183,
+      "taskId": null,
+      "title": "feat(home): build a customizable native workspace dashboard",
+      "url": "https://github.com/Obiente/nc-native/issues/183",
+      "priority": "P1",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": null,
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "enhancement",
+        "priority:P1",
+        "area:dynamic-apps",
+        "area:ux",
+        "type:feature",
+        "platform:android",
+        "platform:desktop",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T20:25:31Z",
+      "closedAt": null
+    },
+    {
+      "number": 185,
+      "taskId": null,
+      "title": "epic(admin): manage a Nextcloud server natively",
+      "url": "https://github.com/Obiente/nc-native/issues/185",
+      "priority": "P1",
+      "area": "Platform",
+      "status": "Todo",
+      "milestone": null,
+      "progress": {
+        "total": 5,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "enhancement",
+        "priority:P1",
+        "area:dynamic-apps",
+        "area:platform",
+        "type:feature",
+        "platform:android",
+        "platform:desktop",
+        "needs-design",
+        "needs-protocol-review",
+        "epic"
+      ],
+      "updatedAt": "2026-07-24T20:46:23Z",
+      "closedAt": null
+    },
+    {
+      "number": 186,
+      "taskId": null,
+      "title": "feat(admin): manage users, groups, quotas, and account lifecycle",
+      "url": "https://github.com/Obiente/nc-native/issues/186",
+      "priority": "P1",
+      "area": "Platform",
+      "status": "Todo",
+      "milestone": null,
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "enhancement",
+        "priority:P1",
+        "area:dynamic-apps",
+        "area:ux",
+        "type:feature",
+        "platform:android",
+        "platform:desktop",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T20:46:40Z",
+      "closedAt": null
+    },
+    {
+      "number": 187,
+      "taskId": null,
+      "title": "feat(admin): install, update, configure, and remove server apps",
+      "url": "https://github.com/Obiente/nc-native/issues/187",
+      "priority": "P1",
+      "area": "Platform",
+      "status": "Todo",
+      "milestone": null,
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "enhancement",
+        "priority:P1",
+        "area:dynamic-apps",
+        "area:platform",
+        "type:feature",
+        "platform:android",
+        "platform:desktop",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T20:46:51Z",
+      "closedAt": null
+    },
+    {
+      "number": 188,
+      "taskId": null,
+      "title": "feat(admin): edit server and app administration settings",
+      "url": "https://github.com/Obiente/nc-native/issues/188",
+      "priority": "P1",
+      "area": "Platform",
+      "status": "Todo",
+      "milestone": null,
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "enhancement",
+        "priority:P1",
+        "area:dynamic-apps",
+        "area:ux",
+        "type:feature",
+        "platform:android",
+        "platform:desktop",
+        "needs-design",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T20:47:04Z",
+      "closedAt": null
+    },
+    {
+      "number": 189,
+      "taskId": null,
+      "title": "feat(admin): manage security, sessions, sharing, and federation policies",
+      "url": "https://github.com/Obiente/nc-native/issues/189",
+      "priority": "P1",
+      "area": "Platform",
+      "status": "Todo",
+      "milestone": null,
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "enhancement",
+        "priority:P1",
+        "area:ux",
+        "area:platform",
+        "type:feature",
+        "type:security",
+        "platform:android",
+        "platform:desktop",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T20:47:15Z",
+      "closedAt": null
+    },
+    {
+      "number": 190,
+      "taskId": null,
+      "title": "feat(admin): monitor server health, jobs, logs, and storage",
+      "url": "https://github.com/Obiente/nc-native/issues/190",
+      "priority": "P1",
+      "area": "Platform",
+      "status": "Todo",
+      "milestone": null,
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "enhancement",
+        "priority:P1",
+        "area:ux",
+        "area:platform",
+        "type:feature",
+        "type:reliability",
+        "platform:android",
+        "platform:desktop",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T20:47:28Z",
+      "closedAt": null
+    },
+    {
+      "number": 17,
+      "taskId": "BUILD-001",
+      "title": "Supported JDK bootstrap",
+      "url": "https://github.com/Obiente/nc-native/issues/17",
+      "priority": "P1",
+      "area": "Release",
+      "status": "In Progress",
+      "milestone": "1.0 Release readiness",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:release",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:03:18Z",
+      "closedAt": null
+    },
+    {
+      "number": 18,
+      "taskId": "BUILD-002",
+      "title": "Full CI matrix",
+      "url": "https://github.com/Obiente/nc-native/issues/18",
+      "priority": "P1",
+      "area": "Release",
+      "status": "Todo",
+      "milestone": "1.0 Release readiness",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:release",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:03:26Z",
+      "closedAt": null
+    },
+    {
+      "number": 25,
+      "taskId": "DAV-006",
+      "title": "Task provider integrations",
+      "url": "https://github.com/Obiente/nc-native/issues/25",
+      "priority": "P1",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:09Z",
+      "closedAt": null
+    },
+    {
+      "number": 30,
+      "taskId": "DAV-011",
+      "title": "Calendar scheduling and attendees",
+      "url": "https://github.com/Obiente/nc-native/issues/30",
+      "priority": "P1",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:20Z",
+      "closedAt": null
+    },
+    {
+      "number": 34,
+      "taskId": "DAV-015",
+      "title": "DAV network settings",
+      "url": "https://github.com/Obiente/nc-native/issues/34",
+      "priority": "P1",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-design",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:44Z",
+      "closedAt": null
+    },
+    {
+      "number": 35,
+      "taskId": "DAV-016",
+      "title": "Calendar time-range and alarm settings",
+      "url": "https://github.com/Obiente/nc-native/issues/35",
+      "priority": "P1",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-design",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:48Z",
+      "closedAt": null
+    },
+    {
+      "number": 36,
+      "taskId": "DAV-017",
+      "title": "Push-triggered DAV sync",
+      "url": "https://github.com/Obiente/nc-native/issues/36",
+      "priority": "P1",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:50Z",
+      "closedAt": null
+    },
+    {
+      "number": 39,
+      "taskId": "DAV-020",
+      "title": "Native calendar UX",
+      "url": "https://github.com/Obiente/nc-native/issues/39",
+      "priority": "P1",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-design",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:56Z",
+      "closedAt": null
+    },
+    {
+      "number": 40,
+      "taskId": "DAV-021",
+      "title": "Native contacts UX",
+      "url": "https://github.com/Obiente/nc-native/issues/40",
+      "priority": "P1",
+      "area": "DAV",
+      "status": "Todo",
+      "milestone": "0.3 DAV and groupware",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dav",
+        "type:feature",
+        "platform:android",
+        "needs-design",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:04:58Z",
+      "closedAt": null
+    },
+    {
+      "number": 49,
+      "taskId": "DYN-009",
+      "title": "Generic charts and statistics",
+      "url": "https://github.com/Obiente/nc-native/issues/49",
+      "priority": "P1",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dynamic-apps",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:05:19Z",
+      "closedAt": null
+    },
+    {
+      "number": 58,
+      "taskId": "DYN-018",
+      "title": "Activity presentation",
+      "url": "https://github.com/Obiente/nc-native/issues/58",
+      "priority": "P1",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:05:42Z",
+      "closedAt": null
+    },
+    {
+      "number": 59,
+      "taskId": "DYN-019",
+      "title": "Contacts-like reusable presentation",
+      "url": "https://github.com/Obiente/nc-native/issues/59",
+      "priority": "P1",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:05:44Z",
+      "closedAt": null
+    },
+    {
+      "number": 60,
+      "taskId": "DYN-020",
+      "title": "Calendar-like reusable presentation",
+      "url": "https://github.com/Obiente/nc-native/issues/60",
+      "priority": "P1",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dynamic-apps",
+        "type:feature",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:05:47Z",
+      "closedAt": null
+    },
+    {
+      "number": 65,
+      "taskId": "MEDIA-005",
+      "title": "Folder coverage dashboard",
+      "url": "https://github.com/Obiente/nc-native/issues/65",
+      "priority": "P1",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:media",
+        "type:feature",
+        "platform:android",
+        "needs-design"
+      ],
+      "updatedAt": "2026-07-24T16:05:58Z",
+      "closedAt": null
+    },
+    {
+      "number": 70,
+      "taskId": "MEDIA-010",
+      "title": "Keep-recent-local policy",
+      "url": "https://github.com/Obiente/nc-native/issues/70",
+      "priority": "P1",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:13Z",
+      "closedAt": null
+    },
+    {
+      "number": 71,
+      "taskId": "MEDIA-011",
+      "title": "New-media versus existing-media policy",
+      "url": "https://github.com/Obiente/nc-native/issues/71",
+      "priority": "P1",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:15Z",
+      "closedAt": null
+    },
+    {
+      "number": 72,
+      "taskId": "MEDIA-012",
+      "title": "Destination folder rules",
+      "url": "https://github.com/Obiente/nc-native/issues/72",
+      "priority": "P1",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:22Z",
+      "closedAt": null
+    },
+    {
+      "number": 74,
+      "taskId": "MEDIA-014",
+      "title": "RAW and JPEG pair awareness",
+      "url": "https://github.com/Obiente/nc-native/issues/74",
+      "priority": "P1",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:28Z",
+      "closedAt": null
+    },
+    {
+      "number": 75,
+      "taskId": "MEDIA-015",
+      "title": "Background folder rediscovery",
+      "url": "https://github.com/Obiente/nc-native/issues/75",
+      "priority": "P1",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:31Z",
+      "closedAt": null
+    },
+    {
+      "number": 76,
+      "taskId": "MEDIA-016",
+      "title": "Media backup notifications",
+      "url": "https://github.com/Obiente/nc-native/issues/76",
+      "priority": "P1",
+      "area": "Media",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:media",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:06:32Z",
+      "closedAt": null
+    },
+    {
+      "number": 84,
+      "taskId": "PHOTO-003",
+      "title": "Broader image format support",
+      "url": "https://github.com/Obiente/nc-native/issues/84",
+      "priority": "P1",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:photos",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:06:49Z",
+      "closedAt": null
+    },
+    {
+      "number": 93,
+      "taskId": "PHOTO-012",
+      "title": "Non-destructive edit representation",
+      "url": "https://github.com/Obiente/nc-native/issues/93",
+      "priority": "P1",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:photos",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:10Z",
+      "closedAt": null
+    },
+    {
+      "number": 95,
+      "taskId": "PHOTO-014",
+      "title": "Timeline, map, folders, favorites, and on-this-day",
+      "url": "https://github.com/Obiente/nc-native/issues/95",
+      "priority": "P1",
+      "area": "Photos and Memories",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:photos",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:13Z",
+      "closedAt": null
+    },
+    {
+      "number": 101,
+      "taskId": "RELEASE-002",
+      "title": "Signed Android builds",
+      "url": "https://github.com/Obiente/nc-native/issues/101",
+      "priority": "P1",
+      "area": "Release",
+      "status": "Todo",
+      "milestone": "1.0 Release readiness",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:release",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:07:27Z",
+      "closedAt": null
+    },
+    {
+      "number": 102,
+      "taskId": "RELEASE-003",
+      "title": "Desktop packages",
+      "url": "https://github.com/Obiente/nc-native/issues/102",
+      "priority": "P1",
+      "area": "Release",
+      "status": "Todo",
+      "milestone": "1.0 Release readiness",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:release",
+        "type:feature",
+        "platform:desktop"
+      ],
+      "updatedAt": "2026-07-24T16:07:30Z",
+      "closedAt": null
+    },
+    {
+      "number": 103,
+      "taskId": "RELEASE-004",
+      "title": "Contributor workflow",
+      "url": "https://github.com/Obiente/nc-native/issues/103",
+      "priority": "P1",
+      "area": "Release",
+      "status": "In Progress",
+      "milestone": "1.0 Release readiness",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:release",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:33Z",
+      "closedAt": null
+    },
+    {
+      "number": 109,
+      "taskId": "SYNC-003",
+      "title": "Hidden files and exclusion rules",
+      "url": "https://github.com/Obiente/nc-native/issues/109",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:44Z",
+      "closedAt": null
+    },
+    {
+      "number": 114,
+      "taskId": "SYNC-008",
+      "title": "Resumable downloads",
+      "url": "https://github.com/Obiente/nc-native/issues/114",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:07:52Z",
+      "closedAt": null
+    },
+    {
+      "number": 118,
+      "taskId": "SYNC-012",
+      "title": "Files trash and restore",
+      "url": "https://github.com/Obiente/nc-native/issues/118",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:08:00Z",
+      "closedAt": null
+    },
+    {
+      "number": 119,
+      "taskId": "SYNC-013",
+      "title": "File comments",
+      "url": "https://github.com/Obiente/nc-native/issues/119",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:08:02Z",
+      "closedAt": null
+    },
+    {
+      "number": 120,
+      "taskId": "SYNC-014",
+      "title": "Server file locking",
+      "url": "https://github.com/Obiente/nc-native/issues/120",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:08:04Z",
+      "closedAt": null
+    },
+    {
+      "number": 126,
+      "taskId": "SYNC-020",
+      "title": "Sync diagnostics",
+      "url": "https://github.com/Obiente/nc-native/issues/126",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "Todo",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:08:17Z",
+      "closedAt": null
+    },
+    {
+      "number": 133,
+      "taskId": "TALK-007",
+      "title": "Pinned messages",
+      "url": "https://github.com/Obiente/nc-native/issues/133",
+      "priority": "P1",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:32Z",
+      "closedAt": null
+    },
+    {
+      "number": 134,
+      "taskId": "TALK-008",
+      "title": "Scheduled messages",
+      "url": "https://github.com/Obiente/nc-native/issues/134",
+      "priority": "P1",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:34Z",
+      "closedAt": null
+    },
+    {
+      "number": 139,
+      "taskId": "TALK-013",
+      "title": "Attachment sharing and saving",
+      "url": "https://github.com/Obiente/nc-native/issues/139",
+      "priority": "P1",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:45Z",
+      "closedAt": null
+    },
+    {
+      "number": 140,
+      "taskId": "TALK-014",
+      "title": "Message and conversation search",
+      "url": "https://github.com/Obiente/nc-native/issues/140",
+      "priority": "P1",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:47Z",
+      "closedAt": null
+    },
+    {
+      "number": 141,
+      "taskId": "TALK-015",
+      "title": "Conversation administration",
+      "url": "https://github.com/Obiente/nc-native/issues/141",
+      "priority": "P1",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:talk",
+        "type:feature",
+        "platform:android"
+      ],
+      "updatedAt": "2026-07-24T16:08:51Z",
+      "closedAt": null
+    },
+    {
+      "number": 146,
+      "taskId": "TALK-020",
+      "title": "Call recordings and consent",
+      "url": "https://github.com/Obiente/nc-native/issues/146",
+      "priority": "P1",
+      "area": "Talk",
+      "status": "Todo",
+      "milestone": "0.4 Talk parity",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:talk",
+        "type:feature",
+        "platform:android",
+        "needs-protocol-review"
+      ],
+      "updatedAt": "2026-07-24T16:09:05Z",
+      "closedAt": null
+    },
+    {
+      "number": 157,
+      "taskId": "UX-010",
+      "title": "Empty/error/offline state system",
+      "url": "https://github.com/Obiente/nc-native/issues/157",
+      "priority": "P1",
+      "area": "UX",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:ux",
+        "type:feature"
+      ],
+      "updatedAt": "2026-07-24T16:09:25Z",
+      "closedAt": null
+    }
+  ],
+  "verification": [
+    {
+      "number": 154,
+      "taskId": "UX-007",
+      "title": "Adaptive desktop workspace",
+      "url": "https://github.com/Obiente/nc-native/issues/154",
+      "priority": "P0",
+      "area": "UX",
+      "status": "In Progress",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "type:feature",
+        "platform:desktop",
+        "in-progress",
+        "verification"
+      ],
+      "updatedAt": "2026-07-24T16:29:08Z",
+      "closedAt": null
+    }
+  ],
+  "milestones": [
+    {
+      "number": 1,
+      "title": "0.2 Safe sync and media",
+      "url": "https://github.com/Obiente/nc-native/milestone/1",
+      "description": "Trustworthy Android media backup, storage reclaim foundation, and advanced files synchronization.",
+      "state": "open",
+      "dueOn": null,
+      "updatedAt": "2026-07-24T21:05:10Z",
+      "open": 37,
+      "closed": 8
+    },
+    {
+      "number": 2,
+      "title": "0.3 DAV and groupware",
+      "url": "https://github.com/Obiente/nc-native/milestone/2",
+      "description": "DAV account model, Android calendars, contacts, tasks, and native groupware experiences.",
+      "state": "open",
+      "dueOn": null,
+      "updatedAt": "2026-07-24T16:04:59Z",
+      "open": 22,
+      "closed": 0
+    },
+    {
+      "number": 3,
+      "title": "0.4 Talk parity",
+      "url": "https://github.com/Obiente/nc-native/milestone/3",
+      "description": "Native messaging, attachments, conversation administration, calls, notifications, and signaling.",
+      "state": "open",
+      "dueOn": null,
+      "updatedAt": "2026-07-24T16:09:09Z",
+      "open": 22,
+      "closed": 0
+    },
+    {
+      "number": 4,
+      "title": "0.5 Adaptive apps",
+      "url": "https://github.com/Obiente/nc-native/milestone/4",
+      "description": "Fast contract acquisition and useful semantic interfaces for arbitrary Nextcloud apps.",
+      "state": "open",
+      "dueOn": null,
+      "updatedAt": "2026-07-24T23:41:18Z",
+      "open": 20,
+      "closed": 1
+    },
+    {
+      "number": 5,
+      "title": "0.6 Platform polish",
+      "url": "https://github.com/Obiente/nc-native/milestone/5",
+      "description": "Responsive mobile and desktop UX, reliability, accessibility, performance, and platform integration.",
+      "state": "open",
+      "dueOn": null,
+      "updatedAt": "2026-07-25T13:34:31Z",
+      "open": 31,
+      "closed": 4
+    },
+    {
+      "number": 6,
+      "title": "1.0 Release readiness",
+      "url": "https://github.com/Obiente/nc-native/milestone/6",
+      "description": "Security, CI, signed packages, documentation, and contributor-ready stable release work.",
+      "state": "open",
+      "dueOn": null,
+      "updatedAt": "2026-07-24T20:52:17Z",
+      "open": 8,
+      "closed": 1
+    }
+  ]
+}
