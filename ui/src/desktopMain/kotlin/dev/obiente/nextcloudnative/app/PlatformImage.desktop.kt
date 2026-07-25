@@ -16,7 +16,13 @@ actual fun decodePlatformImage(
     bytes: ByteArray,
     orientationPolicy: EncodedImageOrientationPolicy,
 ): ImageBitmap? = runCatching {
-    decodeDesktopImage(bytes, orientationPolicy).image.toComposeImageBitmap()
+    val decoded = decodeDesktopImage(bytes, orientationPolicy)
+    try {
+        decoded.image.toComposeImageBitmap()
+    } catch (failure: Throwable) {
+        decoded.image.close()
+        throw failure
+    }
 }.getOrNull()
 
 actual fun decodePlatformImageSampled(
@@ -29,25 +35,44 @@ actual fun decodePlatformImageSampled(
     val source = decoded.image
     val sourceWidth = decoded.width
     val sourceHeight = decoded.height
-    val sampled = if (maxOf(sourceWidth, sourceHeight) <= maximumDimension) {
-        source
-    } else {
-        val scale = maximumDimension.toFloat() / maxOf(sourceWidth, sourceHeight)
-        val width = (sourceWidth * scale).roundToInt().coerceAtLeast(1)
-        val height = (sourceHeight * scale).roundToInt().coerceAtLeast(1)
-        val target = Bitmap()
-        check(target.allocN32Pixels(width, height, false)) { "Could not allocate a display-safe image." }
-        val targetPixels = checkNotNull(target.peekPixels()) { "Could not access display-safe image pixels." }
-        check(source.scalePixels(targetPixels, SamplingMode.MITCHELL, true)) {
-            "Could not create a display-safe image."
+    try {
+        val sampled = if (maxOf(sourceWidth, sourceHeight) <= maximumDimension) {
+            source
+        } else {
+            val scale = maximumDimension.toFloat() / maxOf(sourceWidth, sourceHeight)
+            val width = (sourceWidth * scale).roundToInt().coerceAtLeast(1)
+            val height = (sourceHeight * scale).roundToInt().coerceAtLeast(1)
+            Bitmap().use { target ->
+                check(target.allocN32Pixels(width, height, false)) {
+                    "Could not allocate a display-safe image."
+                }
+                val targetPixels = checkNotNull(target.peekPixels()) {
+                    "Could not access display-safe image pixels."
+                }
+                check(source.scalePixels(targetPixels, SamplingMode.MITCHELL, true)) {
+                    "Could not create a display-safe image."
+                }
+                Image.makeFromBitmap(target)
+            }.also {
+                source.close()
+            }
         }
-        Image.makeFromBitmap(target)
+        try {
+            PlatformDecodedImage(
+                image = sampled.toComposeImageBitmap(),
+                sourceWidth = sourceWidth,
+                sourceHeight = sourceHeight,
+            )
+        } catch (failure: Throwable) {
+            sampled.close()
+            throw failure
+        }
+    } catch (failure: Throwable) {
+        if (!source.isClosed) {
+            source.close()
+        }
+        throw failure
     }
-    PlatformDecodedImage(
-        image = sampled.toComposeImageBitmap(),
-        sourceWidth = sourceWidth,
-        sourceHeight = sourceHeight,
-    )
 }.getOrNull()
 
 private data class DesktopDecodedImage(
@@ -64,30 +89,45 @@ private fun decodeDesktopImage(
     bytes: ByteArray,
     orientationPolicy: EncodedImageOrientationPolicy,
 ): DesktopDecodedImage {
-    val codec = Codec.makeFromData(Data.makeFromBytes(bytes))
-    val rawBitmap = codec.readPixels()
-    val rawImage = Image.makeFromBitmap(rawBitmap)
-    val orientation = when (orientationPolicy) {
-        EncodedImageOrientationPolicy.ApplyExif -> codec.encodedOrigin.exifOrientation()
-        EncodedImageOrientationPolicy.PixelsAlreadyUpright -> 1
+    return Data.makeFromBytes(bytes).use { data ->
+        Codec.makeFromData(data).use { codec ->
+            codec.readPixels().use { rawBitmap ->
+                val rawImage = Image.makeFromBitmap(rawBitmap)
+                val orientation = when (orientationPolicy) {
+                    EncodedImageOrientationPolicy.ApplyExif -> codec.encodedOrigin.exifOrientation()
+                    EncodedImageOrientationPolicy.PixelsAlreadyUpright -> 1
+                }
+                if (orientation == 1) {
+                    return@use DesktopDecodedImage(rawImage, rawImage.width, rawImage.height)
+                }
+                rawImage.use { source ->
+                    val dimensions = exifOrientedDimensions(source.width, source.height, orientation)
+                    Bitmap().use { target ->
+                        check(target.allocN32Pixels(dimensions.width, dimensions.height, false)) {
+                            "Could not allocate an EXIF-normalized image."
+                        }
+                        Canvas(target).use { canvas ->
+                            canvas.concat(
+                                Matrix33(
+                                    *exifOrientationMatrixValues(
+                                        source.width,
+                                        source.height,
+                                        orientation,
+                                    ),
+                                ),
+                            )
+                            canvas.drawImage(source, 0f, 0f)
+                        }
+                        DesktopDecodedImage(
+                            image = Image.makeFromBitmap(target),
+                            width = dimensions.width,
+                            height = dimensions.height,
+                        )
+                    }
+                }
+            }
+        }
     }
-    if (orientation == 1) {
-        return DesktopDecodedImage(rawImage, rawImage.width, rawImage.height)
-    }
-    val dimensions = exifOrientedDimensions(rawImage.width, rawImage.height, orientation)
-    val target = Bitmap()
-    check(target.allocN32Pixels(dimensions.width, dimensions.height, false)) {
-        "Could not allocate an EXIF-normalized image."
-    }
-    Canvas(target).apply {
-        concat(Matrix33(*exifOrientationMatrixValues(rawImage.width, rawImage.height, orientation)))
-        drawImage(rawImage, 0f, 0f)
-    }
-    return DesktopDecodedImage(
-        image = Image.makeFromBitmap(target),
-        width = dimensions.width,
-        height = dimensions.height,
-    )
 }
 
 private fun EncodedOrigin.exifOrientation(): Int = when (this) {
