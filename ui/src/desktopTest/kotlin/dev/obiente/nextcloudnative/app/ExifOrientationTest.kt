@@ -1,13 +1,21 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import javax.imageio.ImageIO
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.math.abs
+import org.jetbrains.skia.Bitmap
+import org.jetbrains.skia.ColorAlphaType
+import org.jetbrains.skia.ColorSpace
+import org.jetbrains.skia.ColorType
+import org.jetbrains.skia.Image
+import org.jetbrains.skia.ImageInfo
 
 class ExifOrientationTest {
     @Test
@@ -179,6 +187,67 @@ class ExifOrientationTest {
         )
     }
 
+    @Test
+    fun desktopOrientationPreservesPartialTransparency() {
+        val source = BufferedImage(3, 2, BufferedImage.TYPE_INT_ARGB).apply {
+            setRGB(0, 0, 0x40FF0000)
+            setRGB(1, 0, 0x8000FF00.toInt())
+            setRGB(2, 0, 0xC00000FF.toInt())
+            setRGB(0, 1, 0x60FFFF00)
+            setRGB(1, 1, 0xA000FFFF.toInt())
+            setRGB(2, 1, 0xE0FF00FF.toInt())
+        }
+        val png = ByteArrayOutputStream().also { output ->
+            assertTrue(ImageIO.write(source, "png", output))
+        }.toByteArray()
+        Image.makeFromEncoded(png).use { encoded ->
+            Bitmap().use { target ->
+                assertTrue(target.allocN32Pixels(2, 3, false))
+                target.erase(0xFFFF00FF.toInt())
+                drawDesktopExifOrientation(encoded, target, 6)
+                Image.makeFromBitmap(target).use { oriented ->
+                    val decoded = oriented.toComposeImageBitmap()
+                    assertEquals(2, decoded.width)
+                    assertEquals(3, decoded.height)
+                    val output = decoded.readAllPixels()
+                    repeat(source.height) { y ->
+                        repeat(source.width) { x ->
+                            val mapped = exifOrientedPixel(x, y, source.width, source.height, 6)
+                            assertArgbNear(
+                                expected = source.getRGB(x, y),
+                                actual = output[mapped.y * decoded.width + mapped.x],
+                                tolerance = 1,
+                                message = "transparent pixel ($x,$y)",
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun desktopOrientationPreservesEmbeddedColorSpace() {
+        Bitmap().use { bitmap ->
+            val imageInfo = ImageInfo(
+                3,
+                2,
+                ColorType.RGBA_8888,
+                ColorAlphaType.PREMUL,
+                ColorSpace.displayP3,
+            )
+            assertTrue(bitmap.allocPixels(imageInfo))
+            bitmap.erase(0xFFCC6633.toInt())
+            Image.makeFromBitmap(bitmap).use { source ->
+                renderDesktopExifOrientation(source, 6).use { oriented ->
+                    val colorSpace = assertNotNull(oriented.colorSpace)
+                    assertFalse(colorSpace.isSRGB)
+                    assertEquals(ColorSpace.displayP3, colorSpace)
+                }
+            }
+        }
+    }
+
     private fun syntheticCornerJpeg(): ByteArray {
         val source = BufferedImage(40, 30, BufferedImage.TYPE_INT_RGB)
         val colors = intArrayOf(0xE02020, 0x20C040, 0x3050E0, 0xE0C020)
@@ -209,6 +278,18 @@ class ExifOrientationTest {
         for (shift in listOf(16, 8, 0)) {
             assertTrue(
                 abs(channel(expected, shift) - channel(actual, shift)) <= 20,
+                "$message expected 0x${expected.toUInt().toString(16)}, " +
+                    "actual 0x${actual.toUInt().toString(16)}",
+            )
+        }
+    }
+
+    private fun assertArgbNear(expected: Int, actual: Int, tolerance: Int, message: String) {
+        for (shift in listOf(24, 16, 8, 0)) {
+            val expectedChannel = (expected ushr shift) and 0xFF
+            val actualChannel = (actual ushr shift) and 0xFF
+            assertTrue(
+                abs(expectedChannel - actualChannel) <= tolerance,
                 "$message expected 0x${expected.toUInt().toString(16)}, " +
                     "actual 0x${actual.toUInt().toString(16)}",
             )

@@ -102,31 +102,51 @@ private fun decodeDesktopImage(
                 }
                 rawImage.use { source ->
                     val dimensions = exifOrientedDimensions(source.width, source.height, orientation)
-                    Bitmap().use { target ->
-                        check(target.allocN32Pixels(dimensions.width, dimensions.height, false)) {
-                            "Could not allocate an EXIF-normalized image."
-                        }
-                        Canvas(target).use { canvas ->
-                            canvas.concat(
-                                Matrix33(
-                                    *exifOrientationMatrixValues(
-                                        source.width,
-                                        source.height,
-                                        orientation,
-                                    ),
-                                ),
-                            )
-                            canvas.drawImage(source, 0f, 0f)
-                        }
-                        DesktopDecodedImage(
-                            image = Image.makeFromBitmap(target),
-                            width = dimensions.width,
-                            height = dimensions.height,
-                        )
-                    }
+                    DesktopDecodedImage(
+                        image = renderDesktopExifOrientation(source, orientation),
+                        width = dimensions.width,
+                        height = dimensions.height,
+                    )
                 }
             }
         }
+    }
+}
+
+internal fun renderDesktopExifOrientation(source: Image, orientation: Int): Image {
+    val dimensions = exifOrientedDimensions(source.width, source.height, orientation)
+    return Bitmap().use { target ->
+        check(
+            target.allocPixels(
+                source.imageInfo.withWidthHeight(dimensions.width, dimensions.height),
+            ),
+        ) {
+            "Could not allocate an EXIF-normalized image."
+        }
+        drawDesktopExifOrientation(source, target, orientation)
+        Image.makeFromBitmap(target)
+    }
+}
+
+internal fun drawDesktopExifOrientation(
+    source: Image,
+    target: Bitmap,
+    orientation: Int,
+) {
+    val dimensions = exifOrientedDimensions(source.width, source.height, orientation)
+    require(target.width == dimensions.width && target.height == dimensions.height)
+    target.erase(0x00000000)
+    Canvas(target).use { canvas ->
+        canvas.concat(
+            Matrix33(
+                *exifOrientationMatrixValues(
+                    source.width,
+                    source.height,
+                    orientation,
+                ),
+            ),
+        )
+        canvas.drawImage(source, 0f, 0f)
     }
 }
 
