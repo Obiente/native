@@ -2,10 +2,41 @@ package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class RecognizedFaceLiveReadAuditTest {
+    @Test
+    fun `live person refresh preserves stable cluster identity with GET only`() = runBlocking {
+        if (System.getenv("RUN_LIVE_NEXTCLOUD_FACE_AUDIT") != "1") return@runBlocking
+        val services = DesktopNextcloudServices()
+        val session = assertNotNull(services.loadSession())
+        val initial = sortNextcloudPeopleForDisplay(
+            services.listPeople(session, NextcloudPeopleBackend.Recognize.apiValue),
+        )
+        val selected = initial.firstOrNull()
+            ?: error("The live server returned no Recognize people.")
+        val refreshed = services.listPeople(session, NextcloudPeopleBackend.Recognize.apiValue)
+        val reconciliation = assertIs<PeoplePostMutationReconciliation.CurrentPerson>(
+            reconcilePersonAfterMutation(PeopleAction.SetCover, selected, refreshed),
+        )
+
+        assertEquals(selected.id, reconciliation.person.id)
+        assertEquals(selected.userId, reconciliation.person.userId)
+        assertEquals(selected.backend, reconciliation.person.backend)
+        assertEquals(NextcloudPeopleBackend.Recognize.apiValue, selected.backend)
+        assertTrue(selected.id >= 0L)
+        assertTrue(selected.count >= 0)
+        assertTrue(selected.coverFileId == null || requireNotNull(selected.coverFileId) > 0L)
+        assertTrue(reconciliation.person.queryName.isNotBlank())
+        println(
+            "person-refresh-audit outcome=success requests=2 methods=get-only " +
+                "identity=stable content=redacted",
+        )
+    }
+
     @Test
     fun `live exact face picker pages and plans chosen detection without mutation`() = runBlocking {
         if (System.getenv("RUN_LIVE_NEXTCLOUD_FACE_AUDIT") != "1") return@runBlocking

@@ -128,6 +128,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.actionBindingValues
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeScreenState
 import dev.obiente.nextcloudnative.nativeui.runtime.settingsFormPrefillView
 import dev.obiente.nextcloudnative.nativeui.runtime.editableNativeFields
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -768,6 +769,7 @@ private fun AuthenticatedApp(
             recognizeBridge = serverInfo?.recognizeBridge ?: RecognizeBridgeDiscovery.NotAdvertised,
             person = current.person,
             onBack = ::navigateBack,
+            onPersonChanged = { refreshed -> screen = Screen.PersonMedia(refreshed) },
             onOpenMedia = { file, media ->
                 screen = Screen.MediaViewer(media = media, selected = file, returnTo = current)
             },
@@ -5541,6 +5543,7 @@ private fun PersonMediaScreen(
     recognizeBridge: RecognizeBridgeDiscovery,
     person: NextcloudPerson,
     onBack: () -> Unit,
+    onPersonChanged: (NextcloudPerson) -> Unit,
     onOpenMedia: (NextcloudFile, List<NextcloudFile>) -> Unit,
 ) {
     var mediaItems by remember(person.id, person.backend) { mutableStateOf<List<NativeMediaItem>?>(null) }
@@ -5571,6 +5574,9 @@ private fun PersonMediaScreen(
     var mergePrepareError by remember(person.id) { mutableStateOf<String?>(null) }
     var pendingMergeWorkflow by remember(person.id) { mutableStateOf<PersonMergeWorkflow?>(null) }
     var pendingPlan by remember(person.id) { mutableStateOf<PeopleActionPlan?>(null) }
+    var postMutationRefreshAction by remember(person.id) { mutableStateOf<PeopleAction?>(null) }
+    var postMutationRefreshRunning by remember(person.id) { mutableStateOf(false) }
+    var postMutationRefreshError by remember(person.id) { mutableStateOf<String?>(null) }
     var recognizedFaces by remember(person.id) { mutableStateOf<List<RecognizedFaceMedia>?>(null) }
     var recognizedFaceDayIndex by remember(person.id) { mutableStateOf<PersonMediaDayIndex?>(null) }
     var recognizedFaceCursor by remember(person.id) { mutableStateOf<NativeMediaDayCursor?>(null) }
@@ -5711,6 +5717,37 @@ private fun PersonMediaScreen(
         recognizedFacesLoadingMore = false
     }
 
+    suspend fun refreshPersonAfterMutation(action: PeopleAction) {
+        postMutationRefreshAction = action
+        postMutationRefreshRunning = true
+        postMutationRefreshError = null
+        try {
+            val people = services.listPeople(session, person.backend)
+            when (val reconciliation = reconcilePersonAfterMutation(action, person, people)) {
+                is PeoplePostMutationReconciliation.CurrentPerson -> {
+                    onPersonChanged(reconciliation.person)
+                    loadAttempt += 1
+                }
+                PeoplePostMutationReconciliation.Gallery -> onBack()
+            }
+            postMutationRefreshAction = null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            postMutationRefreshError = failure.message?.takeIf(String::isNotBlank)
+                ?: "The change was saved, but this person could not be refreshed."
+        } finally {
+            postMutationRefreshRunning = false
+        }
+    }
+
+    fun launchPersonRefresh(action: PeopleAction) {
+        postMutationRefreshAction = action
+        postMutationRefreshRunning = true
+        postMutationRefreshError = null
+        scope.launch { refreshPersonAfterMutation(action) }
+    }
+
     fun closePhotoSelection() {
         if (photoSelectionMode == PersonPhotoSelectionMode.RemoveFace) {
             recognizedFacesRequestGeneration += 1
@@ -5790,7 +5827,10 @@ private fun PersonMediaScreen(
             },
             trailingContent = {
                 Box {
-                    IconButton(onClick = { actionMenuExpanded = true }) {
+                    IconButton(
+                        enabled = postMutationRefreshAction == null,
+                        onClick = { actionMenuExpanded = true },
+                    ) {
                         Icon(NextcloudIcons.More, contentDescription = "Person actions")
                     }
                     DropdownMenu(
@@ -5863,6 +5903,53 @@ private fun PersonMediaScreen(
                 }
             },
         )
+        if (postMutationRefreshRunning || postMutationRefreshError != null) {
+            Surface(color = NextcloudTheme.colors.appTile) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(
+                        horizontal = NextcloudSpacing.Large,
+                        vertical = NextcloudSpacing.Medium,
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (postMutationRefreshRunning) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            NextcloudIcons.Refresh,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            if (postMutationRefreshRunning) {
+                                "Refreshing person…"
+                            } else {
+                                "Change saved, refresh needed"
+                            },
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        postMutationRefreshError?.let { message ->
+                            Text(
+                                message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    if (!postMutationRefreshRunning) {
+                        TextButton(
+                            onClick = {
+                                val action = postMutationRefreshAction ?: return@TextButton
+                                launchPersonRefresh(action)
+                            },
+                        ) { Text("Retry") }
+                    }
+                }
+            }
+        }
         photoSelectionMode?.takeIf { it == PersonPhotoSelectionMode.Cover }?.let { mode ->
             PersonPhotoSelectionBanner(
                 title = when (mode) {
@@ -6160,13 +6247,16 @@ private fun PersonMediaScreen(
                 pendingPlan = null
                 pendingMergeWorkflow = null
                 when (plan.action) {
-                    PeopleAction.SetCover,
-                    PeopleAction.RemoveFace,
-                    -> loadAttempt += 1
-                    PeopleAction.RenamePerson,
                     PeopleAction.MergePerson,
                     PeopleAction.DeletePerson,
                     -> onBack()
+                    PeopleAction.SetCover,
+                    PeopleAction.RemoveFace,
+                    -> {
+                        closePhotoSelection()
+                        launchPersonRefresh(plan.action)
+                    }
+                    PeopleAction.RenamePerson -> launchPersonRefresh(plan.action)
                 }
             },
         )
