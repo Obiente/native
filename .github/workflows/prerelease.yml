@@ -66,6 +66,7 @@ jobs:
 
   desktop:
     needs: validate
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -80,7 +81,7 @@ jobs:
             artifact: nextcloud-native-windows
             tasks: ":ui:packageMsi"
             paths: ui/build/compose/binaries/main/msi/*.msi
-          - runner: macos-latest
+          - runner: macos-15-intel
             artifact: nextcloud-native-macos
             tasks: ":ui:packageDmg"
             paths: ui/build/compose/binaries/main/dmg/*.dmg
@@ -99,7 +100,14 @@ jobs:
 
       - name: Build native desktop package
         shell: bash
-        run: ./gradlew --no-daemon ${{ matrix.tasks }}
+        run: |
+          set +e
+          ./gradlew --no-daemon ${{ matrix.tasks }}
+          status=$?
+          if [[ "${status}" -ne 0 ]]; then
+            find ui/build/compose/logs -type f -print -exec cat {} \; 2>/dev/null || true
+          fi
+          exit "${status}"
 
       - name: Upload desktop package
         uses: actions/upload-artifact@v7
@@ -109,15 +117,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish:
-    needs:
-      - validate
-      - desktop
+  android:
+    needs: validate
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: prerelease
-    permissions:
-      contents: write
     steps:
       - name: Check out tagged source
         uses: actions/checkout@v7
@@ -184,8 +189,8 @@ jobs:
             <release/android-signing-certificate.sha256)"
           test "${certificate_sha256}" = "${expected_certificate_sha256}"
           apk_sha256="$(sha256sum "dist/nextcloud-native-${version}-android.apk" | awk '{print $1}')"
-          printf '%s\n' "${certificate_sha256}" >"${RUNNER_TEMP}/certificate-sha256"
-          printf '%s\n' "${apk_sha256}" >"${RUNNER_TEMP}/apk-sha256"
+          printf '%s\n' "${certificate_sha256}" >"dist/android-certificate.sha256"
+          printf '%s\n' "${apk_sha256}" >"dist/android-apk.sha256"
 
       - name: Remove protected Android signing key
         if: always()
@@ -195,31 +200,79 @@ jobs:
             shred --remove "${keystore}"
           fi
 
-      - name: Download desktop packages
+      - name: Upload Android packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextcloud-native-android
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  stage-assets:
+    needs:
+      - desktop
+      - android
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      successful-platforms: ${{ steps.platforms.outputs.successful }}
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+
+      - name: Download successful platform packages
+        id: download
+        continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           pattern: nextcloud-native-*
-          path: dist
-          merge-multiple: true
+          path: artifacts
 
-      - name: Create update metadata and checksums
+      - name: Count successful platforms
+        id: platforms
         run: |
           set -euo pipefail
+          successful=0
+          for platform in android linux windows macos; do
+            artifact="artifacts/nextcloud-native-${platform}"
+            if [[ -d "${artifact}" ]] &&
+              find "${artifact}" -type f -print -quit | grep -q .; then
+              successful=$((successful + 1))
+              echo "${platform}: available"
+            else
+              echo "${platform}: unavailable"
+            fi
+          done
+          echo "Successful platforms: ${successful}/4"
+          echo "successful=${successful}" >>"${GITHUB_OUTPUT}"
+          test "${successful}" -gt 0
+
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find artifacts -mindepth 2 -maxdepth 2 -type f \
+            -exec cp -t dist -- {} +
           version="${GITHUB_REF_NAME#v}"
           version_code="$(awk -F= '$1 == "ncVersionCode" { print $2 }' gradle.properties)"
           apk_name="nextcloud-native-${version}-android.apk"
-          apk_size="$(stat --format='%s' "dist/${apk_name}")"
-          apk_sha256="$(cat "${RUNNER_TEMP}/apk-sha256")"
-          certificate_sha256="$(cat "${RUNNER_TEMP}/certificate-sha256")"
-          signer_digests="$(jq -cn --arg digest "${certificate_sha256}" '[$digest]')"
-          tools/create-prerelease-update-manifest.sh \
-            dist/update-manifest.json \
-            "${version}" \
-            "${version_code}" \
-            "${apk_name}" \
-            "${apk_size}" \
-            "${apk_sha256}" \
-            "${signer_digests}"
+          if [[ -f "dist/${apk_name}" ]]; then
+            apk_size="$(stat --format='%s' "dist/${apk_name}")"
+            apk_sha256="$(cat dist/android-apk.sha256)"
+            certificate_sha256="$(cat dist/android-certificate.sha256)"
+            signer_digests="$(jq -cn --arg digest "${certificate_sha256}" '[$digest]')"
+            tools/create-prerelease-update-manifest.sh \
+              dist/update-manifest.json \
+              "${version}" \
+              "${version_code}" \
+              "${apk_name}" \
+              "${apk_size}" \
+              "${apk_sha256}" \
+              "${signer_digests}"
+          fi
+          rm -f dist/android-apk.sha256 dist/android-certificate.sha256
           (
             cd dist
             find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\0' |
@@ -227,7 +280,7 @@ jobs:
               xargs -0 sha256sum >SHA256SUMS
           )
 
-      - name: Publish GitHub prerelease
+      - name: Stage assets on the tagged draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -237,6 +290,38 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
+            --draft \
             --prerelease \
             --notes-file "docs/release-notes/${version}.md" \
             --title "Nextcloud Native ${version}"
+
+  release-quorum:
+    needs: stage-assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require at least three successful platforms
+        env:
+          SUCCESSFUL_PLATFORMS: ${{ needs.stage-assets.outputs.successful-platforms }}
+        run: |
+          echo "Successful platforms: ${SUCCESSFUL_PLATFORMS}/4"
+          test "${SUCCESSFUL_PLATFORMS}" -ge 3
+
+  publish:
+    needs:
+      - validate
+      - stage-assets
+      - release-quorum
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the staged GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --draft=false \
+            --prerelease \
+            --latest=false

@@ -9,6 +9,15 @@ until the full product sprint is complete.
 
 ## Unreleased
 
+## [0.1.0-alpha.2]
+
+### Fixed
+
+- Release packaging now treats Android, Linux, Windows, and macOS independently
+  and publishes when at least three platform artifacts are available.
+- macOS packaging uses GitHub's supported Intel runner and retains detailed
+  `jpackage` diagnostics when packaging fails.
+
 ## [0.1.0-alpha.1]
 
 ### Added
