@@ -12,6 +12,8 @@ class NativeRecipeScalingTest {
         assertEquals(2.5, parseRecipeServingCount("yield 2 1/2"))
         assertEquals(4.0, parseRecipeServingCount("Yield: 4"))
         assertNull(parseRecipeServingCount("4-6 servings"))
+        assertNull(parseRecipeServingCount("4\u20136 servings"))
+        assertNull(parseRecipeServingCount("4\u20146 servings"))
         assertNull(parseRecipeServingCount("to taste"))
         assertNull(parseRecipeServingCount("0 servings"))
     }

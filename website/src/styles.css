@@ -1249,7 +1249,7 @@ h1 span {
 }
 
 .faq-list details[open] summary::after {
-  content: "−";
+  content: "-";
 }
 
 .faq-list details p {

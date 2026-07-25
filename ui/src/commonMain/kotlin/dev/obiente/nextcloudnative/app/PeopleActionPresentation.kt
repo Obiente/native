@@ -78,6 +78,6 @@ private fun recognizeActionDisabledSummary(
     person.ownerUserId != support.currentUserId -> "Only the owner can change this person."
     !support.recognizeDavAvailable -> "Recognize person editing is unavailable."
     support.recognizeApiKeyRequired && !support.recognizeApiKeyAvailable ->
-        "Recognize’s short-lived API key is unavailable."
+        "Recognize's short-lived API key is unavailable."
     else -> null
 }

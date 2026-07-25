@@ -276,7 +276,11 @@ cannot be inferred safely. It should still reuse shared models, actions, state,
 and components.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) before
-changing implementation behavior. Report security issues privately through
+changing implementation behavior. AI-assisted contributions must remain
+human-led and accountable; disclosure is appreciated but optional. See
+[AI_POLICY.md](AI_POLICY.md).
+
+Report security issues privately through
 [GitHub private vulnerability reporting](https://github.com/Obiente/nc-native/security/advisories/new).
 
 ## License and trademark
@@ -284,5 +288,5 @@ changing implementation behavior. Report security issues privately through
 Nextcloud Native is licensed under the
 [GNU Affero General Public License, version 3 or later](LICENSE).
 
-“Nextcloud” is a trademark of Nextcloud GmbH. This independent Obiente project
+"Nextcloud" is a trademark of Nextcloud GmbH. This independent Obiente project
 is not affiliated with, sponsored by, or endorsed by Nextcloud GmbH.

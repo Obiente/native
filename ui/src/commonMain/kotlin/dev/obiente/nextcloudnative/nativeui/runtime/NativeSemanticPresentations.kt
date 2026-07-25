@@ -574,7 +574,7 @@ internal fun nativeGroupwarePresentation(
             phone?.takeUnless { it.equals(title, ignoreCase = true) },
         )
         NativeGroupwareItemKind.Event -> listOfNotNull(
-            listOfNotNull(start, end).joinToString(" – ").takeIf(String::isNotBlank),
+            listOfNotNull(start, end).joinToString(" - ").takeIf(String::isNotBlank),
             location,
             status,
             "Recurring".takeIf { recurring },

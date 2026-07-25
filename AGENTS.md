@@ -25,12 +25,18 @@ The next phase has four priorities, in this order:
 Feature count never outranks correctness, privacy, accessibility, battery use,
 or preservation of originals.
 
+All work must follow [AI_POLICY.md](AI_POLICY.md). The human supplies the idea,
+intent, decisions, and active guidance. Agents may assist only inside that
+concrete scope and may not operate as autonomous contributors.
+
 ## 2. Sources of truth
 
 Use these documents for different decisions:
 
 - GitHub issues and the public GitHub Project are the source of truth for
   current work, priority, ownership, and completion.
+- [AI_POLICY.md](AI_POLICY.md) defines human direction, accountability,
+  sign-off, and optional disclosure for AI-assisted contributions.
 - [ROADMAP.md](ROADMAP.md) defines the dependency order, acceptance gates, and
   long-term product scope. It is not a claim that every listed feature exists.
 - [ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md) defines transport,
@@ -50,7 +56,7 @@ Do not copy issue status into a second local tracker. When the assigned task
 includes GitHub publication, update the issue and Project as work advances.
 Otherwise report the required status change to the coordinating maintainer.
 
-## 3. What “native” means
+## 3. What "native" means
 
 A finished feature must help a person complete the workflow for which the
 server app exists.
@@ -208,7 +214,7 @@ Additional rules:
 - Keep previews and temporary originals bounded and evictable.
 - Treat offline pins, local drafts, conflict copies, upload snapshots, and
   user-created files as stronger retention classes than previews.
-- “Viewed,” “cached,” “available offline,” “uploaded,” and “synchronized” are
+- "Viewed," "cached," "available offline," "uploaded," and "synchronized" are
   different states and must never be presented as synonyms.
 - Transfer history must be paged or virtualized. Large queues must not require
   thousands of live UI nodes.
@@ -296,6 +302,13 @@ The supported build JDK is 21. Respect the Gradle wrapper and repository
 toolchain configuration. Do not bypass the supported JDK or add a contributor's
 SDK/JDK path to repository configuration.
 
+Repository-authored prose, source comments, and UI copy use ordinary ASCII
+punctuation. The Rust text-hygiene check rejects smart quotes, typographic
+dashes, Unicode ellipses, Unicode minus signs, no-break spaces, and invisible
+formatting characters while allowing normal UTF-8 letters and translations.
+When code must recognize such input from an external source, express the
+codepoint with an ASCII Unicode escape and test the behavior explicitly.
+
 Use focused tests while iterating, then validate in proportion to the change:
 
 | Change | Minimum evidence before review |
@@ -333,6 +346,8 @@ final-device QA, not the only way to test.
 
 - Start nontrivial work from a focused issue with a user problem, acceptance
   criteria, priority, area/platform, and milestone.
+- Do not autonomously discover or claim work. Every implementation must trace
+  back to a concrete human request or a human-approved issue and scope.
 - Keep one independently reviewable outcome per branch and pull request.
 - A delegated implementation or review subtask does not by itself authorize a
   commit, push, PR, issue or Project edit, label or milestone change, review
@@ -341,10 +356,17 @@ final-device QA, not the only way to test.
 - Amending, rebasing, force-pushing, deleting branches/tags/releases, or
   rewriting shared history requires explicit authority for that exact action.
 - Use Conventional Commit subjects.
-- Sign commits according to the repository's configured human identity and
-  signing policy. Automated tools must not become author or committer and must
-  not add bot/assistant `Co-authored-by` trailers. Preserve external
-  contributors' real authorship.
+- The human contributor remains the author and is responsible for the complete
+  change. Automated tools must not become author or committer and must not add
+  bot/assistant `Co-authored-by` trailers.
+- Every submitted commit needs the human contributor's DCO `Signed-off-by`
+  trailer. An agent may add it only after that human explicitly confirms they
+  reviewed the commit and authorize the sign-off. Cryptographic commit signing
+  remains a separate repository requirement.
+- Optional AI disclosure is appreciated in the PR description or an
+  `Assisted-by: Tool[:model]` trailer, but it is not mandatory. Never disclose
+  private prompts or account data.
+- Preserve external contributors' real authorship.
 - Do not include internal tracking notes, generated design explorations,
   private test data, local credentials, or unrelated context in commits, PRs,
   issues, reviews, or release notes.

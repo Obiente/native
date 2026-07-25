@@ -28,7 +28,7 @@ class PeopleActionPresentationTest {
         recognizeActions.forEach { action ->
             val item = requireNotNull(items[action])
             assertFalse(item.enabled)
-            assertEquals("Recognize’s short-lived API key is unavailable.", item.disabledReason)
+            assertEquals("Recognize's short-lived API key is unavailable.", item.disabledReason)
         }
     }
 

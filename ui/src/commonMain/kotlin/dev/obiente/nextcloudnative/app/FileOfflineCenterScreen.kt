@@ -333,7 +333,7 @@ internal fun FileOfflineCenterScreen(
                 if (items.isEmpty() && !loading) {
                     item {
                         OfflineCenterMessageCard(
-                            "No files are pinned. Use a file’s menu in Files and choose “Make available offline”.",
+                            "No files are pinned. Use a file's menu in Files and choose \"Make available offline\".",
                             errorTone = false,
                         )
                     }
@@ -839,7 +839,7 @@ private fun MediaFolderPreview(
                 loading -> {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     Text(
-                        "Loading a bounded preview…",
+                        "Loading a bounded preview...",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -876,7 +876,7 @@ private fun MediaFolderPreview(
                     }
                     if (preview.access == MediaSyncFolderAccess.LimitedSelection) {
                         Text(
-                            "Grant full access for this folder’s media types before enabling automatic upload.",
+                            "Grant full access for this folder's media types before enabling automatic upload.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -1169,7 +1169,7 @@ private fun OfflineCenterSummaryCard(
                                 }
                             FileOfflineCenterSupport.Unsupported ->
                                 "Not available on this platform build."
-                            null -> "Loading device status…"
+                            null -> "Loading device status..."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

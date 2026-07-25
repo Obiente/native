@@ -107,14 +107,14 @@ fun planFileActions(
             add(action(FileMenuAction.EditText, "Edit text", FileActionPlacement.Primary, textEditReason))
         }
         if (!file.isDirectory && support.platformViewer) {
-            add(action(FileMenuAction.OpenWith, "Open with…", FileActionPlacement.Overflow, externalHandoffReason))
+            add(action(FileMenuAction.OpenWith, "Open with...", FileActionPlacement.Overflow, externalHandoffReason))
         }
         if (!file.isDirectory && officeEditPlan != null) {
             val reason = (officeEditPlan as? OfficeEditSessionPlan.Blocked)?.reason?.userMessage()
             add(action(FileMenuAction.EditWith, "Edit in Office", FileActionPlacement.Overflow, reason))
         } else if (!file.isDirectory && support.platformEditor) {
             val reason = boundedDownloadReason ?: if (!hasVersion) "Refresh the folder before editing this file." else null
-            add(action(FileMenuAction.EditWith, "Edit with…", FileActionPlacement.Overflow, reason))
+            add(action(FileMenuAction.EditWith, "Edit with...", FileActionPlacement.Overflow, reason))
         }
         add(PlannedFileAction(FileMenuAction.Details, "Details", FileActionPlacement.Overflow))
         if (!file.isDirectory && file.fileId != null) {
@@ -150,7 +150,7 @@ fun planFileActions(
             add(
                 action(
                     FileMenuAction.SendCopy,
-                    "Send a copy…",
+                    "Send a copy...",
                     FileActionPlacement.Overflow,
                     externalHandoffReason,
                 ),

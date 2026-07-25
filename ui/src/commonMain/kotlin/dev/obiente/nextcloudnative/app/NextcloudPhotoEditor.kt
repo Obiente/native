@@ -229,7 +229,7 @@ fun NextcloudPhotoEditor(
                 }
                 when (val state = recipeState) {
                     PhotoEditorRecipeState.Loading -> Text(
-                        "Checking for a saved non-destructive recipe…",
+                        "Checking for a saved non-destructive recipe...",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -347,12 +347,12 @@ fun NextcloudPhotoEditor(
                 when (val state = exportState) {
                     PhotoEditorExportState.Idle -> Unit
                     PhotoEditorExportState.SavingRecipe -> Text(
-                        "Creating edit recipe…",
+                        "Creating edit recipe...",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     PhotoEditorExportState.SavingCopy -> Text(
-                        "Rendering a new full-resolution copy…",
+                        "Rendering a new full-resolution copy...",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -374,7 +374,7 @@ fun NextcloudPhotoEditor(
                 }
                 when (val state = sourceState) {
                     PhotoEditorSourceState.Loading -> Text(
-                        "Loading the full-resolution source for export…",
+                        "Loading the full-resolution source for export...",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

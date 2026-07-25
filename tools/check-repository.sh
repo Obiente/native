@@ -14,6 +14,20 @@ if [[ "${#candidate_files[@]}" -eq 0 ]]; then
     exit 1
 fi
 
+if ! command -v rustc >/dev/null 2>&1; then
+    printf 'Rust stable is required to run repository hygiene checks.\n' >&2
+    exit 1
+fi
+
+temporary_directory="$(mktemp -d)"
+trap 'rm -rf -- "$temporary_directory"' EXIT
+
+bash tools/test-text-hygiene.sh
+rustc --edition=2021 tools/text-hygiene.rs \
+    -o "$temporary_directory/text-hygiene"
+printf '%s\0' "${candidate_files[@]}" |
+    "$temporary_directory/text-hygiene" --null
+
 generated="$(printf '%s\n' "${candidate_files[@]}" | grep -E "$generated_pattern" || true)"
 if [[ -n "$generated" ]]; then
     printf 'Generated or machine-local files are tracked:\n%s\n' "$generated" >&2
