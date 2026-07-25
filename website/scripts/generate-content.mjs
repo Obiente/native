@@ -15,7 +15,9 @@ import {
 } from "./news-feed-contract.mjs";
 import {
   githubJsonPages,
+  normalizeRoadmapSnapshot,
   repositoryRoadmapFallback,
+  roadmapSnapshotFromLive,
   shippedPriorityItems,
 } from "./roadmap-data.mjs";
 
@@ -24,6 +26,7 @@ const repositoryRoot = path.resolve(websiteRoot, "..");
 const generatedDirectory = path.join(websiteRoot, "src", "generated");
 const publicDirectory = path.join(websiteRoot, "public");
 const newsDirectory = path.join(websiteRoot, "content", "news");
+const roadmapSnapshotFile = path.join(websiteRoot, "data", "roadmap-snapshot.json");
 const changelogFile = path.join(repositoryRoot, "CHANGELOG.md");
 const changelogRoute = "/changelog/";
 await mkdir(generatedDirectory, { recursive: true });
@@ -469,8 +472,23 @@ try {
       closed: milestone.closed_issues,
     })),
   };
+  await mkdir(path.dirname(roadmapSnapshotFile), { recursive: true });
+  await writeFile(
+    roadmapSnapshotFile,
+    `${JSON.stringify(roadmapSnapshotFromLive(roadmap), null, 2)}\n`,
+  );
 } catch (error) {
-  console.warn(`Using repository roadmap fallback: ${error.message}`);
+  try {
+    roadmap = normalizeRoadmapSnapshot(
+      JSON.parse(await readFile(roadmapSnapshotFile, "utf8")),
+    );
+    console.warn(`Using bundled GitHub roadmap snapshot: ${error.message}`);
+  } catch (snapshotError) {
+    roadmap = fallbackRoadmap;
+    console.warn(
+      `Using repository roadmap fallback: ${error.message}; ${snapshotError.message}`,
+    );
+  }
 }
 
 await writeFile(

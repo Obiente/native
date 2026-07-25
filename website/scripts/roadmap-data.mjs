@@ -16,6 +16,32 @@ export function repositoryRoadmapFallback(projectUrl) {
   };
 }
 
+const roadmapListFields = ["epics", "shipped", "milestones", "priorities", "verification"];
+
+export function normalizeRoadmapSnapshot(snapshot) {
+  if (
+    !snapshot ||
+    typeof snapshot !== "object" ||
+    typeof snapshot.projectUrl !== "string" ||
+    typeof snapshot.updatedAt !== "string" ||
+    roadmapListFields.some((field) => !Array.isArray(snapshot[field]))
+  ) {
+    throw new TypeError("The bundled roadmap snapshot is incomplete.");
+  }
+  return {
+    ...snapshot,
+    source: "github-snapshot",
+    syncState: "snapshot",
+  };
+}
+
+export function roadmapSnapshotFromLive(roadmap) {
+  if (roadmap?.source !== "github" || roadmap?.syncState !== "live") {
+    throw new TypeError("Only live GitHub roadmap data can refresh the bundled snapshot.");
+  }
+  return normalizeRoadmapSnapshot(roadmap);
+}
+
 export function nextPageUrl(linkHeader) {
   if (!linkHeader) return null;
   for (const entry of linkHeader.split(",")) {

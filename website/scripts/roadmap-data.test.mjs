@@ -4,7 +4,9 @@ import {
   fallbackRoadmapState,
   githubJsonPages,
   nextPageUrl,
+  normalizeRoadmapSnapshot,
   repositoryRoadmapFallback,
+  roadmapSnapshotFromLive,
   shippedPriorityItems,
 } from "./roadmap-data.mjs";
 
@@ -82,4 +84,29 @@ test("repository roadmap fallback has deterministic truthful sync state", () => 
   assert.deepEqual(fallback.milestones, []);
   assert.deepEqual(fallback.priorities, []);
   assert.deepEqual(fallback.verification, []);
+});
+
+test("live roadmap data becomes an explicitly dated bundled snapshot", () => {
+  const live = {
+    source: "github",
+    syncState: "live",
+    projectUrl: "https://example.test/project",
+    updatedAt: "2026-07-25T12:00:00Z",
+    epics: [{ number: 10 }],
+    shipped: [{ number: 82 }],
+    milestones: [],
+    priorities: [],
+    verification: [],
+  };
+  const snapshot = roadmapSnapshotFromLive(live);
+
+  assert.equal(snapshot.source, "github-snapshot");
+  assert.equal(snapshot.syncState, "snapshot");
+  assert.equal(snapshot.updatedAt, live.updatedAt);
+  assert.deepEqual(snapshot.epics, live.epics);
+  assert.deepEqual(normalizeRoadmapSnapshot(snapshot), snapshot);
+  assert.throws(
+    () => normalizeRoadmapSnapshot({ ...snapshot, shipped: null }),
+    /snapshot is incomplete/,
+  );
 });
