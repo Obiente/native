@@ -167,6 +167,28 @@ jobs:
           printf '%s' "${ANDROID_RELEASE_KEYSTORE_BASE64}" |
             base64 --decode >"${RUNNER_TEMP}/nextcloud-native-release.keystore"
 
+      - name: Verify protected Android signing identity
+        env:
+          NC_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          NC_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          actual_certificate_sha256="$(keytool -list -v \
+            -keystore "${RUNNER_TEMP}/nextcloud-native-release.keystore" \
+            -storepass "${NC_ANDROID_KEYSTORE_PASSWORD}" \
+            -alias "${NC_ANDROID_KEY_ALIAS}" |
+            awk -F': ' '/SHA256:/{ fingerprint=$2; gsub(":", "", fingerprint); print tolower(fingerprint); exit }')"
+          expected_certificate_sha256="$(tr -d ':[:space:]' \
+            <release/android-signing-certificate.sha256 | tr '[:upper:]' '[:lower:]')"
+          if [[ -z "${actual_certificate_sha256}" ]]; then
+            echo "::error::The protected Android signing certificate could not be read."
+            exit 1
+          fi
+          if [[ "${actual_certificate_sha256}" != "${expected_certificate_sha256}" ]]; then
+            echo "::error::Protected Android signing certificate ${actual_certificate_sha256} does not match pinned certificate ${expected_certificate_sha256}."
+            exit 1
+          fi
+
       - name: Build signed Android release
         env:
           NC_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/nextcloud-native-release.keystore
@@ -208,8 +230,14 @@ jobs:
           test -n "${aab_certificate_sha256}"
           expected_certificate_sha256="$(tr -d ':[:space:]' \
             <release/android-signing-certificate.sha256 | tr '[:upper:]' '[:lower:]')"
-          test "${certificate_sha256}" = "${expected_certificate_sha256}"
-          test "${aab_certificate_sha256}" = "${expected_certificate_sha256}"
+          if [[ "${certificate_sha256}" != "${expected_certificate_sha256}" ]]; then
+            echo "::error::APK signing certificate ${certificate_sha256} does not match pinned certificate ${expected_certificate_sha256}."
+            exit 1
+          fi
+          if [[ "${aab_certificate_sha256}" != "${expected_certificate_sha256}" ]]; then
+            echo "::error::App Bundle signing certificate ${aab_certificate_sha256} does not match pinned certificate ${expected_certificate_sha256}."
+            exit 1
+          fi
           apk_sha256="$(sha256sum "dist/nextcloud-native-${version}-android.apk" | awk '{print $1}')"
           printf '%s\n' "${certificate_sha256}" >"dist/android-certificate.sha256"
           printf '%s\n' "${apk_sha256}" >"dist/android-apk.sha256"
