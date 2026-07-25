@@ -34,5 +34,6 @@ for file in "${candidate_files[@]}"; do
 done
 
 bash tools/test-apksigner-certificate-parser.sh
+bash tools/test-build-jvm-criteria.sh
 
 printf 'Repository hygiene checks passed.\n'
