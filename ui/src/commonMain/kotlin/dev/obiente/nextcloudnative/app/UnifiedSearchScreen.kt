@@ -190,7 +190,7 @@ internal fun NextcloudUnifiedSearchScreen(
             )
             !searching && groups.values.all { it.entries.isEmpty() } && failures.isEmpty() -> UnifiedSearchMessage(
                 title = "No results",
-                detail = "Nothing matched “$submittedQuery”.",
+                detail = "Nothing matched \"$submittedQuery\".",
             )
             else -> LazyColumn(
                 modifier = Modifier.fillMaxSize(),

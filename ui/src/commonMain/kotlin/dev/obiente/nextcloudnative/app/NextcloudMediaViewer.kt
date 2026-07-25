@@ -217,7 +217,13 @@ fun NextcloudMediaViewer(
             load = { candidate ->
                 services.loadPreviewCached(session, candidate, width = 1_600, height = 1_600)
             },
-            decode = { bytes -> decodePlatformImageSampled(bytes, MAXIMUM_PREVIEW_IMAGE_DIMENSION)?.image },
+            decode = { bytes ->
+                decodePlatformImageSampled(
+                    bytes,
+                    MAXIMUM_PREVIEW_IMAGE_DIMENSION,
+                    EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+                )?.image
+            },
         )
         previewState = loaded?.let {
             MediaPreviewState.Ready(it.value, it.source, it.usedFallback)
@@ -408,7 +414,7 @@ fun NextcloudMediaViewer(
                         Icon(NextcloudIcons.Play, contentDescription = null, modifier = Modifier.size(22.dp))
                     }
                     Text(
-                        if (externalOpening) "Preparing video…" else "Play video",
+                        if (externalOpening) "Preparing video..." else "Play video",
                         modifier = Modifier.padding(start = 8.dp),
                     )
                 }
@@ -436,7 +442,7 @@ fun NextcloudMediaViewer(
                         onClick = ::openInMediaApp,
                         enabled = !externalOpening && selected.originalAccessAllowed,
                     ) {
-                        Text(if (externalOpening) "Preparing…" else "Open in another app")
+                        Text(if (externalOpening) "Preparing..." else "Open in another app")
                     }
                 }
             }
@@ -448,7 +454,7 @@ fun NextcloudMediaViewer(
                         when (fullQualityState) {
                             FullQualityState.Idle ->
                                 if (zoom < FULL_QUALITY_MEDIA_ZOOM_THRESHOLD) " · Preview" else ""
-                            FullQualityState.Loading -> " · Loading full quality…"
+                            FullQualityState.Loading -> " · Loading full quality..."
                             is FullQualityState.Ready -> " · Full quality"
                             FullQualityState.Error -> " · Preview (full quality unavailable)"
                         },
@@ -891,7 +897,7 @@ private fun PreviewError(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(
-            text = "Couldn’t open this preview",
+            text = "Couldn't open this preview",
             color = Color.White,
             style = MaterialTheme.typography.titleMedium,
         )
@@ -912,7 +918,7 @@ private fun PreviewError(
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                 }
                 Text(
-                    if (openingExternal) "Preparing…" else "Open in another app",
+                    if (openingExternal) "Preparing..." else "Open in another app",
                     modifier = Modifier.padding(start = if (openingExternal) 8.dp else 0.dp),
                 )
             }

@@ -735,7 +735,7 @@ private fun DashboardLoading() {
     ) {
         CircularProgressIndicator()
         Text(
-            "Loading dashboard…",
+            "Loading dashboard...",
             modifier = Modifier.padding(top = NextcloudSpacing.Medium),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1079,7 +1079,7 @@ internal fun NativeUserStatusScreen(
                             CircularProgressIndicator(modifier = Modifier.size(18.dp))
                             Spacer(Modifier.size(8.dp))
                         }
-                        Text(if (mutationInProgress) "Updating…" else "Update status")
+                        Text(if (mutationInProgress) "Updating..." else "Update status")
                     }
                 },
             )

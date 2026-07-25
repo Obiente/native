@@ -417,7 +417,7 @@ private fun LoginScreen(
                 onClick = {
                     connecting = true
                     error = null
-                    status = "Contacting your server…"
+                    status = "Contacting your server..."
                     scope.launch {
                         runCatching {
                             val challenge = services.beginLogin(serverUrl)
@@ -964,7 +964,7 @@ private fun MarketingHomeScreen(
         )
         when {
             error != null -> ErrorMessage(error, onRetry)
-            serverInfo == null -> LoadingMessage("Discovering your cloud…")
+            serverInfo == null -> LoadingMessage("Discovering your cloud...")
             else -> {
                 val apps = serverInfo.apps
                 val files = apps.firstOrNull { it.id == "files" }
@@ -1161,7 +1161,7 @@ private fun AppsScreen(
         ProductHeader(title = "Apps", onSettings = onSettings, onSearch = onSearch)
         when {
             error != null -> ErrorMessage(error, onRetry)
-            serverInfo == null -> LoadingMessage("Loading installed apps…")
+            serverInfo == null -> LoadingMessage("Loading installed apps...")
             else -> {
                 val apps = serverInfo.apps.filter { app ->
                     app.id != "dashboard" &&
@@ -1177,7 +1177,7 @@ private fun AppsScreen(
                     shape = RoundedCornerShape(NextcloudRadii.Card),
                 )
                 if (apps.isEmpty()) {
-                    EmptyMessage("No installed app matches “$search”.")
+                    EmptyMessage("No installed app matches \"$search\".")
                 } else {
                     LazyVerticalGrid(
                         columns = GridCells.Adaptive(150.dp),
@@ -1237,7 +1237,7 @@ private fun AdminAppsScreen(
             onBack = onBack,
         )
         when (val result = catalogResult) {
-            null -> LoadingMessage("Loading administrator app catalog…")
+            null -> LoadingMessage("Loading administrator app catalog...")
             is NativeAppCatalogResult.Available -> NativeAppCatalogSurface(
                 catalog = result.catalog,
                 query = search,
@@ -3181,7 +3181,7 @@ private fun ActivityScreen(
             }
             !timeline.initialized && timeline.error != null ->
                 ErrorMessage(requireNotNull(timeline.error)) { loadAttempt += 1 }
-            !timeline.initialized -> LoadingMessage("Loading activity…")
+            !timeline.initialized -> LoadingMessage("Loading activity...")
             timeline.activities.isEmpty() -> EmptyMessage("There is no recent activity.")
             else -> LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -3206,7 +3206,7 @@ private fun ActivityScreen(
                         ) {
                             Icon(NextcloudIcons.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                             Text(
-                                if (timeline.refreshing) "Refreshing…" else "Refresh",
+                                if (timeline.refreshing) "Refreshing..." else "Refresh",
                                 modifier = Modifier.padding(start = NextcloudSpacing.Small),
                             )
                         }
@@ -3344,7 +3344,7 @@ private fun ActivityScreen(
                             onClick = { olderPageAttempt += 1 },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(if (timeline.loadingMore) "Loading…" else "Load older activity")
+                            Text(if (timeline.loadingMore) "Loading..." else "Load older activity")
                         }
                     }
                 }
@@ -3618,7 +3618,7 @@ private fun FilesScreen(
             }
             FileMenuAction.OpenWith -> {
                 handoffError = null
-                handoffNotice = "Preparing ${file.name}…"
+                handoffNotice = "Preparing ${file.name}..."
                 scope.launch {
                     runCatching {
                         services.handoffFileToExternalApp(
@@ -3651,7 +3651,7 @@ private fun FilesScreen(
             }
             FileMenuAction.SendCopy -> {
                 handoffError = null
-                handoffNotice = "Preparing ${file.name}…"
+                handoffNotice = "Preparing ${file.name}..."
                 scope.launch {
                     runCatching {
                         services.handoffFileToExternalApp(
@@ -3774,7 +3774,7 @@ private fun FilesScreen(
         }
         when {
             error != null && files == null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
-            files == null -> LoadingMessage("Loading files…")
+            files == null -> LoadingMessage("Loading files...")
             files?.isEmpty() == true -> EmptyMessage("This folder is empty.")
             else -> {
                 val loadedFiles = requireNotNull(files)
@@ -3858,7 +3858,7 @@ private fun FilesScreen(
                         )
                     }
                     if (visibleFiles.isEmpty()) {
-                        EmptyMessage("No files match “${filterQuery.trim()}”.")
+                        EmptyMessage("No files match \"${filterQuery.trim()}\".")
                     } else if (layout == FileLayout.List) {
                         FileList(
                             files = visibleFiles,
@@ -4025,7 +4025,7 @@ private fun FilesScreen(
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(8.dp))
                     }
-                    Text(if (creationRunning) "Creating…" else "Create")
+                    Text(if (creationRunning) "Creating..." else "Create")
                 }
             },
         )
@@ -4113,7 +4113,7 @@ private fun FilesScreen(
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(8.dp))
                     }
-                    Text(if (mutationRunning) "Renaming…" else "Rename")
+                    Text(if (mutationRunning) "Renaming..." else "Rename")
                 }
             },
         )
@@ -4233,7 +4233,7 @@ private fun FilesScreen(
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(8.dp))
                     }
-                    Text(if (mutationRunning) "${verb}ing…" else verb)
+                    Text(if (mutationRunning) "${verb}ing..." else verb)
                 }
             },
         )
@@ -4313,7 +4313,7 @@ private fun FilesScreen(
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(8.dp))
                     }
-                    Text(if (mutationRunning) "Deleting…" else "Delete")
+                    Text(if (mutationRunning) "Deleting..." else "Delete")
                 }
             },
         )
@@ -4500,7 +4500,7 @@ private fun FilesScreen(
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(8.dp))
                     }
-                    Text(if (shareRunning) "Creating…" else "Create")
+                    Text(if (shareRunning) "Creating..." else "Create")
                 }
             },
         )
@@ -4635,7 +4635,10 @@ private fun FileGridTile(
         file.fileId ?: return@LaunchedEffect
         if (!file.hasPreview || file.isDirectory) return@LaunchedEffect
         preview = runCatching {
-            decodePlatformImage(services.loadPreviewCached(session, file, width = 320, height = 320))
+            decodePlatformImage(
+                services.loadPreviewCached(session, file, width = 320, height = 320),
+                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+            )
         }.getOrNull()
     }
     Card(
@@ -4934,7 +4937,7 @@ private fun MediaScreen(
                 error != null && collectionItems.isEmpty() -> ErrorMessage(requireNotNull(error)) {
                     scope.launch { loadCollectionPage(collection, reset = true) }
                 }
-                loading && collectionItems.isEmpty() -> LoadingMessage("Loading ${collection.name}…")
+                loading && collectionItems.isEmpty() -> LoadingMessage("Loading ${collection.name}...")
                 collectionItems.isEmpty() && dayIndex != null -> EmptyMessage("This collection has no indexed media.")
                 else -> NativeMediaCollectionContent(
                     collection = collection,
@@ -4994,7 +4997,7 @@ private fun MediaScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                                Text("Updating album…")
+                                Text("Updating album...")
                             }
                         }
                     }
@@ -5144,7 +5147,7 @@ private fun MediaScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                        Text("Loading albums…")
+                        Text("Loading albums...")
                     }
                     albums.isEmpty() -> Text("Create an album first.")
                     else -> LazyColumn(
@@ -5215,7 +5218,7 @@ private fun MediaScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                            Text("Updating album…")
+                            Text("Updating album...")
                         }
                     }
                 }
@@ -5324,7 +5327,7 @@ private fun MediaScreen(
         if (mode == MediaMode.Timeline) {
             when {
                 mediaError != null -> ErrorMessage(requireNotNull(mediaError)) { mediaLoadAttempt += 1 }
-                media == null -> LoadingMessage("Finding photos and RAW previews…")
+                media == null -> LoadingMessage("Finding photos and RAW previews...")
                 media?.isEmpty() == true -> EmptyMessage("No previewable media was found.")
                 else -> LazyVerticalGrid(
                     columns = GridCells.Adaptive(120.dp),
@@ -5366,7 +5369,7 @@ private fun MediaScreen(
                     catalog = null
                     loadAttempt += 1
                 }
-                catalog == null -> LoadingMessage("Loading albums and tags…")
+                catalog == null -> LoadingMessage("Loading albums and tags...")
                 else -> NativeMediaCollectionBrowser(
                     catalog = requireNotNull(catalog),
                     state = browserState,
@@ -5468,7 +5471,7 @@ private fun MediaScreen(
                     peopleByBackend.remove(peopleBackend)
                     peopleLoadAttempt += 1
                 }
-                people == null -> LoadingMessage("Loading recognized people…")
+                people == null -> LoadingMessage("Loading recognized people...")
                 people.isEmpty() -> EmptyMessage("Memories has not returned any recognized people yet.")
                 visiblePeople.isEmpty() -> EmptyMessage("No recognized person matches your search.")
                 else -> LazyVerticalGrid(
@@ -5502,7 +5505,12 @@ private fun PersonTile(
     var image by remember(person.id, person.coverFileId, person.coverEtag) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(person.id, person.coverFileId, person.coverEtag) {
         if (person.coverFileId == null) return@LaunchedEffect
-        image = runCatching { decodePlatformImage(services.loadPersonCoverCached(session, person)) }.getOrNull()
+        image = runCatching {
+            decodePlatformImage(
+                services.loadPersonCoverCached(session, person),
+                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+            )
+        }.getOrNull()
     }
 
     Card(
@@ -5992,7 +6000,7 @@ private fun PersonMediaScreen(
         photoSelectionMode?.takeIf { it == PersonPhotoSelectionMode.Cover }?.let { mode ->
             PersonPhotoSelectionBanner(
                 title = when (mode) {
-                    PersonPhotoSelectionMode.Cover -> "Choose one photo to use as ${person.name}’s cover."
+                    PersonPhotoSelectionMode.Cover -> "Choose one photo to use as ${person.name}'s cover."
                     PersonPhotoSelectionMode.RemoveFace ->
                         "Choose the exact face to remove. The source photo will stay in Files."
                 },
@@ -6004,7 +6012,7 @@ private fun PersonMediaScreen(
                 recognizedFacesError != null -> ErrorMessage(requireNotNull(recognizedFacesError)) {
                     recognizedFacesLoadAttempt += 1
                 }
-                recognizedFaces == null -> LoadingMessage("Loading exact face assignments…")
+                recognizedFaces == null -> LoadingMessage("Loading exact face assignments...")
                 else -> RecognizedFaceRemovalPicker(
                     services = services,
                     session = session,
@@ -6028,7 +6036,7 @@ private fun PersonMediaScreen(
                 )
             }
             error != null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
-            mediaItems == null -> LoadingMessage("Loading ${person.name}…")
+            mediaItems == null -> LoadingMessage("Loading ${person.name}...")
             mediaItems?.isEmpty() == true -> EmptyMessage("No photos were returned for this person.")
             else -> {
                 val loadedItems = requireNotNull(mediaItems)
@@ -6143,7 +6151,7 @@ private fun PersonMediaScreen(
         }
         AlertDialog(
             onDismissRequest = { mergePickerVisible = false },
-            title = { Text("Merge ${person.name} into…") },
+            title = { Text("Merge ${person.name} into...") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
                     Text(
@@ -6169,7 +6177,7 @@ private fun PersonMediaScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Text("Loading people…")
+                            Text("Loading people...")
                         }
                         visibleTargets.isEmpty() -> Text(
                             "No other recognized person matches.",
@@ -6253,7 +6261,7 @@ private fun PersonMediaScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-                            Text("Loading every face assigned to ${person.name}…")
+                            Text("Loading every face assigned to ${person.name}...")
                         }
                         Text(
                             "No faces are changed during this inventory step.",
@@ -6419,7 +6427,7 @@ private fun PeopleActionPlanReviewDialog(
                                 isMerge && mergeWorkflow != null -> {
                                     val progress = requireNotNull(mergeWorkflow).progress
                                     if (running) {
-                                        "Moved ${progress.succeeded} of ${progress.total} faces…"
+                                        "Moved ${progress.succeeded} of ${progress.total} faces..."
                                     } else {
                                         "Complete inventory ready: ${progress.total} faces. The merge stops on the first rejected or uncertain move."
                                     }
@@ -6552,7 +6560,12 @@ private fun MediaTile(
     LaunchedEffect(file.fileId) {
         file.fileId ?: return@LaunchedEffect
         if (!file.hasPreview) return@LaunchedEffect
-        image = runCatching { decodePlatformImage(services.loadPreviewCached(session, file)) }.getOrNull()
+        image = runCatching {
+            decodePlatformImage(
+                services.loadPreviewCached(session, file),
+                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+            )
+        }.getOrNull()
     }
     Surface(
         modifier = Modifier.fillMaxWidth().aspectRatio(1f).then(
@@ -6774,7 +6787,7 @@ private fun TextEditorScreen(
         ScreenHeader(file.name, if (dirty) "Unsaved changes" else "Text editor", ::requestBack)
         when {
             loadingError != null -> ErrorMessage(requireNotNull(loadingError))
-            originalText == null -> LoadingMessage("Opening ${file.name}…")
+            originalText == null -> LoadingMessage("Opening ${file.name}...")
             else -> {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large, vertical = 8.dp),
@@ -6800,7 +6813,7 @@ private fun TextEditorScreen(
                     ) {
                         Icon(NextcloudIcons.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.size(8.dp))
-                        Text(if (saving) "Saving…" else "Save")
+                        Text(if (saving) "Saving..." else "Save")
                     }
                 }
                 if (isMarkdown) {
@@ -6981,7 +6994,7 @@ private fun TalkScreen(
         ScreenHeader("Talk", "Conversations", onBack)
         when {
             error != null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
-            rooms == null -> LoadingMessage("Loading conversations…")
+            rooms == null -> LoadingMessage("Loading conversations...")
             rooms?.isEmpty() == true -> EmptyMessage("No Talk conversations yet.")
             else -> LazyColumn(contentPadding = PaddingValues(bottom = NextcloudSpacing.XXLarge)) {
                 listItems(requireNotNull(rooms), key = TalkRoom::token) { room ->
@@ -7076,7 +7089,7 @@ private fun ChatScreen(
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when {
                 error != null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
-                messages == null -> LoadingMessage("Loading messages…")
+                messages == null -> LoadingMessage("Loading messages...")
                 messages?.isEmpty() == true -> EmptyMessage("No messages in this conversation yet.")
                 else -> LazyColumn(
                     state = messageListState,
@@ -7208,7 +7221,7 @@ private fun ProjectNewsScreen(
         )
         when {
             error != null && result == null -> ErrorMessage(requireNotNull(error)) { refresh += 1 }
-            result == null -> LoadingMessage("Loading project news…")
+            result == null -> LoadingMessage("Loading project news...")
             else -> LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(NextcloudSpacing.Large),
@@ -7466,7 +7479,7 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                         is AppUpdateInstallState.Verifying -> {
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                             Text(
-                                "Download complete. Verifying package and signing certificate…",
+                                "Download complete. Verifying package and signing certificate...",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -7667,7 +7680,7 @@ private fun SettingsScreen(
                                         "Pinned files, downloads, conflicts, and device storage"
                                     }
                                 } else {
-                                    "Review this platform’s offline file support and limitations"
+                                    "Review this platform's offline file support and limitations"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -7820,7 +7833,7 @@ private fun SettingsScreen(
                 ) {
                     Icon(NextcloudIcons.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.size(8.dp))
-                    Text(if (loggingOut) "Signing out…" else "Sign out and revoke access")
+                    Text(if (loggingOut) "Signing out..." else "Sign out and revoke access")
                 }
             }
         }

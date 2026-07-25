@@ -215,7 +215,7 @@ internal fun GenericRecipeDetailHeader(
                     enabled = selectedServings > 1.0,
                     onClick = { onSelectedServingsChange((selectedServings - 1.0).coerceAtLeast(1.0)) },
                 ) {
-                    Text("−")
+                    Text("-")
                 }
                 OutlinedButton(
                     enabled = selectedServings < 999.0,

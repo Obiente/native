@@ -5,13 +5,27 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.exifinterface.media.ExifInterface
+import java.io.ByteArrayInputStream
 
-actual fun decodePlatformImage(bytes: ByteArray): ImageBitmap? {
+actual fun decodePlatformImage(
+    bytes: ByteArray,
+    orientationPolicy: EncodedImageOrientationPolicy,
+): ImageBitmap? {
     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
-    return bitmap.applyEncodedOrientation(encodedImageOrientation(bytes)).asImageBitmap()
+    val orientation = bytes.orientationFor(orientationPolicy)
+    val oriented = bitmap.applyEncodedOrientation(orientation) ?: run {
+        bitmap.recycle()
+        return null
+    }
+    return oriented.asImageBitmap()
 }
 
-actual fun decodePlatformImageSampled(bytes: ByteArray, maximumDimension: Int): PlatformDecodedImage? {
+actual fun decodePlatformImageSampled(
+    bytes: ByteArray,
+    maximumDimension: Int,
+    orientationPolicy: EncodedImageOrientationPolicy,
+): PlatformDecodedImage? {
     require(maximumDimension > 0)
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
@@ -24,10 +38,12 @@ actual fun decodePlatformImageSampled(bytes: ByteArray, maximumDimension: Int): 
         inSampleSize = sampleSize
         inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
     }
-    val orientation = encodedImageOrientation(bytes)
-    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-        ?.applyEncodedOrientation(orientation)
-        ?: return null
+    val orientation = bytes.orientationFor(orientationPolicy)
+    val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
+    val bitmap = decoded.applyEncodedOrientation(orientation) ?: run {
+        decoded.recycle()
+        return null
+    }
     return PlatformDecodedImage(
         image = bitmap.asImageBitmap(),
         sourceWidth = if (orientationSwapsDimensions(orientation)) bounds.outHeight else bounds.outWidth,
@@ -35,31 +51,33 @@ actual fun decodePlatformImageSampled(bytes: ByteArray, maximumDimension: Int): 
     )
 }
 
-private fun Bitmap.applyEncodedOrientation(orientation: Int): Bitmap {
+private fun Bitmap.applyEncodedOrientation(orientation: Int): Bitmap? {
     if (orientation == 1) return this
-    val matrix = Matrix().apply {
-        when (orientation) {
-            2 -> setScale(-1f, 1f)
-            3 -> setRotate(180f)
-            4 -> {
-                setRotate(180f)
-                postScale(-1f, 1f)
-            }
-            5 -> {
-                setRotate(90f)
-                postScale(-1f, 1f)
-            }
-            6 -> setRotate(90f)
-            7 -> {
-                setRotate(-90f)
-                postScale(-1f, 1f)
-            }
-            8 -> setRotate(-90f)
-        }
-    }
     return runCatching {
+        val (source, destination) = exifOrientationAffinePoints(width, height, orientation)
+        val matrix = Matrix().apply {
+            check(setPolyToPoly(source, 0, destination, 0, 3)) {
+                "Could not construct the EXIF orientation transform."
+            }
+        }
         Bitmap.createBitmap(this, 0, 0, width, height, matrix, true).also { transformed ->
             if (transformed !== this) recycle()
         }
-    }.getOrElse { this }
+    }.getOrNull()
+}
+
+private fun ByteArray.orientationFor(policy: EncodedImageOrientationPolicy): Int = when (policy) {
+    EncodedImageOrientationPolicy.ApplyExif -> runCatching {
+        ByteArrayInputStream(this).use { input ->
+            ExifInterface(input).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL,
+            )
+        }.takeIf { it in 1..8 } ?: 1
+    }.getOrElse {
+        // The bounded common parser keeps JPEG/TIFF orientation available if a vendor-specific
+        // payload is rejected by ExifInterface.
+        encodedImageOrientation(this)
+    }
+    EncodedImageOrientationPolicy.PixelsAlreadyUpright -> 1
 }

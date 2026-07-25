@@ -17,4 +17,4 @@ operations, migrations, and remaining limitations.
 
 ## Visual changes
 
-Add screenshots for each affected form factor, or write “Not applicable.”
+Add screenshots for each affected form factor, or write "Not applicable."

@@ -18,6 +18,112 @@ internal fun encodedImageOrientation(bytes: ByteArray): Int {
 
 internal fun orientationSwapsDimensions(orientation: Int): Boolean = orientation in 5..8
 
+internal data class ExifOrientedDimensions(
+    val width: Int,
+    val height: Int,
+)
+
+internal data class ExifPixelCoordinate(
+    val x: Int,
+    val y: Int,
+)
+
+internal fun exifOrientedDimensions(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    orientation: Int,
+): ExifOrientedDimensions {
+    require(sourceWidth > 0 && sourceHeight > 0)
+    require(orientation in 1..8)
+    return if (orientationSwapsDimensions(orientation)) {
+        ExifOrientedDimensions(sourceHeight, sourceWidth)
+    } else {
+        ExifOrientedDimensions(sourceWidth, sourceHeight)
+    }
+}
+
+/**
+ * Maps one encoded pixel into the canonical upright coordinate system defined by EXIF 1.
+ *
+ * Orientations 2, 4, 5, and 7 are mirrored; treating them as rotations loses information and
+ * makes crop and editor coordinates disagree with exported copies.
+ */
+internal fun exifOrientedPixel(
+    sourceX: Int,
+    sourceY: Int,
+    sourceWidth: Int,
+    sourceHeight: Int,
+    orientation: Int,
+): ExifPixelCoordinate {
+    require(sourceWidth > 0 && sourceHeight > 0)
+    require(sourceX in 0 until sourceWidth && sourceY in 0 until sourceHeight)
+    require(orientation in 1..8)
+    return when (orientation) {
+        1 -> ExifPixelCoordinate(sourceX, sourceY)
+        2 -> ExifPixelCoordinate(sourceWidth - 1 - sourceX, sourceY)
+        3 -> ExifPixelCoordinate(sourceWidth - 1 - sourceX, sourceHeight - 1 - sourceY)
+        4 -> ExifPixelCoordinate(sourceX, sourceHeight - 1 - sourceY)
+        5 -> ExifPixelCoordinate(sourceY, sourceX)
+        6 -> ExifPixelCoordinate(sourceHeight - 1 - sourceY, sourceX)
+        7 -> ExifPixelCoordinate(sourceHeight - 1 - sourceY, sourceWidth - 1 - sourceX)
+        8 -> ExifPixelCoordinate(sourceY, sourceWidth - 1 - sourceX)
+        else -> error("Unreachable EXIF orientation.")
+    }
+}
+
+/**
+ * Three source/destination edge points for an affine EXIF transform.
+ *
+ * Edge coordinates use width/height rather than the last pixel so platform rasterizers preserve
+ * the complete image bounds without half-pixel translations.
+ */
+internal fun exifOrientationAffinePoints(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    orientation: Int,
+): Pair<FloatArray, FloatArray> {
+    require(sourceWidth > 0 && sourceHeight > 0)
+    require(orientation in 1..8)
+    val width = sourceWidth.toFloat()
+    val height = sourceHeight.toFloat()
+    val source = floatArrayOf(0f, 0f, width, 0f, 0f, height)
+    val destination = when (orientation) {
+        1 -> floatArrayOf(0f, 0f, width, 0f, 0f, height)
+        2 -> floatArrayOf(width, 0f, 0f, 0f, width, height)
+        3 -> floatArrayOf(width, height, 0f, height, width, 0f)
+        4 -> floatArrayOf(0f, height, width, height, 0f, 0f)
+        5 -> floatArrayOf(0f, 0f, 0f, width, height, 0f)
+        6 -> floatArrayOf(height, 0f, height, width, 0f, 0f)
+        7 -> floatArrayOf(height, width, height, 0f, 0f, width)
+        8 -> floatArrayOf(0f, width, 0f, 0f, height, width)
+        else -> error("Unreachable EXIF orientation.")
+    }
+    return source to destination
+}
+
+internal fun exifOrientationMatrixValues(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    orientation: Int,
+): FloatArray {
+    val (source, destination) = exifOrientationAffinePoints(sourceWidth, sourceHeight, orientation)
+    val scaleX = source[2] - source[0]
+    val scaleY = source[5] - source[1]
+    val destinationX0 = destination[0]
+    val destinationY0 = destination[1]
+    return floatArrayOf(
+        (destination[2] - destinationX0) / scaleX,
+        (destination[4] - destinationX0) / scaleY,
+        destinationX0,
+        (destination[3] - destinationY0) / scaleX,
+        (destination[5] - destinationY0) / scaleY,
+        destinationY0,
+        0f,
+        0f,
+        1f,
+    )
+}
+
 private fun ByteArray.jpegExifTiffStart(): Int? {
     var cursor = 2
     while (cursor + 4 <= size) {

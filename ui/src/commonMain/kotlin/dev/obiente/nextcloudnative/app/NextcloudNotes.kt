@@ -504,7 +504,7 @@ private fun RenameNoteFolderDialog(
                             }
                     }
                 },
-            ) { Text(if (submitting) "Renaming…" else "Rename") }
+            ) { Text(if (submitting) "Renaming..." else "Rename") }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") } },
     )
@@ -555,7 +555,7 @@ private fun DeleteNoteFolderDialog(
                     containerColor = MaterialTheme.colorScheme.error,
                     contentColor = MaterialTheme.colorScheme.onError,
                 ),
-            ) { Text(if (submitting) "Deleting…" else "Delete") }
+            ) { Text(if (submitting) "Deleting..." else "Delete") }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") } },
     )
@@ -836,7 +836,7 @@ internal fun NextcloudNoteEditor(
                         onClick = ::saveNote,
                     ) {
                         Icon(NextcloudIcons.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Text(if (saving) "Saving…" else "Save", modifier = Modifier.padding(start = 8.dp))
+                        Text(if (saving) "Saving..." else "Save", modifier = Modifier.padding(start = 8.dp))
                     }
                 }
                 if (folderOptions.isNotEmpty()) {
@@ -996,7 +996,7 @@ internal fun NextcloudNoteEditor(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError,
                     ),
-                ) { Text(if (deleting) "Deleting…" else "Delete") }
+                ) { Text(if (deleting) "Deleting..." else "Delete") }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirmation = false }, enabled = !deleting) { Text("Cancel") }

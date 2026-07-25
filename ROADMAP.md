@@ -20,7 +20,7 @@ Nextcloud Native should make a self-hosted cloud feel like one operating-system 
 - credentials and sensitive URLs remain on the device and out of logs;
 - Android, iOS, Windows, macOS, and Linux use the same domain rules while respecting each operating system's native integration points.
 
-“Best Nextcloud client” will be measured primarily by trust and integration:
+"Best Nextcloud client" will be measured primarily by trust and integration:
 
 1. **No silent data loss.** Ambiguous writes become visible pending/unknown states. Concurrent edits become explicit conflicts.
 2. **Native where it matters.** Filesystem providers, share sheets, notifications, background transfer, calls, media, shortcuts, and accessibility use platform APIs.
@@ -36,7 +36,7 @@ Nextcloud Native should make a self-hosted cloud feel like one operating-system 
 - The UI never parses JSON, XML, DAV properties, or protocol headers.
 - Every write declares its conflict, retry, confirmation, and offline policy before it is enabled.
 - Unknown or ambiguous network outcomes are not blindly retried for non-idempotent operations.
-- Full files are not retained merely because the user viewed a preview. “Available offline” is explicit.
+- Full files are not retained merely because the user viewed a preview. "Available offline" is explicit.
 - Image and document edits create a new file by default. Replacing an original is a separate, ETag-guarded action.
 - A stored Login Flow app password is never treated as the account password.
 - Strict administrator operations never cause the primary password to be stored.
@@ -172,7 +172,7 @@ All platforms expose the same states:
 - failed with retryable or terminal reason;
 - delivery/commit outcome unknown.
 
-UI copy and icons must not collapse these into a single “downloaded” or “error” state.
+UI copy and icons must not collapse these into a single "downloaded" or "error" state.
 
 ## 5. Foundational dependency gates
 
@@ -373,7 +373,7 @@ The vault profile defaults to:
 - atomic temporary-file/save/rename sequences recognized as one logical update where journal evidence permits;
 - no remote deletion until the local deletion is stable and the remote base is unchanged;
 - conflicts surfaced inside the app and with clearly named local copies;
-- manual “sync now,” pause, and per-vault health/status;
+- manual "sync now," pause, and per-vault health/status;
 - no battery-intensive continuous polling when Android has suspended the app.
 
 ### Background, battery, and network behavior
@@ -384,7 +384,7 @@ The vault profile defaults to:
 - Metered/roaming policies apply before hydration and transfer; metadata refresh can have a separate low-bandwidth policy.
 - Backoff uses server `Retry-After` where available, jitter, and a per-account circuit breaker. Authentication, permission, quota, and conflict errors do not spin.
 - Desktop uses filesystem watchers as hints and periodic verification. Watch overflow degrades to a visible rescan, not silent staleness.
-- iOS scheduling accepts that the OS controls background runtime. The File Provider extension and BG tasks must converge when invoked; “continuous” cannot mean an always-running daemon on iOS.
+- iOS scheduling accepts that the OS controls background runtime. The File Provider extension and BG tasks must converge when invoked; "continuous" cannot mean an always-running daemon on iOS.
 
 ### Acceptance criteria
 
@@ -835,7 +835,7 @@ Architecture decisions that affect persistence, sync semantics, authentication, 
 | Risk | Impact | Mitigation/gate |
 |---|---|---|
 | Files DAV has no universal directory sync token | Expensive scans/stale remote changes | Journaled incremental hints plus periodic verification; benchmark large trees |
-| Mobile background restrictions | “Continuous” sync cannot always run immediately | Honest policy, WorkManager/BGTask/File Provider triggers, visible last-sync state, manual foreground override |
+| Mobile background restrictions | "Continuous" sync cannot always run immediately | Honest policy, WorkManager/BGTask/File Provider triggers, visible last-sync state, manual foreground override |
 | SAF/File Provider consumer differences | Write/seek/atomic-save failures | Real application compatibility suite and staging/close-commit model |
 | Concurrent edits/deletes | Data loss | Base generations, ETags, tombstones, durable conflict copies, no destructive blind retry |
 | Large uploads and process death | Duplicate/corrupt files | Persisted chunk sessions, source-generation checks, final verification |

@@ -3,36 +3,162 @@ package dev.obiente.nextcloudnative.app
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import org.jetbrains.skia.Bitmap
+import org.jetbrains.skia.Canvas
+import org.jetbrains.skia.Codec
+import org.jetbrains.skia.Data
+import org.jetbrains.skia.EncodedOrigin
 import org.jetbrains.skia.Image
+import org.jetbrains.skia.Matrix33
 import org.jetbrains.skia.SamplingMode
 import kotlin.math.roundToInt
 
-actual fun decodePlatformImage(bytes: ByteArray): ImageBitmap? = runCatching {
-    Image.makeFromEncoded(bytes).toComposeImageBitmap()
+actual fun decodePlatformImage(
+    bytes: ByteArray,
+    orientationPolicy: EncodedImageOrientationPolicy,
+): ImageBitmap? = runCatching {
+    val decoded = decodeDesktopImage(bytes, orientationPolicy)
+    try {
+        decoded.image.toComposeImageBitmap()
+    } catch (failure: Throwable) {
+        decoded.image.close()
+        throw failure
+    }
 }.getOrNull()
 
-actual fun decodePlatformImageSampled(bytes: ByteArray, maximumDimension: Int): PlatformDecodedImage? = runCatching {
+actual fun decodePlatformImageSampled(
+    bytes: ByteArray,
+    maximumDimension: Int,
+    orientationPolicy: EncodedImageOrientationPolicy,
+): PlatformDecodedImage? = runCatching {
     require(maximumDimension > 0)
-    val source = Image.makeFromEncoded(bytes)
-    val sourceWidth = source.width
-    val sourceHeight = source.height
-    val sampled = if (maxOf(sourceWidth, sourceHeight) <= maximumDimension) {
-        source
-    } else {
-        val scale = maximumDimension.toFloat() / maxOf(sourceWidth, sourceHeight)
-        val width = (sourceWidth * scale).roundToInt().coerceAtLeast(1)
-        val height = (sourceHeight * scale).roundToInt().coerceAtLeast(1)
-        val target = Bitmap()
-        check(target.allocN32Pixels(width, height, false)) { "Could not allocate a display-safe image." }
-        val targetPixels = checkNotNull(target.peekPixels()) { "Could not access display-safe image pixels." }
-        check(source.scalePixels(targetPixels, SamplingMode.MITCHELL, true)) {
-            "Could not create a display-safe image."
+    val decoded = decodeDesktopImage(bytes, orientationPolicy)
+    val source = decoded.image
+    val sourceWidth = decoded.width
+    val sourceHeight = decoded.height
+    try {
+        val sampled = if (maxOf(sourceWidth, sourceHeight) <= maximumDimension) {
+            source
+        } else {
+            val scale = maximumDimension.toFloat() / maxOf(sourceWidth, sourceHeight)
+            val width = (sourceWidth * scale).roundToInt().coerceAtLeast(1)
+            val height = (sourceHeight * scale).roundToInt().coerceAtLeast(1)
+            Bitmap().use { target ->
+                check(target.allocN32Pixels(width, height, false)) {
+                    "Could not allocate a display-safe image."
+                }
+                val targetPixels = checkNotNull(target.peekPixels()) {
+                    "Could not access display-safe image pixels."
+                }
+                check(source.scalePixels(targetPixels, SamplingMode.MITCHELL, true)) {
+                    "Could not create a display-safe image."
+                }
+                Image.makeFromBitmap(target)
+            }.also {
+                source.close()
+            }
         }
+        try {
+            PlatformDecodedImage(
+                image = sampled.toComposeImageBitmap(),
+                sourceWidth = sourceWidth,
+                sourceHeight = sourceHeight,
+            )
+        } catch (failure: Throwable) {
+            sampled.close()
+            throw failure
+        }
+    } catch (failure: Throwable) {
+        if (!source.isClosed) {
+            source.close()
+        }
+        throw failure
+    }
+}.getOrNull()
+
+private data class DesktopDecodedImage(
+    val image: Image,
+    val width: Int,
+    val height: Int,
+)
+
+/**
+ * Codec.readPixels returns encoded pixel storage without applying EncodedOrigin. This lets a
+ * trusted server preview opt out of stale EXIF while originals use Skia's complete 1-8 transform.
+ */
+private fun decodeDesktopImage(
+    bytes: ByteArray,
+    orientationPolicy: EncodedImageOrientationPolicy,
+): DesktopDecodedImage {
+    return Data.makeFromBytes(bytes).use { data ->
+        Codec.makeFromData(data).use { codec ->
+            codec.readPixels().use { rawBitmap ->
+                val rawImage = Image.makeFromBitmap(rawBitmap)
+                val orientation = when (orientationPolicy) {
+                    EncodedImageOrientationPolicy.ApplyExif -> codec.encodedOrigin.exifOrientation()
+                    EncodedImageOrientationPolicy.PixelsAlreadyUpright -> 1
+                }
+                if (orientation == 1) {
+                    return@use DesktopDecodedImage(rawImage, rawImage.width, rawImage.height)
+                }
+                rawImage.use { source ->
+                    val dimensions = exifOrientedDimensions(source.width, source.height, orientation)
+                    DesktopDecodedImage(
+                        image = renderDesktopExifOrientation(source, orientation),
+                        width = dimensions.width,
+                        height = dimensions.height,
+                    )
+                }
+            }
+        }
+    }
+}
+
+internal fun renderDesktopExifOrientation(source: Image, orientation: Int): Image {
+    val dimensions = exifOrientedDimensions(source.width, source.height, orientation)
+    return Bitmap().use { target ->
+        check(
+            target.allocPixels(
+                source.imageInfo.withWidthHeight(dimensions.width, dimensions.height),
+            ),
+        ) {
+            "Could not allocate an EXIF-normalized image."
+        }
+        drawDesktopExifOrientation(source, target, orientation)
         Image.makeFromBitmap(target)
     }
-    PlatformDecodedImage(
-        image = sampled.toComposeImageBitmap(),
-        sourceWidth = sourceWidth,
-        sourceHeight = sourceHeight,
-    )
-}.getOrNull()
+}
+
+internal fun drawDesktopExifOrientation(
+    source: Image,
+    target: Bitmap,
+    orientation: Int,
+) {
+    val dimensions = exifOrientedDimensions(source.width, source.height, orientation)
+    require(target.width == dimensions.width && target.height == dimensions.height)
+    target.erase(0x00000000)
+    Canvas(target).use { canvas ->
+        canvas.concat(
+            Matrix33(
+                *exifOrientationMatrixValues(
+                    source.width,
+                    source.height,
+                    orientation,
+                ),
+            ),
+        )
+        canvas.drawImage(source, 0f, 0f)
+    }
+}
+
+private fun EncodedOrigin.exifOrientation(): Int = when (this) {
+    EncodedOrigin.UNUSED,
+    EncodedOrigin.TOP_LEFT,
+    -> 1
+    EncodedOrigin.TOP_RIGHT -> 2
+    EncodedOrigin.BOTTOM_RIGHT -> 3
+    EncodedOrigin.BOTTOM_LEFT -> 4
+    EncodedOrigin.LEFT_TOP -> 5
+    EncodedOrigin.RIGHT_TOP -> 6
+    EncodedOrigin.RIGHT_BOTTOM -> 7
+    EncodedOrigin.LEFT_BOTTOM -> 8
+}

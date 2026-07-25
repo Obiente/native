@@ -122,7 +122,7 @@ const messages = reactive({
   design: [
     { id: 1, sender: "Mina", body: "The new gallery flow is ready to review.", time: "14:28" },
     { id: 2, sender: "Mina", body: "Shared 3 photos from Project photos", time: "14:29", attachment: true },
-    { id: 3, sender: "You", body: "Nice. I’ll check the full-quality view.", time: "14:31", own: true },
+    { id: 3, sender: "You", body: "Nice. I'll check the full-quality view.", time: "14:31", own: true },
   ],
   family: [
     { id: 1, sender: "System", body: "Call ended · 24 minutes", time: "14:20", system: true },
@@ -130,7 +130,7 @@ const messages = reactive({
   ],
   updates: [
     { id: 1, sender: "You", body: "Ready for review.", time: "Tuesday", own: true },
-    { id: 2, sender: "Mina", body: "I’ll take a look this afternoon.", time: "Tuesday" },
+    { id: 2, sender: "Mina", body: "I'll take a look this afternoon.", time: "Tuesday" },
   ],
 });
 
@@ -232,7 +232,7 @@ function startCall(kind) {
                 </button>
                 <div v-if="fileMenuOpen" class="overflow-menu">
                   <button type="button" @click="runFileAction('Rename')">Rename</button>
-                  <button type="button" @click="runFileAction('Move')">Move to…</button>
+                  <button type="button" @click="runFileAction('Move')">Move to...</button>
                   <button type="button" class="danger" @click="runFileAction('Move to trash')">
                     Move to trash
                   </button>

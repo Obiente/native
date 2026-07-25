@@ -136,7 +136,7 @@ fun planRenamePerson(
         risk = PeopleActionRisk.MetadataWrite,
         confirmation = PeopleActionConfirmation(
             title = "Rename person?",
-            message = "Rename “$currentDisplayName” to “$newName”? This changes the person label in Recognize.",
+            message = "Rename \"$currentDisplayName\" to \"$newName\"? This changes the person label in Recognize.",
             confirmLabel = "Rename",
         ),
         partialFailure = PeopleActionPartialFailure.SingleRequestOutcomeRequiresRefresh,
@@ -173,7 +173,7 @@ fun planMergePeople(
         risk = PeopleActionRisk.MultiStepDestructiveMetadata,
         confirmation = PeopleActionConfirmation(
             title = "Merge people?",
-            message = "Merge “$sourceDisplayName” into “$targetDisplayName”? Faces move one at a time, so an interruption can leave both people partially changed.",
+            message = "Merge \"$sourceDisplayName\" into \"$targetDisplayName\"? Faces move one at a time, so an interruption can leave both people partially changed.",
             confirmLabel = "Merge",
         ),
         partialFailure = PeopleActionPartialFailure.PerFaceMovesCanPartiallyApply,
@@ -194,7 +194,7 @@ fun planSetPersonCover(
 ): PeopleActionPlan {
     val disabledReason = when {
         !support.memoriesPeopleApiAvailable -> "Memories person covers are unavailable on this server."
-        person.ownerUserId != support.currentUserId -> "Only the owner can change this person’s cover."
+        person.ownerUserId != support.currentUserId -> "Only the owner can change this person's cover."
         sourceFile.fileId == null -> "Refresh this photo before using it as a cover."
         sourceFile.isDirectory -> "A folder cannot be used as a person cover."
         else -> null
@@ -207,7 +207,7 @@ fun planSetPersonCover(
         risk = PeopleActionRisk.MetadataWrite,
         confirmation = PeopleActionConfirmation(
             title = "Change person cover?",
-            message = "Use “${sourceFile.name}” as the cover for “$personDisplayName”? This changes only the Memories person cover.",
+            message = "Use \"${sourceFile.name}\" as the cover for \"$personDisplayName\"? This changes only the Memories person cover.",
             confirmLabel = "Set cover",
         ),
         authRequirements = setOf(PeopleActionAuthRequirement.AuthenticatedNextcloudSession),
@@ -247,7 +247,7 @@ fun planRemoveFace(
     risk = PeopleActionRisk.DestructiveMetadata,
     confirmation = PeopleActionConfirmation(
         title = "Remove face from person?",
-        message = "Remove “${face.sourceFileName}” from “$personDisplayName”? The photo stays in Files, but Recognize may regroup this face later.",
+        message = "Remove \"${face.sourceFileName}\" from \"$personDisplayName\"? The photo stays in Files, but Recognize may regroup this face later.",
         confirmLabel = "Remove face",
     ),
     partialFailure = PeopleActionPartialFailure.SingleRequestOutcomeRequiresRefresh,
@@ -274,7 +274,7 @@ fun planDeletePerson(
     risk = PeopleActionRisk.DestructiveMetadata,
     confirmation = PeopleActionConfirmation(
         title = "Remove person?",
-        message = "Remove “$personDisplayName”? Photos stay in Files, but every face in this group moves to Recognize’s rejected pool.",
+        message = "Remove \"$personDisplayName\"? Photos stay in Files, but every face in this group moves to Recognize's rejected pool.",
         confirmLabel = "Remove person",
     ),
     partialFailure = PeopleActionPartialFailure.SingleRequestOutcomeRequiresRefresh,

@@ -286,7 +286,7 @@ const frequentlyAsked = [
             v-model="searchQuery"
             type="search"
             name="documentation-search"
-            placeholder="Search roadmap, apps, schema, security…"
+            placeholder="Search roadmap, apps, schema, security..."
             autocomplete="off"
           />
         </label>

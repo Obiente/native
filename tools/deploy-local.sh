@@ -11,19 +11,6 @@ if [[ "$(uname -s)" != "Linux" ]]; then
     exit 1
 fi
 
-java_command="${JAVA_HOME:+$JAVA_HOME/bin/}java"
-if ! command -v "$java_command" >/dev/null 2>&1; then
-    printf 'JDK 21 was not found. Install it and set JAVA_HOME before deploying.\n' >&2
-    exit 1
-fi
-
-java_version="$("$java_command" -version 2>&1 | awk -F'"' '/version/ { print $2; exit }')"
-java_major="${java_version%%.*}"
-if [[ "$java_major" != "21" ]]; then
-    printf 'JDK 21 is required, but Java %s is active. Set JAVA_HOME to a JDK 21 installation.\n' "${java_version:-unknown}" >&2
-    exit 1
-fi
-
 if [[ -z "${ANDROID_HOME:-}" && -z "${ANDROID_SDK_ROOT:-}" ]]; then
     printf 'Set ANDROID_HOME or ANDROID_SDK_ROOT to your Android SDK directory.\n' >&2
     exit 1

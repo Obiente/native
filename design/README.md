@@ -5,7 +5,7 @@ icon. Generated concepts, screenshots, and visual QA artifacts remain outside
 the public repository.
 
 The production glyph is `NextcloudIcons.Cloud`, the existing outlined Material
-cloud used beside “Nextcloud Native” in the desktop workspace. The matching
+cloud used beside "Nextcloud Native" in the desktop workspace. The matching
 source asset is `design/app-icon/cloud.svg`, derived from the Apache-2.0
 licensed Material Icons asset shipped by the pinned Compose icon dependency.
 Its charcoal background and lavender foreground use the dark theme's
