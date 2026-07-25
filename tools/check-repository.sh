@@ -33,4 +33,6 @@ for file in "${candidate_files[@]}"; do
     fi
 done
 
+bash tools/test-apksigner-certificate-parser.sh
+
 printf 'Repository hygiene checks passed.\n'
