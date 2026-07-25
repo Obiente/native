@@ -217,7 +217,13 @@ fun NextcloudMediaViewer(
             load = { candidate ->
                 services.loadPreviewCached(session, candidate, width = 1_600, height = 1_600)
             },
-            decode = { bytes -> decodePlatformImageSampled(bytes, MAXIMUM_PREVIEW_IMAGE_DIMENSION)?.image },
+            decode = { bytes ->
+                decodePlatformImageSampled(
+                    bytes,
+                    MAXIMUM_PREVIEW_IMAGE_DIMENSION,
+                    EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+                )?.image
+            },
         )
         previewState = loaded?.let {
             MediaPreviewState.Ready(it.value, it.source, it.usedFallback)

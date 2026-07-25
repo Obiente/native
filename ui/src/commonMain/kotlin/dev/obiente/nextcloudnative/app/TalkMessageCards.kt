@@ -285,7 +285,10 @@ private fun TalkNativeAttachmentCard(
         if (!model.canLoadServerRaster) return@LaunchedEffect
         preview = runCatching {
             val bytes = services.loadPreviewCached(session, file, width = 720, height = 480)
-            decodePlatformImage(bytes) ?: error("Invalid Talk attachment preview")
+            decodePlatformImage(
+                bytes,
+                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+            ) ?: error("Invalid Talk attachment preview")
         }.fold(
             onSuccess = TalkAttachmentPreviewState::Ready,
             onFailure = { TalkAttachmentPreviewState.Failed },

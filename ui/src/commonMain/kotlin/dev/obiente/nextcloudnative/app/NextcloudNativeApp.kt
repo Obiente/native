@@ -4633,7 +4633,10 @@ private fun FileGridTile(
         file.fileId ?: return@LaunchedEffect
         if (!file.hasPreview || file.isDirectory) return@LaunchedEffect
         preview = runCatching {
-            decodePlatformImage(services.loadPreviewCached(session, file, width = 320, height = 320))
+            decodePlatformImage(
+                services.loadPreviewCached(session, file, width = 320, height = 320),
+                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+            )
         }.getOrNull()
     }
     Card(
@@ -5500,7 +5503,12 @@ private fun PersonTile(
     var image by remember(person.id, person.coverFileId, person.coverEtag) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(person.id, person.coverFileId, person.coverEtag) {
         if (person.coverFileId == null) return@LaunchedEffect
-        image = runCatching { decodePlatformImage(services.loadPersonCoverCached(session, person)) }.getOrNull()
+        image = runCatching {
+            decodePlatformImage(
+                services.loadPersonCoverCached(session, person),
+                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+            )
+        }.getOrNull()
     }
 
     Card(
@@ -6414,7 +6422,12 @@ private fun MediaTile(
     LaunchedEffect(file.fileId) {
         file.fileId ?: return@LaunchedEffect
         if (!file.hasPreview) return@LaunchedEffect
-        image = runCatching { decodePlatformImage(services.loadPreviewCached(session, file)) }.getOrNull()
+        image = runCatching {
+            decodePlatformImage(
+                services.loadPreviewCached(session, file),
+                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+            )
+        }.getOrNull()
     }
     Surface(
         modifier = Modifier.fillMaxWidth().aspectRatio(1f).then(
