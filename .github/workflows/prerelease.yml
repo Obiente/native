@@ -56,6 +56,7 @@ jobs:
         run: |
           bash tools/check-repository.sh
           bash tools/test-release-signing-config.sh
+          bash tools/test-prerelease-update-contract.sh
           cargo test --locked
           ./gradlew --no-daemon \
             :contractAcquisition:test \
@@ -207,32 +208,18 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           version_code="$(awk -F= '$1 == "ncVersionCode" { print $2 }' gradle.properties)"
           apk_name="nextcloud-native-${version}-android.apk"
+          apk_size="$(stat --format='%s' "dist/${apk_name}")"
           apk_sha256="$(cat "${RUNNER_TEMP}/apk-sha256")"
           certificate_sha256="$(cat "${RUNNER_TEMP}/certificate-sha256")"
-          jq -n \
-            --arg schemaVersion "1" \
-            --arg channel "prerelease" \
-            --arg versionName "${version}" \
-            --argjson versionCode "${version_code}" \
-            --arg packageName "dev.obiente.nextcloudnative" \
-            --arg minimumAndroidSdk "26" \
-            --arg downloadUrl \
-              "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${apk_name}" \
-            --arg sha256 "${apk_sha256}" \
-            --arg signingCertificateSha256 "${certificate_sha256}" \
-            '{
-              schemaVersion: ($schemaVersion | tonumber),
-              channel: $channel,
-              versionName: $versionName,
-              versionCode: $versionCode,
-              packageName: $packageName,
-              minimumAndroidSdk: ($minimumAndroidSdk | tonumber),
-              android: {
-                downloadUrl: $downloadUrl,
-                sha256: $sha256,
-                signingCertificateSha256: $signingCertificateSha256
-              }
-            }' >dist/update-manifest.json
+          signer_digests="$(jq -cn --arg digest "${certificate_sha256}" '[$digest]')"
+          tools/create-prerelease-update-manifest.sh \
+            dist/update-manifest.json \
+            "${version}" \
+            "${version_code}" \
+            "${apk_name}" \
+            "${apk_size}" \
+            "${apk_sha256}" \
+            "${signer_digests}"
           (
             cd dist
             find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\0' |

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "channel": "prerelease-v1",
+  "versionName": "0.1.0-alpha.1",
+  "versionCode": 1,
+  "packageName": "dev.obiente.nextcloudnative",
+  "minimumAndroidSdk": 26,
+  "apkUrl": "https://github.com/Obiente/nc-native/releases/download/v0.1.0-alpha.1/nextcloud-native-0.1.0-alpha.1-android.apk",
+  "apkSize": 123456,
+  "apkSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "signingCertificateSha256Digests": [
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  ],
+  "releaseNotesUrl": "https://github.com/Obiente/nc-native/releases/tag/v0.1.0-alpha.1"
+}

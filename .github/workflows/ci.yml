@@ -50,7 +50,9 @@ jobs:
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
 
       - name: Check repository hygiene
-        run: bash tools/check-repository.sh
+        run: |
+          bash tools/check-repository.sh
+          bash tools/test-prerelease-update-contract.sh
 
       - name: Test semantic compiler
         run: cargo test --locked
