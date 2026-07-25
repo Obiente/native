@@ -125,6 +125,11 @@ compose.desktop {
             windows {
                 iconFile.set(project.file("src/desktopMain/resources/nextcloud-native.ico"))
             }
+            macOS {
+                // Apple's package metadata requires the first numeric component
+                // to be greater than zero, independently of our prerelease name.
+                packageVersion = "1.0.3"
+            }
         }
     }
 }

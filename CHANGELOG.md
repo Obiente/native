@@ -9,6 +9,15 @@ until the full product sprint is complete.
 
 ## Unreleased
 
+## [0.1.0-alpha.3]
+
+### Fixed
+
+- macOS packages use a valid Apple package version while the application keeps
+  its prerelease product version.
+- Staged release assets retain packages nested inside platform artifact
+  directories.
+
 ## [0.1.0-alpha.2]
 
 ### Fixed
