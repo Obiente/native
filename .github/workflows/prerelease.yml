@@ -15,12 +15,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorize-signing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Authorize tagged source for signing
+        run: |
+          set -euo pipefail
+          bash tools/test-prerelease-version.sh
+          bash tools/verify-prerelease-version.sh "${GITHUB_REF_NAME}"
+          test -f "docs/release-notes/${GITHUB_REF_NAME#v}.md"
+          grep -Fq "## [${GITHUB_REF_NAME#v}]" CHANGELOG.md
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
+
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -37,17 +56,17 @@ jobs:
         run: cat docs/prerelease-checklist.md >>"${GITHUB_STEP_SUMMARY}"
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
 
       - name: Install Android platform
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
@@ -89,10 +108,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
         with:
           distribution: temurin
           java-version: "21"
@@ -110,7 +129,7 @@ jobs:
           exit "${status}"
 
       - name: Upload desktop package
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.paths }}
@@ -118,24 +137,24 @@ jobs:
           retention-days: 7
 
   android:
-    needs: validate
+    needs: authorize-signing
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: prerelease
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
 
       - name: Install Android platform
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
@@ -177,15 +196,20 @@ jobs:
           test -n "${apksigner_path}"
           "${apksigner_path}" verify --verbose --print-certs \
             "dist/nextcloud-native-${version}-android.apk" >"${RUNNER_TEMP}/apk-signing.txt"
-          jarsigner -verify -strict \
+          jarsigner -verify \
             "dist/nextcloud-native-${version}-android.aab" >/dev/null
           certificate_sha256="$(awk -F': ' \
             '/Signer #1 certificate SHA-256 digest:/ { print $2; exit }' \
-            "${RUNNER_TEMP}/apk-signing.txt")"
+            "${RUNNER_TEMP}/apk-signing.txt" | tr '[:upper:]' '[:lower:]')"
           test -n "${certificate_sha256}"
-          expected_certificate_sha256="$(tr -d '[:space:]' \
-            <release/android-signing-certificate.sha256)"
+          aab_certificate_sha256="$(keytool -printcert \
+            -jarfile "dist/nextcloud-native-${version}-android.aab" |
+            awk -F': ' '/SHA256:/{ fingerprint=$2; gsub(":", "", fingerprint); print tolower(fingerprint); exit }')"
+          test -n "${aab_certificate_sha256}"
+          expected_certificate_sha256="$(tr -d ':[:space:]' \
+            <release/android-signing-certificate.sha256 | tr '[:upper:]' '[:lower:]')"
           test "${certificate_sha256}" = "${expected_certificate_sha256}"
+          test "${aab_certificate_sha256}" = "${expected_certificate_sha256}"
           apk_sha256="$(sha256sum "dist/nextcloud-native-${version}-android.apk" | awk '{print $1}')"
           printf '%s\n' "${certificate_sha256}" >"dist/android-certificate.sha256"
           printf '%s\n' "${apk_sha256}" >"dist/android-apk.sha256"
@@ -199,7 +223,7 @@ jobs:
           fi
 
       - name: Upload Android packages
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nextcloud-native-android
           path: dist/*
@@ -218,12 +242,12 @@ jobs:
       contents: write
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Download successful platform packages
         id: download
         continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: nextcloud-native-*
           path: artifacts
@@ -277,7 +301,11 @@ jobs:
               sort -z |
               xargs -0 sha256sum >SHA256SUMS
           )
-          cp "docs/release-notes/${version}.md" "${RUNNER_TEMP}/release-notes.md"
+          awk '
+            NR == 1 && /^# / { next }
+            NR == 2 && /^$/ { next }
+            { print }
+          ' "docs/release-notes/${version}.md" >"${RUNNER_TEMP}/release-notes.md"
           if [[ "${{ steps.platforms.outputs.successful }}" -lt 4 ]]; then
             {
               printf '\n## Build availability\n\n'
@@ -285,7 +313,12 @@ jobs:
               printf '| --- | --- |\n'
               for platform in android linux windows macos; do
                 artifact="artifacts/nextcloud-native-${platform}"
-                label="${platform^}"
+                case "${platform}" in
+                  android) label="Android" ;;
+                  linux) label="Linux" ;;
+                  windows) label="Windows" ;;
+                  macos) label="macOS" ;;
+                esac
                 if [[ -d "${artifact}" ]] &&
                   find "${artifact}" -type f -print -quit | grep -q .; then
                   printf '| %s | ✅ Available |\n' "${label}"
