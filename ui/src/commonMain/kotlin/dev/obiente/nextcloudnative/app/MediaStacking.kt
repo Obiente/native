@@ -54,16 +54,22 @@ fun describeMediaDisplaySource(
     selected: MediaSourceChoice,
     displayed: MediaSourceChoice,
     fullQuality: Boolean,
+    payloadKind: MediaDisplayPayloadKind = MediaDisplayPayloadKind.ServerPreview,
 ): String {
-    val source = when (displayed.format) {
-        MediaAssetFormat.Raw ->
-            if (fullQuality) "RAW full-resolution render" else "RAW server preview"
-        MediaAssetFormat.Jpeg ->
-            if (fullQuality) "JPEG original" else "JPEG server preview"
-        MediaAssetFormat.Image ->
-            if (fullQuality) "Full-resolution image" else "Image preview"
-        MediaAssetFormat.Video -> "Video preview"
-        MediaAssetFormat.Other -> "File preview"
+    val source = when {
+        payloadKind == MediaDisplayPayloadKind.MemoriesRawRender ->
+            if (fullQuality) "RAW full-resolution render" else "RAW render"
+        payloadKind == MediaDisplayPayloadKind.EmbeddedCameraPreview -> "RAW embedded camera preview"
+        else -> when (displayed.format) {
+            MediaAssetFormat.Raw ->
+                if (fullQuality) "RAW full-resolution render" else "RAW server preview"
+            MediaAssetFormat.Jpeg ->
+                if (fullQuality) "JPEG original" else "JPEG server preview"
+            MediaAssetFormat.Image ->
+                if (fullQuality) "Full-resolution image" else "Image preview"
+            MediaAssetFormat.Video -> "Video preview"
+            MediaAssetFormat.Other -> "File preview"
+        }
     }
     return if (displayed.file.path == selected.file.path) {
         source
@@ -129,7 +135,10 @@ fun planMediaSources(files: List<NextcloudFile>, selected: NextcloudFile): Media
             val format = file.mediaAssetFormat()
             MediaSourceChoice(file, format.sourceLabel(), format)
         }
-    val previewCandidates = ordered.filter { it.file.fileId != null && it.file.hasPreview }
+    val previewCandidates = ordered.filter {
+        (it.file.fileId != null && it.file.hasPreview) ||
+            (it.file.isRawPhoto() && it.file.originalAccessAllowed)
+    }
     val fullQualityCandidates = ordered.filter {
         it.file.fileId != null && it.file.originalAccessAllowed && it.format != MediaAssetFormat.Video
     }

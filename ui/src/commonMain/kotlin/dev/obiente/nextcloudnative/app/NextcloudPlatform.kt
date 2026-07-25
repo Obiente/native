@@ -582,6 +582,21 @@ interface NextcloudPlatformServices {
     ): NextcloudFileContent
 
     /**
+     * Reads one exact, bounded byte range from a Files WebDAV object.
+     *
+     * Platforms must require an HTTP 206 response and must reject servers that ignore the Range
+     * header. This keeps large media containers out of memory when only an embedded preview is
+     * needed. The returned bytes are detached and may never be written back automatically.
+     */
+    suspend fun downloadFileRange(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        offset: Long,
+        length: Int,
+    ): ByteArray = error("Bounded file range reads are not supported on this platform.")
+
+    /**
      * Lists immutable historical generations for the exact Files record.
      *
      * Implementations authenticate against the active account and use the official versions DAV

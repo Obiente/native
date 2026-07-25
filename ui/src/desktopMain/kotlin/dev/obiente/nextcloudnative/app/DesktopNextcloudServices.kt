@@ -682,6 +682,35 @@ class DesktopNextcloudServices(
         }
     }
 
+    override suspend fun downloadFileRange(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        offset: Long,
+        length: Int,
+    ): ByteArray = withContext(Dispatchers.IO) {
+        require(offset >= 0L) { "The file range offset must not be negative." }
+        require(length > 0) { "The file range length must be greater than zero." }
+        val endInclusive = Math.addExact(offset, length.toLong() - 1L)
+        val response = request(
+            "GET",
+            buildNextcloudFileUrl(session.serverUrl, userId, path),
+            session,
+            headers = mapOf(
+                "Accept" to "application/octet-stream",
+                "Range" to "bytes=$offset-$endInclusive",
+            ),
+            maxResponseBytes = length.toLong(),
+        )
+        check(response.status == 206) {
+            "The server did not honor the bounded file range request (HTTP ${response.status})."
+        }
+        check(response.body.size == length) {
+            "The server returned an incomplete file range."
+        }
+        response.body
+    }
+
     override suspend fun listFileVersions(
         session: NextcloudSession,
         userId: String,

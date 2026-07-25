@@ -212,10 +212,41 @@ fun NextcloudMediaViewer(
 
     LaunchedEffect(selected.path, selected.fileId, session, retryKey, sourcePlan.previewCandidates) {
         previewState = MediaPreviewState.Loading
-        val loaded = loadFirstUsableMediaSource(
+        val loaded = loadFirstUsableMediaPreviewSource(
             candidates = sourcePlan.previewCandidates,
+            maximumPayloadBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES,
             load = { candidate ->
-                services.loadPreviewCached(session, candidate, width = 1_600, height = 1_600)
+                loadMediaDisplayPayload(
+                    file = candidate,
+                    loadCorePreview = {
+                        services.loadPreviewCached(session, candidate, width = 1_600, height = 1_600)
+                    },
+                    loadMemoriesRawRender = {
+                        val fileId = requireNotNull(candidate.fileId) {
+                            "The RAW file has no stable server file ID."
+                        }
+                        val response = services.executeNextcloudApi(
+                            session,
+                            memoriesPhotoDecodableApiRequest(fileId, candidate.etag),
+                        )
+                        check(response.status in 200..299) {
+                            "The Memories RAW render failed (HTTP ${response.status})."
+                        }
+                        response.body
+                    },
+                    loadFileRange = { offset, length ->
+                        check(userId.isNotBlank()) {
+                            "The authenticated Files user ID is unavailable."
+                        }
+                        services.downloadFileRange(
+                            session = session,
+                            userId = userId,
+                            path = candidate.path,
+                            offset = offset,
+                            length = length,
+                        )
+                    },
+                )
             },
             decode = { bytes ->
                 decodePlatformImageSampled(
@@ -226,7 +257,7 @@ fun NextcloudMediaViewer(
             },
         )
         previewState = loaded?.let {
-            MediaPreviewState.Ready(it.value, it.source, it.usedFallback)
+            MediaPreviewState.Ready(it.value, it.source, it.usedFallback, it.payloadKind)
         } ?: MediaPreviewState.Error
     }
 
@@ -467,6 +498,11 @@ fun NextcloudMediaViewer(
                                 selected = sourcePlan.selected,
                                 displayed = activeSource,
                                 fullQuality = fullQuality != null,
+                                payloadKind = if (fullQuality != null) {
+                                    MediaDisplayPayloadKind.ServerPreview
+                                } else {
+                                    readyPreview?.payloadKind ?: MediaDisplayPayloadKind.ServerPreview
+                                },
                             ),
                         )
                     }
@@ -946,6 +982,7 @@ private sealed interface MediaPreviewState {
         val image: ImageBitmap,
         val source: MediaSourceChoice,
         val usedFallback: Boolean,
+        val payloadKind: MediaDisplayPayloadKind,
     ) : MediaPreviewState
 
     data object Error : MediaPreviewState
