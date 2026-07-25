@@ -277,6 +277,24 @@ jobs:
               sort -z |
               xargs -0 sha256sum >SHA256SUMS
           )
+          cp "docs/release-notes/${version}.md" "${RUNNER_TEMP}/release-notes.md"
+          if [[ "${{ steps.platforms.outputs.successful }}" -lt 4 ]]; then
+            {
+              printf '\n## Build availability\n\n'
+              printf '| Platform | Status |\n'
+              printf '| --- | --- |\n'
+              for platform in android linux windows macos; do
+                artifact="artifacts/nextcloud-native-${platform}"
+                label="${platform^}"
+                if [[ -d "${artifact}" ]] &&
+                  find "${artifact}" -type f -print -quit | grep -q .; then
+                  printf '| %s | ✅ Available |\n' "${label}"
+                else
+                  printf '| %s | ❌ Unavailable |\n' "${label}"
+                fi
+              done
+            } >>"${RUNNER_TEMP}/release-notes.md"
+          fi
 
       - name: Stage assets on the tagged draft release
         env:
@@ -290,7 +308,7 @@ jobs:
             --verify-tag \
             --draft \
             --prerelease \
-            --notes-file "docs/release-notes/${version}.md" \
+            --notes-file "${RUNNER_TEMP}/release-notes.md" \
             --title "Nextcloud Native ${version}"
 
   release-quorum:
