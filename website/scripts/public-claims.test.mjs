@@ -26,6 +26,9 @@ test("machine-readable product claims match current Android and Linux alpha avai
   assert.match(app, /name: "iOS and iPadOS",[\s\S]*?status: "Planned"/);
   assert.match(app, /name: "Android",[\s\S]*?status: "Alpha build"/);
   assert.match(app, /name: "Linux",[\s\S]*?status: "Alpha build"/);
+  assert.match(app, /href="https:\/\/github\.com\/Obiente\/nc-native\/releases"/);
+  assert.doesNotMatch(app, /releases\/latest/);
+  assert.match(app, /completion status tracked on the public roadmap/);
 
   const parsedManifest = JSON.parse(manifest);
   assert.match(parsedManifest.description, /early alpha/i);

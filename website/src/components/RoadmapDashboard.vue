@@ -27,7 +27,7 @@ const outcomeByTask = {
 };
 
 const sourceLabel = computed(() =>
-  roadmap.source === "github" ? "GitHub Project and issues" : "Repository roadmap snapshot",
+  roadmap.source === "github" ? "GitHub Project and issues" : "Bundled roadmap document",
 );
 const syncLabel = computed(() =>
   roadmap.syncState === "live" && roadmap.updatedAt
@@ -170,7 +170,11 @@ watch([query, area, status, platform], () => {
       <span><strong>Last synced</strong> {{ syncLabel }}</span>
     </div>
 
-    <section class="progress-overview" aria-label="Tracked issue progress">
+    <section
+      v-if="roadmap.source === 'github'"
+      class="progress-overview"
+      aria-label="Tracked issue progress"
+    >
       <div class="progress-focus">
         <span>Current release focus</span>
         <strong>{{ currentMilestone?.title || "Unscheduled" }}</strong>
@@ -192,7 +196,7 @@ watch([query, area, status, platform], () => {
       </div>
     </section>
 
-    <details class="ledger-disclosure release-sequence">
+    <details v-if="roadmap.source === 'github'" class="ledger-disclosure release-sequence">
       <summary>
         <span>
           <strong>Release milestones</strong>
@@ -245,7 +249,11 @@ watch([query, area, status, platform], () => {
       </div>
     </details>
 
-    <section class="workstream-section" aria-labelledby="workstream-title">
+    <section
+      v-if="roadmap.source === 'github'"
+      class="workstream-section"
+      aria-labelledby="workstream-title"
+    >
       <header>
         <div>
           <h3 id="workstream-title">Product workstreams</h3>
@@ -289,7 +297,7 @@ watch([query, area, status, platform], () => {
       </div>
     </section>
 
-    <details class="ledger-disclosure issue-browser">
+    <details v-if="roadmap.source === 'github'" class="ledger-disclosure issue-browser">
       <summary>
         <span>
           <strong>Feature issue browser</strong>
@@ -380,8 +388,8 @@ watch([query, area, status, platform], () => {
     </details>
 
     <p v-if="roadmap.source !== 'github'" class="roadmap-fallback-note">
-      Live GitHub data was unavailable during this build. Issue links remain canonical and this
-      view uses the repository roadmap snapshot.
+      Live GitHub data was unavailable during this build, so no potentially stale issue status
+      or progress totals are shown. Read the detailed roadmap below or open the canonical project.
     </p>
   </section>
 </template>
@@ -900,7 +908,7 @@ watch([query, area, status, platform], () => {
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 780px) {
   .roadmap-ledger {
     margin-top: 22px;
     border-radius: var(--radius-surface);

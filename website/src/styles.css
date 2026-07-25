@@ -1549,6 +1549,35 @@ h1 span {
   line-height: 1.55;
 }
 
+.roadmap-source-document {
+  margin-top: 24px;
+  overflow: hidden;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-large);
+  background: var(--surface-low);
+}
+
+.roadmap-source-document > summary {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  padding: 0 26px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.roadmap-source-document > summary:hover,
+.roadmap-source-document > summary:focus-visible {
+  background: var(--surface);
+}
+
+.roadmap-source-document > .markdown-body {
+  padding: 10px 26px 34px;
+  border-top: 1px solid var(--outline);
+}
+
 .doc-back {
   display: inline-flex;
   margin-bottom: 38px;

@@ -155,6 +155,85 @@ const users = [
   { name: "Noah", role: "User", quota: "2 GB of 25 GB", status: "Active" },
 ];
 
+const searchResults = computed(() => {
+  const itemsByApp = {
+    files: files.map((file) => ({
+      id: file.id,
+      title: file.name,
+      description: `${file.kind} · ${file.size}`,
+    })),
+    photos: photos.map((photo) => ({
+      id: photo.id,
+      title: photo.title,
+      description: photo.meta,
+    })),
+    talk: conversations.map((item) => ({
+      id: item.name,
+      title: item.name,
+      description: item.preview,
+    })),
+    mail: mails.map((mail) => ({
+      id: mail.id,
+      title: mail.subject,
+      description: `${mail.sender} · ${mail.preview}`,
+    })),
+    tables: tableRows.map((row) => ({
+      id: row.id,
+      title: row.item,
+      description: `${row.category} · ${row.value} · ${row.status}`,
+    })),
+    deck: columns.flatMap((column) =>
+      column.cards.map((card) => ({
+        id: card,
+        title: card,
+        description: `${column.title} · This week`,
+      })),
+    ),
+    cookbook: recipes.map((recipe) => ({
+      id: recipe.id,
+      title: recipe.name,
+      description: `${recipe.time} · ${recipe.tags}`,
+    })),
+    cospend: transactions.map((item) => ({
+      id: item.title,
+      title: item.title,
+      description: `${item.amount} · Paid by ${item.payer} · ${item.split}`,
+    })),
+    music: albums.map((album) => ({
+      id: album.title,
+      title: album.title,
+      description: `${album.artist} · ${album.tracks} tracks`,
+    })),
+    calendar: [
+      { id: "workshop", title: "Community workshop", description: "25 July · 09:30-12:30 · Studio" },
+      { id: "review", title: "Review call", description: "28 July · Obiente calendar" },
+    ],
+    admin: users.map((user) => ({
+      id: user.name,
+      title: user.name,
+      description: `${user.role} · ${user.quota} · ${user.status}`,
+    })),
+  };
+  const term = query.value.trim().toLowerCase();
+  if (!term) return [];
+  return (itemsByApp[props.app] ?? []).filter((item) =>
+    `${item.title} ${item.description}`.toLowerCase().includes(term),
+  );
+});
+
+function openSearchResult(result) {
+  if (props.app === "files") selectedFile.value = result.id;
+  if (props.app === "photos") selectedPhoto.value = result.id;
+  if (props.app === "talk") conversation.value = result.id;
+  if (props.app === "mail") selectedMail.value = result.id;
+  if (props.app === "tables") selectedTableRow.value = result.id;
+  if (props.app === "cookbook") selectedRecipe.value = result.id;
+  if (props.app === "music") musicPlaying.value = true;
+  if (props.app === "admin") adminView.value = "Users";
+  query.value = "";
+  notify(`Opened ${result.title}`);
+}
+
 function notify(message) {
   feedback.value = message;
   window.setTimeout(() => {
@@ -185,7 +264,29 @@ function notify(message) {
       <button type="button" aria-label="More app actions"><PhDotsThreeVertical :size="18" weight="bold" aria-hidden="true" /></button>
     </header>
 
-    <div v-if="app === 'files'" class="files-layout">
+    <section v-if="query.trim()" class="preview-search-results" aria-live="polite">
+      <header>
+        <strong>Search results</strong>
+        <span>{{ searchResults.length }} found in {{ activeMeta.title }}</span>
+      </header>
+      <button
+        v-for="result in searchResults"
+        :key="result.id"
+        type="button"
+        @click="openSearchResult(result)"
+      >
+        <PhMagnifyingGlass :size="18" weight="duotone" aria-hidden="true" />
+        <span>
+          <strong>{{ result.title }}</strong>
+          <small>{{ result.description }}</small>
+        </span>
+      </button>
+      <p v-if="searchResults.length === 0">
+        No matching items in {{ activeMeta.title }}.
+      </p>
+    </section>
+
+    <div v-else-if="app === 'files'" class="files-layout">
       <aside class="mini-source-list">
         <strong>Files</strong>
         <button class="active"><PhFolder :size="16" weight="duotone" /> All files</button>
@@ -374,6 +475,15 @@ button { cursor:pointer; }
 .app-toolbar input { width:100%; min-width:0; border:0; outline:0; background:transparent; font-size:9px; }
 .app-toolbar > button { width:35px; height:35px; display:grid; place-items:center; border:1px solid #343740; border-radius:8px; background:#11141a; }
 .mobile-apps { display:none !important; }
+.preview-search-results { flex:1; display:flex; flex-direction:column; gap:6px; padding:18px; }
+.preview-search-results > header { display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding:0 4px 10px; border-bottom:1px solid #292c33; }
+.preview-search-results > header strong { font-size:12px; }
+.preview-search-results > header span,.preview-search-results > p { color:#8c8a94; font-size:8px; }
+.preview-search-results > button { min-height:54px; display:grid; grid-template-columns:24px minmax(0,1fr); align-items:center; gap:10px; padding:8px 12px; border:1px solid transparent; border-radius:8px; background:transparent; color:#d4d1d8; text-align:left; }
+.preview-search-results > button:hover,.preview-search-results > button:focus-visible { border-color:#8f72c5; background:#211c2a; }
+.preview-search-results > button > span { min-width:0; display:grid; gap:3px; }
+.preview-search-results > button strong { overflow:hidden; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+.preview-search-results > button small { overflow:hidden; color:#8c8a94; font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
 .mini-source-list,.mail-folders,.calendar-layout > aside:first-child,.admin-layout > aside { display:flex; flex-direction:column; gap:4px; padding:17px 11px; border-right:1px solid #292c33; background:#101319; }
 .mini-source-list > strong,.mail-folders > strong,.calendar-layout > aside strong,.admin-layout > aside strong { margin:0 8px 8px; color:#aaa8b1; font-size:8px; text-transform:uppercase; letter-spacing:.08em; }
 .mini-source-list button,.mail-folders button,.admin-layout > aside button { min-height:34px; display:flex; align-items:center; gap:8px; padding:0 9px; border:0; border-radius:7px; background:transparent; color:#d4d1d8; font-size:9px; text-align:left; }

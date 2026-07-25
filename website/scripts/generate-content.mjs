@@ -14,8 +14,8 @@ import {
   nativeNewsFeedRevision,
 } from "./news-feed-contract.mjs";
 import {
-  fallbackRoadmapState,
   githubJsonPages,
+  repositoryRoadmapFallback,
   shippedPriorityItems,
 } from "./roadmap-data.mjs";
 
@@ -417,58 +417,7 @@ async function allProjectItems() {
   return githubProjectItems(`${projectApi}/items?per_page=100&${projectFieldQuery}`);
 }
 
-const fallbackRoadmap = {
-  ...fallbackRoadmapState,
-  projectUrl,
-  epics: [
-    [10, "EPIC-MEDIA", "Safe media backup and storage", "Media"],
-    [11, "EPIC-SYNC", "Files client and advanced sync", "Files and sync"],
-    [12, "EPIC-DAV", "DAV device sync and native groupware", "DAV"],
-    [13, "EPIC-TALK", "Native Talk replacement", "Talk"],
-    [14, "EPIC-PHOTO", "Photos and Memories", "Photos and Memories"],
-    [15, "EPIC-DYN", "Adaptive Nextcloud apps", "Adaptive apps"],
-    [16, "EPIC-PLATFORM", "Platform UX, quality, and releases", "Release"],
-  ].map(([number, taskId, title, area]) => ({
-    number,
-    taskId,
-    title,
-    area,
-    priority: "P0",
-    status: "In Progress",
-    milestone: null,
-    progress: null,
-    labels: ["epic"],
-    updatedAt: null,
-    closedAt: null,
-    url: `https://github.com/Obiente/nc-native/issues/${number}`,
-  })),
-  shipped: [],
-  milestones: [],
-  priorities: [
-    [53, "DYN-013", "Cospend and budget presentation", "Adaptive apps"],
-    [54, "DYN-014", "Mail presentation", "Adaptive apps"],
-    [124, "SYNC-018", "File sharing and sharee search", "Files and sync"],
-    [129, "SYNC-017", "Multiple account roots", "Files and sync"],
-    [162, "MEDIA-006", "Preserve third-party media picker visibility", "Media"],
-    [164, "MEDIA-008", "Cloud-only media restore", "Media"],
-    [169, "MEDIA-018", "Media backup recovery and retry", "Media"],
-    [174, "PHOTO-006", "Native albums and shared albums", "Photos and Memories"],
-  ].map(([number, taskId, title, area]) => ({
-    number,
-    taskId,
-    title,
-    area,
-    priority: "P0",
-    status: "Todo",
-    milestone: null,
-    progress: null,
-    labels: [],
-    updatedAt: null,
-    closedAt: null,
-    url: `https://github.com/Obiente/nc-native/issues/${number}`,
-  })),
-  verification: [],
-};
+const fallbackRoadmap = repositoryRoadmapFallback(projectUrl);
 
 let roadmap = fallbackRoadmap;
 try {

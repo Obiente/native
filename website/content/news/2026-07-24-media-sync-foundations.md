@@ -103,15 +103,17 @@ without turning every completed upload into a live card.
 
 ## A complete storage cleanup path
 
-Folder discovery and preview connect to a durable SQLite transfer store. Native local
-and remote destination pickers feed compact pending, failed, and completed views.
-Account identity is present in every queue and verification record, keeping two users
-or two Nextcloud servers safely separate.
+The storage-cleanup design connects folder discovery and preview to a durable SQLite
+transfer store. Native local and remote destination pickers feed compact pending,
+failed, and completed views, while account identity belongs in every queue and
+verification record. The remaining persistence, background execution, and recovery
+gates are still active implementation work and are tracked below.
 
-The storage review flow derives candidates from exact verification evidence.
-Temporary cloud-only sharing, RAW/JPEG grouping, and bounded history remain part of
-the same model. The public roadmap beneath this article tracks the acceptance gates
-behind the experience rather than hiding them behind one "photo backup" checkbox.
+The storage review flow is designed to derive candidates from exact verification
+evidence. Temporary cloud-only sharing, RAW/JPEG grouping, and bounded history remain
+part of the same model. The public roadmap beneath this article tracks the acceptance
+gates behind the experience rather than hiding them behind one "photo backup"
+checkbox.
 
 ## Proof belongs outside the queue
 

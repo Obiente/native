@@ -4,6 +4,7 @@ import {
   fallbackRoadmapState,
   githubJsonPages,
   nextPageUrl,
+  repositoryRoadmapFallback,
   shippedPriorityItems,
 } from "./roadmap-data.mjs";
 
@@ -73,4 +74,12 @@ test("repository roadmap fallback has deterministic truthful sync state", () => 
     updatedAt: null,
   });
   assert.equal(JSON.stringify(fallbackRoadmapState), JSON.stringify(fallbackRoadmapState));
+
+  const fallback = repositoryRoadmapFallback("https://example.test/project");
+  assert.equal(fallback.projectUrl, "https://example.test/project");
+  assert.deepEqual(fallback.epics, []);
+  assert.deepEqual(fallback.shipped, []);
+  assert.deepEqual(fallback.milestones, []);
+  assert.deepEqual(fallback.priorities, []);
+  assert.deepEqual(fallback.verification, []);
 });

@@ -4,6 +4,18 @@ export const fallbackRoadmapState = Object.freeze({
   updatedAt: null,
 });
 
+export function repositoryRoadmapFallback(projectUrl) {
+  return {
+    ...fallbackRoadmapState,
+    projectUrl,
+    epics: [],
+    shipped: [],
+    milestones: [],
+    priorities: [],
+    verification: [],
+  };
+}
+
 export function nextPageUrl(linkHeader) {
   if (!linkHeader) return null;
   for (const entry of linkHeader.split(",")) {

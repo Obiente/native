@@ -381,12 +381,13 @@ const frequentlyAsked = [
             </p>
             <h1>One native client for your <span>Nextcloud.</span></h1>
             <p class="hero-lede">
-              Use Files, Photos, Memories, Talk, Calendar, Contacts, Mail, Music,
-              Deck, Tables, Cookbook, Cospend, and server administration from one
-              consistent phone and desktop app.
+              One consistent home for Files, Photos, Memories, Talk, Calendar,
+              Contacts, Mail, Music, Deck, Tables, Cookbook, Cospend, and server
+              administration. Android and Linux alpha builds are available now,
+              with completion status tracked on the public roadmap.
             </p>
             <div class="hero-actions">
-              <a class="button button-primary" href="https://github.com/Obiente/nc-native/releases/latest" target="_blank" rel="noreferrer">
+              <a class="button button-primary" href="https://github.com/Obiente/nc-native/releases" target="_blank" rel="noreferrer">
                 Download the alpha
                 <ArrowRight :size="19" weight="bold" aria-hidden="true" />
               </a>
@@ -795,6 +796,10 @@ const frequentlyAsked = [
               </p>
             </header>
             <RoadmapDashboard />
+            <details class="roadmap-source-document">
+              <summary>Read the detailed product and engineering roadmap</summary>
+              <div class="markdown-body" v-html="currentDoc.html"></div>
+            </details>
           </template>
           <template v-else>
             <a class="doc-back" href="/#docs">Nextcloud Native documentation</a>

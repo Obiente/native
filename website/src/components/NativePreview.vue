@@ -92,7 +92,11 @@ const activeAppMeta = computed(
 );
 
 function focusAppSwitcher() {
-  appSwitcher.value?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  appSwitcher.value?.scrollIntoView({
+    behavior: reduceMotion ? "auto" : "smooth",
+    block: "nearest",
+  });
   appSwitcher.value?.querySelector('[aria-pressed="true"]')?.focus();
 }
 </script>

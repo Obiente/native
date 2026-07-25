@@ -97,11 +97,12 @@ folder access pauses only the affected pair and gives a direct path to reconnect
 
 ## From background execution to conflict review
 
-Native local and remote pickers connect directly to durable SQLite state. A folder
-preview appears before pairing, while paged pending, failed, and completed views make
-large histories manageable. Scheduled background execution respects network and
-charging preferences, and the conflict review center keeps both versions available
-until the user chooses what belongs in the vault.
+The synchronization design connects native local and remote pickers to durable SQLite
+state. It includes a folder preview before pairing, bounded pending, failed, and
+completed views, scheduled background execution, per-pair network and charging
+preferences, and a conflict review center that keeps both versions available. These
+data-safety gates remain active implementation work and are tracked in the public
+roadmap below.
 
 ## Revisions make retries safe
 
@@ -111,8 +112,8 @@ or a server ETag. A planned transfer records the revisions it expects. Before
 committing a write or delete, the worker checks that the relevant revision has not
 changed.
 
-Queue entries and verification records live in SQLite rather than a large JSON file.
-That supports indexed paging, transactions, restart recovery, and bounded queries.
-Workers claim idempotent jobs so retrying after process death does not duplicate a
-successful upload. The UI observes summaries and pages from that durable source
-instead of owning the work itself.
+Queue entries and verification records are specified for SQLite rather than a large
+JSON file. That model supports indexed paging, transactions, restart recovery, and
+bounded queries. Workers claim idempotent jobs so retrying after process death does
+not duplicate a successful upload. The UI observes summaries and pages from that
+durable source instead of owning the work itself.
