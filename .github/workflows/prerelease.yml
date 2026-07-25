@@ -208,20 +208,30 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  release-quorum:
+  stage-assets:
     needs:
       - desktop
       - android
     if: always()
     runs-on: ubuntu-latest
+    outputs:
+      successful-platforms: ${{ steps.platforms.outputs.successful }}
+    permissions:
+      contents: write
     steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+
       - name: Download successful platform packages
+        id: download
+        continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           pattern: nextcloud-native-*
           path: artifacts
 
-      - name: Require at least three successful platforms
+      - name: Count successful platforms
+        id: platforms
         run: |
           set -euo pipefail
           successful=0
@@ -236,29 +246,15 @@ jobs:
             fi
           done
           echo "Successful platforms: ${successful}/4"
-          test "${successful}" -ge 3
+          echo "successful=${successful}" >>"${GITHUB_OUTPUT}"
+          test "${successful}" -gt 0
 
-  publish:
-    needs:
-      - validate
-      - release-quorum
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Check out tagged source
-        uses: actions/checkout@v7
-
-      - name: Download successful platform packages
-        uses: actions/download-artifact@v8
-        with:
-          pattern: nextcloud-native-*
-          path: dist
-          merge-multiple: true
-
-      - name: Create update metadata and checksums
+      - name: Prepare release assets
         run: |
           set -euo pipefail
+          mkdir -p dist
+          find artifacts -mindepth 2 -maxdepth 2 -type f \
+            -exec cp -t dist -- {} +
           version="${GITHUB_REF_NAME#v}"
           version_code="$(awk -F= '$1 == "ncVersionCode" { print $2 }' gradle.properties)"
           apk_name="nextcloud-native-${version}-android.apk"
@@ -284,7 +280,7 @@ jobs:
               xargs -0 sha256sum >SHA256SUMS
           )
 
-      - name: Publish GitHub prerelease
+      - name: Stage assets on the tagged draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -294,6 +290,38 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
+            --draft \
             --prerelease \
             --notes-file "docs/release-notes/${version}.md" \
             --title "Nextcloud Native ${version}"
+
+  release-quorum:
+    needs: stage-assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require at least three successful platforms
+        env:
+          SUCCESSFUL_PLATFORMS: ${{ needs.stage-assets.outputs.successful-platforms }}
+        run: |
+          echo "Successful platforms: ${SUCCESSFUL_PLATFORMS}/4"
+          test "${SUCCESSFUL_PLATFORMS}" -ge 3
+
+  publish:
+    needs:
+      - validate
+      - stage-assets
+      - release-quorum
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the staged GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --draft=false \
+            --prerelease \
+            --latest=false
