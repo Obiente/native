@@ -322,7 +322,12 @@ private fun RenderedMarkdownDocument(preview: DocumentPreview.Text, filename: St
 
 @Composable
 private fun RasterDocument(preview: DocumentPreview.Raster, filename: String) {
-    val image = remember(preview) { decodePlatformImage(preview.encodedImage) }
+    val image = remember(preview) {
+        decodePlatformImage(
+            preview.encodedImage,
+            EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+        )
+    }
     if (image == null) {
         DocumentPreviewMessage(
             title = "Preview unavailable",
