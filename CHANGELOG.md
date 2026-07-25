@@ -9,6 +9,15 @@ until the full product sprint is complete.
 
 ## Unreleased
 
+## [0.1.0-alpha.4]
+
+### Fixed
+
+- Android release lint now understands Kotlin 2.4 metadata and catches real
+  release issues without relying on build-log text.
+- Release pages show a compact platform status table only when a build is
+  unavailable.
+
 ## [0.1.0-alpha.3]
 
 ### Fixed
