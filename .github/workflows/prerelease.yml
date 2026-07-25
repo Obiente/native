@@ -253,7 +253,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          find artifacts -mindepth 2 -maxdepth 2 -type f \
+          find artifacts -mindepth 2 -type f \
             -exec cp -t dist -- {} +
           version="${GITHUB_REF_NAME#v}"
           version_code="$(awk -F= '$1 == "ncVersionCode" { print $2 }' gradle.properties)"
