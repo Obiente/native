@@ -17,6 +17,8 @@ export function metadataFor(path) {
       tags: post.tags,
       image: `${siteUrl}${post.image}`,
       imageAlt: post.imageAlt,
+      imageWidth: post.imageWidth,
+      imageHeight: post.imageHeight,
     };
   }
   if (path === "/news/") {
@@ -57,4 +59,60 @@ export function metadataFor(path) {
 
 export function socialImageFor(metadata) {
   return metadata.image ?? `${siteUrl}/social-preview.png`;
+}
+
+export function socialImageDetailsFor(metadata) {
+  return {
+    url: socialImageFor(metadata),
+    alt:
+      metadata.imageAlt ??
+      "Nextcloud Native desktop and mobile clients connected to Nextcloud",
+    width: metadata.imageWidth ?? 1280,
+    height: metadata.imageHeight ?? 640,
+    type: "image/png",
+  };
+}
+
+function escapeAttribute(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+export function sharingHeadFor(metadata) {
+  const image = socialImageDetailsFor(metadata);
+  return [
+    `<link rel="canonical" href="${escapeAttribute(metadata.canonical)}">`,
+    `<link rel="alternate" hreflang="en" href="${escapeAttribute(metadata.canonical)}">`,
+    `<link rel="alternate" hreflang="x-default" href="${escapeAttribute(metadata.canonical)}">`,
+    `<meta property="og:title" content="${escapeAttribute(metadata.title)}">`,
+    `<meta property="og:description" content="${escapeAttribute(metadata.description)}">`,
+    `<meta property="og:type" content="${escapeAttribute(metadata.type)}">`,
+    `<meta property="og:url" content="${escapeAttribute(metadata.canonical)}">`,
+    `<meta property="og:site_name" content="Nextcloud Native">`,
+    `<meta property="og:locale" content="en_US">`,
+    `<meta property="og:image" content="${escapeAttribute(image.url)}">`,
+    `<meta property="og:image:secure_url" content="${escapeAttribute(image.url)}">`,
+    `<meta property="og:image:type" content="${image.type}">`,
+    `<meta property="og:image:width" content="${image.width}">`,
+    `<meta property="og:image:height" content="${image.height}">`,
+    `<meta property="og:image:alt" content="${escapeAttribute(image.alt)}">`,
+    `<meta name="twitter:card" content="summary_large_image">`,
+    `<meta name="twitter:title" content="${escapeAttribute(metadata.title)}">`,
+    `<meta name="twitter:description" content="${escapeAttribute(metadata.description)}">`,
+    `<meta name="twitter:image" content="${escapeAttribute(image.url)}">`,
+    `<meta name="twitter:image:alt" content="${escapeAttribute(image.alt)}">`,
+    ...(metadata.published
+      ? [
+          `<meta property="article:published_time" content="${escapeAttribute(metadata.published)}">`,
+          `<meta property="article:modified_time" content="${escapeAttribute(metadata.modified)}">`,
+          `<meta property="article:author" content="https://obiente.org">`,
+          ...metadata.tags.map(
+            (tag) => `<meta property="article:tag" content="${escapeAttribute(tag)}">`,
+          ),
+        ]
+      : []),
+  ].join("\n    ");
 }

@@ -4,7 +4,14 @@ import { docs } from "./generated/docs.js";
 import { docsContent } from "./generated/docs-content.js";
 import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
-import { metadataFor, siteUrl, socialImageFor } from "./server-metadata.js";
+import {
+  metadataFor,
+  sharingHeadFor,
+  siteUrl,
+  socialImageDetailsFor,
+} from "./server-metadata.js";
+
+const organizationUrl = "https://obiente.org";
 
 function normalizePath(path) {
   const pathname = path.split("?")[0].split("#")[0];
@@ -37,7 +44,7 @@ export async function render(pathname) {
   const app = createServerApp(props);
   const html = await renderToString(app);
   const metadata = metadataFor(initialPath);
-  const socialImage = socialImageFor(metadata);
+  const socialImage = socialImageDetailsFor(metadata);
   const softwareData = {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
@@ -52,13 +59,14 @@ export async function render(pathname) {
     author: {
       "@type": "Organization",
       name: "Obiente",
-      url: "https://obiente.dev",
+      url: organizationUrl,
     },
     publisher: {
       "@type": "Organization",
       name: "Obiente",
-      url: "https://obiente.dev",
+      url: organizationUrl,
     },
+    image: `${siteUrl}/icon-512.png`,
     isAccessibleForFree: true,
     inLanguage: "en",
     downloadUrl: "https://github.com/Obiente/nc-native/releases",
@@ -83,7 +91,9 @@ export async function render(pathname) {
       "@type": "WebSite",
       name: "Nextcloud Native",
       url: siteUrl,
-      publisher: { "@type": "Organization", name: "Obiente", url: "https://obiente.dev" },
+      publisher: { "@type": "Organization", name: "Obiente", url: organizationUrl },
+      image: `${siteUrl}/icon-512.png`,
+      sameAs: ["https://github.com/Obiente/nc-native"],
       inLanguage: "en",
     },
   ];
@@ -124,10 +134,16 @@ export async function render(pathname) {
       datePublished: metadata.published,
       dateModified: metadata.modified,
       mainEntityOfPage: metadata.canonical,
-      author: { "@type": "Organization", name: "Obiente", url: "https://obiente.dev" },
-      publisher: { "@type": "Organization", name: "Obiente", url: "https://obiente.dev" },
+      author: { "@type": "Organization", name: "Obiente", url: organizationUrl },
+      publisher: { "@type": "Organization", name: "Obiente", url: organizationUrl },
       keywords: metadata.tags?.join(", "),
-      image: socialImage,
+      image: {
+        "@type": "ImageObject",
+        url: socialImage.url,
+        width: socialImage.width,
+        height: socialImage.height,
+        caption: socialImage.alt,
+      },
       isAccessibleForFree: true,
       inLanguage: "en",
       about: [
@@ -163,37 +179,10 @@ export async function render(pathname) {
   const head = [
     `<title>${escapeHtml(metadata.title)}</title>`,
     `<meta name="description" content="${escapeHtml(metadata.description)}">`,
-    `<link rel="canonical" href="${metadata.canonical}">`,
-    `<meta property="og:title" content="${escapeHtml(metadata.title)}">`,
-    `<meta property="og:description" content="${escapeHtml(metadata.description)}">`,
-    `<meta property="og:type" content="${metadata.type}">`,
-    `<meta property="og:url" content="${metadata.canonical}">`,
-    `<meta property="og:site_name" content="Nextcloud Native">`,
-    `<meta property="og:image" content="${escapeHtml(socialImage)}">`,
-    `<meta property="og:image:alt" content="${
-      metadata.imageAlt
-        ? escapeHtml(metadata.imageAlt)
-        : "Nextcloud Native desktop and mobile clients connected to Nextcloud"
-    }">`,
-    `<meta name="twitter:card" content="summary_large_image">`,
-    `<meta name="twitter:title" content="${escapeHtml(metadata.title)}">`,
-    `<meta name="twitter:description" content="${escapeHtml(metadata.description)}">`,
-    `<meta name="twitter:image" content="${escapeHtml(socialImage)}">`,
-    `<meta name="twitter:image:alt" content="${
-      metadata.imageAlt
-        ? escapeHtml(metadata.imageAlt)
-        : "Nextcloud Native desktop and mobile clients connected to Nextcloud"
-    }">`,
+    sharingHeadFor(metadata),
     `<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">`,
     `<meta name="author" content="Obiente">`,
     `<link rel="alternate" type="application/rss+xml" title="Nextcloud Native project news" href="${siteUrl}/news.xml">`,
-    ...(metadata.published
-      ? [
-          `<meta property="article:published_time" content="${metadata.published}">`,
-          `<meta property="article:modified_time" content="${metadata.modified}">`,
-          ...metadata.tags.map((tag) => `<meta property="article:tag" content="${escapeHtml(tag)}">`),
-        ]
-      : []),
     `<script type="application/ld+json">${safeJson(structuredData)}</script>`,
   ].join("\n    ");
 
