@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 enum class PeopleAction {
     RenamePerson,
     MergePerson,
