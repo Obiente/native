@@ -59,6 +59,7 @@ function formatDate(value) {
     day: "numeric",
     month: "short",
     year: "numeric",
+    timeZone: "UTC",
   }).format(new Date(value));
 }
 
@@ -77,14 +78,20 @@ const linkedItems = computed(() => {
     .slice(0, 8);
 });
 
-const sourceLabel = computed(() =>
-  roadmap.source === "github" ? "GitHub Project and issues" : "Repository roadmap snapshot",
-);
-const syncLabel = computed(() =>
-  roadmap.syncState === "live" && roadmap.updatedAt
-    ? formatDate(roadmap.updatedAt)
-    : "Live sync unavailable",
-);
+const sourceLabel = computed(() => {
+  if (roadmap.source === "github") return "GitHub Project and issues";
+  if (roadmap.source === "github-snapshot") return "Bundled GitHub Project snapshot";
+  return "Bundled roadmap document";
+});
+const syncLabel = computed(() => {
+  if (roadmap.syncState === "live" && roadmap.updatedAt) {
+    return formatDate(roadmap.updatedAt);
+  }
+  if (roadmap.syncState === "snapshot" && roadmap.updatedAt) {
+    return `Snapshot from ${formatDate(roadmap.updatedAt)}`;
+  }
+  return "Live sync unavailable";
+});
 </script>
 
 <template>

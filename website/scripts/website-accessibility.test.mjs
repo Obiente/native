@@ -35,6 +35,12 @@ test("interactive preview exposes named controls and a functional mobile app swi
   assert.match(appSurface, /const searchResults = computed/);
   assert.match(appSurface, /v-for="result in searchResults"/);
   assert.match(appSurface, /No matching items in \{\{ activeMeta\.title \}\}/);
+  for (const app of ["deck", "cospend", "calendar"]) {
+    assert.match(appSurface, new RegExp(`props\\.app === "${app}"`));
+  }
+  assert.match(appSurface, /currentConversation\.messages/);
+  assert.match(appSurface, /const day = index - 1/);
+  assert.match(appSurface, /\.app-surface \{ position:relative/);
   assert.match(appSurface, /:aria-label="musicPlaying \? 'Pause Rain on glass'/);
   assert.match(appSurface, /:aria-label="`More actions for \$\{user\.name\}`"/);
 });
@@ -61,6 +67,9 @@ test("roadmap links and indexed details remain available with truthful fallback 
   assert.match(roadmap, /Completed features/);
   assert.match(roadmap, /recentCompletedFeatures/);
   assert.match(roadmap, /remainingCompletedFeatures/);
+  assert.match(roadmap, /timeZone: "UTC"/);
+  assert.match(articleRoadmap, /timeZone: "UTC"/);
+  assert.match(articleRoadmap, /Bundled GitHub Project snapshot/);
   assert.match(app, /class="roadmap-source-document"/);
   assert.match(app, /v-html="currentDoc\.html"/);
 });

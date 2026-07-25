@@ -87,9 +87,10 @@ becomes a Kanban board, Cookbook becomes a recipe library, Cospend becomes a bud
 dashboard, and Music provides albums, artwork, playback queues, and media controls.
 
 These experiences share context-aware forms that already know the current item and
-parent, consistent overflow menus, global Nextcloud search, and fast cached startup.
-The same file preview and share sheet work from Files, a Talk attachment, Mail, or
-another app that references a file.
+parent, consistent overflow menus, and global Nextcloud search. Durable cached startup
+across every app remains active delivery work while the account-scoped metadata store
+and invalidation rules are completed. The same file preview and share sheet work from
+Files, a Talk attachment, Mail, or another app that references a file.
 
 ## Reusable components make unfamiliar apps useful
 

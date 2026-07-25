@@ -55,6 +55,10 @@ const selectedMail = ref(1);
 const selectedRecipe = ref(1);
 const servings = ref(8);
 const selectedTableRow = ref(2);
+const selectedDeckCard = ref("Launch page");
+const selectedTransaction = ref("Studio rent");
+const selectedAlbum = ref("Field recordings");
+const selectedCalendarEvent = ref("workshop");
 const analyticsOpen = ref(true);
 const musicPlaying = ref(false);
 const adminView = ref("Users");
@@ -95,11 +99,36 @@ const conversations = [
   { name: "Project updates", preview: "Ready for review", unread: 0 },
 ];
 
-const messages = [
-  { sender: "Mina", body: "The new gallery flow is ready to review.", time: "14:28" },
-  { sender: "Mina", body: "Shared 3 photos from Project photos", time: "14:29", attachment: true },
-  { sender: "You", body: "Nice. I'll check the full-quality view.", time: "14:31", own: true },
-];
+const conversationDetails = {
+  "Design team": {
+    participants: "3 participants · active",
+    messages: [
+      { sender: "Mina", body: "The new gallery flow is ready to review.", time: "14:28" },
+      { sender: "Mina", body: "Shared 3 photos from Project photos", time: "14:29", attachment: true },
+      { sender: "You", body: "Nice. I'll check the full-quality view.", time: "14:31", own: true },
+    ],
+    call: "Group call ended · 24 minutes · 3 participants",
+  },
+  Family: {
+    participants: "4 participants · active",
+    messages: [
+      { sender: "Noah", body: "The weekend photos are in the shared album.", time: "11:04" },
+      { sender: "You", body: "Great, I will add the favourites tonight.", time: "11:08", own: true },
+    ],
+    call: "Family call ended · 24 minutes · 4 participants",
+  },
+  "Project updates": {
+    participants: "6 participants · active",
+    messages: [
+      { sender: "Mina", body: "The Android build is ready for review.", time: "09:16" },
+      { sender: "You", body: "I will test the navigation and rotation states.", time: "09:19", own: true },
+    ],
+    call: "Review call ended · 18 minutes · 6 participants",
+  },
+};
+const currentConversation = computed(
+  () => conversationDetails[conversation.value] ?? conversationDetails["Design team"],
+);
 
 const mails = [
   { id: 1, sender: "Mina", subject: "Gallery review", preview: "The updated flow is ready.", time: "10:42", unread: true },
@@ -143,11 +172,39 @@ const albums = [
   { title: "Quiet mornings", artist: "Studio library", tracks: 11, artwork: "/demo-media/north-sea.webp" },
   { title: "Workshop mix", artist: "Community", tracks: 16, artwork: "/demo-media/forest-trail.webp" },
 ];
+const currentAlbum = computed(
+  () => albums.find((album) => album.title === selectedAlbum.value) ?? albums[0],
+);
 
 const monthDays = Array.from({ length: 35 }, (_, index) => {
-  const day = index - 2;
+  const day = index - 1;
   return day > 0 && day <= 31 ? day : null;
 });
+const calendarEvents = {
+  workshop: {
+    id: "workshop",
+    day: 25,
+    date: "Saturday 25 July",
+    title: "Community workshop",
+    time: "09:30-12:30 · Studio",
+    calendar: "Obiente",
+    guests: "4 attending",
+    reminder: "30 minutes before",
+  },
+  review: {
+    id: "review",
+    day: 28,
+    date: "Tuesday 28 July",
+    title: "Review call",
+    time: "15:00-15:45 · Online",
+    calendar: "Obiente",
+    guests: "6 attending",
+    reminder: "10 minutes before",
+  },
+};
+const currentCalendarEvent = computed(
+  () => calendarEvents[selectedCalendarEvent.value] ?? calendarEvents.workshop,
+);
 
 const users = [
   { name: "Obiente", role: "Administrator", quota: "18 GB of 100 GB", status: "Active" },
@@ -227,8 +284,14 @@ function openSearchResult(result) {
   if (props.app === "talk") conversation.value = result.id;
   if (props.app === "mail") selectedMail.value = result.id;
   if (props.app === "tables") selectedTableRow.value = result.id;
+  if (props.app === "deck") selectedDeckCard.value = result.id;
   if (props.app === "cookbook") selectedRecipe.value = result.id;
-  if (props.app === "music") musicPlaying.value = true;
+  if (props.app === "cospend") selectedTransaction.value = result.id;
+  if (props.app === "music") {
+    selectedAlbum.value = result.id;
+    musicPlaying.value = true;
+  }
+  if (props.app === "calendar") selectedCalendarEvent.value = result.id;
   if (props.app === "admin") adminView.value = "Users";
   query.value = "";
   notify(`Opened ${result.title}`);
@@ -358,14 +421,14 @@ function notify(message) {
         </button>
       </aside>
       <section class="thread">
-        <header><div><strong>{{ conversation }}</strong><small>3 participants · active</small></div><button type="button" aria-label="Start audio call"><PhPhone :size="17" aria-hidden="true" /></button><button type="button" aria-label="Start video call"><PhVideoCamera :size="17" aria-hidden="true" /></button></header>
+        <header><div><strong>{{ conversation }}</strong><small>{{ currentConversation.participants }}</small></div><button type="button" aria-label="Start audio call"><PhPhone :size="17" aria-hidden="true" /></button><button type="button" aria-label="Start video call"><PhVideoCamera :size="17" aria-hidden="true" /></button></header>
         <div class="message-list">
-          <article v-for="message in messages" :key="message.time" :class="{ own: message.own }">
+          <article v-for="message in currentConversation.messages" :key="message.time" :class="{ own: message.own }">
             <small>{{ message.sender }}</small><p>{{ message.body }}</p>
             <button v-if="message.attachment" class="attachment"><PhImage :size="17" /> Project photos · 3 items</button>
             <time>{{ message.time }}</time>
           </article>
-          <article class="call-card"><PhPhone :size="20" weight="duotone" /><span><strong>Group call ended</strong><small>24 minutes · 3 participants</small></span></article>
+          <article class="call-card"><PhPhone :size="20" weight="duotone" /><span><strong>{{ currentConversation.call.split(' · ')[0] }}</strong><small>{{ currentConversation.call.split(' · ').slice(1).join(' · ') }}</small></span></article>
         </div>
         <form @submit.prevent="notify('Message sent in the preview')"><input aria-label="Message" placeholder="Write a message" /><button type="submit" aria-label="Send message"><PhMicrophone :size="17" aria-hidden="true" /></button></form>
       </section>
@@ -427,7 +490,7 @@ function notify(message) {
     <div v-else-if="app === 'deck'" class="deck-layout">
       <div class="board-toolbar"><span><strong>Launch board</strong><small>8 cards · 3 lists</small></span><button><PhPlus :size="15" /> Add card</button></div>
       <div class="board-columns">
-        <section v-for="column in columns" :key="column.title"><header><strong>{{ column.title }}</strong><span>{{ column.cards.length }}</span></header><article v-for="card in column.cards" :key="card"><span class="card-label"></span><strong>{{ card }}</strong><small><PhClock :size="13" /> This week · Obiente</small></article><button><PhPlus :size="14" /> Add a card</button></section>
+        <section v-for="column in columns" :key="column.title"><header><strong>{{ column.title }}</strong><span>{{ column.cards.length }}</span></header><button v-for="card in column.cards" :key="card" class="board-card" :class="{ selected: selectedDeckCard === card }" @click="selectedDeckCard = card"><span class="card-label"></span><strong>{{ card }}</strong><small><PhClock :size="13" /> This week · Obiente</small></button><button class="add-card"><PhPlus :size="14" /> Add a card</button></section>
       </div>
     </div>
 
@@ -439,19 +502,19 @@ function notify(message) {
     <div v-else-if="app === 'cospend'" class="cospend-layout">
       <header class="budget-summary"><div><small>Your balance</small><strong>€ 34.20 owed to you</strong></div><button><PhPlus :size="15" /> Add expense</button></header>
       <details :open="analyticsOpen" @toggle="analyticsOpen = $event.target.open"><summary><span><PhChartBar :size="18" weight="duotone" /><strong>Spending overview</strong><small>€ 578.40 this month</small></span><PhCaretDown :size="17" /></summary><div class="budget-metrics"><article><small>Shared</small><strong>€ 402.00</strong></article><article><small>Your share</small><strong>€ 176.40</strong></article><article><small>Largest category</small><strong>Studio</strong></article></div></details>
-      <section class="transaction-list"><header><strong>Recent transactions</strong><button>Filter</button></header><article v-for="item in transactions" :key="item.title"><span><PhTag :size="18" weight="duotone" /></span><div><strong>{{ item.title }}</strong><small>Paid by {{ item.payer }} · {{ item.split }}</small></div><b>{{ item.amount }}</b></article></section>
+      <section class="transaction-list"><header><strong>Recent transactions</strong><button>Filter</button></header><button v-for="item in transactions" :key="item.title" class="transaction" :class="{ selected: selectedTransaction === item.title }" @click="selectedTransaction = item.title"><span><PhTag :size="18" weight="duotone" /></span><div><strong>{{ item.title }}</strong><small>Paid by {{ item.payer }} · {{ item.split }}</small></div><b>{{ item.amount }}</b></button></section>
     </div>
 
     <div v-else-if="app === 'music'" class="music-layout">
       <nav><button class="active">Albums</button><button>Artists</button><button>Playlists</button><button>Songs</button></nav>
-      <div class="album-grid"><article v-for="album in albums" :key="album.title"><img :src="album.artwork" :alt="`${album.title} album artwork`" /><strong>{{ album.title }}</strong><small>{{ album.artist }} · {{ album.tracks }} tracks</small><button type="button" :aria-label="`Play ${album.title}`" @click="musicPlaying = true"><PhPlay :size="15" weight="fill" aria-hidden="true" /></button></article></div>
-      <footer class="music-player"><img src="/demo-media/field-notes.webp" alt="" /><div><strong>Rain on glass</strong><small>Field recordings</small></div><button type="button" aria-label="Previous track"><PhSkipBack :size="16" weight="fill" aria-hidden="true" /></button><button class="play" type="button" :aria-label="musicPlaying ? 'Pause Rain on glass' : 'Play Rain on glass'" @click="musicPlaying = !musicPlaying"><component :is="musicPlaying ? PhPause : PhPlay" :size="17" weight="fill" aria-hidden="true" /></button><button type="button" aria-label="Next track"><PhSkipForward :size="16" weight="fill" aria-hidden="true" /></button><time>02:18 / 04:36</time></footer>
+      <div class="album-grid"><article v-for="album in albums" :key="album.title" :class="{ selected: selectedAlbum === album.title }"><img :src="album.artwork" :alt="`${album.title} album artwork`" /><strong>{{ album.title }}</strong><small>{{ album.artist }} · {{ album.tracks }} tracks</small><button type="button" :aria-label="`Play ${album.title}`" @click="selectedAlbum = album.title; musicPlaying = true"><PhPlay :size="15" weight="fill" aria-hidden="true" /></button></article></div>
+      <footer class="music-player"><img :src="currentAlbum.artwork" alt="" /><div><strong>Rain on glass</strong><small>{{ currentAlbum.title }}</small></div><button type="button" aria-label="Previous track"><PhSkipBack :size="16" weight="fill" aria-hidden="true" /></button><button class="play" type="button" :aria-label="musicPlaying ? 'Pause Rain on glass' : 'Play Rain on glass'" @click="musicPlaying = !musicPlaying"><component :is="musicPlaying ? PhPause : PhPlay" :size="17" weight="fill" aria-hidden="true" /></button><button type="button" aria-label="Next track"><PhSkipForward :size="16" weight="fill" aria-hidden="true" /></button><time>02:18 / 04:36</time></footer>
     </div>
 
     <div v-else-if="app === 'calendar'" class="calendar-layout">
       <aside><button class="new-event"><PhPlus :size="15" /> New event</button><strong>Calendars</strong><label><input checked type="checkbox" /> Personal</label><label><input checked type="checkbox" /> Obiente</label><label><input type="checkbox" /> Birthdays</label></aside>
-      <section class="calendar-month"><header><button type="button" aria-label="Previous month">‹</button><h3>July 2026</h3><button type="button" aria-label="Next month">›</button><button type="button">Today</button></header><div class="weekdays"><span v-for="day in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']" :key="day">{{ day }}</span></div><div class="month-grid"><button v-for="(day, index) in monthDays" :key="index" type="button" :disabled="!day" :aria-label="day ? `July ${day}, 2026${day === 25 ? ', Workshop' : day === 28 ? ', Review call' : ''}` : 'Outside July 2026'" :class="{ muted: !day, today: day === 25 }"><span>{{ day }}</span><b v-if="day === 25">Workshop</b><b v-if="day === 28">Review call</b></button></div></section>
-      <aside class="event-inspector"><p class="kicker">Friday 25 July</p><h3>Community workshop</h3><p>09:30-12:30 · Studio</p><dl><div><dt>Calendar</dt><dd>Obiente</dd></div><div><dt>Guests</dt><dd>4 attending</dd></div><div><dt>Reminder</dt><dd>30 minutes before</dd></div></dl><button>Edit event</button></aside>
+      <section class="calendar-month"><header><button type="button" aria-label="Previous month">‹</button><h3>July 2026</h3><button type="button" aria-label="Next month">›</button><button type="button">Today</button></header><div class="weekdays"><span v-for="day in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']" :key="day">{{ day }}</span></div><div class="month-grid"><button v-for="(day, index) in monthDays" :key="index" type="button" :disabled="!day" :aria-label="day ? `July ${day}, 2026${day === 25 ? ', Workshop' : day === 28 ? ', Review call' : ''}` : 'Outside July 2026'" :class="{ muted: !day, today: day === 25, selected: day === currentCalendarEvent.day }" @click="day === 25 ? selectedCalendarEvent = 'workshop' : day === 28 ? selectedCalendarEvent = 'review' : null"><span>{{ day }}</span><b v-if="day === 25">Workshop</b><b v-if="day === 28">Review call</b></button></div></section>
+      <aside class="event-inspector"><p class="kicker">{{ currentCalendarEvent.date }}</p><h3>{{ currentCalendarEvent.title }}</h3><p>{{ currentCalendarEvent.time }}</p><dl><div><dt>Calendar</dt><dd>{{ currentCalendarEvent.calendar }}</dd></div><div><dt>Guests</dt><dd>{{ currentCalendarEvent.guests }}</dd></div><div><dt>Reminder</dt><dd>{{ currentCalendarEvent.reminder }}</dd></div></dl><button>Edit event</button></aside>
     </div>
 
     <div v-else-if="app === 'admin'" class="admin-layout">
@@ -464,7 +527,7 @@ function notify(message) {
 </template>
 
 <style scoped>
-.app-surface { min-width:0; min-height:640px; display:flex; flex-direction:column; background:#0d1015; }
+.app-surface { position:relative; min-width:0; min-height:640px; display:flex; flex-direction:column; background:#0d1015; }
 button,input { font:inherit; color:inherit; }
 button { cursor:pointer; }
 .app-toolbar { min-height:79px; display:grid; grid-template-columns:minmax(0,1fr) 180px auto; align-items:center; gap:8px; padding:13px 16px; border-bottom:1px solid #292c33; }
@@ -591,18 +654,18 @@ dt { color:#8c8a94; font-size:8px; } dd { margin:5px 0 0; font-size:9px; }
 .deck-layout { flex:1; padding:14px; overflow:auto; }.board-toolbar { display:flex; align-items:center; margin-bottom:12px; }.board-toolbar > span { display:grid; }.board-toolbar strong { font-size:11px; }.board-toolbar small { color:#8c8a94; font-size:8px; }
 .board-columns { display:grid; grid-template-columns:repeat(3,minmax(150px,1fr)); gap:9px; }.board-columns section { min-height:430px; padding:10px; border:1px solid #292c33; border-radius:10px; background:#11141a; }
 .board-columns section > header { display:flex; justify-content:space-between; padding:4px 2px 11px; }.board-columns header strong { font-size:9px; }.board-columns header span { color:#8c8a94; font-size:8px; }
-.board-columns article { display:grid; gap:8px; margin-bottom:8px; padding:11px; border:1px solid #31343c; border-radius:8px; background:#191c22; }.card-label { width:32px; height:4px; border-radius:4px; background:#9b7bd7; }.board-columns article strong { font-size:9px; }.board-columns article small { display:flex; align-items:center; gap:5px; color:#8c8a94; font-size:7px; }.board-columns section > button { border:0; background:transparent; color:#bba3e8; font-size:8px; }
+.board-card { width:100%; display:grid; gap:8px; margin-bottom:8px; padding:11px; border:1px solid #31343c; border-radius:8px; background:#191c22; color:inherit; text-align:left; }.board-card.selected { border-color:#8f72c5; background:#211c2a; }.card-label { width:32px; height:4px; border-radius:4px; background:#9b7bd7; }.board-card strong { font-size:9px; }.board-card small { display:flex; align-items:center; gap:5px; color:#8c8a94; font-size:7px; }.board-columns section > .add-card { border:0; background:transparent; color:#bba3e8; font-size:8px; }
 .cookbook-layout { flex:1; display:grid; grid-template-columns:210px minmax(0,1fr); }.recipe-list { padding:13px 9px; border-right:1px solid #292c33; }.recipe-list header { display:flex; align-items:center; padding:2px 4px 12px; }.recipe-list header strong { font-size:11px; }.recipe-list > button { width:100%; min-height:60px; display:grid; grid-template-columns:35px minmax(0,1fr); align-items:center; gap:8px; padding:7px; border:0; border-radius:8px; background:transparent; text-align:left; }.recipe-list > button.active { background:#30283d; }.recipe-list > button > span:first-child { width:34px; height:34px; display:grid; place-items:center; border-radius:8px; background:#25232e; color:#cbb3fd; }.recipe-list button span:last-child { display:grid; }.recipe-list strong { font-size:9px; }.recipe-list small { color:#8c8a94; font-size:7px; }
 .recipe-detail { max-width:590px; padding:25px 28px; }.kicker { color:#cbb3fd !important; font-size:8px !important; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }.recipe-detail h3 { margin:8px 0 0; font-size:21px; }.recipe-detail > p { color:#8c8a94; font-size:9px; }.servings { width:max-content; display:flex; align-items:center; gap:12px; margin:20px 0; padding:7px; border:1px solid #343740; border-radius:9px; }.servings button { width:27px; height:27px; border:0; border-radius:6px; background:#30283d; }.servings span { display:grid; min-width:48px; text-align:center; }.servings strong { font-size:11px; }.servings small { color:#8c8a94; font-size:7px; }.recipe-detail section { margin-top:18px; }.recipe-detail h4 { margin:0 0 8px; font-size:11px; }.recipe-detail ul,.recipe-detail ol { margin:0; padding-left:18px; color:#d5d2d9; font-size:9px; line-height:1.7; }
 .cospend-layout { flex:1; padding:16px; overflow:auto; }.budget-summary { display:flex; align-items:center; padding:14px; border:1px solid #343740; border-radius:10px; background:#15181e; }.budget-summary div { display:grid; }.budget-summary small { color:#8c8a94; font-size:8px; }.budget-summary strong { margin-top:3px; font-size:15px; }
 .cospend-layout details { margin-top:10px; border:1px solid #343740; border-radius:10px; background:#11141a; }.cospend-layout summary { display:flex; align-items:center; justify-content:space-between; padding:12px; cursor:pointer; list-style:none; }.cospend-layout summary > span { display:grid; grid-template-columns:auto 1fr; align-items:center; gap:2px 8px; }.cospend-layout summary svg { grid-row:1/3; color:#cbb3fd; }.cospend-layout summary strong { font-size:10px; }.cospend-layout summary small { color:#8c8a94; font-size:7px; }
 .budget-metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; padding:0 12px 12px; }.budget-metrics article { display:grid; padding:10px; border-radius:8px; background:#1a1d23; }.budget-metrics small { color:#8c8a94; font-size:7px; }.budget-metrics strong { margin-top:5px; font-size:10px; }
 .transaction-list { margin-top:14px; }.transaction-list header { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }.transaction-list header strong { font-size:11px; }.transaction-list header button { margin:0; background:transparent; color:#cbb3fd; }
-.transaction-list article { min-height:55px; display:grid; grid-template-columns:34px minmax(0,1fr) auto; align-items:center; gap:9px; border-bottom:1px solid #292c33; }.transaction-list article > span { width:32px; height:32px; display:grid; place-items:center; border-radius:8px; background:#25232e; color:#cbb3fd; }.transaction-list article div { display:grid; }.transaction-list article strong,.transaction-list article b { font-size:9px; }.transaction-list article small { color:#8c8a94; font-size:7px; }
+.transaction { width:100%; min-height:55px; display:grid; grid-template-columns:34px minmax(0,1fr) auto; align-items:center; gap:9px; padding:0 7px; border:1px solid transparent; border-bottom-color:#292c33; background:transparent; color:inherit; text-align:left; }.transaction.selected { border-color:#8f72c5; border-radius:7px; background:#211c2a; }.transaction > span { width:32px; height:32px; display:grid; place-items:center; border-radius:8px; background:#25232e; color:#cbb3fd; }.transaction div { display:grid; }.transaction strong,.transaction b { font-size:9px; }.transaction small { color:#8c8a94; font-size:7px; }
 .music-layout { flex:1; position:relative; padding:14px 14px 70px; }.music-layout nav { display:flex; gap:4px; margin-bottom:14px; }.album-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }.album-grid article { position:relative; }.album-grid article > img { width:100%; height:80px; object-fit:cover; border-radius:7px; }.album-grid article > button { position:absolute; right:10px; bottom:10px; width:27px; height:27px; display:grid; place-items:center; border:0; border-radius:999px; background:#9b72e6; }
 .music-player { position:absolute; right:0; bottom:0; left:0; min-height:58px; display:grid; grid-template-columns:34px minmax(0,1fr) auto auto auto auto; align-items:center; gap:7px; padding:7px 14px; border-top:1px solid #343740; background:#181b21; }.music-player > img { width:32px; height:32px; object-fit:cover; border-radius:7px; }.music-player > div { display:grid; }.music-player strong { font-size:9px; }.music-player small,.music-player time { color:#8c8a94; font-size:7px; }.music-player button { width:27px; height:27px; display:grid; place-items:center; border:0; border-radius:999px; background:transparent; }.music-player button.play { background:#cbb3fd; color:#29183d; }
 .calendar-layout { flex:1; display:grid; grid-template-columns:120px minmax(260px,1fr) 175px; }.calendar-layout > aside:first-child { gap:8px; }.calendar-layout .new-event { min-height:33px; margin-bottom:10px; border:0; border-radius:7px; background:#8d64dc; color:#fff; font-size:8px; }.calendar-layout label { display:flex; align-items:center; gap:7px; color:#d4d1d8; font-size:8px; }.calendar-layout input { accent-color:#9b72e6; }
-.calendar-month { min-width:0; padding:12px; border-right:1px solid #292c33; }.calendar-month > header { display:flex; align-items:center; gap:5px; margin-bottom:10px; }.calendar-month h3 { margin:0 auto 0 4px; font-size:12px; }.calendar-month header button { min-width:28px; height:28px; border:1px solid #343740; border-radius:6px; background:#15181e; font-size:8px; }.weekdays,.month-grid { display:grid; grid-template-columns:repeat(7,1fr); }.weekdays span { padding:5px; color:#8c8a94; font-size:7px; text-align:center; }.month-grid button { min-width:0; min-height:56px; display:flex; flex-direction:column; align-items:flex-start; gap:5px; padding:5px; border:1px solid #292c33; background:transparent; font-size:7px; }.month-grid button.today { background:#211c2a; box-shadow:inset 0 0 0 1px #9b72e6; }.month-grid button.muted { opacity:.25; }.month-grid b { max-width:100%; overflow:hidden; padding:3px 4px; border-radius:4px; background:#43365a; color:#dfceff; font-size:6px; text-overflow:ellipsis; white-space:nowrap; }
+.calendar-month { min-width:0; padding:12px; border-right:1px solid #292c33; }.calendar-month > header { display:flex; align-items:center; gap:5px; margin-bottom:10px; }.calendar-month h3 { margin:0 auto 0 4px; font-size:12px; }.calendar-month header button { min-width:28px; height:28px; border:1px solid #343740; border-radius:6px; background:#15181e; font-size:8px; }.weekdays,.month-grid { display:grid; grid-template-columns:repeat(7,1fr); }.weekdays span { padding:5px; color:#8c8a94; font-size:7px; text-align:center; }.month-grid button { min-width:0; min-height:56px; display:flex; flex-direction:column; align-items:flex-start; gap:5px; padding:5px; border:1px solid #292c33; background:transparent; font-size:7px; }.month-grid button.today { background:#211c2a; }.month-grid button.selected { box-shadow:inset 0 0 0 1px #9b72e6; }.month-grid button.muted { opacity:.25; }.month-grid b { max-width:100%; overflow:hidden; padding:3px 4px; border-radius:4px; background:#43365a; color:#dfceff; font-size:6px; text-overflow:ellipsis; white-space:nowrap; }
 .event-inspector h3 { margin:6px 0 0; font-size:14px; }.event-inspector > button { width:100%; min-height:31px; border:0; border-radius:7px; background:#30283d; color:#d1b7ff; font-size:8px; }
 .admin-layout { flex:1; display:grid; grid-template-columns:140px minmax(0,1fr); }.admin-layout > section { padding:16px; }.admin-layout section > header { display:flex; align-items:center; margin-bottom:16px; }.admin-layout section > header h3 { margin:0; font-size:16px; }.admin-layout section > header p { margin:4px 0 0; color:#8c8a94; font-size:8px; }
 .user-head { min-height:30px; display:grid; grid-template-columns:minmax(100px,1fr) 90px 110px 65px; align-items:center; padding:0 8px 0 47px; border-bottom:1px solid #292c33; color:#8c8a94; font-size:7px; }.user-table article { min-height:54px; display:grid; grid-template-columns:30px minmax(60px,1fr) 90px 110px 65px auto; align-items:center; gap:8px; padding:0 8px; border-bottom:1px solid #292c33; font-size:8px; }.user-table article .avatar { width:28px; height:28px; }.user-table article button { border:0; background:transparent; }.online { color:#5de0c0; }
