@@ -16,20 +16,97 @@ class PeoplePostMutationReconciliationTest {
         assertEquals(
             renamed,
             assertIs<PeoplePostMutationReconciliation.CurrentPerson>(
-                reconcilePersonAfterMutation(PeopleAction.RenamePerson, previous, listOf(renamed)),
+                reconcilePersonAfterMutation(
+                    PeoplePostMutationExpectation.Rename("Example Person"),
+                    previous,
+                    listOf(renamed),
+                ),
             ).person,
         )
         assertEquals(
             newCover,
             assertIs<PeoplePostMutationReconciliation.CurrentPerson>(
-                reconcilePersonAfterMutation(PeopleAction.SetCover, previous, listOf(newCover)),
+                reconcilePersonAfterMutation(
+                    PeoplePostMutationExpectation.SetCover(91),
+                    previous,
+                    listOf(newCover),
+                ),
             ).person,
         )
         assertEquals(
             oneFaceRemoved,
             assertIs<PeoplePostMutationReconciliation.CurrentPerson>(
-                reconcilePersonAfterMutation(PeopleAction.RemoveFace, previous, listOf(oneFaceRemoved)),
+                reconcilePersonAfterMutation(
+                    PeoplePostMutationExpectation.RemoveFace(41),
+                    previous,
+                    listOf(oneFaceRemoved),
+                    refreshedFaceDetectionIds = setOf(40, 42, 43),
+                ),
             ).person,
+        )
+    }
+
+    @Test
+    fun unchangedImmediateReadKeepsReconciliationPending() {
+        val previous = person(name = "Old name", queryName = "42", count = 4, cover = 11)
+
+        assertIs<PeoplePostMutationReconciliation.Pending>(
+            reconcilePersonAfterMutation(
+                PeoplePostMutationExpectation.Rename("New name"),
+                previous,
+                listOf(previous),
+            ),
+        )
+        assertIs<PeoplePostMutationReconciliation.Pending>(
+            reconcilePersonAfterMutation(
+                PeoplePostMutationExpectation.SetCover(91),
+                previous,
+                listOf(previous),
+            ),
+        )
+        assertIs<PeoplePostMutationReconciliation.Pending>(
+            reconcilePersonAfterMutation(
+                PeoplePostMutationExpectation.RemoveFace(41),
+                previous,
+                listOf(previous.copy(count = previous.count - 1)),
+                refreshedFaceDetectionIds = setOf(41, 42, 43),
+            ),
+        )
+    }
+
+    @Test
+    fun exactFaceAbsenceWinsOverConcurrentAggregateCountChanges() {
+        val previous = person(count = 4)
+
+        assertIs<PeoplePostMutationReconciliation.CurrentPerson>(
+            reconcilePersonAfterMutation(
+                PeoplePostMutationExpectation.RemoveFace(41),
+                previous,
+                listOf(previous),
+                refreshedFaceDetectionIds = setOf(40, 42, 43, 44),
+            ),
+        )
+        assertIs<PeoplePostMutationReconciliation.Pending>(
+            reconcilePersonAfterMutation(
+                PeoplePostMutationExpectation.RemoveFace(41),
+                previous,
+                listOf(previous.copy(count = 3)),
+                refreshedFaceDetectionIds = setOf(40, 41, 42),
+            ),
+        )
+    }
+
+    @Test
+    fun renameRequiresAuthoritativeQueryNameInsteadOfDisplayFallback() {
+        val previous = person(name = "Unnamed person", queryName = "42")
+        val staleDisplay = previous.copy(name = "Unnamed person", queryName = "42")
+
+        assertIs<PeoplePostMutationReconciliation.Pending>(
+            reconcilePersonAfterMutation(
+                PeoplePostMutationExpectation.Rename("Unnamed person"),
+                previous,
+                listOf(staleDisplay),
+            ),
         )
     }
 
@@ -38,14 +115,44 @@ class PeoplePostMutationReconciliationTest {
         val previous = person()
 
         assertIs<PeoplePostMutationReconciliation.Gallery>(
-            reconcilePersonAfterMutation(PeopleAction.RemoveFace, previous, emptyList()),
+            reconcilePersonAfterMutation(
+                PeoplePostMutationExpectation.RemoveFace(41),
+                previous,
+                emptyList(),
+            ),
         )
         assertIs<PeoplePostMutationReconciliation.Gallery>(
-            reconcilePersonAfterMutation(PeopleAction.MergePerson, previous, listOf(previous)),
+            reconcilePersonAfterMutation(
+                PeoplePostMutationExpectation.RemovePerson(PeopleAction.MergePerson),
+                previous,
+                listOf(previous),
+            ),
         )
         assertIs<PeoplePostMutationReconciliation.Gallery>(
-            reconcilePersonAfterMutation(PeopleAction.DeletePerson, previous, listOf(previous)),
+            reconcilePersonAfterMutation(
+                PeoplePostMutationExpectation.RemovePerson(PeopleAction.DeletePerson),
+                previous,
+                listOf(previous),
+            ),
         )
+    }
+
+    @Test
+    fun pendingExpectationsRoundTripThroughSaveableState() {
+        val expectations = listOf(
+            PeoplePostMutationExpectation.Rename("Example Person"),
+            PeoplePostMutationExpectation.SetCover(91),
+            PeoplePostMutationExpectation.RemoveFace(41),
+            PeoplePostMutationExpectation.RemovePerson(PeopleAction.MergePerson),
+            PeoplePostMutationExpectation.RemovePerson(PeopleAction.DeletePerson),
+        )
+
+        expectations.forEach { expectation ->
+            assertEquals(
+                expectation,
+                decodePeoplePostMutationExpectation(expectation.encodeForSavedState()),
+            )
+        }
     }
 
     @Test
@@ -54,16 +161,16 @@ class PeoplePostMutationReconciliationTest {
         val otherOwner = previous.copy(userId = "other-user")
         val otherBackend = previous.copy(backend = NextcloudPeopleBackend.FaceRecognition.apiValue)
 
-        assertIs<PeoplePostMutationReconciliation.Gallery>(
+        assertIs<PeoplePostMutationReconciliation.Pending>(
             reconcilePersonAfterMutation(
-                PeopleAction.SetCover,
+                PeoplePostMutationExpectation.SetCover(91),
                 previous,
                 listOf(otherOwner, otherBackend),
             ),
         )
         assertFailsWith<IllegalArgumentException> {
             reconcilePersonAfterMutation(
-                PeopleAction.RenamePerson,
+                PeoplePostMutationExpectation.Rename("Renamed"),
                 previous,
                 listOf(previous, previous.copy(name = "Duplicate")),
             )

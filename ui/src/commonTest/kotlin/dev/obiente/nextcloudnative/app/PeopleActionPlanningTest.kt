@@ -37,6 +37,10 @@ class PeopleActionPlanningTest {
         assertEquals("Grace", request.pathValues["person"])
         assertEquals("Grace Hopper", request.destinationPathValues["person"])
         assertEquals(PeopleActionRetryPolicy.NeverAutomaticRefreshBeforeRetry, plan.retryPolicy)
+        assertEquals(
+            PeoplePostMutationExpectation.Rename("Grace Hopper"),
+            plan.postMutationExpectation(),
+        )
     }
 
     @Test
@@ -53,6 +57,10 @@ class PeopleActionPlanningTest {
         assertEquals(setOf(PeopleActionAuthRequirement.AuthenticatedNextcloudSession), plan.authRequirements)
         assertEquals(PeopleMutationSurface.MemoriesApi, request.surface)
         assertEquals(mapOf("name" to "ada/Grace", "fileid" to "44"), request.bodyFields)
+        assertEquals(
+            PeoplePostMutationExpectation.SetCover(44L),
+            plan.postMutationExpectation(),
+        )
     }
 
     @Test
@@ -62,6 +70,10 @@ class PeopleActionPlanningTest {
 
         assertEquals(PeopleActionRisk.DestructiveMetadata, remove.risk)
         assertTrue("photo stays in Files" in remove.confirmation.message)
+        assertEquals(
+            PeoplePostMutationExpectation.RemoveFace(11L),
+            remove.postMutationExpectation(),
+        )
         assertEquals(PeopleActionRisk.DestructiveMetadata, delete.risk)
         assertTrue("Photos stay in Files" in delete.confirmation.message)
         assertEquals(PeopleMutationMethod.DELETE, (delete.binding as PeopleActionBinding.Single).request.method)

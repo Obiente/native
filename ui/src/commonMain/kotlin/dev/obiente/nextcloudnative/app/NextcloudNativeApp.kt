@@ -5574,9 +5574,21 @@ private fun PersonMediaScreen(
     var mergePrepareError by remember(person.id) { mutableStateOf<String?>(null) }
     var pendingMergeWorkflow by remember(person.id) { mutableStateOf<PersonMergeWorkflow?>(null) }
     var pendingPlan by remember(person.id) { mutableStateOf<PeopleActionPlan?>(null) }
-    var postMutationRefreshAction by remember(person.id) { mutableStateOf<PeopleAction?>(null) }
-    var postMutationRefreshRunning by remember(person.id) { mutableStateOf(false) }
-    var postMutationRefreshError by remember(person.id) { mutableStateOf<String?>(null) }
+    var postMutationRefreshExpectationState by rememberSaveable(
+        currentUserId,
+        person.id,
+        person.backend,
+    ) {
+        mutableStateOf<String?>(null)
+    }
+    val postMutationRefreshExpectation = remember(postMutationRefreshExpectationState) {
+        postMutationRefreshExpectationState?.let(::decodePeoplePostMutationExpectation)
+    }
+    var postMutationRefreshAttempt by rememberSaveable(currentUserId, person.id, person.backend) {
+        mutableStateOf(0)
+    }
+    var postMutationRefreshRunning by remember(person.id, person.backend) { mutableStateOf(false) }
+    var postMutationRefreshError by remember(person.id, person.backend) { mutableStateOf<String?>(null) }
     var recognizedFaces by remember(person.id) { mutableStateOf<List<RecognizedFaceMedia>?>(null) }
     var recognizedFaceDayIndex by remember(person.id) { mutableStateOf<PersonMediaDayIndex?>(null) }
     var recognizedFaceCursor by remember(person.id) { mutableStateOf<NativeMediaDayCursor?>(null) }
@@ -5717,20 +5729,55 @@ private fun PersonMediaScreen(
         recognizedFacesLoadingMore = false
     }
 
-    suspend fun refreshPersonAfterMutation(action: PeopleAction) {
-        postMutationRefreshAction = action
+    fun requestPersonRefresh(expectation: PeoplePostMutationExpectation) {
+        postMutationRefreshExpectationState = expectation.encodeForSavedState()
+        postMutationRefreshAttempt += 1
+        postMutationRefreshError = null
+    }
+
+    LaunchedEffect(postMutationRefreshExpectationState, postMutationRefreshAttempt) {
+        val expectation = postMutationRefreshExpectation ?: return@LaunchedEffect
         postMutationRefreshRunning = true
         postMutationRefreshError = null
         try {
             val people = services.listPeople(session, person.backend)
-            when (val reconciliation = reconcilePersonAfterMutation(action, person, people)) {
+            val initialReconciliation = reconcilePersonAfterMutation(
+                expectation = expectation,
+                previous = person,
+                refreshedPeople = people,
+            )
+            val reconciliation =
+                if (
+                    expectation is PeoplePostMutationExpectation.RemoveFace &&
+                    initialReconciliation is PeoplePostMutationReconciliation.Pending
+                ) {
+                    val refreshedFaceDetectionIds =
+                        recognizedFaceReadService.loadCompleteFacesForReconciliation(session, personReference)
+                            .mapTo(linkedSetOf(), RecognizedFaceMedia::detectionId)
+                    reconcilePersonAfterMutation(
+                        expectation = expectation,
+                        previous = person,
+                        refreshedPeople = people,
+                        refreshedFaceDetectionIds = refreshedFaceDetectionIds,
+                    )
+                } else {
+                    initialReconciliation
+                }
+            when (reconciliation) {
                 is PeoplePostMutationReconciliation.CurrentPerson -> {
                     onPersonChanged(reconciliation.person)
                     loadAttempt += 1
+                    postMutationRefreshExpectationState = null
                 }
-                PeoplePostMutationReconciliation.Gallery -> onBack()
+                PeoplePostMutationReconciliation.Gallery -> {
+                    postMutationRefreshExpectationState = null
+                    onBack()
+                }
+                PeoplePostMutationReconciliation.Pending -> {
+                    postMutationRefreshError =
+                        "The change was saved, but the exact server postcondition is not visible yet. Retry the refresh."
+                }
             }
-            postMutationRefreshAction = null
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
@@ -5739,13 +5786,6 @@ private fun PersonMediaScreen(
         } finally {
             postMutationRefreshRunning = false
         }
-    }
-
-    fun launchPersonRefresh(action: PeopleAction) {
-        postMutationRefreshAction = action
-        postMutationRefreshRunning = true
-        postMutationRefreshError = null
-        scope.launch { refreshPersonAfterMutation(action) }
     }
 
     fun closePhotoSelection() {
@@ -5828,7 +5868,7 @@ private fun PersonMediaScreen(
             trailingContent = {
                 Box {
                     IconButton(
-                        enabled = postMutationRefreshAction == null,
+                        enabled = postMutationRefreshExpectation == null,
                         onClick = { actionMenuExpanded = true },
                     ) {
                         Icon(NextcloudIcons.More, contentDescription = "Person actions")
@@ -5903,7 +5943,7 @@ private fun PersonMediaScreen(
                 }
             },
         )
-        if (postMutationRefreshRunning || postMutationRefreshError != null) {
+        if (postMutationRefreshExpectation != null) {
             Surface(color = NextcloudTheme.colors.appTile) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(
@@ -5942,8 +5982,7 @@ private fun PersonMediaScreen(
                     if (!postMutationRefreshRunning) {
                         TextButton(
                             onClick = {
-                                val action = postMutationRefreshAction ?: return@TextButton
-                                launchPersonRefresh(action)
+                                postMutationRefreshAttempt += 1
                             },
                         ) { Text("Retry") }
                     }
@@ -6008,11 +6047,17 @@ private fun PersonMediaScreen(
                             services = services,
                             session = session,
                             file = file,
-                            badge = if (photoSelectionMode != null && selectable) "Choose" else null,
+                            badge = when {
+                                postMutationRefreshRunning -> "Refreshing"
+                                postMutationRefreshExpectation != null -> "Refresh needed"
+                                photoSelectionMode != null && selectable -> "Choose"
+                                else -> null
+                            },
                             backupStatus = mediaBackupStatuses[file.path.trim('/')],
                             faceRectangle = item.faceRectangle.takeIf { showFaceRectangles },
                             sourceWidth = item.width,
                             sourceHeight = item.height,
+                            enabled = postMutationRefreshExpectation == null,
                             onClick = {
                                 when (photoSelectionMode) {
                                     PersonPhotoSelectionMode.Cover -> if (selectable) {
@@ -6253,10 +6298,12 @@ private fun PersonMediaScreen(
                     PeopleAction.SetCover,
                     PeopleAction.RemoveFace,
                     -> {
+                        val expectation = plan.postMutationExpectation()
                         closePhotoSelection()
-                        launchPersonRefresh(plan.action)
+                        requestPersonRefresh(expectation)
                     }
-                    PeopleAction.RenamePerson -> launchPersonRefresh(plan.action)
+                    PeopleAction.RenamePerson ->
+                        requestPersonRefresh(plan.postMutationExpectation())
                 }
             },
         )
@@ -6494,6 +6541,7 @@ private fun MediaTile(
     faceRectangle: NativeFaceRectangle? = null,
     sourceWidth: Int? = null,
     sourceHeight: Int? = null,
+    enabled: Boolean = true,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -6509,9 +6557,13 @@ private fun MediaTile(
     Surface(
         modifier = Modifier.fillMaxWidth().aspectRatio(1f).then(
             if (onLongClick == null) {
-                Modifier.clickable(onClick = onClick)
+                Modifier.clickable(enabled = enabled, onClick = onClick)
             } else {
-                Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                Modifier.combinedClickable(
+                    enabled = enabled,
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                )
             },
         ),
         color = NextcloudTheme.colors.appTile,

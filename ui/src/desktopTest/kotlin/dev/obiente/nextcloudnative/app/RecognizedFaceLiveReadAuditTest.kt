@@ -20,7 +20,11 @@ class RecognizedFaceLiveReadAuditTest {
             ?: error("The live server returned no Recognize people.")
         val refreshed = services.listPeople(session, NextcloudPeopleBackend.Recognize.apiValue)
         val reconciliation = assertIs<PeoplePostMutationReconciliation.CurrentPerson>(
-            reconcilePersonAfterMutation(PeopleAction.SetCover, selected, refreshed),
+            reconcilePersonAfterMutation(
+                PeoplePostMutationExpectation.Rename(selected.queryName),
+                selected,
+                refreshed,
+            ),
         )
 
         assertEquals(selected.id, reconciliation.person.id)
