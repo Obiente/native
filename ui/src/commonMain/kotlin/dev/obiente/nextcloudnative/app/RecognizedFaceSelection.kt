@@ -243,13 +243,36 @@ class RecognizedFaceReadService internal constructor(
         session: NextcloudSession,
         person: PersonMediaReference,
         maximumFaces: Int = MAX_COMPLETE_MERGE_FACE_ITEMS,
+    ): List<RecognizedFaceMedia> = loadCompleteFaces(
+        session = session,
+        person = person,
+        maximumFaces = maximumFaces,
+        unavailablePurpose = "a safe native merge",
+    )
+
+    suspend fun loadCompleteFacesForReconciliation(
+        session: NextcloudSession,
+        person: PersonMediaReference,
+        maximumFaces: Int = MAX_COMPLETE_MERGE_FACE_ITEMS,
+    ): List<RecognizedFaceMedia> = loadCompleteFaces(
+        session = session,
+        person = person,
+        maximumFaces = maximumFaces,
+        unavailablePurpose = "exact face-removal verification",
+    )
+
+    private suspend fun loadCompleteFaces(
+        session: NextcloudSession,
+        person: PersonMediaReference,
+        maximumFaces: Int,
+        unavailablePurpose: String,
     ): List<RecognizedFaceMedia> {
         require(maximumFaces in 1..MAX_COMPLETE_MERGE_FACE_ITEMS)
         val dayResponse = execute(session, memoriesPersonDayIndexRequest(person, includeFaceRectangle = true))
         val days = parseMemoriesPersonDayIndex(dayResponse)
         val advertisedTotal = days.sumOf { day -> day.itemCount?.toLong() ?: 0L }
         require(advertisedTotal <= maximumFaces.toLong()) {
-            "This person has more than $maximumFaces face assignments, so a safe native merge is unavailable."
+            "This person has more than $maximumFaces face assignments, so $unavailablePurpose is unavailable."
         }
         if (days.isEmpty()) return emptyList()
 
@@ -261,7 +284,7 @@ class RecognizedFaceReadService internal constructor(
                     require(request.method == NextcloudApiMethod.GET && request.body == null)
                     addAll(parseMemoriesRecognizedFaces(execute(session, request), person))
                     require(size <= maximumFaces) {
-                        "This person has more than $maximumFaces face assignments, so a safe native merge is unavailable."
+                        "This person has more than $maximumFaces face assignments, so $unavailablePurpose is unavailable."
                     }
                 }
         }
