@@ -27,7 +27,7 @@ export function buildRss(newsEntries, baseUrl) {
     '<rss version="2.0"><channel>',
     "<title>Nextcloud Native project news</title>",
     `<link>${escapeXml(`${baseUrl}/news/`)}</link>`,
-    "<description>Product stories about how Nextcloud Native is taking shape across phones and desktops.</description>",
+    "<description>Guides to Nextcloud Native features, workflows, architecture, and public delivery roadmaps across phones and desktops.</description>",
     "<language>en</language>",
     ...newsEntries.map((post) => {
       const url = `${baseUrl}${post.path}`;

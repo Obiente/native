@@ -23,7 +23,7 @@ export function metadataFor(path) {
     return {
       title: "Project news · Nextcloud Native",
       description:
-        "See how Nextcloud Native is improving phone photo backup, Files, Talk, Photos, notes sync, offline access, and safe storage cleanup.",
+        "Guides to Nextcloud Native photo backup, WebDAV file sync, Obsidian notes, Talk, Photos, offline access, and adaptive native Nextcloud apps.",
       canonical: `${siteUrl}/news/`,
       type: "website",
     };
@@ -49,7 +49,7 @@ export function metadataFor(path) {
   return {
     title: "Nextcloud Native · Obiente",
     description:
-      "Back up phone photos, sync files and Obsidian notes, use Talk, Photos, Files, and more Nextcloud apps in one native phone and desktop client.",
+      "A native Nextcloud mobile and desktop client for Files, WebDAV sync, Photos, Memories, Talk, Calendar, Contacts, Mail, and installed apps.",
     canonical: `${siteUrl}/`,
     type: "website",
   };

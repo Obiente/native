@@ -44,7 +44,8 @@ export async function render(pathname) {
     name: "Nextcloud Native",
     applicationCategory: "ProductivityApplication",
     operatingSystem: "Android, Linux, Windows, macOS, iOS",
-    description: metadata.description,
+    description:
+      "A native mobile and desktop client for Files, sync, Photos, Memories, Talk, Calendar, Contacts, Mail, and installed Nextcloud apps.",
     url: siteUrl,
     codeRepository: "https://github.com/Obiente/nc-native",
     license: "https://www.gnu.org/licenses/agpl-3.0.html",
@@ -53,8 +54,26 @@ export async function render(pathname) {
       name: "Obiente",
       url: "https://obiente.dev",
     },
+    publisher: {
+      "@type": "Organization",
+      name: "Obiente",
+      url: "https://obiente.dev",
+    },
     isAccessibleForFree: true,
+    inLanguage: "en",
+    downloadUrl: "https://github.com/Obiente/nc-native/releases",
     softwareHelp: `${siteUrl}/contributing/`,
+    featureList: [
+      "Native Nextcloud Files and WebDAV sync",
+      "Phone photo backup, Memories, albums, tags, people, RAW, and Live Photos",
+      "Nextcloud Talk messages, attachments, notifications, and calls",
+      "Calendar and CalDAV event management",
+      "Contacts and CardDAV address books",
+      "Mail folders, HTML messages, attachments, search, and composition",
+      "Tables, Deck, Cookbook, Cospend, Music, and adaptive installed apps",
+      "Native Nextcloud user, app, and server administration",
+      "Offline cache, multiple accounts, background sync, and global search",
+    ],
     screenshot: [
       `${siteUrl}/screenshots/desktop-home.png`,
       `${siteUrl}/screenshots/mobile-home.png`,
@@ -68,12 +87,41 @@ export async function render(pathname) {
       name: "Nextcloud Native",
       url: siteUrl,
       publisher: { "@type": "Organization", name: "Obiente", url: "https://obiente.dev" },
+      inLanguage: "en",
     },
   ];
+  if (initialPath !== "/") {
+    structuredData.push({
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      itemListElement: [
+        {
+          "@type": "ListItem",
+          position: 1,
+          name: "Nextcloud Native",
+          item: siteUrl,
+        },
+        ...(metadata.published
+          ? [{
+              "@type": "ListItem",
+              position: 2,
+              name: "News",
+              item: `${siteUrl}/news/`,
+            }]
+          : []),
+        {
+          "@type": "ListItem",
+          position: metadata.published ? 3 : 2,
+          name: metadata.title.replace(" · Nextcloud Native", ""),
+          item: metadata.canonical,
+        },
+      ],
+    });
+  }
   if (metadata.published) {
     structuredData.push({
       "@context": "https://schema.org",
-      "@type": "TechArticle",
+      "@type": "Article",
       headline: metadata.title.replace(" · Nextcloud Native", ""),
       description: metadata.description,
       datePublished: metadata.published,
@@ -82,8 +130,37 @@ export async function render(pathname) {
       author: { "@type": "Organization", name: "Obiente", url: "https://obiente.dev" },
       publisher: { "@type": "Organization", name: "Obiente", url: "https://obiente.dev" },
       keywords: metadata.tags?.join(", "),
-      image: metadata.image,
+      image: socialImage,
       isAccessibleForFree: true,
+      inLanguage: "en",
+      about: [
+        { "@type": "SoftwareApplication", name: "Nextcloud Native", url: siteUrl },
+        { "@type": "Thing", name: "Nextcloud" },
+      ],
+    });
+  }
+  if (initialPath === "/") {
+    structuredData.push({
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      mainEntity: [
+        [
+          "Is Nextcloud Native a web wrapper?",
+          "No. It uses Nextcloud server APIs and renders native interfaces for phone and desktop.",
+        ],
+        [
+          "Can Nextcloud Native sync an Obsidian folder?",
+          "Yes. It pairs a normal device folder with a Nextcloud folder and provides revision-aware two-way sync.",
+        ],
+        [
+          "Can Nextcloud Native back up phone photos?",
+          "Yes. It shows waiting, uploading, verified, changed, failed, and cloud-only states and keeps current media visible to other apps.",
+        ],
+      ].map(([name, text]) => ({
+        "@type": "Question",
+        name,
+        acceptedAnswer: { "@type": "Answer", text },
+      })),
     });
   }
   const head = [
@@ -99,7 +176,7 @@ export async function render(pathname) {
     `<meta property="og:image:alt" content="${
       metadata.imageAlt
         ? escapeHtml(metadata.imageAlt)
-        : "Nextcloud Native, one adaptive native experience for Nextcloud"
+        : "Nextcloud Native desktop and mobile clients connected to Nextcloud"
     }">`,
     `<meta name="twitter:card" content="summary_large_image">`,
     `<meta name="twitter:title" content="${escapeHtml(metadata.title)}">`,
@@ -108,9 +185,10 @@ export async function render(pathname) {
     `<meta name="twitter:image:alt" content="${
       metadata.imageAlt
         ? escapeHtml(metadata.imageAlt)
-        : "Nextcloud Native, one adaptive native experience for Nextcloud"
+        : "Nextcloud Native desktop and mobile clients connected to Nextcloud"
     }">`,
     `<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">`,
+    `<meta name="author" content="Obiente">`,
     `<link rel="alternate" type="application/rss+xml" title="Nextcloud Native project news" href="${siteUrl}/news.xml">`,
     ...(metadata.published
       ? [
