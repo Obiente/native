@@ -5,176 +5,284 @@
 <h1 align="center">Nextcloud Native</h1>
 
 <p align="center">
-  One adaptive, native client for your whole Nextcloud.
+  One coherent, native workspace for your whole Nextcloud.
 </p>
 
-[![Build and test](https://github.com/obiente/nc-native/actions/workflows/ci.yml/badge.svg)](https://github.com/obiente/nc-native/actions/workflows/ci.yml)
+<p align="center">
+  <a href="https://nc-native.obiente.dev">Website</a> ·
+  <a href="https://nc-native.obiente.dev/roadmap/">Roadmap</a> ·
+  <a href="https://github.com/Obiente/nc-native/releases">Testing releases</a> ·
+  <a href="https://github.com/orgs/Obiente/projects/4">GitHub Project</a>
+</p>
+
+[![Build and test](https://github.com/Obiente/nc-native/actions/workflows/ci.yml/badge.svg)](https://github.com/Obiente/nc-native/actions/workflows/ci.yml)
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 
-An independent, unofficial Obiente project for building native clients that integrate with Nextcloud. It is not affiliated with or endorsed by Nextcloud GmbH.
+Nextcloud Native is an independent Obiente project for building a fast,
+consistent client across Nextcloud Files and installed Nextcloud apps. It
+turns verified APIs and data relationships into real native interfaces instead
+of embedding remote web pages or exposing raw API responses.
 
-> **Development preview:** the project is under active development and is not
-> yet suitable as the only client for important data.
+The goal is larger than putting many apps behind one icon. Nextcloud should
+feel like one operating-system service:
 
-This project is the shared intelligence layer for an adaptive native Nextcloud
-client. It does not render remote web pages. It compiles the metadata and APIs
-of an installed Nextcloud app into a small, typed native UI schema.
+- files available through native browsers, pickers, sharing, offline access,
+  and dependable synchronization;
+- photos, videos, RAW files, albums, people, backups, and edits presented as a
+  complete media library;
+- Talk messages, attachments, notifications, media, and eventually calls using
+  platform integrations;
+- calendars, contacts, tasks, mail, notes, music, recipes, boards, tables,
+  budgets, and other installed apps sharing one interaction language;
+- administration, settings, and app management exposed only when permissions
+  and authentication make them safe;
+- useful native support for previously unseen apps through typed contracts and
+  reusable semantic components.
 
-The intended flow is:
+> **Alpha software:** Nextcloud Native is under active development. Current
+> prereleases are for testing and contribution, not yet a replacement for every
+> production workflow or the only copy of important data.
+
+Nextcloud Native is unofficial and is not affiliated with, sponsored by, or
+endorsed by Nextcloud GmbH.
+
+## Why this project exists
+
+The Nextcloud ecosystem has excellent server apps, but their mobile and desktop
+experiences vary. Some have separate clients, some rely on the browser, some
+expose only part of their server functionality, and each uses different
+navigation and interaction patterns.
+
+Nextcloud Native provides a shared native product layer without reducing every
+app to the same generic screen. A table should behave like a table, a deck like
+a board, a mailbox like mail, a recipe like something a person can cook from,
+and an expense project like a financial workspace. The common layer supplies
+identity, permissions, caching, actions, search, settings, navigation, and
+platform behavior. Semantic components supply the workflow.
+
+## How adaptive native apps work
 
 ```text
-Nextcloud metadata + capabilities + OpenAPI + observed behaviour
-                              |
-                              v
-                     semantic compiler
-                              |
-                              v
-                Nextcloud Native Schema v0.1
-                     /                  \
-                    v                    v
-       Android / iOS UI       Windows / macOS / Linux UI
+connected Nextcloud account
+    |
+    +-- capabilities and installed-app versions
+    +-- official OCS, DAV, OpenAPI, and app contracts
+    +-- exact signed App Store packages and verified source fallbacks
+    +-- approved successful read observations
+    |
+    v
+validated typed resources, relationships, permissions, and actions
+    |
+    v
+reusable semantic models
+    |
+    +-- files, media, people, mail, calendar, board, table, recipe ...
+    |
+    v
+platform-adapted native UI for Android and desktop
 ```
 
-## Design rules
+Discovery is deterministic before it is heuristic. The runtime can infer field
+roles, relationships, component families, labels, and useful entry points, but
+it may not invent an endpoint, payload, permission, resource ID, or retry
+guarantee.
 
-- Deterministic discovery and typed API descriptions come before AI inference.
-- AI may propose semantics, but it may not invent endpoints or payload fields.
-- Read operations are safe to explore. Inferred writes require confirmation.
-- Generated schemas are tied to an exact server app version and are rebuilt
-  after an upgrade.
-- A verified adapter can enhance an inferred schema without replacing the
-  generic runtime.
-- All inference and learned adapters remain local unless the user explicitly
-  opts into sharing them.
+Small verified adapters are welcome when they provide meaningful behavior that
+cannot be inferred safely. The important distinction is that an adapter
+enhances the same typed runtime rather than creating an isolated second app.
 
-## Current milestone
+See [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md),
+[NATIVE_SCHEMA.md](NATIVE_SCHEMA.md), and
+[ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md) for the trust and execution
+boundaries.
 
-The current milestone provides:
+## What works in the current alpha
 
-- `DiscoverySnapshot`, the normalized input gathered from a Nextcloud server.
-- `NativeAppSchema`, a platform-neutral component and action grammar.
-- `OpenApiCompiler`, a conservative compiler from OpenAPI operations to native
-  resources, collection views, detail views, forms and actions.
-- `DynamicAppDescriptor` 1.0 and `DynamicDescriptorCompiler`, the validated
-  discovery/execution contract for advertised OpenAPI and approved successful
-  JSON reads. See [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md).
-- Signed-contract acquisition for apps that do not advertise their schema at
-  runtime. The client selects the exact installed App Store release, verifies
-  its Nextcloud certificate chain, revocation status and archive signature,
-  then compiles the packaged OpenAPI contract without app-specific code. If a
-  verified package has no contract, the client may use an explicitly
-  lower-trust OpenAPI file from the exact GitHub tag linked by the App Store,
-  only after matching its app ID and version; endpoint execution remains
-  restricted to the connected server's approved app prefixes.
-- `AdapterRegistry`, an explicit extension point for verified app knowledge.
-- Representative compiler tests for media, expense and conversation models.
-- A real authenticated Compose application with native Files, Photos/Memories,
-  Talk, Activity and Notes experiences.
-- File list/grid layouts, server previews, a zoomable media viewer, per-person
-  Memories galleries, safe UTF-8 file editing, and ETag-protected Markdown
-  Notes editing with native edit/preview modes.
-- Typed Talk message rendering for text, shared files, recordings, calls,
-  system events and shared objects. History reads explicitly avoid read-marker,
-  notification and presence mutations.
-- A bounded in-memory preview LRU. The persistent encrypted metadata/blob cache
-  and offline mutation queue are specified but not implemented yet.
-- A session cache for already verified app contracts. Persistent verified
-  package caching is still pending.
+The repository already contains runnable Android and Linux desktop
+applications with:
 
-The platform projects consume the schema and map `NativeComponent` values to
-real Compose components. The shared component layer supports Android, iOS,
-Windows, macOS and Linux; thin platform launchers own secure storage,
-notifications, background work, sharing and calling integrations. No HTML or
-CSS is part of the runtime contract.
+- Nextcloud Login Flow v2 with Android Keystore and Linux Secret Service
+  credential storage;
+- authenticated native Files browsing, list/grid layouts, previews, sharing
+  foundations, text editing, and media viewing;
+- Photos and Memories collections, albums, tags, people, favorites, RAW/JPEG
+  grouping, zoom-gated original loading, and non-destructive edit foundations;
+- native Talk history and typed message cards for text, files, recordings,
+  calls, system events, and shared objects;
+- Notes with folders, ETag-aware writes, and native Markdown edit/preview;
+- Activity, global search, Dashboard, user status, and app navigation;
+- native semantic flows for Mail, Music, Cookbook, Calendar, Contacts, Tasks,
+  Tables, Deck, Cospend, Budget, Office metadata, and administration inventory
+  at different levels of completeness;
+- signed-contract acquisition from exact Nextcloud App Store releases plus a
+  guarded exact-source fallback for apps that do not advertise a contract;
+- shape-driven tables, boards, forms, settings, summaries, charts, collection
+  browsers, and detail inspectors that can be reused by unfamiliar apps;
+- dark/light/system appearance and responsive shared Compose components;
+- deterministic mock services, visible isolated Android emulators, and
+  synthetic screenshot generation from the real Compose UI.
 
-The Android launcher supports Nextcloud Login Flow v2, stores the resulting app
-password with an Android Keystore key, discovers the authenticated user's app
-navigation and capabilities, and provides system, light and dark appearance
-settings. The Linux desktop launcher stores the app password through Secret
-Service. Normal account passwords never enter either app.
+This is a meaningful application baseline, not a completeness claim. Some app
+surfaces remain read-heavy, some actions still need stronger context binding,
+contract discovery and persistent caching need further work, and native UX
+quality varies by workflow. The public Project tracks those gaps.
 
-The integration work is grounded in official server and app repositories. See
-[ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md) for the public adapter,
-permission, conflict, and confirmation boundaries. Strict administrator actions
-cannot be authorized with a stored Login Flow app password; those use an
-explicit authenticated admin handoff instead of asking the app to store the
-account password.
+## The next phase
 
-## Development
+The project is moving from a broad native prototype to a dependable daily
+client.
+
+| Workstream | What this phase delivers |
+| --- | --- |
+| Shared foundation | Account-scoped typed transport, SQLite/SQLDelight metadata, stale-while-revalidate repositories, verified contract caching, durable errors, and one identity for the same object across apps |
+| Files | Complete browsing and actions, native previews/editors, shares, versions, trash, large folders, resumable transfers, conflicts, and multi-account isolation |
+| Sync and offline | Visible upload history, selective offline roots, crash-safe journals and tombstones, Android DocumentsProvider, desktop sync roots, and an Obsidian-grade two-way profile |
+| Photos and media | Truthful camera/media backup state, folder preview and destination picking, storage reclaim without hiding media unnecessarily, originals, RAW/video/Live Photos, people workflows, albums, and non-destructive editing |
+| DAV and groupware | CardDAV and CalDAV synchronization, native Contacts, Calendar, Tasks, recurrence, sync tokens, and optional operating-system account bridges |
+| Talk | Complete messages and attachments first, then push, notifications, system media integration, signaling, and separately gated WebRTC calling |
+| Dynamic apps | Faster persistent contract acquisition, relationship-aware navigation, context-bound forms/actions, semantic layouts, and small verified adapters where they genuinely improve the workflow |
+| Desktop product | Resizable multi-pane workspaces, keyboard and pointer UX, dense tables, persistent inspectors, desktop file integration, notifications, and update/packaging quality |
+| Administration | Native read-only inventory and diagnostics, safe preflight and lifecycle plans, settings generated from verified schemas, and explicit browser/authentication handoff for strict operations |
+
+The dependency gates and data-safety criteria are in
+[ROADMAP.md](ROADMAP.md). Live status, priorities, and completed work are in the
+[GitHub Project](https://github.com/orgs/Obiente/projects/4).
+
+## Platform status
+
+| Platform | Current state |
+| --- | --- |
+| Android | Active application target, routine emulator and physical-device QA, signed APK/AAB prereleases |
+| Linux | Primary interactive desktop development target, distributable plus RPM/DEB prereleases |
+| Windows | Early MSI packaging artifact; native Credential Manager login storage and supported authenticated use are not implemented yet |
+| macOS | Early DMG packaging artifact; native Keychain login storage and supported authenticated use are not implemented yet |
+| iOS / iPadOS | Planned platform target; no supported launcher is shipped yet |
+
+Android and desktop already share domain models, semantic components, and
+product rules. The next-phase architecture moves duplicated transport and
+state into shared repositories without requiring the same layout everywhere.
+Mobile prioritizes touch, lifecycle, background work, and compact navigation.
+Desktop prioritizes multi-pane workflows, keyboard/pointer control, density,
+resize behavior, and operating-system file integration.
+
+See [PLATFORMS.md](PLATFORMS.md) for the platform boundary and
+[COMPATIBILITY.md](COMPATIBILITY.md) for verified server/app coverage.
+
+## Product and safety principles
+
+- No automatic WebView fallback for installed apps.
+- No endpoint, payload, permission, or ID invented by AI or UI inference.
+- Reads do not imply writes. Every write needs verified provenance,
+  permissions, target identity, validation, conflict behavior, retry policy,
+  confirmation, and postcondition recovery.
+- Unknown non-idempotent outcomes are visible and reconciled, not blindly
+  retried.
+- Cached, viewed, available offline, uploaded, and synchronized are distinct
+  states.
+- Originals are preserved by default. Edits create a new file unless the user
+  explicitly chooses a guarded replacement.
+- A Login Flow app password is never treated as the primary account password.
+- Credentials, share tokens, server URLs, account identifiers, filenames,
+  messages, contacts, and other private data stay out of logs, fixtures,
+  screenshots, issues, and public artifacts.
+- Real-account QA is explicitly authorized and enforced read-only. Write tests
+  use disposable synthetic data on an isolated server.
+- Previously visited content should appear from cache immediately and refresh
+  without throwing away useful state.
+- Unsupported behavior is explained honestly instead of presented as a broken
+  action.
+
+## Try a prerelease
+
+Testing builds are published on the
+[GitHub Releases page](https://github.com/Obiente/nc-native/releases).
+Releases remain below `1.0.0` and are marked as prereleases until the published
+product, data-loss, security, and platform gates pass.
+
+Android release artifacts are signed with the project's protected release key.
+Desktop packages are provided per successful platform build. Windows and macOS
+packages currently prove packaging only and do not yet have their required
+native credential-store login integration. Read each release's known
+limitations before installing over an existing test build.
+
+## Build from source
 
 Requirements:
 
-- JDK 21
-- Rust stable
-- Android SDK Platform 36 and Build Tools 35.0.0 for Android builds
-- `adb` and Avahi tools only when deploying wirelessly to a local device
+- JDK 21;
+- Rust stable;
+- Android SDK Platform 36 and Build Tools 35.0.0 for Android builds.
 
-Set `ANDROID_HOME` or `ANDROID_SDK_ROOT` to your own Android SDK location. Do
-not commit `local.properties`; it is ignored because SDK paths are specific to
-each contributor's machine.
+Use `ANDROID_HOME` or `ANDROID_SDK_ROOT` for your own SDK installation. Do not
+commit `local.properties` or a home-directory path.
 
 ```bash
-cargo test
-./gradlew :ui:desktopTest
-./gradlew :ui:createDistributable
-./gradlew :androidApp:assembleDebug
+git clone https://github.com/Obiente/nc-native.git
+cd nc-native
+
+cargo test --locked
+./gradlew --no-daemon :ui:desktopTest
+./gradlew --no-daemon :ui:createDistributable
+./gradlew --no-daemon :androidApp:assembleDebug
+bash tools/check-repository.sh
 ```
 
-The Gradle wrapper pins the build system and downloads project dependencies, so
-contributors do not need a global Gradle installation. CI builds the Rust core,
-shared desktop renderer, runnable Linux app image and Android APK on every
-push and pull request. Both built applications are uploaded as CI artifacts.
+The Gradle wrapper pins Gradle itself, and the project build targets JDK 21.
+Build and test jobs are path-filtered where appropriate so documentation-only
+changes do not rebuild unrelated application targets.
 
-See [COMPATIBILITY.md](COMPATIBILITY.md) for the first real app test matrix and
-[PLATFORMS.md](PLATFORMS.md) for the cross-platform boundary.
+For the complete local test matrix, isolated visible Android emulators, optional
+read-only session reuse, and device deployment, read
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-Contribution guidance is in [CONTRIBUTING.md](CONTRIBUTING.md). Please report
-security issues privately as described in [SECURITY.md](SECURITY.md).
+## Repository map
 
-## Wireless Android test device
+| Path | Purpose |
+| --- | --- |
+| `src/` and `tests/` | Rust semantic compiler, schema model, inference, and contract tests |
+| `contractAcquisition/` | Exact-version signed package and source contract acquisition |
+| `ui/` | Shared Compose domain UI plus Android/desktop implementations |
+| `androidApp/` | Android launcher and platform integrations |
+| `website/` | Self-hosted project site, news, public roadmap, and synthetic real-UI screenshots |
+| `tools/` | Repository checks, deployment, emulators, screenshots, and release validation |
+| `docs/` | Release notes and operational documentation |
 
-Android wireless-debugging ports change when the service restarts, so the
-helper discovers the current trusted mDNS endpoint. With one paired device:
+Architecture and protocol references:
 
-```bash
-./tools/adb-connect-wireless.sh
-./tools/install-debug-apk.sh
-./tools/deploy-android-debug.sh
-```
+- [Product and engineering roadmap](ROADMAP.md)
+- [Adapter and transport architecture](ADAPTER_ARCHITECTURE.md)
+- [Dynamic App Descriptor](DYNAMIC_APP_DESCRIPTOR.md)
+- [Native Schema](NATIVE_SCHEMA.md)
+- [Platform strategy](PLATFORMS.md)
+- [Compatibility matrix](COMPATIBILITY.md)
+- [Changelog](CHANGELOG.md)
+- [Security policy](SECURITY.md)
 
-If several paired devices are visible, select one by its `adb devices -l`
-model name, for example
-`ADB_DEVICE_NAME=YourModel ./tools/deploy-android-debug.sh`.
+## Contributing
 
-Wireless debugging remains LAN-only. Do not forward its dynamic port through a
-public router.
+Contributions are welcome, especially:
 
-## Linux and Android test deployment
+- reusable semantic components and relationship inference;
+- Files, DAV, sync, media, Talk, and platform integration work;
+- protocol research backed by official upstream sources;
+- versioned compatibility fixtures and mock-server tests;
+- accessibility, responsive desktop/mobile UX, and performance improvements;
+- translations, documentation, packaging, and deterministic visual QA.
 
-On Linux, build and open the desktop app and update a paired Android test device
-with one command:
+Start with an issue or a focused item in the
+[public Project](https://github.com/orgs/Obiente/projects/4). A small
+app-specific adapter is appropriate when it provides verified behavior that
+cannot be inferred safely. It should still reuse shared models, actions, state,
+and components.
 
-```bash
-./tools/deploy-local.sh
-```
+Read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) before
+changing implementation behavior. Report security issues privately through
+[GitHub private vulnerability reporting](https://github.com/Obiente/nc-native/security/advisories/new).
 
-The helper runs the shared desktop tests, creates the Linux desktop app image,
-builds the Android debug APK, starts the freshly built desktop app, then
-installs and opens the Android app. An already-running desktop process from this
-checkout is cleanly restarted so it uses the new build without creating a
-duplicate. Desktop account state remains in the system credential store.
-Android installation uses `adb install -r`, so application data and the
-signed-in session are kept across debug updates.
-
-The generated Linux executable is under
-`ui/build/compose/binaries/main/app/NextcloudNative/bin/`. Desktop logs from a
-launch performed by the helper are written beside the app image in
-`nextcloud-native.log`.
-
-## License
+## License and trademark
 
 Nextcloud Native is licensed under the
 [GNU Affero General Public License, version 3 or later](LICENSE).
 
-“Nextcloud” is a trademark of Nextcloud GmbH. This independent project is not
-affiliated with, sponsored by, or endorsed by Nextcloud GmbH.
+“Nextcloud” is a trademark of Nextcloud GmbH. This independent Obiente project
+is not affiliated with, sponsored by, or endorsed by Nextcloud GmbH.
