@@ -213,21 +213,48 @@ jobs:
             "dist/nextcloud-native-${version}-android.apk"
           cp androidApp/build/outputs/bundle/release/androidApp-release.aab \
             "dist/nextcloud-native-${version}-android.aab"
-          apksigner_path="$(find "${ANDROID_HOME}/build-tools" -type f -name apksigner -print |
-            sort -V | tail -n 1)"
-          test -n "${apksigner_path}"
-          "${apksigner_path}" verify --verbose --print-certs \
-            "dist/nextcloud-native-${version}-android.apk" >"${RUNNER_TEMP}/apk-signing.txt"
-          jarsigner -verify \
-            "dist/nextcloud-native-${version}-android.aab" >/dev/null
-          certificate_sha256="$(awk -F': ' \
-            '/Signer #1 certificate SHA-256 digest:/ { print $2; exit }' \
-            "${RUNNER_TEMP}/apk-signing.txt" | tr '[:upper:]' '[:lower:]')"
-          test -n "${certificate_sha256}"
-          aab_certificate_sha256="$(keytool -printcert \
-            -jarfile "dist/nextcloud-native-${version}-android.aab" |
-            awk -F': ' '/SHA256:/{ fingerprint=$2; gsub(":", "", fingerprint); print tolower(fingerprint); exit }')"
-          test -n "${aab_certificate_sha256}"
+          apksigner_path="${ANDROID_HOME}/build-tools/35.0.0/apksigner"
+          if [[ ! -x "${apksigner_path}" ]]; then
+            echo "::error::Expected Android Build Tools 35.0.0 apksigner was not found."
+            exit 1
+          fi
+          if ! "${apksigner_path}" verify --verbose --print-certs \
+            "dist/nextcloud-native-${version}-android.apk" \
+            >"${RUNNER_TEMP}/apk-signing.txt" 2>&1; then
+            tail -100 "${RUNNER_TEMP}/apk-signing.txt"
+            echo "::error::APK cryptographic signature verification failed."
+            exit 1
+          fi
+          if ! jarsigner -verify \
+            "dist/nextcloud-native-${version}-android.aab" \
+            >"${RUNNER_TEMP}/aab-signing.txt" 2>&1; then
+            tail -100 "${RUNNER_TEMP}/aab-signing.txt"
+            echo "::error::App Bundle cryptographic signature verification failed."
+            exit 1
+          fi
+          if ! certificate_sha256="$(
+            tools/extract-apksigner-certificate-sha256.sh \
+              <"${RUNNER_TEMP}/apk-signing.txt"
+          )"; then
+            tail -100 "${RUNNER_TEMP}/apk-signing.txt"
+            echo "::error::APK signing certificate fingerprint was not reported."
+            exit 1
+          fi
+          if ! keytool -printcert \
+            -jarfile "dist/nextcloud-native-${version}-android.aab" \
+            >"${RUNNER_TEMP}/aab-certificate.txt" 2>&1; then
+            tail -100 "${RUNNER_TEMP}/aab-certificate.txt"
+            echo "::error::App Bundle signing certificate could not be read."
+            exit 1
+          fi
+          aab_certificate_sha256="$(awk -F': ' \
+            '/SHA256:/{ fingerprint=$2; gsub(":", "", fingerprint); print tolower(fingerprint); exit }' \
+            "${RUNNER_TEMP}/aab-certificate.txt")"
+          if [[ -z "${aab_certificate_sha256}" ]]; then
+            tail -100 "${RUNNER_TEMP}/aab-certificate.txt"
+            echo "::error::App Bundle signing certificate fingerprint was not reported."
+            exit 1
+          fi
           expected_certificate_sha256="$(tr -d ':[:space:]' \
             <release/android-signing-certificate.sha256 | tr '[:upper:]' '[:lower:]')"
           if [[ "${certificate_sha256}" != "${expected_certificate_sha256}" ]]; then
