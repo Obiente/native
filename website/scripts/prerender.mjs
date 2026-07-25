@@ -2,6 +2,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { buildRss, buildSitemap } from "./xml-feeds.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const template = await readFile(path.join(root, "dist", "index.html"), "utf8");
@@ -23,14 +24,10 @@ for (const route of serverEntry.routes) {
 }
 
 const baseUrl = "https://nc-native.obiente.dev";
-const sitemap = [
-  '<?xml version="1.0" encoding="UTF-8"?>',
-  '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-  ...serverEntry.routes.map((route) => `  <url><loc>${baseUrl}${route}</loc></url>`),
-  "</urlset>",
-  "",
-].join("\n");
+const sitemap = buildSitemap(serverEntry.routes, serverEntry.newsEntries, baseUrl);
 await writeFile(path.join(root, "dist", "sitemap.xml"), sitemap);
+const rss = buildRss(serverEntry.newsEntries, baseUrl);
+await writeFile(path.join(root, "dist", "news.xml"), rss);
 await rm(path.join(root, "dist-ssr"), { recursive: true, force: true });
 
 console.log(`Prerendered ${serverEntry.routes.length} crawlable routes.`);

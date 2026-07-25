@@ -22,6 +22,9 @@ import {
   PhX as X,
 } from "@phosphor-icons/vue";
 import { docs } from "./generated/docs.js";
+import { news } from "./generated/news.js";
+import { changelog } from "./generated/changelog.js";
+import { marketingCaptures } from "./generated/captures.js";
 import NativePreview from "./components/NativePreview.vue";
 import RoadmapDashboard from "./components/RoadmapDashboard.vue";
 
@@ -34,9 +37,33 @@ const props = defineProps({
     type: Object,
     default: null,
   },
+  initialNews: {
+    type: Object,
+    default: null,
+  },
 });
 
 const githubUrl = "https://github.com/Obiente/nc-native";
+const workflowCaptureCopy = {
+  "obsidian-vault-sync": {
+    title: "Keep an Obsidian vault in sync",
+    body: "A real folder pair shows direction, destination, network policy, and bounded transfer counts.",
+    alt: "Nextcloud Native Obsidian vault two-way sync pair with pending and completed transfer counts",
+  },
+  "media-backup-queue": {
+    title: "See what your phone still needs to back up",
+    body: "Detected media folders and the active Camera pair stay visible without loading an unbounded history.",
+    alt: "Nextcloud Native media backup view with Camera and Screenshots suggestions and active transfer counts",
+  },
+  "adaptive-dynamic-data": {
+    title: "Turn discovered data into a useful native view",
+    body: "The adaptive renderer maps typed fields into a compact table instead of exposing raw API data.",
+    alt: "Nextcloud Native adaptive table with item, category, value, status, and updated columns",
+  },
+};
+const workflowCaptures = marketingCaptures
+  .filter((capture) => workflowCaptureCopy[capture.scenario])
+  .map((capture) => ({ ...capture, ...workflowCaptureCopy[capture.scenario] }));
 const normalizedPath =
   props.initialPath === "/"
     ? "/"
@@ -44,6 +71,12 @@ const normalizedPath =
 const currentDoc = computed(
   () => props.initialDoc ?? docs.find((doc) => doc.path === normalizedPath),
 );
+const currentPost = computed(
+  () => props.initialNews ?? news.find((post) => post.path === normalizedPath),
+);
+const isNewsIndex = computed(() => normalizedPath === "/news/");
+const isChangelog = computed(() => normalizedPath === "/changelog/");
+const isHome = computed(() => normalizedPath === "/");
 const searchOpen = ref(false);
 const searchQuery = ref("");
 const searchDocuments = ref(docs);
@@ -86,18 +119,18 @@ const searchResults = computed(() => {
 const capabilities = [
   {
     icon: SquaresFour,
-    title: "Adaptive by design",
-    body: "It reads app contracts, data shapes and actions, then composes a useful native experience.",
+    title: "Your apps in one place",
+    body: "Open Files, Photos, Talk, notes, calendars, boards, and more without learning a different interface each time.",
   },
   {
     icon: Sparkle,
-    title: "Native where it matters",
-    body: "Files, photos, messages, tables and media use reusable platform components, not embedded pages.",
+    title: "Made for your device",
+    body: "Preview and edit files, browse photos, reply to messages, and work offline in interfaces built for phone and desktop.",
   },
   {
     icon: ShieldCheck,
-    title: "Your server stays yours",
-    body: "Credentials and learned app knowledge stay local. There is no Obiente cloud in the middle.",
+    title: "Your cloud stays yours",
+    body: "The app connects directly to your Nextcloud. There is no Obiente account, subscription, or cloud service in the middle.",
   },
 ];
 
@@ -140,20 +173,20 @@ const adaptiveSteps = [
   {
     icon: GitBranch,
     step: "01",
-    title: "Discover the contract",
-    body: "Capabilities, OpenAPI, app metadata and observed safe reads describe what the server can actually do.",
+    title: "See what your server offers",
+    body: "The app checks the features and apps your own Nextcloud safely makes available.",
   },
   {
     icon: Stack,
     step: "02",
-    title: "Compile the semantics",
-    body: "Resources, fields, relations and actions become a typed platform-neutral native schema.",
+    title: "Understand the information",
+    body: "Dates, people, files, rows, messages, and actions are recognized from verified data.",
   },
   {
     icon: Desktop,
     step: "03",
-    title: "Compose the experience",
-    body: "Reusable native components choose the right list, gallery, editor, table, conversation or dashboard.",
+    title: "Choose the right native view",
+    body: "The result becomes a useful gallery, editor, table, conversation, calendar, board, or dashboard.",
   },
 ];
 
@@ -162,6 +195,16 @@ const frequentlyAsked = [
     question: "Is this a web wrapper?",
     answer:
       "No. Nextcloud Native consumes server APIs and renders native Compose interfaces. Web content is reserved for formats that genuinely require a document renderer, not app navigation.",
+  },
+  {
+    question: "Can I sync an Obsidian notes folder with Nextcloud?",
+    answer:
+      "That is a core goal. The planned experience pairs a normal Android folder with a Nextcloud folder, supports two-way sync, keeps notes visible to Obsidian, and asks before resolving conflicts. The foundations are under development and are not release-ready yet.",
+  },
+  {
+    question: "Can it back up photos and safely free phone storage?",
+    answer:
+      "That is also a core goal. The app will distinguish waiting, uploading, verified, changed, failed, and cloud-only photos. Storage cleanup will only be offered for an exact version verified on the server, followed by Android's own confirmation.",
   },
   {
     question: "Does every Nextcloud app work already?",
@@ -198,6 +241,8 @@ const frequentlyAsked = [
         <a href="/#apps">Apps</a>
         <a href="/#platforms">Platforms</a>
         <a href="/roadmap/">Roadmap</a>
+        <a href="/news/">News</a>
+        <a href="/changelog/">Changelog</a>
         <a href="/#docs">Docs</a>
       </nav>
 
@@ -261,7 +306,7 @@ const frequentlyAsked = [
     </div>
 
     <main id="main">
-      <template v-if="!currentDoc">
+      <template v-if="isHome">
         <section class="hero section-width">
           <div class="hero-copy">
             <p class="eyebrow">
@@ -270,9 +315,9 @@ const frequentlyAsked = [
             </p>
             <h1>Your cloud.<br /><span>One native experience.</span></h1>
             <p class="hero-lede">
-              Nextcloud Native is one adaptive client for your whole Nextcloud.
-              It turns app data and actions into interfaces that feel built for
-              your phone and desktop.
+              Back up phone photos, sync files and notes, chat in Talk, and use
+              more of your Nextcloud apps from one consistent client for phone
+              and desktop.
             </p>
             <div class="hero-actions">
               <a class="button button-primary" :href="githubUrl" target="_blank" rel="noreferrer">
@@ -291,11 +336,11 @@ const frequentlyAsked = [
 
         <section id="approach" class="approach section-width">
           <div class="section-heading">
-            <p class="eyebrow">A different kind of client</p>
-            <h2>Native does not have to mean narrow.</h2>
+            <p class="eyebrow">One app for everyday Nextcloud</p>
+            <h2>Spend less time jumping between apps.</h2>
             <p>
-              Custom experiences stay possible, but shared semantics do the heavy lifting.
-              New apps can inherit the right patterns without waiting for a one-off rewrite.
+              Your photos, files, messages, notes, calendars, and other apps should
+              share familiar navigation, previews, search, editing, and offline behavior.
             </p>
           </div>
 
@@ -313,11 +358,12 @@ const frequentlyAsked = [
         <section class="adaptive-section">
           <div class="section-width adaptive-layout">
             <div class="section-heading compact">
-              <p class="eyebrow">From unknown API to useful UI</p>
-              <h2>The interface is compiled, not guessed.</h2>
+              <p class="eyebrow">How unfamiliar apps can still feel native</p>
+              <h2>The right screen for the information in front of you.</h2>
               <p>
-                Deterministic discovery comes first. Semantic inference can improve the
-                result, but it may never invent an endpoint, payload or permission.
+                A less common Nextcloud app should not fall back to a technical data
+                dump. Verified information can become a useful native screen without
+                the app guessing permissions or unsafe actions.
               </p>
               <a class="text-link" href="/architecture/">
                 Read the architecture
@@ -343,11 +389,11 @@ const frequentlyAsked = [
         <section id="apps" class="apps-section">
           <div class="section-width apps-layout">
             <div class="section-heading compact">
-              <p class="eyebrow">One coherent workspace</p>
-              <h2>Apps should feel connected.</h2>
+              <p class="eyebrow">Files, Talk, Photos, and more</p>
+              <h2>Your work should follow you across apps.</h2>
               <p>
-                Shared search, previews, people, files and actions can move through the
-                whole client instead of stopping at app boundaries.
+                Open a file shared in Talk with the same preview and actions as Files.
+                Find a person, note, photo, or calendar item from one search.
               </p>
               <a class="text-link" href="/compatibility/">
                 See the compatibility work
@@ -366,11 +412,11 @@ const frequentlyAsked = [
 
         <section id="platforms" class="platform-section section-width">
           <div class="section-heading">
-            <p class="eyebrow">One core, platform-native edges</p>
-            <h2>Designed beyond a single screen.</h2>
+            <p class="eyebrow">Phone and desktop</p>
+            <h2>At home on every device you use.</h2>
             <p>
-              The shared runtime keeps behavior consistent. Each operating system still
-              owns credentials, files, background work, notifications and calls.
+              Behavior stays familiar while Android, iOS, Windows, macOS, and Linux
+              keep control of their own files, notifications, background work, and calls.
             </p>
           </div>
 
@@ -387,6 +433,61 @@ const frequentlyAsked = [
               <h3>{{ platform.name }}</h3>
               <p>{{ platform.body }}</p>
             </article>
+          </div>
+        </section>
+
+        <section id="workflows" class="screenshots-section">
+          <div class="section-width">
+            <div class="section-heading">
+              <p class="eyebrow">Built around real workflows</p>
+              <h2>See native workflows, not placeholder screens.</h2>
+              <p>
+                Explore folder sync, media backup, and adaptive app data through
+                production Compose components driven by deterministic sample data.
+              </p>
+            </div>
+            <div class="workflow-showcase">
+              <figure v-for="capture in workflowCaptures" :key="capture.scenario">
+                <div class="workflow-capture-media">
+                  <img
+                    :src="capture.path"
+                    :alt="capture.alt"
+                    :width="capture.width"
+                    :height="capture.height"
+                    loading="lazy"
+                  />
+                </div>
+                <figcaption>
+                  <strong>{{ capture.title }}</strong>
+                  <span>{{ capture.body }}</span>
+                </figcaption>
+              </figure>
+            </div>
+            <div class="screenshot-gallery">
+              <figure class="screenshot-desktop">
+                <img
+                  src="/screenshots/desktop-home.png"
+                  alt="Nextcloud Native desktop home rendered by the real Compose application with synthetic demo data"
+                  width="1440"
+                  height="900"
+                  loading="lazy"
+                />
+                <figcaption><strong>A workspace made for desktop</strong><span>Persistent navigation, useful density, and room for focused work.</span></figcaption>
+              </figure>
+              <figure class="screenshot-mobile">
+                <img
+                  src="/screenshots/mobile-home.png"
+                  alt="Nextcloud Native mobile home rendered offscreen by the real Compose UI with synthetic demo data"
+                  width="1080"
+                  height="2400"
+                  loading="lazy"
+                />
+                <figcaption><strong>The same cloud, shaped for mobile</strong><span>Touch-sized choices and platform navigation without a web view.</span></figcaption>
+              </figure>
+            </div>
+            <p class="fixture-disclosure">
+              Captured from the real app with synthetic names and data. No account, server, cache, or user media is read.
+            </p>
           </div>
         </section>
 
@@ -410,6 +511,35 @@ const frequentlyAsked = [
                 <span class="read-time">{{ doc.readingMinutes }} min</span>
               </a>
             </div>
+          </div>
+        </section>
+
+        <section class="news-section section-width">
+          <div class="news-heading">
+            <div class="section-heading compact">
+              <p class="eyebrow">What we are building</p>
+              <h2>See Nextcloud Native taking shape.</h2>
+            </div>
+            <a class="text-link" href="/news/">All project news <ArrowRight :size="18" weight="bold" /></a>
+          </div>
+          <div class="news-grid">
+            <a v-for="post in news.slice(0, 3)" :key="post.path" class="news-card" :href="post.path">
+              <div class="news-card-media">
+                <img
+                  :src="post.image"
+                  :alt="post.imageAlt"
+                  :width="post.imageWidth"
+                  :height="post.imageHeight"
+                  loading="lazy"
+                />
+              </div>
+              <div class="news-card-copy">
+                <time :datetime="post.date">{{ post.date }}</time>
+                <h3>{{ post.title }}</h3>
+                <p>{{ post.description }}</p>
+                <span class="news-card-link">{{ post.readingMinutes }} min read <ArrowRight :size="16" weight="bold" /></span>
+              </div>
+            </a>
           </div>
         </section>
 
@@ -443,7 +573,88 @@ const frequentlyAsked = [
       </template>
 
       <section
-        v-else
+        v-else-if="currentPost"
+        class="article-page section-width"
+      >
+        <article class="news-article">
+          <a class="doc-back" href="/news/">Project news</a>
+          <header class="doc-heading">
+            <p class="eyebrow">Product story</p>
+            <h1>{{ currentPost.title }}</h1>
+            <p>{{ currentPost.description }}</p>
+            <span>
+              Published <time :datetime="currentPost.date">{{ currentPost.date }}</time>
+              · Updated <time :datetime="currentPost.lastUpdated">{{ currentPost.lastUpdated }}</time>
+              · {{ currentPost.readingMinutes }} minute read
+            </span>
+            <div class="article-tags"><span v-for="tag in currentPost.tags" :key="tag">{{ tag }}</span></div>
+          </header>
+          <figure class="article-hero">
+            <img
+              :src="currentPost.image"
+              :alt="currentPost.imageAlt"
+              :width="currentPost.imageWidth"
+              :height="currentPost.imageHeight"
+            />
+            <figcaption>{{ currentPost.imageCaption }}</figcaption>
+          </figure>
+          <div class="markdown-body" v-html="currentPost.html"></div>
+          <p class="article-release-link">
+            Looking for concise version-by-version changes?
+            <a href="/changelog/">Read the changelog</a>.
+          </p>
+        </article>
+      </section>
+
+      <section v-else-if="isNewsIndex" class="news-index section-width">
+        <header class="doc-heading">
+          <p class="eyebrow">Nextcloud Native news</p>
+          <h1>What is getting better, and why it matters.</h1>
+          <p>Stories connect everyday Nextcloud workflows to the architecture taking shape underneath them.</p>
+          <a class="text-link" href="/changelog/">
+            Looking for release changes? Read the changelog
+            <ArrowRight :size="18" weight="bold" />
+          </a>
+        </header>
+        <div class="news-grid news-index-grid">
+          <a v-for="post in news" :key="post.path" class="news-card" :href="post.path">
+            <div class="news-card-media">
+              <img
+                :src="post.image"
+                :alt="post.imageAlt"
+                :width="post.imageWidth"
+                :height="post.imageHeight"
+                loading="lazy"
+              />
+            </div>
+            <div class="news-card-copy">
+              <time :datetime="post.lastUpdated">Updated {{ post.lastUpdated }}</time>
+              <h2>{{ post.title }}</h2>
+              <p>{{ post.description }}</p>
+              <span class="news-card-link">{{ post.readingMinutes }} min read <ArrowRight :size="16" weight="bold" /></span>
+            </div>
+          </a>
+        </div>
+      </section>
+
+      <section v-else-if="isChangelog" class="article-page section-width">
+        <article class="news-article changelog-article">
+          <a class="doc-back" href="/news/">Project news</a>
+          <header class="doc-heading">
+            <p class="eyebrow">Release history</p>
+            <h1>{{ changelog.title }}</h1>
+            <p>{{ changelog.description }}</p>
+            <span>
+              Sourced from {{ changelog.file }}
+              <template v-if="!changelog.available"> · awaiting the first public release</template>
+            </span>
+          </header>
+          <div class="markdown-body" v-html="changelog.html"></div>
+        </article>
+      </section>
+
+      <section
+        v-else-if="currentDoc"
         class="doc-page section-width"
         :class="{ 'roadmap-page': currentDoc.path === '/roadmap/' }"
       >
@@ -473,6 +684,12 @@ const frequentlyAsked = [
           <div class="markdown-body" v-html="currentDoc.html"></div>
         </article>
       </section>
+
+      <section v-else class="not-found section-width">
+        <p class="eyebrow">Not found</p>
+        <h1>This page is not part of the workspace.</h1>
+        <a class="button button-primary" href="/">Return home</a>
+      </section>
     </main>
 
     <footer class="site-footer section-width">
@@ -485,6 +702,7 @@ const frequentlyAsked = [
       <p>An independent AGPL-3.0-or-later project by Obiente.</p>
       <div class="footer-links">
         <a :href="githubUrl">GitHub</a>
+        <a href="/changelog/">Changelog</a>
         <a href="/security/">Security</a>
         <a :href="`${githubUrl}/blob/main/LICENSE`">License</a>
       </div>

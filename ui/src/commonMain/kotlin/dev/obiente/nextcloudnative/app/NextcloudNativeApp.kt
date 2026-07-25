@@ -48,6 +48,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -56,6 +57,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -70,6 +72,7 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -88,6 +91,8 @@ import dev.obiente.nextcloudnative.app.design.NextcloudNavigationRail
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
+import dev.obiente.nextcloudnative.app.design.NextcloudWorkspaceCapabilities
+import dev.obiente.nextcloudnative.app.design.accountAvatarContentDescription
 import dev.obiente.nextcloudnative.app.design.NextcloudNavigationStyle
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
@@ -162,6 +167,10 @@ private sealed interface Screen {
     data object AdminApps : Screen
     @Serializable
     data object OfflineCenter : Screen
+    @Serializable
+    data object ProjectNews : Screen
+    @Serializable
+    data class ProjectNewsArticleView(val article: ProjectNewsArticle) : Screen
     @Serializable
     data class Chat(val room: TalkRoom) : Screen
     @Serializable
@@ -293,6 +302,65 @@ fun NextcloudNativeApp(
                         session = null
                     },
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Renders the real root shell and home components against the compile-time synthetic fixture.
+ *
+ * Capture builds call this directly, so they cannot load sessions, caches, endpoints, or media.
+ */
+@Composable
+fun NextcloudNativeMarketingCapture(
+    scenario: MarketingCaptureScenario,
+    assets: MarketingCaptureAssets,
+    fixture: MarketingDemoFixture = nextcloudNativeMarketingFixture,
+) {
+    NextcloudNativeTheme(darkTheme = true) {
+        NextcloudAppBackground {
+            val desktop = scenario.presentation == NextcloudPresentation.Desktop
+            CompositionLocalProvider(
+                LocalNextcloudWorkspaceCapabilities provides NextcloudWorkspaceCapabilities(
+                    isDesktop = desktop,
+                    usesDenseControls = desktop,
+                    supportsAuxiliaryPane = desktop,
+                ),
+            ) {
+                when (scenario) {
+                    MarketingCaptureScenario.ObsidianSync -> MarketingObsidianSyncScenario()
+                    MarketingCaptureScenario.MediaBackup -> MarketingMediaBackupScenario()
+                    MarketingCaptureScenario.AdaptiveApp -> MarketingAdaptiveAppScenario()
+                    MarketingCaptureScenario.DesktopHome,
+                    MarketingCaptureScenario.MobileHome,
+                    -> {
+                        val serverInfo = remember(fixture) { fixture.serverInfo() }
+                        RootShell(
+                            presentation = scenario.presentation,
+                            selected = NextcloudDestination.Home,
+                            onSelected = {},
+                            identity = NextcloudDesktopIdentity(
+                                displayName = fixture.displayName,
+                                cloudName = fixture.cloudName,
+                                avatar = assets.avatar,
+                            ),
+                        ) {
+                            MarketingHomeScreen(
+                                serverInfo = serverInfo,
+                                error = null,
+                                lastOpenedAppId = "files",
+                                onRetry = {},
+                                onSettings = {},
+                                onSearch = {},
+                                onApps = {},
+                                onOpenApp = {},
+                                marketingAvatar = assets.avatar,
+                                accountDisplayName = fixture.displayName,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -472,6 +540,11 @@ private fun AuthenticatedApp(
                 screen = Screen.Root
                 destination = NextcloudDestination.Settings
             }
+            Screen.ProjectNews -> {
+                screen = Screen.Root
+                destination = NextcloudDestination.Settings
+            }
+            is Screen.ProjectNewsArticleView -> screen = Screen.ProjectNews
             is Screen.PersonMedia -> screen = Screen.Media
             is Screen.Chat -> screen = Screen.Talk
             is Screen.NoteEditor -> screen = Screen.Notes
@@ -538,9 +611,20 @@ private fun AuthenticatedApp(
                     onThemePreferenceChanged = onThemePreferenceChanged,
                     onAdminApps = { screen = Screen.AdminApps },
                     onOfflineCenter = { screen = Screen.OfflineCenter },
+                    onProjectNews = { screen = Screen.ProjectNews },
                     onLoggedOut = onLoggedOut,
                 )
             }
+            Screen.ProjectNews -> ProjectNewsScreen(
+                services = services,
+                onBack = ::navigateBack,
+                onOpenArticle = { screen = Screen.ProjectNewsArticleView(it) },
+            )
+            is Screen.ProjectNewsArticleView -> ProjectNewsArticleScreen(
+                services = services,
+                article = current.article,
+                onBack = ::navigateBack,
+            )
             Screen.OfflineCenter -> FileOfflineCenterScreen(
             services = services,
             session = session,
@@ -852,6 +936,212 @@ private fun RootShell(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MarketingHomeScreen(
+    serverInfo: NextcloudServerInfo?,
+    error: String?,
+    lastOpenedAppId: String,
+    onRetry: () -> Unit,
+    onSettings: () -> Unit,
+    onSearch: () -> Unit,
+    onApps: () -> Unit,
+    onOpenApp: (NextcloudAppEntry) -> Unit,
+    marketingAvatar: ImageBitmap? = null,
+    accountDisplayName: String? = null,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        ProductHeader(
+            title = "Nextcloud Native",
+            onSettings = onSettings,
+            onSearch = onSearch,
+            accountAvatar = marketingAvatar,
+            accountDisplayName = accountDisplayName,
+        )
+        when {
+            error != null -> ErrorMessage(error, onRetry)
+            serverInfo == null -> LoadingMessage("Discovering your cloud…")
+            else -> {
+                val apps = serverInfo.apps
+                val files = apps.firstOrNull { it.id == "files" }
+                val media = apps.firstOrNull { it.id == "photos" || it.id == "memories" }
+                val talk = apps.firstOrNull { it.id == "spreed" || it.id == "talk" }
+                val lastOpened = apps.firstOrNull { it.id == lastOpenedAppId && it.id in nativeAppIds } ?: files
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = NextcloudSpacing.XLarge,
+                        top = NextcloudSpacing.XLarge,
+                        end = NextcloudSpacing.XLarge,
+                        bottom = NextcloudSpacing.XXLarge,
+                    ),
+                ) {
+                    item {
+                        Text(
+                            "Welcome back, ${serverInfo.displayName.substringBefore(' ')}",
+                            style = MaterialTheme.typography.displaySmall,
+                        )
+                        Row(
+                            modifier = Modifier.padding(top = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        ) {
+                            Icon(
+                                NextcloudIcons.CheckCircle,
+                                contentDescription = null,
+                                tint = NextcloudTheme.colors.success,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                "Connected to ${serverInfo.themeName ?: "Nextcloud"}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    lastOpened?.let { app ->
+                        item {
+                            SectionTitle("Continue", Modifier.padding(top = 34.dp, bottom = 12.dp))
+                            ContinueCard(app = app, onClick = { onOpenApp(app) })
+                        }
+                    }
+                    item { SectionTitle("Your cloud", Modifier.padding(top = 32.dp, bottom = 8.dp)) }
+                    files?.let { app ->
+                        item {
+                            CloudRow(
+                                title = "My stuff",
+                                subtitle = "Files, photos and notes",
+                                icon = NextcloudIcons.Folder,
+                                onClick = { onOpenApp(app) },
+                            )
+                        }
+                    }
+                    media?.let { app ->
+                        item {
+                            CloudRow(
+                                title = "Photos & Memories",
+                                subtitle = "Albums and RAW previews",
+                                icon = NextcloudIcons.Photo,
+                                onClick = { onOpenApp(app) },
+                            )
+                        }
+                    }
+                    talk?.let { app ->
+                        item {
+                            CloudRow(
+                                title = "Conversations",
+                                subtitle = "Talk and messages",
+                                icon = NextcloudIcons.app(app.id),
+                                onClick = { onOpenApp(app) },
+                            )
+                        }
+                    }
+                    item {
+                        SectionTitle("Discover", Modifier.padding(top = 32.dp, bottom = 8.dp))
+                        TimelineRow(
+                            title = "Your native apps are ready",
+                            subtitle = "${apps.count { it.id in nativeAppIds }} connected experiences",
+                            icon = NextcloudIcons.CheckCircle,
+                            accent = true,
+                            onClick = onApps,
+                        )
+                        TimelineRow(
+                            title = "Explore every installed app",
+                            subtitle = "Discovery stays separate from your home",
+                            icon = NextcloudIcons.Apps,
+                            accent = false,
+                            onClick = onApps,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContinueCard(app: NextcloudAppEntry, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp),
+        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+        ) {
+            Surface(color = NextcloudTheme.colors.appIconContainer, shape = RoundedCornerShape(12.dp)) {
+                Icon(
+                    NextcloudIcons.app(app.id),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(10.dp).size(28.dp),
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(app.name, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    nativeSubtitle(app.id),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(NextcloudIcons.ChevronRight, contentDescription = "Open ${app.name}")
+        }
+    }
+}
+
+@Composable
+private fun CloudRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(36.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Icon(NextcloudIcons.ChevronRight, contentDescription = "Open $title", modifier = Modifier.size(20.dp))
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+}
+
+@Composable
+private fun TimelineRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    accent: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+    ) {
+        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = if (accent) NextcloudTheme.colors.success else MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(11.dp).size(24.dp),
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Icon(NextcloudIcons.ChevronRight, contentDescription = "Open $title", modifier = Modifier.size(20.dp))
     }
 }
 
@@ -6754,6 +7044,370 @@ private fun ChatScreen(
 }
 
 @Composable
+private fun ProjectNewsScreen(
+    services: NextcloudPlatformServices,
+    onBack: () -> Unit,
+    onOpenArticle: (ProjectNewsArticle) -> Unit,
+) {
+    var result by remember { mutableStateOf<ProjectNewsResult?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var refresh by remember { mutableStateOf(0) }
+    LaunchedEffect(refresh) {
+        error = null
+        runCatching { services.loadProjectNews(forceRefresh = refresh > 0) }
+            .onSuccess { result = it }
+            .onFailure { error = it.message ?: "Could not load project news." }
+    }
+    Column(modifier = Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = "Project news",
+            subtitle = result?.let { if (it.cached) "Cached on this device" else "Latest from Obiente" },
+            onBack = onBack,
+        )
+        when {
+            error != null && result == null -> ErrorMessage(requireNotNull(error)) { refresh += 1 }
+            result == null -> LoadingMessage("Loading project news…")
+            else -> LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(NextcloudSpacing.Large),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            ) {
+                error?.let { message ->
+                    item {
+                        Text(
+                            "$message Showing the last verified cache.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                val articles = requireNotNull(result).feed.entries
+                items(articles.size, key = { index -> articles[index].id }) { index ->
+                    val article = articles[index]
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { onOpenArticle(article) },
+                        color = NextcloudTheme.colors.appTile,
+                        shape = RoundedCornerShape(NextcloudRadii.Card),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(NextcloudSpacing.Large),
+                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        ) {
+                            Text(
+                                if (article.lastUpdated != null) {
+                                    "Published ${article.publishedDate} · Updated ${article.lastUpdated}"
+                                } else {
+                                    article.publishedDate
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(article.title, style = MaterialTheme.typography.titleLarge)
+                            Text(
+                                article.description,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                                article.tags.take(3).forEach { tag ->
+                                    Surface(
+                                        color = NextcloudTheme.colors.appIconContainer,
+                                        shape = RoundedCornerShape(NextcloudRadii.Pill),
+                                    ) {
+                                        Text(
+                                            tag,
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                            style = MaterialTheme.typography.labelSmall,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                item {
+                    TextButton(onClick = { refresh += 1 }) {
+                        Icon(NextcloudIcons.Refresh, contentDescription = null)
+                        Spacer(Modifier.size(8.dp))
+                        Text("Refresh news")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProjectNewsArticleScreen(
+    services: NextcloudPlatformServices,
+    article: ProjectNewsArticle,
+    onBack: () -> Unit,
+) {
+    val presentation = remember(article) { projectNewsArticlePresentation(article) }
+    var heroImage by remember(article.image.sha256) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(article.image.sha256) {
+        heroImage = runCatching {
+            decodePlatformImage(services.loadProjectNewsImage(presentation.heroImage))
+        }.getOrNull()
+    }
+    Column(modifier = Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = article.title,
+            subtitle = if (article.lastUpdated != null) {
+                "Published ${article.publishedDate} · Updated ${article.lastUpdated}"
+            } else {
+                article.publishedDate
+            },
+            onBack = onBack,
+        )
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+        ) {
+            heroImage?.let { image ->
+                item {
+                    Image(
+                        bitmap = image,
+                        contentDescription = presentation.heroImage.alt,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(
+                                presentation.heroImage.width.toFloat() /
+                                    presentation.heroImage.height.toFloat(),
+                            )
+                            .clip(RoundedCornerShape(NextcloudRadii.Card)),
+                    )
+                }
+            }
+            item {
+                Text(
+                    article.description,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            item {
+                Markdown(
+                    content = article.bodyMarkdown,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
+    val scope = rememberCoroutineScope()
+    val support = remember(services) { services.appUpdateSupport() }
+    val updateState by remember(services) {
+        services.observeAppUpdateInstallState()
+    }.collectAsState(AppUpdateInstallState.Idle)
+    var checking by remember { mutableStateOf(false) }
+    var installing by remember { mutableStateOf(false) }
+    var checkResult by remember { mutableStateOf<AppUpdateCheckResult?>(null) }
+    var installMessage by remember { mutableStateOf<String?>(null) }
+    fun beginInstall(release: AndroidDirectRelease) {
+        installing = true
+        installMessage = null
+        scope.launch {
+            installMessage = when (val install = services.beginAppUpdate(release)) {
+                AppUpdateInstallResult.ConfirmationOpened ->
+                    "Android opened the update confirmation."
+                AppUpdateInstallResult.Cancelled ->
+                    "Download paused. You can resume it without starting over."
+                is AppUpdateInstallResult.PermissionRequired -> install.message
+                is AppUpdateInstallResult.Rejected -> install.message
+            }
+            installing = false
+        }
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Small),
+        color = NextcloudTheme.colors.appTile,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Column(
+            modifier = Modifier.padding(NextcloudSpacing.Large),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
+                    Icon(
+                        NextcloudIcons.Cloud,
+                        contentDescription = null,
+                        modifier = Modifier.padding(12.dp).size(26.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("App updates", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Version ${support.currentVersionName} · ${support.channel.name}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (support.canCheckDirectUpdates) {
+                    TextButton(
+                        enabled = !checking,
+                        onClick = {
+                            checking = true
+                            installMessage = null
+                            scope.launch {
+                                checkResult = services.checkForAppUpdate()
+                                checking = false
+                            }
+                        },
+                    ) {
+                        if (checking) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text("Check")
+                        }
+                    }
+                }
+            }
+            Text(
+                support.explanation,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            when (val checked = checkResult) {
+                is AppUpdateCheckResult.Available -> {
+                    val release = checked.release
+                    val releaseState = updateState.takeIf { state ->
+                        when (state) {
+                            is AppUpdateInstallState.Downloading -> state.versionCode == release.versionCode
+                            is AppUpdateInstallState.Verifying -> state.versionCode == release.versionCode
+                            is AppUpdateInstallState.PermissionRequired -> state.versionCode == release.versionCode
+                            is AppUpdateInstallState.Cancelled -> state.versionCode == release.versionCode
+                            is AppUpdateInstallState.Failed -> state.versionCode == release.versionCode
+                            is AppUpdateInstallState.ConfirmationOpened -> state.versionCode == release.versionCode
+                            AppUpdateInstallState.Idle -> false
+                        }
+                    } ?: AppUpdateInstallState.Idle
+                    Text(
+                        "Version ${release.versionName} is available.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    when (releaseState) {
+                        is AppUpdateInstallState.Downloading -> {
+                            val progress =
+                                (releaseState.downloadedBytes.toDouble() / releaseState.totalBytes.toDouble())
+                                    .coerceIn(0.0, 1.0)
+                                    .toFloat()
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier.fillMaxWidth().height(6.dp),
+                            )
+                            Text(
+                                buildString {
+                                    append(formatBytes(releaseState.downloadedBytes))
+                                    append(" of ")
+                                    append(formatBytes(releaseState.totalBytes))
+                                    if (releaseState.resumedFromBytes > 0) append(" · resumed")
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            OutlinedButton(onClick = { services.cancelAppUpdate() }) {
+                                Text("Pause download")
+                            }
+                        }
+                        is AppUpdateInstallState.Verifying -> {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            Text(
+                                "Download complete. Verifying package and signing certificate…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        is AppUpdateInstallState.Cancelled -> {
+                            Text(
+                                if (releaseState.canResume) {
+                                    "${formatBytes(releaseState.downloadedBytes)} saved for resume."
+                                } else {
+                                    "The download was paused before any data was saved."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Button(
+                                onClick = { beginInstall(release) },
+                                enabled = !installing,
+                            ) {
+                                Text(if (releaseState.canResume) "Resume download" else "Retry download")
+                            }
+                        }
+                        is AppUpdateInstallState.Failed -> {
+                            Text(
+                                releaseState.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Button(
+                                onClick = { beginInstall(release) },
+                                enabled = !installing,
+                            ) {
+                                Text(if (releaseState.canResume) "Resume download" else "Retry download")
+                            }
+                        }
+                        is AppUpdateInstallState.PermissionRequired -> {
+                            Text(
+                                releaseState.message,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Button(
+                                onClick = { beginInstall(release) },
+                                enabled = !installing,
+                            ) {
+                                Text("Continue update")
+                            }
+                        }
+                        is AppUpdateInstallState.ConfirmationOpened -> Text(
+                            "Android opened the update confirmation.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NextcloudTheme.colors.success,
+                        )
+                        AppUpdateInstallState.Idle -> Button(
+                            onClick = { beginInstall(release) },
+                            enabled = !installing,
+                        ) {
+                            if (installing) {
+                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                            } else {
+                                Text("Download, verify, and review")
+                            }
+                        }
+                    }
+                }
+                is AppUpdateCheckResult.Current -> Text(
+                    "This installation is up to date.",
+                    color = NextcloudTheme.colors.success,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                is AppUpdateCheckResult.Failed -> Text(
+                    checked.message,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                is AppUpdateCheckResult.Unavailable, null -> Unit
+            }
+            installMessage?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
 private fun SettingsScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
@@ -6762,6 +7416,7 @@ private fun SettingsScreen(
     onThemePreferenceChanged: (ThemePreference) -> Unit,
     onAdminApps: () -> Unit,
     onOfflineCenter: () -> Unit,
+    onProjectNews: () -> Unit,
     onLoggedOut: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -6936,6 +7591,44 @@ private fun SettingsScreen(
                 }
             }
             item {
+                SectionTitle("Nextcloud Native")
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
+                    onClick = onProjectNews,
+                    color = NextcloudTheme.colors.appTile,
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
+                            Icon(
+                                NextcloudIcons.Activity,
+                                contentDescription = null,
+                                modifier = Modifier.padding(12.dp).size(26.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Project news", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Read development notes in a native, cached view",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(
+                            NextcloudIcons.ChevronRight,
+                            contentDescription = "Open project news",
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                AppUpdateSettingsCard(services)
+            }
+            item {
                 SectionTitle("Administration")
                 Surface(
                     modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
@@ -6998,6 +7691,8 @@ private fun ProductHeader(
     onSettings: (() -> Unit)? = null,
     onSearch: (() -> Unit)? = null,
     showSettings: Boolean = true,
+    accountAvatar: ImageBitmap? = null,
+    accountDisplayName: String? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = NextcloudSpacing.XLarge),
@@ -7011,12 +7706,21 @@ private fun ProductHeader(
                     IconButton(onClick = it) { Icon(NextcloudIcons.Search, contentDescription = "Search Nextcloud") }
                 }
                 Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                    Icon(
-                        NextcloudIcons.Profile,
-                        contentDescription = "Account",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(8.dp).size(22.dp),
-                    )
+                    if (accountAvatar != null) {
+                        Image(
+                            bitmap = accountAvatar,
+                            contentDescription = accountAvatarContentDescription(accountDisplayName),
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(38.dp).clip(CircleShape),
+                        )
+                    } else {
+                        Icon(
+                            NextcloudIcons.Profile,
+                            contentDescription = "Account",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(8.dp).size(22.dp),
+                        )
+                    }
                 }
                 onSettings?.let {
                     IconButton(onClick = it) { Icon(NextcloudIcons.Settings, contentDescription = "Settings") }

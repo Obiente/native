@@ -21,6 +21,7 @@ if [[ -n "$generated" ]]; then
 fi
 
 for file in "${candidate_files[@]}"; do
+    [[ -f "$file" ]] || continue
     [[ "$file" == "tools/check-repository.sh" ]] && continue
     if grep -n -I -E "$machine_pattern" -- "$file"; then
         printf 'Machine-specific paths or LAN addresses are present in %s.\n' "$file" >&2

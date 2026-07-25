@@ -199,10 +199,10 @@ function startCall(kind) {
           <span>{{ item.label }}</span>
         </button>
         <div class="preview-account">
-          <span>O</span>
+          <img src="/obiente-avatar.png" alt="Obiente" width="29" height="29" />
           <div>
-            <strong>Obiente Cloud</strong>
-            <small>Connected</small>
+            <strong>Obiente</strong>
+            <small>Connected to Nextcloud</small>
           </div>
         </div>
       </aside>
@@ -563,7 +563,7 @@ function startCall(kind) {
   border-top: 1px solid var(--outline);
 }
 
-.preview-account > span,
+.preview-account > img,
 .avatar {
   display: grid;
   place-items: center;
@@ -574,10 +574,10 @@ function startCall(kind) {
   font-weight: 750;
 }
 
-.preview-account > span {
+.preview-account > img {
   width: 29px;
   height: 29px;
-  font-size: 11px;
+  object-fit: cover;
 }
 
 .preview-account > div {

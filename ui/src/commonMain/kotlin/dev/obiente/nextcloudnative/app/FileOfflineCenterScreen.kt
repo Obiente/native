@@ -530,7 +530,7 @@ internal fun FileOfflineCenterScreen(
 }
 
 @Composable
-private fun FolderSyncSection(
+internal fun FolderSyncSection(
     snapshot: FileSyncCenterSnapshot?,
     loading: Boolean,
     mediaDiscovery: MediaSyncFolderDiscovery?,
@@ -635,11 +635,11 @@ private fun MediaFolderSuggestions(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                OfflineCenterMessageCard(
-                    "Originals stay in their current Android media folders, so Instagram, WhatsApp, Discord, " +
-                        "and other media pickers can still see them. Upload status is tracked separately. " +
-                        "Future storage cleanup will only remove verified copies after an explicit review.",
-                    errorTone = false,
+                Text(
+                    "Originals stay visible to other Android apps. Backup status is tracked separately, " +
+                        "and storage cleanup always requires review.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (discovery.access == MediaSyncFolderAccess.LimitedSelection) {
                     OfflineCenterMessageCard(
@@ -760,13 +760,18 @@ private fun FolderSyncPairCard(
                 )
             }
             Text(
-                "↔ Nextcloud /${pair.remoteRootPath}",
+                fileSyncRouteLabel(pair.configuration.direction, pair.remoteRootPath),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
                 "${pair.configuration.direction.readableSyncDirection()} · " +
-                    "${pair.conflicts.size} conflicts · ${pair.failedCount} failed",
+                    "${pair.readyCount} pending · ${pair.runningCount} syncing",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "${pair.completedCount} completed · ${pair.conflicts.size} conflicts · ${pair.failedCount} failed",
                 style = MaterialTheme.typography.bodySmall,
                 color = if (pair.conflicts.size + pair.failedCount > 0) {
                     MaterialTheme.colorScheme.error
@@ -1350,6 +1355,18 @@ private fun FileSyncDirection.readableSyncDirection(): String = when (this) {
     FileSyncDirection.Bidirectional -> "Two-way"
     FileSyncDirection.DownloadOnly -> "Nextcloud to device"
     FileSyncDirection.UploadOnly -> "Device to Nextcloud"
+}
+
+internal fun fileSyncRouteLabel(
+    direction: FileSyncDirection,
+    remoteRootPath: String,
+): String {
+    val remote = "Nextcloud /${remoteRootPath.trimStart('/')}"
+    return when (direction) {
+        FileSyncDirection.Bidirectional -> "Device ↔ $remote"
+        FileSyncDirection.DownloadOnly -> "$remote → device"
+        FileSyncDirection.UploadOnly -> "Device → $remote"
+    }
 }
 
 private fun MediaSyncFolderKind.readableMediaFolderKind(): String = when (this) {

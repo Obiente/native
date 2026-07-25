@@ -1,0 +1,353 @@
+package dev.obiente.nextcloudnative.app
+
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+
+const val PROJECT_NEWS_FEED_URL = "https://nc-native.obiente.dev/news-feed-v1.json"
+const val ANDROID_PRERELEASE_DISCOVERY_URL =
+    "https://api.github.com/repos/Obiente/nc-native/releases?per_page=20"
+const val MAX_PROJECT_NEWS_FEED_BYTES = 512 * 1024
+const val MAX_PROJECT_NEWS_IMAGE_BYTES = 8 * 1024 * 1024
+const val MAX_ANDROID_UPDATE_METADATA_BYTES = 64 * 1024
+const val MAX_ANDROID_RELEASE_DISCOVERY_BYTES = 512 * 1024
+const val MAX_ANDROID_UPDATE_APK_BYTES = 256L * 1024L * 1024L
+
+@Serializable
+data class ProjectNewsFeed(
+    val schemaVersion: Int,
+    val feedRevision: String,
+    val entries: List<ProjectNewsArticle>,
+)
+
+@Serializable
+data class ProjectNewsArticle(
+    val id: String,
+    val title: String,
+    val description: String,
+    val publishedDate: String,
+    val lastUpdated: String? = null,
+    val tags: List<String>,
+    val bodyMarkdown: String,
+    val webUrl: String,
+    val contentSha256: String,
+    val image: ProjectNewsImage,
+)
+
+@Serializable
+data class ProjectNewsImage(
+    val url: String,
+    val alt: String,
+    val width: Int,
+    val height: Int,
+    val sha256: String,
+)
+
+data class ProjectNewsResult(
+    val feed: ProjectNewsFeed,
+    val cached: Boolean,
+)
+
+data class ProjectNewsArticlePresentation(
+    val heroImage: ProjectNewsImage,
+)
+
+fun projectNewsArticlePresentation(article: ProjectNewsArticle): ProjectNewsArticlePresentation =
+    ProjectNewsArticlePresentation(heroImage = article.image)
+
+enum class AppDistributionChannel {
+    DirectApk,
+    GooglePlay,
+    FDroid,
+    OtherStore,
+    Development,
+    Unsupported,
+}
+
+data class AppUpdateSupport(
+    val channel: AppDistributionChannel,
+    val currentVersionName: String,
+    val currentVersionCode: Long,
+    val canCheckDirectUpdates: Boolean,
+    val explanation: String,
+)
+
+sealed interface AppUpdateInstallState {
+    data object Idle : AppUpdateInstallState
+
+    data class Downloading(
+        val versionName: String,
+        val versionCode: Long,
+        val downloadedBytes: Long,
+        val totalBytes: Long,
+        val resumedFromBytes: Long,
+    ) : AppUpdateInstallState
+
+    data class Verifying(
+        val versionName: String,
+        val versionCode: Long,
+    ) : AppUpdateInstallState
+
+    data class PermissionRequired(
+        val versionName: String,
+        val versionCode: Long,
+        val message: String,
+    ) : AppUpdateInstallState
+
+    data class Cancelled(
+        val versionName: String,
+        val versionCode: Long,
+        val downloadedBytes: Long,
+        val canResume: Boolean,
+    ) : AppUpdateInstallState
+
+    data class Failed(
+        val versionName: String,
+        val versionCode: Long,
+        val message: String,
+        val downloadedBytes: Long,
+        val canResume: Boolean,
+    ) : AppUpdateInstallState
+
+    data class ConfirmationOpened(
+        val versionName: String,
+        val versionCode: Long,
+    ) : AppUpdateInstallState
+}
+
+@Serializable
+data class AndroidDirectRelease(
+    val schemaVersion: Int,
+    val channel: String,
+    val versionName: String,
+    val versionCode: Long,
+    val packageName: String,
+    val minimumAndroidSdk: Int,
+    val apkUrl: String,
+    val apkSize: Long,
+    val apkSha256: String,
+    val signingCertificateSha256Digests: List<String>,
+    val releaseNotesUrl: String,
+)
+
+sealed interface AppUpdateCheckResult {
+    data class Current(val support: AppUpdateSupport) : AppUpdateCheckResult
+    data class Available(
+        val support: AppUpdateSupport,
+        val release: AndroidDirectRelease,
+    ) : AppUpdateCheckResult
+    data class Unavailable(val support: AppUpdateSupport) : AppUpdateCheckResult
+    data class Failed(val support: AppUpdateSupport, val message: String) : AppUpdateCheckResult
+}
+
+sealed interface AppUpdateInstallResult {
+    data object ConfirmationOpened : AppUpdateInstallResult
+    data object Cancelled : AppUpdateInstallResult
+    data class PermissionRequired(val message: String) : AppUpdateInstallResult
+    data class Rejected(val message: String) : AppUpdateInstallResult
+}
+
+private val publicContentJson = Json {
+    ignoreUnknownKeys = false
+    isLenient = false
+}
+
+private val githubDiscoveryJson = Json {
+    ignoreUnknownKeys = true
+    isLenient = false
+}
+
+@Serializable
+private data class GitHubReleaseDiscovery(
+    val tag_name: String,
+    val draft: Boolean,
+    val prerelease: Boolean,
+    val assets: List<GitHubReleaseAsset>,
+)
+
+@Serializable
+private data class GitHubReleaseAsset(
+    val name: String,
+    val browser_download_url: String,
+)
+
+fun parseProjectNewsFeed(bytes: ByteArray): ProjectNewsFeed {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_PROJECT_NEWS_FEED_BYTES)
+    val feed = publicContentJson.decodeFromString<ProjectNewsFeed>(bytes.decodeToString())
+    require(feed.schemaVersion == 1)
+    require(feed.feedRevision.isSha256())
+    require(feed.entries.size in 1..100)
+    require(feed.entries.map(ProjectNewsArticle::id).distinct().size == feed.entries.size)
+    feed.entries.forEach { article ->
+        require(article.id.matches(Regex("[a-z0-9]+(?:-[a-z0-9]+)*")))
+        require(article.title.isBoundedPublicText(160))
+        require(article.description.isBoundedPublicText(320))
+        require(article.publishedDate.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")))
+        article.lastUpdated?.let { updated ->
+            require(updated.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")))
+            require(updated >= article.publishedDate)
+        }
+        require(article.tags.size <= 12 && article.tags.all { it.isBoundedPublicText(48) })
+        require(article.bodyMarkdown.isBoundedMarkdown(64 * 1024))
+        require(
+            article.webUrl == "https://nc-native.obiente.dev/news/${article.id}/",
+        )
+        require(article.contentSha256.isSha256())
+        require(
+            publicContentSha256(article.bodyMarkdown.encodeToByteArray()) ==
+                article.contentSha256,
+        )
+        require(isCanonicalProjectNewsImageUrl(article.image.url))
+        require(article.image.alt.isBoundedPublicText(240))
+        require(article.image.width in 1..8_192 && article.image.height in 1..8_192)
+        require(article.image.sha256.isSha256())
+    }
+    require(feed.entries.zipWithNext().all { (left, right) ->
+        left.publishedDate >= right.publishedDate
+    })
+    require(feed.feedRevision == projectNewsFeedRevision(feed.entries))
+    return feed
+}
+
+fun projectNewsFeedRevision(entries: List<ProjectNewsArticle>): String =
+    publicContentSha256(
+        buildString {
+            append("project-news-revision-v1\n")
+            entries.forEach { article ->
+                appendRevisionField(article.id)
+                appendRevisionField(article.title)
+                appendRevisionField(article.description)
+                appendRevisionField(article.publishedDate)
+                appendRevisionField(article.lastUpdated.orEmpty())
+                appendRevisionField(article.tags.size.toString())
+                article.tags.forEach(::appendRevisionField)
+                appendRevisionField(article.contentSha256)
+                appendRevisionField(article.webUrl)
+                appendRevisionField(article.image.url)
+                appendRevisionField(article.image.alt)
+                appendRevisionField(article.image.width.toString())
+                appendRevisionField(article.image.height.toString())
+                appendRevisionField(article.image.sha256)
+            }
+        }.encodeToByteArray(),
+    )
+
+private fun StringBuilder.appendRevisionField(value: String) {
+    append(value.encodeToByteArray().size)
+    append(':')
+    append(value)
+    append('\n')
+}
+
+fun parseAndroidPrereleaseManifestUrl(bytes: ByteArray): String {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_ANDROID_RELEASE_DISCOVERY_BYTES)
+    val releases = githubDiscoveryJson.decodeFromString<List<GitHubReleaseDiscovery>>(bytes.decodeToString())
+    val release = releases.firstOrNull { candidate ->
+        !candidate.draft &&
+            candidate.prerelease &&
+            candidate.tag_name.matches(Regex("v0\\.[0-9]+\\.[0-9]+-(?:alpha|beta|rc)\\.[0-9]+"))
+    } ?: error("No supported Nextcloud Native prerelease was found.")
+    val expectedUrl =
+        "https://github.com/Obiente/nc-native/releases/download/${release.tag_name}/update-manifest.json"
+    require(
+        release.assets.count { asset ->
+            asset.name == "update-manifest.json" && asset.browser_download_url == expectedUrl
+        } == 1,
+    )
+    return expectedUrl
+}
+
+fun parseAndroidDirectRelease(
+    bytes: ByteArray,
+    metadataUrl: String,
+): AndroidDirectRelease {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_ANDROID_UPDATE_METADATA_BYTES)
+    require(isCanonicalAndroidPrereleaseManifestUrl(metadataUrl))
+    val release = publicContentJson.decodeFromString<AndroidDirectRelease>(bytes.decodeToString())
+    return validateAndroidDirectRelease(release, metadataUrl)
+}
+
+fun validateAndroidDirectRelease(
+    release: AndroidDirectRelease,
+    metadataUrl: String =
+        "https://github.com/Obiente/nc-native/releases/download/v${release.versionName}/update-manifest.json",
+): AndroidDirectRelease {
+    require(release.schemaVersion == 1 && release.channel == "prerelease-v1")
+    require(release.versionName.isBoundedPublicText(64) && release.versionCode > 0)
+    require(release.packageName == "dev.obiente.nextcloudnative")
+    require(release.minimumAndroidSdk in 26..64)
+    require(release.apkSize in 1..MAX_ANDROID_UPDATE_APK_BYTES)
+    require(release.apkSha256.isSha256())
+    require(
+        release.signingCertificateSha256Digests.isNotEmpty() &&
+            release.signingCertificateSha256Digests.size <= 8 &&
+            release.signingCertificateSha256Digests.distinct().size ==
+            release.signingCertificateSha256Digests.size &&
+            release.signingCertificateSha256Digests.all(String::isSha256),
+    )
+    val tag = "v${release.versionName}"
+    require(
+        metadataUrl ==
+            "https://github.com/Obiente/nc-native/releases/download/$tag/update-manifest.json",
+    )
+    require(
+        release.apkUrl.hasCanonicalPathUnder(
+            "https://github.com/Obiente/nc-native/releases/download/$tag/",
+            trailingSlash = false,
+        ) && release.apkUrl.endsWith(".apk"),
+    )
+    require(
+        release.releaseNotesUrl ==
+            "https://github.com/Obiente/nc-native/releases/tag/$tag",
+    )
+    return release
+}
+
+fun isNewerAndroidRelease(currentVersionCode: Long, release: AndroidDirectRelease): Boolean =
+    release.versionCode > currentVersionCode
+
+fun isCanonicalAndroidPrereleaseManifestUrl(url: String): Boolean {
+    val prefix = "https://github.com/Obiente/nc-native/releases/download/"
+    if (!url.hasCanonicalPathUnder(prefix, trailingSlash = false)) return false
+    val path = url.removePrefix(prefix).split('/')
+    return path.size == 2 &&
+        path[0].matches(Regex("v0\\.[0-9]+\\.[0-9]+-(?:alpha|beta|rc)\\.[0-9]+")) &&
+        path[1] == "update-manifest.json"
+}
+
+fun isCanonicalProjectNewsImageUrl(url: String): Boolean =
+    url.hasCanonicalPathUnder("https://nc-native.obiente.dev/screenshots/", trailingSlash = false) &&
+        url.endsWith(".png")
+
+private fun String.hasCanonicalPathUnder(
+    requiredPrefix: String,
+    trailingSlash: Boolean,
+): Boolean {
+    if (!startsWith(requiredPrefix) || any { it == '%' || it == '?' || it == '#' || it == '\\' }) {
+        return false
+    }
+    val relativePath = removePrefix(requiredPrefix)
+    if (relativePath.isEmpty() || endsWith('/') != trailingSlash) return false
+    val pathWithoutTrailingSlash = if (trailingSlash) relativePath.dropLast(1) else relativePath
+    if (pathWithoutTrailingSlash.isEmpty()) return false
+    return pathWithoutTrailingSlash
+        .split('/')
+        .all { segment ->
+            segment != "." &&
+                segment != ".." &&
+                segment.matches(Regex("[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"))
+        }
+}
+
+private fun String.isSha256(): Boolean =
+    length == 64 && all { it in '0'..'9' || it in 'a'..'f' }
+
+private fun String.isBoundedPublicText(maxLength: Int): Boolean =
+    isNotBlank() && length <= maxLength && none(Char::isISOControl)
+
+private fun String.isBoundedMarkdown(maxLength: Int): Boolean =
+    isNotBlank() &&
+        length <= maxLength &&
+        none { character ->
+            character.isISOControl() && character != '\n' && character != '\r' && character != '\t'
+        }

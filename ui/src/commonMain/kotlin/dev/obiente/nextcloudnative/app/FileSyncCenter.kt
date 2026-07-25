@@ -152,6 +152,7 @@ data class FileSyncPairSummary(
     val conflicts: List<FileSyncConflictSummary>,
     val failedCount: Int,
     val skippedCount: Int,
+    val completedCount: Int = 0,
     val lastScanEpochMillis: Long?,
     val scheduleDescription: String? = null,
 ) {
@@ -159,7 +160,7 @@ data class FileSyncPairSummary(
         require(id.isSafeFileSyncCenterText(256))
         require(localDisplayName.isSafeFileSyncCenterText(256))
         if (remoteRootPath.isNotEmpty()) requireValidSyncPath(remoteRootPath)
-        require(listOf(readyCount, runningCount, failedCount, skippedCount).all { it >= 0 })
+        require(listOf(readyCount, runningCount, failedCount, skippedCount, completedCount).all { it >= 0 })
         require(conflicts.size <= 20_000)
         require(conflicts.map(FileSyncConflictSummary::workId).distinct().size == conflicts.size)
         require(lastScanEpochMillis == null || lastScanEpochMillis >= 0L)
@@ -238,6 +239,7 @@ fun FileSyncPair.toCenterSummary(
         },
         failedCount = workItems.count { it.state == FileSyncExecutionState.Failed },
         skippedCount = workItems.count { it.state == FileSyncExecutionState.Skipped },
+        completedCount = baselines.size,
         lastScanEpochMillis = lastScanEpochMillis,
         scheduleDescription = scheduleDescription,
     )

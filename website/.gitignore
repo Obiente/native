@@ -4,3 +4,5 @@ dist/
 dist-ssr/
 src/generated/
 public/search-index.json
+public/news-feed-v1.json
+public/obiente-avatar.png

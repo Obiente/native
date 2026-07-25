@@ -69,6 +69,13 @@ import dev.obiente.nextcloudnative.app.TalkRoom
 import dev.obiente.nextcloudnative.app.ThemePreference
 import dev.obiente.nextcloudnative.app.PlatformCapability
 import dev.obiente.nextcloudnative.app.PlatformCapabilityStatus
+import dev.obiente.nextcloudnative.app.AndroidDirectRelease
+import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
+import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
+import dev.obiente.nextcloudnative.app.AppUpdateInstallState
+import dev.obiente.nextcloudnative.app.AppUpdateSupport
+import dev.obiente.nextcloudnative.app.ProjectNewsResult
+import dev.obiente.nextcloudnative.app.ProjectNewsImage
 import dev.obiente.nextcloudnative.app.PeopleMutationSurface
 import dev.obiente.nextcloudnative.app.PeopleTransportAuthorization
 import dev.obiente.nextcloudnative.app.PeopleTransportRequest
@@ -147,6 +154,7 @@ internal class AndroidNextcloudServices(
     private val mediaSyncFolderDetector = AndroidMediaSyncFolderDetector(appContext)
     private val externalFileHandoff = AndroidExternalFileHandoff(appContext)
     private val platformCapabilities = AndroidPlatformCapabilities(appContext, context as? Activity)
+    private val projectContent = AndroidProjectContentClient(appContext, context as? Activity)
 
     override val supportsFileOfflineStorage: Boolean = true
     override val supportsRecursiveFileOfflineStorage: Boolean = true
@@ -162,6 +170,25 @@ internal class AndroidNextcloudServices(
 
     override fun requestPlatformCapability(capability: PlatformCapability): Boolean =
         platformCapabilities.request(capability)
+
+    override suspend fun loadProjectNews(forceRefresh: Boolean): ProjectNewsResult =
+        withContext(Dispatchers.IO) { projectContent.loadNews(forceRefresh) }
+
+    override suspend fun loadProjectNewsImage(image: ProjectNewsImage): ByteArray =
+        withContext(Dispatchers.IO) { projectContent.loadNewsImage(image) }
+
+    override fun appUpdateSupport(): AppUpdateSupport = projectContent.support()
+
+    override suspend fun checkForAppUpdate(): AppUpdateCheckResult =
+        withContext(Dispatchers.IO) { projectContent.checkForUpdate() }
+
+    override fun observeAppUpdateInstallState(): Flow<AppUpdateInstallState> =
+        projectContent.observeUpdateState()
+
+    override suspend fun beginAppUpdate(release: AndroidDirectRelease): AppUpdateInstallResult =
+        withContext(Dispatchers.IO) { projectContent.beginUpdate(release) }
+
+    override fun cancelAppUpdate(): Boolean = projectContent.cancelUpdate()
 
     override fun loadThemePreference(): ThemePreference = runCatching {
         ThemePreference.valueOf(preferences.getString(KEY_THEME, ThemePreference.System.name).orEmpty())

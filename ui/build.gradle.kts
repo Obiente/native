@@ -128,3 +128,33 @@ compose.desktop {
         }
     }
 }
+
+val desktopCaptureCompilation = kotlin.targets
+    .getByName("desktop")
+    .compilations
+    .getByName("main")
+
+tasks.register<JavaExec>("captureMarketingScreenshots") {
+    group = "documentation"
+    description = "Renders real Compose marketing scenarios from isolated synthetic fixtures."
+    dependsOn(desktopCaptureCompilation.compileTaskProvider)
+    classpath(
+        desktopCaptureCompilation.output.allOutputs,
+        desktopCaptureCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set(
+        "dev.obiente.nextcloudnative.nativeui.preview.MarketingCaptureMainKt",
+    )
+    workingDir(rootProject.projectDir)
+    args(
+        listOf(
+        "desktop-home.png",
+        "mobile-home.png",
+        "obsidian-vault-sync.png",
+        "media-backup-queue.png",
+        "adaptive-dynamic-data.png",
+        ).map { fileName ->
+            rootProject.file("website/public/screenshots/$fileName").absolutePath
+        },
+    )
+}

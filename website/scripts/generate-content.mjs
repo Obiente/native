@@ -1,14 +1,58 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import MarkdownIt from "markdown-it";
 import markdownItAnchor from "markdown-it-anchor";
+import {
+  normalizeNewsArticleBody,
+  parseNewsFrontmatter,
+} from "./content-frontmatter.mjs";
+import {
+  assertValidNativeNewsFeed,
+  nativeNewsFeedRevision,
+} from "./news-feed-contract.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(websiteRoot, "..");
 const generatedDirectory = path.join(websiteRoot, "src", "generated");
 const publicDirectory = path.join(websiteRoot, "public");
+const newsDirectory = path.join(websiteRoot, "content", "news");
+const changelogFile = path.join(repositoryRoot, "CHANGELOG.md");
+const changelogRoute = "/changelog/";
+await mkdir(generatedDirectory, { recursive: true });
+await mkdir(publicDirectory, { recursive: true });
+const canonicalObienteAvatar = path.join(
+  repositoryRoot,
+  "ui",
+  "src",
+  "desktopMain",
+  "resources",
+  "marketing",
+  "obiente-avatar.png",
+);
+await copyFile(canonicalObienteAvatar, path.join(publicDirectory, "obiente-avatar.png"));
+const captureManifest = JSON.parse(
+  await readFile(
+    path.join(publicDirectory, "screenshots", "capture-manifest.json"),
+    "utf8",
+  ),
+);
+const captureByImage = new Map(
+  captureManifest.captures.map((capture) => [
+    `/screenshots/${capture.file}`,
+    capture,
+  ]),
+);
+const marketingCaptures = captureManifest.captures.map((capture) => ({
+  ...capture,
+  path: `/screenshots/${capture.file}`,
+}));
+await writeFile(
+  path.join(generatedDirectory, "captures.js"),
+  `// Generated from the Compose capture manifest. Do not edit.\nexport const marketingCaptures = ${JSON.stringify(marketingCaptures, null, 2)};\n`,
+);
 
 const sources = [
   {
@@ -77,6 +121,7 @@ const sources = [
   },
 ];
 const routeByFile = new Map(sources.map((source) => [source.file, source.path]));
+routeByFile.set("CHANGELOG.md", changelogRoute);
 
 function slugify(value) {
   return value
@@ -137,8 +182,6 @@ function headingsFrom(source) {
   }));
 }
 
-await mkdir(generatedDirectory, { recursive: true });
-
 const docs = await Promise.all(
   sources.map(async (source) => {
     const markdownSource = await readFile(path.join(repositoryRoot, source.file), "utf8");
@@ -162,7 +205,142 @@ await writeFile(
   `// Generated from repository Markdown. Do not edit.\nexport const docsContent = ${JSON.stringify(docs, null, 2)};\n`,
 );
 
-const searchIndex = docs.map(({ html, ...doc }) => doc);
+let changelogSource;
+let changelogAvailable = true;
+try {
+  changelogSource = await readFile(changelogFile, "utf8");
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+  changelogAvailable = false;
+  changelogSource = [
+    "# Changelog",
+    "",
+    "The first curated release history will appear here with the first public release.",
+  ].join("\n");
+}
+if (
+  changelogAvailable &&
+  (
+    !/^#\s+Changelog\s*$/im.test(changelogSource) ||
+    !/^##\s+.+$/m.test(changelogSource) ||
+    !/^###\s+(Added|Changed|Deprecated|Removed|Fixed|Security)\s*$/m.test(changelogSource)
+  )
+) {
+  throw new Error(
+    "CHANGELOG.md must contain a Changelog title, a release section, and a Keep a Changelog category.",
+  );
+}
+const changelogBody = changelogSource.replace(/^#\s+Changelog\s*\n+/i, "");
+const changelogText = textOnly(changelogBody);
+const changelog = {
+  file: "CHANGELOG.md",
+  path: changelogRoute,
+  title: "Changelog",
+  shortTitle: "Changelog",
+  description:
+    "Concise Added, Changed, Fixed, and Security records for each Nextcloud Native release.",
+  html: markdown.render(changelogBody),
+  text: changelogText,
+  headings: headingsFrom(changelogBody),
+  readingMinutes: Math.max(1, Math.ceil(changelogText.split(/\s+/).length / 220)),
+  available: changelogAvailable,
+};
+await writeFile(
+  path.join(generatedDirectory, "changelog.js"),
+  `// Generated from the canonical root CHANGELOG.md when available. Do not edit.\nexport const changelog = ${JSON.stringify(changelog, null, 2)};\n`,
+);
+
+const newsFiles = (await readdir(newsDirectory))
+  .filter((file) => file.endsWith(".md"))
+  .sort()
+  .reverse();
+const news = await Promise.all(
+  newsFiles.map(async (file) => {
+    const source = await readFile(path.join(newsDirectory, file), "utf8");
+    const { metadata, body } = parseNewsFrontmatter(source, file);
+    const text = textOnly(body);
+    const articleBody = normalizeNewsArticleBody(body, metadata.title);
+    const capture = captureByImage.get(metadata.image);
+    if (!capture) {
+      throw new Error(`${file}: image must reference a declared Compose capture.`);
+    }
+    return {
+      file,
+      path: `/news/${metadata.slug}/`,
+      title: metadata.title,
+      shortTitle: metadata.title,
+      description: metadata.description,
+      date: metadata.date,
+      lastUpdated: metadata.lastUpdated,
+      tags: metadata.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+      image: metadata.image,
+      imageAlt: metadata.imageAlt,
+      imageCaption: metadata.imageCaption,
+      imageWidth: capture.width,
+      imageHeight: capture.height,
+      html: markdown.render(articleBody),
+      text,
+      headings: headingsFrom(articleBody),
+      readingMinutes: Math.max(1, Math.ceil(text.split(/\s+/).length / 220)),
+    };
+  }),
+);
+if (new Set(news.map((post) => post.path)).size !== news.length) {
+  throw new Error("News slugs must be unique.");
+}
+await writeFile(
+  path.join(generatedDirectory, "news.js"),
+  `// Generated from fixture-safe repository news. Do not edit.\nexport const news = ${JSON.stringify(news, null, 2)};\n`,
+);
+const newsFeedEntries = await Promise.all(
+  news.map(async (post) => ({
+    id: post.path.slice("/news/".length, -1),
+    title: post.title,
+    description: post.description,
+    publishedDate: post.date,
+    lastUpdated: post.lastUpdated,
+    tags: post.tags,
+    bodyMarkdown: normalizeNewsArticleBody(
+      parseNewsFrontmatter(
+      // Re-read from the single canonical source rather than reconstructing Markdown from HTML.
+        await readFile(path.join(newsDirectory, post.file), "utf8"),
+        post.file,
+      ).body,
+      post.title,
+    ),
+    webUrl: `https://nc-native.obiente.dev${post.path}`,
+    image: {
+      url: `https://nc-native.obiente.dev${post.image}`,
+      alt: post.imageAlt,
+      width: post.imageWidth,
+      height: post.imageHeight,
+      sha256: createHash("sha256")
+        .update(await readFile(path.join(publicDirectory, post.image.slice(1))))
+        .digest("hex"),
+    },
+  })),
+);
+const hashedNewsFeedEntries = newsFeedEntries.map((entry) => ({
+  ...entry,
+  contentSha256: createHash("sha256").update(entry.bodyMarkdown).digest("hex"),
+}));
+const newsFeed = {
+  schemaVersion: 1,
+  feedRevision: nativeNewsFeedRevision(hashedNewsFeedEntries),
+  entries: hashedNewsFeedEntries,
+};
+const serializedNewsFeed = `${JSON.stringify(newsFeed, null, 2)}\n`;
+assertValidNativeNewsFeed(newsFeed, Buffer.byteLength(serializedNewsFeed));
+await writeFile(
+  path.join(publicDirectory, "news-feed-v1.json"),
+  serializedNewsFeed,
+);
+
+const searchIndex = [
+  ...docs.map(({ html, ...doc }) => ({ ...doc, contentType: "Documentation" })),
+  ...news.map(({ html, ...post }) => ({ ...post, contentType: "News" })),
+  { ...changelog, html: undefined, contentType: "Changelog" },
+];
 
 const githubApiHeaders = {
   Accept: "application/vnd.github+json",

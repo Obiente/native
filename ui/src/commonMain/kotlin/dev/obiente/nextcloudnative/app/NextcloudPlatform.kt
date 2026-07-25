@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.serialization.Serializable
 
 enum class ThemePreference {
@@ -300,6 +301,41 @@ data class NextcloudPerson(
 )
 
 interface NextcloudPlatformServices {
+    /** Loads public project news from the fixed Obiente feed, with a bounded platform cache. */
+    suspend fun loadProjectNews(forceRefresh: Boolean = false): ProjectNewsResult =
+        error("Project news is unavailable on this platform.")
+
+    /** Loads one hash-verified, canonical public image referenced by the project news feed. */
+    suspend fun loadProjectNewsImage(image: ProjectNewsImage): ByteArray =
+        error("Project news images are unavailable on this platform.")
+
+    /** Describes who owns app updates. Store-owned installs must remain with their store. */
+    fun appUpdateSupport(): AppUpdateSupport = AppUpdateSupport(
+        channel = AppDistributionChannel.Unsupported,
+        currentVersionName = "Unknown",
+        currentVersionCode = 0,
+        canCheckDirectUpdates = false,
+        explanation = "In-app update checks are unavailable on this platform.",
+    )
+
+    suspend fun checkForAppUpdate(): AppUpdateCheckResult =
+        AppUpdateCheckResult.Unavailable(appUpdateSupport())
+
+    /** Observable direct-APK download, verification, cancellation, and retry state. */
+    fun observeAppUpdateInstallState(): Flow<AppUpdateInstallState> =
+        flowOf(AppUpdateInstallState.Idle)
+
+    /**
+     * Downloads and verifies one direct-APK release before opening the platform confirmation flow.
+     *
+     * Implementations may never silently install or invoke this for store-owned installs.
+     */
+    suspend fun beginAppUpdate(release: AndroidDirectRelease): AppUpdateInstallResult =
+        AppUpdateInstallResult.Rejected("Direct app updates are unavailable on this platform.")
+
+    /** Cancels the active direct-APK download while retaining a safe resumable partial file. */
+    fun cancelAppUpdate(): Boolean = false
+
     /** True only when this platform has durable app-private offline file storage and execution. */
     val supportsFileOfflineStorage: Boolean get() = false
 
