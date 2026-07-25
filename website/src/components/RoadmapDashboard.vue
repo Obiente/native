@@ -26,14 +26,23 @@ const outcomeByTask = {
   "EPIC-PLATFORM": "Responsive UX, accessibility, performance, packaging, and releases.",
 };
 
-const sourceLabel = computed(() =>
-  roadmap.source === "github" ? "GitHub Project and issues" : "Bundled roadmap document",
+const hasRoadmapData = computed(() =>
+  roadmap.source === "github" || roadmap.source === "github-snapshot",
 );
-const syncLabel = computed(() =>
-  roadmap.syncState === "live" && roadmap.updatedAt
-    ? formatDate(roadmap.updatedAt)
-    : "Live sync unavailable",
-);
+const sourceLabel = computed(() => {
+  if (roadmap.source === "github") return "GitHub Project and issues";
+  if (roadmap.source === "github-snapshot") return "Bundled GitHub Project snapshot";
+  return "Bundled roadmap document";
+});
+const syncLabel = computed(() => {
+  if (roadmap.syncState === "live" && roadmap.updatedAt) {
+    return formatDate(roadmap.updatedAt);
+  }
+  if (roadmap.syncState === "snapshot" && roadmap.updatedAt) {
+    return `Snapshot from ${formatDate(roadmap.updatedAt)}`;
+  }
+  return "Live sync unavailable";
+});
 
 function formatDate(value) {
   if (!value) return "Not available";
@@ -122,6 +131,16 @@ const currentMilestone = computed(
     roadmap.milestones[0],
 );
 
+const completedFeatures = computed(() =>
+  [...(roadmap.shipped ?? [])].sort(
+    (left, right) =>
+      new Date(right.closedAt ?? right.updatedAt ?? 0).getTime() -
+      new Date(left.closedAt ?? left.updatedAt ?? 0).getTime(),
+  ),
+);
+const recentCompletedFeatures = computed(() => completedFeatures.value.slice(0, 6));
+const remainingCompletedFeatures = computed(() => completedFeatures.value.slice(6));
+
 const areas = computed(() => [
   "All areas",
   ...new Set(productIssues.value.map((item) => item.area).filter(Boolean)),
@@ -171,7 +190,7 @@ watch([query, area, status, platform], () => {
     </div>
 
     <section
-      v-if="roadmap.source === 'github'"
+      v-if="hasRoadmapData"
       class="progress-overview"
       aria-label="Tracked issue progress"
     >
@@ -196,7 +215,7 @@ watch([query, area, status, platform], () => {
       </div>
     </section>
 
-    <details v-if="roadmap.source === 'github'" class="ledger-disclosure release-sequence">
+    <details v-if="hasRoadmapData" class="ledger-disclosure release-sequence">
       <summary>
         <span>
           <strong>Release milestones</strong>
@@ -250,7 +269,7 @@ watch([query, area, status, platform], () => {
     </details>
 
     <section
-      v-if="roadmap.source === 'github'"
+      v-if="hasRoadmapData"
       class="workstream-section"
       aria-labelledby="workstream-title"
     >
@@ -263,6 +282,7 @@ watch([query, area, status, platform], () => {
       <div class="workstream-table" aria-label="Product workstreams">
         <div class="table-head workstream-columns" aria-hidden="true">
           <span>Capability and outcome</span>
+          <span>Epic progress</span>
           <span>Status</span>
           <span>Target</span>
           <span>Issue</span>
@@ -278,6 +298,17 @@ watch([query, area, status, platform], () => {
           <span class="feature-name">
             <strong>{{ epic.title }}</strong>
             <small>{{ workstreamOutcome(epic) }}</small>
+          </span>
+          <span class="epic-progress">
+            <span>
+              <strong>{{ epic.progress?.completed ?? 0 }} of {{ epic.progress?.total ?? 0 }}</strong>
+              <small>{{ epic.progress?.percent_completed ?? 0 }}%</small>
+            </span>
+            <progress
+              :value="epic.progress?.completed ?? 0"
+              :max="Math.max(epic.progress?.total ?? 0, 1)"
+              :aria-label="`${epic.title}: ${epic.progress?.completed ?? 0} of ${epic.progress?.total ?? 0} linked features completed`"
+            ></progress>
           </span>
           <span class="quiet-status" :class="statusKey(epic)">
             <component
@@ -297,7 +328,59 @@ watch([query, area, status, platform], () => {
       </div>
     </section>
 
-    <details v-if="roadmap.source === 'github'" class="ledger-disclosure issue-browser">
+    <section
+      v-if="hasRoadmapData"
+      class="completed-section"
+      aria-labelledby="completed-title"
+    >
+      <header>
+        <div>
+          <h3 id="completed-title">Completed features</h3>
+          <p>Verified project work already marked Done.</p>
+        </div>
+        <strong>{{ completedFeatures.length }} shipped</strong>
+      </header>
+      <div class="completed-grid">
+        <a
+          v-for="item in recentCompletedFeatures"
+          :key="item.number"
+          :href="item.url"
+          target="_blank"
+          rel="noreferrer"
+        >
+          <PhCheckCircle :size="17" weight="duotone" aria-hidden="true" />
+          <span>
+            <strong>{{ item.title }}</strong>
+            <small>{{ item.taskId || `Issue #${item.number}` }} · {{ item.area || "Product" }}</small>
+          </span>
+          <PhArrowSquareOut :size="13" weight="bold" aria-hidden="true" />
+        </a>
+      </div>
+      <details v-if="remainingCompletedFeatures.length" class="completed-more">
+        <summary>
+          Show {{ remainingCompletedFeatures.length }} more completed features
+          <PhCaretDown :size="15" weight="bold" aria-hidden="true" />
+        </summary>
+        <div class="completed-grid">
+          <a
+            v-for="item in remainingCompletedFeatures"
+            :key="item.number"
+            :href="item.url"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <PhCheckCircle :size="17" weight="duotone" aria-hidden="true" />
+            <span>
+              <strong>{{ item.title }}</strong>
+              <small>{{ item.taskId || `Issue #${item.number}` }} · {{ item.area || "Product" }}</small>
+            </span>
+            <PhArrowSquareOut :size="13" weight="bold" aria-hidden="true" />
+          </a>
+        </div>
+      </details>
+    </section>
+
+    <details v-if="hasRoadmapData" class="ledger-disclosure issue-browser">
       <summary>
         <span>
           <strong>Feature issue browser</strong>
@@ -387,7 +470,11 @@ watch([query, area, status, platform], () => {
       </div>
     </details>
 
-    <p v-if="roadmap.source !== 'github'" class="roadmap-fallback-note">
+    <p v-if="roadmap.syncState === 'snapshot'" class="roadmap-fallback-note">
+      GitHub could not be refreshed during this build. Progress and completed features use the
+      dated public-project snapshot shown above.
+    </p>
+    <p v-else-if="!hasRoadmapData" class="roadmap-fallback-note">
       Live GitHub data was unavailable during this build, so no potentially stale issue status
       or progress totals are shown. Read the detailed roadmap below or open the canonical project.
     </p>
@@ -624,7 +711,8 @@ watch([query, area, status, platform], () => {
   border-bottom: 1px solid var(--outline);
 }
 
-.workstream-section h3 {
+.workstream-section h3,
+.completed-section h3 {
   margin: 0;
   font-size: 16px;
   letter-spacing: -0.025em;
@@ -644,7 +732,12 @@ watch([query, area, status, platform], () => {
 
 .workstream-columns {
   display: grid;
-  grid-template-columns: minmax(300px, 1.7fr) 108px minmax(145px, 0.8fr) 66px;
+  grid-template-columns:
+    minmax(260px, 1.7fr)
+    minmax(120px, 0.7fr)
+    108px
+    minmax(145px, 0.8fr)
+    66px;
   gap: 18px;
 }
 
@@ -727,6 +820,53 @@ watch([query, area, status, platform], () => {
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.epic-progress {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.epic-progress > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.epic-progress strong {
+  color: var(--text);
+  font-size: 10px;
+}
+
+.epic-progress small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.epic-progress progress {
+  width: 100%;
+  height: 4px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.epic-progress progress::-webkit-progress-bar {
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.epic-progress progress::-webkit-progress-value {
+  border-radius: 999px;
+  background: var(--primary);
+}
+
+.epic-progress progress::-moz-progress-bar {
+  border-radius: 999px;
+  background: var(--primary);
 }
 
 .quiet-status,
@@ -888,6 +1028,112 @@ watch([query, area, status, platform], () => {
   padding: 13px 26px;
 }
 
+.completed-section {
+  padding: 22px 26px 24px;
+  border-bottom: 1px solid var(--outline);
+}
+
+.completed-section > header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 14px;
+}
+
+.completed-section > header p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.completed-section > header > strong {
+  color: var(--success);
+  font-size: 11px;
+}
+
+.completed-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-surface);
+  background: var(--outline);
+}
+
+.completed-grid > a {
+  min-width: 0;
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  background: var(--surface-low);
+}
+
+.completed-grid > a:hover,
+.completed-grid > a:focus-visible {
+  background: var(--surface);
+}
+
+.completed-grid > a > svg:first-child {
+  color: var(--success);
+}
+
+.completed-grid > a > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.completed-grid strong,
+.completed-grid small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.completed-grid strong {
+  color: var(--text);
+  font-size: 10px;
+}
+
+.completed-grid small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.completed-grid > a > svg:last-child {
+  color: var(--primary);
+}
+
+.completed-more {
+  margin-top: 10px;
+}
+
+.completed-more > summary {
+  width: fit-content;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 0;
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.completed-more > summary svg {
+  transition: transform 160ms ease;
+}
+
+.completed-more[open] > summary svg {
+  transform: rotate(180deg);
+}
+
 @media (max-width: 900px) {
   .progress-overview {
     grid-template-columns: 1fr;
@@ -898,7 +1144,10 @@ watch([query, area, status, platform], () => {
     grid-template-columns: minmax(130px, 0.8fr) 100px minmax(230px, 1.5fr) 105px;
   }
 
-  .workstream-columns,
+  .workstream-columns {
+    grid-template-columns: minmax(210px, 1.5fr) 110px 95px 125px 62px;
+  }
+
   .issue-columns {
     grid-template-columns: minmax(240px, 1.6fr) 100px 135px 62px;
   }
@@ -930,7 +1179,8 @@ watch([query, area, status, platform], () => {
   }
 
   .progress-overview,
-  .workstream-section {
+  .workstream-section,
+  .completed-section {
     padding: 18px 17px;
   }
 
@@ -997,14 +1247,28 @@ watch([query, area, status, platform], () => {
     grid-row: 3;
   }
 
-  .workstream-row > :nth-child(3),
   .issue-record > summary > :nth-child(3) {
     grid-column: 1;
     grid-row: 2;
     color: var(--muted);
   }
 
-  .workstream-row > .issue-link,
+  .workstream-row > .epic-progress {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .workstream-row > :nth-child(4) {
+    grid-column: 1;
+    grid-row: 3;
+    color: var(--muted);
+  }
+
+  .workstream-row > .issue-link {
+    grid-column: 1;
+    grid-row: 4;
+  }
+
   .record-reference {
     grid-column: 1;
     grid-row: 3;
@@ -1028,6 +1292,16 @@ watch([query, area, status, platform], () => {
   }
 
   .roadmap-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .completed-section > header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .completed-grid {
     grid-template-columns: 1fr;
   }
 }

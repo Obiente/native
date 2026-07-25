@@ -53,7 +53,14 @@ test("roadmap links and indexed details remain available with truthful fallback 
   assert.match(roadmap, /Live sync unavailable/);
   assert.match(articleRoadmap, /Live sync unavailable/);
   assert.match(roadmap, /no potentially stale issue status/);
+  assert.match(roadmap, /Bundled GitHub Project snapshot/);
+  assert.match(roadmap, /dated public-project snapshot/);
   assert.match(roadmap, /@media \(max-width: 780px\)/);
+  assert.match(roadmap, /Epic progress/);
+  assert.match(roadmap, /<progress/);
+  assert.match(roadmap, /Completed features/);
+  assert.match(roadmap, /recentCompletedFeatures/);
+  assert.match(roadmap, /remainingCompletedFeatures/);
   assert.match(app, /class="roadmap-source-document"/);
   assert.match(app, /v-html="currentDoc\.html"/);
 });
