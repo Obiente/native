@@ -3,7 +3,10 @@ set -euo pipefail
 
 certificate_sha256="$(
     awk -F': ' \
-        '/certificate SHA-256 digest:/ { print tolower($NF); exit }'
+        '/^(Signer #[0-9]+|V[0-9][0-9.]* Signer( #[0-9]+)?):? certificate SHA-256 digest:/ {
+            print tolower($NF)
+            exit
+        }'
 )"
 
 if [[ ! "$certificate_sha256" =~ ^[0-9a-f]{64}$ ]]; then
