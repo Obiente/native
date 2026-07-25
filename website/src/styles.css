@@ -716,10 +716,32 @@ h1 span {
 }
 
 .feature-overview-grid h3 {
-  margin: 24px 0 0;
+  margin: 10px 0 0;
   font-size: 20px;
   line-height: 1.25;
   letter-spacing: -0.03em;
+}
+
+.feature-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 20px;
+  color: var(--status-active);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.feature-stage::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.feature-overview-grid article:last-child .feature-stage {
+  color: var(--status-planned);
 }
 
 .feature-overview-grid p {

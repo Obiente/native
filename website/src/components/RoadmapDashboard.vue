@@ -29,6 +29,11 @@ const outcomeByTask = {
 const sourceLabel = computed(() =>
   roadmap.source === "github" ? "GitHub Project and issues" : "Repository roadmap snapshot",
 );
+const syncLabel = computed(() =>
+  roadmap.syncState === "live" && roadmap.updatedAt
+    ? formatDate(roadmap.updatedAt)
+    : "Live sync unavailable",
+);
 
 function formatDate(value) {
   if (!value) return "Not available";
@@ -162,7 +167,7 @@ watch([query, area, status, platform], () => {
 
     <div class="ledger-source">
       <span><strong>Source</strong> {{ sourceLabel }}</span>
-      <span><strong>Last synced</strong> {{ formatDate(roadmap.updatedAt) }}</span>
+      <span><strong>Last synced</strong> {{ syncLabel }}</span>
     </div>
 
     <section class="progress-overview" aria-label="Tracked issue progress">
@@ -203,12 +208,12 @@ watch([query, area, status, platform], () => {
             <PhArrowSquareOut :size="14" weight="bold" aria-hidden="true" />
           </a>
         </div>
-        <div class="release-table" role="table" aria-label="Release milestones">
-          <div class="table-head release-columns" role="row">
-            <span role="columnheader">Release</span>
-            <span role="columnheader">Status</span>
-            <span role="columnheader">Delivery scope</span>
-            <span role="columnheader">Repository</span>
+        <div class="release-table" aria-label="Release milestones">
+          <div class="table-head release-columns" aria-hidden="true">
+            <span>Release</span>
+            <span>Status</span>
+            <span>Delivery scope</span>
+            <span>Repository</span>
           </div>
           <a
             v-for="milestone in roadmap.milestones"
@@ -217,10 +222,9 @@ watch([query, area, status, platform], () => {
             :href="milestone.url"
             target="_blank"
             rel="noreferrer"
-            role="row"
           >
-            <strong role="cell">{{ milestone.title }}</strong>
-            <span class="quiet-status" :class="milestoneStatus(milestone)" role="cell">
+            <strong>{{ milestone.title }}</strong>
+            <span class="quiet-status" :class="milestoneStatus(milestone)">
               <component
                 :is="milestoneStatus(milestone) === 'shipped' ? PhCheckCircle : milestoneStatus(milestone) === 'active' ? PhClock : PhCircle"
                 :size="14"
@@ -229,10 +233,10 @@ watch([query, area, status, platform], () => {
               />
               {{ milestoneStatusLabel(milestone) }}
             </span>
-            <span role="cell">
+            <span>
               {{ milestone.description || `${milestone.closed} linked issues closed · ${milestone.open} open` }}
             </span>
-            <span class="issue-link" role="cell">
+            <span class="issue-link">
               Milestone {{ milestone.number }}
               <PhArrowSquareOut :size="13" weight="bold" aria-hidden="true" />
             </span>
@@ -248,12 +252,12 @@ watch([query, area, status, platform], () => {
           <p>Capabilities, outcomes, and current target releases.</p>
         </div>
       </header>
-      <div class="workstream-table" role="table" aria-label="Product workstreams">
-        <div class="table-head workstream-columns" role="row">
-          <span role="columnheader">Capability and outcome</span>
-          <span role="columnheader">Status</span>
-          <span role="columnheader">Target</span>
-          <span role="columnheader">Issue</span>
+      <div class="workstream-table" aria-label="Product workstreams">
+        <div class="table-head workstream-columns" aria-hidden="true">
+          <span>Capability and outcome</span>
+          <span>Status</span>
+          <span>Target</span>
+          <span>Issue</span>
         </div>
         <a
           v-for="epic in roadmap.epics"
@@ -262,13 +266,12 @@ watch([query, area, status, platform], () => {
           :href="epic.url"
           target="_blank"
           rel="noreferrer"
-          role="row"
         >
-          <span class="feature-name" role="cell">
+          <span class="feature-name">
             <strong>{{ epic.title }}</strong>
             <small>{{ workstreamOutcome(epic) }}</small>
           </span>
-          <span class="quiet-status" :class="statusKey(epic)" role="cell">
+          <span class="quiet-status" :class="statusKey(epic)">
             <component
               :is="statusKey(epic) === 'shipped' ? PhCheckCircle : statusKey(epic) === 'active' ? PhClock : PhCircle"
               :size="14"
@@ -277,8 +280,8 @@ watch([query, area, status, platform], () => {
             />
             {{ statusLabel(epic) }}
           </span>
-          <span role="cell">{{ epic.milestone || "Unscheduled" }}</span>
-          <span class="issue-link" role="cell">
+          <span>{{ epic.milestone || "Unscheduled" }}</span>
+          <span class="issue-link">
             {{ issueReference(epic) }}
             <PhArrowSquareOut :size="13" weight="bold" aria-hidden="true" />
           </span>

@@ -13,6 +13,11 @@ import {
   assertValidNativeNewsFeed,
   nativeNewsFeedRevision,
 } from "./news-feed-contract.mjs";
+import {
+  fallbackRoadmapState,
+  githubJsonPages,
+  shippedPriorityItems,
+} from "./roadmap-data.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(websiteRoot, "..");
@@ -342,9 +347,9 @@ const searchIndex = [
     title: "Nextcloud Native mobile and desktop client",
     shortTitle: "Nextcloud Native",
     description:
-      "Files, WebDAV sync, Photos, Memories, Recognize, Talk, Calendar, CalDAV, Contacts, CardDAV, Mail, Tables, Deck, Cookbook, Cospend, Music, and administration in one native client.",
+      "Explore the Android and Linux alpha plus the public delivery roadmap for Files, sync, Photos, Memories, Talk, groupware, installed apps, and administration.",
     text:
-      "Android iOS Linux macOS Windows offline cache multiple accounts background sync global Nextcloud search photo backup Live Photos RAW non-destructive editing Talk calls media controls Obsidian folder sync admin users groups apps server settings",
+      "Android Linux alpha native Nextcloud client public roadmap planned iOS macOS Windows offline cache multiple accounts background sync global search photo backup Live Photos RAW editing Talk calls Obsidian folder sync administration",
     contentType: "Product",
   },
   ...docs.map(({ html, ...doc }) => ({ ...doc, contentType: "Documentation" })),
@@ -370,6 +375,10 @@ async function githubJson(url) {
     throw new Error(`GitHub roadmap request failed with HTTP ${response.status}.`);
   }
   return response.json();
+}
+
+function githubProjectItems(url) {
+  return githubJsonPages(url, { headers: githubApiHeaders });
 }
 
 function projectField(item, name) {
@@ -405,13 +414,12 @@ function roadmapItem(item) {
 }
 
 async function allProjectItems() {
-  return githubJson(`${projectApi}/items?per_page=100&${projectFieldQuery}`);
+  return githubProjectItems(`${projectApi}/items?per_page=100&${projectFieldQuery}`);
 }
 
 const fallbackRoadmap = {
-  source: "repository",
+  ...fallbackRoadmapState,
   projectUrl,
-  updatedAt: new Date().toISOString(),
   epics: [
     [10, "EPIC-MEDIA", "Safe media backup and storage", "Media"],
     [11, "EPIC-SYNC", "Files client and advanced sync", "Files and sync"],
@@ -465,10 +473,10 @@ const fallbackRoadmap = {
 let roadmap = fallbackRoadmap;
 try {
   const [epics, priorities, projectItems, verification, milestones] = await Promise.all([
-    githubJson(`${projectApi}/views/5/items?per_page=100&${projectFieldQuery}`),
-    githubJson(`${projectApi}/views/3/items?per_page=100&${projectFieldQuery}`),
+    githubProjectItems(`${projectApi}/views/5/items?per_page=100&${projectFieldQuery}`),
+    githubProjectItems(`${projectApi}/views/3/items?per_page=100&${projectFieldQuery}`),
     allProjectItems(),
-    githubJson(`${projectApi}/views/4/items?per_page=100&${projectFieldQuery}`),
+    githubProjectItems(`${projectApi}/views/4/items?per_page=100&${projectFieldQuery}`),
     githubJson(
       "https://api.github.com/repos/Obiente/nc-native/milestones?state=all&per_page=100",
     ),
@@ -480,14 +488,14 @@ try {
   ]
     .filter(Boolean)
     .sort()
-    .at(-1) ?? new Date().toISOString();
+    .at(-1) ?? null;
   roadmap = {
     source: "github",
+    syncState: "live",
     projectUrl,
     updatedAt: projectUpdatedAt,
     epics: epics.map(roadmapItem).filter(Boolean),
-    shipped: projectRoadmapItems
-      .filter((item) => item.status === "Done")
+    shipped: shippedPriorityItems(projectRoadmapItems)
       .sort((left, right) => (right.closedAt ?? "").localeCompare(left.closedAt ?? "")),
     priorities: priorities
       .map(roadmapItem)

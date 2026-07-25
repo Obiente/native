@@ -86,9 +86,15 @@ const apps = [
 ];
 
 const activeApp = ref("files");
+const appSwitcher = ref(null);
 const activeAppMeta = computed(
   () => apps.find((app) => app.id === activeApp.value) ?? apps[0],
 );
+
+function focusAppSwitcher() {
+  appSwitcher.value?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  appSwitcher.value?.querySelector('[aria-pressed="true"]')?.focus();
+}
 </script>
 
 <template>
@@ -105,7 +111,7 @@ const activeAppMeta = computed(
     </header>
 
     <div class="preview-workspace">
-      <aside class="preview-apps" aria-label="Choose an app preview">
+      <aside ref="appSwitcher" class="preview-apps" aria-label="Choose an app preview">
         <div class="preview-apps-heading">
           <span>Apps</span>
           <small>Native views from one client</small>
@@ -124,7 +130,7 @@ const activeAppMeta = computed(
       </aside>
 
       <div class="preview-product">
-        <PreviewAppSurface :app="activeApp" />
+        <PreviewAppSurface :app="activeApp" @open-switcher="focusAppSwitcher" />
       </div>
     </div>
 

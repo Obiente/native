@@ -3,7 +3,7 @@ title: Syncing an Obsidian folder with Nextcloud
 slug: sync-obsidian-notes
 date: 2026-07-22
 lastUpdated: 2026-07-25
-description: Reliable two-way Nextcloud folder sync keeps Markdown notes visible to Obsidian, preserves conflicting edits, and works offline without a hidden app folder.
+description: The design for reliable two-way Nextcloud folder sync keeps Markdown notes visible to Obsidian, preserves conflicting edits, and avoids hidden app folders.
 tags: Obsidian Nextcloud sync, Markdown notes, Android folder sync, offline files
 image: /screenshots/obsidian-vault-sync.png
 imageAlt: Nextcloud Native showing a synthetic Obsidian vault two-way sync pair with pending and completed transfer counts on mobile

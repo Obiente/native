@@ -167,17 +167,22 @@ function notify(message) {
   <section class="app-surface">
     <header class="app-toolbar">
       <button class="mobile-apps" type="button" aria-label="Choose an app" @click="$emit('open-switcher')">
-        <PhSquaresFour :size="18" weight="duotone" />
+        <PhSquaresFour :size="18" weight="duotone" aria-hidden="true" />
       </button>
       <div>
         <h2>{{ activeMeta.title }}</h2>
-        <span><PhCheckCircle :size="14" weight="duotone" /> Connected to Nextcloud · {{ activeMeta.subtitle }}</span>
+        <span><PhCheckCircle :size="14" weight="duotone" aria-hidden="true" /> Connected to Nextcloud · {{ activeMeta.subtitle }}</span>
       </div>
       <label>
-        <PhMagnifyingGlass :size="16" weight="bold" />
-        <input v-model="query" type="search" :placeholder="`Search ${activeMeta.title}`" />
+        <PhMagnifyingGlass :size="16" weight="bold" aria-hidden="true" />
+        <input
+          v-model="query"
+          type="search"
+          :aria-label="`Search ${activeMeta.title}`"
+          :placeholder="`Search ${activeMeta.title}`"
+        />
       </label>
-      <button type="button" aria-label="More actions"><PhDotsThreeVertical :size="18" weight="bold" /></button>
+      <button type="button" aria-label="More app actions"><PhDotsThreeVertical :size="18" weight="bold" aria-hidden="true" /></button>
     </header>
 
     <div v-if="app === 'files'" class="files-layout">
@@ -210,7 +215,7 @@ function notify(message) {
         <p>{{ currentFile.kind }} · {{ currentFile.size }}</p>
         <div class="inline-actions">
           <button @click="notify('Shared through the system share sheet')"><PhShareNetwork :size="16" /> Share</button>
-          <button><PhDotsThreeVertical :size="16" /></button>
+          <button type="button" aria-label="More file actions"><PhDotsThreeVertical :size="16" aria-hidden="true" /></button>
         </div>
         <dl><div><dt>Available</dt><dd>Online + cached</dd></div><div><dt>Modified</dt><dd>{{ currentFile.changed }}</dd></div></dl>
       </aside>
@@ -231,7 +236,7 @@ function notify(message) {
         <aside class="photo-inspector">
           <img :src="currentPhoto.src" :alt="currentPhoto.title" />
           <h3>{{ currentPhoto.title }}</h3><p>{{ currentPhoto.meta }} · Full quality</p>
-          <div class="inline-actions"><button><PhShareNetwork :size="16" /> Share</button><button><PhDotsThreeVertical :size="16" /></button></div>
+          <div class="inline-actions"><button><PhShareNetwork :size="16" aria-hidden="true" /> Share</button><button type="button" aria-label="More photo actions"><PhDotsThreeVertical :size="16" aria-hidden="true" /></button></div>
         </aside>
       </template>
       <div v-else class="collection-cards">
@@ -252,7 +257,7 @@ function notify(message) {
         </button>
       </aside>
       <section class="thread">
-        <header><div><strong>{{ conversation }}</strong><small>3 participants · active</small></div><button><PhPhone :size="17" /></button><button><PhVideoCamera :size="17" /></button></header>
+        <header><div><strong>{{ conversation }}</strong><small>3 participants · active</small></div><button type="button" aria-label="Start audio call"><PhPhone :size="17" aria-hidden="true" /></button><button type="button" aria-label="Start video call"><PhVideoCamera :size="17" aria-hidden="true" /></button></header>
         <div class="message-list">
           <article v-for="message in messages" :key="message.time" :class="{ own: message.own }">
             <small>{{ message.sender }}</small><p>{{ message.body }}</p>
@@ -261,14 +266,14 @@ function notify(message) {
           </article>
           <article class="call-card"><PhPhone :size="20" weight="duotone" /><span><strong>Group call ended</strong><small>24 minutes · 3 participants</small></span></article>
         </div>
-        <form @submit.prevent="notify('Message sent in the preview')"><input placeholder="Write a message" /><button><PhMicrophone :size="17" /></button></form>
+        <form @submit.prevent="notify('Message sent in the preview')"><input aria-label="Message" placeholder="Write a message" /><button type="submit" aria-label="Send message"><PhMicrophone :size="17" aria-hidden="true" /></button></form>
       </section>
     </div>
 
     <div v-else-if="app === 'mail'" class="mail-layout">
       <aside class="mail-folders"><button class="compose"><PhPlus :size="15" /> New message</button><strong>Mailboxes</strong><button :class="{ active: mailbox === 'Inbox' }" @click="mailbox = 'Inbox'">Inbox <b>3</b></button><button>Starred</button><button>Sent</button><button>Drafts</button><button>Archive</button></aside>
       <section class="mail-list"><header><strong>{{ mailbox }}</strong><small>{{ mails.length }} messages</small></header><button v-for="mail in mails" :key="mail.id" :class="{ active: selectedMail === mail.id, unread: mail.unread }" @click="selectedMail = mail.id"><span><strong>{{ mail.sender }}</strong><time>{{ mail.time }}</time></span><b>{{ mail.subject }}</b><small>{{ mail.preview }}</small></button></section>
-      <article class="mail-message"><header><h3>{{ currentMail.subject }}</h3><button><PhDotsThreeVertical :size="17" /></button><p>From {{ currentMail.sender }} · to Obiente</p></header><div class="mail-body"><p>Hello Obiente,</p><p>The updated gallery flow is ready. The layout now keeps actions contextual and gives full-quality media room to breathe.</p><p>Could you review it before the workshop?</p><p>Thanks,<br />{{ currentMail.sender }}</p></div><footer><button @click="notify('Reply editor opened')">Reply</button><button>Forward</button></footer></article>
+      <article class="mail-message"><header><h3>{{ currentMail.subject }}</h3><button type="button" aria-label="More message actions"><PhDotsThreeVertical :size="17" aria-hidden="true" /></button><p>From {{ currentMail.sender }} · to Obiente</p></header><div class="mail-body"><p>Hello Obiente,</p><p>The updated gallery flow is ready. The layout now keeps actions contextual and gives full-quality media room to breathe.</p><p>Could you review it before the workshop?</p><p>Thanks,<br />{{ currentMail.sender }}</p></div><footer><button @click="notify('Reply editor opened')">Reply</button><button>Forward</button></footer></article>
     </div>
 
     <div v-else-if="app === 'tables'" class="tables-layout">
@@ -338,19 +343,19 @@ function notify(message) {
 
     <div v-else-if="app === 'music'" class="music-layout">
       <nav><button class="active">Albums</button><button>Artists</button><button>Playlists</button><button>Songs</button></nav>
-      <div class="album-grid"><article v-for="album in albums" :key="album.title"><img :src="album.artwork" :alt="`${album.title} album artwork`" /><strong>{{ album.title }}</strong><small>{{ album.artist }} · {{ album.tracks }} tracks</small><button @click="musicPlaying = true"><PhPlay :size="15" weight="fill" /></button></article></div>
-      <footer class="music-player"><img src="/demo-media/field-notes.webp" alt="" /><div><strong>Rain on glass</strong><small>Field recordings</small></div><button><PhSkipBack :size="16" weight="fill" /></button><button class="play" @click="musicPlaying = !musicPlaying"><component :is="musicPlaying ? PhPause : PhPlay" :size="17" weight="fill" /></button><button><PhSkipForward :size="16" weight="fill" /></button><time>02:18 / 04:36</time></footer>
+      <div class="album-grid"><article v-for="album in albums" :key="album.title"><img :src="album.artwork" :alt="`${album.title} album artwork`" /><strong>{{ album.title }}</strong><small>{{ album.artist }} · {{ album.tracks }} tracks</small><button type="button" :aria-label="`Play ${album.title}`" @click="musicPlaying = true"><PhPlay :size="15" weight="fill" aria-hidden="true" /></button></article></div>
+      <footer class="music-player"><img src="/demo-media/field-notes.webp" alt="" /><div><strong>Rain on glass</strong><small>Field recordings</small></div><button type="button" aria-label="Previous track"><PhSkipBack :size="16" weight="fill" aria-hidden="true" /></button><button class="play" type="button" :aria-label="musicPlaying ? 'Pause Rain on glass' : 'Play Rain on glass'" @click="musicPlaying = !musicPlaying"><component :is="musicPlaying ? PhPause : PhPlay" :size="17" weight="fill" aria-hidden="true" /></button><button type="button" aria-label="Next track"><PhSkipForward :size="16" weight="fill" aria-hidden="true" /></button><time>02:18 / 04:36</time></footer>
     </div>
 
     <div v-else-if="app === 'calendar'" class="calendar-layout">
       <aside><button class="new-event"><PhPlus :size="15" /> New event</button><strong>Calendars</strong><label><input checked type="checkbox" /> Personal</label><label><input checked type="checkbox" /> Obiente</label><label><input type="checkbox" /> Birthdays</label></aside>
-      <section class="calendar-month"><header><button>‹</button><h3>July 2026</h3><button>›</button><button>Today</button></header><div class="weekdays"><span v-for="day in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']" :key="day">{{ day }}</span></div><div class="month-grid"><button v-for="(day, index) in monthDays" :key="index" :class="{ muted: !day, today: day === 25 }"><span>{{ day }}</span><b v-if="day === 25">Workshop</b><b v-if="day === 28">Review call</b></button></div></section>
+      <section class="calendar-month"><header><button type="button" aria-label="Previous month">‹</button><h3>July 2026</h3><button type="button" aria-label="Next month">›</button><button type="button">Today</button></header><div class="weekdays"><span v-for="day in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']" :key="day">{{ day }}</span></div><div class="month-grid"><button v-for="(day, index) in monthDays" :key="index" type="button" :disabled="!day" :aria-label="day ? `July ${day}, 2026${day === 25 ? ', Workshop' : day === 28 ? ', Review call' : ''}` : 'Outside July 2026'" :class="{ muted: !day, today: day === 25 }"><span>{{ day }}</span><b v-if="day === 25">Workshop</b><b v-if="day === 28">Review call</b></button></div></section>
       <aside class="event-inspector"><p class="kicker">Friday 25 July</p><h3>Community workshop</h3><p>09:30–12:30 · Studio</p><dl><div><dt>Calendar</dt><dd>Obiente</dd></div><div><dt>Guests</dt><dd>4 attending</dd></div><div><dt>Reminder</dt><dd>30 minutes before</dd></div></dl><button>Edit event</button></aside>
     </div>
 
     <div v-else-if="app === 'admin'" class="admin-layout">
       <aside><strong>Administration</strong><button v-for="item in ['Overview','Users','Apps','Security','Sharing','Background jobs']" :key="item" :class="{ active: adminView === item }" @click="adminView = item">{{ item }}</button></aside>
-      <section><header><div><h3>{{ adminView }}</h3><p>Manage your Nextcloud server from the native workspace.</p></div><button><PhPlus :size="15" /> {{ adminView === 'Users' ? 'New user' : 'Add' }}</button></header><div v-if="adminView === 'Users'" class="user-table"><div class="user-head"><span>User</span><span>Role</span><span>Storage</span><span>Status</span></div><article v-for="user in users" :key="user.name"><span class="avatar"><img v-if="user.name === 'Obiente'" src="/obiente-avatar.png" alt="" /><template v-else>{{ user.name.slice(0, 1) }}</template></span><strong>{{ user.name }}</strong><span>{{ user.role }}</span><span>{{ user.quota }}</span><span class="online">{{ user.status }}</span><button><PhDotsThreeVertical :size="16" /></button></article></div><div v-else class="admin-cards"><article><PhShieldCheck :size="24" weight="duotone" /><strong>Security check</strong><span>All critical checks pass</span></article><article><PhAppWindow :size="24" weight="duotone" /><strong>Installed apps</strong><span>42 enabled · 3 updates</span></article><article><PhClock :size="24" weight="duotone" /><strong>Background jobs</strong><span>Last run 4 minutes ago</span></article></div></section>
+      <section><header><div><h3>{{ adminView }}</h3><p>Manage your Nextcloud server from the native workspace.</p></div><button><PhPlus :size="15" /> {{ adminView === 'Users' ? 'New user' : 'Add' }}</button></header><div v-if="adminView === 'Users'" class="user-table"><div class="user-head"><span>User</span><span>Role</span><span>Storage</span><span>Status</span></div><article v-for="user in users" :key="user.name"><span class="avatar"><img v-if="user.name === 'Obiente'" src="/obiente-avatar.png" alt="" /><template v-else>{{ user.name.slice(0, 1) }}</template></span><strong>{{ user.name }}</strong><span>{{ user.role }}</span><span>{{ user.quota }}</span><span class="online">{{ user.status }}</span><button type="button" :aria-label="`More actions for ${user.name}`"><PhDotsThreeVertical :size="16" aria-hidden="true" /></button></article></div><div v-else class="admin-cards"><article><PhShieldCheck :size="24" weight="duotone" /><strong>Security check</strong><span>All critical checks pass</span></article><article><PhAppWindow :size="24" weight="duotone" /><strong>Installed apps</strong><span>42 enabled · 3 updates</span></article><article><PhClock :size="24" weight="duotone" /><strong>Background jobs</strong><span>Last run 4 minutes ago</span></article></div></section>
     </div>
 
     <div v-if="feedback" class="app-feedback" role="status">{{ feedback }}</div>

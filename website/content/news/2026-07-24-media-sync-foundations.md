@@ -3,7 +3,7 @@ title: Backing up your phone photos should feel trustworthy
 slug: media-sync-foundations
 date: 2026-07-24
 lastUpdated: 2026-07-25
-description: See which photos are safely backed up to Nextcloud, which still need attention, and when it is safe to free phone storage.
+description: The verified-backup design distinguishes safe Nextcloud copies, files that need attention, and storage that can be reviewed for cleanup.
 tags: phone photo backup, Nextcloud Photos, Android, free phone storage
 image: /screenshots/media-backup-queue.png
 imageAlt: Nextcloud Native showing detected Camera and Screenshots folders plus pending and completed photo backup counts on mobile
@@ -92,10 +92,10 @@ available when the phone is offline.
 ## Formats and devices keep their meaning
 
 RAW originals remain distinct from JPEG fallbacks, while matching RAW/JPEG pairs can
-appear as one stack without hiding either file. Android and iOS Live Photos retain
-their still image and motion video as one experience. Edited derivatives, bursts,
-videos, HEIC, and broader image formats use explicit format metadata instead of being
-treated as interchangeable JPEG files.
+appear as one stack without hiding either file. The roadmap covers Android and iOS Live
+Photos as paired still-image and motion-video assets rather than claiming that support
+is already shipped. Edited derivatives, bursts, videos, HEIC, and broader image formats
+use explicit format metadata instead of being treated as interchangeable JPEG files.
 
 Android vendors impose different background and battery rules, so folder status also
 explains when the operating system paused work. Recovery and retry are visible

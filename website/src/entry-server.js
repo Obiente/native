@@ -43,9 +43,9 @@ export async function render(pathname) {
     "@type": "SoftwareApplication",
     name: "Nextcloud Native",
     applicationCategory: "ProductivityApplication",
-    operatingSystem: "Android, Linux, Windows, macOS, iOS",
+    operatingSystem: "Android, Linux",
     description:
-      "A native mobile and desktop client for Files, sync, Photos, Memories, Talk, Calendar, Contacts, Mail, and installed Nextcloud apps.",
+      "An early alpha native Nextcloud client for Android and Linux with real Files, media, Talk, Notes, Activity, dashboard, and adaptive app integrations.",
     url: siteUrl,
     codeRepository: "https://github.com/Obiente/nc-native",
     license: "https://www.gnu.org/licenses/agpl-3.0.html",
@@ -64,15 +64,12 @@ export async function render(pathname) {
     downloadUrl: "https://github.com/Obiente/nc-native/releases",
     softwareHelp: `${siteUrl}/contributing/`,
     featureList: [
-      "Native Nextcloud Files and WebDAV sync",
-      "Phone photo backup, Memories, albums, tags, people, RAW, and Live Photos",
-      "Nextcloud Talk messages, attachments, notifications, and calls",
-      "Calendar and CalDAV event management",
-      "Contacts and CardDAV address books",
-      "Mail folders, HTML messages, attachments, search, and composition",
-      "Tables, Deck, Cookbook, Cospend, Music, and adaptive installed apps",
-      "Native Nextcloud user, app, and server administration",
-      "Offline cache, multiple accounts, background sync, and global search",
+      "Native Nextcloud account connection on Android and Linux",
+      "WebDAV file browsing, previews, bounded downloads, and guarded text editing",
+      "Media browsing, server and RAW previews, recognized people, and per-person galleries",
+      "Talk room and read-only history views with typed attachments and system events",
+      "Markdown Notes editing and preview with explicit save and conflict handling",
+      "Read-only Activity timeline and adaptive typed views for installed apps",
     ],
     screenshot: [
       `${siteUrl}/screenshots/desktop-home.png`,
@@ -150,11 +147,11 @@ export async function render(pathname) {
         ],
         [
           "Can Nextcloud Native sync an Obsidian folder?",
-          "Yes. It pairs a normal device folder with a Nextcloud folder and provides revision-aware two-way sync.",
+          "Revision-aware folder-pair sync is in active development and is tracked on the public roadmap.",
         ],
         [
           "Can Nextcloud Native back up phone photos?",
-          "Yes. It shows waiting, uploading, verified, changed, failed, and cloud-only states and keeps current media visible to other apps.",
+          "Verified photo backup and safe storage recovery are in active development and are tracked on the public roadmap.",
         ],
       ].map(([name, text]) => ({
         "@type": "Question",

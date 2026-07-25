@@ -3,7 +3,7 @@ title: One native app for Files, Talk, Photos, and more
 slug: adaptive-native-apps
 date: 2026-07-20
 lastUpdated: 2026-07-25
-description: Nextcloud Native makes installed Nextcloud apps feel consistent on Android, iOS, Linux, macOS, and Windows without wrapping their web pages.
+description: Nextcloud Native is designed to make installed apps feel consistent without wrapping web pages, starting with Android and Linux and targeting iOS, macOS, and Windows.
 tags: Nextcloud apps, native Nextcloud client, Android, iOS, Linux, macOS, Windows, Files, Talk, Photos
 image: /screenshots/adaptive-dynamic-data.png
 imageAlt: Nextcloud Native rendering a synthetic community inventory as a native data table after recognizing verified typed fields

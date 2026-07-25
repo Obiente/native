@@ -80,6 +80,11 @@ const linkedItems = computed(() => {
 const sourceLabel = computed(() =>
   roadmap.source === "github" ? "GitHub Project and issues" : "Repository roadmap snapshot",
 );
+const syncLabel = computed(() =>
+  roadmap.syncState === "live" && roadmap.updatedAt
+    ? formatDate(roadmap.updatedAt)
+    : "Live sync unavailable",
+);
 </script>
 
 <template>
@@ -108,7 +113,7 @@ const sourceLabel = computed(() =>
     <div class="article-roadmap-body">
       <div class="article-roadmap-source">
         <span><strong>Source</strong> {{ sourceLabel }}</span>
-        <span><strong>Last synced</strong> {{ formatDate(roadmap.updatedAt) }}</span>
+        <span><strong>Last synced</strong> {{ syncLabel }}</span>
       </div>
 
       <a
@@ -130,12 +135,12 @@ const sourceLabel = computed(() =>
         </span>
       </a>
 
-      <div v-if="linkedItems.length" class="linked-issues" role="table" aria-label="Related roadmap issues">
-        <div class="linked-head issue-columns" role="row">
-          <span role="columnheader">Feature or capability</span>
-          <span role="columnheader">Status</span>
-          <span role="columnheader">Target</span>
-          <span role="columnheader">Issue</span>
+      <div v-if="linkedItems.length" class="linked-issues" aria-label="Related roadmap issues">
+        <div class="linked-head issue-columns" aria-hidden="true">
+          <span>Feature or capability</span>
+          <span>Status</span>
+          <span>Target</span>
+          <span>Issue</span>
         </div>
         <a
           v-for="item in linkedItems"
@@ -144,13 +149,12 @@ const sourceLabel = computed(() =>
           :href="item.url"
           target="_blank"
           rel="noreferrer"
-          role="row"
         >
-          <span class="linked-title" role="cell">
+          <span class="linked-title">
             <strong>{{ item.title }}</strong>
             <small>{{ item.taskId || `Issue #${item.number}` }}</small>
           </span>
-          <span class="quiet-status" :class="statusKey(item)" role="cell">
+          <span class="quiet-status" :class="statusKey(item)">
             <component
               :is="statusKey(item) === 'shipped' ? PhCheckCircle : statusKey(item) === 'active' ? PhClock : PhCircle"
               :size="14"
@@ -159,8 +163,8 @@ const sourceLabel = computed(() =>
             />
             {{ statusLabel(item) }}
           </span>
-          <span role="cell">{{ item.milestone || "Unscheduled" }}</span>
-          <span class="issue-reference" role="cell">
+          <span>{{ item.milestone || "Unscheduled" }}</span>
+          <span class="issue-reference">
             #{{ item.number }}
             <PhArrowSquareOut :size="13" weight="bold" aria-hidden="true" />
           </span>

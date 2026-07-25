@@ -49,7 +49,7 @@ export function metadataFor(path) {
   return {
     title: "Nextcloud Native · Obiente",
     description:
-      "A native Nextcloud mobile and desktop client for Files, WebDAV sync, Photos, Memories, Talk, Calendar, Contacts, Mail, and installed apps.",
+      "An early alpha native Nextcloud client for Android and Linux, with real integrations and a public roadmap for broader app and platform support.",
     canonical: `${siteUrl}/`,
     type: "website",
   };

@@ -157,42 +157,48 @@ const featureAreas = [
   {
     icon: File,
     title: "Files, WebDAV, and advanced sync",
-    body: "Browse, preview, edit, share, move, rename, and keep files offline. Folder pairs use durable queues, revision-aware conflict handling, and native local and Nextcloud pickers.",
+    stage: "In active development",
+    body: "The product direction covers browsing, previews, editing, sharing, offline files, and revision-safe folder pairs. The alpha currently provides real WebDAV browsing, previews, and guarded text editing while the broader sync workflow is completed.",
     link: "/news/sync-obsidian-notes/",
     label: "How folder sync works",
   },
   {
     icon: Camera,
     title: "Photos, Memories, and Recognize",
-    body: "Back up camera folders, browse albums, tags and people, retain Live Photos and RAW originals, edit non-destructively, and share cloud-only media through the system share sheet.",
+    stage: "In active development",
+    body: "The alpha already browses real media, RAW previews, and recognized people. Verified backup, albums, Live Photos, non-destructive editing, and cloud-only sharing remain tracked delivery work.",
     link: "/news/media-sync-foundations/",
     label: "How photo backup stays trustworthy",
   },
   {
     icon: ChatCircleDots,
     title: "Talk messages and calls",
-    body: "Use native conversations, replies, reactions, rich attachments, voice messages, search, notifications, and audio or video calls with foreground media controls.",
+    stage: "In active development",
+    body: "The alpha provides native rooms, read-only history, attachments, and typed call or system events. Sending, richer interactions, notifications, and full audio or video calling remain on the public roadmap.",
     link: "/compatibility/",
     label: "Explore app compatibility",
   },
   {
     icon: CalendarBlank,
     title: "Calendar, Contacts, and Mail",
-    body: "Work with Calendar and CalDAV events, Contacts and CardDAV address books, and full Mail folders, HTML messages, attachments, composition, and search.",
+    stage: "In active development",
+    body: "Native calendar, contact, and mailbox components are being connected to CalDAV, CardDAV, and Mail data. Full editing, composition, search, and device synchronization are tracked work.",
     link: "/architecture/",
     label: "See how native views are selected",
   },
   {
     icon: ListChecks,
     title: "Tables, Deck, Cookbook, Cospend, and Music",
-    body: "Edit tables, move Kanban cards, scale recipe ingredients, understand budgets through useful charts, and play music with album art and system media controls.",
+    stage: "In active development",
+    body: "Adaptive views already recognize these resource families. Editing tables, moving Kanban cards, recipe workflows, budget actions, and complete system playback integration are being verified app by app.",
     link: "/news/adaptive-native-apps/",
     label: "Read about adaptive native apps",
   },
   {
     icon: ShieldCheck,
     title: "Native Nextcloud administration",
-    body: "Manage users, groups, quotas, apps, server settings, background jobs, security status, and app administration without switching to a desktop browser.",
+    stage: "Planned",
+    body: "The planned administration workspace covers users, groups, quotas, apps, server settings, background jobs, security status, and app-specific administration with explicit permission checks.",
     link: "/roadmap/",
     label: "Follow the public delivery roadmap",
   },
@@ -202,23 +208,30 @@ const platforms = [
   {
     icon: Desktop,
     name: "Android",
-    status: "Native mobile",
-    body: "Photo backup, filesystem integration, background sync, sharing and notifications.",
+    status: "Alpha build",
+    body: "The current Android alpha provides native account, app, file, media, and system integration foundations while broader sync and communication work continues.",
     available: true,
   },
   {
     icon: Desktop,
     name: "Linux",
-    status: "Native desktop",
-    body: "A spacious desktop workspace with secure credentials, keyboard navigation and system files.",
+    status: "Alpha build",
+    body: "The current Linux desktop alpha provides the native workspace used for development and integration testing.",
     available: true,
   },
   {
     icon: Code,
-    name: "iOS · macOS · Windows",
-    status: "Native clients",
-    body: "Shared behavior with platform-native files, notifications, media, calls and credentials.",
-    available: true,
+    name: "Windows and macOS",
+    status: "Packaging preview",
+    body: "Prerelease MSI and DMG artifacts prove the packaging pipeline. Native credential storage and supported authenticated use are not implemented yet.",
+    available: false,
+  },
+  {
+    icon: Code,
+    name: "iOS and iPadOS",
+    status: "Planned",
+    body: "The shared architecture targets Apple mobile platforms, but no supported launcher is shipped yet.",
+    available: false,
   },
 ];
 
@@ -252,12 +265,12 @@ const frequentlyAsked = [
   {
     question: "Can I sync an Obsidian notes folder with Nextcloud?",
     answer:
-      "Yes. Pair a normal device folder with a Nextcloud folder, choose two-way sync, and keep the same Markdown files visible to Obsidian and other editors. Revision checks preserve both versions when changes conflict.",
+      "Revision-safe folder-pair sync is in active development. The intended workflow pairs a normal device folder with a Nextcloud folder, keeps Markdown visible to Obsidian and other editors, and preserves both versions when changes conflict.",
   },
   {
     question: "Can it back up photos and safely free phone storage?",
     answer:
-      "Yes. Waiting, uploading, verified, changed, failed, and cloud-only photos remain distinguishable. Storage cleanup only includes exact versions verified on the selected server and keeps cloud-only photos available for sharing.",
+      "Verified photo backup and storage recovery are in active development. The design distinguishes waiting, uploading, verified, changed, failed, and cloud-only files, and only offers cleanup for exact versions verified on the selected server.",
   },
   {
     question: "How does it work with so many Nextcloud apps?",
@@ -507,6 +520,7 @@ const frequentlyAsked = [
                 <span class="feature-icon">
                   <component :is="feature.icon" :size="24" weight="duotone" aria-hidden="true" />
                 </span>
+                <span class="feature-stage">{{ feature.stage }}</span>
                 <h3>{{ feature.title }}</h3>
                 <p>{{ feature.body }}</p>
                 <a :href="feature.link">
