@@ -337,6 +337,16 @@ await writeFile(
 );
 
 const searchIndex = [
+  {
+    path: "/",
+    title: "Nextcloud Native mobile and desktop client",
+    shortTitle: "Nextcloud Native",
+    description:
+      "Files, WebDAV sync, Photos, Memories, Recognize, Talk, Calendar, CalDAV, Contacts, CardDAV, Mail, Tables, Deck, Cookbook, Cospend, Music, and administration in one native client.",
+    text:
+      "Android iOS Linux macOS Windows offline cache multiple accounts background sync global Nextcloud search photo backup Live Photos RAW non-destructive editing Talk calls media controls Obsidian folder sync admin users groups apps server settings",
+    contentType: "Product",
+  },
   ...docs.map(({ html, ...doc }) => ({ ...doc, contentType: "Documentation" })),
   ...news.map(({ html, ...post }) => ({ ...post, contentType: "News" })),
   { ...changelog, html: undefined, contentType: "Changelog" },
@@ -388,12 +398,20 @@ function roadmapItem(item) {
     status: projectField(item, "Status"),
     milestone: issue.milestone?.title ?? null,
     progress: issue.sub_issues_summary ?? null,
+    labels: (issue.labels ?? []).map((label) => label.name).filter(Boolean),
+    updatedAt: issue.updated_at ?? null,
+    closedAt: issue.closed_at ?? null,
   };
+}
+
+async function allProjectItems() {
+  return githubJson(`${projectApi}/items?per_page=100&${projectFieldQuery}`);
 }
 
 const fallbackRoadmap = {
   source: "repository",
   projectUrl,
+  updatedAt: new Date().toISOString(),
   epics: [
     [10, "EPIC-MEDIA", "Safe media backup and storage", "Media"],
     [11, "EPIC-SYNC", "Files client and advanced sync", "Files and sync"],
@@ -411,31 +429,71 @@ const fallbackRoadmap = {
     status: "In Progress",
     milestone: null,
     progress: null,
+    labels: ["epic"],
+    updatedAt: null,
+    closedAt: null,
     url: `https://github.com/Obiente/nc-native/issues/${number}`,
   })),
+  shipped: [],
   milestones: [],
-  priorities: [],
+  priorities: [
+    [53, "DYN-013", "Cospend and budget presentation", "Adaptive apps"],
+    [54, "DYN-014", "Mail presentation", "Adaptive apps"],
+    [124, "SYNC-018", "File sharing and sharee search", "Files and sync"],
+    [129, "SYNC-017", "Multiple account roots", "Files and sync"],
+    [162, "MEDIA-006", "Preserve third-party media picker visibility", "Media"],
+    [164, "MEDIA-008", "Cloud-only media restore", "Media"],
+    [169, "MEDIA-018", "Media backup recovery and retry", "Media"],
+    [174, "PHOTO-006", "Native albums and shared albums", "Photos and Memories"],
+  ].map(([number, taskId, title, area]) => ({
+    number,
+    taskId,
+    title,
+    area,
+    priority: "P0",
+    status: "Todo",
+    milestone: null,
+    progress: null,
+    labels: [],
+    updatedAt: null,
+    closedAt: null,
+    url: `https://github.com/Obiente/nc-native/issues/${number}`,
+  })),
   verification: [],
 };
 
 let roadmap = fallbackRoadmap;
 try {
-  const [epics, priorities, verification, milestones] = await Promise.all([
+  const [epics, priorities, projectItems, verification, milestones] = await Promise.all([
     githubJson(`${projectApi}/views/5/items?per_page=100&${projectFieldQuery}`),
     githubJson(`${projectApi}/views/3/items?per_page=100&${projectFieldQuery}`),
+    allProjectItems(),
     githubJson(`${projectApi}/views/4/items?per_page=100&${projectFieldQuery}`),
     githubJson(
       "https://api.github.com/repos/Obiente/nc-native/milestones?state=all&per_page=100",
     ),
   ]);
+  const projectRoadmapItems = projectItems.map(roadmapItem).filter(Boolean);
+  const projectUpdatedAt = [
+    ...projectRoadmapItems.map((item) => item.updatedAt),
+    ...milestones.map((milestone) => milestone.updated_at),
+  ]
+    .filter(Boolean)
+    .sort()
+    .at(-1) ?? new Date().toISOString();
   roadmap = {
     source: "github",
     projectUrl,
+    updatedAt: projectUpdatedAt,
     epics: epics.map(roadmapItem).filter(Boolean),
+    shipped: projectRoadmapItems
+      .filter((item) => item.status === "Done")
+      .sort((left, right) => (right.closedAt ?? "").localeCompare(left.closedAt ?? "")),
     priorities: priorities
       .map(roadmapItem)
       .filter(Boolean)
       .filter((item) => !item.taskId?.startsWith("EPIC-"))
+      .filter((item) => item.status !== "Done")
       .sort(
         (left, right) =>
           (left.priority ?? "").localeCompare(right.priority ?? "") ||
@@ -446,6 +504,10 @@ try {
       number: milestone.number,
       title: milestone.title,
       url: milestone.html_url,
+      description: milestone.description,
+      state: milestone.state,
+      dueOn: milestone.due_on,
+      updatedAt: milestone.updated_at,
       open: milestone.open_issues,
       closed: milestone.closed_issues,
     })),
@@ -461,6 +523,7 @@ await writeFile(
 
 const roadmapSearchText = [
   ...roadmap.epics,
+  ...roadmap.shipped,
   ...roadmap.priorities,
   ...roadmap.verification,
   ...roadmap.milestones,

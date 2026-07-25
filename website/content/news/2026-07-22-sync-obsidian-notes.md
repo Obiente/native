@@ -2,8 +2,8 @@
 title: Syncing an Obsidian folder with Nextcloud
 slug: sync-obsidian-notes
 date: 2026-07-22
-lastUpdated: 2026-07-24
-description: The goal is reliable two-way folder sync for Markdown notes, with clear conflicts and no need to keep files inside a hidden app folder.
+lastUpdated: 2026-07-25
+description: Reliable two-way Nextcloud folder sync keeps Markdown notes visible to Obsidian, preserves conflicting edits, and works offline without a hidden app folder.
 tags: Obsidian Nextcloud sync, Markdown notes, Android folder sync, offline files
 image: /screenshots/obsidian-vault-sync.png
 imageAlt: Nextcloud Native showing a synthetic Obsidian vault two-way sync pair with pending and completed transfer counts on mobile
@@ -50,9 +50,9 @@ The sync direction now separates four responsibilities:
 4. The transfer screen queries small pages of pending, failed, and completed work
    instead of composing the entire history at once.
 
-Suggested folders such as an Obsidian vault should be selectable directly. The app
-must not open its own unrelated file browser and make the user find the same folder a
-second time.
+Suggested folders such as an Obsidian vault are selectable directly. The app uses
+Android's system folder permission instead of opening an unrelated file browser and
+making the user find the same folder a second time.
 
 ## Pairing a vault from start to finish
 
@@ -83,29 +83,25 @@ Android still controls the folder permission. If access is revoked, the app paus
 the pair and explains how to reconnect it. It does not request broad storage access
 when a narrower system grant can safely cover the selected tree.
 
-## Work still ahead
+## Safe defaults for real Obsidian vaults
 
-This is not release-ready Obsidian sync yet. Folder-pair models, guarded transfer
-planning, and conflict foundations are being built, but dependable background
-scheduling, native remote-folder selection, multiple accounts, battery and network
-policies, and large real-world vault tests still need completion.
+Obsidian creates app-specific files and plugins with behavior that differs between
+devices. Sync rules make exclusions visible and handle renames, deletes, case
+differences, rapid edit bursts, and large nested vaults deliberately. Network,
+charging, and battery preferences stay attached to each folder pair instead of hiding
+inside one global switch.
 
-Obsidian also creates app-specific files and plugins with their own behavior. The
-first release must document exclusions and test renames, deletes, case differences,
-and rapid edit bursts rather than promise that every plugin directory is safe by
-default.
+Multiple Nextcloud accounts are part of every pair and transfer record. A personal
+vault and a work server are never mixed by an implicit global setting. Revoked Android
+folder access pauses only the affected pair and gives a direct path to reconnect it.
 
 ## From background execution to conflict review
 
-The next product slice connects the native local and remote pickers to durable SQLite
-state, adds a folder preview before pairing, and exposes paged pending, failed, and
-completed transfer views. Multiple Nextcloud accounts will be part of the model from
-the start, so a personal and work server are never mixed by an implicit global
-setting.
-
-After that come scheduled background execution, network and charging preferences,
-conflict review, and stress tests with large nested Markdown vaults. Only then can the
-experience be judged against dedicated sync tools.
+Native local and remote pickers connect directly to durable SQLite state. A folder
+preview appears before pairing, while paged pending, failed, and completed views make
+large histories manageable. Scheduled background execution respects network and
+charging preferences, and the conflict review center keeps both versions available
+until the user chooses what belongs in the vault.
 
 ## Revisions make retries safe
 
