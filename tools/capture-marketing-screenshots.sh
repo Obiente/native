@@ -8,17 +8,6 @@ if (($#)); then
   exit 2
 fi
 
-java_command="${JAVA_HOME:+$JAVA_HOME/bin/}java"
-if ! command -v "$java_command" >/dev/null 2>&1; then
-  echo "JDK 21 was not found. Install it and set JAVA_HOME before capturing." >&2
-  exit 1
-fi
-java_version="$("$java_command" -version 2>&1 | awk -F'"' '/version/ { print $2; exit }')"
-if [[ "${java_version%%.*}" != "21" ]]; then
-  echo "JDK 21 is required. Set JAVA_HOME to a JDK 21 installation." >&2
-  exit 1
-fi
-
 cd "$repository_root"
 ./gradlew --no-daemon :ui:captureMarketingScreenshots
 
