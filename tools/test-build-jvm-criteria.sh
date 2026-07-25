@@ -43,4 +43,14 @@ do
     }
 done
 
+for helper in \
+    tools/deploy-local.sh \
+    tools/capture-marketing-screenshots.sh
+do
+    if grep -Eq 'JDK 21 (is required|was not found)|java_major.*21|java_version.*21' "$helper"; then
+        printf '%s must let the Gradle daemon criteria select Java 21 instead of rejecting another supported launcher JDK.\n' "$helper" >&2
+        exit 1
+    fi
+done
+
 printf 'Build JVM criteria checks passed.\n'
