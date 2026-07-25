@@ -267,7 +267,7 @@ fun GenericNativeAppScreen(
                         Button(onClick = onLoadMore, enabled = !loadingMore) {
                             if (loadingMore) {
                                 CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                                Text("Loading…", modifier = Modifier.padding(start = NextcloudSpacing.Small))
+                                Text("Loading...", modifier = Modifier.padding(start = NextcloudSpacing.Small))
                             } else {
                                 Text(if (loadMoreError == null) "Load more" else "Try again")
                             }
@@ -543,7 +543,7 @@ private fun GenericTableValueCell(
     emphasized: Boolean,
     onEdit: (NativeCellEditPlan) -> Unit,
 ) {
-    val value = rawValue?.takeIf(String::isNotBlank)?.let { formatNativeField(field, it).displayValue } ?: "—"
+    val value = rawValue?.takeIf(String::isNotBlank)?.let { formatNativeField(field, it).displayValue } ?: "-"
     Row(
         modifier = Modifier.width(width)
             .heightIn(min = 50.dp)
@@ -565,7 +565,7 @@ private fun GenericTableValueCell(
             } else {
                 MaterialTheme.typography.bodyMedium
             },
-            color = if (value == "—") MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+            color = if (value == "-") MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -592,7 +592,7 @@ private fun GenericRendererLoading(title: String) {
         }
         Text("Loading $title", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Fetching the latest data from your server…",
+            "Fetching the latest data from your server...",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1721,7 +1721,7 @@ private fun GenericRecordBoard(
             when (val result = actionExecutor.execute(target.plan.request(values))) {
                 is NativeActionExecutionResult.Success -> {
                     editTarget = null
-                    actionMessage = "Update accepted. Refreshing the card…"
+                    actionMessage = "Update accepted. Refreshing the card..."
                     onActionSucceeded?.invoke()
                 }
                 is NativeActionExecutionResult.Failure -> actionError = result.message
@@ -1744,7 +1744,7 @@ private fun GenericRecordBoard(
                         targetLaneTitle = destination.title,
                         beforeFingerprint = fingerprint,
                     )
-                    actionMessage = "Move accepted. Refreshing the board to verify it…"
+                    actionMessage = "Move accepted. Refreshing the board to verify it..."
                     onActionSucceeded?.invoke()
                 }
                 is NativeActionExecutionResult.Failure -> actionError = result.message
@@ -1761,7 +1761,7 @@ private fun GenericRecordBoard(
             when (val result = actionExecutor.execute(target.request(title, description))) {
                 is NativeActionExecutionResult.Success -> {
                     createTarget = null
-                    actionMessage = "Card created in ${target.lane.title}. Refreshing the board…"
+                    actionMessage = "Card created in ${target.lane.title}. Refreshing the board..."
                     onActionSucceeded?.invoke()
                 }
                 is NativeActionExecutionResult.Failure -> actionError = result.message
@@ -1778,7 +1778,7 @@ private fun GenericRecordBoard(
             when (val result = actionExecutor.execute(target.plan.request())) {
                 is NativeActionExecutionResult.Success -> {
                     confirmTarget = null
-                    actionMessage = "${target.plan.label} accepted. Refreshing the board…"
+                    actionMessage = "${target.plan.label} accepted. Refreshing the board..."
                     onActionSucceeded?.invoke()
                 }
                 is NativeActionExecutionResult.Failure -> actionError = result.message
@@ -2078,7 +2078,7 @@ private fun NativeBoardCreateDialog(
                 enabled = !busy && title.isNotBlank(),
                 onClick = { onCreate(title, description) },
             ) {
-                Text(if (busy) "Creating…" else "Create")
+                Text(if (busy) "Creating..." else "Create")
             }
         },
     )
@@ -2117,7 +2117,7 @@ private fun NativeBoardDirectActionDialog(
                 },
                 onClick = onConfirm,
             ) {
-                Text(if (busy) "Working…" else target.plan.label)
+                Text(if (busy) "Working..." else target.plan.label)
             }
         },
     )
@@ -2173,7 +2173,7 @@ private fun NativeBoardEditDialog(
                     if (validation.isEmpty()) onSave(values) else errors = validation
                 },
             ) {
-                Text(if (busy) "Saving…" else "Save")
+                Text(if (busy) "Saving..." else "Save")
             }
         },
     )
@@ -3987,7 +3987,7 @@ private fun NativeStructuredValue.Scalar.structuredDisplayValue(): String = when
         "false" -> "No"
         else -> value.orEmpty()
     }
-    NativeStructuredScalarKind.nullValue -> "—"
+    NativeStructuredScalarKind.nullValue -> "-"
     else -> value.orEmpty()
 }
 

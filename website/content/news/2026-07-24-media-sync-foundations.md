@@ -30,7 +30,7 @@ changed after upload, failed with a retry, intentionally excluded, or stored onl
 the cloud after local cleanup.
 
 Without those distinctions, people have to open the server, compare folders, and
-guess before deleting anything. The problem becomes worse when an app “organizes”
+guess before deleting anything. The problem becomes worse when an app "organizes"
 uploaded media by moving it into a private app folder. That can hide recent photos
 from WhatsApp, Instagram, Discord, editors, and Android's normal media picker.
 
@@ -111,7 +111,7 @@ and verification record.
 After reliable background execution, the project can add the storage review flow,
 temporary cloud-only sharing, richer RAW/JPEG grouping, and stress tests against
 large camera libraries. The roadmap tracks each acceptance gate rather than hiding
-the work behind one “photo backup” checkbox.
+the work behind one "photo backup" checkbox.
 
 ## Proof belongs outside the queue
 

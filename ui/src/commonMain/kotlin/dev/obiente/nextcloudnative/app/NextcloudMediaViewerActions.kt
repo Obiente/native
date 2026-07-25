@@ -33,7 +33,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import kotlinx.coroutines.launch
 
 internal enum class MediaViewerAction(val label: String) {
-    SendCopy("Send a copy…"),
+    SendCopy("Send a copy..."),
     ShareNextcloud("Manage Nextcloud sharing"),
     AddToAlbum("Add to album"),
     Move("Move"),
@@ -179,7 +179,7 @@ private fun MediaTransferDialog(
                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.size(8.dp))
                 }
-                Text(if (running) "${verb}ing…" else verb)
+                Text(if (running) "${verb}ing..." else verb)
             }
         },
     )
@@ -245,7 +245,7 @@ private fun MediaDeleteDialog(
                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.size(8.dp))
                 }
-                Text(if (running) "Deleting…" else "Delete")
+                Text(if (running) "Deleting..." else "Delete")
             }
         },
     )
@@ -300,7 +300,7 @@ private fun MediaAlbumDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                    Text("Loading albums…")
+                    Text("Loading albums...")
                 }
                 catalog?.albums.isNullOrEmpty() -> Text("No writable albums are available yet.")
                 else -> LazyColumn(
@@ -369,7 +369,7 @@ private fun MediaAlbumDialog(
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(8.dp))
                     }
-                    Text(if (running) "Adding…" else activePlan.confirmation.confirmLabel)
+                    Text(if (running) "Adding..." else activePlan.confirmation.confirmLabel)
                 }
             }
         },
@@ -567,7 +567,7 @@ private fun MediaShareDialog(
                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.size(8.dp))
                 }
-                Text(if (running) "Creating…" else "Create share")
+                Text(if (running) "Creating..." else "Create share")
             }
         },
     )

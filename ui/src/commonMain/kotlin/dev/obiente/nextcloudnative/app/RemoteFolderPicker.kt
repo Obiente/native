@@ -430,7 +430,7 @@ internal fun RemoteFolderPickerDialog(
                         if (refreshing) {
                             item(key = "refreshing") {
                                 Text(
-                                    "Showing cached folders while refreshing…",
+                                    "Showing cached folders while refreshing...",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

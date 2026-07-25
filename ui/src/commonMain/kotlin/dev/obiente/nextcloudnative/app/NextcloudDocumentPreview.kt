@@ -142,7 +142,7 @@ fun NextcloudDocumentPreview(
             }
 
             DocumentPreviewUiState.Error -> DocumentPreviewMessage(
-                title = "Couldn’t load this preview",
+                title = "Couldn't load this preview",
                 detail = "The server did not return a usable document preview.",
                 action = "Retry",
                 onAction = { attempt += 1 },
@@ -183,7 +183,7 @@ private fun DocumentWorkflowBar(
                             strokeWidth = 2.dp,
                         )
                     }
-                    Text(if (editStatus == DocumentEditUiState.Starting) "Starting Office…" else "Edit in Office")
+                    Text(if (editStatus == DocumentEditUiState.Starting) "Starting Office..." else "Edit in Office")
                 }
                 is OfficeEditSessionPlan.Blocked -> Text(
                     officePlan.reason.userMessage(),

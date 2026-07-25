@@ -1,26 +1,76 @@
 # Platform strategy
 
-The project has two portable layers and thin launchers:
+Nextcloud Native already shares product rules, typed domain models, schema
+compilation, and many semantic Compose components. Transport and protocol code
+is still duplicated in places, metadata is mostly in memory, and the durable
+repository/cache/sync foundation is next-phase work.
 
-1. The Rust semantic compiler builds the same typed schema on every platform.
-2. The shared Compose component library renders that schema without HTML.
-3. Platform launchers own only lifecycle and operating-system integrations.
+The target architecture has three portable layers and thin platform products:
 
-## Supported build direction
+1. The Rust semantic compiler produces the same validated native schema.
+2. Shared Kotlin repositories own account state, caching, pagination,
+   conflicts, and actions.
+3. Shared Compose components render semantic workflows without HTML.
+4. Platform launchers own lifecycle, layout adaptation, secure storage,
+   background work, files, notifications, media, sharing, and packaging.
 
-| Platform | Shared runtime | Platform-specific responsibilities |
-| --- | --- | --- |
-| Android | Compose + semantic schema | Keystore, background upload, shares, notifications, camera and calls |
-| iOS | Compose + semantic schema | Keychain, background transfer, share extension, notifications and CallKit |
-| Windows | Compose Desktop | Credential Manager, file integration, notifications and packaging |
-| macOS | Compose Desktop | Keychain, Finder integration, notifications and packaging |
-| Linux | Compose Desktop | Secret Service, file integration, notifications and packaging |
+## Current status
 
-The current build enables the desktop JVM target because it can be compiled and
-tested on this Linux workstation without downloading an Android SDK. All UI code
-lives in `commonMain`, so adding Android and iOS targets must not require moving
-or duplicating components.
+| Platform | Runtime | Current state | Platform-specific direction |
+| --- | --- | --- | --- |
+| Android | Compose Multiplatform | Active launcher and signed alpha APK/AAB | Keystore, WorkManager, DocumentsProvider, permissions, notifications, shares, media sessions, camera backup, and calls |
+| Linux | Compose Desktop | Primary interactive desktop target; alpha RPM/DEB | Secret Service, desktop file integration, notifications, media keys, portals, and conventional sync roots |
+| Windows | Compose Desktop | Early MSI packaging artifact; no supported authenticated login yet | Credential Manager, Cloud Files API, notifications, media controls, and updates |
+| macOS | Compose Desktop | Early DMG packaging artifact; no supported authenticated login yet | Keychain, File Provider/Finder integration, notifications, media controls, and updates |
+| iOS / iPadOS | Planned Compose target | No supported launcher is shipped | Keychain, File Provider, background transfer, share extension, notifications, media, and CallKit |
 
-No shared module may import Android, Apple, Windows or Linux APIs. Those belong
-behind platform interfaces in their respective source sets.
+Packaging is not feature parity. A platform becomes supported for a workflow
+only after its platform-specific acceptance tests pass and the limitation is
+recorded in [COMPATIBILITY.md](COMPATIBILITY.md).
 
+## Shared boundaries
+
+- Shared modules must not import Android, Apple, Windows, macOS, or Linux APIs.
+- Platform services implement interfaces owned by shared domain code.
+- Protocol parsing, permission rules, sync policy, retries, conflicts, and
+  account identity belong in shared code. Existing duplication should move
+  toward that boundary rather than becoming a new platform-specific design.
+- Secure credentials remain inside the platform credential store.
+- Filesystem providers and sync roots will expose the same shared file and
+  transfer state once the durable repository/sync foundation exists, while
+  using each operating system's native provider model.
+- Shared Compose components contain behavior and semantics. Platform layouts
+  may arrange them differently.
+
+## Mobile product rules
+
+- Correct safe-area insets, system back, touch targets, and permission flows.
+- State restoration across rotation, activity recreation, and process death.
+- Durable background work that is honest about Android/iOS scheduling limits.
+- Progressive layouts for large phones, tablets, foldables, and external
+  displays.
+- Native share/open-with, notifications, media sessions, filesystem providers,
+  camera/media discovery, and calling surfaces.
+
+## Desktop product rules
+
+- Resizable master-detail and multi-pane workspaces where the workflow benefits.
+- Keyboard navigation, pointer selection, context menus, drag-and-drop, and
+  accessibility focus.
+- Dense tables, persistent inspectors, multi-selection, and broad content views
+  instead of phone cards stretched across a window.
+- Conventional sync roots or native virtual-file providers according to the
+  operating system.
+- Secret storage, notifications, system media controls, file associations,
+  updates, and native packaging.
+
+## Platform delivery rule
+
+Shared code is valuable only when it preserves correct native behavior. Move a
+rule into shared code when it is domain policy. Keep an implementation in a
+platform source set when it depends on lifecycle, security, scheduling,
+filesystem, media, notification, windowing, or accessibility APIs unique to
+that operating system.
+
+The dependency order and acceptance gates are defined in
+[ROADMAP.md](ROADMAP.md), especially the platform productization milestone.

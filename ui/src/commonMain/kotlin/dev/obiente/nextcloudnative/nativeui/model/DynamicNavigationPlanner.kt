@@ -480,7 +480,7 @@ private fun DynamicAction.resolveNavigationParameters(
 }
 
 /**
- * A collection query such as `tracks?album=…` is a safe read-only child facet for an `albums`
+ * A collection query such as `tracks?album=...` is a safe read-only child facet for an `albums`
  * record. Exact semantic equality keeps unrelated options such as page, limit, and sort inert.
  */
 private fun String.isContextFilterFor(contextResourceId: String): Boolean {
