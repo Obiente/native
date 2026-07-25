@@ -38,7 +38,7 @@ class NextcloudDocumentWebDavTest {
             expectedEtag = "\"read-1\"",
         )
 
-        assertEquals("hello from cloud", destination.toString(Charsets.UTF_8))
+        assertEquals("hello from cloud", destination.toByteArray().toString(Charsets.UTF_8))
         assertEquals(16L, result.byteCount)
         assertEquals("text/plain; charset=utf-8", result.contentType)
         assertEquals("\"read-1\"", result.etag)

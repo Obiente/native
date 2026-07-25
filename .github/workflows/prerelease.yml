@@ -155,14 +155,12 @@ jobs:
           NC_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
           NC_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
         run: |
-          set -o pipefail
-          ./gradlew --no-daemon :androidApp:assembleDirectApk :androidApp:bundleRelease 2>&1 |
-            tee "${RUNNER_TEMP}/android-release-build.log"
-          if grep -Fq "compiled with an incompatible version of Kotlin" \
-            "${RUNNER_TEMP}/android-release-build.log"; then
-            echo "Android lint could not analyze Kotlin metadata; refusing to publish." >&2
-            exit 1
-          fi
+          ./gradlew --no-daemon \
+            :androidApp:verifyReleaseLintGate \
+            :androidApp:lintVitalDirectApk \
+            :androidApp:lintVitalRelease \
+            :androidApp:assembleDirectApk \
+            :androidApp:bundleRelease
 
       - name: Verify Android signing and prepare artifacts
         id: android

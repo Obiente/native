@@ -5,6 +5,7 @@ import android.app.Notification
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
@@ -34,7 +35,10 @@ internal class NextcloudFileSyncWorker(
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         try {
             setForeground(createForegroundInfo(pairId))
-        } catch (_: ForegroundServiceStartNotAllowedException) {
+        } catch (error: IllegalStateException) {
+            if (!isForegroundServiceStartNotAllowed(error)) {
+                throw error
+            }
             // WorkManager may still execute short work when the OS temporarily refuses an FGS.
         }
         val engine = AndroidFileSyncEngine(applicationContext)
@@ -82,6 +86,13 @@ internal class NextcloudFileSyncWorker(
 
     private fun stableNotificationId(pairId: String): Int =
         pairId.hashCode().let { if (it == Int.MIN_VALUE) 1 else kotlin.math.abs(it) }.coerceAtLeast(1)
+
+    private fun isForegroundServiceStartNotAllowed(error: IllegalStateException): Boolean =
+        Build.VERSION.SDK_INT >= 31 && isForegroundServiceStartNotAllowedApi31(error)
+
+    @RequiresApi(31)
+    private fun isForegroundServiceStartNotAllowedApi31(error: IllegalStateException): Boolean =
+        error is ForegroundServiceStartNotAllowedException
 
     internal companion object {
         const val KEY_PAIR_ID = "pair_id"
