@@ -5973,7 +5973,7 @@ private fun PersonMediaScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             if (postMutationRefreshRunning) {
-                                "Refreshing person…"
+                                "Refreshing person..."
                             } else {
                                 "Change saved, refresh needed"
                             },
