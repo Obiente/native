@@ -74,6 +74,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    lint {
+        checkTestSources = true
+        xmlReport = true
+    }
 }
 
 dependencies {
@@ -114,4 +119,26 @@ tasks.matching { task ->
         task.name == "assembleDirectApk"
 }.configureEach {
     dependsOn(validateReleaseSigning)
+}
+
+val verifyReleaseLintGate by tasks.registering {
+    group = "verification"
+    description = "Runs full release lint and proves the analyzer inspected its test probe."
+    dependsOn("lintRelease")
+
+    val lintReport = layout.buildDirectory.file("reports/lint-results-release.xml")
+    inputs.file(lintReport)
+
+    doLast {
+        val report = lintReport.get().asFile
+        check(report.isFile) {
+            "Release lint did not produce ${report.relativeTo(projectDir)}."
+        }
+        val reportText = report.readText()
+        check("id=\"SdCardPath\"" in reportText &&
+            "ReleaseLintGateFixture.kt" in reportText
+        ) {
+            "Release lint did not detect its known SdCardPath test probe."
+        }
+    }
 }
