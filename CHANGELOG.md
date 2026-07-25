@@ -9,33 +9,6 @@ until the full product sprint is complete.
 
 ## Unreleased
 
-## [0.1.0-alpha.4]
-
-### Fixed
-
-- Android release lint now understands Kotlin 2.4 metadata and catches real
-  release issues without relying on build-log text.
-- Release pages show a compact platform status table only when a build is
-  unavailable.
-
-## [0.1.0-alpha.3]
-
-### Fixed
-
-- macOS packages use a valid Apple package version while the application keeps
-  its prerelease product version.
-- Staged release assets retain packages nested inside platform artifact
-  directories.
-
-## [0.1.0-alpha.2]
-
-### Fixed
-
-- Release packaging now treats Android, Linux, Windows, and macOS independently
-  and publishes when at least three platform artifacts are available.
-- macOS packaging uses GitHub's supported Intel runner and retains detailed
-  `jpackage` diagnostics when packaging fails.
-
 ## [0.1.0-alpha.1]
 
 ### Added
@@ -88,6 +61,12 @@ until the full product sprint is complete.
 - Cookbook categories and keywords now open their matching recipes instead of
   exposing the category or keyword record as the destination.
 - Binary recipe images are no longer opened as JSON detail records.
+- Android release lint understands Kotlin 2.4 metadata and checks the complete
+  release source.
+- Android APK and App Bundle signatures are matched against the trusted release
+  certificate.
+- macOS packages use Apple-compatible version metadata.
+- Release pages show platform availability only when a build is missing.
 
 ### Security
 
