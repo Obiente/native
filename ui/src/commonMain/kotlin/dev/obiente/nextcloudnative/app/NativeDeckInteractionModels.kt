@@ -93,6 +93,9 @@ sealed interface DeckUiInteraction {
     data class DueDate(val card: DeckCard) : DeckUiInteraction
     data class Comments(val card: DeckCard) : DeckUiInteraction
     data class Attachments(val card: DeckCard) : DeckUiInteraction
+    data class DeleteBoard(val board: DeckBoard) : DeckUiInteraction
+    data class DeleteStack(val stack: DeckStack) : DeckUiInteraction
+    data class DeleteCard(val card: DeckCard) : DeckUiInteraction
 }
 
 data class DeckUiDueDateOption(

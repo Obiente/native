@@ -823,6 +823,39 @@ private fun DeckUiDeleteConfirmation(
     )
 }
 
+@Composable
+fun DeckUiDestructiveConfirmationDialog(
+    title: String,
+    message: String,
+    busy: Boolean,
+    errorMessage: String?,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+                Text(message)
+                errorMessage?.let { DeckUiInlineError(it) }
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm, enabled = !busy) {
+                if (busy) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(NextcloudSpacing.Small))
+                }
+                Text(if (busy) "Deleting..." else "Delete")
+            }
+        },
+    )
+}
+
 private fun <T> Set<T>.toggle(value: T): Set<T> =
     if (value in this) this - value else this + value
 

@@ -750,6 +750,7 @@ private fun AuthenticatedApp(
             NativeDeckScreen(
                 services = services,
                 session = session,
+                currentUserId = serverInfo?.userId ?: session.loginName,
                 modifier = Modifier.weight(1f),
             )
         }

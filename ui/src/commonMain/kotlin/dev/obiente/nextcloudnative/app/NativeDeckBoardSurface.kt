@@ -62,7 +62,10 @@ fun NativeDeckBoardSurface(
     onDismissCard: () -> Unit,
     onRetry: () -> Unit,
     onCreateBoard: (() -> Unit)? = null,
+    onCreateStack: ((DeckBoard) -> Unit)? = null,
     onCreateCard: ((DeckStack) -> Unit)? = null,
+    boardActions: (DeckBoard) -> List<NextcloudCardAction> = { emptyList() },
+    stackActions: (DeckStack) -> List<NextcloudCardAction> = { emptyList() },
     cardActions: (DeckCard) -> List<NextcloudCardAction> = { emptyList() },
     modifier: Modifier = Modifier,
 ) {
@@ -94,6 +97,7 @@ fun NativeDeckBoardSurface(
             state = state,
             onSelectBoard = onSelectBoard,
             onCreateBoard = onCreateBoard,
+            boardActions = boardActions,
             modifier = modifier,
         )
         is DeckWorkspaceState.Board -> DeckBoardWorkspace(
@@ -102,7 +106,10 @@ fun NativeDeckBoardSurface(
             onOpenCard = onOpenCard,
             onSelectCard = onSelectCard,
             onDismissCard = onDismissCard,
+            onCreateStack = onCreateStack,
             onCreateCard = onCreateCard,
+            boardActions = boardActions,
+            stackActions = stackActions,
             cardActions = cardActions,
             modifier = modifier,
         )
@@ -130,6 +137,7 @@ private fun DeckBoardPicker(
     state: DeckWorkspaceState.BoardPicker,
     onSelectBoard: (DeckBoard) -> Unit,
     onCreateBoard: (() -> Unit)?,
+    boardActions: (DeckBoard) -> List<NextcloudCardAction>,
     modifier: Modifier,
 ) {
     Column(
@@ -160,11 +168,16 @@ private fun DeckBoardPicker(
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         ) {
             items(state.boards, key = DeckBoard::id) { board ->
+                val actions = boardActions(board)
+                var menuExpanded by remember(board.id) { mutableStateOf(false) }
                 Card(
                     modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
                         onOpen = { onSelectBoard(board) },
-                        onShowActions = null,
+                        onShowActions = actions.takeIf { it.isNotEmpty() }?.let {
+                            { menuExpanded = true }
+                        },
                         openLabel = "Open ${board.title}",
+                        actionsLabel = "Actions for ${board.title}",
                     ),
                     colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
                 ) {
@@ -199,7 +212,16 @@ private fun DeckBoardPicker(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Icon(NextcloudIcons.ChevronRight, contentDescription = null)
+                        if (actions.isEmpty()) {
+                            Icon(NextcloudIcons.ChevronRight, contentDescription = null)
+                        } else {
+                            NextcloudCardOverflow(
+                                itemLabel = board.title,
+                                actions = actions,
+                                expanded = menuExpanded,
+                                onExpandedChange = { menuExpanded = it },
+                            )
+                        }
                     }
                 }
             }
@@ -214,10 +236,15 @@ private fun DeckBoardWorkspace(
     onOpenCard: (DeckCard) -> Unit,
     onSelectCard: (DeckCard) -> Unit,
     onDismissCard: () -> Unit,
+    onCreateStack: ((DeckBoard) -> Unit)?,
     onCreateCard: ((DeckStack) -> Unit)?,
+    boardActions: (DeckBoard) -> List<NextcloudCardAction>,
+    stackActions: (DeckStack) -> List<NextcloudCardAction>,
     cardActions: (DeckCard) -> List<NextcloudCardAction>,
     modifier: Modifier,
 ) {
+    val activeBoardActions = boardActions(state.board)
+    var boardMenuExpanded by remember(state.board.id) { mutableStateOf(false) }
     Column(modifier = modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(
@@ -238,6 +265,17 @@ private fun DeckBoardWorkspace(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            if (onCreateStack != null && state.board.permissions.canManage) {
+                IconButton(onClick = { onCreateStack(state.board) }) {
+                    Icon(NextcloudIcons.Add, contentDescription = "Add list")
+                }
+            }
+            NextcloudCardOverflow(
+                itemLabel = state.board.title,
+                actions = activeBoardActions,
+                expanded = boardMenuExpanded,
+                onExpandedChange = { boardMenuExpanded = it },
+            )
         }
         HorizontalDivider()
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -249,6 +287,7 @@ private fun DeckBoardWorkspace(
                     onOpenCard = onOpenCard,
                     onSelectCard = onSelectCard,
                     onCreateCard = onCreateCard,
+                    stackActions = stackActions,
                     cardActions = cardActions,
                     modifier = Modifier.weight(1f),
                 )
@@ -258,18 +297,38 @@ private fun DeckBoardWorkspace(
                             .background(MaterialTheme.colorScheme.outlineVariant),
                     )
                     state.selectedCard?.let { card ->
-                        DeckCardInspector(card, modifier = Modifier.width(340.dp).fillMaxHeight())
+                        DeckCardInspector(
+                            card = card,
+                            actions = cardActions(card),
+                            modifier = Modifier.width(340.dp).fillMaxHeight(),
+                        )
                     }
                 }
             }
             if (!showInspector) {
                 state.selectedCard?.let { card ->
+                    val actions = cardActions(card)
+                    var menuExpanded by remember(card.id) { mutableStateOf(false) }
                     AlertDialog(
                         onDismissRequest = onDismissCard,
-                        title = { Text(card.title) },
+                        title = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                Text(card.title, modifier = Modifier.weight(1f))
+                                NextcloudCardOverflow(
+                                    itemLabel = card.title,
+                                    actions = actions,
+                                    expanded = menuExpanded,
+                                    onExpandedChange = { menuExpanded = it },
+                                )
+                            }
+                        },
                         text = {
                             DeckCardInspector(
                                 card = card,
+                                actions = actions,
                                 modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
                                 showTitle = false,
                             )
@@ -293,6 +352,7 @@ private fun DeckLanes(
     onOpenCard: (DeckCard) -> Unit,
     onSelectCard: (DeckCard) -> Unit,
     onCreateCard: ((DeckStack) -> Unit)?,
+    stackActions: (DeckStack) -> List<NextcloudCardAction>,
     cardActions: (DeckCard) -> List<NextcloudCardAction>,
     modifier: Modifier,
 ) {
@@ -312,6 +372,8 @@ private fun DeckLanes(
         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
     ) {
         items(stacks, key = DeckStack::id) { stack ->
+            val actions = stackActions(stack)
+            var menuExpanded by remember(stack.id) { mutableStateOf(false) }
             Card(
                 modifier = Modifier.width(316.dp).fillMaxHeight(),
                 colors = CardDefaults.cardColors(
@@ -335,6 +397,12 @@ private fun DeckLanes(
                             Icon(NextcloudIcons.Add, contentDescription = "Add card to ${stack.title}")
                         }
                     }
+                    NextcloudCardOverflow(
+                        itemLabel = stack.title,
+                        actions = actions,
+                        expanded = menuExpanded,
+                        onExpandedChange = { menuExpanded = it },
+                    )
                 }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -457,19 +525,38 @@ private fun DeckCardItem(
 @Composable
 private fun DeckCardInspector(
     card: DeckCard,
+    actions: List<NextcloudCardAction>,
     modifier: Modifier,
     showTitle: Boolean = true,
 ) {
+    var menuExpanded by remember(card.id) { mutableStateOf(false) }
     LazyColumn(
         modifier = modifier.background(MaterialTheme.colorScheme.surfaceContainerLow),
         contentPadding = PaddingValues(NextcloudSpacing.Large),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
     ) {
-        item {
-            Text(card.title, style = MaterialTheme.typography.headlineSmall)
+        if (showTitle) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Text(
+                        card.title,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.headlineSmall,
+                    )
+                    NextcloudCardOverflow(
+                        itemLabel = card.title,
+                        actions = actions,
+                        expanded = menuExpanded,
+                        onExpandedChange = { menuExpanded = it },
+                    )
+                }
+            }
         }
         card.descriptionMarkdown?.takeIf(String::isNotBlank)?.let { description ->
-            if (showTitle) item {
+            item {
                 Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
                     Text("Description", style = MaterialTheme.typography.labelMedium)
                     Text(description, style = MaterialTheme.typography.bodyMedium)
