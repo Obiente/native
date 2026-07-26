@@ -36,8 +36,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -379,8 +379,8 @@ private fun DeckLanes(
         }
         return
     }
-    val stackBounds = remember { mutableStateMapOf<Long, DeckUiRect>() }
-    val cardBounds = remember { mutableStateMapOf<Long, DeckUiRect>() }
+    val stackBounds = remember { DeckUiBoundsRegistry<Long>() }
+    val cardBounds = remember { DeckUiBoundsRegistry<Long>() }
     var draggedCard by remember { mutableStateOf<DeckCard?>(null) }
     var dragPosition by remember { mutableStateOf<Offset?>(null) }
     var dragGrabOffset by remember { mutableStateOf(Offset.Zero) }
@@ -392,12 +392,12 @@ private fun DeckLanes(
             pointerX = position.x,
             pointerY = position.y,
             zones = stacks.mapNotNull { stack ->
-                stackBounds[stack.id]?.let { bounds ->
+                stackBounds.bounds(stack.id)?.let { bounds ->
                     DeckUiStackDropZone(
                         stack = stack,
                         bounds = bounds,
                         cards = stack.cards.mapNotNull { candidate ->
-                            cardBounds[candidate.id]?.let { cardBounds ->
+                            cardBounds.bounds(candidate.id)?.let { cardBounds ->
                                 DeckUiCardDropZone(candidate, cardBounds)
                             }
                         },
@@ -425,31 +425,41 @@ private fun DeckLanes(
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
         ) {
             items(stacks, key = DeckStack::id) { stack ->
-            val actions = stackActions(stack)
-            var menuExpanded by remember(stack.id) { mutableStateOf(false) }
-            val laneShape = RoundedCornerShape(NextcloudRadii.Card)
-            val isDropTarget = dropTarget?.stack?.id == stack.id
-            Card(
-                modifier = Modifier.width(316.dp).fillMaxHeight()
-                    .onGloballyPositioned { coordinates ->
-                        stackBounds[stack.id] = coordinates.boundsInWindow().toDeckUiRect()
+                val stackBoundsOwner = remember(stack.id) { Any() }
+                DisposableEffect(stack.id, stackBoundsOwner) {
+                    onDispose {
+                        stackBounds.remove(stack.id, stackBoundsOwner)
                     }
-                    .then(
-                        if (isDropTarget) {
-                            Modifier.border(
-                                width = 2.dp,
-                                color = MaterialTheme.colorScheme.primary,
-                                shape = laneShape,
+                }
+                val actions = stackActions(stack)
+                var menuExpanded by remember(stack.id) { mutableStateOf(false) }
+                val laneShape = RoundedCornerShape(NextcloudRadii.Card)
+                val isDropTarget = dropTarget?.stack?.id == stack.id
+                Card(
+                    modifier = Modifier.width(316.dp).fillMaxHeight()
+                        .onGloballyPositioned { coordinates ->
+                            stackBounds.update(
+                                stack.id,
+                                stackBoundsOwner,
+                                coordinates.boundsInWindow().toDeckUiRect(),
                             )
-                        } else {
-                            Modifier
-                        },
+                        }
+                        .then(
+                            if (isDropTarget) {
+                                Modifier.border(
+                                    width = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    shape = laneShape,
+                                )
+                            } else {
+                                Modifier
+                            },
+                        ),
+                    shape = laneShape,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                     ),
-                shape = laneShape,
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                ),
-            ) {
+                ) {
                 Row(
                     modifier = Modifier.fillMaxWidth()
                         .nextcloudCardInteractions(
@@ -506,14 +516,22 @@ private fun DeckLanes(
                             }
                         }
                         item(key = card.id) {
+                            val cardBoundsOwner = remember(card.id) { Any() }
+                            DisposableEffect(card.id, cardBoundsOwner) {
+                                onDispose {
+                                    cardBounds.remove(card.id, cardBoundsOwner)
+                                }
+                            }
                             DeckCardItem(
                                 card = card,
                                 selected = card.id == selectedCardId,
                                 dragging = card.id == activeCard?.id,
                                 dragEnabled = onMoveCard != null,
-                                onBoundsChanged = { bounds -> cardBounds[card.id] = bounds },
+                                onBoundsChanged = { bounds ->
+                                    cardBounds.update(card.id, cardBoundsOwner, bounds)
+                                },
                                 onDragStart = dragStart@{ localPosition ->
-                                    val bounds = cardBounds[card.id] ?: return@dragStart
+                                    val bounds = cardBounds.bounds(card.id) ?: return@dragStart
                                     val position = Offset(
                                         x = bounds.left + localPosition.x,
                                         y = bounds.top + localPosition.y,
@@ -564,7 +582,7 @@ private fun DeckLanes(
                         }
                     }
                 }
-            }
+                }
             }
         }
         val previewCard = draggedCard

@@ -123,6 +123,23 @@ class NativeDeckDragPlacementTest {
         assertNull(target)
     }
 
+    @Test
+    fun `disposing an old lazy item cannot remove its replacement bounds`() {
+        val registry = DeckUiBoundsRegistry<Long>()
+        val oldOwner = Any()
+        val newOwner = Any()
+        val staleBounds = DeckUiRect(0f, 0f, 100f, 100f)
+        val currentBounds = DeckUiRect(120f, 0f, 220f, 100f)
+
+        registry.update(7L, oldOwner, staleBounds)
+        registry.update(7L, newOwner, currentBounds)
+        registry.remove(7L, oldOwner)
+
+        assertEquals(currentBounds, registry.bounds(7L))
+        registry.remove(7L, newOwner)
+        assertNull(registry.bounds(7L))
+    }
+
     private fun stackZone(
         stack: DeckStack,
         cardZones: List<DeckUiCardDropZone> = emptyList(),

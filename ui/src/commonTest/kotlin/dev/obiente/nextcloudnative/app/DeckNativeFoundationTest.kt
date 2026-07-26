@@ -112,6 +112,40 @@ class DeckNativeFoundationTest {
     }
 
     @Test
+    fun `authoritative board detail preserves revision and current permissions`() {
+        val board = parseDeckBoard(
+            NextcloudApiResponse(
+                status = 200,
+                body = """
+                    {
+                      "id": 7,
+                      "title": "Current product",
+                      "color": "A970FF",
+                      "archived": false,
+                      "shared": 0,
+                      "lastModified": 456,
+                      "permissions": {
+                        "PERMISSION_READ": true,
+                        "PERMISSION_EDIT": false,
+                        "PERMISSION_MANAGE": false,
+                        "PERMISSION_SHARE": false
+                      },
+                      "labels": [],
+                      "users": []
+                    }
+                """.trimIndent().encodeToByteArray(),
+                contentType = "application/json",
+                etag = "board-revision-2",
+            ),
+        )
+
+        assertEquals(7L, board.id)
+        assertEquals("board-revision-2", board.etag)
+        assertFalse(board.permissions.canEdit)
+        assertFalse(board.permissions.canManage)
+    }
+
+    @Test
     fun `stack response becomes ordered native lanes and cards`() {
         val stacks = parseDeckStacks(
             boardId = 7,

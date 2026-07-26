@@ -26,6 +26,31 @@ internal data class DeckUiCardDropTarget(
     val insertionIndex: Int,
 )
 
+/**
+ * Tracks positioned lazy items without allowing a disposed item to remove a newer placement for
+ * the same resource identity.
+ */
+internal class DeckUiBoundsRegistry<Key> {
+    private data class Entry(
+        val owner: Any,
+        val bounds: DeckUiRect,
+    )
+
+    private val entries = mutableMapOf<Key, Entry>()
+
+    fun update(key: Key, owner: Any, bounds: DeckUiRect) {
+        entries[key] = Entry(owner, bounds)
+    }
+
+    fun bounds(key: Key): DeckUiRect? = entries[key]?.bounds
+
+    fun remove(key: Key, owner: Any) {
+        if (entries[key]?.owner === owner) {
+            entries.remove(key)
+        }
+    }
+}
+
 internal fun resolveDeckUiCardDropTarget(
     pointerX: Float,
     pointerY: Float,

@@ -198,37 +198,18 @@ fun parseDeckCapabilities(response: NextcloudApiResponse): DeckCapabilities? {
 fun parseDeckBoards(response: NextcloudApiResponse): List<DeckBoard> {
     require(response.status in 200..299) { "Deck boards failed to load (HTTP ${response.status})." }
     return response.deckPayload("Deck boards").requireArray("Deck boards").map { element ->
-        val value = element.requireObject("Deck board")
-        val permissions = value["permissions"] as? JsonObject
-        val owner = (value["owner"] as? JsonObject)?.toDeckUser()
-        val users = buildList {
-            owner?.let(::add)
-            value.array("users").mapNotNullTo(this) { userElement ->
-                val assignment = userElement as? JsonObject ?: return@mapNotNullTo null
-                (assignment["participant"] as? JsonObject)?.toDeckUser()
-                    ?: (assignment["user"] as? JsonObject)?.toDeckUser()
-                    ?: assignment.toDeckUser()
-            }
-        }.distinctBy(DeckUser::id)
-        DeckBoard(
-            id = value.requirePositiveId("id", "Deck board"),
-            title = value.requireString("title", "Deck board"),
-            color = value.string("color")?.normalizeDeckColor(),
-            archived = value.boolean("archived") ?: false,
-            owner = owner,
-            labels = value.array("labels").mapNotNull(JsonElement::toDeckLabel),
-            users = users,
-            permissions = DeckPermissions(
-                canRead = permissions?.boolean("PERMISSION_READ") ?: true,
-                canEdit = permissions?.boolean("PERMISSION_EDIT") ?: false,
-                canManage = permissions?.boolean("PERMISSION_MANAGE") ?: false,
-                canShare = permissions?.boolean("PERMISSION_SHARE") ?: false,
-            ),
-            shared = (value.long("shared") ?: 0L) > 0L,
-            lastModified = value.long("lastModified"),
-            etag = value.string("ETag") ?: value.string("etag"),
-        )
+        element.requireObject("Deck board").toDeckBoard()
     }.filterNot(DeckBoard::archived).sortedBy { it.title.lowercase() }
+}
+
+fun parseDeckBoard(response: NextcloudApiResponse): DeckBoard {
+    require(response.status in 200..299) { "The Deck board failed to load (HTTP ${response.status})." }
+    val board = response.deckPayload("Deck board").requireObject("Deck board").toDeckBoard()
+    return if (board.etag == null && response.etag != null) {
+        board.copy(etag = response.etag)
+    } else {
+        board
+    }
 }
 
 fun parseDeckStacks(
@@ -327,6 +308,38 @@ private fun JsonObject.toDeckCard(boardId: Long, expectedStackId: Long): DeckCar
         },
         attachmentCount = int("attachmentCount") ?: array("attachments").size,
         unreadCommentCount = int("commentsUnread") ?: 0,
+        etag = string("ETag") ?: string("etag"),
+    )
+}
+
+private fun JsonObject.toDeckBoard(): DeckBoard {
+    val permissions = this["permissions"] as? JsonObject
+    val owner = (this["owner"] as? JsonObject)?.toDeckUser()
+    val users = buildList {
+        owner?.let(::add)
+        array("users").mapNotNullTo(this) { userElement ->
+            val assignment = userElement as? JsonObject ?: return@mapNotNullTo null
+            (assignment["participant"] as? JsonObject)?.toDeckUser()
+                ?: (assignment["user"] as? JsonObject)?.toDeckUser()
+                ?: assignment.toDeckUser()
+        }
+    }.distinctBy(DeckUser::id)
+    return DeckBoard(
+        id = requirePositiveId("id", "Deck board"),
+        title = requireString("title", "Deck board"),
+        color = string("color")?.normalizeDeckColor(),
+        archived = boolean("archived") ?: false,
+        owner = owner,
+        labels = array("labels").mapNotNull(JsonElement::toDeckLabel),
+        users = users,
+        permissions = DeckPermissions(
+            canRead = permissions?.boolean("PERMISSION_READ") ?: true,
+            canEdit = permissions?.boolean("PERMISSION_EDIT") ?: false,
+            canManage = permissions?.boolean("PERMISSION_MANAGE") ?: false,
+            canShare = permissions?.boolean("PERMISSION_SHARE") ?: false,
+        ),
+        shared = (long("shared") ?: 0L) > 0L,
+        lastModified = long("lastModified"),
         etag = string("ETag") ?: string("etag"),
     )
 }
