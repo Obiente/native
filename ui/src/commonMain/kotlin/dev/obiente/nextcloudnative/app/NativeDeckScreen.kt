@@ -745,7 +745,7 @@ fun NativeDeckScreen(
             card = overlay.card,
             busy = mutationBusy,
             errorMessage = mutationError,
-            quickDueDates = emptyList(),
+            quickDueDates = deckQuickDueDates(),
             onDismiss = { if (!mutationBusy) interaction = null },
             onSubmit = { draft ->
                 val board = checkNotNull(boardState()?.board)
@@ -871,7 +871,7 @@ fun NativeDeckScreen(
             card = overlay.card,
             busy = mutationBusy,
             errorMessage = mutationError,
-            quickDueDates = emptyList(),
+            quickDueDates = deckQuickDueDates(),
             onDismiss = { if (!mutationBusy) interaction = null },
             onSubmit = { date, time ->
                 val board = checkNotNull(boardState()?.board)
@@ -1108,6 +1108,12 @@ private fun deckUiInstant(date: String, time: String): String? {
     val normalizedTime = time.trim().ifEmpty { "23:59" }
     return deckLocalDateTimeToInstant(normalizedDate, normalizedTime)
 }
+
+private fun deckQuickDueDates(): List<DeckUiDueDateOption> = listOf(
+    DeckUiDueDateOption("Today", deckLocalDatePlusDays(0)),
+    DeckUiDueDateOption("Tomorrow", deckLocalDatePlusDays(1)),
+    DeckUiDueDateOption("Next week", deckLocalDatePlusDays(7)),
+)
 
 private fun DeckComment.toDeckUiComment(currentUserId: String): DeckUiComment =
     DeckUiComment(

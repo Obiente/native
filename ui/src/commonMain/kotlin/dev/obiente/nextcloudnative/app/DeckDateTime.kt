@@ -17,3 +17,6 @@ internal expect fun deckInstantToLocalDateTime(value: String): DeckLocalDateTime
  * Converts a validated local date and time selected by the user into an absolute UTC timestamp.
  */
 internal expect fun deckLocalDateTimeToInstant(date: String, time: String): String
+
+/** Returns a local calendar date relative to today for quick native due-date choices. */
+internal expect fun deckLocalDatePlusDays(days: Int): String
