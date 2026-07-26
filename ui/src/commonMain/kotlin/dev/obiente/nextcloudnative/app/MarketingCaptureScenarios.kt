@@ -39,6 +39,38 @@ enum class MarketingCaptureScenario(
     ObsidianSync("obsidian-vault-sync", "obsidian-vault-sync.png", NextcloudPresentation.Adaptive, 1_080, 1_000, 2.625f),
     MediaBackup("media-backup-queue", "media-backup-queue.png", NextcloudPresentation.Adaptive, 1_080, 1_800, 2.625f),
     AdaptiveApp("adaptive-dynamic-data", "adaptive-dynamic-data.png", NextcloudPresentation.Desktop, 960, 360, 1f),
+    TransferMobilePending(
+        "transfer-mobile-pending",
+        "transfer-mobile-pending.png",
+        NextcloudPresentation.Adaptive,
+        1_080,
+        1_800,
+        2.625f,
+    ),
+    TransferMobileFailed(
+        "transfer-mobile-failed-cached",
+        "transfer-mobile-failed-cached.png",
+        NextcloudPresentation.Adaptive,
+        1_080,
+        1_800,
+        2.625f,
+    ),
+    TransferDesktopActive(
+        "transfer-desktop-active",
+        "transfer-desktop-active.png",
+        NextcloudPresentation.Desktop,
+        1_280,
+        800,
+        1f,
+    ),
+    TransferDesktopCompleted(
+        "transfer-desktop-completed-page",
+        "transfer-desktop-completed-page.png",
+        NextcloudPresentation.Desktop,
+        1_280,
+        800,
+        1f,
+    ),
 }
 
 val marketingCaptureScenarios: List<MarketingCaptureScenario> =

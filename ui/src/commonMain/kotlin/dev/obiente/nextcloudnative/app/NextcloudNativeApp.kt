@@ -335,6 +335,11 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.ObsidianSync -> MarketingObsidianSyncScenario()
                     MarketingCaptureScenario.MediaBackup -> MarketingMediaBackupScenario()
                     MarketingCaptureScenario.AdaptiveApp -> MarketingAdaptiveAppScenario()
+                    MarketingCaptureScenario.TransferMobilePending,
+                    MarketingCaptureScenario.TransferMobileFailed,
+                    MarketingCaptureScenario.TransferDesktopActive,
+                    MarketingCaptureScenario.TransferDesktopCompleted,
+                    -> MarketingMediaTransferScenario(scenario)
                     MarketingCaptureScenario.DesktopHome,
                     MarketingCaptureScenario.MobileHome,
                     -> {

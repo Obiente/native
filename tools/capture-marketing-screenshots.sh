@@ -16,5 +16,9 @@ file website/public/screenshots/mobile-home.png | grep -q "PNG image data, 1080 
 file website/public/screenshots/obsidian-vault-sync.png | grep -q "PNG image data, 1080 x 1000"
 file website/public/screenshots/media-backup-queue.png | grep -q "PNG image data, 1080 x 1800"
 file website/public/screenshots/adaptive-dynamic-data.png | grep -q "PNG image data, 960 x 360"
+file website/public/screenshots/transfer-mobile-pending.png | grep -q "PNG image data, 1080 x 1800"
+file website/public/screenshots/transfer-mobile-failed-cached.png | grep -q "PNG image data, 1080 x 1800"
+file website/public/screenshots/transfer-desktop-active.png | grep -q "PNG image data, 1280 x 800"
+file website/public/screenshots/transfer-desktop-completed-page.png | grep -q "PNG image data, 1280 x 800"
 
 echo "Workstation Compose captures are ready in website/public/screenshots/."
