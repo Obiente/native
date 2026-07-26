@@ -164,3 +164,16 @@ tasks.register<JavaExec>("captureMarketingScreenshots") {
         },
     )
 }
+
+tasks.register<JavaExec>("runDeckInteractionPreview") {
+    group = "verification"
+    description = "Opens a network-free synthetic Deck workspace for pointer and layout QA."
+    dependsOn(desktopCaptureCompilation.compileTaskProvider)
+    classpath(
+        desktopCaptureCompilation.output.allOutputs,
+        desktopCaptureCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set(
+        "dev.obiente.nextcloudnative.nativeui.preview.DeckInteractionPreviewMainKt",
+    )
+}
