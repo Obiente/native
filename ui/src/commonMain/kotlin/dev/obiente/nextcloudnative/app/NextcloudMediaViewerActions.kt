@@ -2,12 +2,14 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -466,8 +468,12 @@ private fun MediaShareDialog(
                 if (supportedTargets.isNotEmpty()) {
                     item { Text("Create access", style = MaterialTheme.typography.titleSmall) }
                     item {
-                        Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                            supportedTargets.forEach { choice ->
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            contentPadding = PaddingValues(end = NextcloudSpacing.Small),
+                        ) {
+                            items(supportedTargets, key = FileShareTarget::name) { choice ->
                                 FilterChip(
                                     selected = target == choice,
                                     enabled = !running,
@@ -480,7 +486,12 @@ private fun MediaShareDialog(
                                         )
                                         error = null
                                     },
-                                    label = { Text(choice.presentation().label) },
+                                    label = {
+                                        Text(
+                                            choice.presentation().label,
+                                            maxLines = 1,
+                                        )
+                                    },
                                 )
                             }
                         }

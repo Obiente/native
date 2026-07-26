@@ -4395,8 +4395,12 @@ private fun FilesScreen(
                     if (supportedTargets.isNotEmpty()) {
                         HorizontalDivider()
                         Text("Create access", style = MaterialTheme.typography.titleSmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                            supportedTargets.forEach { targetType ->
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            contentPadding = PaddingValues(end = NextcloudSpacing.Small),
+                        ) {
+                            listItems(supportedTargets, key = FileShareTarget::name) { targetType ->
                                 FilterChip(
                                     selected = shareType == targetType,
                                     enabled = !shareRunning,
@@ -4409,7 +4413,12 @@ private fun FilesScreen(
                                         )
                                         shareError = null
                                     },
-                                    label = { Text(targetType.presentation().label) },
+                                    label = {
+                                        Text(
+                                            targetType.presentation().label,
+                                            maxLines = 1,
+                                        )
+                                    },
                                 )
                             }
                         }
