@@ -34,6 +34,52 @@ class MediaTransferCenterTest {
     }
 
     @Test
+    fun productionHostAndCapturesExposeDetailsOnly() {
+        assertEquals(
+            setOf(MediaTransferAction.Details),
+            PRODUCTION_MEDIA_TRANSFER_ACTIONS,
+        )
+        MediaBackupTransferState.entries.forEach { state ->
+            assertTrue(
+                record(state).availableTransferActions().containsAll(
+                    PRODUCTION_MEDIA_TRANSFER_ACTIONS,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun transferCaptureFixturesCoverBoundedAndCachedStates() {
+        val pending = marketingMediaTransferFixture(
+            MarketingCaptureScenario.TransferMobilePending,
+        )
+        assertEquals(MediaTransferSection.Pending, pending.state.page.section)
+        assertEquals(3, pending.state.page.records.size)
+
+        val failed = marketingMediaTransferFixture(
+            MarketingCaptureScenario.TransferMobileFailed,
+        )
+        assertEquals(MediaTransferSection.Failed, failed.state.page.section)
+        assertTrue(failed.statusMessageIsError)
+        assertTrue(failed.statusMessage?.contains("saved transfer history") == true)
+        assertTrue(failed.state.page.records.isNotEmpty())
+
+        val active = marketingMediaTransferFixture(
+            MarketingCaptureScenario.TransferDesktopActive,
+        )
+        assertEquals(MediaTransferSection.Active, active.state.page.section)
+        assertNotNull(active.busyLocalKey)
+
+        val completed = marketingMediaTransferFixture(
+            MarketingCaptureScenario.TransferDesktopCompleted,
+        )
+        assertEquals(MediaTransferSection.Completed, completed.state.page.section)
+        assertTrue(completed.state.canLoadNewer)
+        assertNotNull(completed.state.page.nextCursor)
+        assertTrue(completed.state.page.records.size < completed.state.summary.succeeded)
+    }
+
+    @Test
     fun presentationWindowRejectsUnboundedOrMismatchedPages() {
         val records = List(MEDIA_TRANSFER_CENTER_PAGE_SIZE + 1) {
             record(MediaBackupTransferState.Pending, "media:$it")
@@ -149,6 +195,98 @@ class MediaTransferCenterTest {
     }
 
     @Test
+    fun interruptedTransferReconciliationPreservesOnlyAuthoritativeActiveSources() = runBlocking {
+        val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))
+        store.upsertAll(
+            listOf(
+                record(
+                    MediaBackupTransferState.Uploading,
+                    key = "media:active",
+                    sourceId = "pair-active",
+                ),
+                record(
+                    MediaBackupTransferState.Uploading,
+                    key = "media:interrupted",
+                    sourceId = "pair-interrupted",
+                ),
+                record(
+                    MediaBackupTransferState.Uploading,
+                    key = "media:legacy",
+                ),
+            ),
+        )
+
+        assertEquals(
+            1,
+            store.reconcileInterruptedTransfers(accountId, setOf("pair-active")),
+        )
+        assertEquals(
+            MediaBackupTransferState.Uploading,
+            store.load(accountId, "media:active")?.transferState,
+        )
+        assertEquals(
+            MediaBackupTransferState.Pending,
+            store.load(accountId, "media:interrupted")?.transferState,
+        )
+        assertEquals(
+            MediaBackupTransferState.Uploading,
+            store.load(accountId, "media:legacy")?.transferState,
+        )
+
+        assertEquals(2, store.reconcileInterruptedTransfers(accountId, emptySet()))
+        assertEquals(3, store.summary(accountId).pending)
+        store.close()
+    }
+
+    @Test
+    fun deletingTransferSourcePurgesOnlyThatSyncPairsProjection() = runBlocking {
+        val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))
+        store.upsertAll(
+            listOf(
+                record(
+                    MediaBackupTransferState.Pending,
+                    key = "media:first",
+                    sourceId = "pair-first",
+                ),
+                record(
+                    MediaBackupTransferState.Succeeded,
+                    key = "media:first-completed",
+                    sourceId = "pair-first",
+                ),
+                record(
+                    MediaBackupTransferState.Pending,
+                    key = "media:second",
+                    sourceId = "pair-second",
+                ),
+                record(
+                    MediaBackupTransferState.Pending,
+                    key = "media:legacy-first",
+                ),
+                record(
+                    MediaBackupTransferState.Pending,
+                    key = "media:legacy-other",
+                ),
+            ),
+        )
+
+        assertEquals(
+            2,
+            store.deleteUnfinishedSource(
+                accountId,
+                "pair-first",
+                legacyLocalKeys = listOf("media:legacy-first"),
+            ),
+        )
+        assertNull(store.load(accountId, "media:first"))
+        assertNotNull(store.load(accountId, "media:first-completed"))
+        assertNull(store.load(accountId, "media:legacy-first"))
+        assertNotNull(store.load(accountId, "media:second"))
+        assertNotNull(store.load(accountId, "media:legacy-other"))
+        assertEquals(0, store.deleteUnfinishedSource(accountId, "pair-first"))
+        store.close()
+    }
+
+    @Test
     fun savedCursorHistoryIsBoundedAndRejectsInvalidState() {
         val history = listOf<MediaBackupLedgerCursor?>(null) +
             List(80) { index ->
@@ -214,6 +352,7 @@ class MediaTransferCenterTest {
         state: MediaBackupTransferState,
         key: String = "media:1",
         updatedAt: Long = 10_000,
+        sourceId: String? = null,
     ): MediaBackupLedgerRecord {
         val local = LocalMediaObject(
             key = key,
@@ -235,6 +374,7 @@ class MediaTransferCenterTest {
         }
         return MediaBackupLedgerRecord(
             accountId = accountId,
+            sourceId = sourceId,
             local = local,
             receipt = receipt,
             transferState = state,

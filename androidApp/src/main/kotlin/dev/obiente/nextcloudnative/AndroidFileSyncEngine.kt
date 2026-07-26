@@ -17,6 +17,7 @@ import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.MediaBackupLedgerStore
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.addFileSyncPair
@@ -77,14 +78,24 @@ internal class AndroidFileSyncEngine(context: Context) {
      * uploads. A failed query is treated conservatively as active work so a running worker is
      * never rewritten to pending merely because WorkManager could not be inspected.
      */
-    suspend fun hasRunningWorkForAccount(accountId: String): Boolean {
-        if (ENGINE_LOCK.isLocked) return true
-        val pairIds = store.load().coordinator.pairs
-            .asSequence()
-            .filter { pair -> pair.accountId == accountId }
-            .map(FileSyncPair::id)
-            .toList()
-        return runCatching { scheduler.hasRunningWork(pairIds) }.getOrDefault(true)
+    suspend fun reconcileMediaTransfersForDisplay(
+        accountId: String,
+        mediaStore: MediaBackupLedgerStore,
+    ) {
+        if (!ENGINE_LOCK.tryLock()) return
+        try {
+            val activeSourceIds = runCatching {
+                val pairIds = store.load().coordinator.pairs
+                    .asSequence()
+                    .filter { pair -> pair.accountId == accountId }
+                    .map(FileSyncPair::id)
+                    .toList()
+                scheduler.runningPairIds(pairIds)
+            }.getOrNull() ?: return
+            mediaStore.reconcileInterruptedTransfers(accountId, activeSourceIds)
+        } finally {
+            ENGINE_LOCK.unlock()
+        }
     }
 
     suspend fun addPair(
@@ -160,6 +171,24 @@ internal class AndroidFileSyncEngine(context: Context) {
                 )
             }
             val remaining = removeFileSyncPair(current.coordinator, pairId)
+            scheduler.cancel(pairId)
+            val mediaStore = createAndroidMediaBackupLedgerStore(
+                context = appContext,
+                recoverInterruptedTransfers = false,
+            )
+            try {
+                mediaStore.deleteUnfinishedSource(
+                    accountId = pair.accountId,
+                    sourceId = pair.id,
+                    legacyLocalKeys = (pair.baselines.asSequence().map(FileSyncBaseline::relativePath) +
+                        pair.workItems.asSequence().map { work -> work.relativePath })
+                        .distinct()
+                        .map { relativePath -> mediaBackupLocalKey(pair.localRootId, relativePath) }
+                        .toList(),
+                )
+            } finally {
+                mediaStore.close()
+            }
             store.save(
                 current.copy(
                     coordinator = remaining,
@@ -177,7 +206,6 @@ internal class AndroidFileSyncEngine(context: Context) {
                     )
                 }
             }
-            scheduler.cancel(pairId)
             FileSyncCenterActionResult.Completed("Folder sync pair removed. No local or server files were deleted.")
         }
 

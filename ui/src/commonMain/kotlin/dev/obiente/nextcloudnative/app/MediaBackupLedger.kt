@@ -52,6 +52,7 @@ enum class MediaBackupTransferState {
 
 data class MediaBackupLedgerRecord(
     val accountId: String,
+    val sourceId: String? = null,
     val local: LocalMediaObject?,
     val receipt: MediaBackupReceipt?,
     val transferState: MediaBackupTransferState,
@@ -61,6 +62,7 @@ data class MediaBackupLedgerRecord(
 ) {
     init {
         require(accountId.isSafeMediaLedgerText(256))
+        require(sourceId == null || sourceId.isSafeMediaLedgerText(256))
         require(local != null || receipt != null)
         require(local == null || receipt == null || local.key == receipt.localKey)
         require(attemptCount in 0..MAX_MEDIA_BACKUP_ATTEMPTS)
@@ -187,6 +189,9 @@ enum class MediaTransferAction {
     Cancel,
 }
 
+internal val PRODUCTION_MEDIA_TRANSFER_ACTIONS: Set<MediaTransferAction> =
+    setOf(MediaTransferAction.Details)
+
 fun MediaBackupLedgerRecord.availableTransferActions(): Set<MediaTransferAction> = when (transferState) {
     MediaBackupTransferState.Pending -> setOf(MediaTransferAction.Details, MediaTransferAction.Cancel)
     MediaBackupTransferState.Uploading -> setOf(MediaTransferAction.Details, MediaTransferAction.Cancel)
@@ -290,5 +295,7 @@ const val MEDIA_TRANSFER_CENTER_PAGE_SIZE = 50
 const val MAX_MEDIA_BACKUP_STATUS_PATHS = 500
 const val MAX_MEDIA_BACKUP_LEDGER_QUERY_KEYS = 500
 const val MAX_MEDIA_BACKUP_LEDGER_WRITE_BATCH = 500
+internal const val MAX_MEDIA_BACKUP_TRANSFER_SOURCES = 64
+internal const val MAX_MEDIA_BACKUP_SOURCE_LEGACY_KEYS = 40_000
 private const val MAX_SAVED_MEDIA_TRANSFER_WINDOWS = 64
 private const val MAX_MEDIA_BACKUP_ATTEMPTS = 1_000

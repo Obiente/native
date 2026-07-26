@@ -59,7 +59,7 @@ class MediaTransferCenterInstrumentedTest {
             assertVisible(device, "No completed uploads are in local history.")
             assertFalse(device.hasObject(By.text("upload-complete-1.jpg")))
 
-            device.findObject(By.text("Pending 55")).click()
+            device.findObject(By.text("Pending 56")).click()
             assertTrue(scrollUntilVisible(device, "Older", TRANSFER_SCROLL_ATTEMPTS))
             device.findObject(By.text("Older")).click()
             assertVisible(device, "Newer")

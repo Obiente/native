@@ -69,6 +69,7 @@ class AndroidMediaBackupLedgerBridgeTest {
 
         var record = mediaBackupLedgerRecordForWork(pair, ready, existing = null, nowEpochMillis = 1_000)
         assertEquals(MediaBackupStatus.Pending, record.resolveMediaBackupStatus())
+        assertEquals(pair.id, record.sourceId)
 
         val running = ready.copy(state = FileSyncExecutionState.Running, attemptCount = 1)
         record = mediaBackupLedgerRecordForWork(
@@ -104,6 +105,7 @@ class AndroidMediaBackupLedgerBridgeTest {
             nowEpochMillis = 4_000,
         )
         assertEquals(MediaBackupStatus.BackedUp, record.resolveMediaBackupStatus())
+        assertEquals(pair.id, record.sourceId)
         assertEquals("Photos/Camera/IMG_0042.jpg", record.receipt?.remotePath)
 
         val changed = local.copy(revision = "generation:10")

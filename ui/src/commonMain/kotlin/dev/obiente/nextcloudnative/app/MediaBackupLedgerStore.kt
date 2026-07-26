@@ -246,6 +246,42 @@ class MediaBackupLedgerStore internal constructor(
         changedRowCount()
     }
 
+    suspend fun deleteUnfinishedSource(
+        accountId: String,
+        sourceId: String,
+        legacyLocalKeys: Collection<String> = emptyList(),
+    ): Int = mutex.withLock {
+        requireAccountId(accountId)
+        requireSourceId(sourceId)
+        val legacyKeys = legacyLocalKeys.distinct()
+        require(legacyKeys.size <= MAX_MEDIA_BACKUP_SOURCE_LEGACY_KEYS)
+        legacyKeys.forEach(::requireLocalKey)
+        transaction {
+            var deleted = connection.prepare(
+                "DELETE FROM media_backup_ledger WHERE account_id = ? AND source_id = ? " +
+                    "AND transfer_state != 'Succeeded'",
+            ).use { statement ->
+                statement.bindText(1, accountId)
+                statement.bindText(2, sourceId)
+                check(!statement.step())
+                changedRowCount()
+            }
+            legacyKeys.chunked(MAX_MEDIA_BACKUP_LEDGER_QUERY_KEYS).forEach { keys ->
+                val placeholders = List(keys.size) { "?" }.joinToString()
+                connection.prepare(
+                    "DELETE FROM media_backup_ledger WHERE account_id = ? AND source_id IS NULL " +
+                        "AND transfer_state != 'Succeeded' AND local_key IN ($placeholders)",
+                ).use { statement ->
+                    statement.bindText(1, accountId)
+                    keys.forEachIndexed { index, key -> statement.bindText(index + 2, key) }
+                    check(!statement.step())
+                    deleted += changedRowCount()
+                }
+            }
+            deleted
+        }
+    }
+
     suspend fun statusesForRemotePaths(
         accountId: String,
         remotePaths: Collection<String>,
@@ -296,6 +332,34 @@ class MediaBackupLedgerStore internal constructor(
         }
     }
 
+    suspend fun reconcileInterruptedTransfers(
+        accountId: String,
+        activeSourceIds: Set<String>,
+    ): Int = mutex.withLock {
+        requireAccountId(accountId)
+        require(activeSourceIds.size <= MAX_MEDIA_BACKUP_TRANSFER_SOURCES)
+        activeSourceIds.forEach(::requireSourceId)
+        transaction {
+            val predicate = if (activeSourceIds.isEmpty()) {
+                ""
+            } else {
+                val placeholders = List(activeSourceIds.size) { "?" }.joinToString()
+                " AND source_id IS NOT NULL AND source_id NOT IN ($placeholders)"
+            }
+            connection.prepare(
+                "UPDATE media_backup_ledger SET transfer_state = 'Pending', failure_message = NULL " +
+                    "WHERE account_id = ? AND transfer_state = 'Uploading'$predicate",
+            ).use { statement ->
+                statement.bindText(1, accountId)
+                activeSourceIds.forEachIndexed { index, sourceId ->
+                    statement.bindText(index + 2, sourceId)
+                }
+                check(!statement.step())
+            }
+            changedRowCount()
+        }
+    }
+
     suspend fun close() = mutex.withLock {
         connection.close()
     }
@@ -316,15 +380,25 @@ class MediaBackupLedgerStore internal constructor(
                     connection.execSQL(CREATE_ACCOUNT_STATE_INDEX)
                     connection.execSQL(CREATE_ACCOUNT_UPDATED_INDEX)
                     connection.execSQL(CREATE_ACCOUNT_REMOTE_PATH_INDEX)
+                    connection.execSQL(CREATE_ACCOUNT_SOURCE_INDEX)
                     connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
                 }
                 1 -> {
                     connection.execSQL(ADD_HISTORY_VISIBLE_COLUMN)
+                    connection.execSQL(ADD_SOURCE_ID_COLUMN)
                     connection.execSQL(CREATE_ACCOUNT_REMOTE_PATH_INDEX)
+                    connection.execSQL(CREATE_ACCOUNT_SOURCE_INDEX)
                     connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
                 }
                 2 -> {
                     connection.execSQL(ADD_HISTORY_VISIBLE_COLUMN)
+                    connection.execSQL(ADD_SOURCE_ID_COLUMN)
+                    connection.execSQL(CREATE_ACCOUNT_SOURCE_INDEX)
+                    connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
+                }
+                3 -> {
+                    connection.execSQL(ADD_SOURCE_ID_COLUMN)
+                    connection.execSQL(CREATE_ACCOUNT_SOURCE_INDEX)
                     connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
                 }
                 SCHEMA_VERSION -> Unit
@@ -396,58 +470,61 @@ class MediaBackupLedgerStore internal constructor(
 
     private fun SQLiteStatement.bindRecord(record: MediaBackupLedgerRecord) {
         bindText(1, record.accountId)
-        bindText(2, record.localKey)
-        bindNullableText(3, record.local?.displayName)
-        bindNullableLong(4, record.local?.size)
-        bindNullableText(5, record.local?.revision)
-        bindNullableText(6, record.receipt?.localRevision)
-        bindNullableLong(7, record.receipt?.localSize)
-        bindNullableText(8, record.receipt?.remotePath)
-        bindNullableText(9, record.receipt?.remoteEtag)
-        bindNullableLong(10, record.receipt?.verifiedAtEpochMillis)
-        bindText(11, record.transferState.name)
-        bindLong(12, record.attemptCount.toLong())
-        bindLong(13, record.updatedAtEpochMillis)
-        bindNullableText(14, record.failureMessage)
+        bindNullableText(2, record.sourceId)
+        bindText(3, record.localKey)
+        bindNullableText(4, record.local?.displayName)
+        bindNullableLong(5, record.local?.size)
+        bindNullableText(6, record.local?.revision)
+        bindNullableText(7, record.receipt?.localRevision)
+        bindNullableLong(8, record.receipt?.localSize)
+        bindNullableText(9, record.receipt?.remotePath)
+        bindNullableText(10, record.receipt?.remoteEtag)
+        bindNullableLong(11, record.receipt?.verifiedAtEpochMillis)
+        bindText(12, record.transferState.name)
+        bindLong(13, record.attemptCount.toLong())
+        bindLong(14, record.updatedAtEpochMillis)
+        bindNullableText(15, record.failureMessage)
     }
 
     private fun SQLiteStatement.readRecord(): MediaBackupLedgerRecord {
         val accountId = getText(0)
-        val localKey = getText(1)
-        val local = if (isNull(2)) {
-            check(isNull(3) && isNull(4))
+        val sourceId = nullableText(1)
+        val localKey = getText(2)
+        val local = if (isNull(3)) {
+            check(isNull(4) && isNull(5))
             null
         } else {
             LocalMediaObject(
                 key = localKey,
-                displayName = getText(2),
-                size = getLong(3),
-                revision = getText(4),
+                displayName = getText(3),
+                size = getLong(4),
+                revision = getText(5),
             )
         }
-        val receipt = if (isNull(7)) {
-            check(isNull(5) && isNull(6) && isNull(8) && isNull(9))
+        val receipt = if (isNull(8)) {
+            check(isNull(6) && isNull(7) && isNull(9) && isNull(10))
             null
         } else {
             MediaBackupReceipt(
                 localKey = localKey,
-                localRevision = getText(5),
-                localSize = getLong(6),
-                remotePath = getText(7),
-                remoteEtag = getText(8),
-                verifiedAtEpochMillis = getLong(9),
+                localRevision = getText(6),
+                localSize = getLong(7),
+                remotePath = getText(8),
+                remoteEtag = getText(9),
+                verifiedAtEpochMillis = getLong(10),
             )
         }
-        val attemptCount = getLong(11)
+        val attemptCount = getLong(12)
         check(attemptCount in 0..Int.MAX_VALUE.toLong())
         return MediaBackupLedgerRecord(
             accountId = accountId,
+            sourceId = sourceId,
             local = local,
             receipt = receipt,
-            transferState = enumValueOf(getText(10)),
+            transferState = enumValueOf(getText(11)),
             attemptCount = attemptCount.toInt(),
-            updatedAtEpochMillis = getLong(12),
-            failureMessage = nullableText(13),
+            updatedAtEpochMillis = getLong(13),
+            failureMessage = nullableText(14),
         )
     }
 
@@ -470,12 +547,16 @@ class MediaBackupLedgerStore internal constructor(
         require(localKey.isNotBlank() && localKey.length <= 2_048 && localKey.none(Char::isISOControl))
     }
 
+    private fun requireSourceId(sourceId: String) {
+        require(sourceId.isNotBlank() && sourceId.length <= 256 && sourceId.none(Char::isISOControl))
+    }
+
     private companion object {
-        const val SCHEMA_VERSION = 3
+        const val SCHEMA_VERSION = 4
         const val SCHEMA_MIGRATION_BUSY_TIMEOUT_MILLIS = 5_000
 
         const val SELECT_COLUMNS =
-            "SELECT account_id, local_key, local_display_name, local_size, local_revision, " +
+            "SELECT account_id, source_id, local_key, local_display_name, local_size, local_revision, " +
                 "receipt_local_revision, receipt_local_size, remote_path, remote_etag, verified_at, " +
                 "transfer_state, attempt_count, updated_at, failure_message FROM media_backup_ledger"
 
@@ -483,6 +564,7 @@ class MediaBackupLedgerStore internal constructor(
             """
             CREATE TABLE media_backup_ledger (
                 account_id TEXT NOT NULL,
+                source_id TEXT,
                 local_key TEXT NOT NULL,
                 local_display_name TEXT,
                 local_size INTEGER,
@@ -521,6 +603,9 @@ class MediaBackupLedgerStore internal constructor(
             "ALTER TABLE media_backup_ledger ADD COLUMN history_visible INTEGER NOT NULL " +
                 "DEFAULT 1 CHECK (history_visible IN (0, 1))"
 
+        const val ADD_SOURCE_ID_COLUMN =
+            "ALTER TABLE media_backup_ledger ADD COLUMN source_id TEXT"
+
         const val CREATE_ACCOUNT_STATE_INDEX =
             "CREATE INDEX media_backup_account_state_updated " +
                 "ON media_backup_ledger(account_id, transfer_state, updated_at DESC, local_key DESC)"
@@ -533,14 +618,19 @@ class MediaBackupLedgerStore internal constructor(
             "CREATE INDEX media_backup_account_remote_path_updated " +
                 "ON media_backup_ledger(account_id, remote_path, updated_at DESC, local_key DESC)"
 
+        const val CREATE_ACCOUNT_SOURCE_INDEX =
+            "CREATE INDEX media_backup_account_source " +
+                "ON media_backup_ledger(account_id, source_id)"
+
         val UPSERT_RECORD =
             """
             INSERT INTO media_backup_ledger (
-                account_id, local_key, local_display_name, local_size, local_revision,
+                account_id, source_id, local_key, local_display_name, local_size, local_revision,
                 receipt_local_revision, receipt_local_size, remote_path, remote_etag, verified_at,
                 transfer_state, attempt_count, updated_at, failure_message, history_visible
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             ON CONFLICT(account_id, local_key) DO UPDATE SET
+                source_id = excluded.source_id,
                 local_display_name = excluded.local_display_name,
                 local_size = excluded.local_size,
                 local_revision = excluded.local_revision,
@@ -553,7 +643,16 @@ class MediaBackupLedgerStore internal constructor(
                 attempt_count = excluded.attempt_count,
                 updated_at = excluded.updated_at,
                 failure_message = excluded.failure_message,
-                history_visible = 1
+                history_visible = CASE
+                    WHEN media_backup_ledger.transfer_state = 'Succeeded'
+                        AND excluded.transfer_state = 'Succeeded'
+                        AND media_backup_ledger.receipt_local_revision = excluded.receipt_local_revision
+                        AND media_backup_ledger.receipt_local_size = excluded.receipt_local_size
+                        AND media_backup_ledger.remote_path = excluded.remote_path
+                        AND media_backup_ledger.remote_etag = excluded.remote_etag
+                    THEN media_backup_ledger.history_visible
+                    ELSE 1
+                END
             """.trimIndent()
     }
 }

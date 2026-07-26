@@ -153,7 +153,10 @@ internal class AndroidMediaBackupLedgerBridge(
             ) {
                 AndroidMediaBackupLedgerBridge(
                     pair = pair,
-                    store = createAndroidMediaBackupLedgerStore(context.applicationContext),
+                    store = createAndroidMediaBackupLedgerStore(
+                        context = context.applicationContext,
+                        recoverInterruptedTransfers = false,
+                    ),
                 )
             } else {
                 null
@@ -205,7 +208,8 @@ internal fun mediaBackupLedgerRecordForWork(
         }
         val failure = work.failureMessage.takeIf { state == MediaBackupTransferState.Failed }
         val unchanged = existing?.let { current ->
-            current.local == localObject &&
+            current.sourceId == pair.id &&
+                current.local == localObject &&
                 current.receipt == receipt &&
                 current.transferState == state &&
                 current.attemptCount == work.attemptCount &&
@@ -213,6 +217,7 @@ internal fun mediaBackupLedgerRecordForWork(
         } == true
         return MediaBackupLedgerRecord(
             accountId = pair.accountId,
+            sourceId = pair.id,
             local = localObject,
             receipt = receipt,
             transferState = state,
@@ -236,6 +241,7 @@ internal fun mediaBackupSucceededRecord(
     val localObject = local.toMediaBackupLocalObject(key)
     return MediaBackupLedgerRecord(
         accountId = pair.accountId,
+        sourceId = pair.id,
         local = localObject,
         receipt = MediaBackupReceipt(
             localKey = key,
@@ -265,7 +271,8 @@ internal fun mediaBackupVerifiedRecord(
     val currentReceipt = existing?.receipt
     val path = pair.mediaBackupRemotePath(local.relativePath)
     if (
-        existing?.local == localObject &&
+        existing?.sourceId == pair.id &&
+        existing.local == localObject &&
         currentReceipt?.localRevision == local.revision &&
         currentReceipt.localSize == local.size &&
         currentReceipt.remotePath == path &&
@@ -276,6 +283,7 @@ internal fun mediaBackupVerifiedRecord(
     }
     return MediaBackupLedgerRecord(
         accountId = pair.accountId,
+        sourceId = pair.id,
         local = localObject,
         receipt = MediaBackupReceipt(
             localKey = key,
@@ -314,10 +322,15 @@ internal fun mediaBackupCloudOnlyRecord(
     ) {
         return null
     }
-    if (existing.local == null && existing.transferState == MediaBackupTransferState.Succeeded) {
+    if (
+        existing.sourceId == pair.id &&
+        existing.local == null &&
+        existing.transferState == MediaBackupTransferState.Succeeded
+    ) {
         return null
     }
     return existing.copy(
+        sourceId = pair.id,
         local = null,
         transferState = MediaBackupTransferState.Succeeded,
         updatedAtEpochMillis = nowEpochMillis,
