@@ -27,14 +27,30 @@ candidates. Each prerelease number is between 1 and 999.
 ## Creating a prerelease
 
 1. Update the three `ncVersion*` values in `gradle.properties`.
-2. Move the completed entries from `Unreleased` in `CHANGELOG.md` into a
-   versioned section and start a new empty `Unreleased` section.
-3. Add plain-language notes at `docs/release-notes/<version>.md`. Lead with
-   user-visible changes and known limitations; put implementation details last.
-4. Run `bash tools/test-prerelease-version.sh`.
-5. Merge the version change through the normal reviewed pull-request workflow.
-6. Create the matching tag, such as `v0.1.0-alpha.2`, from the intended commit.
-7. Push the tag.
+2. Prepare the release-note draft from the validated unreleased fragments:
+
+   ```bash
+   node tools/changelog-fragments.mjs prepare-release \
+     --version 0.2.0-alpha.1 \
+     --output docs/release-notes/0.2.0-alpha.1.md
+   ```
+
+3. Review and curate the draft. Lead with user-visible changes and add accurate
+   known limitations; do not expose implementation or workflow mechanics.
+4. Move the included files from `changes/unreleased/` to
+   `changes/archive/<version>/`.
+5. Copy the same rendered categories into a new versioned section in
+   `CHANGELOG.md`, leaving a new empty `Unreleased` section.
+6. Run `bash tools/test-prerelease-version.sh` and
+   `node tools/changelog-fragments.mjs validate`.
+7. Merge the version change through the normal reviewed pull-request workflow.
+8. Create the matching tag, such as `v0.2.0-alpha.1`, from the intended commit.
+9. Push the tag.
+
+The fragment files are the canonical source for changes since the previous
+release. Pull request titles are not scraped, and concurrent work does not edit
+the shared root changelog. Published `CHANGELOG.md` sections and archived
+fragments remain immutable.
 
 The protected `prerelease` GitHub environment should require approval. The
 workflow tests the source again, builds platform artifacts, verifies Android

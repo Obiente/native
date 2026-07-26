@@ -63,9 +63,9 @@ direction, or speak on your behalf.
 
 ## Development setup
 
-Install JDK 21, Rust stable, and Android SDK Platform 36 with Build Tools
-35.0.0. Set `ANDROID_HOME` or `ANDROID_SDK_ROOT` to your local SDK directory.
-Do not add local SDK paths to project files.
+Install JDK 21, Rust stable, Node.js 20 or newer, and Android SDK Platform 36
+with Build Tools 35.0.0. Set `ANDROID_HOME` or `ANDROID_SDK_ROOT` to your local
+SDK directory. Do not add local SDK paths to project files.
 
 Run the complete local verification suite:
 
@@ -150,6 +150,10 @@ real account or copy those generated artifacts into the repository.
 ## Pull requests
 
 - Keep changes focused and explain the user-facing outcome.
+- Add one small file under `changes/unreleased/` for every pull request. Use a
+  user-facing category for product changes or an explicit `internal` fragment
+  with `user-facing: no` for maintenance that should not appear in release
+  notes. See [changes/README.md](changes/README.md) for the format.
 - Add regression tests for bug fixes and contract tests for API behavior.
 - Describe any server versions and apps tested without exposing account data.
 - Include screenshots for visible UI changes on the affected form factors.

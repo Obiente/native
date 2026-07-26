@@ -2,7 +2,9 @@
 
 All notable changes to Nextcloud Native are recorded here. News articles explain
 features in depth, while release notes summarize what people should know before
-installing a particular build.
+installing a particular build. Pull requests add independent files under
+`changes/unreleased/`; the website renders them here until release preparation
+archives them and curates the immutable version section below.
 
 The project remains in prerelease development. Versions stay below `1.0.0`
 until the full product sprint is complete.
