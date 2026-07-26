@@ -93,7 +93,7 @@ fun parseNextcloudFileSharingCapabilities(json: String): NextcloudFileSharingCap
         emailPasswordEnforced = emailPassword?.booleanAt("enforced") == true,
         publicExpirationSupported = publicExpirationEnabled,
         publicExpirationEnforced = publicExpirationEnabled &&
-            publicExpiration?.booleanAt("enforced") == true,
+            publicExpiration.booleanAt("enforced") == true,
         userExpirationSupported = sharing.objectAt("user")
             ?.objectAt("expire_date")
             ?.booleanAt("enabled") == true,
