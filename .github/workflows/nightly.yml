@@ -1,0 +1,657 @@
+name: Publish nightly
+
+on:
+  workflow_run:
+    workflows:
+      - Build and test
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: nightly-release-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      eligible: ${{ steps.source.outputs.eligible }}
+      sha: ${{ steps.source.outputs.sha }}
+      tag: ${{ steps.source.outputs.tag }}
+      version: ${{ steps.source.outputs.version }}
+      version-code: ${{ steps.source.outputs.version_code }}
+      desktop-version: ${{ steps.source.outputs.desktop_version }}
+    steps:
+      - name: Check out the exact tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Authorize trusted main source
+        id: source
+        env:
+          SOURCE_EVENT: ${{ github.event.workflow_run.event }}
+          SOURCE_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SOURCE_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          SOURCE_RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
+        run: |
+          set -euo pipefail
+          test "${SOURCE_EVENT}" = "push"
+          test "${SOURCE_HEAD_BRANCH}" = "main"
+          test "${SOURCE_HEAD_REPOSITORY}" = "${GITHUB_REPOSITORY}"
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          git fetch --tags origin main
+          git merge-base --is-ancestor "${SOURCE_SHA}" origin/main
+          if git tag --points-at "${SOURCE_SHA}" |
+            grep -Eq '^v0\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[1-9][0-9]*$'; then
+            echo "eligible=false" >>"${GITHUB_OUTPUT}"
+            echo "A curated prerelease already owns this source commit." \
+              >>"${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          timestamp="$(date --utc --date="${SOURCE_STARTED_AT}" +%Y%m%d-%H%M)"
+          short_sha="${SOURCE_SHA:0:8}"
+          tag="nightly-${timestamp}-run${SOURCE_RUN_NUMBER}-${short_sha}"
+          source_sequence="$(git rev-list --count "${SOURCE_SHA}")"
+          version_code="$(tools/derive-android-version-code.sh "${source_sequence}" nightly)"
+          desktop_version="$(tools/derive-desktop-package-version.sh "${source_sequence}" nightly)"
+          {
+            echo "eligible=true"
+            echo "sha=${SOURCE_SHA}"
+            echo "tag=${tag}"
+            echo "version=${tag}"
+            echo "version_code=${version_code}"
+            echo "desktop_version=${desktop_version}"
+          } >>"${GITHUB_OUTPUT}"
+
+  android:
+    needs: source
+    if: needs.source.outputs.eligible == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: prerelease
+    steps:
+      - name: Check out the exact tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+
+      - name: Install Android platform
+        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+
+      - name: Require protected Android signing secrets
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          NC_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          NC_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          NC_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for secret_name in \
+            ANDROID_RELEASE_KEYSTORE_BASE64 \
+            NC_ANDROID_KEYSTORE_PASSWORD \
+            NC_ANDROID_KEY_ALIAS \
+            NC_ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!secret_name}" ]]; then
+              echo "::error::Required Android signing secret ${secret_name} is unavailable."
+              exit 1
+            fi
+          done
+
+      - name: Restore protected Android signing key
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${ANDROID_RELEASE_KEYSTORE_BASE64}" |
+            base64 --decode >"${RUNNER_TEMP}/nextcloud-native-release.keystore"
+
+      - name: Verify protected Android signing identity
+        env:
+          NC_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          NC_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          actual_certificate_sha256="$(keytool -list -v \
+            -keystore "${RUNNER_TEMP}/nextcloud-native-release.keystore" \
+            -storepass "${NC_ANDROID_KEYSTORE_PASSWORD}" \
+            -alias "${NC_ANDROID_KEY_ALIAS}" |
+            awk -F': ' '/SHA256:/{ fingerprint=$2; gsub(":", "", fingerprint); print tolower(fingerprint); exit }')"
+          expected_certificate_sha256="$(tr -d ':[:space:]' \
+            <release/android-signing-certificate.sha256 | tr '[:upper:]' '[:lower:]')"
+          test -n "${actual_certificate_sha256}"
+          if [[ "${actual_certificate_sha256}" != "${expected_certificate_sha256}" ]]; then
+            echo "::error::Protected Android signing certificate does not match the pinned certificate."
+            exit 1
+          fi
+
+      - name: Build the signed nightly APK
+        env:
+          NC_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/nextcloud-native-release.keystore
+          NC_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          NC_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          NC_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          NIGHTLY_VERSION: ${{ needs.source.outputs.version }}
+          NIGHTLY_VERSION_CODE: ${{ needs.source.outputs.version-code }}
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon \
+            -PncVersionName="${NIGHTLY_VERSION}" \
+            -PncVersionCode="${NIGHTLY_VERSION_CODE}" \
+            :androidApp:verifyReleaseLintGate \
+            :androidApp:lintVitalDirectApk \
+            :androidApp:assembleDirectApk
+
+      - name: Verify signing, version identity, and manifest
+        env:
+          NIGHTLY_TAG: ${{ needs.source.outputs.tag }}
+          NIGHTLY_VERSION: ${{ needs.source.outputs.version }}
+          NIGHTLY_VERSION_CODE: ${{ needs.source.outputs.version-code }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          apk_name="nextcloud-native-${NIGHTLY_VERSION}-android.apk"
+          cp androidApp/build/outputs/apk/directApk/androidApp-directApk.apk "dist/${apk_name}"
+
+          apksigner_path="${ANDROID_HOME}/build-tools/35.0.0/apksigner"
+          "${apksigner_path}" verify --verbose --print-certs "dist/${apk_name}" \
+            >"${RUNNER_TEMP}/apk-signing.txt" 2>&1
+          certificate_sha256="$(
+            tools/extract-apksigner-certificate-sha256.sh \
+              <"${RUNNER_TEMP}/apk-signing.txt"
+          )"
+          expected_certificate_sha256="$(tr -d ':[:space:]' \
+            <release/android-signing-certificate.sha256 | tr '[:upper:]' '[:lower:]')"
+          test "${certificate_sha256}" = "${expected_certificate_sha256}"
+
+          apkanalyzer="${ANDROID_HOME}/cmdline-tools/latest/bin/apkanalyzer"
+          tools/verify-android-artifact-metadata.sh \
+            "${apkanalyzer}" \
+            "dist/${apk_name}" \
+            "dev.obiente.nextcloudnative" \
+            "${NIGHTLY_VERSION}" \
+            "${NIGHTLY_VERSION_CODE}" \
+            "26"
+
+          apk_size="$(stat --format='%s' "dist/${apk_name}")"
+          apk_sha256="$(sha256sum "dist/${apk_name}" | awk '{print $1}')"
+          signer_digests="$(jq -cn --arg digest "${certificate_sha256}" '[$digest]')"
+          tools/create-android-update-manifest.sh \
+            dist/update-manifest.json \
+            nightly-v1 \
+            "${NIGHTLY_TAG}" \
+            "${NIGHTLY_VERSION}" \
+            "${NIGHTLY_VERSION_CODE}" \
+            "${apk_name}" \
+            "${apk_size}" \
+            "${apk_sha256}" \
+            "${signer_digests}"
+          printf '%s\n' "${certificate_sha256}" >dist/android-certificate.sha256
+          printf '%s\n' "${apk_sha256}" >dist/android-apk.sha256
+
+      - name: Remove protected Android signing key
+        if: always()
+        run: |
+          keystore="${RUNNER_TEMP}/nextcloud-native-release.keystore"
+          if [[ -f "${keystore}" ]]; then
+            shred --remove "${keystore}"
+          fi
+
+      - name: Upload verified signed nightly
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: nextcloud-native-android
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  desktop:
+    needs: source
+    if: needs.source.outputs.eligible == 'true'
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            tasks: ":ui:packageDeb :ui:packageRpm"
+            paths: |
+              ui/build/compose/binaries/main/deb/*.deb
+              ui/build/compose/binaries/main/rpm/*.rpm
+          - runner: windows-latest
+            platform: windows
+            tasks: ":ui:packageMsi"
+            paths: ui/build/compose/binaries/main/msi/*.msi
+          - runner: macos-15-intel
+            platform: macos
+            tasks: ":ui:packageDmg"
+            paths: ui/build/compose/binaries/main/dmg/*.dmg
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Check out the exact tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Build native desktop package
+        shell: bash
+        env:
+          NIGHTLY_DESKTOP_VERSION: ${{ needs.source.outputs.desktop-version }}
+        run: |
+          set +e
+          ./gradlew --no-daemon \
+            -PncDesktopPackageVersion="${NIGHTLY_DESKTOP_VERSION}" \
+            -PncMacosPackageVersion="${NIGHTLY_DESKTOP_VERSION}" \
+            ${{ matrix.tasks }}
+          status=$?
+          if [[ "${status}" -ne 0 ]]; then
+            find ui/build/compose/logs -type f -print -exec cat {} \; 2>/dev/null || true
+          fi
+          exit "${status}"
+
+      - name: Upload desktop nightly package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: nextcloud-native-${{ matrix.platform }}
+          path: ${{ matrix.paths }}
+          if-no-files-found: error
+          retention-days: 7
+
+  stage-assets:
+    needs:
+      - source
+      - android
+      - desktop
+    if: >-
+      always() &&
+      needs.source.outputs.eligible == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      successful-platforms: ${{ steps.platforms.outputs.successful }}
+      available-platforms: ${{ steps.platforms.outputs.available }}
+      already-published: ${{ steps.release.outputs.already-published }}
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download successful nightly packages
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: nextcloud-native-*
+          path: artifacts
+
+      - name: Count successful platforms
+        id: platforms
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_TAG: ${{ needs.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          existing_assets="$(
+            gh release view "${NIGHTLY_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json assets \
+              --jq '.assets[].name' 2>/dev/null || true
+          )"
+          successful=0
+          available=()
+          for platform in android linux windows macos; do
+            artifact="artifacts/nextcloud-native-${platform}"
+            staged=false
+            case "${platform}" in
+              android)
+                grep -Eq '^nextcloud-native-.*-android\.apk$' <<<"${existing_assets}" &&
+                  grep -Fxq 'update-manifest.json' <<<"${existing_assets}" &&
+                  staged=true
+                ;;
+              linux)
+                grep -Eq '\.(deb|rpm)$' <<<"${existing_assets}" &&
+                  staged=true
+                ;;
+              windows)
+                grep -Eq '\.msi$' <<<"${existing_assets}" &&
+                  staged=true
+                ;;
+              macos)
+                grep -Eq '\.dmg$' <<<"${existing_assets}" &&
+                  staged=true
+                ;;
+            esac
+            if {
+              [[ -d "${artifact}" ]] &&
+                find "${artifact}" -type f -print -quit | grep -q .
+            } || [[ "${staged}" = "true" ]]; then
+              successful=$((successful + 1))
+              available+=("${platform}")
+              echo "${platform}: available"
+            else
+              echo "${platform}: unavailable"
+            fi
+          done
+          echo "Successful platforms: ${successful}/4"
+          echo "successful=${successful}" >>"${GITHUB_OUTPUT}"
+          echo "available=$(IFS=,; echo "${available[*]}")" >>"${GITHUB_OUTPUT}"
+          if [[ "${successful}" -eq 0 ]]; then
+            test "$(
+              gh release view "${NIGHTLY_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --json isDraft \
+                --jq '.isDraft'
+            )" = "false"
+          fi
+
+      - name: Prepare immutable release assets
+        if: steps.platforms.outputs.successful != '0'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts dist
+          if [[ -d artifacts/nextcloud-native-android ]]; then
+            test -f artifacts/nextcloud-native-android/update-manifest.json
+            test -f artifacts/nextcloud-native-android/android-apk.sha256
+          fi
+          find artifacts -mindepth 2 -maxdepth 2 -type f \
+            ! -name android-apk.sha256 \
+            ! -name android-certificate.sha256 \
+            -exec cp -t dist -- {} +
+
+      - name: Create or verify immutable nightly prerelease
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_SHA: ${{ needs.source.outputs.sha }}
+          NIGHTLY_TAG: ${{ needs.source.outputs.tag }}
+          NIGHTLY_VERSION: ${{ needs.source.outputs.version }}
+          NIGHTLY_VERSION_CODE: ${{ needs.source.outputs.version-code }}
+          SOURCE_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          SUCCESSFUL_PLATFORMS: ${{ steps.platforms.outputs.successful }}
+          AVAILABLE_PLATFORMS: ${{ steps.platforms.outputs.available }}
+        run: |
+          set -euo pipefail
+          echo "already-published=false" >>"${GITHUB_OUTPUT}"
+          existing_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${NIGHTLY_TAG}" \
+              --jq '.object.sha' 2>/dev/null || true
+          )"
+          if [[ -z "${existing_sha}" ]]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f "ref=refs/tags/${NIGHTLY_TAG}" \
+              -f "sha=${NIGHTLY_SHA}" >/dev/null
+          elif [[ "${existing_sha}" != "${NIGHTLY_SHA}" ]]; then
+            echo "::error::Nightly tag ${NIGHTLY_TAG} points to a different commit."
+            exit 1
+          fi
+
+          existing_release="$(
+            gh release view "${NIGHTLY_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json isDraft 2>/dev/null || true
+          )"
+          if [[ -n "${existing_release}" ]] &&
+            [[ "$(jq -r '.isDraft' <<<"${existing_release}")" = "false" ]]; then
+            echo "already-published=true" >>"${GITHUB_OUTPUT}"
+            echo "Published nightly ${NIGHTLY_TAG} is immutable; no assets or metadata were changed."
+            exit 0
+          fi
+
+          test "${SUCCESSFUL_PLATFORMS}" -gt 0
+          printf 'Automated nightly from the tested main branch.\n\nSource CI: %s\n' \
+            "${SOURCE_RUN_URL}" >"${RUNNER_TEMP}/release-notes.md"
+          if [[ "${SUCCESSFUL_PLATFORMS}" -lt 4 ]]; then
+            {
+              printf '\n## Build availability\n\n'
+              printf '| Platform | Status |\n'
+              printf '| --- | --- |\n'
+              for platform in android linux windows macos; do
+                artifact="artifacts/nextcloud-native-${platform}"
+                case "${platform}" in
+                  android) label="Android" ;;
+                  linux) label="Linux" ;;
+                  windows) label="Windows" ;;
+                  macos) label="macOS" ;;
+                esac
+                if [[ ",${AVAILABLE_PLATFORMS}," == *",${platform},"* ]]; then
+                  printf '| %s | Available |\n' "${label}"
+                else
+                  printf '| %s | Unavailable |\n' "${label}"
+                fi
+              done
+            } >>"${RUNNER_TEMP}/release-notes.md"
+          fi
+          mapfile -d '' assets < <(find dist -maxdepth 1 -type f -print0 | sort -z)
+
+          if [[ -n "${existing_release}" ]]; then
+            existing_assets="$(
+              gh release view "${NIGHTLY_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --json assets \
+                --jq '.assets[].name'
+            )"
+            current_android=false
+            if find dist -maxdepth 1 -type f \
+              -name 'nextcloud-native-*-android.apk' -print -quit | grep -q . &&
+              [[ -f dist/update-manifest.json ]]; then
+              current_android=true
+            fi
+            existing_android_apk=false
+            existing_android_manifest=false
+            existing_android_any=false
+            grep -Eq '^nextcloud-native-.*-android\.apk$' <<<"${existing_assets}" &&
+              existing_android_apk=true
+            grep -Fxq 'update-manifest.json' <<<"${existing_assets}" &&
+              existing_android_manifest=true
+            grep -Eq '(^nextcloud-native-.*-android\.(apk|aab)$|^update-manifest\.json$)' \
+              <<<"${existing_assets}" &&
+              existing_android_any=true
+            if [[ "${current_android}" = "false" ]] &&
+              [[ "${existing_android_any}" = "true" ]] &&
+              {
+                [[ "${existing_android_apk}" = "false" ]] ||
+                  [[ "${existing_android_manifest}" = "false" ]]
+              }; then
+              while IFS= read -r partial_asset; do
+                case "${partial_asset}" in
+                  nextcloud-native-*-android.apk|nextcloud-native-*-android.aab|update-manifest.json)
+                    gh release delete-asset "${NIGHTLY_TAG}" "${partial_asset}" \
+                      --repo "${GITHUB_REPOSITORY}" \
+                      --yes
+                    ;;
+                esac
+              done <<<"${existing_assets}"
+              existing_assets="$(
+                gh release view "${NIGHTLY_TAG}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --json assets \
+                  --jq '.assets[].name'
+              )"
+            fi
+            for asset in "${assets[@]}"; do
+              name="$(basename "${asset}")"
+              case "${name}" in
+                nextcloud-native-*-android.apk|nextcloud-native-*-android.aab|update-manifest.json)
+                  if [[ "${current_android}" = "true" ]]; then
+                    gh release upload "${NIGHTLY_TAG}" "${asset}" \
+                      --repo "${GITHUB_REPOSITORY}" \
+                      --clobber
+                    continue
+                  fi
+                  ;;
+              esac
+              if grep -Fxq "${name}" <<<"${existing_assets}"; then
+                echo "Retaining immutable staged asset ${name}."
+              else
+                gh release upload "${NIGHTLY_TAG}" "${asset}" \
+                  --repo "${GITHUB_REPOSITORY}"
+              fi
+            done
+            gh release edit "${NIGHTLY_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --prerelease \
+              --latest=false \
+              --notes-file "${RUNNER_TEMP}/release-notes.md" \
+              --title "Nextcloud Native ${NIGHTLY_VERSION}"
+          else
+            test "${#assets[@]}" -gt 0
+            gh release create "${NIGHTLY_TAG}" "${assets[@]}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --draft \
+              --prerelease \
+              --latest=false \
+              --notes-file "${RUNNER_TEMP}/release-notes.md" \
+              --title "Nextcloud Native ${NIGHTLY_VERSION}"
+          fi
+
+          if [[ "${SUCCESSFUL_PLATFORMS}" -ge 3 ]]; then
+            canonical="${RUNNER_TEMP}/canonical-release-assets"
+            mkdir -p "${canonical}"
+            gh release download "${NIGHTLY_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --dir "${canonical}"
+            if [[ -f "${canonical}/SHA256SUMS" ]]; then
+              rm "${canonical}/SHA256SUMS"
+            fi
+            mapfile -d '' canonical_apks < <(
+              find "${canonical}" -maxdepth 1 -type f \
+                -name 'nextcloud-native-*-android.apk' -print0
+            )
+            if [[ "${#canonical_apks[@]}" -gt 0 ]] ||
+              [[ -f "${canonical}/update-manifest.json" ]]; then
+              test "${#canonical_apks[@]}" -eq 1
+              test -f "${canonical}/update-manifest.json"
+              tools/verify-android-update-manifest-assets.sh \
+                "${canonical}/update-manifest.json" \
+                "${canonical_apks[0]}" \
+                "${GITHUB_REPOSITORY}" \
+                "${NIGHTLY_TAG}" \
+                "nightly-v1" \
+                "${NIGHTLY_VERSION}" \
+                "${NIGHTLY_VERSION_CODE}"
+            fi
+            (
+              cd "${canonical}"
+              find . -maxdepth 1 -type f -printf '%P\0' |
+                sort -z |
+                xargs -0 sha256sum >"${RUNNER_TEMP}/SHA256SUMS"
+            )
+            gh release upload "${NIGHTLY_TAG}" "${RUNNER_TEMP}/SHA256SUMS" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+          fi
+
+  release-quorum:
+    needs: stage-assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require at least three successful platforms
+        env:
+          ALREADY_PUBLISHED: ${{ needs.stage-assets.outputs.already-published }}
+          SUCCESSFUL_PLATFORMS: ${{ needs.stage-assets.outputs.successful-platforms }}
+        run: |
+          echo "Successful platforms: ${SUCCESSFUL_PLATFORMS}/4"
+          [[ "${ALREADY_PUBLISHED}" = "true" ]] ||
+            test "${SUCCESSFUL_PLATFORMS}" -ge 3
+
+  publish:
+    needs:
+      - source
+      - stage-assets
+      - release-quorum
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the exact tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+
+      - name: Publish the staged nightly prerelease
+        if: needs.stage-assets.outputs.already-published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_TAG: ${{ needs.source.outputs.tag }}
+        run: |
+          gh release edit "${NIGHTLY_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --draft=false \
+            --prerelease \
+            --latest=false
+
+  promote:
+    needs:
+      - source
+      - publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: android-nightly-channel
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the exact tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+
+      - name: Advance the Android nightly channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_SHA: ${{ needs.source.outputs.sha }}
+          NIGHTLY_TAG: ${{ needs.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p channel
+          if gh release download "${NIGHTLY_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern update-manifest.json \
+            --dir channel; then
+            tools/promote-android-update-channel.sh \
+              "${GITHUB_REPOSITORY}" \
+              channel-nightly \
+              "${NIGHTLY_TAG}" \
+              "${NIGHTLY_SHA}" \
+              channel/update-manifest.json
+          else
+            echo "This nightly has no Android package; the Android channel was not changed." \
+              >>"${GITHUB_STEP_SUMMARY}"
+          fi
