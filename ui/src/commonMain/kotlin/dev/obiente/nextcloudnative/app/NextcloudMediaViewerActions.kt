@@ -385,13 +385,7 @@ private fun MediaShareDialog(
     onDismiss: () -> Unit,
 ) {
     val supportedTargets = remember(capabilities) {
-        FileShareTarget.entries.filter {
-            when (it) {
-                FileShareTarget.PublicLink -> capabilities.publicLinks
-                FileShareTarget.User -> capabilities.userShares
-                FileShareTarget.Group -> capabilities.groupShares
-            }
-        }
+        FileShareTarget.entries.filter(capabilities::supports)
     }
     var shares by remember(file.path) { mutableStateOf<List<NextcloudFileShare>?>(null) }
     var target by remember(file.path) {
@@ -418,8 +412,10 @@ private fun MediaShareDialog(
     val plan = planFileShareCreation(
         file = file,
         target = target,
-        recipient = recipient.takeUnless { target == FileShareTarget.PublicLink },
-        permissions = FileSharePermissions(read = true, update = allowEditing),
+        recipient = recipient.takeIf { target.requiresRecipient },
+        permissions = (
+            if (allowEditing) FileSharePermissionPreset.Edit else FileSharePermissionPreset.View
+            ).toPermissions(file.isDirectory),
         capabilities = capabilities,
     )
     AlertDialog(
@@ -476,25 +472,18 @@ private fun MediaShareDialog(
                                         recipient = ""
                                         error = null
                                     },
-                                    label = {
-                                        Text(
-                                            when (choice) {
-                                                FileShareTarget.PublicLink -> "Public link"
-                                                FileShareTarget.User -> "User"
-                                                FileShareTarget.Group -> "Group"
-                                            },
-                                        )
-                                    },
+                                    label = { Text(choice.presentation().label) },
                                 )
                             }
                         }
                     }
-                    if (target != FileShareTarget.PublicLink) {
+                    if (target.requiresRecipient) {
                         item {
                             FileShareRecipientPicker(
                                 session = session,
                                 services = services,
                                 target = target,
+                                file = file,
                                 selectedRecipient = recipient,
                                 enabled = !running,
                                 onSelected = {
