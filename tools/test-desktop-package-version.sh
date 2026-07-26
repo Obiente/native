@@ -13,11 +13,11 @@ test "$("$derive" 6554 nightly)" = "1.1.5"
 test "$("$derive" 1677721 rc)" = "1.255.65534"
 
 if "$derive" 0 nightly >/dev/null 2>&1; then
-    echo "A zero CI run number must be rejected." >&2
+    echo "A zero main-history sequence must be rejected." >&2
     exit 1
 fi
 if "$derive" 1677722 nightly >/dev/null 2>&1; then
-    echo "An out-of-range CI run number must be rejected." >&2
+    echo "An out-of-range main-history sequence must be rejected." >&2
     exit 1
 fi
 if "$derive" 1 stable >/dev/null 2>&1; then

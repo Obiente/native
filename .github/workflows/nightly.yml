@@ -66,8 +66,9 @@ jobs:
           timestamp="$(date --utc --date="${SOURCE_STARTED_AT}" +%Y%m%d-%H%M)"
           short_sha="${SOURCE_SHA:0:8}"
           tag="nightly-${timestamp}-run${SOURCE_RUN_NUMBER}-${short_sha}"
-          version_code="$(tools/derive-android-version-code.sh "${SOURCE_RUN_NUMBER}" nightly)"
-          desktop_version="$(tools/derive-desktop-package-version.sh "${SOURCE_RUN_NUMBER}" nightly)"
+          source_sequence="$(git rev-list --count "${SOURCE_SHA}")"
+          version_code="$(tools/derive-android-version-code.sh "${source_sequence}" nightly)"
+          desktop_version="$(tools/derive-desktop-package-version.sh "${source_sequence}" nightly)"
           {
             echo "eligible=true"
             echo "sha=${SOURCE_SHA}"

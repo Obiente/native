@@ -45,22 +45,22 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
-          source_run_number="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&event=push&status=success&per_page=100" |
-              jq --arg sha "${GITHUB_SHA}" \
-                '[.workflow_runs[] | select(.head_sha == $sha)] |
-                 if length == 0 then error("No successful main CI run") else max_by(.run_number).run_number end'
-          )"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&event=push&status=success&per_page=100" |
+            jq --arg sha "${GITHUB_SHA}" -e \
+              '[.workflow_runs[] | select(.head_sha == $sha)] |
+               if length == 0 then error("No successful main CI run") else true end' \
+              >/dev/null
           if [[ "${GITHUB_REF_NAME}" =~ -(alpha|beta|rc)\.[1-9][0-9]*$ ]]; then
             channel="${BASH_REMATCH[1]}"
           else
             echo "::error::The release tag does not identify an allocated channel."
             exit 1
           fi
-          version_code="$(tools/derive-android-version-code.sh "${source_run_number}" "${channel}")"
+          source_sequence="$(git rev-list --count "${GITHUB_SHA}")"
+          version_code="$(tools/derive-android-version-code.sh "${source_sequence}" "${channel}")"
           desktop_version="$(
-            tools/derive-desktop-package-version.sh "${source_run_number}" "${channel}"
+            tools/derive-desktop-package-version.sh "${source_sequence}" "${channel}"
           )"
           {
             echo "value=${version_code}"

@@ -17,7 +17,7 @@ test "$alpha" -lt "$beta"
 test "$beta" -lt "$next_nightly"
 
 if "$derive" 0 nightly >/dev/null 2>&1; then
-    echo "A zero CI run number must be rejected." >&2
+    echo "A zero main-history sequence must be rejected." >&2
     exit 1
 fi
 if "$derive" 41 stable >/dev/null 2>&1; then
