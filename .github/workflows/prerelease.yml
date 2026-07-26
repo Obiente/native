@@ -2,6 +2,8 @@ name: Publish prerelease
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v0.*-alpha.*"
       - "v0.*-beta.*"
@@ -11,11 +13,40 @@ permissions:
   contents: read
 
 concurrency:
-  group: prerelease-${{ github.ref }}
+  group: prerelease-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
+  release-context:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      curated: ${{ steps.release.outputs.curated }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Resolve immutable release identity
+        id: release
+        env:
+          COMMIT_TIMESTAMP: ${{ github.event.head_commit.timestamp }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            curated=true
+          else
+            test "${GITHUB_REF}" = "refs/heads/main"
+            short_sha="${GITHUB_SHA:0:8}"
+            timestamp="$(date --utc --date="${COMMIT_TIMESTAMP}" +%Y%m%d-%H%M)"
+            tag="nightly-${timestamp}-run${GITHUB_RUN_NUMBER}-${short_sha}"
+            curated=false
+          fi
+          echo "curated=${curated}" >>"${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
+          echo "version=${tag#v}" >>"${GITHUB_OUTPUT}"
+
   authorize-signing:
+    needs: release-context
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -24,17 +55,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Authorize tagged source for signing
+      - name: Authorize exact main source for signing
+        env:
+          CURATED_RELEASE: ${{ needs.release-context.outputs.curated }}
+          RELEASE_TAG: ${{ needs.release-context.outputs.tag }}
         run: |
           set -euo pipefail
-          bash tools/test-prerelease-version.sh
-          bash tools/verify-prerelease-version.sh "${GITHUB_REF_NAME}"
-          test -f "docs/release-notes/${GITHUB_REF_NAME#v}.md"
-          grep -Fq "## [${GITHUB_REF_NAME#v}]" CHANGELOG.md
+          if [[ "${CURATED_RELEASE}" == "true" ]]; then
+            bash tools/test-prerelease-version.sh
+            bash tools/verify-prerelease-version.sh "${RELEASE_TAG}"
+            test -f "docs/release-notes/${RELEASE_TAG#v}.md"
+            grep -Fq "## [${RELEASE_TAG#v}]" CHANGELOG.md
+          fi
           git fetch --no-tags origin main
           git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
 
   validate:
+    needs: release-context
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -43,12 +80,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Require a prerelease version on main
+      - name: Require authorized release source on main
+        env:
+          CURATED_RELEASE: ${{ needs.release-context.outputs.curated }}
+          RELEASE_TAG: ${{ needs.release-context.outputs.tag }}
         run: |
-          bash tools/test-prerelease-version.sh
-          bash tools/verify-prerelease-version.sh "${GITHUB_REF_NAME}"
-          test -f "docs/release-notes/${GITHUB_REF_NAME#v}.md"
-          grep -Fq "## [${GITHUB_REF_NAME#v}]" CHANGELOG.md
+          set -euo pipefail
+          if [[ "${CURATED_RELEASE}" == "true" ]]; then
+            bash tools/test-prerelease-version.sh
+            bash tools/verify-prerelease-version.sh "${RELEASE_TAG}"
+            test -f "docs/release-notes/${RELEASE_TAG#v}.md"
+            grep -Fq "## [${RELEASE_TAG#v}]" CHANGELOG.md
+          fi
           git fetch origin main
           git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
 
@@ -137,7 +180,9 @@ jobs:
           retention-days: 7
 
   android:
-    needs: authorize-signing
+    needs:
+      - authorize-signing
+      - release-context
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -205,9 +250,11 @@ jobs:
 
       - name: Verify Android signing and prepare artifacts
         id: android
+        env:
+          RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_VERSION}"
           mkdir -p dist
           cp androidApp/build/outputs/apk/directApk/androidApp-directApk.apk \
             "dist/nextcloud-native-${version}-android.apk"
@@ -287,6 +334,7 @@ jobs:
 
   stage-assets:
     needs:
+      - release-context
       - desktop
       - android
     if: always()
@@ -327,15 +375,19 @@ jobs:
           test "${successful}" -gt 0
 
       - name: Prepare release assets
+        env:
+          CURATED_RELEASE: ${{ needs.release-context.outputs.curated }}
+          RELEASE_TAG: ${{ needs.release-context.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p dist
           find artifacts -mindepth 2 -type f \
             -exec cp -t dist -- {} +
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_VERSION}"
           version_code="$(awk -F= '$1 == "ncVersionCode" { print $2 }' gradle.properties)"
           apk_name="nextcloud-native-${version}-android.apk"
-          if [[ -f "dist/${apk_name}" ]]; then
+          if [[ "${CURATED_RELEASE}" == "true" && -f "dist/${apk_name}" ]]; then
             apk_size="$(stat --format='%s' "dist/${apk_name}")"
             apk_sha256="$(cat dist/android-apk.sha256)"
             certificate_sha256="$(cat dist/android-certificate.sha256)"
@@ -356,11 +408,16 @@ jobs:
               sort -z |
               xargs -0 sha256sum >SHA256SUMS
           )
-          awk '
-            NR == 1 && /^# / { next }
-            NR == 2 && /^$/ { next }
-            { print }
-          ' "docs/release-notes/${version}.md" >"${RUNNER_TEMP}/release-notes.md"
+          if [[ "${CURATED_RELEASE}" == "true" ]]; then
+            awk '
+              NR == 1 && /^# / { next }
+              NR == 2 && /^$/ { next }
+              { print }
+            ' "docs/release-notes/${version}.md" >"${RUNNER_TEMP}/release-notes.md"
+          else
+            printf 'Automated nightly prerelease for commit `%s`.\n' \
+              "${GITHUB_SHA:0:8}" >"${RUNNER_TEMP}/release-notes.md"
+          fi
           if [[ "${{ steps.platforms.outputs.successful }}" -lt 4 ]]; then
             {
               printf '\n## Build availability\n\n'
@@ -376,45 +433,87 @@ jobs:
                 esac
                 if [[ -d "${artifact}" ]] &&
                   find "${artifact}" -type f -print -quit | grep -q .; then
-                  printf '| %s | ✅ Available |\n' "${label}"
+                  printf '| %s | Available |\n' "${label}"
                 else
-                  printf '| %s | ❌ Unavailable |\n' "${label}"
+                  printf '| %s | Unavailable |\n' "${label}"
                 fi
               done
             } >>"${RUNNER_TEMP}/release-notes.md"
           fi
 
-      - name: Stage assets on the tagged draft release
+      - name: Create immutable nightly tag
+        if: needs.release-context.outputs.curated != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-context.outputs.tag }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          mapfile -d '' assets < <(find dist -maxdepth 1 -type f -print0 | sort -z)
-          gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --verify-tag \
-            --draft \
-            --prerelease \
-            --notes-file "${RUNNER_TEMP}/release-notes.md" \
-            --title "Nextcloud Native ${version}"
+          existing_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" \
+              --jq '.object.sha' 2>/dev/null || true
+          )"
+          if [[ -z "${existing_sha}" ]]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f "ref=refs/tags/${RELEASE_TAG}" \
+              -f "sha=${GITHUB_SHA}" >/dev/null
+          elif [[ "${existing_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "::error::Nightly tag ${RELEASE_TAG} points to ${existing_sha}, not ${GITHUB_SHA}."
+            exit 1
+          fi
 
-  release-quorum:
-    needs: stage-assets
+      - name: Stage assets on the immutable draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-context.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' assets < <(find dist -maxdepth 1 -type f -print0 | sort -z)
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${assets[@]}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+            gh release edit "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --prerelease \
+              --latest=false \
+              --notes-file "${RUNNER_TEMP}/release-notes.md" \
+              --title "Nextcloud Native ${RELEASE_VERSION}"
+          else
+            gh release create "${RELEASE_TAG}" "${assets[@]}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --draft \
+              --prerelease \
+              --notes-file "${RUNNER_TEMP}/release-notes.md" \
+              --title "Nextcloud Native ${RELEASE_VERSION}"
+          fi
+
+  release-policy:
+    needs:
+      - release-context
+      - stage-assets
     runs-on: ubuntu-latest
     steps:
-      - name: Require at least three successful platforms
+      - name: Apply channel publication threshold
         env:
+          CURATED_RELEASE: ${{ needs.release-context.outputs.curated }}
           SUCCESSFUL_PLATFORMS: ${{ needs.stage-assets.outputs.successful-platforms }}
         run: |
           echo "Successful platforms: ${SUCCESSFUL_PLATFORMS}/4"
-          test "${SUCCESSFUL_PLATFORMS}" -ge 3
+          if [[ "${CURATED_RELEASE}" == "true" ]]; then
+            test "${SUCCESSFUL_PLATFORMS}" -ge 3
+          else
+            test "${SUCCESSFUL_PLATFORMS}" -ge 1
+          fi
 
   publish:
     needs:
+      - release-context
       - validate
       - stage-assets
-      - release-quorum
+      - release-policy
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -422,8 +521,9 @@ jobs:
       - name: Publish the staged GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-context.outputs.tag }}
         run: |
-          gh release edit "${GITHUB_REF_NAME}" \
+          gh release edit "${RELEASE_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
             --draft=false \

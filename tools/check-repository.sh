@@ -49,5 +49,6 @@ done
 
 bash tools/test-apksigner-certificate-parser.sh
 bash tools/test-build-jvm-criteria.sh
+bash tools/test-nightly-release-workflow.sh
 
 printf 'Repository hygiene checks passed.\n'
