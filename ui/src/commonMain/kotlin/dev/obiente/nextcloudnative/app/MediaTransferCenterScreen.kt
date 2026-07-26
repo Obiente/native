@@ -51,10 +51,14 @@ internal fun MediaTransferCenterScreen(
     state: MediaTransferCenterState,
     loading: Boolean,
     busyLocalKey: String?,
+    clearingCompleted: Boolean,
+    statusMessage: String?,
+    statusMessageIsError: Boolean,
     onBack: () -> Unit,
     onSelectSection: (MediaTransferSection) -> Unit,
     onLoadNewer: () -> Unit,
     onLoadOlder: (MediaBackupLedgerCursor) -> Unit,
+    onRetry: () -> Unit,
     onAction: (MediaBackupLedgerRecord, MediaTransferAction) -> Unit,
     onClearCompleted: () -> Unit,
     visibleActions: (MediaBackupLedgerRecord) -> Set<MediaTransferAction> = {
@@ -83,6 +87,7 @@ internal fun MediaTransferCenterScreen(
                     summary = state.summary,
                     selected = state.page.section,
                     onSelect = onSelectSection,
+                    clearEnabled = !clearingCompleted,
                     onClearCompleted = {
                         clearHistoryConfirmation = requestMediaTransferClearHistory(
                             completedCount = state.summary.succeeded,
@@ -93,6 +98,35 @@ internal fun MediaTransferCenterScreen(
             if (loading) {
                 item(key = "loading") {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
+            statusMessage?.let { message ->
+                item(key = "status-message") {
+                    Surface(
+                        color = NextcloudTheme.colors.appTile,
+                        shape = RoundedCornerShape(NextcloudRadii.Card),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                message,
+                                modifier = Modifier.weight(1f),
+                                color = if (statusMessageIsError) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.primary
+                                },
+                            )
+                            if (statusMessageIsError) {
+                                OutlinedButton(enabled = !loading, onClick = onRetry) {
+                                    Text("Try again")
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if (!loading && state.page.records.isEmpty()) {
@@ -218,6 +252,7 @@ private fun MediaTransferFilters(
     summary: MediaBackupLedgerSummary,
     selected: MediaTransferSection,
     onSelect: (MediaTransferSection) -> Unit,
+    clearEnabled: Boolean,
     onClearCompleted: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -243,7 +278,7 @@ private fun MediaTransferFilters(
                 NextcloudCardAction(
                     label = "Clear completed history",
                     destructive = true,
-                    enabled = summary.succeeded > 0,
+                    enabled = summary.succeeded > 0 && clearEnabled,
                     onClick = onClearCompleted,
                 ),
             ),

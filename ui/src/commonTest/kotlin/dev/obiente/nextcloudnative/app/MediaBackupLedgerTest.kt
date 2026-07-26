@@ -221,7 +221,7 @@ class MediaBackupLedgerTest {
         store.close()
 
         val future = BundledSQLiteDriver().open(":memory:")
-        future.execSQL("PRAGMA user_version = 3")
+        future.execSQL("PRAGMA user_version = 4")
         assertFailsWith<MediaBackupLedgerStoreException> {
             MediaBackupLedgerStore(future)
         }
@@ -233,14 +233,40 @@ class MediaBackupLedgerTest {
         val connection = BundledSQLiteDriver().open(":memory:")
         MediaBackupLedgerStore(connection)
         connection.execSQL("DROP INDEX media_backup_account_remote_path_updated")
+        connection.execSQL("ALTER TABLE media_backup_ledger DROP COLUMN history_visible")
         connection.execSQL("PRAGMA user_version = 1")
 
         val migrated = MediaBackupLedgerStore(connection)
 
         connection.prepare("PRAGMA user_version").use { statement ->
             check(statement.step())
-            assertEquals(2L, statement.getLong(0))
+            assertEquals(3L, statement.getLong(0))
         }
+        migrated.close()
+    }
+
+    @Test
+    fun versionTwoLedgerMigratesHistoryVisibilityWithoutLosingReceipts() = runBlocking {
+        val connection = BundledSQLiteDriver().open(":memory:")
+        val current = MediaBackupLedgerStore(connection)
+        current.upsert(succeededRecord("external:migrated", 2_000))
+        connection.execSQL("ALTER TABLE media_backup_ledger DROP COLUMN history_visible")
+        connection.execSQL("PRAGMA user_version = 2")
+
+        val migrated = MediaBackupLedgerStore(connection)
+
+        connection.prepare("PRAGMA user_version").use { statement ->
+            check(statement.step())
+            assertEquals(3L, statement.getLong(0))
+        }
+        assertEquals(
+            MediaBackupStatus.BackedUp,
+            migrated.load(accountId, "external:migrated")?.resolveMediaBackupStatus(),
+        )
+        assertEquals(
+            1,
+            migrated.summary(accountId, includeClearedCompleted = false).succeeded,
+        )
         migrated.close()
     }
 

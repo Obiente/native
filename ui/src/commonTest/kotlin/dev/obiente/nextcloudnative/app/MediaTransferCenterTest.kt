@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -74,7 +75,7 @@ class MediaTransferCenterTest {
     }
 
     @Test
-    fun retryCancelAndClearAreAtomicAndStateGuarded() = runBlocking {
+    fun retryCancelAndClearAreAtomicStateGuardedAndPreserveBackupProof() = runBlocking {
         val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))
         val failed = record(MediaBackupTransferState.Failed, "media:failed")
         val pending = record(MediaBackupTransferState.Pending, "media:pending")
@@ -89,6 +90,29 @@ class MediaTransferCenterTest {
         assertFalse(store.removePending(accountId, completed.localKey))
         assertEquals(1, store.clearCompleted(accountId))
         assertEquals(1, store.summary(accountId).pending)
+        assertEquals(1, store.summary(accountId).succeeded)
+        assertEquals(
+            0,
+            store.summary(accountId, includeClearedCompleted = false).succeeded,
+        )
+        assertTrue(
+            store.page(
+                accountId = accountId,
+                transferState = MediaBackupTransferState.Succeeded,
+                includeClearedCompleted = false,
+            ).records.isEmpty(),
+        )
+        val retainedReceipt = assertNotNull(store.load(accountId, completed.localKey))
+        assertEquals(MediaBackupStatus.BackedUp, retainedReceipt.resolveMediaBackupStatus())
+        assertEquals(
+            mapOf(
+                requireNotNull(retainedReceipt.receipt).remotePath to MediaBackupStatus.BackedUp,
+            ),
+            store.statusesForRemotePaths(
+                accountId,
+                listOf(requireNotNull(retainedReceipt.receipt).remotePath),
+            ),
+        )
         assertEquals(0, store.clearCompleted(accountId))
         store.close()
     }

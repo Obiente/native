@@ -110,12 +110,16 @@ class MediaBackupLedgerStore internal constructor(
         transferState: MediaBackupTransferState? = null,
         after: MediaBackupLedgerCursor? = null,
         limit: Int = 50,
+        includeClearedCompleted: Boolean = true,
     ): MediaBackupLedgerPage = mutex.withLock {
         requireAccountId(accountId)
         require(limit in 1..MAX_MEDIA_BACKUP_LEDGER_PAGE_SIZE)
         val predicates = buildList {
             add("account_id = ?")
             if (transferState != null) add("transfer_state = ?")
+            if (!includeClearedCompleted) {
+                add("(transfer_state != 'Succeeded' OR history_visible = 1)")
+            }
             if (after != null) {
                 add("(updated_at < ? OR (updated_at = ? AND local_key < ?))")
             }
@@ -151,12 +155,20 @@ class MediaBackupLedgerStore internal constructor(
         )
     }
 
-    suspend fun summary(accountId: String): MediaBackupLedgerSummary = mutex.withLock {
+    suspend fun summary(
+        accountId: String,
+        includeClearedCompleted: Boolean = true,
+    ): MediaBackupLedgerSummary = mutex.withLock {
         requireAccountId(accountId)
         val counts = mutableMapOf<MediaBackupTransferState, Int>()
+        val visibleHistoryPredicate = if (includeClearedCompleted) {
+            ""
+        } else {
+            " AND (transfer_state != 'Succeeded' OR history_visible = 1)"
+        }
         connection.prepare(
             "SELECT transfer_state, COUNT(*) FROM media_backup_ledger " +
-                "WHERE account_id = ? GROUP BY transfer_state",
+                "WHERE account_id = ?$visibleHistoryPredicate GROUP BY transfer_state",
         ).use { statement ->
             statement.bindText(1, accountId)
             while (statement.step()) {
@@ -185,7 +197,8 @@ class MediaBackupLedgerStore internal constructor(
         connection.prepare(
             """
             UPDATE media_backup_ledger
-            SET transfer_state = 'Pending', failure_message = NULL, updated_at = ?
+            SET transfer_state = 'Pending', failure_message = NULL, updated_at = ?,
+                history_visible = 1
             WHERE account_id = ? AND local_key = ? AND transfer_state = 'Failed'
             """.trimIndent(),
         ).use { statement ->
@@ -211,7 +224,8 @@ class MediaBackupLedgerStore internal constructor(
         requireLocalKey(localKey)
         connection.prepare(
             "DELETE FROM media_backup_ledger " +
-                "WHERE account_id = ? AND local_key = ? AND transfer_state = 'Pending'",
+                "WHERE account_id = ? AND local_key = ? AND transfer_state = 'Pending' " +
+                "AND receipt_local_revision IS NULL",
         ).use { statement ->
             statement.bindText(1, accountId)
             statement.bindText(2, localKey)
@@ -223,7 +237,8 @@ class MediaBackupLedgerStore internal constructor(
     suspend fun clearCompleted(accountId: String): Int = mutex.withLock {
         requireAccountId(accountId)
         connection.prepare(
-            "DELETE FROM media_backup_ledger WHERE account_id = ? AND transfer_state = 'Succeeded'",
+            "UPDATE media_backup_ledger SET history_visible = 0 " +
+                "WHERE account_id = ? AND transfer_state = 'Succeeded' AND history_visible = 1",
         ).use { statement ->
             statement.bindText(1, accountId)
             check(!statement.step())
@@ -288,7 +303,12 @@ class MediaBackupLedgerStore internal constructor(
                 connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
             }
             1 -> transaction {
+                connection.execSQL(ADD_HISTORY_VISIBLE_COLUMN)
                 connection.execSQL(CREATE_ACCOUNT_REMOTE_PATH_INDEX)
+                connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
+            }
+            2 -> transaction {
+                connection.execSQL(ADD_HISTORY_VISIBLE_COLUMN)
                 connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
             }
             SCHEMA_VERSION -> Unit
@@ -434,7 +454,7 @@ class MediaBackupLedgerStore internal constructor(
     }
 
     private companion object {
-        const val SCHEMA_VERSION = 2
+        const val SCHEMA_VERSION = 3
 
         const val SELECT_COLUMNS =
             "SELECT account_id, local_key, local_display_name, local_size, local_revision, " +
@@ -460,6 +480,7 @@ class MediaBackupLedgerStore internal constructor(
                 attempt_count INTEGER NOT NULL CHECK (attempt_count >= 0),
                 updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
                 failure_message TEXT,
+                history_visible INTEGER NOT NULL DEFAULT 1 CHECK (history_visible IN (0, 1)),
                 PRIMARY KEY (account_id, local_key),
                 CHECK (
                     (local_display_name IS NULL AND local_size IS NULL AND local_revision IS NULL)
@@ -478,6 +499,10 @@ class MediaBackupLedgerStore internal constructor(
             )
             """.trimIndent()
 
+        const val ADD_HISTORY_VISIBLE_COLUMN =
+            "ALTER TABLE media_backup_ledger ADD COLUMN history_visible INTEGER NOT NULL " +
+                "DEFAULT 1 CHECK (history_visible IN (0, 1))"
+
         const val CREATE_ACCOUNT_STATE_INDEX =
             "CREATE INDEX media_backup_account_state_updated " +
                 "ON media_backup_ledger(account_id, transfer_state, updated_at DESC, local_key DESC)"
@@ -495,8 +520,8 @@ class MediaBackupLedgerStore internal constructor(
             INSERT INTO media_backup_ledger (
                 account_id, local_key, local_display_name, local_size, local_revision,
                 receipt_local_revision, receipt_local_size, remote_path, remote_etag, verified_at,
-                transfer_state, attempt_count, updated_at, failure_message
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                transfer_state, attempt_count, updated_at, failure_message, history_visible
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             ON CONFLICT(account_id, local_key) DO UPDATE SET
                 local_display_name = excluded.local_display_name,
                 local_size = excluded.local_size,
@@ -509,7 +534,8 @@ class MediaBackupLedgerStore internal constructor(
                 transfer_state = excluded.transfer_state,
                 attempt_count = excluded.attempt_count,
                 updated_at = excluded.updated_at,
-                failure_message = excluded.failure_message
+                failure_message = excluded.failure_message,
+                history_visible = 1
             """.trimIndent()
     }
 }

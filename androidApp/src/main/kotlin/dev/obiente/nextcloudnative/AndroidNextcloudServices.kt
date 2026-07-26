@@ -575,13 +575,17 @@ internal class AndroidNextcloudServices(
         try {
             val accountId = NextcloudDocumentIds.accountKey(session)
             mediaTransferCenterState(
-                summary = store.summary(accountId),
+                summary = store.summary(
+                    accountId = accountId,
+                    includeClearedCompleted = false,
+                ),
                 section = section,
                 page = store.page(
                     accountId = accountId,
                     transferState = section.transferState(),
                     after = after,
                     limit = dev.obiente.nextcloudnative.app.MEDIA_TRANSFER_CENTER_PAGE_SIZE,
+                    includeClearedCompleted = false,
                 ),
                 canLoadNewer = after != null,
             )
