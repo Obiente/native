@@ -12,28 +12,15 @@ sealed interface DeckCardInsertionPlan {
     ) : DeckCardInsertionPlan
 
     data object Unchanged : DeckCardInsertionPlan
-
-    data class RebalanceRequired(
-        val reason: DeckCardOrderRebalanceReason,
-        val insertionIndex: Int,
-        val previousOrder: Long?,
-        val nextOrder: Long?,
-    ) : DeckCardInsertionPlan
-}
-
-enum class DeckCardOrderRebalanceReason {
-    InvalidOrderSequence,
-    NoOrderBeforeFirstCard,
-    NoOrderBetweenCards,
-    NoOrderAfterLastCard,
 }
 
 /**
  * Plans a Deck reorder without asking callers to construct board, stack, or card identifiers.
  *
- * A move is returned only when one non-negative integer can place the card strictly between its
- * new neighbors. When no such integer exists, the caller must refresh and use an authoritative
- * stack rebalance workflow instead of guessing or sending a duplicate order.
+ * Deck's reorder endpoint interprets [DeckCardMove.order] as the final zero-based position and
+ * authoritatively rewrites the affected stack to consecutive positions. Existing card order
+ * values are therefore identity-free display state, not sparse keys from which a midpoint should
+ * be invented.
  */
 fun planDeckCardInsertion(
     source: DeckCard,
@@ -83,55 +70,6 @@ fun planDeckCardInsertion(
         }
     }
 
-    val invalidOrderPair = remainingCards.zipWithNext().firstOrNull { (previous, next) ->
-        previous.order < 0L || next.order < 0L || previous.order >= next.order
-    }
-    if (remainingCards.firstOrNull()?.order?.let { it < 0L } == true || invalidOrderPair != null) {
-        return DeckCardInsertionPlan.RebalanceRequired(
-            reason = DeckCardOrderRebalanceReason.InvalidOrderSequence,
-            insertionIndex = insertionIndex,
-            previousOrder = invalidOrderPair?.first?.order,
-            nextOrder = invalidOrderPair?.second?.order ?: remainingCards.firstOrNull()?.order,
-        )
-    }
-
-    val previousOrder = remainingCards.getOrNull(insertionIndex - 1)?.order
-    val nextOrder = remainingCards.getOrNull(insertionIndex)?.order
-    val order = when {
-        previousOrder == null && nextOrder == null -> 0L
-        previousOrder == null -> {
-            if (requireNotNull(nextOrder) == 0L) {
-                return DeckCardInsertionPlan.RebalanceRequired(
-                    reason = DeckCardOrderRebalanceReason.NoOrderBeforeFirstCard,
-                    insertionIndex = insertionIndex,
-                    previousOrder = null,
-                    nextOrder = nextOrder,
-                )
-            }
-            nextOrder / 2L
-        }
-        nextOrder == null -> {
-            if (previousOrder == Long.MAX_VALUE) {
-                return DeckCardInsertionPlan.RebalanceRequired(
-                    reason = DeckCardOrderRebalanceReason.NoOrderAfterLastCard,
-                    insertionIndex = insertionIndex,
-                    previousOrder = previousOrder,
-                    nextOrder = null,
-                )
-            }
-            previousOrder + 1L
-        }
-        nextOrder - previousOrder <= 1L -> {
-            return DeckCardInsertionPlan.RebalanceRequired(
-                reason = DeckCardOrderRebalanceReason.NoOrderBetweenCards,
-                insertionIndex = insertionIndex,
-                previousOrder = previousOrder,
-                nextOrder = nextOrder,
-            )
-        }
-        else -> previousOrder + ((nextOrder - previousOrder) / 2L)
-    }
-
     return DeckCardInsertionPlan.MoveReady(
         DeckCardMove(
             source = DeckCardContext(
@@ -145,7 +83,7 @@ fun planDeckCardInsertion(
                 boardId = DeckBoardId(destination.boardId),
                 stackId = destination.id,
             ),
-            order = order,
+            order = insertionIndex.toLong(),
         ),
     )
 }

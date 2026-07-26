@@ -25,7 +25,7 @@ class DeckCardOrderingTest {
     }
 
     @Test
-    fun `top middle and bottom insertion retain integer space`() {
+    fun `top middle and bottom insertion use final server positions`() {
         val source = card(id = 42, stackId = 11, order = 50)
         val destination = stack(
             id = 12,
@@ -36,15 +36,15 @@ class DeckCardOrderingTest {
         )
 
         assertEquals(
-            10L,
+            0L,
             planDeckCardInsertion(source, destination, insertionIndex = 0).readyMove().order,
         )
         assertEquals(
-            30L,
+            1L,
             planDeckCardInsertion(source, destination, insertionIndex = 1).readyMove().order,
         )
         assertEquals(
-            41L,
+            2L,
             planDeckCardInsertion(source, destination, insertionIndex = 2).readyMove().order,
         )
     }
@@ -57,11 +57,11 @@ class DeckCardOrderingTest {
         val destination = stack(id = 12, cards = listOf(first, source, last))
 
         assertEquals(
-            5L,
+            0L,
             planDeckCardInsertion(source, destination, insertionIndex = 0).readyMove().order,
         )
         assertEquals(
-            31L,
+            2L,
             planDeckCardInsertion(source, destination, insertionIndex = 2).readyMove().order,
         )
         assertSame(
@@ -83,13 +83,13 @@ class DeckCardOrderingTest {
         )
 
         assertEquals(
-            5L,
+            1L,
             planDeckCardInsertion(source, destination, insertionIndex = 1).readyMove().order,
         )
     }
 
     @Test
-    fun `exhausted top middle and bottom order space require rebalance`() {
+    fun `server positions remain valid when loaded orders have no sparse gaps`() {
         val source = card(id = 42, stackId = 11, order = 50)
 
         val top = planDeckCardInsertion(
@@ -97,10 +97,7 @@ class DeckCardOrderingTest {
             stack(id = 12, cards = listOf(card(id = 1, stackId = 12, order = 0))),
             insertionIndex = 0,
         )
-        assertEquals(
-            DeckCardOrderRebalanceReason.NoOrderBeforeFirstCard,
-            assertIs<DeckCardInsertionPlan.RebalanceRequired>(top).reason,
-        )
+        assertEquals(0L, top.readyMove().order)
 
         val middle = planDeckCardInsertion(
             source,
@@ -113,10 +110,7 @@ class DeckCardOrderingTest {
             ),
             insertionIndex = 1,
         )
-        val middleRebalance = assertIs<DeckCardInsertionPlan.RebalanceRequired>(middle)
-        assertEquals(DeckCardOrderRebalanceReason.NoOrderBetweenCards, middleRebalance.reason)
-        assertEquals(10L, middleRebalance.previousOrder)
-        assertEquals(11L, middleRebalance.nextOrder)
+        assertEquals(1L, middle.readyMove().order)
 
         val bottom = planDeckCardInsertion(
             source,
@@ -126,14 +120,11 @@ class DeckCardOrderingTest {
             ),
             insertionIndex = 1,
         )
-        assertEquals(
-            DeckCardOrderRebalanceReason.NoOrderAfterLastCard,
-            assertIs<DeckCardInsertionPlan.RebalanceRequired>(bottom).reason,
-        )
+        assertEquals(1L, bottom.readyMove().order)
     }
 
     @Test
-    fun `invalid existing order sequence requires rebalance instead of being sorted`() {
+    fun `loaded duplicate order values do not change requested final position`() {
         val source = card(id = 42, stackId = 11, order = 50)
         val result = planDeckCardInsertion(
             source,
@@ -147,10 +138,7 @@ class DeckCardOrderingTest {
             insertionIndex = 1,
         )
 
-        assertEquals(
-            DeckCardOrderRebalanceReason.InvalidOrderSequence,
-            assertIs<DeckCardInsertionPlan.RebalanceRequired>(result).reason,
-        )
+        assertEquals(1L, result.readyMove().order)
     }
 
     @Test
