@@ -745,15 +745,13 @@ private fun AuthenticatedApp(
             userId = serverInfo?.userId ?: session.loginName,
             onBack = ::navigateBack,
         )
-        Screen.Deck -> Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-            ScreenHeader("Deck", "Boards, stacks, and cards", ::navigateBack)
-            NativeDeckScreen(
-                services = services,
-                session = session,
-                currentUserId = serverInfo?.userId ?: session.loginName,
-                modifier = Modifier.weight(1f),
-            )
-        }
+        Screen.Deck -> NativeDeckScreen(
+            services = services,
+            session = session,
+            currentUserId = serverInfo?.userId ?: session.loginName,
+            onBack = ::navigateBack,
+            modifier = Modifier.fillMaxSize().safeDrawingPadding(),
+        )
         Screen.AdminApps -> AdminAppsScreen(
             services = services,
             session = session,

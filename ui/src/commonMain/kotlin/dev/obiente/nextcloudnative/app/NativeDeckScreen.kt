@@ -25,6 +25,7 @@ fun NativeDeckScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     currentUserId: String = session.loginName,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -558,9 +559,32 @@ fun NativeDeckScreen(
         }
     }
 
+    fun backToBoards() {
+        interaction = null
+        mutationError = null
+        requestedBoard = null
+        requestedBoardId = null
+        requestedCardId = null
+        state = if (loadedBoards.isEmpty()) {
+            DeckWorkspaceState.Empty(
+                title = "No boards",
+                message = "Create a board to start organizing cards.",
+                canCreateBoards = capabilities?.canCreateBoards == true,
+            )
+        } else {
+            DeckWorkspaceState.BoardPicker(
+                loadedBoards,
+                capabilities?.canCreateBoards == true,
+            )
+        }
+    }
+
     val currentBoard = boardState()?.board
+    PlatformBackHandler(enabled = requestedBoard != null, onBack = ::backToBoards)
     NativeDeckBoardSurface(
         state = state,
+        boardContext = requestedBoard,
+        onExit = onBack,
         onSelectBoard = { board ->
             interaction = null
             mutationError = null
@@ -568,25 +592,7 @@ fun NativeDeckScreen(
             requestedBoardId = board.id
             requestedCardId = null
         },
-        onBackToBoards = {
-            interaction = null
-            mutationError = null
-            requestedBoard = null
-            requestedBoardId = null
-            requestedCardId = null
-            state = if (loadedBoards.isEmpty()) {
-                DeckWorkspaceState.Empty(
-                    title = "No boards",
-                    message = "Create a board to start organizing cards.",
-                    canCreateBoards = capabilities?.canCreateBoards == true,
-                )
-            } else {
-                DeckWorkspaceState.BoardPicker(
-                    loadedBoards,
-                    capabilities?.canCreateBoards == true,
-                )
-            }
-        },
+        onBackToBoards = ::backToBoards,
         onOpenCard = {},
         onSelectCard = { card ->
             requestedCardId = card.id
