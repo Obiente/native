@@ -165,6 +165,8 @@ private sealed interface Screen {
     @Serializable
     data object Contacts : Screen
     @Serializable
+    data object Deck : Screen
+    @Serializable
     data object AdminApps : Screen
     @Serializable
     data object OfflineCenter : Screen
@@ -499,6 +501,7 @@ private fun AuthenticatedApp(
             "user_status" -> Screen.UserStatus
             "calendar" -> Screen.Calendar
             "contacts" -> Screen.Contacts
+            "deck" -> Screen.Deck
             "activity" -> {
                 destination = NextcloudDestination.Activity
                 Screen.Root
@@ -528,6 +531,7 @@ private fun AuthenticatedApp(
             Screen.UserStatus,
             Screen.Calendar,
             Screen.Contacts,
+            Screen.Deck,
             is Screen.AppInfo,
             -> {
                 screen = Screen.Root
@@ -741,6 +745,14 @@ private fun AuthenticatedApp(
             userId = serverInfo?.userId ?: session.loginName,
             onBack = ::navigateBack,
         )
+        Screen.Deck -> Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
+            ScreenHeader("Deck", "Boards, stacks, and cards", ::navigateBack)
+            NativeDeckScreen(
+                services = services,
+                session = session,
+                modifier = Modifier.weight(1f),
+            )
+        }
         Screen.AdminApps -> AdminAppsScreen(
             services = services,
             session = session,
