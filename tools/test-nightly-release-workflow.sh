@@ -58,6 +58,9 @@ require_text "$nightly" 'test "${#assets[@]}" -gt 0'
 require_text "$nightly" 'already-published: ${{ steps.release.outputs.already-published }}'
 require_text "$nightly" 'available-platforms: ${{ steps.platforms.outputs.available }}'
 require_text "$nightly" 'Published nightly ${NIGHTLY_TAG} is immutable; no assets or metadata were changed.'
+require_text "$nightly" 'tag_ref_response="${RUNNER_TEMP}/nightly-tag-ref.json"'
+require_text "$nightly" 'elif jq -e '\''.status == 404 or .status == "404"'\'''
+require_text "$nightly" 'cat "${tag_ref_error}" >&2'
 require_text "$nightly" 'Retaining immutable staged asset ${name}.'
 require_text "$nightly" 'canonical-release-assets'
 require_text "$nightly" 'if [[ "${SUCCESSFUL_PLATFORMS}" -ge 3 ]]; then'
@@ -106,6 +109,10 @@ bash -n "$promotion"
 
 if grep -Fq 'cmp "${asset}" "${RUNNER_TEMP}/existing/${name}"' "$nightly"; then
     echo "Draft recovery must retain previously staged package assets." >&2
+    exit 1
+fi
+if grep -Fq -- '--jq '\''.object.sha'\'' 2>/dev/null || true' "$nightly"; then
+    echo "Missing tag references must not turn GitHub 404 JSON into a commit SHA." >&2
     exit 1
 fi
 

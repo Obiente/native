@@ -404,10 +404,23 @@ jobs:
         run: |
           set -euo pipefail
           echo "already-published=false" >>"${GITHUB_OUTPUT}"
-          existing_sha="$(
-            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${NIGHTLY_TAG}" \
-              --jq '.object.sha' 2>/dev/null || true
-          )"
+          tag_ref_response="${RUNNER_TEMP}/nightly-tag-ref.json"
+          tag_ref_error="${RUNNER_TEMP}/nightly-tag-ref.error"
+          existing_sha=""
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${NIGHTLY_TAG}" \
+            >"${tag_ref_response}" 2>"${tag_ref_error}"; then
+            existing_sha="$(
+              jq -er '.object.sha | select(type == "string" and length > 0)' \
+                "${tag_ref_response}"
+            )"
+          elif jq -e '.status == 404 or .status == "404"' \
+            "${tag_ref_response}" >/dev/null 2>&1; then
+            :
+          else
+            cat "${tag_ref_error}" >&2
+            cat "${tag_ref_response}" >&2
+            exit 1
+          fi
           if [[ -z "${existing_sha}" ]]; then
             gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
               -f "ref=refs/tags/${NIGHTLY_TAG}" \
