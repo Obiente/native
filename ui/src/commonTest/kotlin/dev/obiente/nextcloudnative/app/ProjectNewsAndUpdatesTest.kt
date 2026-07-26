@@ -203,4 +203,83 @@ class ProjectNewsAndUpdatesTest {
             }
         }
     }
+
+    @Test
+    fun nightlyParserBindsManifestAndAssetsToTheImmutableTag() {
+        val tag = "nightly-20260726-1430-run42-abcdef12"
+        val metadataUrl =
+            "https://github.com/Obiente/nc-native/releases/download/$tag/update-manifest.json"
+        val release = AndroidDirectRelease(
+            schemaVersion = 1,
+            channel = "nightly-v1",
+            versionName = tag,
+            versionCode = 20_000_421,
+            packageName = "dev.obiente.nextcloudnative",
+            minimumAndroidSdk = 26,
+            apkUrl =
+                "https://github.com/Obiente/nc-native/releases/download/$tag/" +
+                    "nextcloud-native-$tag-android.apk",
+            apkSize = 123_456,
+            apkSha256 = "a".repeat(64),
+            signingCertificateSha256Digests = listOf("b".repeat(64)),
+            releaseNotesUrl = "https://github.com/Obiente/nc-native/releases/tag/$tag",
+        )
+        val encoded = Json.encodeToString(release).encodeToByteArray()
+        val discovery = """
+            [
+              {
+                "tag_name": "nightly-20260726-1500-run43-fedcba98",
+                "draft": false,
+                "prerelease": true,
+                "assets": [
+                  {
+                    "name": "nextcloud-native-linux.rpm",
+                    "browser_download_url": "https://github.com/Obiente/nc-native/releases/download/nightly-20260726-1500-run43-fedcba98/nextcloud-native-linux.rpm"
+                  }
+                ]
+              },
+              {
+                "tag_name": "$tag",
+                "draft": false,
+                "prerelease": true,
+                "assets": [
+                  {
+                    "name": "update-manifest.json",
+                    "browser_download_url": "$metadataUrl"
+                  }
+                ]
+              }
+            ]
+        """.trimIndent().encodeToByteArray()
+
+        assertEquals(
+            metadataUrl,
+            parseAndroidUpdateManifestUrl(discovery, AndroidUpdateChannel.Nightly),
+        )
+        assertEquals(release, parseAndroidDirectRelease(encoded, metadataUrl))
+        assertTrue(isCanonicalAndroidUpdateManifestUrl(metadataUrl))
+        assertFailsWith<IllegalArgumentException> {
+            parseAndroidDirectRelease(
+                encoded,
+                metadataUrl.replace(tag, "nightly-20260726-1430-run43-abcdef12"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            validateAndroidDirectRelease(release.copy(channel = "stable-v1"))
+        }
+    }
+
+    @Test
+    fun updateChannelPreferencesAcceptStableIdentifiersAndSafelyDefault() {
+        assertEquals(
+            AndroidUpdateChannel.Alpha,
+            parseAndroidUpdateChannel(AndroidUpdateChannel.Alpha.manifestChannel),
+        )
+        assertEquals(
+            AndroidUpdateChannel.Nightly,
+            parseAndroidUpdateChannel(AndroidUpdateChannel.Nightly.name),
+        )
+        assertEquals(AndroidUpdateChannel.Alpha, parseAndroidUpdateChannel(null))
+        assertEquals(AndroidUpdateChannel.Alpha, parseAndroidUpdateChannel("stable-v1"))
+    }
 }

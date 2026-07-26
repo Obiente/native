@@ -21,7 +21,7 @@ grep -Fq 'tools/create-prerelease-update-manifest.sh' \
   "$project_root/.github/workflows/prerelease.yml"
 grep -Fq 'update-manifest.json' "$project_root/.github/workflows/prerelease.yml"
 grep -Fq \
-  'https://api.github.com/repos/Obiente/nc-native/releases?per_page=20' \
+  'https://api.github.com/repos/Obiente/nc-native/releases?per_page=100' \
   "$project_root/ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ProjectNewsAndUpdates.kt"
 
 printf 'Prerelease update producer and consumer contract checks passed.\n'

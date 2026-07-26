@@ -18,6 +18,10 @@ if ! command -v rustc >/dev/null 2>&1; then
     printf 'Rust stable is required to run repository hygiene checks.\n' >&2
     exit 1
 fi
+if ! command -v node >/dev/null 2>&1; then
+    printf 'Node.js is required to validate changelog fragments.\n' >&2
+    exit 1
+fi
 
 temporary_directory="$(mktemp -d)"
 trap 'rm -rf -- "$temporary_directory"' EXIT
@@ -49,6 +53,8 @@ done
 
 bash tools/test-apksigner-certificate-parser.sh
 bash tools/test-build-jvm-criteria.sh
+node tools/changelog-fragments.mjs validate
+node --test tools/changelog-fragments.test.mjs
 bash tools/test-nightly-release-workflow.sh
 
 printf 'Repository hygiene checks passed.\n'

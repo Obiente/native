@@ -11,6 +11,7 @@ import android.provider.Settings
 import androidx.core.content.FileProvider
 import dev.obiente.nextcloudnative.app.ANDROID_PRERELEASE_DISCOVERY_URL
 import dev.obiente.nextcloudnative.app.AndroidDirectRelease
+import dev.obiente.nextcloudnative.app.AndroidUpdateChannel
 import dev.obiente.nextcloudnative.app.AppDistributionChannel
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
@@ -25,10 +26,11 @@ import dev.obiente.nextcloudnative.app.PROJECT_NEWS_FEED_URL
 import dev.obiente.nextcloudnative.app.ProjectNewsResult
 import dev.obiente.nextcloudnative.app.ProjectNewsImage
 import dev.obiente.nextcloudnative.app.isNewerAndroidRelease
-import dev.obiente.nextcloudnative.app.isCanonicalAndroidPrereleaseManifestUrl
+import dev.obiente.nextcloudnative.app.isCanonicalAndroidUpdateManifestUrl
 import dev.obiente.nextcloudnative.app.isCanonicalProjectNewsImageUrl
-import dev.obiente.nextcloudnative.app.parseAndroidPrereleaseManifestUrl
 import dev.obiente.nextcloudnative.app.parseAndroidDirectRelease
+import dev.obiente.nextcloudnative.app.parseAndroidUpdateChannel
+import dev.obiente.nextcloudnative.app.parseAndroidUpdateManifestUrl
 import dev.obiente.nextcloudnative.app.parseProjectNewsFeed
 import dev.obiente.nextcloudnative.app.validateAndroidDirectRelease
 import java.io.File
@@ -170,7 +172,14 @@ internal class AndroidProjectContentClient(
         return bytes
     }
 
-    fun checkForUpdate(): AppUpdateCheckResult {
+    fun updateChannel(): AndroidUpdateChannel =
+        parseAndroidUpdateChannel(preferences.getString(KEY_UPDATE_CHANNEL, null))
+
+    fun saveUpdateChannel(channel: AndroidUpdateChannel) {
+        preferences.edit().putString(KEY_UPDATE_CHANNEL, channel.manifestChannel).apply()
+    }
+
+    fun checkForUpdate(channel: AndroidUpdateChannel): AppUpdateCheckResult {
         val support = support()
         if (!support.canCheckDirectUpdates) return AppUpdateCheckResult.Unavailable(support)
         return runCatching {
@@ -178,7 +187,7 @@ internal class AndroidProjectContentClient(
                 ANDROID_PRERELEASE_DISCOVERY_URL,
                 MAX_ANDROID_RELEASE_DISCOVERY_BYTES.toLong(),
             )
-            val metadataUrl = parseAndroidPrereleaseManifestUrl(bytes)
+            val metadataUrl = parseAndroidUpdateManifestUrl(bytes, channel)
             val metadata = getBounded(metadataUrl, MAX_ANDROID_UPDATE_METADATA_BYTES.toLong())
             val release = parseAndroidDirectRelease(metadata, metadataUrl)
             if (isNewerAndroidRelease(support.currentVersionCode, release)) {
@@ -364,7 +373,7 @@ internal class AndroidProjectContentClient(
         require(
             url == PROJECT_NEWS_FEED_URL ||
                 url == ANDROID_PRERELEASE_DISCOVERY_URL ||
-                isCanonicalAndroidPrereleaseManifestUrl(url) ||
+                isCanonicalAndroidUpdateManifestUrl(url) ||
                 isCanonicalProjectNewsImageUrl(url),
         )
         val request = Request.Builder().url(url).get().apply {
@@ -515,6 +524,7 @@ internal class AndroidProjectContentClient(
     private companion object {
         const val PREFERENCES = "project-content-v1"
         const val KEY_NEWS_FETCHED_AT = "news-fetched-at"
+        const val KEY_UPDATE_CHANNEL = "update-channel"
         const val NEWS_CACHE_TTL_MILLIS = 6 * 60 * 60 * 1_000L
         const val UPDATE_PROGRESS_STEP_BYTES = 256L * 1024L
     }

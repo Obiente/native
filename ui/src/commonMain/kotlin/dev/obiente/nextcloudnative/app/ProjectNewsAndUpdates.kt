@@ -6,11 +6,11 @@ import kotlinx.serialization.json.Json
 
 const val PROJECT_NEWS_FEED_URL = "https://nc-native.obiente.dev/news-feed-v1.json"
 const val ANDROID_PRERELEASE_DISCOVERY_URL =
-    "https://api.github.com/repos/Obiente/nc-native/releases?per_page=20"
+    "https://api.github.com/repos/Obiente/nc-native/releases?per_page=100"
 const val MAX_PROJECT_NEWS_FEED_BYTES = 512 * 1024
 const val MAX_PROJECT_NEWS_IMAGE_BYTES = 8 * 1024 * 1024
 const val MAX_ANDROID_UPDATE_METADATA_BYTES = 64 * 1024
-const val MAX_ANDROID_RELEASE_DISCOVERY_BYTES = 512 * 1024
+const val MAX_ANDROID_RELEASE_DISCOVERY_BYTES = 2 * 1024 * 1024
 const val MAX_ANDROID_UPDATE_APK_BYTES = 256L * 1024L * 1024L
 
 @Serializable
@@ -130,6 +130,18 @@ data class AndroidDirectRelease(
     val releaseNotesUrl: String,
 )
 
+enum class AndroidUpdateChannel(
+    val manifestChannel: String,
+) {
+    Alpha("prerelease-v1"),
+    Nightly("nightly-v1"),
+}
+
+fun parseAndroidUpdateChannel(value: String?): AndroidUpdateChannel =
+    AndroidUpdateChannel.entries.singleOrNull { channel ->
+        channel.name == value || channel.manifestChannel == value
+    } ?: AndroidUpdateChannel.Alpha
+
 sealed interface AppUpdateCheckResult {
     data class Current(val support: AppUpdateSupport) : AppUpdateCheckResult
     data class Available(
@@ -240,20 +252,29 @@ private fun StringBuilder.appendRevisionField(value: String) {
 }
 
 fun parseAndroidPrereleaseManifestUrl(bytes: ByteArray): String {
+    return parseAndroidUpdateManifestUrl(bytes, AndroidUpdateChannel.Alpha)
+}
+
+fun parseAndroidUpdateManifestUrl(
+    bytes: ByteArray,
+    channel: AndroidUpdateChannel,
+): String {
     require(bytes.isNotEmpty() && bytes.size <= MAX_ANDROID_RELEASE_DISCOVERY_BYTES)
     val releases = githubDiscoveryJson.decodeFromString<List<GitHubReleaseDiscovery>>(bytes.decodeToString())
     val release = releases.firstOrNull { candidate ->
+        val expectedUrl =
+            "https://github.com/Obiente/nc-native/releases/download/" +
+                "${candidate.tag_name}/update-manifest.json"
         !candidate.draft &&
             candidate.prerelease &&
-            candidate.tag_name.matches(Regex("v0\\.[0-9]+\\.[0-9]+-(?:alpha|beta|rc)\\.[0-9]+"))
-    } ?: error("No supported Nextcloud Native prerelease was found.")
+            candidate.tag_name.matches(channel.releaseTagPattern()) &&
+            candidate.assets.count { asset ->
+                asset.name == "update-manifest.json" &&
+                    asset.browser_download_url == expectedUrl
+            } == 1
+    } ?: error("No supported Nextcloud Native ${channel.name.lowercase()} release was found.")
     val expectedUrl =
         "https://github.com/Obiente/nc-native/releases/download/${release.tag_name}/update-manifest.json"
-    require(
-        release.assets.count { asset ->
-            asset.name == "update-manifest.json" && asset.browser_download_url == expectedUrl
-        } == 1,
-    )
     return expectedUrl
 }
 
@@ -262,17 +283,19 @@ fun parseAndroidDirectRelease(
     metadataUrl: String,
 ): AndroidDirectRelease {
     require(bytes.isNotEmpty() && bytes.size <= MAX_ANDROID_UPDATE_METADATA_BYTES)
-    require(isCanonicalAndroidPrereleaseManifestUrl(metadataUrl))
+    require(isCanonicalAndroidUpdateManifestUrl(metadataUrl))
     val release = publicContentJson.decodeFromString<AndroidDirectRelease>(bytes.decodeToString())
     return validateAndroidDirectRelease(release, metadataUrl)
 }
 
 fun validateAndroidDirectRelease(
     release: AndroidDirectRelease,
-    metadataUrl: String =
-        "https://github.com/Obiente/nc-native/releases/download/v${release.versionName}/update-manifest.json",
+    metadataUrl: String = release.canonicalMetadataUrl(),
 ): AndroidDirectRelease {
-    require(release.schemaVersion == 1 && release.channel == "prerelease-v1")
+    require(release.schemaVersion == 1)
+    val updateChannel = AndroidUpdateChannel.entries.singleOrNull {
+        it.manifestChannel == release.channel
+    } ?: throw IllegalArgumentException("Unsupported Android update channel.")
     require(release.versionName.isBoundedPublicText(64) && release.versionCode > 0)
     require(release.packageName == "dev.obiente.nextcloudnative")
     require(release.minimumAndroidSdk in 26..64)
@@ -285,7 +308,7 @@ fun validateAndroidDirectRelease(
             release.signingCertificateSha256Digests.size &&
             release.signingCertificateSha256Digests.all(String::isSha256),
     )
-    val tag = "v${release.versionName}"
+    val tag = release.releaseTag(updateChannel)
     require(
         metadataUrl ==
             "https://github.com/Obiente/nc-native/releases/download/$tag/update-manifest.json",
@@ -307,12 +330,50 @@ fun isNewerAndroidRelease(currentVersionCode: Long, release: AndroidDirectReleas
     release.versionCode > currentVersionCode
 
 fun isCanonicalAndroidPrereleaseManifestUrl(url: String): Boolean {
+    return isCanonicalAndroidUpdateManifestUrl(url, AndroidUpdateChannel.Alpha)
+}
+
+fun isCanonicalAndroidUpdateManifestUrl(url: String): Boolean =
+    AndroidUpdateChannel.entries.any { channel ->
+        isCanonicalAndroidUpdateManifestUrl(url, channel)
+    }
+
+private fun isCanonicalAndroidUpdateManifestUrl(
+    url: String,
+    channel: AndroidUpdateChannel,
+): Boolean {
     val prefix = "https://github.com/Obiente/nc-native/releases/download/"
     if (!url.hasCanonicalPathUnder(prefix, trailingSlash = false)) return false
     val path = url.removePrefix(prefix).split('/')
     return path.size == 2 &&
-        path[0].matches(Regex("v0\\.[0-9]+\\.[0-9]+-(?:alpha|beta|rc)\\.[0-9]+")) &&
+        path[0].matches(channel.releaseTagPattern()) &&
         path[1] == "update-manifest.json"
+}
+
+private fun AndroidUpdateChannel.releaseTagPattern(): Regex = when (this) {
+    AndroidUpdateChannel.Alpha ->
+        Regex("v0\\.[0-9]+\\.[0-9]+-(?:alpha|beta|rc)\\.[0-9]+")
+    AndroidUpdateChannel.Nightly ->
+        Regex("nightly-[0-9]{8}-[0-9]{4}-run[1-9][0-9]*-[a-f0-9]{8}")
+}
+
+private fun AndroidDirectRelease.releaseTag(channel: AndroidUpdateChannel): String = when (channel) {
+    AndroidUpdateChannel.Alpha -> {
+        require(versionName.matches(Regex("0\\.[0-9]+\\.[0-9]+-(?:alpha|beta|rc)\\.[0-9]+")))
+        "v$versionName"
+    }
+    AndroidUpdateChannel.Nightly -> {
+        require(versionName.matches(channel.releaseTagPattern()))
+        versionName
+    }
+}
+
+private fun AndroidDirectRelease.canonicalMetadataUrl(): String {
+    val updateChannel = AndroidUpdateChannel.entries.singleOrNull {
+        it.manifestChannel == channel
+    } ?: throw IllegalArgumentException("Unsupported Android update channel.")
+    return "https://github.com/Obiente/nc-native/releases/download/" +
+        "${releaseTag(updateChannel)}/update-manifest.json"
 }
 
 fun isCanonicalProjectNewsImageUrl(url: String): Boolean =
