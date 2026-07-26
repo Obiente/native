@@ -16,6 +16,8 @@ internal class AndroidStreamingMultipartRequestBody(
 
     override fun contentLength(): Long = upload.contentLength ?: -1L
 
+    override fun isOneShot(): Boolean = true
+
     override fun writeTo(sink: BufferedSink) {
         openSource().use { source ->
             writePreparedMultipartUpload(
