@@ -5,7 +5,7 @@ const requiredNewsMetadata = [
   "lastUpdated",
   "description",
   "tags",
-  "image",
+  "captureScenario",
   "imageAlt",
   "imageCaption",
 ];
@@ -32,7 +32,7 @@ export function parseNewsFrontmatter(source, file) {
     throw new Error(`${file} has an invalid date or slug.`);
   }
   if (
-    !/^\/screenshots\/[a-z0-9-]+\.png$/.test(metadata.image) ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(metadata.captureScenario) ||
     metadata.imageAlt.length > 240 ||
     metadata.imageCaption.length > 240
   ) {

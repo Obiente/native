@@ -5,7 +5,7 @@ date: 2026-07-20
 lastUpdated: 2026-07-25
 description: Nextcloud Native is designed to make installed apps feel consistent without wrapping web pages, starting with Android and Linux and targeting iOS, macOS, and Windows.
 tags: Nextcloud apps, native Nextcloud client, Android, iOS, Linux, macOS, Windows, Files, Talk, Photos
-image: /screenshots/adaptive-dynamic-data.png
+captureScenario: adaptive-dynamic-data
 imageAlt: Nextcloud Native rendering a synthetic community inventory as a native data table after recognizing verified typed fields
 imageCaption: The production adaptive Compose renderer maps a fixed synthetic contract into Item, Category, Value, Status, and Updated columns.
 ---

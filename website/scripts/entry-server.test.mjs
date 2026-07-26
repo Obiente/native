@@ -11,7 +11,7 @@ import {
 
 test("social cards use the contextual page image", async () => {
   const article = news[0];
-  const articleImage = `${siteUrl}${article.image}`;
+  const articleImage = `${siteUrl}${article.websiteImage}`;
 
   assert.equal(socialImageFor(metadataFor(article.path)), articleImage);
   assert.equal(socialImageFor(metadataFor("/")), `${siteUrl}/social-preview.png`);
@@ -33,8 +33,8 @@ test("rendered head contains complete route-specific sharing metadata", async ()
     `<link rel="canonical" href="${siteUrl}${article.path}">`,
     '<link rel="alternate" hreflang="en"',
     '<meta property="og:locale" content="en_US">',
-    `<meta property="og:image" content="${siteUrl}${article.image}">`,
-    `<meta property="og:image:secure_url" content="${siteUrl}${article.image}">`,
+    `<meta property="og:image" content="${siteUrl}${article.websiteImage}">`,
+    `<meta property="og:image:secure_url" content="${siteUrl}${article.websiteImage}">`,
     `<meta property="og:image:width" content="${article.imageWidth}">`,
     `<meta property="og:image:height" content="${article.imageHeight}">`,
     '<meta name="twitter:card" content="summary_large_image">',

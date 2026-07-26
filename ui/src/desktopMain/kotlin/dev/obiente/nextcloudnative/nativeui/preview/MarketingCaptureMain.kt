@@ -16,17 +16,19 @@ import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Image
 
 fun main(arguments: Array<String>) {
-    require(arguments.size == marketingCaptureScenarios.size) {
-        "Pass every repository-owned marketing screenshot output path."
+    require(arguments.isEmpty()) {
+        "The capture registry owns every output path and accepts no arguments."
     }
     val repositoryRoot = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize()
-    val expectedOutputs = marketingCaptureScenarios.map { scenario ->
+    val outputs = marketingCaptureScenarios.map { scenario ->
         repositoryRoot.resolve("website/public/screenshots/${scenario.fileName}").normalize()
     }
-    val outputs = arguments.map { Path.of(it).toAbsolutePath().normalize() }
-    require(outputs == expectedOutputs) {
-        "Marketing captures must use the repository-owned paths."
-    }
+    val captureDirectory = repositoryRoot.resolve("website/public/screenshots")
+    removeObsoleteDeclaredCaptureFiles(
+        captureDirectory = captureDirectory,
+        manifestPath = captureDirectory.resolve("capture-manifest.json"),
+        expected = marketingCaptureScenarios.mapTo(mutableSetOf(), MarketingCaptureScenario::fileName),
+    )
     val avatar = loadObienteAvatar()
     val assets = MarketingCaptureAssets(
         avatar = avatar,
@@ -106,13 +108,21 @@ private fun writeCaptureManifest(
               "width": ${scenario.width},
               "height": ${scenario.height},
               "density": ${scenario.density},
+              "feature": "${scenario.feature}",
+              "surface": "${scenario.surface}",
+              "state": "${scenario.state}",
+              "purpose": "${scenario.purpose.manifestValue}",
+              "platform": "${scenario.platform}",
+              "viewport": "${scenario.viewport}"${scenario.pullRequest?.let { pullRequest ->
+                  ",\n              \"pullRequest\": $pullRequest"
+              }.orEmpty()},
               "sha256": "${Files.readAllBytes(output).sha256()}"
             }
         """.trimIndent().prependIndent("            ")
     }
     val manifest = """
         {
-          "schemaVersion": 1,
+          "schemaVersion": 2,
           "renderer": "Compose ImageComposeScene",
           "identity": "Obiente",
           "cloudIdentity": "Nextcloud",
@@ -134,16 +144,25 @@ private fun writeCaptureManifest(
 }
 
 private fun discoverCaptureSources(repositoryRoot: Path): List<String> {
-    val sourceRoots = listOf(
-        "ui/src/commonMain/kotlin",
-        "ui/src/commonMain/resources",
-        "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview",
-        "ui/src/desktopMain/resources/marketing",
-    )
+    val inventoryPath = "tools/marketing-capture-inputs.txt"
+    val sourceRoots = Files.readAllLines(repositoryRoot.resolve(inventoryPath))
+        .map(String::trim)
+        .filter { line -> line.isNotEmpty() && !line.startsWith('#') }
+        .onEach { relative ->
+            require(
+                !Path.of(relative).isAbsolute &&
+                    relative.split('/').none { segment -> segment == ".." },
+            ) {
+                "Marketing capture inputs must stay inside the repository."
+            }
+        }
     val discovered = sourceRoots.flatMap { relativeRoot ->
         val root = repositoryRoot.resolve(relativeRoot)
-        if (!Files.exists(root)) {
-            emptyList()
+        require(Files.exists(root)) {
+            "Marketing capture input does not exist: $relativeRoot"
+        }
+        if (Files.isRegularFile(root)) {
+            listOf(relativeRoot)
         } else {
             Files.walk(root).use { paths ->
                 paths.filter { path -> Files.isRegularFile(path) }
@@ -152,7 +171,7 @@ private fun discoverCaptureSources(repositoryRoot: Path): List<String> {
             }
         }
     }
-    return (discovered + "ui/build.gradle.kts").distinct().sorted()
+    return (discovered + inventoryPath).distinct().sorted()
 }
 
 private fun ByteArray.sha256(): String =

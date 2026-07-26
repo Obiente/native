@@ -67,14 +67,24 @@ network, cache, or media services.
 tools/capture-marketing-screenshots.sh
 ```
 
-This produces the desktop and mobile home screens plus contextual Obsidian
-sync, media backup, and adaptive-app scenarios offscreen on the workstation.
-Each scenario is rendered from production Compose components with deterministic
-synthetic models. Mobile captures use a 1080 by 2400 viewport at Android-like
-density, but the workflow does not use adb, an emulator, or a phone. Tests
-enforce that every article screenshot appears in the capture manifest and that
-the fixture cannot contain credentials, real endpoints, local paths, or user
-content.
+This renders every entry in the Compose capture registry and writes its image
+and metadata to the capture manifest. Adding a registry entry is sufficient;
+Gradle, the shell wrapper, website tests, and the gallery do not carry a second
+filename list. Each scenario uses production Compose components and
+deterministic synthetic models. The workflow does not use adb, an emulator, a
+phone, a Nextcloud account, or network-backed application services.
+
+The website validates the manifest, PNG dimensions, and image hashes. Check
+whether the committed catalog represents the current capture inputs with:
+
+```bash
+npm run --prefix website verify:captures
+```
+
+If the command reports stale inputs, run the capture wrapper with JDK 21 and
+review the updated synthetic images. The `/visual-qa/` route lists scenario,
+feature, surface, state, platform, viewport, and pixel metadata. Future
+scenario entries may also identify the pull request they review.
 
 The canonical Obiente organization avatar lives with the desktop capture
 resources. Content generation copies it into `public/` for static hosting, so

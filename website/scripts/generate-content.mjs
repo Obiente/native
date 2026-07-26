@@ -25,6 +25,12 @@ import {
   loadFragments,
   validateArchivedReleaseHistory,
 } from "../../tools/changelog-fragments.mjs";
+import {
+  articleCapture,
+  stableCapturePath,
+  validateCaptureManifest,
+  websiteCapturePath,
+} from "./marketing-captures.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(websiteRoot, "..");
@@ -46,21 +52,16 @@ const canonicalObienteAvatar = path.join(
   "obiente-avatar.png",
 );
 await copyFile(canonicalObienteAvatar, path.join(publicDirectory, "obiente-avatar.png"));
-const captureManifest = JSON.parse(
+const captureManifest = validateCaptureManifest(JSON.parse(
   await readFile(
     path.join(publicDirectory, "screenshots", "capture-manifest.json"),
     "utf8",
   ),
-);
-const captureByImage = new Map(
-  captureManifest.captures.map((capture) => [
-    `/screenshots/${capture.file}`,
-    capture,
-  ]),
-);
+));
 const marketingCaptures = captureManifest.captures.map((capture) => ({
   ...capture,
-  path: `/screenshots/${capture.file}`,
+  path: stableCapturePath(capture),
+  websitePath: websiteCapturePath(captureManifest, capture),
 }));
 await writeFile(
   path.join(generatedDirectory, "captures.js"),
@@ -149,7 +150,7 @@ function slugify(value) {
 const markdown = new MarkdownIt({
   html: false,
   linkify: true,
-  typographer: true,
+  typographer: false,
 }).use(markdownItAnchor, {
   slugify,
   permalink: markdownItAnchor.permalink.linkInsideHeader({
@@ -279,10 +280,8 @@ const news = await Promise.all(
     const { metadata, body } = parseNewsFrontmatter(source, file);
     const text = textOnly(body);
     const articleBody = normalizeNewsArticleBody(body, metadata.title);
-    const capture = captureByImage.get(metadata.image);
-    if (!capture) {
-      throw new Error(`${file}: image must reference a declared Compose capture.`);
-    }
+    const capture = articleCapture(captureManifest, metadata.captureScenario, file);
+    const image = stableCapturePath(capture);
     return {
       file,
       path: `/news/${metadata.slug}/`,
@@ -292,7 +291,9 @@ const news = await Promise.all(
       date: metadata.date,
       lastUpdated: metadata.lastUpdated,
       tags: metadata.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
-      image: metadata.image,
+      captureScenario: capture.scenario,
+      image,
+      websiteImage: websiteCapturePath(captureManifest, capture),
       imageAlt: metadata.imageAlt,
       imageCaption: metadata.imageCaption,
       imageWidth: capture.width,

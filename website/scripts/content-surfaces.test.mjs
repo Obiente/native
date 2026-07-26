@@ -7,6 +7,12 @@ import { fileURLToPath } from "node:url";
 import { changelog } from "../src/generated/changelog.js";
 import { marketingCaptures } from "../src/generated/captures.js";
 import { news } from "../src/generated/news.js";
+import {
+  readCaptureManifest,
+  stableCapturePath,
+  verifyCaptureAssets,
+  websiteCapturePath,
+} from "./marketing-captures.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(websiteRoot, "..");
@@ -16,6 +22,8 @@ test("news stays long-form, visual, and separate from release history", async ()
   for (const post of news) {
     assert.ok(post.readingMinutes >= 4, `${post.file} is too short to be a product story`);
     assert.match(post.image, /^\/screenshots\/[a-z0-9-]+\.png$/);
+    assert.match(post.websiteImage, /^\/screenshots\/[a-z0-9-]+\.png\?v=[a-f0-9]{64}$/);
+    assert.match(post.captureScenario, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     assert.ok(post.imageAlt.length >= 40);
     assert.ok(post.imageCaption.length >= 40);
     assert.ok(post.text.split(/\s+/).filter(Boolean).length >= 700);
@@ -50,6 +58,7 @@ test("living news metadata and native feed share the canonical Markdown source",
     assert.equal(nativeArticle.lastUpdated, post.lastUpdated);
     assert.equal(nativeArticle.title, post.title);
     assert.equal(nativeArticle.description, post.description);
+    assert.equal(nativeArticle.image.url, `https://nc-native.obiente.dev${post.image}`);
   }
 });
 
@@ -101,15 +110,12 @@ test("marketing screenshots are rendered offscreen without an Android device", a
 
   assert.doesNotMatch(captureScript, /\badb\b|ANDROID_HOME|--android|assembleScreenshot/);
   assert.match(captureScript, /:ui:captureMarketingScreenshots/);
+  assert.doesNotMatch(captureScript, /desktop-home\.png|mobile-home\.png/);
   assert.match(captureMain, /ImageComposeScene/);
   assert.match(captureMain, /NextcloudNativeMarketingCapture/);
 
-  const manifest = JSON.parse(
-    await readFile(
-      path.join(websiteRoot, "public", "screenshots", "capture-manifest.json"),
-      "utf8",
-    ),
-  );
+  const manifest = await readCaptureManifest();
+  assert.equal(manifest.schemaVersion, 2);
   assert.equal(manifest.identity, "Obiente");
   assert.equal(manifest.cloudIdentity, "Nextcloud");
   assert.equal(manifest.networkAccess, false);
@@ -125,7 +131,11 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   );
   assert.deepEqual(
     marketingCaptures.map((capture) => capture.path),
-    manifest.captures.map((capture) => `/screenshots/${capture.file}`),
+    manifest.captures.map(stableCapturePath),
+  );
+  assert.deepEqual(
+    marketingCaptures.map((capture) => capture.websitePath),
+    manifest.captures.map((capture) => websiteCapturePath(manifest, capture)),
   );
   const expectedDimensions = new Map([
     ["desktop-home", [1440, 900]],
@@ -144,12 +154,27 @@ test("marketing screenshots are rendered offscreen without an Android device", a
     manifest.captures.map((capture) => `/screenshots/${capture.file}`),
   );
   assert.ok(news.every((post) => capturedImages.has(post.image)));
+  assert.ok(
+    news.every(
+      (post) =>
+        manifest.captures.find((capture) => capture.scenario === post.captureScenario)
+          ?.purpose === "showcase",
+    ),
+  );
+  assert.deepEqual(await verifyCaptureAssets(manifest), []);
+  assert.ok(manifest.captures.every((capture) => capture.feature.length > 0));
+  assert.ok(manifest.captures.every((capture) => capture.surface.length > 0));
+  assert.ok(manifest.captures.every((capture) => capture.state.length > 0));
+  assert.ok(manifest.captures.every((capture) => capture.purpose === "showcase"));
+  assert.ok(manifest.captures.every((capture) => capture.platform.length > 0));
+  assert.ok(manifest.captures.every((capture) => capture.viewport.length > 0));
   assert.ok(manifest.captureSources.length > 0);
   assert.equal(new Set(manifest.captureSources).size, manifest.captureSources.length);
   assert.ok(
     manifest.captureSources.every(
       (relative) =>
         relative === "ui/build.gradle.kts" ||
+        relative === "tools/marketing-capture-inputs.txt" ||
         relative.startsWith("ui/src/commonMain/") ||
         relative.startsWith(
           "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/",
@@ -179,4 +204,27 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   );
   const websiteAvatar = await readFile(path.join(websiteRoot, "public", "obiente-avatar.png"));
   assert.deepEqual(websiteAvatar, avatar);
+});
+
+test("visual QA and mobile navigation are driven by registered captures", async () => {
+  const appSource = await readFile(
+    path.join(websiteRoot, "src", "App.vue"),
+    "utf8",
+  );
+  const entryServer = await readFile(
+    path.join(websiteRoot, "src", "entry-server.js"),
+    "utf8",
+  );
+
+  assert.match(entryServer, /"\/visual-qa\/"/u);
+  assert.match(appSource, /aria-controls="mobile-site-navigation"/u);
+  assert.match(appSource, /class="hero-mobile-capture"/u);
+  assert.match(appSource, /:src="mobileHomeCapture\.websitePath"/u);
+  assert.match(appSource, /capture\.purpose === visualQaPurpose\.value/u);
+  assert.match(appSource, /capture\.pullRequest/u);
+  assert.match(appSource, /visualQaGroups/u);
+  assert.doesNotMatch(
+    appSource,
+    /class="hero-mobile-capture"[\s\S]*?src="\/screenshots\/mobile-home\.png"/u,
+  );
 });

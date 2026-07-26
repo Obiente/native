@@ -5,7 +5,7 @@ date: 2026-07-24
 lastUpdated: 2026-07-25
 description: The verified-backup design distinguishes safe Nextcloud copies, files that need attention, and storage that can be reviewed for cleanup.
 tags: phone photo backup, Nextcloud Photos, Android, free phone storage
-image: /screenshots/media-backup-queue.png
+captureScenario: media-backup-queue
 imageAlt: Nextcloud Native showing detected Camera and Screenshots folders plus pending and completed photo backup counts on mobile
 imageCaption: Production media-folder and sync-pair components show detected folders alongside synthetic pending and completed backup counts.
 ---

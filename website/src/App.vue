@@ -12,6 +12,7 @@ import {
   PhGitBranch as GitBranch,
   PhGithubLogo as GithubLogo,
   PhListChecks as ListChecks,
+  PhList as Menu,
   PhMagnifyingGlass as MagnifyingGlass,
   PhMusicNotes as MusicNotes,
   PhShieldCheck as ShieldCheck,
@@ -65,6 +66,11 @@ const workflowCaptureCopy = {
 const workflowCaptures = marketingCaptures
   .filter((capture) => workflowCaptureCopy[capture.scenario])
   .map((capture) => ({ ...capture, ...workflowCaptureCopy[capture.scenario] }));
+const captureByScenario = new Map(
+  marketingCaptures.map((capture) => [capture.scenario, capture]),
+);
+const desktopHomeCapture = captureByScenario.get("desktop-home");
+const mobileHomeCapture = captureByScenario.get("mobile-home");
 const normalizedPath =
   props.initialPath === "/"
     ? "/"
@@ -80,7 +86,56 @@ const relatedPosts = computed(() =>
 );
 const isNewsIndex = computed(() => normalizedPath === "/news/");
 const isChangelog = computed(() => normalizedPath === "/changelog/");
+const isVisualQa = computed(() => normalizedPath === "/visual-qa/");
 const isHome = computed(() => normalizedPath === "/");
+const mobileNavOpen = ref(false);
+const visualQaPlatform = ref("all");
+const visualQaPurpose = ref("all");
+const visualQaPullRequest = ref("all");
+const visualQaPurposes = [
+  { value: "all", label: "All states" },
+  { value: "showcase", label: "Showcase" },
+  { value: "state-coverage", label: "Loading and error states" },
+];
+const visualQaPlatforms = computed(() => [
+  "all",
+  ...new Set(marketingCaptures.map((capture) => capture.platform)),
+]);
+const visualQaPullRequests = computed(() => [
+  "all",
+  "unlinked",
+  ...new Set(
+    marketingCaptures
+      .map((capture) => capture.pullRequest)
+      .filter((pullRequest) => Number.isInteger(pullRequest))
+      .map(String),
+  ),
+]);
+const visibleVisualQaCaptures = computed(() =>
+  marketingCaptures.filter(
+    (capture) =>
+      (visualQaPurpose.value === "all" ||
+        capture.purpose === visualQaPurpose.value) &&
+      (visualQaPlatform.value === "all" ||
+        capture.platform === visualQaPlatform.value) &&
+      (visualQaPullRequest.value === "all" ||
+        (visualQaPullRequest.value === "unlinked"
+          ? capture.pullRequest === undefined
+          : String(capture.pullRequest) === visualQaPullRequest.value)),
+  ),
+);
+const visualQaGroups = computed(() => {
+  const groups = new Map();
+  for (const capture of visibleVisualQaCaptures.value) {
+    const key = capture.pullRequest === undefined
+      ? "Baseline catalog"
+      : `Pull request #${capture.pullRequest}`;
+    const entries = groups.get(key) ?? [];
+    entries.push(capture);
+    groups.set(key, entries);
+  }
+  return [...groups.entries()].map(([label, captures]) => ({ label, captures }));
+});
 const searchOpen = ref(false);
 const searchQuery = ref("");
 const searchDocuments = ref(docs);
@@ -307,12 +362,24 @@ const frequentlyAsked = [
         <a href="/#apps">Apps</a>
         <a href="/#platforms">Platforms</a>
         <a href="/roadmap/">Roadmap</a>
+        <a href="/visual-qa/">Visual QA</a>
         <a href="/news/">News</a>
         <a href="/changelog/">Changelog</a>
         <a href="/#docs">Docs</a>
       </nav>
 
       <div class="header-actions">
+        <button
+          class="mobile-menu-button"
+          type="button"
+          aria-label="Toggle primary navigation"
+          aria-controls="mobile-site-navigation"
+          :aria-expanded="mobileNavOpen"
+          @click="mobileNavOpen = !mobileNavOpen"
+        >
+          <X v-if="mobileNavOpen" :size="21" weight="bold" aria-hidden="true" />
+          <Menu v-else :size="21" weight="bold" aria-hidden="true" />
+        </button>
         <button
           class="header-search"
           type="button"
@@ -327,6 +394,23 @@ const frequentlyAsked = [
           <span>GitHub</span>
         </a>
       </div>
+
+      <nav
+        v-if="mobileNavOpen"
+        id="mobile-site-navigation"
+        class="mobile-nav"
+        aria-label="Mobile primary navigation"
+        @click="mobileNavOpen = false"
+      >
+        <a href="/#approach">Approach</a>
+        <a href="/#apps">Apps</a>
+        <a href="/#platforms">Platforms</a>
+        <a href="/roadmap/">Roadmap</a>
+        <a href="/visual-qa/">Visual QA</a>
+        <a href="/news/">News</a>
+        <a href="/changelog/">Changelog</a>
+        <a href="/#docs">Docs</a>
+      </nav>
     </header>
 
     <div
@@ -398,7 +482,16 @@ const frequentlyAsked = [
             <p class="hero-note">An independent Obiente project. Connects directly to your own Nextcloud.</p>
           </div>
 
-          <NativePreview />
+          <NativePreview class="hero-interactive-preview" />
+          <figure class="hero-mobile-capture">
+            <img
+              :src="mobileHomeCapture.websitePath"
+              alt="Nextcloud Native mobile home rendered by the real Compose application with synthetic data"
+              :width="mobileHomeCapture.width"
+              :height="mobileHomeCapture.height"
+            />
+            <figcaption>Real mobile Compose UI with synthetic sample data.</figcaption>
+          </figure>
         </section>
 
         <section id="approach" class="approach section-width">
@@ -548,7 +641,7 @@ const frequentlyAsked = [
               <figure v-for="capture in workflowCaptures" :key="capture.scenario">
                 <div class="workflow-capture-media">
                   <img
-                    :src="capture.path"
+                    :src="capture.websitePath"
                     :alt="capture.alt"
                     :width="capture.width"
                     :height="capture.height"
@@ -564,7 +657,7 @@ const frequentlyAsked = [
             <div class="screenshot-gallery">
               <figure class="screenshot-desktop">
                 <img
-                  src="/screenshots/desktop-home.png"
+                  :src="desktopHomeCapture.websitePath"
                   alt="Nextcloud Native desktop home rendered by the real Compose application with synthetic demo data"
                   width="1440"
                   height="900"
@@ -574,7 +667,7 @@ const frequentlyAsked = [
               </figure>
               <figure class="screenshot-mobile">
                 <img
-                  src="/screenshots/mobile-home.png"
+                  :src="mobileHomeCapture.websitePath"
                   alt="Nextcloud Native mobile home rendered offscreen by the real Compose UI with synthetic demo data"
                   width="1080"
                   height="2400"
@@ -625,7 +718,7 @@ const frequentlyAsked = [
             <a v-for="post in news.slice(0, 3)" :key="post.path" class="news-card" :href="post.path">
               <div class="news-card-media">
                 <img
-                  :src="post.image"
+                  :src="post.websiteImage"
                   :alt="post.imageAlt"
                   :width="post.imageWidth"
                   :height="post.imageHeight"
@@ -671,6 +764,125 @@ const frequentlyAsked = [
         </section>
       </template>
 
+      <section v-else-if="isVisualQa" class="visual-qa-page section-width">
+        <header class="doc-heading visual-qa-heading">
+          <p class="eyebrow">Synthetic Compose catalog</p>
+          <h1>Visual QA</h1>
+          <p>
+            Review deterministic screenshots rendered from the application UI.
+            The catalog uses synthetic data and does not connect to a personal
+            Nextcloud account.
+          </p>
+          <div class="visual-qa-filter-set">
+            <span>State</span>
+            <div class="visual-qa-filters" aria-label="Filter captures by state purpose">
+              <button
+                v-for="purpose in visualQaPurposes"
+                :key="purpose.value"
+                type="button"
+                :class="{ active: visualQaPurpose === purpose.value }"
+                @click="visualQaPurpose = purpose.value"
+              >
+                {{ purpose.label }}
+              </button>
+            </div>
+          </div>
+          <div class="visual-qa-filter-set">
+            <span>Platform</span>
+            <div class="visual-qa-filters" aria-label="Filter captures by platform">
+              <button
+                v-for="platform in visualQaPlatforms"
+                :key="platform"
+                type="button"
+                :class="{ active: visualQaPlatform === platform }"
+                @click="visualQaPlatform = platform"
+              >
+                {{ platform === "all" ? "All platforms" : platform }}
+              </button>
+            </div>
+          </div>
+          <div class="visual-qa-filter-set">
+            <span>Review source</span>
+            <div class="visual-qa-filters" aria-label="Filter captures by pull request">
+              <button
+                v-for="pullRequest in visualQaPullRequests"
+                :key="pullRequest"
+                type="button"
+                :class="{ active: visualQaPullRequest === pullRequest }"
+                @click="visualQaPullRequest = pullRequest"
+              >
+                {{
+                  pullRequest === "all"
+                    ? "All pull requests"
+                    : pullRequest === "unlinked"
+                      ? "Baseline catalog"
+                      : `PR #${pullRequest}`
+                }}
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <div v-if="visualQaGroups.length" class="visual-qa-groups">
+          <section
+            v-for="group in visualQaGroups"
+            :key="group.label"
+            class="visual-qa-group"
+          >
+            <header>
+              <h2>{{ group.label }}</h2>
+              <span>{{ group.captures.length }} captures</span>
+            </header>
+            <div class="visual-qa-grid">
+              <figure
+                v-for="capture in group.captures"
+                :key="capture.scenario"
+                class="visual-qa-card"
+              >
+                <a
+                  class="visual-qa-image"
+                  :href="capture.websitePath"
+                  target="_blank"
+                  rel="noreferrer"
+                  :aria-label="`Open ${capture.scenario} at full size`"
+                >
+                  <img
+                    :src="capture.websitePath"
+                    :alt="`${capture.feature} ${capture.surface}: ${capture.state}`"
+                    :width="capture.width"
+                    :height="capture.height"
+                    loading="lazy"
+                  />
+                </a>
+                <figcaption>
+                  <div>
+                    <span class="visual-qa-feature">{{ capture.feature }}</span>
+                    <strong>{{ capture.surface }}</strong>
+                    <p>{{ capture.state }}</p>
+                  </div>
+                  <dl>
+                    <div><dt>Purpose</dt><dd>{{ capture.purpose }}</dd></div>
+                    <div><dt>Scenario</dt><dd>{{ capture.scenario }}</dd></div>
+                    <div><dt>Platform</dt><dd>{{ capture.platform }}</dd></div>
+                    <div><dt>Viewport</dt><dd>{{ capture.viewport }}</dd></div>
+                    <div><dt>Pixels</dt><dd>{{ capture.width }} x {{ capture.height }}</dd></div>
+                  </dl>
+                  <a
+                    class="visual-qa-full-size"
+                    :href="capture.websitePath"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open full-size PNG
+                  </a>
+                </figcaption>
+              </figure>
+            </div>
+          </section>
+        </div>
+        <p v-else class="visual-qa-empty">No captures match these filters.</p>
+      </section>
+
       <section
         v-else-if="currentPost"
         class="article-page section-width"
@@ -690,7 +902,7 @@ const frequentlyAsked = [
           </header>
           <figure class="article-hero">
             <img
-              :src="currentPost.image"
+              :src="currentPost.websiteImage"
               :alt="currentPost.imageAlt"
               :width="currentPost.imageWidth"
               :height="currentPost.imageHeight"
@@ -734,7 +946,7 @@ const frequentlyAsked = [
           <a v-for="post in news" :key="post.path" class="news-card" :href="post.path">
             <div class="news-card-media">
               <img
-                :src="post.image"
+                :src="post.websiteImage"
                 :alt="post.imageAlt"
                 :width="post.imageWidth"
                 :height="post.imageHeight"
