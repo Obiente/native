@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -9,9 +9,11 @@ import {
   checkDiffHasFragment,
   composeChangelogSource,
   composeReleaseNotes,
+  defaultRepositoryRoot,
   loadFragments,
   parseFragment,
   renderFragments,
+  validateArchivedReleaseHistory,
 } from "./changelog-fragments.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -58,6 +60,25 @@ test("normal UTF-8 letters are accepted while control characters are rejected", 
     "changes/unreleased/localized.md",
   );
   assert.equal(localized.summary.includes("ge\u00ebxporteerde"), true);
+  assert.equal(
+    parseFragment(
+      fragment({
+        summary: "\u00c9\u00e9n overzicht toont nu alle gesynchroniseerde mappen.",
+      }),
+      "changes/unreleased/localized-start.md",
+    ).summary.startsWith("\u00c9"),
+    true,
+  );
+  assert.throws(
+    () =>
+      parseFragment(
+        fragment({
+          summary: "\u00e9\u00e9n overzicht begint niet met een hoofdletter.",
+        }),
+        "changes/unreleased/lowercase-start.md",
+      ),
+    /must start with an uppercase letter or number/,
+  );
   assert.throws(
     () =>
       parseFragment(
@@ -159,6 +180,23 @@ test("release note preparation shares the user-facing aggregation", () => {
   assert.match(notes, /^## Known limitations$/m);
 });
 
+test("contributor Node.js guidance matches the website engine exactly", async () => {
+  const packageMetadata = JSON.parse(
+    await readFile(
+      path.join(defaultRepositoryRoot, "website", "package.json"),
+      "utf8",
+    ),
+  );
+  const contributing = await readFile(
+    path.join(defaultRepositoryRoot, "CONTRIBUTING.md"),
+    "utf8",
+  );
+  assert.equal(
+    contributing.includes(`Node.js \`${packageMetadata.engines.node}\``),
+    true,
+  );
+});
+
 test("loading validates archived and unreleased fragments", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "nc-native-changes-"));
   try {
@@ -196,6 +234,22 @@ test("loading validates archived and unreleased fragments", async () => {
   }
 });
 
+test("loading rejects symlinks and other non-regular fragment entries", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nc-native-symlink-"));
+  try {
+    const unreleased = path.join(root, "changes", "unreleased");
+    await mkdir(unreleased, { recursive: true });
+    await writeFile(path.join(root, "outside.md"), fragment());
+    await symlink(path.join(root, "outside.md"), path.join(unreleased, "42-feature.md"));
+    await assert.rejects(
+      loadFragments(root),
+      /fragment entries must be regular files or directories/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("diff enforcement accepts a fragment and rejects unrecorded work", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "nc-native-diff-"));
   try {
@@ -217,7 +271,7 @@ test("diff enforcement accepts a fragment and rejects unrecorded work", async ()
     await execFileAsync("git", ["commit", "-qm", "change"], { cwd: root });
     await assert.rejects(
       checkDiffHasFragment(root, base),
-      /needs a changelog fragment/,
+      /needs a newly added changelog fragment/,
     );
 
     await mkdir(path.join(root, "changes", "unreleased"), { recursive: true });
@@ -225,9 +279,50 @@ test("diff enforcement accepts a fragment and rejects unrecorded work", async ()
       path.join(root, "changes", "unreleased", "42-feature.md"),
       fragment(),
     );
-    await execFileAsync("git", ["add", "changes"], { cwd: root });
+    await execFileAsync("git", ["add", "."], { cwd: root });
     await execFileAsync("git", ["commit", "-qm", "fragment"], { cwd: root });
     await checkDiffHasFragment(root, base);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("diff enforcement requires an added unreleased fragment", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nc-native-added-fragment-"));
+  try {
+    await execFileAsync("git", ["init", "-q"], { cwd: root });
+    await execFileAsync("git", ["config", "user.name", "Test"], { cwd: root });
+    await execFileAsync("git", ["config", "user.email", "test@example.invalid"], {
+      cwd: root,
+    });
+    await mkdir(path.join(root, "changes", "unreleased"), { recursive: true });
+    await writeFile(path.join(root, "app.txt"), "one\n");
+    await writeFile(
+      path.join(root, "changes", "unreleased", "42-feature.md"),
+      fragment(),
+    );
+    await execFileAsync("git", ["add", "."], { cwd: root });
+    await execFileAsync("git", ["commit", "-qm", "base"], { cwd: root });
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+    });
+    const base = stdout.trim();
+
+    await writeFile(path.join(root, "app.txt"), "two\n");
+    await writeFile(
+      path.join(root, "changes", "unreleased", "42-feature.md"),
+      fragment({
+        summary: "Native collections now provide a revised list and detail workspace.",
+      }),
+    );
+    await execFileAsync("git", ["add", "."], { cwd: root });
+    await execFileAsync("git", ["commit", "-qm", "modify old fragment"], {
+      cwd: root,
+    });
+    await assert.rejects(
+      checkDiffHasFragment(root, base),
+      /needs a newly added changelog fragment/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -264,7 +359,16 @@ test("diff enforcement protects archived fragments and permits release moves", a
     );
     const unreleased = path.join(root, "changes", "unreleased", "42-feature.md");
     await writeFile(unreleased, fragment());
-    await execFileAsync("git", ["add", "changes"], { cwd: root });
+    await mkdir(path.join(root, "docs", "release-notes"), { recursive: true });
+    await writeFile(
+      path.join(root, "CHANGELOG.md"),
+      "# Changelog\n\n## Unreleased\n\n## [0.1.0-alpha.1]\n\n### Fixes\n\n- First preview.\n",
+    );
+    await writeFile(
+      path.join(root, "docs", "release-notes", "0.1.0-alpha.1.md"),
+      "# Nextcloud Native 0.1.0-alpha.1\n\n## Fixes\n\n- First preview.\n",
+    );
+    await execFileAsync("git", ["add", "."], { cwd: root });
     await execFileAsync("git", ["commit", "-qm", "base"], { cwd: root });
     const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
       cwd: root,
@@ -307,10 +411,173 @@ test("diff enforcement protects archived fragments and permits release moves", a
       ],
       { cwd: root },
     );
+    await writeFile(
+      path.join(root, "CHANGELOG.md"),
+      [
+        "# Changelog",
+        "",
+        "## Unreleased",
+        "",
+        "## [0.2.0-alpha.1]",
+        "",
+        "### Features",
+        "",
+        "- Native collections now provide a focused list and detail workspace.",
+        "",
+        "## [0.1.0-alpha.1]",
+        "",
+        "### Fixes",
+        "",
+        "- First preview.",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      path.join(root, "docs", "release-notes", "0.2.0-alpha.1.md"),
+      "# Nextcloud Native 0.2.0-alpha.1\n\n## Features\n\n- Native collections now provide a focused list and detail workspace.\n",
+    );
+    await execFileAsync("git", ["add", "."], { cwd: root });
     await execFileAsync("git", ["commit", "-qm", "archive release"], {
       cwd: root,
     });
     await checkDiffHasFragment(root, base);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("diff enforcement protects released changelog sections and release notes", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nc-native-release-history-"));
+  try {
+    await execFileAsync("git", ["init", "-q"], { cwd: root });
+    await execFileAsync("git", ["config", "user.name", "Test"], { cwd: root });
+    await execFileAsync("git", ["config", "user.email", "test@example.invalid"], {
+      cwd: root,
+    });
+    await mkdir(path.join(root, "changes", "unreleased"), { recursive: true });
+    await mkdir(path.join(root, "docs", "release-notes"), { recursive: true });
+    await writeFile(path.join(root, "app.txt"), "one\n");
+    await writeFile(
+      path.join(root, "CHANGELOG.md"),
+      "# Changelog\n\n## Unreleased\n\n## [0.1.0-alpha.1]\n\n### Features\n\n- First preview.\n",
+    );
+    await writeFile(
+      path.join(root, "docs", "release-notes", "0.1.0-alpha.1.md"),
+      "# Nextcloud Native 0.1.0-alpha.1\n\n## Features\n\n- First preview.\n",
+    );
+    await execFileAsync("git", ["add", "."], { cwd: root });
+    await execFileAsync("git", ["commit", "-qm", "base"], { cwd: root });
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+    });
+    const base = stdout.trim();
+
+    await writeFile(path.join(root, "app.txt"), "two\n");
+    await writeFile(
+      path.join(root, "changes", "unreleased", "43-feature.md"),
+      fragment({ issue: "43" }),
+    );
+    await writeFile(
+      path.join(root, "CHANGELOG.md"),
+      "# Changelog\n\n## Unreleased\n\n## [0.1.0-alpha.1]\n\n### Features\n\n- Rewritten preview.\n",
+    );
+    await execFileAsync("git", ["add", "."], { cwd: root });
+    await execFileAsync("git", ["commit", "-qm", "rewrite changelog"], {
+      cwd: root,
+    });
+    await assert.rejects(
+      checkDiffHasFragment(root, base),
+      /released section 0.1.0-alpha.1 is immutable/,
+    );
+
+    await execFileAsync("git", ["reset", "--hard", base], { cwd: root });
+    await mkdir(path.join(root, "changes", "unreleased"), { recursive: true });
+    await writeFile(path.join(root, "app.txt"), "two\n");
+    await writeFile(
+      path.join(root, "changes", "unreleased", "43-feature.md"),
+      fragment({ issue: "43" }),
+    );
+    await writeFile(
+      path.join(root, "docs", "release-notes", "0.1.0-alpha.1.md"),
+      "# Nextcloud Native 0.1.0-alpha.1\n\nChanged after release.\n",
+    );
+    await execFileAsync("git", ["add", "."], { cwd: root });
+    await execFileAsync("git", ["commit", "-qm", "rewrite notes"], { cwd: root });
+    await assert.rejects(
+      checkDiffHasFragment(root, base),
+      /existing release-note files are immutable/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("archived fragments reconcile with changelog and release notes", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nc-native-reconcile-"));
+  const version = "0.2.0-alpha.1";
+  const expected =
+    "[Android, Desktop] Native collections now provide a focused list and detail workspace.";
+  try {
+    const archive = path.join(root, "changes", "archive", version);
+    await mkdir(archive, { recursive: true });
+    await mkdir(path.join(root, "docs", "release-notes"), { recursive: true });
+    await writeFile(path.join(archive, "42-feature.md"), fragment());
+    const changelog = [
+      "# Changelog",
+      "",
+      "## Unreleased",
+      "",
+      `## [${version}]`,
+      "",
+      "### Features",
+      "",
+      `- ${expected.slice(0, -1)} (issue #42).`,
+      "",
+    ].join("\n");
+    await writeFile(path.join(root, "CHANGELOG.md"), changelog);
+    const releaseNotePath = path.join(
+      root,
+      "docs",
+      "release-notes",
+      `${version}.md`,
+    );
+    await writeFile(
+      releaseNotePath,
+      [
+        `# Nextcloud Native ${version}`,
+        "",
+        "## Features",
+        "",
+        `- ${expected}`,
+        "",
+        "## Known limitations",
+        "",
+        "- Testing build.",
+        "",
+      ].join("\n"),
+    );
+    await validateArchivedReleaseHistory(root);
+
+    await writeFile(path.join(root, "CHANGELOG.md"), "# Changelog\n\n## Unreleased\n");
+    await assert.rejects(
+      validateArchivedReleaseHistory(root),
+      /needs a corresponding released section/,
+    );
+    await writeFile(path.join(root, "CHANGELOG.md"), changelog);
+
+    await rm(releaseNotePath);
+    await assert.rejects(
+      validateArchivedReleaseHistory(root),
+      /archived fragments require this immutable release record/,
+    );
+    await writeFile(
+      releaseNotePath,
+      `# Nextcloud Native ${version}\n\n## Features\n\n- A different entry.\n`,
+    );
+    await assert.rejects(
+      validateArchivedReleaseHistory(root),
+      /release-notes.*do not match its archived fragments/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -66,6 +66,15 @@ test("changelog remains a dedicated root-sourced searchable surface", async () =
   assert.equal(indexed.length, 1);
   assert.equal(indexed[0].contentType, "Changelog");
   assert.ok(news.every((post) => post.path !== changelog.path));
+
+  const generator = await readFile(
+    path.join(websiteRoot, "scripts", "generate-content.mjs"),
+    "utf8",
+  );
+  assert.match(
+    generator,
+    /if \(changelogAvailable\) \{\s+changelogSource = composeChangelogSource/u,
+  );
 });
 
 test("marketing screenshots are rendered offscreen without an Android device", async () => {

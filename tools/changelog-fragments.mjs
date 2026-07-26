@@ -34,6 +34,8 @@ const fragmentNamePattern = /^[a-z0-9][a-z0-9-]{1,79}\.md$/;
 const positiveIntegerPattern = /^[1-9][0-9]*$/;
 const archivedFragmentPattern =
   /^changes\/archive\/0\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[1-9][0-9]*\/[a-z0-9][a-z0-9-]*\.md$/;
+const prereleaseVersionPattern =
+  /^0\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[1-9][0-9]*$/;
 
 function fail(message) {
   throw new Error(message);
@@ -164,7 +166,7 @@ export function parseFragment(source, relativePath = "fragment.md") {
   if (summary.length < 20 || summary.length > 240) {
     fail(`${relativePath}: summary must contain between 20 and 240 characters.`);
   }
-  if (!/^[A-Z0-9]/.test(summary)) {
+  if (!/^(?:\p{Lu}|\p{Lt}|\p{N})/u.test(summary)) {
     fail(`${relativePath}: summary must start with an uppercase letter or number.`);
   }
   if (!/[.!?]$/.test(summary)) {
@@ -194,12 +196,16 @@ async function walkMarkdownFiles(directory, repositoryRoot) {
   const files = [];
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
     const absolutePath = path.join(directory, entry.name);
+    const relativePath = path.relative(repositoryRoot, absolutePath);
+    if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) {
+      fail(`${relativePath}: changelog fragment entries must be regular files or directories.`);
+    }
     if (entry.isDirectory()) {
       files.push(...(await walkMarkdownFiles(absolutePath, repositoryRoot)));
     } else if (entry.isFile() && entry.name.endsWith(".md")) {
       if (!fragmentNamePattern.test(entry.name)) {
         fail(
-          `${path.relative(repositoryRoot, absolutePath)}: use a lowercase hyphenated fragment filename.`,
+          `${relativePath}: use a lowercase hyphenated fragment filename.`,
         );
       }
       files.push(absolutePath);
@@ -276,6 +282,15 @@ function platformPrefix(fragment) {
   return `[${labels.join(", ")}] `;
 }
 
+function renderFragmentEntry(fragment, includeContext) {
+  const suffix = includeContext ? contextSuffix(fragment) : "";
+  const prefix = platformPrefix(fragment);
+  if (!suffix) return `${prefix}${fragment.summary}`;
+  const punctuation = fragment.summary.at(-1);
+  const summary = fragment.summary.slice(0, -1);
+  return `${prefix}${summary}${suffix}${punctuation}`;
+}
+
 export function renderFragments(
   fragments,
   { headingLevel = 3, includeInternal = false, includeContext = true } = {},
@@ -292,15 +307,7 @@ export function renderFragments(
     sections.push(`${"#".repeat(headingLevel)} ${categoryHeadings[category]}`);
     sections.push("");
     for (const fragment of entries) {
-      const suffix = includeContext ? contextSuffix(fragment) : "";
-      const prefix = platformPrefix(fragment);
-      if (suffix) {
-        const punctuation = fragment.summary.at(-1);
-        const summary = fragment.summary.slice(0, -1);
-        sections.push(`- ${prefix}${summary}${suffix}${punctuation}`);
-      } else {
-        sections.push(`- ${prefix}${fragment.summary}`);
-      }
+      sections.push(`- ${renderFragmentEntry(fragment, includeContext)}`);
     }
     sections.push("");
   }
@@ -334,7 +341,7 @@ export function composeChangelogSource(legacySource, fragments) {
 }
 
 export function composeReleaseNotes(version, fragments) {
-  if (!/^0\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[1-9][0-9]*$/.test(version)) {
+  if (!prereleaseVersionPattern.test(version)) {
     fail(
       "Release version must use 0.x.y-alpha.n, 0.x.y-beta.n, or 0.x.y-rc.n.",
     );
@@ -354,6 +361,112 @@ export function composeReleaseNotes(version, fragments) {
     "<!-- Curate limitations before publishing. -->",
     "",
   ].join("\n");
+}
+
+function normalizeRenderedEntry(entry) {
+  return entry
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(
+      /\s+\((?:issue #[0-9]+|PR #[0-9]+)(?:, (?:issue #[0-9]+|PR #[0-9]+))*\)([.!?])$/u,
+      "$1",
+    );
+}
+
+function extractRenderedEntries(source) {
+  const headings = new Set(Object.values(categoryHeadings));
+  const entries = [];
+  let inCategory = false;
+  let current = null;
+  const flush = () => {
+    if (current !== null) entries.push(normalizeRenderedEntry(current));
+    current = null;
+  };
+  for (const line of source.split("\n")) {
+    const heading = /^#{2,4}\s+(.+?)\s*$/u.exec(line);
+    if (heading) {
+      flush();
+      inCategory = headings.has(heading[1]);
+      continue;
+    }
+    if (!inCategory) continue;
+    if (line.startsWith("- ")) {
+      flush();
+      current = line.slice(2);
+    } else if (current !== null && line.trim()) {
+      current += ` ${line.trim()}`;
+    }
+  }
+  flush();
+  return entries;
+}
+
+async function readReleaseRecord(repositoryRoot, relativePath) {
+  try {
+    return await readFile(path.join(repositoryRoot, relativePath), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      fail(`${relativePath}: archived fragments require this immutable release record.`);
+    }
+    throw error;
+  }
+}
+
+function assertReleaseEntries(version, recordName, expected, actual) {
+  if (
+    expected.length !== actual.length ||
+    expected.some((entry, index) => entry !== actual[index])
+  ) {
+    fail(
+      `${recordName}: user-facing entries for ${version} do not match its archived fragments. ` +
+        `Expected ${JSON.stringify(expected)} but found ${JSON.stringify(actual)}.`,
+    );
+  }
+}
+
+export async function validateArchivedReleaseHistory(
+  repositoryRoot = defaultRepositoryRoot,
+  fragments = undefined,
+) {
+  const allFragments =
+    fragments ?? (await loadFragments(repositoryRoot, { includeArchive: true }));
+  const archivedByVersion = new Map();
+  for (const fragment of allFragments) {
+    const match = /^changes[\\/]archive[\\/]([^\\/]+)[\\/]/u.exec(
+      fragment.relativePath,
+    );
+    if (!match) continue;
+    const entries = archivedByVersion.get(match[1]) ?? [];
+    entries.push(fragment);
+    archivedByVersion.set(match[1], entries);
+  }
+  if (archivedByVersion.size === 0) return;
+
+  const changelogSource = await readReleaseRecord(repositoryRoot, "CHANGELOG.md");
+  const changelogSections = releasedChangelogSections(changelogSource);
+  for (const [version, archived] of [...archivedByVersion.entries()].sort()) {
+    const expected = sortFragments(archived)
+      .filter((fragment) => fragment.userFacing)
+      .map((fragment) => normalizeRenderedEntry(renderFragmentEntry(fragment, false)));
+    const changelogSection = changelogSections.get(version);
+    if (changelogSection === undefined) {
+      fail(`CHANGELOG.md: archived version ${version} needs a corresponding released section.`);
+    }
+    const releaseNotePath = `docs/release-notes/${version}.md`;
+    const releaseNote = await readReleaseRecord(repositoryRoot, releaseNotePath);
+    assertReleaseEntries(
+      version,
+      "CHANGELOG.md",
+      expected,
+      extractRenderedEntries(changelogSection),
+    );
+    assertReleaseEntries(
+      version,
+      releaseNotePath,
+      expected,
+      extractRenderedEntries(releaseNote),
+    );
+  }
 }
 
 async function gitChangedFiles(repositoryRoot, base, head) {
@@ -378,26 +491,141 @@ async function gitChangedFiles(repositoryRoot, base, head) {
     });
 }
 
+function releasedChangelogSections(source) {
+  const sections = new Map();
+  const matches = [
+    ...source.matchAll(
+      /^## \[(0\.[0-9]+\.[0-9]+-(?:alpha|beta|rc)\.[1-9][0-9]*)\]\s*$/gm,
+    ),
+  ];
+  for (const [index, match] of matches.entries()) {
+    const start = match.index;
+    const end = matches[index + 1]?.index ?? source.length;
+    sections.set(match[1], source.slice(start, end).trimEnd());
+  }
+  return sections;
+}
+
+async function gitFileAtRevision(repositoryRoot, revision, relativePath) {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["show", `${revision}:${relativePath}`],
+      { cwd: repositoryRoot, maxBuffer: 4 * 1024 * 1024 },
+    );
+    return stdout;
+  } catch (error) {
+    if (error.code === 128 || error.stderr?.includes("does not exist")) return null;
+    throw error;
+  }
+}
+
+async function protectImmutableReleaseHistory(
+  repositoryRoot,
+  base,
+  head,
+  changed,
+) {
+  const releaseMoves = changed.filter(isPermittedReleaseMove);
+  const releaseVersions = new Set(
+    releaseMoves.map(({ file }) => file.split("/")[2]),
+  );
+  if (releaseVersions.size > 1) {
+    fail("Release preparation may archive fragments for only one new version.");
+  }
+  const noteChanges = changed.filter(
+    ({ file, sourceFile }) =>
+      file.startsWith("docs/release-notes/") ||
+      sourceFile?.startsWith("docs/release-notes/"),
+  );
+  for (const change of noteChanges) {
+    if (change.status !== "A") {
+      fail(
+        `${change.file}: existing release-note files are immutable; release preparation may add one new version file.`,
+      );
+    }
+  }
+  if (noteChanges.filter(({ status }) => status === "A").length > 1) {
+    fail("Release preparation may add only one new release-note file.");
+  }
+  const addedNotes = noteChanges.filter(({ status }) => status === "A");
+  if (addedNotes.length > 0 && releaseMoves.length === 0) {
+    fail("A new release-note file requires archived unreleased fragments in the same change.");
+  }
+
+  const changelogChange = changed.find(
+    ({ file, sourceFile }) => file === "CHANGELOG.md" || sourceFile === "CHANGELOG.md",
+  );
+  if (!changelogChange) {
+    if (releaseMoves.length > 0) {
+      fail("Release preparation must add the matching CHANGELOG.md version section.");
+    }
+    return;
+  }
+  if (changelogChange.status === "D" || changelogChange.file !== "CHANGELOG.md") {
+    fail("CHANGELOG.md and its released sections are immutable and cannot be deleted or renamed.");
+  }
+  const baseSource = await gitFileAtRevision(repositoryRoot, base, "CHANGELOG.md");
+  const headSource = await gitFileAtRevision(repositoryRoot, head, "CHANGELOG.md");
+  if (baseSource === null || headSource === null) {
+    fail("CHANGELOG.md must exist at both revisions.");
+  }
+  const baseSections = releasedChangelogSections(baseSource);
+  const headSections = releasedChangelogSections(headSource);
+  for (const [version, section] of baseSections) {
+    if (headSections.get(version) !== section) {
+      fail(`CHANGELOG.md: released section ${version} is immutable.`);
+    }
+  }
+  const addedVersions = [...headSections.keys()].filter(
+    (version) => !baseSections.has(version),
+  );
+  if (addedVersions.length > 1) {
+    fail("Release preparation may add only one new CHANGELOG.md version section.");
+  }
+  if (addedVersions.length > 0 && releaseMoves.length === 0) {
+    fail("A new CHANGELOG.md version section requires archived unreleased fragments.");
+  }
+  if (releaseMoves.length > 0) {
+    const [releaseVersion] = releaseVersions;
+    if (
+      addedVersions.length !== 1 ||
+      addedVersions[0] !== releaseVersion ||
+      addedNotes.length !== 1 ||
+      addedNotes[0].file !== `docs/release-notes/${releaseVersion}.md`
+    ) {
+      fail(
+        `Release preparation for ${releaseVersion} must add its matching CHANGELOG.md section and release-note file.`,
+      );
+    }
+  }
+}
+
+function isPermittedReleaseMove(change) {
+  return (
+    change.status === "R" &&
+    change.sourceFile !== null &&
+    /^changes\/unreleased\/[a-z0-9][a-z0-9-]*\.md$/.test(
+      change.sourceFile,
+    ) &&
+    archivedFragmentPattern.test(change.file)
+  );
+}
+
 export async function checkDiffHasFragment(
   repositoryRoot,
   base,
   head = "HEAD",
 ) {
   const changed = await gitChangedFiles(repositoryRoot, base, head);
+  await protectImmutableReleaseHistory(repositoryRoot, base, head, changed);
   const archiveChanges = changed.filter(
     ({ file, sourceFile }) =>
       file.startsWith("changes/archive/") ||
       sourceFile?.startsWith("changes/archive/"),
   );
   for (const change of archiveChanges) {
-    const permittedReleaseMove =
-      change.status === "R" &&
-      change.sourceFile !== null &&
-      /^changes\/unreleased\/[a-z0-9][a-z0-9-]*\.md$/.test(
-        change.sourceFile,
-      ) &&
-      archivedFragmentPattern.test(change.file);
-    if (!permittedReleaseMove) {
+    if (!isPermittedReleaseMove(change)) {
       fail(
         `${change.file}: archived changelog fragments are immutable; only rename unreleased fragments into a version archive.`,
       );
@@ -408,16 +636,15 @@ export async function checkDiffHasFragment(
   );
   if (substantive.length === 0) return;
 
-  const fragments = changed.filter(
+  const addedFragments = changed.filter(
     ({ file, status }) =>
-      status !== "D" &&
-      /^changes\/(unreleased|archive\/[^/]+)\/[a-z0-9][a-z0-9-]*\.md$/.test(
-        file,
-      ),
+      status === "A" &&
+      /^changes\/unreleased\/[a-z0-9][a-z0-9-]*\.md$/.test(file),
   );
-  if (fragments.length === 0) {
+  const releaseMoves = archiveChanges.filter(isPermittedReleaseMove);
+  if (addedFragments.length === 0 && releaseMoves.length === 0) {
     fail(
-      "This change needs a changelog fragment. Add a user-facing fragment or an explicit internal fragment under changes/unreleased/.",
+      "This change needs a newly added changelog fragment. Add a user-facing fragment or an explicit internal fragment under changes/unreleased/.",
     );
   }
 }
@@ -437,6 +664,7 @@ async function runCli() {
 
   if (command === "validate") {
     const fragments = await loadFragments(repositoryRoot, { includeArchive: true });
+    await validateArchivedReleaseHistory(repositoryRoot, fragments);
     process.stdout.write(`Validated ${fragments.length} changelog fragments.\n`);
     return;
   }

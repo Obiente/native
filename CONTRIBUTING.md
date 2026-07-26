@@ -63,9 +63,9 @@ direction, or speak on your behalf.
 
 ## Development setup
 
-Install JDK 21, Rust stable, Node.js 20 or newer, and Android SDK Platform 36
-with Build Tools 35.0.0. Set `ANDROID_HOME` or `ANDROID_SDK_ROOT` to your local
-SDK directory. Do not add local SDK paths to project files.
+Install JDK 21, Rust stable, Node.js `^20.19.0 || >=22.12.0`, and Android SDK
+Platform 36 with Build Tools 35.0.0. Set `ANDROID_HOME` or `ANDROID_SDK_ROOT`
+to your local SDK directory. Do not add local SDK paths to project files.
 
 Run the complete local verification suite:
 

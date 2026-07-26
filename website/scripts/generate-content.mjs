@@ -23,6 +23,7 @@ import {
 import {
   composeChangelogSource,
   loadFragments,
+  validateArchivedReleaseHistory,
 } from "../../tools/changelog-fragments.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -242,9 +243,12 @@ if (
     "CHANGELOG.md must contain a Changelog title, a release section, and a Keep a Changelog category.",
   );
 }
-await loadFragments(repositoryRoot, { includeArchive: true });
+const allFragments = await loadFragments(repositoryRoot, { includeArchive: true });
+await validateArchivedReleaseHistory(repositoryRoot, allFragments);
 const unreleasedFragments = await loadFragments(repositoryRoot);
-changelogSource = composeChangelogSource(changelogSource, unreleasedFragments);
+if (changelogAvailable) {
+  changelogSource = composeChangelogSource(changelogSource, unreleasedFragments);
+}
 const changelogBody = changelogSource.replace(/^#\s+Changelog\s*\n+/i, "");
 const changelogText = textOnly(changelogBody);
 const changelog = {
