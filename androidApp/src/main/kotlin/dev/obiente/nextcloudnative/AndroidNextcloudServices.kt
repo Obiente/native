@@ -12,6 +12,8 @@ import android.util.Log
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContract
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContractSourceKind
 import dev.obiente.nextcloudnative.app.AcquiredContractKind
+import dev.obiente.nextcloudnative.app.DeckAttachment
+import dev.obiente.nextcloudnative.app.DeckAttachmentOpenTarget
 import dev.obiente.nextcloudnative.app.LoginChallenge
 import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
@@ -270,6 +272,53 @@ internal class AndroidNextcloudServices(
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
         return externalFileHandoff.launch(file, action, capability) { maximumBytes ->
             downloadFile(session, userId, file.path, maximumBytes)
+        }
+    }
+
+    override suspend fun handoffDeckAttachmentToExternalApp(
+        session: NextcloudSession,
+        target: DeckAttachmentOpenTarget,
+        attachment: DeckAttachment,
+        action: ExternalFileHandoffAction,
+    ): ExternalFileHandoffResult {
+        require(target.method == dev.obiente.nextcloudnative.app.NextcloudApiMethod.GET) {
+            "Deck attachments can only be opened with a read request."
+        }
+        val requestSpec = NextcloudApiRequest(
+            method = target.method,
+            relativePath = target.relativePath,
+            ocsApiRequest = true,
+        ).requireSafe()
+        val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
+        return externalFileHandoff.launchDetached(attachment, action, capability) { output, maximumBytes ->
+            withContext(Dispatchers.IO) {
+                val authorization = Base64.encodeToString(
+                    "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
+                    Base64.NO_WRAP,
+                )
+                val request = Request.Builder()
+                    .url(buildNextcloudApiUrl(session.serverUrl, requestSpec))
+                    .get()
+                    .header("Accept", "*/*")
+                    .header("OCS-APIRequest", "true")
+                    .header("User-Agent", USER_AGENT)
+                    .header("Authorization", "Basic $authorization")
+                    .build()
+                noRedirectHttpClient.newCall(request).execute().use { response ->
+                    check(response.isSuccessful) {
+                        "Opening the Deck attachment failed (HTTP ${response.code})."
+                    }
+                    val responseBody = response.body
+                    val contentLength = responseBody.contentLength()
+                    check(contentLength <= maximumBytes || contentLength == -1L) {
+                        "The Deck attachment is larger than the external handoff limit."
+                    }
+                    AndroidDetachedDownload(
+                        byteCount = responseBody.byteStream().copyBoundedTo(output, maximumBytes),
+                        mimeType = responseBody.contentType()?.toString(),
+                    )
+                }
+            }
         }
     }
 
@@ -1565,6 +1614,25 @@ internal class AndroidNextcloudServices(
             output.write(buffer, 0, read)
         }
         return output.toByteArray()
+    }
+
+    private fun java.io.InputStream.copyBoundedTo(
+        output: java.io.OutputStream,
+        maxBytes: Long,
+    ): Long {
+        require(maxBytes > 0L)
+        val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
+        var total = 0L
+        while (true) {
+            val read = read(buffer)
+            if (read == -1) break
+            total += read
+            check(total <= maxBytes) {
+                "The Deck attachment is larger than the external handoff limit."
+            }
+            output.write(buffer, 0, read)
+        }
+        return total
     }
 
     private fun formatByteLimit(bytes: Long): String = when {

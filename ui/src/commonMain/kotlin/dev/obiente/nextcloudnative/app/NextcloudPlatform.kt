@@ -387,6 +387,23 @@ interface NextcloudPlatformServices {
             ?: "External file handoff is not supported on this platform.",
     )
 
+    /**
+     * Streams an authenticated Deck attachment into a detached private platform cache.
+     *
+     * The typed target comes from the permission-checked Deck route planner. Implementations must
+     * reject redirects, enforce the external handoff byte limit while streaming, and must not
+     * invent a DAV path or ETag for the attachment.
+     */
+    suspend fun handoffDeckAttachmentToExternalApp(
+        session: NextcloudSession,
+        target: DeckAttachmentOpenTarget,
+        attachment: DeckAttachment,
+        action: ExternalFileHandoffAction = ExternalFileHandoffAction.OpenWith,
+    ): ExternalFileHandoffResult = ExternalFileHandoffResult.Unsupported(
+        (externalFileHandoffSupport as? ExternalFileHandoffSupport.Unsupported)?.reason
+            ?: "Deck attachment handoff is not supported on this platform.",
+    )
+
     suspend fun beginLogin(serverUrl: String): LoginChallenge
 
     suspend fun pollLogin(challenge: LoginChallenge): NextcloudSession?

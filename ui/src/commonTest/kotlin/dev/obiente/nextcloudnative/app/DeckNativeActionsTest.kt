@@ -399,6 +399,25 @@ class DeckNativeActionsTest {
     }
 
     @Test
+    fun `attachment open target rejects non Deck and traversal paths`() {
+        assertFailsWith<IllegalArgumentException> {
+            DeckAttachmentOpenTarget(NextcloudApiMethod.POST, "/index.php/apps/deck/api/v1.1")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            DeckAttachmentOpenTarget(
+                NextcloudApiMethod.GET,
+                "/index.php/apps/deck/api/v1.1/boards/7/stacks/11/cards/42/attachments/../../files",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            DeckAttachmentOpenTarget(
+                NextcloudApiMethod.GET,
+                "/ocs/v2.php/apps/files/api/v1/directEditing",
+            )
+        }
+    }
+
+    @Test
     fun `attachment parser preserves metadata and rejects the wrong card`() {
         val attachments = parseDeckAttachments(
             card,

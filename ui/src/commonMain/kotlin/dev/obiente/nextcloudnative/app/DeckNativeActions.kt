@@ -217,7 +217,38 @@ data class DeckAttachmentUploadTarget(
 data class DeckAttachmentOpenTarget(
     val method: NextcloudApiMethod,
     val relativePath: String,
-)
+) {
+    init {
+        require(method == NextcloudApiMethod.GET) { "Deck attachments require a read request." }
+        require(relativePath.isDeckAttachmentOpenPath()) { "The Deck attachment path is invalid." }
+    }
+}
+
+private fun String.isDeckAttachmentOpenPath(): Boolean {
+    val segments = split('/').filter(String::isNotEmpty)
+    if (segments.size !in 13..14) return false
+    if (segments.take(4) != listOf("index.php", "apps", "deck", "api")) return false
+    if (segments[4] !in setOf("v1.0", "v1.1")) return false
+    if (
+        segments[5] != "boards" ||
+        segments[7] != "stacks" ||
+        segments[9] != "cards" ||
+        segments[11] != "attachments"
+    ) {
+        return false
+    }
+    if (!listOf(segments[6], segments[8], segments[10]).all(String::isPositiveDeckPathId)) return false
+    return when (segments[4]) {
+        "v1.0" -> segments.size == 13 && segments[12].isPositiveDeckPathId()
+        "v1.1" -> segments.size == 14 &&
+            segments[12] in DeckAttachmentType.entries.map(DeckAttachmentType::serverValue) &&
+            segments[13].isPositiveDeckPathId()
+        else -> false
+    }
+}
+
+private fun String.isPositiveDeckPathId(): Boolean =
+    isNotEmpty() && all(Char::isDigit) && toLongOrNull()?.let { it > 0L } == true
 
 data class DeckMutationReceipt(
     val returnedId: Long?,

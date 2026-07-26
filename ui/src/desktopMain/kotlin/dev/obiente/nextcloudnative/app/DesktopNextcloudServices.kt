@@ -451,6 +451,51 @@ class DesktopNextcloudServices(
         }
     }
 
+    override suspend fun handoffDeckAttachmentToExternalApp(
+        session: NextcloudSession,
+        target: DeckAttachmentOpenTarget,
+        attachment: DeckAttachment,
+        action: ExternalFileHandoffAction,
+    ): ExternalFileHandoffResult {
+        require(target.method == NextcloudApiMethod.GET) {
+            "Deck attachments can only be opened with a read request."
+        }
+        val requestSpec = NextcloudApiRequest(
+            method = target.method,
+            relativePath = target.relativePath,
+            ocsApiRequest = true,
+        ).requireSafe()
+        val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
+        return externalFileHandoff.launchDetached(attachment, action, capability) { output, maximumBytes ->
+            withContext(Dispatchers.IO) {
+                val authorization = Base64.getEncoder().encodeToString(
+                    "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
+                )
+                val request = Request.Builder()
+                    .url(buildNextcloudApiUrl(session.serverUrl, requestSpec))
+                    .get()
+                    .header("Accept", "*/*")
+                    .header("OCS-APIRequest", "true")
+                    .header("User-Agent", USER_AGENT)
+                    .header("Authorization", "Basic $authorization")
+                    .build()
+                noRedirectHttpClient.newCall(request).execute().use { response ->
+                    check(response.isSuccessful) {
+                        "Opening the Deck attachment failed (HTTP ${response.code})."
+                    }
+                    val responseBody = response.body
+                    val contentLength = responseBody.contentLength()
+                    check(contentLength <= maximumBytes || contentLength == -1L) {
+                        "The Deck attachment is larger than the external handoff limit."
+                    }
+                    DesktopDetachedDownload(
+                        responseBody.byteStream().copyBoundedTo(output, maximumBytes),
+                    )
+                }
+            }
+        }
+    }
+
     override fun copyTextToClipboard(label: String, text: String): Boolean = runCatching {
         require(text.isNotBlank() && text.length <= 8_192 && text.none(Char::isISOControl)) {
             "Clipboard text is invalid."
@@ -1649,6 +1694,25 @@ class DesktopNextcloudServices(
             output.write(buffer, 0, read)
         }
         return output.toByteArray()
+    }
+
+    private fun java.io.InputStream.copyBoundedTo(
+        output: java.io.OutputStream,
+        maxBytes: Long,
+    ): Long {
+        require(maxBytes > 0L)
+        val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
+        var total = 0L
+        while (true) {
+            val read = read(buffer)
+            if (read == -1) break
+            total += read
+            check(total <= maxBytes) {
+                "The Deck attachment is larger than the external handoff limit."
+            }
+            output.write(buffer, 0, read)
+        }
+        return total
     }
 
     private fun formatByteLimit(bytes: Long): String = when {

@@ -69,6 +69,23 @@ fun validateExternalFileHandoff(
     else -> null
 }
 
+fun validateDeckAttachmentHandoff(
+    attachment: DeckAttachment,
+    action: ExternalFileHandoffAction,
+    capability: ExternalFileHandoffCapability,
+): ExternalFileHandoffResult.Rejected? = when {
+    action !in capability.supportedActions -> ExternalFileHandoffResult.Rejected(
+        ExternalFileHandoffRejection.UnsupportedAction,
+        "This platform does not support opening this attachment in another app.",
+    )
+    attachment.byteCount != null && attachment.byteCount > capability.maximumFileBytes ->
+        ExternalFileHandoffResult.Rejected(
+            ExternalFileHandoffRejection.FileTooLarge,
+            "${attachment.name} is larger than the external handoff limit.",
+        )
+    else -> null
+}
+
 /**
  * Verifies the detached bytes after download and before exposing them to another process.
  *

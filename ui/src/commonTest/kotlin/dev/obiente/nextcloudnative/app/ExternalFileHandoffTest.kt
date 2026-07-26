@@ -60,6 +60,28 @@ class ExternalFileHandoffTest {
     }
 
     @Test
+    fun `deck attachments do not require invented DAV identity`() {
+        assertNull(
+            validateDeckAttachmentHandoff(
+                attachment = attachment(byteCount = 12L),
+                action = ExternalFileHandoffAction.OpenWith,
+                capability = capability,
+            ),
+        )
+    }
+
+    @Test
+    fun `known oversized deck attachment is rejected before streaming`() {
+        val rejection = validateDeckAttachmentHandoff(
+            attachment = attachment(byteCount = MAX_EXTERNAL_FILE_HANDOFF_BYTES + 1L),
+            action = ExternalFileHandoffAction.OpenWith,
+            capability = capability,
+        )
+
+        assertEquals(ExternalFileHandoffRejection.FileTooLarge, rejection?.reason)
+    }
+
+    @Test
     fun `handoff requires a selected readable DAV generation`() {
         val missingVersion = validateExternalFileHandoff(
             file(name = "report.pdf").copy(etag = null),
@@ -131,5 +153,17 @@ class ExternalFileHandoffTest {
         fileId = null,
         hasPreview = false,
         etag = "\"v1\"",
+    )
+
+    private fun attachment(byteCount: Long?): DeckAttachment = DeckAttachment(
+        id = 7L,
+        cardId = 11L,
+        type = DeckAttachmentType.DeckFile,
+        name = "report.pdf",
+        mimeType = "application/pdf",
+        byteCount = byteCount,
+        createdBy = "user",
+        createdAt = null,
+        lastModified = null,
     )
 }
