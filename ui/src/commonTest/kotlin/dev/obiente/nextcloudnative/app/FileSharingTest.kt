@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -81,6 +82,29 @@ class FileSharingTest {
         assertFalse(noUserContract.emailProviderAdvertised)
         assertFalse(noUserContract.emailProviderObserved)
         assertFalse(noUserContract.supports(FileShareTarget.Email))
+    }
+
+    @Test
+    fun disabledPublicExpirationCapabilityIsNotOffered() {
+        val capabilities = parseNextcloudFileSharingCapabilities(
+            """
+            {
+              "files_sharing": {
+                "api_enabled": true,
+                "public": {
+                  "enabled": true,
+                  "expire_date": {"enabled": false, "enforced": true}
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        assertFalse(capabilities.publicExpirationSupported)
+        assertEquals(
+            FileShareFeaturePolicy(supported = false, enforced = false),
+            capabilities.expirationPolicy(FileShareTarget.PublicLink),
+        )
     }
 
     @Test
@@ -308,7 +332,7 @@ class FileSharingTest {
             password = "",
             expirationDate = "2028-02-29",
             note = "Synthetic handoff",
-        ).toNextcloudApiRequest()
+        ).toNextcloudApiRequest(syntheticFileShareDateSource)
 
         assertEquals(NextcloudApiMethod.PUT, request.method)
         assertEquals(
@@ -337,6 +361,124 @@ class FileSharingTest {
         assertTrue(request.ocsApiRequest)
         assertTrue(runCatching { RevokeFileShareRequest("../42").toNextcloudApiRequest() }.isFailure)
         assertTrue(runCatching { RevokeFileShareRequest("42/other").toNextcloudApiRequest() }.isFailure)
+    }
+
+    @Test
+    fun nonPermissionEditsPreserveCustomAndMissingPermissionMasks() {
+        val customMaskShare = NextcloudFileShare(
+            id = "share-custom",
+            url = null,
+            token = null,
+            shareType = FileShareTarget.User.wireValue,
+            permissions = 5,
+            note = "Original note",
+        )
+        val customUpdate = assertNotNull(
+            planExistingFileShareUpdate(
+                share = customMaskShare,
+                draft = existingFileShareEditDraft(customMaskShare).copy(note = "Updated note"),
+                sourceIsDirectory = true,
+                target = FileShareTarget.User,
+                expirationPolicy = FileShareFeaturePolicy(supported = false),
+                dateSource = syntheticFileShareDateSource,
+            ),
+        )
+        assertNull(customUpdate.permissions)
+        assertEquals(
+            "note=Updated%20note",
+            customUpdate.toNextcloudApiRequest(syntheticFileShareDateSource).body?.decodeToString(),
+        )
+
+        val missingMaskShare = customMaskShare.copy(
+            id = "share-server-policy",
+            permissions = null,
+            note = null,
+        )
+        val missingMaskUpdate = assertNotNull(
+            planExistingFileShareUpdate(
+                share = missingMaskShare,
+                draft = existingFileShareEditDraft(missingMaskShare).copy(note = "Synthetic note"),
+                sourceIsDirectory = false,
+                target = FileShareTarget.User,
+                expirationPolicy = FileShareFeaturePolicy(supported = false),
+                dateSource = syntheticFileShareDateSource,
+            ),
+        )
+        assertNull(missingMaskUpdate.permissions)
+    }
+
+    @Test
+    fun permissionControlsOnlySendAMaskAfterAnExplicitChange() {
+        val share = NextcloudFileShare(
+            id = "share-42",
+            url = null,
+            token = null,
+            shareType = FileShareTarget.Group.wireValue,
+            permissions = 31,
+        )
+        assertNull(
+            planExistingFileShareUpdate(
+                share = share,
+                draft = existingFileShareEditDraft(share),
+                sourceIsDirectory = true,
+                target = FileShareTarget.Group,
+                expirationPolicy = FileShareFeaturePolicy(supported = false),
+                dateSource = syntheticFileShareDateSource,
+            ),
+        )
+
+        val update = assertNotNull(
+            planExistingFileShareUpdate(
+                share = share,
+                draft = existingFileShareEditDraft(share).copy(allowResharing = false),
+                sourceIsDirectory = true,
+                target = FileShareTarget.Group,
+                expirationPolicy = FileShareFeaturePolicy(supported = false),
+                dateSource = syntheticFileShareDateSource,
+            ),
+        )
+        assertEquals(15, update.permissions?.mask)
+    }
+
+    @Test
+    fun editDraftResetReconcilesEveryFieldFromAuthoritativeShareState() {
+        val changed = NextcloudFileShare(
+            id = "share-42",
+            url = null,
+            token = null,
+            shareType = FileShareTarget.PublicLink.wireValue,
+            permissions = 19,
+            expiration = "2028-02-29",
+            note = "Server-confirmed note",
+            passwordProtected = true,
+        )
+
+        assertEquals(
+            ExistingFileShareEditDraft(
+                allowEditing = true,
+                allowResharing = true,
+                newPassword = "",
+                removePassword = false,
+                expirationDate = "2028-02-29",
+                note = "Server-confirmed note",
+            ),
+            existingFileShareEditDraft(changed),
+        )
+    }
+
+    @Test
+    fun existingShareUpdateRejectsPastExpirationBeforeTransport() {
+        val update = UpdateFileShareRequest(
+            shareId = "share-42",
+            target = FileShareTarget.PublicLink,
+            expirationDate = "2026-07-24",
+        )
+
+        assertTrue(
+            runCatching {
+                update.toNextcloudApiRequest(syntheticFileShareDateSource)
+            }.isFailure,
+        )
     }
 
     @Test
@@ -513,6 +655,7 @@ class FileSharingTest {
                     expiration = FileShareExpiration.OnDate("2028-02-29"),
                     note = "Synthetic project handoff",
                 ),
+                dateSource = syntheticFileShareDateSource,
             ),
         )
     }

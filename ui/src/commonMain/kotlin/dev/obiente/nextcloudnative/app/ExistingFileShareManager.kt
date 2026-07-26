@@ -39,22 +39,14 @@ internal fun ExistingFileShareManager(
     capabilities: NextcloudFileSharingCapabilities,
     onChanged: (NextcloudFileShare) -> Unit,
     onRevoked: (NextcloudFileShare) -> Unit,
+    dateSource: FileShareDateSource = DeviceLocalFileShareDateSource,
 ) {
     var editing by remember(share.id) { mutableStateOf(false) }
     var confirmRevoke by remember(share.id) { mutableStateOf(false) }
-    var allowEditing by remember(share.id, share.permissions) {
-        mutableStateOf(fileSharePermissionsFromMask(share.permissions).update)
-    }
-    var allowResharing by remember(share.id, share.permissions) {
-        mutableStateOf(fileSharePermissionsFromMask(share.permissions).reshare)
-    }
+    var draft by remember(share.id) { mutableStateOf(existingFileShareEditDraft(share)) }
     val target = share.target()
     val passwordPolicy = target?.let(capabilities::passwordPolicy) ?: FileShareFeaturePolicy(false)
     val expirationPolicy = target?.let(capabilities::expirationPolicy) ?: FileShareFeaturePolicy(false)
-    var newPassword by remember(share.id, share.passwordProtected) { mutableStateOf("") }
-    var removePassword by remember(share.id, share.passwordProtected) { mutableStateOf(false) }
-    var expirationDate by remember(share.id, share.expiration) { mutableStateOf(share.expiration.orEmpty()) }
-    var note by remember(share.id, share.note) { mutableStateOf(share.note.orEmpty()) }
     var running by remember(share.id) { mutableStateOf(false) }
     var error by remember(share.id) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -114,25 +106,24 @@ internal fun ExistingFileShareManager(
             Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                 FilterChip(selected = true, enabled = false, onClick = {}, label = { Text("Can view") })
                 FilterChip(
-                    selected = allowEditing,
+                    selected = draft.allowEditing,
                     enabled = !running,
-                    onClick = { allowEditing = !allowEditing },
+                    onClick = { draft = draft.copy(allowEditing = !draft.allowEditing) },
                     label = { Text("Can edit") },
                 )
                 FilterChip(
-                    selected = allowResharing,
+                    selected = draft.allowResharing,
                     enabled = !running,
-                    onClick = { allowResharing = !allowResharing },
+                    onClick = { draft = draft.copy(allowResharing = !draft.allowResharing) },
                     label = { Text("Can reshare") },
                 )
             }
             if (passwordPolicy.supported || share.passwordProtected) {
                 OutlinedTextField(
-                    value = newPassword,
-                    enabled = !running && !removePassword,
+                    value = draft.newPassword,
+                    enabled = !running && !draft.removePassword,
                     onValueChange = {
-                        newPassword = it
-                        removePassword = false
+                        draft = draft.copy(newPassword = it, removePassword = false)
                     },
                     label = { Text("New password") },
                     supportingText = {
@@ -150,11 +141,14 @@ internal fun ExistingFileShareManager(
                 )
                 if (share.passwordProtected && !passwordPolicy.enforced) {
                     FilterChip(
-                        selected = removePassword,
+                        selected = draft.removePassword,
                         enabled = !running,
                         onClick = {
-                            removePassword = !removePassword
-                            if (removePassword) newPassword = ""
+                            val removing = !draft.removePassword
+                            draft = draft.copy(
+                                removePassword = removing,
+                                newPassword = if (removing) "" else draft.newPassword,
+                            )
                         },
                         label = { Text("Remove password") },
                     )
@@ -162,9 +156,9 @@ internal fun ExistingFileShareManager(
             }
             if (expirationPolicy.supported || share.expiration != null) {
                 OutlinedTextField(
-                    value = expirationDate,
+                    value = draft.expirationDate,
                     enabled = !running,
-                    onValueChange = { expirationDate = it },
+                    onValueChange = { draft = draft.copy(expirationDate = it) },
                     label = { Text("Expiration date") },
                     placeholder = { Text("YYYY-MM-DD") },
                     supportingText = {
@@ -181,57 +175,55 @@ internal fun ExistingFileShareManager(
                 )
             }
             OutlinedTextField(
-                value = note,
+                value = draft.note,
                 enabled = !running,
-                onValueChange = { note = it },
+                onValueChange = { draft = draft.copy(note = it) },
                 label = { Text("Note") },
                 minLines = 2,
                 maxLines = 4,
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                TextButton(enabled = !running, onClick = { editing = false }) { Text("Cancel") }
+                TextButton(
+                    enabled = !running,
+                    onClick = {
+                        draft = existingFileShareEditDraft(share)
+                        error = null
+                        editing = false
+                    },
+                ) { Text("Cancel") }
                 Button(
                     enabled = !running,
                     onClick = {
+                        val request = runCatching {
+                            planExistingFileShareUpdate(
+                                share = share,
+                                draft = draft,
+                                sourceIsDirectory = sourceIsDirectory,
+                                target = target,
+                                expirationPolicy = expirationPolicy,
+                                dateSource = dateSource,
+                            )
+                        }.getOrElse { failure ->
+                            error = failure.message ?: "The share settings are invalid."
+                            return@Button
+                        }
+                        if (request == null) {
+                            draft = existingFileShareEditDraft(share)
+                            error = null
+                            editing = false
+                            return@Button
+                        }
                         running = true
                         error = null
-                        val permissions = FileSharePermissions(
-                            read = true,
-                            update = allowEditing,
-                            create = allowEditing && sourceIsDirectory,
-                            delete = allowEditing && sourceIsDirectory,
-                            reshare = allowResharing,
-                        )
                         scope.launch {
                             try {
-                                val passwordUpdate = when {
-                                    removePassword -> ""
-                                    newPassword.isNotEmpty() -> newPassword
-                                    else -> null
-                                }
-                                val normalizedExpiration = expirationDate.trim()
-                                val expirationUpdate = when {
-                                    normalizedExpiration == share.expiration.orEmpty() -> null
-                                    normalizedExpiration.isEmpty() && expirationPolicy.enforced ->
-                                        error("This server requires an expiration date.")
-                                    else -> normalizedExpiration
-                                }
-                                val noteUpdate = note.takeIf { it != share.note.orEmpty() }
                                 val changed = services.updateFileShare(
                                     session,
-                                    UpdateFileShareRequest(
-                                        shareId = share.id,
-                                        target = target,
-                                        permissions = permissions,
-                                        password = passwordUpdate,
-                                        expirationDate = expirationUpdate,
-                                        note = noteUpdate,
-                                    ),
+                                    request,
                                 )
+                                draft = existingFileShareEditDraft(changed)
                                 editing = false
-                                newPassword = ""
-                                removePassword = false
                                 onChanged(changed)
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
@@ -254,6 +246,7 @@ internal fun ExistingFileShareManager(
                 OutlinedButton(
                     enabled = !running,
                     onClick = {
+                        draft = existingFileShareEditDraft(share)
                         error = null
                         editing = true
                     },

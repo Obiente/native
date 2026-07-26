@@ -251,7 +251,12 @@ data class NextcloudFileShare(
     val passwordProtected: Boolean = false,
 )
 
-fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
+fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest =
+    toNextcloudApiRequest(DeviceLocalFileShareDateSource)
+
+internal fun CreateFileShareRequest.toNextcloudApiRequest(
+    dateSource: FileShareDateSource,
+): NextcloudApiRequest {
     val safePath = requireSafeFilePath(path, allowRoot = false)
     val recipient = shareWith?.trim()?.takeIf(String::isNotEmpty)
     require(safePath.encodeToByteArray().size <= MAX_FILE_SHARE_PATH_BYTES) {
@@ -280,7 +285,7 @@ fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
     require(note.length <= MAX_FILE_SHARE_NOTE_LENGTH && note.none(Char::isISOControl)) {
         "The share note is invalid or too long."
     }
-    val expiration = details.expiration.toWireValue()
+    val expiration = details.expiration.toWireValue(dateSource)
     val fields = buildList {
         add("path" to "/$safePath")
         add("shareType" to target.wireValue.toString())
@@ -305,10 +310,10 @@ fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
     )
 }
 
-private fun FileShareExpiration.toWireValue(): String? = when (this) {
+private fun FileShareExpiration.toWireValue(dateSource: FileShareDateSource): String? = when (this) {
     FileShareExpiration.ServerDefault -> null
     FileShareExpiration.NoExpiration -> ""
-    is FileShareExpiration.OnDate -> requireValidFileShareDate(isoDate)
+    is FileShareExpiration.OnDate -> requireNonPastFileShareDate(isoDate, dateSource)
 }
 
 internal fun requireValidFileShareDate(value: String): String {
@@ -329,6 +334,22 @@ internal fun requireValidFileShareDate(value: String): String {
     }
     require(day in 1..daysInMonth) { "Use a valid expiration date." }
     return value
+}
+
+internal fun requireNonPastFileShareDate(
+    value: String,
+    dateSource: FileShareDateSource = DeviceLocalFileShareDateSource,
+): String {
+    val valid = requireValidFileShareDate(value)
+    val selectedDate = FileShareCalendarDate(
+        year = valid.substring(0, 4).toInt(),
+        month = valid.substring(5, 7).toInt(),
+        day = valid.substring(8, 10).toInt(),
+    )
+    require(selectedDate >= dateSource.currentDeviceLocalDate()) {
+        "Choose today or a future expiration date."
+    }
+    return valid
 }
 
 suspend fun NextcloudPlatformServices.createFileShare(

@@ -72,6 +72,7 @@ fun parseNextcloudFileSharingCapabilities(json: String): NextcloudFileSharingCap
     val publicLinks = public?.booleanAt("enabled") == true
     val publicPassword = public?.objectAt("password")
     val publicExpiration = public?.objectAt("expire_date")
+    val publicExpirationEnabled = publicLinks && publicExpiration?.booleanAt("enabled") == true
     val shareByMail = sharing.objectAt("sharebymail")
     val emailPassword = shareByMail?.objectAt("password")
     val emailExpiration = shareByMail?.objectAt("expire_date")
@@ -90,8 +91,9 @@ fun parseNextcloudFileSharingCapabilities(json: String): NextcloudFileSharingCap
         emailPasswordSupported = shareByMail?.booleanAt("enabled") == true &&
             emailPassword?.booleanAt("enabled") == true,
         emailPasswordEnforced = emailPassword?.booleanAt("enforced") == true,
-        publicExpirationSupported = publicLinks && publicExpiration != null,
-        publicExpirationEnforced = publicExpiration?.booleanAt("enforced") == true,
+        publicExpirationSupported = publicExpirationEnabled,
+        publicExpirationEnforced = publicExpirationEnabled &&
+            publicExpiration?.booleanAt("enforced") == true,
         userExpirationSupported = sharing.objectAt("user")
             ?.objectAt("expire_date")
             ?.booleanAt("enabled") == true,
@@ -306,7 +308,12 @@ fun UpdateFileSharePermissionsRequest.toNextcloudApiRequest(): NextcloudApiReque
     ).toNextcloudApiRequest()
 }
 
-fun UpdateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
+fun UpdateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest =
+    toNextcloudApiRequest(DeviceLocalFileShareDateSource)
+
+internal fun UpdateFileShareRequest.toNextcloudApiRequest(
+    dateSource: FileShareDateSource,
+): NextcloudApiRequest {
     val safeId = requireSafeFileShareId(shareId)
     require(permissions == null || permissions.mask != 0) { "At least one share permission is required." }
     require(password == null || password.length <= MAX_UPDATE_FILE_SHARE_PASSWORD_LENGTH &&
@@ -318,7 +325,7 @@ fun UpdateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
             target == FileShareTarget.Email,
     ) { "Passwords are only available for link and email shares." }
     val safeExpiration = expirationDate?.let {
-        if (it.isEmpty()) "" else requireValidFileShareDate(it)
+        if (it.isEmpty()) "" else requireNonPastFileShareDate(it, dateSource)
     }
     require(note == null || note.length <= MAX_UPDATE_FILE_SHARE_NOTE_LENGTH && note.none(Char::isISOControl)) {
         "The share note is invalid or too long."
@@ -466,6 +473,24 @@ fun planFileShareCreation(
     permissions: FileSharePermissions,
     capabilities: NextcloudFileSharingCapabilities,
     details: FileShareCreationDetails = FileShareCreationDetails(),
+): FileShareCreationPlan = planFileShareCreation(
+    file = file,
+    target = target,
+    recipient = recipient,
+    permissions = permissions,
+    capabilities = capabilities,
+    details = details,
+    dateSource = DeviceLocalFileShareDateSource,
+)
+
+internal fun planFileShareCreation(
+    file: NextcloudFile,
+    target: FileShareTarget,
+    recipient: String?,
+    permissions: FileSharePermissions,
+    capabilities: NextcloudFileSharingCapabilities,
+    details: FileShareCreationDetails,
+    dateSource: FileShareDateSource,
 ): FileShareCreationPlan {
     val unavailableReason = fileNativeSharingDisabledReason(file, capabilities)
     if (unavailableReason != null) return FileShareCreationPlan.Blocked(unavailableReason)
@@ -503,7 +528,7 @@ fun planFileShareCreation(
         permissions = permissions,
         details = details,
     )
-    val validationFailure = runCatching { request.toNextcloudApiRequest() }.exceptionOrNull()
+    val validationFailure = runCatching { request.toNextcloudApiRequest(dateSource) }.exceptionOrNull()
     return if (validationFailure == null) {
         FileShareCreationPlan.Ready(request)
     } else {
