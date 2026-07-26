@@ -72,20 +72,20 @@ fun fullQualityMediaPayloadKind(
 fun describeMediaDisplaySource(
     selected: MediaSourceChoice,
     displayed: MediaSourceChoice,
-    fullQuality: Boolean,
+    highDetail: Boolean,
     payloadKind: MediaDisplayPayloadKind = MediaDisplayPayloadKind.ServerPreview,
 ): String {
     val source = when {
         payloadKind == MediaDisplayPayloadKind.MemoriesRawRender ->
-            if (fullQuality) "Generated full-resolution RAW render" else "Generated RAW render"
+            if (highDetail) "Generated high-detail RAW render" else "Generated RAW render"
         payloadKind == MediaDisplayPayloadKind.EmbeddedCameraPreview -> "RAW embedded camera preview"
         else -> when (displayed.format) {
             MediaAssetFormat.Raw ->
-                if (fullQuality) "RAW full-resolution render" else "RAW server preview"
+                if (highDetail) "High-detail RAW render" else "RAW server preview"
             MediaAssetFormat.Jpeg ->
-                if (fullQuality) "JPEG original" else "JPEG server preview"
+                if (highDetail) "High-detail JPEG render" else "JPEG server preview"
             MediaAssetFormat.Image ->
-                if (fullQuality) "Full-resolution image" else "Image preview"
+                if (highDetail) "High-detail image render" else "Image preview"
             MediaAssetFormat.Video -> "Video preview"
             MediaAssetFormat.Other -> "File preview"
         }
@@ -93,7 +93,7 @@ fun describeMediaDisplaySource(
     return if (displayed.file.path == selected.file.path) {
         source
     } else {
-        "$source fallback · actions target ${selected.file.name}"
+        "$source fallback - actions target ${selected.file.name}"
     }
 }
 
@@ -257,6 +257,17 @@ fun NextcloudFile.isPhotoMedia(): Boolean = mediaAssetFormat() in setOf(
 
 fun rawPhotoFileNameSearchPatterns(): List<String> =
     rawPhotoExtensions.sorted().map { extension -> "%.$extension" }
+
+fun selectMediaSearchFiles(
+    results: List<NextcloudFile>,
+    maximumResults: Int = 80,
+): List<NextcloudFile> {
+    require(maximumResults > 0)
+    return results.asSequence()
+        .filterNot(NextcloudFile::isDirectory)
+        .take(maximumResults)
+        .toList()
+}
 
 fun NextcloudFile.mediaAssetFormat(): MediaAssetFormat {
     val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase()

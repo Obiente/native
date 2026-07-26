@@ -9,6 +9,18 @@ import kotlin.test.assertTrue
 
 class MediaStackingTest {
     @Test
+    fun mediaSearchDropsCollectionsEvenWhenTheirNamesLookLikeRawFiles() {
+        val rawDirectory = file("Photos/archive.raw", "httpd/unix-directory").copy(isDirectory = true)
+        val rawFile = file("Photos/frame.RAF", "application/octet-stream")
+        val jpegFile = file("Photos/frame.JPG", "image/jpeg")
+
+        assertEquals(
+            listOf(rawFile, jpegFile),
+            selectMediaSearchFiles(listOf(rawDirectory, rawFile, jpegFile)),
+        )
+    }
+
+    @Test
     fun rawAndJpegWithTheSameFolderAndStemBecomeOneStack() {
         val raw = file("Photos/Trip/DSCF0001.RAF", "image/x-fuji-raf")
         val jpeg = file("Photos/Trip/DSCF0001.JPG", "image/jpeg")
@@ -111,19 +123,19 @@ class MediaStackingTest {
 
         assertEquals(
             "RAW server preview",
-            describeMediaDisplaySource(plan.selected, rawChoice, fullQuality = false),
+            describeMediaDisplaySource(plan.selected, rawChoice, highDetail = false),
         )
         assertEquals(
-            "RAW full-resolution render",
-            describeMediaDisplaySource(plan.selected, rawChoice, fullQuality = true),
+            "High-detail RAW render",
+            describeMediaDisplaySource(plan.selected, rawChoice, highDetail = true),
         )
         assertEquals(
-            "JPEG server preview fallback · actions target DSCF0001.RAF",
-            describeMediaDisplaySource(plan.selected, jpegChoice, fullQuality = false),
+            "JPEG server preview fallback - actions target DSCF0001.RAF",
+            describeMediaDisplaySource(plan.selected, jpegChoice, highDetail = false),
         )
         assertEquals(
-            "JPEG original fallback · actions target DSCF0001.RAF",
-            describeMediaDisplaySource(plan.selected, jpegChoice, fullQuality = true),
+            "High-detail JPEG render fallback - actions target DSCF0001.RAF",
+            describeMediaDisplaySource(plan.selected, jpegChoice, highDetail = true),
         )
     }
 

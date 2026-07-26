@@ -211,6 +211,12 @@ class RawPhotoPreviewTest {
     fun rangeReadsRequireASafeStrongGenerationEtag() {
         assertEquals("\"generation-1\"", requireSafeFileRangeEtag("\"generation-1\""))
         assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("W/\"generation-1\"") }
+        assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("w/\"generation-1\"") }
+        assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("*") }
+        assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("generation-1") }
+        assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("\"generation-1") }
+        assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("generation-1\"") }
+        assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("\"generation\"1\"") }
         assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("\"generation-1\"\r\n") }
     }
 
@@ -235,7 +241,7 @@ class RawPhotoPreviewTest {
             describeMediaDisplaySource(
                 selected = source,
                 displayed = source,
-                fullQuality = false,
+                highDetail = false,
                 payloadKind = MediaDisplayPayloadKind.MemoriesRawRender,
             ),
         )
@@ -244,16 +250,16 @@ class RawPhotoPreviewTest {
             describeMediaDisplaySource(
                 selected = source,
                 displayed = source,
-                fullQuality = false,
+                highDetail = false,
                 payloadKind = MediaDisplayPayloadKind.EmbeddedCameraPreview,
             ),
         )
         assertEquals(
-            "Generated full-resolution RAW render",
+            "Generated high-detail RAW render",
             describeMediaDisplaySource(
                 selected = source,
                 displayed = source,
-                fullQuality = true,
+                highDetail = true,
                 payloadKind = MediaDisplayPayloadKind.MemoriesRawRender,
             ),
         )

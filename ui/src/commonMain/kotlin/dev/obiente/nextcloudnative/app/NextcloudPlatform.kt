@@ -914,15 +914,21 @@ const val MAX_FILE_RANGE_ETAG_LENGTH = 1_024
 
 fun requireSafeFileRangeEtag(value: String): String = value.also {
     require(
-        it.isNotBlank() &&
+        it.length >= 2 &&
             it == it.trim() &&
             it.length <= MAX_FILE_RANGE_ETAG_LENGTH &&
-            it.none(Char::isISOControl) &&
-            !it.startsWith("W/", ignoreCase = true),
+            it.first() == '"' &&
+            it.last() == '"' &&
+            it.substring(1, it.lastIndex).all(::isHttpEntityTagCharacter),
     ) {
         "A safe current strong ETag is required for a file range read."
     }
 }
+
+private fun isHttpEntityTagCharacter(character: Char): Boolean =
+    character.code == 0x21 ||
+        character.code in 0x23..0x7E ||
+        character.code in 0x80..0xFF
 
 fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
     require(relativePath.startsWith('/') && !relativePath.startsWith("//")) {

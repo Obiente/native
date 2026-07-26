@@ -572,7 +572,7 @@ class DesktopNextcloudServices(
                 "application/xml; charset=utf-8", headers = mapOf("Accept" to "application/xml"),
             )
             check(response.status == 207) { "WebDAV media search failed (HTTP ${response.status})." }
-            parseDavFiles(response.body, userId).take(80)
+            selectMediaSearchFiles(parseDavFiles(response.body, userId))
         }
 
     override suspend fun listSystemTags(session: NextcloudSession): List<NextcloudSystemTag> =

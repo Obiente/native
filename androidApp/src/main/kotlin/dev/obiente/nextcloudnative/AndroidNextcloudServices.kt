@@ -102,6 +102,7 @@ import dev.obiente.nextcloudnative.app.parseTalkMessageJson
 import dev.obiente.nextcloudnative.app.parseNextcloudFileSharingCapabilities
 import dev.obiente.nextcloudnative.app.normalizeSystemTagsDavResponse
 import dev.obiente.nextcloudnative.app.rawPhotoFileNameSearchPatterns
+import dev.obiente.nextcloudnative.app.selectMediaSearchFiles
 import dev.obiente.nextcloudnative.app.requireSafe
 import dev.obiente.nextcloudnative.app.systemTagsDavDiscoveryRequest
 import dev.obiente.nextcloudnative.app.toWebDavMutationSpec
@@ -525,7 +526,7 @@ internal class AndroidNextcloudServices(
             headers = mapOf("Accept" to "application/xml"),
         )
         check(response.status == 207) { "WebDAV media search failed (HTTP ${response.status})." }
-        parseDavFiles(response.body, userId).take(80)
+        selectMediaSearchFiles(parseDavFiles(response.body, userId))
     }
 
     override suspend fun loadMediaBackupStatuses(
