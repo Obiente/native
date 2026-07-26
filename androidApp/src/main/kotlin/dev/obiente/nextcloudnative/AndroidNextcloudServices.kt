@@ -70,6 +70,7 @@ import dev.obiente.nextcloudnative.app.ThemePreference
 import dev.obiente.nextcloudnative.app.PlatformCapability
 import dev.obiente.nextcloudnative.app.PlatformCapabilityStatus
 import dev.obiente.nextcloudnative.app.AndroidDirectRelease
+import dev.obiente.nextcloudnative.app.AndroidUpdateChannel
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallState
@@ -179,8 +180,14 @@ internal class AndroidNextcloudServices(
 
     override fun appUpdateSupport(): AppUpdateSupport = projectContent.support()
 
-    override suspend fun checkForAppUpdate(): AppUpdateCheckResult =
-        withContext(Dispatchers.IO) { projectContent.checkForUpdate() }
+    override fun loadAppUpdateChannel(): AndroidUpdateChannel = projectContent.updateChannel()
+
+    override fun saveAppUpdateChannel(channel: AndroidUpdateChannel) {
+        projectContent.saveUpdateChannel(channel)
+    }
+
+    override suspend fun checkForAppUpdate(channel: AndroidUpdateChannel): AppUpdateCheckResult =
+        withContext(Dispatchers.IO) { projectContent.checkForUpdate(channel) }
 
     override fun observeAppUpdateInstallState(): Flow<AppUpdateInstallState> =
         projectContent.observeUpdateState()
