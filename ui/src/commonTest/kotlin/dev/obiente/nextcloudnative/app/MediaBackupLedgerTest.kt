@@ -221,7 +221,7 @@ class MediaBackupLedgerTest {
         store.close()
 
         val future = BundledSQLiteDriver().open(":memory:")
-        future.execSQL("PRAGMA user_version = 4")
+        future.execSQL("PRAGMA user_version = 5")
         assertFailsWith<MediaBackupLedgerStoreException> {
             MediaBackupLedgerStore(future)
         }
@@ -233,6 +233,8 @@ class MediaBackupLedgerTest {
         val connection = BundledSQLiteDriver().open(":memory:")
         MediaBackupLedgerStore(connection)
         connection.execSQL("DROP INDEX media_backup_account_remote_path_updated")
+        connection.execSQL("DROP INDEX media_backup_account_source")
+        connection.execSQL("ALTER TABLE media_backup_ledger DROP COLUMN source_id")
         connection.execSQL("ALTER TABLE media_backup_ledger DROP COLUMN history_visible")
         connection.execSQL("PRAGMA user_version = 1")
 
@@ -240,7 +242,7 @@ class MediaBackupLedgerTest {
 
         connection.prepare("PRAGMA user_version").use { statement ->
             check(statement.step())
-            assertEquals(3L, statement.getLong(0))
+            assertEquals(4L, statement.getLong(0))
         }
         migrated.close()
     }
@@ -250,6 +252,8 @@ class MediaBackupLedgerTest {
         val connection = BundledSQLiteDriver().open(":memory:")
         val current = MediaBackupLedgerStore(connection)
         current.upsert(succeededRecord("external:migrated", 2_000))
+        connection.execSQL("DROP INDEX media_backup_account_source")
+        connection.execSQL("ALTER TABLE media_backup_ledger DROP COLUMN source_id")
         connection.execSQL("ALTER TABLE media_backup_ledger DROP COLUMN history_visible")
         connection.execSQL("PRAGMA user_version = 2")
 
@@ -257,7 +261,7 @@ class MediaBackupLedgerTest {
 
         connection.prepare("PRAGMA user_version").use { statement ->
             check(statement.step())
-            assertEquals(3L, statement.getLong(0))
+            assertEquals(4L, statement.getLong(0))
         }
         assertEquals(
             MediaBackupStatus.BackedUp,
