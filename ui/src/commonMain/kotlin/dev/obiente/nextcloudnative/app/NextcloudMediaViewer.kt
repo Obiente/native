@@ -238,7 +238,7 @@ fun NextcloudMediaViewer(
                         }
                         response.body
                     },
-                    loadFileRange = { offset, length ->
+                    loadFileRange = { offset, length, expectedEtag ->
                         check(userId.isNotBlank()) {
                             "The authenticated Files user ID is unavailable."
                         }
@@ -248,6 +248,7 @@ fun NextcloudMediaViewer(
                             path = candidate.path,
                             offset = offset,
                             length = length,
+                            expectedEtag = expectedEtag,
                         )
                     },
                 )
@@ -280,7 +281,7 @@ fun NextcloudMediaViewer(
         val qualityCandidates = sourcePlan.fullQualityCandidatesAtZoom(zoom)
         if (qualityCandidates.isEmpty() || fullQualityState !is FullQualityState.Idle) return@LaunchedEffect
         fullQualityState = FullQualityState.Loading
-        val loaded = loadFirstUsableMediaSource(
+        val loaded = loadFirstUsableFullResolutionMediaSource(
             candidates = qualityCandidates,
             maximumPayloadBytes = MAX_PHOTO_EDIT_SOURCE_BYTES.toInt(),
             load = { candidate ->
@@ -308,12 +309,18 @@ fun NextcloudMediaViewer(
                     } else {
                         null
                     },
-                ).bytes
+                )
             },
-            decode = { bytes -> decodePlatformImageSampled(bytes, MAXIMUM_DISPLAY_IMAGE_DIMENSION)?.image },
+            decode = { payload ->
+                decodePlatformImageSampled(
+                    payload.bytes,
+                    MAXIMUM_DISPLAY_IMAGE_DIMENSION,
+                    payload.source.orientationPolicy(),
+                )?.image
+            },
         )
         fullQualityState = loaded?.let {
-            FullQualityState.Ready(it.value, it.source, it.usedFallback)
+            FullQualityState.Ready(it.value, it.source, it.usedFallback, it.payloadSource)
         } ?: FullQualityState.Error
     }
 
@@ -510,10 +517,13 @@ fun NextcloudMediaViewer(
                                 selected = sourcePlan.selected,
                                 displayed = activeSource,
                                 fullQuality = fullQuality != null,
-                                payloadKind = if (fullQuality != null) {
-                                    MediaDisplayPayloadKind.ServerPreview
-                                } else {
-                                    readyPreview?.payloadKind ?: MediaDisplayPayloadKind.ServerPreview
+                                payloadKind = when (fullQuality) {
+                                    is FullQualityState.Ready -> fullQualityMediaPayloadKind(
+                                        displayed = fullQuality.source,
+                                        payloadSource = fullQuality.payloadSource,
+                                    )
+                                    else ->
+                                        readyPreview?.payloadKind ?: MediaDisplayPayloadKind.ServerPreview
                                 },
                             ),
                         )
@@ -1013,6 +1023,7 @@ private sealed interface FullQualityState {
         val image: ImageBitmap,
         val source: MediaSourceChoice,
         val usedFallback: Boolean,
+        val payloadSource: FullResolutionPhotoSource,
     ) : FullQualityState
     data object Error : FullQualityState
 }

@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
+
 enum class MediaAssetFormat { Raw, Jpeg, Image, Video, Other }
 
 data class MediaStack(
@@ -45,6 +47,23 @@ data class LoadedMediaSource<T>(
     val source: MediaSourceChoice,
     val usedFallback: Boolean,
 )
+
+data class LoadedFullResolutionMediaSource<T>(
+    val value: T,
+    val source: MediaSourceChoice,
+    val usedFallback: Boolean,
+    val payloadSource: FullResolutionPhotoSource,
+)
+
+fun fullQualityMediaPayloadKind(
+    displayed: MediaSourceChoice,
+    payloadSource: FullResolutionPhotoSource,
+): MediaDisplayPayloadKind =
+    if (payloadSource == FullResolutionPhotoSource.Memories && displayed.format == MediaAssetFormat.Raw) {
+        MediaDisplayPayloadKind.MemoriesRawRender
+    } else {
+        MediaDisplayPayloadKind.ServerPreview
+    }
 
 /**
  * Describes what is actually visible without confusing a rendered RAW preview with RAW bytes.
@@ -177,6 +196,36 @@ internal suspend fun <T> loadFirstUsableMediaSource(
     return null
 }
 
+internal suspend fun <T> loadFirstUsableFullResolutionMediaSource(
+    candidates: List<MediaSourceChoice>,
+    maximumPayloadBytes: Int = MAX_MEDIA_PREVIEW_BYTES,
+    load: suspend (NextcloudFile) -> FullResolutionPhotoPayload,
+    decode: (FullResolutionPhotoPayload) -> T?,
+): LoadedFullResolutionMediaSource<T>? {
+    require(maximumPayloadBytes >= MIN_MEDIA_IMAGE_PAYLOAD_BYTES)
+    candidates.forEachIndexed { index, candidate ->
+        val decoded = try {
+            val payload = load(candidate.file)
+            require(isBoundedDisplayImagePayload(payload.bytes, maximumPayloadBytes)) {
+                "The server did not return a bounded full-resolution image."
+            }
+            requireNotNull(decode(payload)) { "The full-resolution image could not be decoded." } to payload.source
+        } catch (failure: Exception) {
+            if (failure is CancellationException) throw failure
+            null
+        }
+        if (decoded != null) {
+            return LoadedFullResolutionMediaSource(
+                value = decoded.first,
+                source = candidate,
+                usedFallback = index > 0,
+                payloadSource = decoded.second,
+            )
+        }
+    }
+    return null
+}
+
 fun isBoundedDisplayImagePayload(
     bytes: ByteArray,
     maximumPayloadBytes: Int = MAX_MEDIA_PREVIEW_BYTES,
@@ -197,11 +246,17 @@ fun isBoundedDisplayImagePayload(
 
 fun NextcloudFile.isRawPhoto(): Boolean = mediaAssetFormat() == MediaAssetFormat.Raw
 
+fun NextcloudFile.canOpenInMediaViewer(): Boolean =
+    fileId != null && (hasPreview || isRawPhoto())
+
 fun NextcloudFile.isPhotoMedia(): Boolean = mediaAssetFormat() in setOf(
     MediaAssetFormat.Raw,
     MediaAssetFormat.Jpeg,
     MediaAssetFormat.Image,
 )
+
+fun rawPhotoFileNameSearchPatterns(): List<String> =
+    rawPhotoExtensions.sorted().map { extension -> "%.$extension" }
 
 fun NextcloudFile.mediaAssetFormat(): MediaAssetFormat {
     val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase()

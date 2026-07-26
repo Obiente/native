@@ -648,8 +648,8 @@ private fun AuthenticatedApp(
                     file.isEditableText() -> Screen.TextEditor(file, current.path)
                     document.method == DocumentPreviewMethod.ServerRaster ->
                         Screen.DocumentPreview(file, current.path)
-                    file.hasPreview && file.fileId != null -> Screen.MediaViewer(
-                        media = siblings.filter { it.hasPreview && it.fileId != null },
+                    file.canOpenInMediaViewer() -> Screen.MediaViewer(
+                        media = siblings.filter(NextcloudFile::canOpenInMediaViewer),
                         selected = file,
                         returnTo = current,
                     )
@@ -663,9 +663,9 @@ private fun AuthenticatedApp(
                         val document = describeDocument(file)
                         screen = if (document.method != DocumentPreviewMethod.Unsupported) {
                             Screen.DocumentPreview(file, current.path)
-                        } else if (file.hasPreview && file.fileId != null) {
+                        } else if (file.canOpenInMediaViewer()) {
                             Screen.MediaViewer(
-                                media = siblings.filter { it.hasPreview && it.fileId != null },
+                                media = siblings.filter(NextcloudFile::canOpenInMediaViewer),
                                 selected = file,
                                 returnTo = current,
                             )

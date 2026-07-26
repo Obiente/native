@@ -387,6 +387,11 @@ enum class FullResolutionPhotoSource(val label: String) {
     FilesDav("Original from Files"),
 }
 
+fun FullResolutionPhotoSource.orientationPolicy(): EncodedImageOrientationPolicy = when (this) {
+    FullResolutionPhotoSource.Memories -> EncodedImageOrientationPolicy.PixelsAlreadyUpright
+    FullResolutionPhotoSource.FilesDav -> EncodedImageOrientationPolicy.ApplyExif
+}
+
 data class FullResolutionPhotoPayload(
     val bytes: ByteArray,
     val source: FullResolutionPhotoSource,

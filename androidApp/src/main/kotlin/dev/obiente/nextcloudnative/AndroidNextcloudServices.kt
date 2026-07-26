@@ -94,12 +94,14 @@ import dev.obiente.nextcloudnative.app.historicalFileCopyName
 import dev.obiente.nextcloudnative.app.isExactHttpByteContentRange
 import dev.obiente.nextcloudnative.app.normalizeFileVersionHistory
 import dev.obiente.nextcloudnative.app.requireMatchingFileVersion
+import dev.obiente.nextcloudnative.app.requireSafeFileRangeEtag
 import dev.obiente.nextcloudnative.app.discoverRecognizeBridge
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
 import dev.obiente.nextcloudnative.app.dynamicReadCacheIdentity
 import dev.obiente.nextcloudnative.app.parseTalkMessageJson
 import dev.obiente.nextcloudnative.app.parseNextcloudFileSharingCapabilities
 import dev.obiente.nextcloudnative.app.normalizeSystemTagsDavResponse
+import dev.obiente.nextcloudnative.app.rawPhotoFileNameSearchPatterns
 import dev.obiente.nextcloudnative.app.requireSafe
 import dev.obiente.nextcloudnative.app.systemTagsDavDiscoveryRequest
 import dev.obiente.nextcloudnative.app.toWebDavMutationSpec
@@ -488,6 +490,13 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         userId: String,
     ): List<NextcloudFile> = withContext(Dispatchers.IO) {
+        val rawFileNameFilters = rawPhotoFileNameSearchPatterns().joinToString("\n") { pattern ->
+            """
+                <d:like caseless="yes">
+                  <d:prop><d:displayname/></d:prop><d:literal>$pattern</d:literal>
+                </d:like>
+            """.trimIndent()
+        }
         val body = """
             <?xml version="1.0" encoding="UTF-8"?>
             <d:searchrequest xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">
@@ -500,6 +509,7 @@ internal class AndroidNextcloudServices(
                 <d:where><d:or>
                   <d:like><d:prop><d:getcontenttype/></d:prop><d:literal>image/%</d:literal></d:like>
                   <d:like><d:prop><d:getcontenttype/></d:prop><d:literal>video/%</d:literal></d:like>
+                  $rawFileNameFilters
                 </d:or></d:where>
                 <d:orderby><d:order><d:prop><d:getlastmodified/></d:prop><d:descending/></d:order></d:orderby>
                 <d:limit><d:nresults>80</d:nresults></d:limit>
@@ -676,9 +686,11 @@ internal class AndroidNextcloudServices(
         path: String,
         offset: Long,
         length: Int,
+        expectedEtag: String,
     ): ByteArray = withContext(Dispatchers.IO) {
         require(offset >= 0L) { "The file range offset must not be negative." }
         require(length > 0) { "The file range length must be greater than zero." }
+        val safeEtag = requireSafeFileRangeEtag(expectedEtag)
         val endInclusive = Math.addExact(offset, length.toLong() - 1L)
         val response = request(
             method = "GET",
@@ -687,6 +699,7 @@ internal class AndroidNextcloudServices(
             headers = mapOf(
                 "Accept" to "application/octet-stream",
                 "Range" to "bytes=$offset-$endInclusive",
+                "If-Match" to safeEtag,
             ),
             maxResponseBytes = length.toLong(),
         )

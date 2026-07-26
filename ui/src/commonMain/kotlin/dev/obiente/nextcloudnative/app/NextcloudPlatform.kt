@@ -141,7 +141,8 @@ data class NextcloudApiResponse(
  * Stable credential-free identity for a dynamic GET response.
  *
  * Length-prefixed query fields avoid ambiguous delimiter collisions while retaining a readable
- * prefix for diagnostics. Authentication and request bodies are deliberately excluded.
+ * prefix for diagnostics. The response bound is part of the representation identity so a smaller
+ * in-flight read cannot satisfy a larger request. Authentication and request bodies are excluded.
  */
 fun NextcloudApiRequest.dynamicReadCacheIdentity(): String = buildString {
     append(method.name)
@@ -149,6 +150,8 @@ fun NextcloudApiRequest.dynamicReadCacheIdentity(): String = buildString {
     append(relativePath)
     append(" ocs=")
     append(ocsApiRequest)
+    append(" max=")
+    append(maximumResponseBytes)
     queryParameters.toSortedMap().forEach { (name, value) ->
         val encodedName = encodeUrlComponent(name)
         val encodedValue = encodeUrlComponent(value)
@@ -584,9 +587,10 @@ interface NextcloudPlatformServices {
     /**
      * Reads one exact, bounded byte range from a Files WebDAV object.
      *
-     * Platforms must require an HTTP 206 response and must reject servers that ignore the Range
-     * header. This keeps large media containers out of memory when only an embedded preview is
-     * needed. The returned bytes are detached and may never be written back automatically.
+     * Platforms must send [expectedEtag] through If-Match, require an HTTP 206 response, and reject
+     * servers that ignore the Range header. This keeps both reads pinned to one remote generation
+     * and keeps large media containers out of memory when only an embedded preview is needed. The
+     * returned bytes are detached and may never be written back automatically.
      */
     suspend fun downloadFileRange(
         session: NextcloudSession,
@@ -594,6 +598,7 @@ interface NextcloudPlatformServices {
         path: String,
         offset: Long,
         length: Int,
+        expectedEtag: String,
     ): ByteArray = error("Bounded file range reads are not supported on this platform.")
 
     /**
@@ -905,6 +910,19 @@ const val MAX_ACTIVITY_LIMIT = 200
 const val MAX_NOTE_BYTES = 4L * 1024L * 1024L
 const val DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 4L * 1024L * 1024L
 const val MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 16L * 1024L * 1024L
+const val MAX_FILE_RANGE_ETAG_LENGTH = 1_024
+
+fun requireSafeFileRangeEtag(value: String): String = value.also {
+    require(
+        it.isNotBlank() &&
+            it == it.trim() &&
+            it.length <= MAX_FILE_RANGE_ETAG_LENGTH &&
+            it.none(Char::isISOControl) &&
+            !it.startsWith("W/", ignoreCase = true),
+    ) {
+        "A safe current strong ETag is required for a file range read."
+    }
+}
 
 fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
     require(relativePath.startsWith('/') && !relativePath.startsWith("//")) {

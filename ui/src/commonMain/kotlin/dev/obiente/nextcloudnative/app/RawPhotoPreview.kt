@@ -108,7 +108,7 @@ suspend fun loadMediaDisplayPayload(
     file: NextcloudFile,
     loadCorePreview: suspend () -> ByteArray,
     loadMemoriesRawRender: suspend () -> ByteArray,
-    loadFileRange: suspend (offset: Long, length: Int) -> ByteArray,
+    loadFileRange: suspend (offset: Long, length: Int, expectedEtag: String) -> ByteArray,
 ): MediaDisplayPayload {
     if (file.hasPreview) {
         attemptDisplayPayload(
@@ -122,20 +122,24 @@ suspend fun loadMediaDisplayPayload(
         error("No displayable server preview is available.")
     }
 
-    attemptDisplayPayload(
-        kind = MediaDisplayPayloadKind.MemoriesRawRender,
-        maximumPayloadBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES,
-        load = loadMemoriesRawRender,
-    )?.let { return it }
+    if (file.originalAccessAllowed) {
+        attemptDisplayPayload(
+            kind = MediaDisplayPayloadKind.MemoriesRawRender,
+            maximumPayloadBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES,
+            load = loadMemoriesRawRender,
+        )?.let { return it }
+    }
 
     if (
         file.originalAccessAllowed &&
+        file.etag != null &&
         file.name.substringAfterLast('.', missingDelimiterValue = "").equals("raf", ignoreCase = true)
     ) {
-        val header = loadFileRange(0L, FUJI_RAF_DIRECTORY_END)
+        val expectedEtag = file.etag
+        val header = loadFileRange(0L, FUJI_RAF_DIRECTORY_END, expectedEtag)
         val location = parseFujiRafEmbeddedPreview(header, file.size)
             ?: error("The RAF embedded preview directory is invalid.")
-        val embedded = loadFileRange(location.offset, location.length)
+        val embedded = loadFileRange(location.offset, location.length, expectedEtag)
         if (isBoundedDisplayImagePayload(embedded, MAX_RAW_EMBEDDED_PREVIEW_BYTES)) {
             return MediaDisplayPayload(
                 bytes = embedded,
