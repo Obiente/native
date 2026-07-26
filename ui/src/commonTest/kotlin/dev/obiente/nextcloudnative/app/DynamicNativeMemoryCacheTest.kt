@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.TestTimeSource
@@ -87,5 +88,9 @@ class DynamicNativeMemoryCacheTest {
 
         assertEquals(first.dynamicReadCacheIdentity(), second.dynamicReadCacheIdentity())
         assertNull(first.dynamicReadCacheIdentity().takeIf { "never-cache-this" in it })
+        assertNotEquals(
+            first.dynamicReadCacheIdentity(),
+            first.copy(maximumResponseBytes = first.maximumResponseBytes + 1L).dynamicReadCacheIdentity(),
+        )
     }
 }

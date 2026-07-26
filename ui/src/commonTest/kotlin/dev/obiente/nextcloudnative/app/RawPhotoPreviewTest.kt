@@ -17,7 +17,7 @@ class RawPhotoPreviewTest {
             file = raw,
             loadCorePreview = { "<html>preview failed</html>".encodeToByteArray() },
             loadMemoriesRawRender = { jpegFixture() },
-            loadFileRange = { _, _ ->
+            loadFileRange = { _, _, _ ->
                 rangeReads += 1
                 error("RAF range fallback should not be needed.")
             },
@@ -28,13 +28,38 @@ class RawPhotoPreviewTest {
     }
 
     @Test
+    fun previewOnlyRawNeverUsesOriginalQualityFallbacks() = runBlocking {
+        val raw = rawFile(hasPreview = true).copy(originalAccessAllowed = false)
+        var memoriesCalls = 0
+        var rangeReads = 0
+
+        assertFailsWith<IllegalStateException> {
+            loadMediaDisplayPayload(
+                file = raw,
+                loadCorePreview = { "<html>preview failed</html>".encodeToByteArray() },
+                loadMemoriesRawRender = {
+                    memoriesCalls += 1
+                    jpegFixture()
+                },
+                loadFileRange = { _, _, _ ->
+                    rangeReads += 1
+                    jpegFixture()
+                },
+            )
+        }
+
+        assertEquals(0, memoriesCalls)
+        assertEquals(0, rangeReads)
+    }
+
+    @Test
     fun rafUsesItsOwnEmbeddedPreviewWithoutSiblingJpegOrServerPreview() = runBlocking {
         val embedded = jpegFixture()
         val embeddedOffset = 4_096L
         val raw = rawFile(hasPreview = false, size = embeddedOffset + embedded.size)
         val header = rafHeader(embeddedOffset, embedded.size)
         var coreCalls = 0
-        val requestedRanges = mutableListOf<Pair<Long, Int>>()
+        val requestedRanges = mutableListOf<Triple<Long, Int, String>>()
 
         val payload = loadMediaDisplayPayload(
             file = raw,
@@ -43,8 +68,8 @@ class RawPhotoPreviewTest {
                 error("Core preview must be skipped when the server reports no preview.")
             },
             loadMemoriesRawRender = { error("Memories cannot decode this file.") },
-            loadFileRange = { offset, length ->
-                requestedRanges += offset to length
+            loadFileRange = { offset, length, expectedEtag ->
+                requestedRanges += Triple(offset, length, expectedEtag)
                 when (offset) {
                     0L -> header
                     embeddedOffset -> embedded
@@ -56,7 +81,13 @@ class RawPhotoPreviewTest {
         assertEquals(MediaDisplayPayloadKind.EmbeddedCameraPreview, payload.kind)
         assertEquals(embedded.toList(), payload.bytes.toList())
         assertEquals(0, coreCalls)
-        assertEquals(listOf(0L to 0x5C, embeddedOffset to embedded.size), requestedRanges)
+        assertEquals(
+            listOf(
+                Triple(0L, 0x5C, "raf-etag"),
+                Triple(embeddedOffset, embedded.size, "raf-etag"),
+            ),
+            requestedRanges,
+        )
     }
 
     @Test
@@ -70,7 +101,7 @@ class RawPhotoPreviewTest {
                 file = raw,
                 loadCorePreview = { error("No core preview.") },
                 loadMemoriesRawRender = { error("No Memories render.") },
-                loadFileRange = { _, _ ->
+                loadFileRange = { _, _, _ ->
                     reads += 1
                     header
                 },
@@ -123,6 +154,25 @@ class RawPhotoPreviewTest {
     }
 
     @Test
+    fun rawDiscoveryPatternsCoverEveryRecognizedRawExtension() {
+        val patterns = rawPhotoFileNameSearchPatterns()
+
+        assertEquals(true, "%.raf" in patterns)
+        assertEquals(true, "%.dng" in patterns)
+        assertEquals(true, "%.cr3" in patterns)
+        assertEquals(patterns.sorted(), patterns)
+        assertEquals(patterns.distinct(), patterns)
+    }
+
+    @Test
+    fun octetStreamRafWithoutServerPreviewStillOpensInMediaViewer() {
+        val raw = rawFile(hasPreview = false).copy(mimeType = "application/octet-stream")
+
+        assertEquals(true, raw.isRawPhoto())
+        assertEquals(true, raw.canOpenInMediaViewer())
+    }
+
+    @Test
     fun embeddedCameraPreviewAppliesExifWhileServerRendersStayUpright() {
         assertEquals(
             EncodedImageOrientationPolicy.ApplyExif,
@@ -136,6 +186,14 @@ class RawPhotoPreviewTest {
             EncodedImageOrientationPolicy.PixelsAlreadyUpright,
             MediaDisplayPayloadKind.MemoriesRawRender.orientationPolicy(),
         )
+        assertEquals(
+            EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+            FullResolutionPhotoSource.Memories.orientationPolicy(),
+        )
+        assertEquals(
+            EncodedImageOrientationPolicy.ApplyExif,
+            FullResolutionPhotoSource.FilesDav.orientationPolicy(),
+        )
     }
 
     @Test
@@ -147,6 +205,13 @@ class RawPhotoPreviewTest {
         assertEquals(false, isExactHttpByteContentRange("bytes 4096-8191/8191", 4_096L, 8_191L))
         assertEquals(false, isExactHttpByteContentRange("bytes */64000000", 4_096L, 8_191L))
         assertEquals(false, isExactHttpByteContentRange(null, 4_096L, 8_191L))
+    }
+
+    @Test
+    fun rangeReadsRequireASafeStrongGenerationEtag() {
+        assertEquals("\"generation-1\"", requireSafeFileRangeEtag("\"generation-1\""))
+        assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("W/\"generation-1\"") }
+        assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("\"generation-1\"\r\n") }
     }
 
     @Test
@@ -182,6 +247,40 @@ class RawPhotoPreviewTest {
                 fullQuality = false,
                 payloadKind = MediaDisplayPayloadKind.EmbeddedCameraPreview,
             ),
+        )
+        assertEquals(
+            "Generated full-resolution RAW render",
+            describeMediaDisplaySource(
+                selected = source,
+                displayed = source,
+                fullQuality = true,
+                payloadKind = MediaDisplayPayloadKind.MemoriesRawRender,
+            ),
+        )
+    }
+
+    @Test
+    fun fullQualityLoadRetainsTheActualPayloadSource() = runBlocking {
+        val raw = rawFile(hasPreview = false)
+        val candidate = planMediaSources(listOf(raw), raw).fullQualityCandidates.single()
+
+        val loaded = loadFirstUsableFullResolutionMediaSource(
+            candidates = listOf(candidate),
+            maximumPayloadBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES,
+            load = {
+                FullResolutionPhotoPayload(
+                    bytes = jpegFixture(),
+                    source = FullResolutionPhotoSource.Memories,
+                )
+            },
+            decode = { "decoded" },
+        )
+
+        assertEquals(FullResolutionPhotoSource.Memories, loaded?.payloadSource)
+        assertEquals(candidate, loaded?.source)
+        assertEquals(
+            MediaDisplayPayloadKind.MemoriesRawRender,
+            fullQualityMediaPayloadKind(candidate, requireNotNull(loaded).payloadSource),
         )
     }
 
