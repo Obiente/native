@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
@@ -32,6 +33,12 @@ fun NativeDeckScreen(
     var capabilities by remember(session) { mutableStateOf<DeckCapabilities?>(null) }
     var activeRoute by remember(session) { mutableStateOf<DeckReadRoutePlan?>(null) }
     var requestedBoard by remember(session) { mutableStateOf<DeckBoard?>(null) }
+    var requestedBoardId by rememberSaveable(session.serverUrl, session.loginName) {
+        mutableStateOf<Long?>(null)
+    }
+    var requestedCardId by rememberSaveable(session.serverUrl, session.loginName) {
+        mutableStateOf<Long?>(null)
+    }
     var loadAttempt by remember(session) { mutableStateOf(0) }
     var interaction by remember(session) { mutableStateOf<DeckUiInteraction?>(null) }
     var mutationBusy by remember(session) { mutableStateOf(false) }
@@ -120,6 +127,8 @@ fun NativeDeckScreen(
                 interaction = null
                 if (returnToBoards) {
                     requestedBoard = null
+                    requestedBoardId = null
+                    requestedCardId = null
                     loadedBoards = emptyList()
                     state = DeckWorkspaceState.Loading
                 }
@@ -433,17 +442,27 @@ fun NativeDeckScreen(
                 loadedBoards = loaded.boards
                 capabilities = loaded.capabilities
                 activeRoute = loaded.route
-                state = if (loaded.boards.isEmpty()) {
-                    DeckWorkspaceState.Empty(
-                        title = "No boards",
-                        message = "Create a board to start organizing cards.",
-                        canCreateBoards = loaded.capabilities?.canCreateBoards == true,
-                    )
+                val restoredBoard = requestedBoardId?.let { boardId ->
+                    loaded.boards.firstOrNull { it.id == boardId }
+                }
+                if (restoredBoard != null) {
+                    requestedBoard = restoredBoard
+                    state = DeckWorkspaceState.Loading
                 } else {
-                    DeckWorkspaceState.BoardPicker(
-                        boards = loaded.boards,
-                        canCreateBoards = loaded.capabilities?.canCreateBoards == true,
-                    )
+                    requestedBoardId = null
+                    requestedCardId = null
+                    state = if (loaded.boards.isEmpty()) {
+                        DeckWorkspaceState.Empty(
+                            title = "No boards",
+                            message = "Create a board to start organizing cards.",
+                            canCreateBoards = loaded.capabilities?.canCreateBoards == true,
+                        )
+                    } else {
+                        DeckWorkspaceState.BoardPicker(
+                            boards = loaded.boards,
+                            canCreateBoards = loaded.capabilities?.canCreateBoards == true,
+                        )
+                    }
                 }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
@@ -459,7 +478,7 @@ fun NativeDeckScreen(
                 )
             }
         } else {
-            val selectedCardId = boardState()?.selectedCardId
+            val selectedCardId = requestedCardId
             if (boardState()?.board?.id != board.id) state = DeckWorkspaceState.Loading
             runCatching {
                 loadDeckStacks(
@@ -470,10 +489,14 @@ fun NativeDeckScreen(
                 )
             }.onSuccess { loaded ->
                 activeRoute = loaded.route
+                val restoredCardId = selectedCardId?.takeIf { cardId ->
+                    loaded.stacks.any { stack -> stack.cards.any { it.id == cardId } }
+                }
+                requestedCardId = restoredCardId
                 state = DeckWorkspaceState.Board(
                     board = board,
                     stacks = loaded.stacks,
-                    selectedCardId = selectedCardId,
+                    selectedCardId = restoredCardId,
                 )
             }.onFailure { error ->
                 if (error is CancellationException) throw error
@@ -497,11 +520,15 @@ fun NativeDeckScreen(
             interaction = null
             mutationError = null
             requestedBoard = board
+            requestedBoardId = board.id
+            requestedCardId = null
         },
         onBackToBoards = {
             interaction = null
             mutationError = null
             requestedBoard = null
+            requestedBoardId = null
+            requestedCardId = null
             state = if (loadedBoards.isEmpty()) {
                 DeckWorkspaceState.Empty(
                     title = "No boards",
@@ -517,6 +544,7 @@ fun NativeDeckScreen(
         },
         onOpenCard = {},
         onSelectCard = { card ->
+            requestedCardId = card.id
             state = boardState()?.copy(selectedCardId = card.id) ?: state
             scope.launch {
                 runCatching { fetchAuthoritativeCard(card) }
@@ -528,6 +556,7 @@ fun NativeDeckScreen(
             }
         },
         onDismissCard = {
+            requestedCardId = null
             state = boardState()?.copy(selectedCardId = null) ?: state
         },
         onRetry = { refreshBoard() },
