@@ -3462,6 +3462,8 @@ private fun FilesScreen(
     var shareType by remember(path, userId) { mutableStateOf(FileShareTarget.PublicLink) }
     var shareRecipient by remember(path, userId) { mutableStateOf("") }
     var shareAllowsEditing by remember(path, userId) { mutableStateOf(false) }
+    var shareDetails by remember(path, userId) { mutableStateOf(FileShareCreationDetails()) }
+    var effectiveFileSharing by remember(path, userId, fileSharing) { mutableStateOf(fileSharing) }
     var shareRunning by remember(path, userId) { mutableStateOf(false) }
     var shareError by remember(path, userId) { mutableStateOf<String?>(null) }
     var shareNotice by remember(path, userId) { mutableStateOf<String?>(null) }
@@ -3600,7 +3602,8 @@ private fun FilesScreen(
                 fileShares = null
                 shareRecipient = ""
                 shareAllowsEditing = false
-                shareType = FileShareTarget.entries.firstOrNull(fileSharing::supports)
+                shareDetails = FileShareCreationDetails()
+                shareType = FileShareTarget.entries.firstOrNull(effectiveFileSharing::canOffer)
                     ?: FileShareTarget.PublicLink
                 shareError = null
                 shareNotice = null
@@ -4317,7 +4320,7 @@ private fun FilesScreen(
     }
 
     shareTarget?.let { target ->
-        val supportedTargets = FileShareTarget.entries.filter(fileSharing::supports)
+        val supportedTargets = FileShareTarget.entries.filter(effectiveFileSharing::canOffer)
         val requestedPermissions = (
             if (shareAllowsEditing) FileSharePermissionPreset.Edit else FileSharePermissionPreset.View
             ).toPermissions(target.isDirectory)
@@ -4326,7 +4329,8 @@ private fun FilesScreen(
             target = shareType,
             recipient = shareRecipient.takeIf { shareType.requiresRecipient },
             permissions = requestedPermissions,
-            capabilities = fileSharing,
+            capabilities = effectiveFileSharing,
+            details = shareDetails,
         )
         AlertDialog(
             onDismissRequest = {
@@ -4367,6 +4371,7 @@ private fun FilesScreen(
                                     sourceIsDirectory = target.isDirectory,
                                     session = session,
                                     services = services,
+                                    capabilities = effectiveFileSharing,
                                     onChanged = { changed ->
                                         fileShares = fileShares.orEmpty().map {
                                             if (it.id == changed.id) changed else it
@@ -4398,6 +4403,10 @@ private fun FilesScreen(
                                     onClick = {
                                         shareType = targetType
                                         shareRecipient = ""
+                                        shareDetails = shareDetails.copy(
+                                            password = "",
+                                            expiration = FileShareExpiration.ServerDefault,
+                                        )
                                         shareError = null
                                     },
                                     label = { Text(targetType.presentation().label) },
@@ -4416,6 +4425,12 @@ private fun FilesScreen(
                                     shareRecipient = it?.id.orEmpty()
                                     shareError = null
                                 },
+                                onResultsObserved = { recipients ->
+                                    effectiveFileSharing = effectiveFileSharing.withObservedRecipientProvider(
+                                        shareType,
+                                        recipients,
+                                    )
+                                },
                             )
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
@@ -4432,6 +4447,16 @@ private fun FilesScreen(
                                 label = { Text("Can edit") },
                             )
                         }
+                        FileShareCreationFields(
+                            target = shareType,
+                            capabilities = effectiveFileSharing,
+                            details = shareDetails,
+                            enabled = !shareRunning,
+                            onDetailsChanged = {
+                                shareDetails = it
+                                shareError = null
+                            },
+                        )
                         (creationPlan as? FileShareCreationPlan.Blocked)?.let {
                             Text(
                                 it.reason,

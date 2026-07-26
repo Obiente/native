@@ -12,6 +12,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -23,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import kotlinx.coroutines.CancellationException
@@ -34,6 +36,7 @@ internal fun ExistingFileShareManager(
     sourceIsDirectory: Boolean,
     session: NextcloudSession,
     services: NextcloudPlatformServices,
+    capabilities: NextcloudFileSharingCapabilities,
     onChanged: (NextcloudFileShare) -> Unit,
     onRevoked: (NextcloudFileShare) -> Unit,
 ) {
@@ -45,6 +48,13 @@ internal fun ExistingFileShareManager(
     var allowResharing by remember(share.id, share.permissions) {
         mutableStateOf(fileSharePermissionsFromMask(share.permissions).reshare)
     }
+    val target = share.target()
+    val passwordPolicy = target?.let(capabilities::passwordPolicy) ?: FileShareFeaturePolicy(false)
+    val expirationPolicy = target?.let(capabilities::expirationPolicy) ?: FileShareFeaturePolicy(false)
+    var newPassword by remember(share.id, share.passwordProtected) { mutableStateOf("") }
+    var removePassword by remember(share.id, share.passwordProtected) { mutableStateOf(false) }
+    var expirationDate by remember(share.id, share.expiration) { mutableStateOf(share.expiration.orEmpty()) }
+    var note by remember(share.id, share.note) { mutableStateOf(share.note.orEmpty()) }
     var running by remember(share.id) { mutableStateOf(false) }
     var error by remember(share.id) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -81,6 +91,25 @@ internal fun ExistingFileShareManager(
                 ) { Text("Copy") }
             }
         }
+        if (share.passwordProtected || share.expiration != null) {
+            Text(
+                buildList {
+                    if (share.passwordProtected) add("Password protected")
+                    share.expiration?.let { add("Expires $it") }
+                }.joinToString(" - "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        share.note?.let { note ->
+            Text(
+                note,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (editing) {
             Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                 FilterChip(selected = true, enabled = false, onClick = {}, label = { Text("Can view") })
@@ -97,6 +126,69 @@ internal fun ExistingFileShareManager(
                     label = { Text("Can reshare") },
                 )
             }
+            if (passwordPolicy.supported || share.passwordProtected) {
+                OutlinedTextField(
+                    value = newPassword,
+                    enabled = !running && !removePassword,
+                    onValueChange = {
+                        newPassword = it
+                        removePassword = false
+                    },
+                    label = { Text("New password") },
+                    supportingText = {
+                        Text(
+                            if (share.passwordProtected) {
+                                "Leave blank to keep the current password."
+                            } else {
+                                "Leave blank to keep this share without a password."
+                            },
+                        )
+                    },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (share.passwordProtected && !passwordPolicy.enforced) {
+                    FilterChip(
+                        selected = removePassword,
+                        enabled = !running,
+                        onClick = {
+                            removePassword = !removePassword
+                            if (removePassword) newPassword = ""
+                        },
+                        label = { Text("Remove password") },
+                    )
+                }
+            }
+            if (expirationPolicy.supported || share.expiration != null) {
+                OutlinedTextField(
+                    value = expirationDate,
+                    enabled = !running,
+                    onValueChange = { expirationDate = it },
+                    label = { Text("Expiration date") },
+                    placeholder = { Text("YYYY-MM-DD") },
+                    supportingText = {
+                        Text(
+                            if (expirationPolicy.enforced) {
+                                "This server requires an expiration date."
+                            } else {
+                                "Clear the field to remove the expiration date."
+                            },
+                        )
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            OutlinedTextField(
+                value = note,
+                enabled = !running,
+                onValueChange = { note = it },
+                label = { Text("Note") },
+                minLines = 2,
+                maxLines = 4,
+                modifier = Modifier.fillMaxWidth(),
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                 TextButton(enabled = !running, onClick = { editing = false }) { Text("Cancel") }
                 Button(
@@ -113,9 +205,34 @@ internal fun ExistingFileShareManager(
                         )
                         scope.launch {
                             try {
-                                services.updateFileSharePermissions(session, share.id, permissions)
+                                val passwordUpdate = when {
+                                    removePassword -> ""
+                                    newPassword.isNotEmpty() -> newPassword
+                                    else -> null
+                                }
+                                val normalizedExpiration = expirationDate.trim()
+                                val expirationUpdate = when {
+                                    normalizedExpiration == share.expiration.orEmpty() -> null
+                                    normalizedExpiration.isEmpty() && expirationPolicy.enforced ->
+                                        error("This server requires an expiration date.")
+                                    else -> normalizedExpiration
+                                }
+                                val noteUpdate = note.takeIf { it != share.note.orEmpty() }
+                                val changed = services.updateFileShare(
+                                    session,
+                                    UpdateFileShareRequest(
+                                        shareId = share.id,
+                                        target = target,
+                                        permissions = permissions,
+                                        password = passwordUpdate,
+                                        expirationDate = expirationUpdate,
+                                        note = noteUpdate,
+                                    ),
+                                )
                                 editing = false
-                                onChanged(share.copy(permissions = permissions.mask))
+                                newPassword = ""
+                                removePassword = false
+                                onChanged(changed)
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (failure: Throwable) {

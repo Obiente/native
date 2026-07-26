@@ -37,6 +37,7 @@ internal fun FileShareRecipientPicker(
     selectedRecipient: String,
     enabled: Boolean,
     onSelected: (FileShareRecipient?) -> Unit,
+    onResultsObserved: (List<FileShareRecipient>) -> Unit = {},
 ) {
     require(target.requiresRecipient)
     val presentation = target.presentation()
@@ -64,6 +65,7 @@ internal fun FileShareRecipientPicker(
         searchError = null
         try {
             results = services.searchFileShareRecipients(session, normalized, target, file)
+            onResultsObserved(results)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {

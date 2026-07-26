@@ -218,11 +218,24 @@ data class FileSharePermissions(
             (if (reshare) 16 else 0)
 }
 
+sealed interface FileShareExpiration {
+    data object ServerDefault : FileShareExpiration
+    data object NoExpiration : FileShareExpiration
+    data class OnDate(val isoDate: String) : FileShareExpiration
+}
+
+data class FileShareCreationDetails(
+    val password: String = "",
+    val expiration: FileShareExpiration = FileShareExpiration.ServerDefault,
+    val note: String = "",
+)
+
 data class CreateFileShareRequest(
     val path: String,
     val target: FileShareTarget,
     val shareWith: String? = null,
     val permissions: FileSharePermissions = FileSharePermissions(),
+    val details: FileShareCreationDetails = FileShareCreationDetails(),
 )
 
 data class NextcloudFileShare(
@@ -233,6 +246,9 @@ data class NextcloudFileShare(
     val shareWith: String? = null,
     val displayName: String? = null,
     val permissions: Int? = null,
+    val expiration: String? = null,
+    val note: String? = null,
+    val passwordProtected: Boolean = false,
 )
 
 fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
@@ -253,11 +269,26 @@ fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
         recipient.none(Char::isISOControl)
     ) { "The share recipient is invalid or too long." }
     require(permissions.mask != 0) { "At least one share permission is required." }
+    val password = details.password
+    require(password.length <= MAX_FILE_SHARE_PASSWORD_LENGTH && password.none(Char::isISOControl)) {
+        "The share password is invalid or too long."
+    }
+    require(password.isEmpty() || target == FileShareTarget.PublicLink || target == FileShareTarget.Email) {
+        "Passwords are only available for link and email shares."
+    }
+    val note = details.note.trim()
+    require(note.length <= MAX_FILE_SHARE_NOTE_LENGTH && note.none(Char::isISOControl)) {
+        "The share note is invalid or too long."
+    }
+    val expiration = details.expiration.toWireValue()
     val fields = buildList {
         add("path" to "/$safePath")
         add("shareType" to target.wireValue.toString())
         add("permissions" to permissions.mask.toString())
         recipient?.let { add("shareWith" to it) }
+        password.takeIf(String::isNotEmpty)?.let { add("password" to it) }
+        expiration?.let { add("expireDate" to it) }
+        note.takeIf(String::isNotEmpty)?.let { add("note" to it) }
     }
     val body = fields.joinToString("&") { (name, value) ->
         "${encodeFormComponent(name)}=${encodeFormComponent(value)}"
@@ -272,6 +303,32 @@ fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
         ocsApiRequest = true,
         maximumResponseBytes = MAX_FILE_SHARE_RESPONSE_BYTES,
     )
+}
+
+private fun FileShareExpiration.toWireValue(): String? = when (this) {
+    FileShareExpiration.ServerDefault -> null
+    FileShareExpiration.NoExpiration -> ""
+    is FileShareExpiration.OnDate -> requireValidFileShareDate(isoDate)
+}
+
+internal fun requireValidFileShareDate(value: String): String {
+    require(value.length == 10 && value[4] == '-' && value[7] == '-') {
+        "Use an expiration date in YYYY-MM-DD format."
+    }
+    val year = value.substring(0, 4).toIntOrNull()
+    val month = value.substring(5, 7).toIntOrNull()
+    val day = value.substring(8, 10).toIntOrNull()
+    require(year != null && month != null && day != null && year in 1970..9999 && month in 1..12) {
+        "Use a valid expiration date."
+    }
+    val leapYear = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+    val daysInMonth = when (month) {
+        2 -> if (leapYear) 29 else 28
+        4, 6, 9, 11 -> 30
+        else -> 31
+    }
+    require(day in 1..daysInMonth) { "Use a valid expiration date." }
+    return value
 }
 
 suspend fun NextcloudPlatformServices.createFileShare(
@@ -314,8 +371,16 @@ fun parseNextcloudFileShareResponse(response: NextcloudApiResponse): NextcloudFi
             MAX_FILE_SHARE_RECIPIENT_LENGTH,
         ),
         permissions = data.primitive("permissions")?.intOrNull?.takeIf { it in 1..31 },
+        expiration = data.primitive("expiration")?.contentOrNull
+            ?.takeIf { it.length <= MAX_FILE_SHARE_DATE_LENGTH && isValidFileShareDate(it) }
+            ?.take(10),
+        note = data.primitive("note")?.contentOrNull?.boundedFileShareText(MAX_FILE_SHARE_NOTE_LENGTH),
+        passwordProtected = data.primitive("password")?.contentOrNull != null,
     )
 }
+
+private fun isValidFileShareDate(value: String): Boolean =
+    runCatching { requireValidFileShareDate(value.take(10)) }.getOrNull() != null
 
 private fun destinationPath(source: String, directory: String, requestedName: String?): String {
     val safeDirectory = requireSafeFilePath(directory, allowRoot = true)
@@ -383,6 +448,9 @@ private val shareJson = Json { ignoreUnknownKeys = true }
 private const val FILE_HEX_DIGITS = "0123456789ABCDEF"
 private const val MAX_FILE_SHARE_PATH_BYTES = 4_096
 private const val MAX_FILE_SHARE_RECIPIENT_LENGTH = 255
+private const val MAX_FILE_SHARE_PASSWORD_LENGTH = 1_024
+private const val MAX_FILE_SHARE_NOTE_LENGTH = 2_048
+private const val MAX_FILE_SHARE_DATE_LENGTH = 64
 private const val MAX_FILE_SHARE_REQUEST_BYTES = 16 * 1024
 private const val MAX_FILE_SHARE_RESPONSE_BYTES = 256L * 1024L
 private const val MAX_FILE_SHARE_ID_LENGTH = 256

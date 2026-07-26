@@ -384,8 +384,9 @@ private fun MediaShareDialog(
     capabilities: NextcloudFileSharingCapabilities,
     onDismiss: () -> Unit,
 ) {
-    val supportedTargets = remember(capabilities) {
-        FileShareTarget.entries.filter(capabilities::supports)
+    var effectiveCapabilities by remember(file.path, capabilities) { mutableStateOf(capabilities) }
+    val supportedTargets = remember(effectiveCapabilities) {
+        FileShareTarget.entries.filter(effectiveCapabilities::canOffer)
     }
     var shares by remember(file.path) { mutableStateOf<List<NextcloudFileShare>?>(null) }
     var target by remember(file.path) {
@@ -397,6 +398,7 @@ private fun MediaShareDialog(
     }
     var recipient by remember(file.path) { mutableStateOf("") }
     var allowEditing by remember(file.path) { mutableStateOf(false) }
+    var details by remember(file.path) { mutableStateOf(FileShareCreationDetails()) }
     var running by remember(file.path) { mutableStateOf(false) }
     var error by remember(file.path) { mutableStateOf<String?>(null) }
     var notice by remember(file.path) { mutableStateOf<String?>(null) }
@@ -416,7 +418,8 @@ private fun MediaShareDialog(
         permissions = (
             if (allowEditing) FileSharePermissionPreset.Edit else FileSharePermissionPreset.View
             ).toPermissions(file.isDirectory),
-        capabilities = capabilities,
+        capabilities = effectiveCapabilities,
+        details = details,
     )
     AlertDialog(
         onDismissRequest = { if (!running) onDismiss() },
@@ -446,6 +449,7 @@ private fun MediaShareDialog(
                                 sourceIsDirectory = file.isDirectory,
                                 session = session,
                                 services = services,
+                                capabilities = effectiveCapabilities,
                                 onChanged = { changed ->
                                     shares = shares.orEmpty().map {
                                         if (it.id == changed.id) changed else it
@@ -470,6 +474,10 @@ private fun MediaShareDialog(
                                     onClick = {
                                         target = choice
                                         recipient = ""
+                                        details = details.copy(
+                                            password = "",
+                                            expiration = FileShareExpiration.ServerDefault,
+                                        )
                                         error = null
                                     },
                                     label = { Text(choice.presentation().label) },
@@ -490,6 +498,12 @@ private fun MediaShareDialog(
                                     recipient = it?.id.orEmpty()
                                     error = null
                                 },
+                                onResultsObserved = { recipients ->
+                                    effectiveCapabilities = effectiveCapabilities.withObservedRecipientProvider(
+                                        target,
+                                        recipients,
+                                    )
+                                },
                             )
                         }
                     }
@@ -506,6 +520,18 @@ private fun MediaShareDialog(
                                 label = { Text("Can edit") },
                             )
                         }
+                    }
+                    item {
+                        FileShareCreationFields(
+                            target = target,
+                            capabilities = effectiveCapabilities,
+                            details = details,
+                            enabled = !running,
+                            onDetailsChanged = {
+                                details = it
+                                error = null
+                            },
+                        )
                     }
                 }
                 (plan as? FileShareCreationPlan.Blocked)?.let { blocked ->

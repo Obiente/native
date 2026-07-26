@@ -19,12 +19,24 @@ class FileSharingTest {
                     "files_sharing": {
                       "api_enabled": true,
                       "default_permissions": 31,
-                      "public": {"enabled": true, "multiple_links": true},
+                      "public": {
+                        "enabled": true,
+                        "multiple_links": true,
+                        "password": {"enforced": true},
+                        "expire_date": {"enabled": true, "enforced": false}
+                      },
                       "user": {"expire_date": {"enabled": false}},
-                      "group": {"enabled": true},
+                      "group": {"enabled": true, "expire_date": {"enabled": true}},
                       "group_sharing": true,
-                      "sharebymail": {"enabled": true},
-                      "federation": {"outgoing": true}
+                      "sharebymail": {
+                        "enabled": true,
+                        "password": {"enabled": true, "enforced": false},
+                        "expire_date": {"enabled": true, "enforced": true}
+                      },
+                      "federation": {
+                        "outgoing": true,
+                        "expire_date_supported": {"enabled": true}
+                      }
                     }
                   }
                 }
@@ -41,6 +53,11 @@ class FileSharingTest {
         assertTrue(capabilities.emailProviderAdvertised)
         assertTrue(capabilities.emailShares)
         assertTrue(capabilities.remoteShares)
+        assertEquals(FileShareFeaturePolicy(true, true), capabilities.passwordPolicy(FileShareTarget.PublicLink))
+        assertEquals(FileShareFeaturePolicy(true, false), capabilities.passwordPolicy(FileShareTarget.Email))
+        assertEquals(FileShareFeaturePolicy(true, true), capabilities.expirationPolicy(FileShareTarget.Email))
+        assertEquals(FileShareFeaturePolicy(true, false), capabilities.expirationPolicy(FileShareTarget.Remote))
+        assertTrue(capabilities.canOffer(FileShareTarget.Email))
         assertEquals(31, capabilities.defaultPermissions)
         assertTrue(capabilities.supportsAnyCreation)
     }
@@ -208,6 +225,7 @@ class FileSharingTest {
             emailRecipientQuery = true,
         )
         assertFalse(queryOnly.supports(FileShareTarget.Email))
+        assertTrue(queryOnly.canOffer(FileShareTarget.Email))
 
         val observed = queryOnly.withObservedRecipientProvider(
             FileShareTarget.Email,
@@ -282,6 +300,33 @@ class FileSharingTest {
     }
 
     @Test
+    fun existingLinkSettingsUpdatePreservesClearVersusUnchangedSemantics() {
+        val request = UpdateFileShareRequest(
+            shareId = "share-42",
+            target = FileShareTarget.PublicLink,
+            permissions = FileSharePermissions(read = true),
+            password = "",
+            expirationDate = "2028-02-29",
+            note = "Synthetic handoff",
+        ).toNextcloudApiRequest()
+
+        assertEquals(NextcloudApiMethod.PUT, request.method)
+        assertEquals(
+            "permissions=1&password=&expireDate=2028-02-29&note=Synthetic%20handoff",
+            request.body?.decodeToString(),
+        )
+        assertTrue(
+            runCatching {
+                UpdateFileShareRequest(
+                    shareId = "share-42",
+                    target = FileShareTarget.User,
+                    password = "not-allowed",
+                ).toNextcloudApiRequest()
+            }.isFailure,
+        )
+    }
+
+    @Test
     fun existingShareRevocationIsExplicitAndRejectsUnsafeIdentifiers() {
         val request = RevokeFileShareRequest("42").toNextcloudApiRequest()
 
@@ -320,7 +365,10 @@ class FileSharingTest {
                             "share_type": 0,
                             "share_with": "ada",
                             "share_with_displayname": "Ada Lovelace",
-                            "permissions": 19
+                            "permissions": 19,
+                            "expiration": "2028-02-29 00:00:00",
+                            "note": "Synthetic handoff",
+                            "password": "redacted"
                           },
                           {
                             "id": "42",
@@ -342,6 +390,9 @@ class FileSharingTest {
         assertEquals("ada", shares[0].shareWith)
         assertEquals("Ada Lovelace", shares[0].displayName)
         assertEquals(19, shares[0].permissions)
+        assertEquals("2028-02-29", shares[0].expiration)
+        assertEquals("Synthetic handoff", shares[0].note)
+        assertTrue(shares[0].passwordProtected)
         assertEquals("https://cloud.test/s/public-token", shares[1].url)
     }
 
@@ -408,6 +459,60 @@ class FileSharingTest {
                 " ",
                 FileSharePermissions(),
                 capabilities,
+            ),
+        )
+    }
+
+    @Test
+    fun creationPlanEnforcesAdvertisedPasswordAndExpirationPolicies() {
+        val capabilities = NextcloudFileSharingCapabilities(
+            apiEnabled = true,
+            publicLinks = true,
+            publicPasswordSupported = true,
+            publicPasswordEnforced = true,
+            publicExpirationSupported = true,
+            publicExpirationEnforced = true,
+        )
+        val file = file(path = "Documents/Guide.pdf", permissions = null)
+
+        val missingPassword = assertIs<FileShareCreationPlan.Blocked>(
+            planFileShareCreation(
+                file,
+                FileShareTarget.PublicLink,
+                recipient = null,
+                permissions = FileSharePermissions(),
+                capabilities = capabilities,
+            ),
+        )
+        assertTrue(missingPassword.reason.contains("requires a password"))
+
+        val forbiddenNoExpiration = assertIs<FileShareCreationPlan.Blocked>(
+            planFileShareCreation(
+                file,
+                FileShareTarget.PublicLink,
+                recipient = null,
+                permissions = FileSharePermissions(),
+                capabilities = capabilities,
+                details = FileShareCreationDetails(
+                    password = "synthetic-password",
+                    expiration = FileShareExpiration.NoExpiration,
+                ),
+            ),
+        )
+        assertTrue(forbiddenNoExpiration.reason.contains("requires an expiration date"))
+
+        assertIs<FileShareCreationPlan.Ready>(
+            planFileShareCreation(
+                file,
+                FileShareTarget.PublicLink,
+                recipient = null,
+                permissions = FileSharePermissions(),
+                capabilities = capabilities,
+                details = FileShareCreationDetails(
+                    password = "synthetic-password",
+                    expiration = FileShareExpiration.OnDate("2028-02-29"),
+                    note = "Synthetic project handoff",
+                ),
             ),
         )
     }
