@@ -23,6 +23,7 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.prefs.Preferences
 import javax.xml.parsers.DocumentBuilderFactory
@@ -31,6 +32,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -313,6 +315,7 @@ class DesktopNextcloudServices(
     )
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
     private val externalFileHandoff = DesktopExternalFileHandoff()
+    private val localUploadPicker = DesktopLocalUploadPicker()
     private val projectNewsCache = File(
         desktopContractCacheDirectory("responses").parentFile,
         "project-content/news-feed-v1.json",
@@ -976,6 +979,63 @@ class DesktopNextcloudServices(
         )
     }
 
+    override suspend fun chooseLocalUploadFile(
+        acceptedMimeTypes: List<String>,
+        maximumBytes: Long,
+    ): LocalUploadSelectionResult =
+        localUploadPicker.choose(acceptedMimeTypes, maximumBytes)
+
+    override fun releaseLocalUploadFile(file: LocalUploadFile) {
+        localUploadPicker.release(file)
+    }
+
+    override suspend fun executeNextcloudMultipartUpload(
+        session: NextcloudSession,
+        request: NextcloudMultipartUploadRequest,
+    ): NextcloudApiResponse = withContext(Dispatchers.IO) {
+        val safeRequest = request.requireSafe()
+        val envelope = prepareMultipartUpload(
+            safeRequest,
+            "nc-native-${UUID.randomUUID()}",
+        )
+        val requestBody = DesktopStreamingMultipartRequestBody(envelope) {
+            localUploadPicker.open(safeRequest.file)
+        }
+        val apiRequest = NextcloudApiRequest(
+            method = safeRequest.method,
+            relativePath = safeRequest.relativePath,
+            queryParameters = safeRequest.queryParameters,
+            ocsApiRequest = safeRequest.ocsApiRequest,
+            maximumResponseBytes = safeRequest.maximumResponseBytes,
+        )
+        val accountId = desktopFileCacheAccountId(session)
+        dynamicApiRequestCoalescer.invalidateAccount(accountId) {
+            runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
+        }
+        try {
+            val response = request(
+                method = safeRequest.method.name,
+                url = buildNextcloudApiUrl(session.serverUrl, apiRequest),
+                session = session,
+                ocsRequest = safeRequest.ocsApiRequest,
+                streamingBody = requestBody,
+                maxResponseBytes = safeRequest.maximumResponseBytes,
+                client = noRedirectHttpClient,
+            )
+            NextcloudApiResponse(
+                response.status,
+                response.body,
+                response.contentType,
+                response.etag,
+                response.location,
+            )
+        } finally {
+            dynamicApiRequestCoalescer.invalidateAccount(accountId) {
+                runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
+            }
+        }
+    }
+
     override suspend fun executeGroupwareDav(
         session: NextcloudSession,
         request: GroupwareDavRequest,
@@ -1540,8 +1600,10 @@ class DesktopNextcloudServices(
         rawBody: ByteArray? = null,
         maxResponseBytes: Long = MAX_API_RESPONSE_BYTES,
         client: OkHttpClient = httpClient,
+        streamingBody: RequestBody? = null,
     ): HttpResponse {
         val requestBody = when {
+            streamingBody != null -> streamingBody
             rawBody != null -> rawBody.toRequestBody(contentType?.toMediaType())
             body != null -> body.toRequestBody(contentType?.toMediaType())
             method == "POST" || method == "PUT" || method == "PATCH" -> byteArrayOf().toRequestBody(null)

@@ -19,6 +19,9 @@ import dev.obiente.nextcloudnative.app.MAX_NOTE_BYTES
 import dev.obiente.nextcloudnative.app.MAX_TALK_MESSAGE_PAGE_SIZE
 import dev.obiente.nextcloudnative.app.NextcloudApiRequest
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
+import dev.obiente.nextcloudnative.app.LocalUploadFile
+import dev.obiente.nextcloudnative.app.LocalUploadSelectionResult
+import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.GroupwareDavRequest
 import dev.obiente.nextcloudnative.app.NextcloudAppEntry
 import dev.obiente.nextcloudnative.app.NextcloudActivity
@@ -83,6 +86,7 @@ import dev.obiente.nextcloudnative.app.boundedPreviewDimension
 import dev.obiente.nextcloudnative.app.boundedActivityLimit
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
 import dev.obiente.nextcloudnative.app.buildNextcloudApiUrl
+import dev.obiente.nextcloudnative.app.prepareMultipartUpload
 import dev.obiente.nextcloudnative.app.buildPeopleMutationUrl
 import dev.obiente.nextcloudnative.app.conflictConditionHeaders
 import dev.obiente.nextcloudnative.app.boundedFileVersionContentRequest
@@ -117,6 +121,7 @@ import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filter
@@ -125,6 +130,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -132,6 +138,7 @@ import org.json.JSONObject
 internal class AndroidNextcloudServices(
     context: Context,
     private val fileSyncRootPicker: AndroidFileSyncRootPicker? = null,
+    private val localUploadPicker: AndroidLocalUploadPicker? = null,
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
 ) : NextcloudPlatformServices {
     private val appContext = context.applicationContext
@@ -960,6 +967,69 @@ internal class AndroidNextcloudServices(
         )
     }
 
+    override suspend fun chooseLocalUploadFile(
+        acceptedMimeTypes: List<String>,
+        maximumBytes: Long,
+    ): LocalUploadSelectionResult =
+        localUploadPicker?.choose(acceptedMimeTypes, maximumBytes)
+            ?: LocalUploadSelectionResult.Unavailable(
+                "Local file selection is unavailable on this Android host.",
+            )
+
+    override fun releaseLocalUploadFile(file: LocalUploadFile) {
+        localUploadPicker?.release(file)
+    }
+
+    override suspend fun executeNextcloudMultipartUpload(
+        session: NextcloudSession,
+        request: NextcloudMultipartUploadRequest,
+    ): NextcloudApiResponse = withContext(Dispatchers.IO) {
+        val safeRequest = request.requireSafe()
+        val picker = checkNotNull(localUploadPicker) {
+            "Local file upload is unavailable on this Android host."
+        }
+        val envelope = prepareMultipartUpload(
+            safeRequest,
+            "nc-native-${UUID.randomUUID()}",
+        )
+        val requestBody = AndroidStreamingMultipartRequestBody(envelope) {
+            picker.open(safeRequest.file)
+        }
+        val apiRequest = NextcloudApiRequest(
+            method = safeRequest.method,
+            relativePath = safeRequest.relativePath,
+            queryParameters = safeRequest.queryParameters,
+            ocsApiRequest = safeRequest.ocsApiRequest,
+            maximumResponseBytes = safeRequest.maximumResponseBytes,
+        )
+        val accountId = NextcloudDocumentIds.cacheAccountId(session)
+        dynamicApiRequestCoalescer.invalidateAccount(accountId) {
+            runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
+        }
+        try {
+            val response = request(
+                method = safeRequest.method.name,
+                url = buildNextcloudApiUrl(session.serverUrl, apiRequest),
+                session = session,
+                ocsRequest = safeRequest.ocsApiRequest,
+                streamingBody = requestBody,
+                maxResponseBytes = safeRequest.maximumResponseBytes,
+                client = noRedirectHttpClient,
+            )
+            NextcloudApiResponse(
+                response.status,
+                response.body,
+                response.contentType,
+                response.etag,
+                response.location,
+            )
+        } finally {
+            dynamicApiRequestCoalescer.invalidateAccount(accountId) {
+                runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
+            }
+        }
+    }
+
     override suspend fun executeGroupwareDav(
         session: NextcloudSession,
         request: GroupwareDavRequest,
@@ -1436,6 +1506,7 @@ internal class AndroidNextcloudServices(
         rawBody: ByteArray? = null,
         maxResponseBytes: Long = MAX_API_RESPONSE_BYTES,
         client: OkHttpClient = httpClient,
+        streamingBody: RequestBody? = null,
     ): HttpResponse {
         check(
             !appContext.isReadOnlyTestMode() ||
@@ -1444,6 +1515,7 @@ internal class AndroidNextcloudServices(
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
         }
         val requestBody = when {
+            streamingBody != null -> streamingBody
             rawBody != null -> rawBody.toRequestBody(contentType?.toMediaType())
             body != null -> body.toRequestBody(contentType?.toMediaType())
             method == "POST" || method == "PUT" || method == "PATCH" -> byteArrayOf().toRequestBody(null)

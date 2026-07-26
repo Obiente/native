@@ -673,6 +673,33 @@ interface NextcloudPlatformServices {
     ): NextcloudApiResponse
 
     /**
+     * Opens the platform document picker. Only a file explicitly selected by the user can produce
+     * an opaque [LocalUploadFile] capability.
+     */
+    suspend fun chooseLocalUploadFile(
+        acceptedMimeTypes: List<String> = listOf("*/*"),
+        maximumBytes: Long = DEFAULT_LOCAL_UPLOAD_LIMIT_BYTES,
+    ): LocalUploadSelectionResult = LocalUploadSelectionResult.Unavailable(
+        "Local file selection is unavailable on this platform.",
+    )
+
+    /** Releases an opaque picker capability without changing or deleting the local file. */
+    fun releaseLocalUploadFile(file: LocalUploadFile) = Unit
+
+    /**
+     * Streams one picker-authorized file to a reviewed same-origin multipart endpoint.
+     *
+     * Implementations attach the active account credentials, reject redirects, enforce both
+     * request and response limits, and never accept an arbitrary local path from shared code.
+     */
+    suspend fun executeNextcloudMultipartUpload(
+        session: NextcloudSession,
+        request: NextcloudMultipartUploadRequest,
+    ): NextcloudApiResponse {
+        error("Multipart upload is unavailable on this platform.")
+    }
+
+    /**
      * Dedicated same-origin CalDAV/CardDAV transport.
      *
      * DAV needs methods and conditional headers that are intentionally unavailable to dynamic
