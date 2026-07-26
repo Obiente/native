@@ -576,16 +576,12 @@ private data class DeckUiColorOption(
 )
 
 private fun DeckCard?.toDeckUiDraft(): DeckUiCardDraft {
-    val dueAt = this?.dueAt.orEmpty()
-    val dueDate = dueAt.takeIf { it.length >= 10 }?.take(10).orEmpty()
-    val dueTime = dueAt.takeIf { it.length >= 16 }?.substring(11, 16)
-        ?.takeIf(::isValidDeckUiTime)
-        .orEmpty()
+    val localDueAt = this?.dueAt?.let(::deckInstantToLocalDateTime)
     return DeckUiCardDraft(
         title = this?.title.orEmpty(),
         descriptionMarkdown = this?.descriptionMarkdown.orEmpty(),
-        dueDate = dueDate,
-        dueTime = dueTime,
+        dueDate = localDueAt?.date.orEmpty(),
+        dueTime = localDueAt?.time.orEmpty(),
     )
 }
 
