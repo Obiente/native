@@ -177,3 +177,16 @@ tasks.register<JavaExec>("runDeckInteractionPreview") {
         "dev.obiente.nextcloudnative.nativeui.preview.DeckInteractionPreviewMainKt",
     )
 }
+
+tasks.register<JavaExec>("runDynamicBoardInteractionPreview") {
+    group = "verification"
+    description = "Opens a network-free discovered board for adaptive drag and layout QA."
+    dependsOn(desktopCaptureCompilation.compileTaskProvider)
+    classpath(
+        desktopCaptureCompilation.output.allOutputs,
+        desktopCaptureCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set(
+        "dev.obiente.nextcloudnative.nativeui.preview.DynamicBoardInteractionPreviewMainKt",
+    )
+}
