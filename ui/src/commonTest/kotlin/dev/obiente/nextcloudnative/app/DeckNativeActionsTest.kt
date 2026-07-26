@@ -151,6 +151,69 @@ class DeckNativeActionsTest {
     }
 
     @Test
+    fun `destructive and archive actions stay bound to their typed resources`() {
+        val deleteBoard = routes.deleteBoard(access)
+        val restoreBoard = routes.restoreBoard(access)
+        val deleteStack = routes.deleteStack(access, sourceStack)
+        val deleteCard = routes.deleteCard(access, card)
+        val archiveCard = routes.archiveCard(access, card)
+        val unarchiveCard = routes.unarchiveCard(access, card)
+
+        assertEquals(
+            "/index.php/apps/deck/api/v1.1/boards/7",
+            deleteBoard.relativePath,
+        )
+        assertEquals(NextcloudApiMethod.DELETE, deleteBoard.method)
+        assertEquals(
+            "/index.php/apps/deck/api/v1.1/boards/7/undo_delete",
+            restoreBoard.relativePath,
+        )
+        assertEquals(NextcloudApiMethod.POST, restoreBoard.method)
+        assertEquals(
+            "/index.php/apps/deck/api/v1.1/boards/7/stacks/11",
+            deleteStack.relativePath,
+        )
+        assertEquals(NextcloudApiMethod.DELETE, deleteStack.method)
+        assertEquals(
+            "/index.php/apps/deck/api/v1.1/boards/7/stacks/11/cards/42",
+            deleteCard.relativePath,
+        )
+        assertEquals(NextcloudApiMethod.DELETE, deleteCard.method)
+        assertEquals("${deleteCard.relativePath}/archive", archiveCard.relativePath)
+        assertEquals("${deleteCard.relativePath}/unarchive", unarchiveCard.relativePath)
+        assertEquals(NextcloudApiMethod.PUT, archiveCard.method)
+        assertEquals(NextcloudApiMethod.PUT, unarchiveCard.method)
+    }
+
+    @Test
+    fun `label management uses the board resource and normalized fields`() {
+        val create = routes.createLabel(
+            access,
+            DeckLabelDraft(title = "  Needs review  ", color = "#A970FF"),
+        )
+        val update = routes.updateLabel(
+            access,
+            labelId = 5,
+            draft = DeckLabelDraft(title = "Approved", color = "42b983"),
+        )
+        val delete = routes.deleteLabel(access, labelId = 5)
+
+        assertEquals(
+            "/index.php/apps/deck/api/v1.1/boards/7/labels",
+            create.relativePath,
+        )
+        assertEquals(NextcloudApiMethod.POST, create.method)
+        assertEquals("Needs review", create.jsonBody().string("title"))
+        assertEquals("a970ff", create.jsonBody().string("color"))
+        assertEquals("${create.relativePath}/5", update.relativePath)
+        assertEquals(NextcloudApiMethod.PUT, update.method)
+        assertEquals("Approved", update.jsonBody().string("title"))
+        assertEquals("42b983", update.jsonBody().string("color"))
+        assertEquals(update.relativePath, delete.relativePath)
+        assertEquals(NextcloudApiMethod.DELETE, delete.method)
+    }
+
+    @Test
     fun `comments use the official OCS endpoint and bounded pagination`() {
         val list = routes.comments(access, card, limit = 25, offset = 50)
         val create = routes.createComment(access, card, DeckCommentDraft("A useful comment"))
@@ -309,6 +372,7 @@ class DeckNativeActionsTest {
         val reference = DeckAttachmentReference(card, DeckAttachmentType.File, attachmentId = 9)
         val open = routes.openAttachment(access, reference)
         val delete = routes.deleteAttachment(access, reference)
+        val restore = routes.restoreAttachment(access, reference)
         val upload = routes.attachmentUploadTarget(access, card)
 
         assertEquals(
@@ -317,6 +381,8 @@ class DeckNativeActionsTest {
         )
         assertEquals(open.relativePath, delete.relativePath)
         assertEquals(NextcloudApiMethod.DELETE, delete.method)
+        assertEquals("${open.relativePath}/restore", restore.relativePath)
+        assertEquals(NextcloudApiMethod.PUT, restore.method)
         assertEquals(
             "/index.php/apps/deck/api/v1.1/boards/7/stacks/11/cards/42/attachments",
             upload.relativePath,
@@ -386,6 +452,26 @@ class DeckNativeActionsTest {
     }
 
     @Test
+    fun `comment mutation receipt rejects unsuccessful OCS metadata`() {
+        val receipt = parseDeckCommentMutationReceipt(
+            jsonResponse(
+                """{"ocs":{"meta":{"statuscode":200},"data":{"id":18}}}""",
+                etag = "comment-etag",
+            ),
+        )
+
+        assertEquals(18L, receipt.returnedId)
+        assertEquals("comment-etag", receipt.etag)
+        assertFailsWith<IllegalArgumentException> {
+            parseDeckCommentMutationReceipt(
+                jsonResponse(
+                    """{"ocs":{"meta":{"statuscode":403},"data":null}}""",
+                ),
+            )
+        }
+    }
+
+    @Test
     fun `draft validation rejects invalid values before transport`() {
         assertFailsWith<IllegalArgumentException> { DeckBoardId(0) }
         assertFailsWith<IllegalArgumentException> { DeckBoardDraft("Board", "12345") }
@@ -394,6 +480,10 @@ class DeckNativeActionsTest {
         }
         assertFailsWith<IllegalArgumentException> { DeckCommentDraft(" ".repeat(10)) }
         assertFailsWith<IllegalArgumentException> { routes.assignLabel(access, card, labelId = -1) }
+        assertFailsWith<IllegalArgumentException> { routes.assignLabel(access, card, labelId = 99) }
+        assertFailsWith<IllegalArgumentException> {
+            routes.assignUser(access, card, userId = "not-a-board-member")
+        }
         assertFailsWith<IllegalArgumentException> {
             routes.assignUser(access, card, userId = "participant\u0000other")
         }
@@ -478,7 +568,7 @@ class DeckNativeActionsTest {
         color = "a970ff",
         archived = archived,
         owner = DeckUser("owner", "Owner"),
-        labels = emptyList(),
+        labels = listOf(DeckLabel(5, "Needs review", "a970ff")),
         users = listOf(DeckUser("participant", "Participant")),
         permissions = permissions,
         shared = false,

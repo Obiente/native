@@ -67,6 +67,14 @@ data class DeckStackDraft(
     }
 }
 
+data class DeckLabelDraft(
+    val title: String,
+    val color: String,
+) {
+    internal val normalizedTitle = title.requireDeckText("Label title", DECK_LABEL_TITLE_LIMIT)
+    internal val normalizedColor = color.requireDeckColor()
+}
+
 data class DeckCardDraft(
     val title: String,
     val order: Long = DECK_DEFAULT_CARD_ORDER,
@@ -221,10 +229,21 @@ class DeckBoardAccess private constructor(
     val boardId: DeckBoardId,
     private val permissions: DeckPermissions,
     private val archived: Boolean,
+    private val labelIds: Set<Long>,
+    private val userIds: Set<String>,
 ) {
     companion object {
         fun from(board: DeckBoard): DeckBoardAccess =
-            DeckBoardAccess(DeckBoardId(board.id), board.permissions, board.archived)
+            DeckBoardAccess(
+                boardId = DeckBoardId(board.id),
+                permissions = board.permissions,
+                archived = board.archived,
+                labelIds = board.labels.mapTo(mutableSetOf(), DeckLabel::id),
+                userIds = buildSet {
+                    board.owner?.id?.let(::add)
+                    board.users.mapTo(this, DeckUser::id)
+                },
+            )
     }
 
     internal fun requireRead(expectedBoardId: DeckBoardId) {
@@ -246,6 +265,18 @@ class DeckBoardAccess private constructor(
     internal fun requireActiveManage(expectedBoardId: DeckBoardId) {
         requireManage(expectedBoardId)
         require(!archived) { "Archived Deck boards are read-only." }
+    }
+
+    internal fun requireLabel(labelId: Long): Long {
+        val normalized = labelId.requireDeckRelationshipId()
+        require(normalized in labelIds) { "The Deck label does not belong to this board." }
+        return normalized
+    }
+
+    internal fun requireUser(userId: String): String {
+        val normalized = userId.requireDeckParticipantId()
+        require(normalized in userIds) { "The Deck user does not belong to this board." }
+        return normalized
     }
 }
 
@@ -298,6 +329,22 @@ data class DeckWriteRoutePlan(
         )
     }
 
+    fun deleteBoard(access: DeckBoardAccess): NextcloudApiRequest {
+        access.requireManage(access.boardId)
+        return deckRequest(
+            method = NextcloudApiMethod.DELETE,
+            path = "$apiRoot/boards/${access.boardId.value}",
+        )
+    }
+
+    fun restoreBoard(access: DeckBoardAccess): NextcloudApiRequest {
+        access.requireManage(access.boardId)
+        return deckRequest(
+            method = NextcloudApiMethod.POST,
+            path = "$apiRoot/boards/${access.boardId.value}/undo_delete",
+        )
+    }
+
     fun createStack(
         access: DeckBoardAccess,
         draft: DeckStackDraft,
@@ -326,6 +373,17 @@ data class DeckWriteRoutePlan(
                 put("title", update.normalizedTitle)
                 put("order", update.order)
             },
+        )
+    }
+
+    fun deleteStack(
+        access: DeckBoardAccess,
+        context: DeckStackContext,
+    ): NextcloudApiRequest {
+        access.requireActiveManage(context.boardId)
+        return deckRequest(
+            method = NextcloudApiMethod.DELETE,
+            path = context.stackPath(),
         )
     }
 
@@ -383,6 +441,39 @@ data class DeckWriteRoutePlan(
         )
     }
 
+    fun deleteCard(
+        access: DeckBoardAccess,
+        context: DeckCardContext,
+    ): NextcloudApiRequest {
+        access.requireEdit(context.stack.boardId)
+        return deckRequest(
+            method = NextcloudApiMethod.DELETE,
+            path = context.cardPath(),
+        )
+    }
+
+    fun archiveCard(
+        access: DeckBoardAccess,
+        context: DeckCardContext,
+    ): NextcloudApiRequest {
+        access.requireEdit(context.stack.boardId)
+        return deckRequest(
+            method = NextcloudApiMethod.PUT,
+            path = "${context.cardPath()}/archive",
+        )
+    }
+
+    fun unarchiveCard(
+        access: DeckBoardAccess,
+        context: DeckCardContext,
+    ): NextcloudApiRequest {
+        access.requireEdit(context.stack.boardId)
+        return deckRequest(
+            method = NextcloudApiMethod.PUT,
+            path = "${context.cardPath()}/unarchive",
+        )
+    }
+
     fun moveCard(
         access: DeckBoardAccess,
         move: DeckCardMove,
@@ -408,7 +499,7 @@ data class DeckWriteRoutePlan(
             context,
             "assignLabel",
             "labelId",
-            labelId.requireDeckRelationshipId(),
+            access.requireLabel(labelId),
         )
     }
 
@@ -422,7 +513,7 @@ data class DeckWriteRoutePlan(
             context,
             "removeLabel",
             "labelId",
-            labelId.requireDeckRelationshipId(),
+            access.requireLabel(labelId),
         )
     }
 
@@ -436,7 +527,7 @@ data class DeckWriteRoutePlan(
             context,
             "assignUser",
             "userId",
-            userId.requireDeckParticipantId(),
+            access.requireUser(userId),
         )
     }
 
@@ -450,7 +541,51 @@ data class DeckWriteRoutePlan(
             context,
             "unassignUser",
             "userId",
-            userId.requireDeckParticipantId(),
+            access.requireUser(userId),
+        )
+    }
+
+    fun createLabel(
+        access: DeckBoardAccess,
+        draft: DeckLabelDraft,
+    ): NextcloudApiRequest {
+        access.requireActiveManage(access.boardId)
+        return deckJsonRequest(
+            method = NextcloudApiMethod.POST,
+            path = "$apiRoot/boards/${access.boardId.value}/labels",
+            body = buildJsonObject {
+                put("title", draft.normalizedTitle)
+                put("color", draft.normalizedColor)
+            },
+        )
+    }
+
+    fun updateLabel(
+        access: DeckBoardAccess,
+        labelId: Long,
+        draft: DeckLabelDraft,
+    ): NextcloudApiRequest {
+        access.requireActiveManage(access.boardId)
+        return deckJsonRequest(
+            method = NextcloudApiMethod.PUT,
+            path = "$apiRoot/boards/${access.boardId.value}/labels/" +
+                labelId.requireDeckRelationshipId(),
+            body = buildJsonObject {
+                put("title", draft.normalizedTitle)
+                put("color", draft.normalizedColor)
+            },
+        )
+    }
+
+    fun deleteLabel(
+        access: DeckBoardAccess,
+        labelId: Long,
+    ): NextcloudApiRequest {
+        access.requireActiveManage(access.boardId)
+        return deckRequest(
+            method = NextcloudApiMethod.DELETE,
+            path = "$apiRoot/boards/${access.boardId.value}/labels/" +
+                labelId.requireDeckRelationshipId(),
         )
     }
 
@@ -569,6 +704,17 @@ data class DeckWriteRoutePlan(
         )
     }
 
+    fun restoreAttachment(
+        access: DeckBoardAccess,
+        reference: DeckAttachmentReference,
+    ): NextcloudApiRequest {
+        access.requireEdit(reference.card.stack.boardId)
+        return deckRequest(
+            method = NextcloudApiMethod.PUT,
+            path = "${reference.attachmentPath()}/restore",
+        )
+    }
+
     fun attachmentUploadTarget(
         access: DeckBoardAccess,
         context: DeckCardContext,
@@ -644,6 +790,30 @@ fun parseDeckMutationReceipt(
     if (expectedId != null && returnedId != null) {
         require(returnedId == expectedId) { "The Deck action returned an unexpected resource." }
     }
+    return DeckMutationReceipt(returnedId = returnedId, etag = response.etag)
+}
+
+fun parseDeckCommentMutationReceipt(
+    response: NextcloudApiResponse,
+): DeckMutationReceipt {
+    require(response.status in 200..299) {
+        "The Deck comment action failed (HTTP ${response.status})."
+    }
+    require(response.body.size <= DECK_MUTATION_RESPONSE_BYTES) {
+        "The Deck comment action returned too much data."
+    }
+    if (response.body.isEmpty()) {
+        return DeckMutationReceipt(returnedId = null, etag = response.etag)
+    }
+    val root = runCatching { deckActionsJson.parseToJsonElement(response.body.decodeToString()) }
+        .getOrNull() ?: error("The Deck comment action returned invalid JSON.")
+    val ocs = (root as? JsonObject)?.get("ocs") as? JsonObject
+    val statusCode = (ocs?.get("meta") as? JsonObject)?.int("statuscode")
+    require(statusCode == null || statusCode in 200..299) {
+        "The Deck comment action returned an unsuccessful OCS response."
+    }
+    val data = ocs?.get("data") ?: root
+    val returnedId = (data as? JsonObject)?.long("id")
     return DeckMutationReceipt(returnedId = returnedId, etag = response.etag)
 }
 
@@ -924,6 +1094,7 @@ private val deckActionsJson = Json {
 
 private const val DECK_BOARD_TITLE_LIMIT = 100
 private const val DECK_STACK_TITLE_LIMIT = 100
+private const val DECK_LABEL_TITLE_LIMIT = 100
 private const val DECK_CARD_TITLE_LIMIT = 255
 private const val DECK_CARD_DESCRIPTION_LIMIT = 64 * 1024
 private const val DECK_COMMENT_LIMIT = 1_000
@@ -936,4 +1107,4 @@ private const val DECK_MAX_COMMENT_PAGE_SIZE = 100
 private const val DECK_REQUEST_BODY_BYTES = 96 * 1024
 private const val DECK_MUTATION_RESPONSE_BYTES = 2L * 1024L * 1024L
 private const val DECK_ATTACHMENT_LIST_RESPONSE_BYTES = 4L * 1024L * 1024L
-private const val DECK_ATTACHMENT_OPEN_RESPONSE_BYTES = 32L * 1024L * 1024L
+private const val DECK_ATTACHMENT_OPEN_RESPONSE_BYTES = 4L * 1024L * 1024L
