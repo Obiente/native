@@ -51,16 +51,21 @@ function parseReference(value, field, relativePath) {
   return reference;
 }
 
-function assertAscii(value, relativePath) {
+function assertPlainText(value, relativePath) {
   for (const character of value) {
-    if (character.codePointAt(0) > 0x7f) {
-      fail(`${relativePath}: fragments must use ASCII text only.`);
+    const codepoint = character.codePointAt(0);
+    if (
+      codepoint === 0x00 ||
+      (codepoint < 0x20 && character !== "\n") ||
+      codepoint === 0x7f
+    ) {
+      fail(`${relativePath}: fragments must not contain control characters.`);
     }
   }
 }
 
 export function parseFragment(source, relativePath = "fragment.md") {
-  assertAscii(source, relativePath);
+  assertPlainText(source, relativePath);
   if (source.includes("\r")) {
     fail(`${relativePath}: use LF line endings.`);
   }
@@ -255,6 +260,22 @@ function contextSuffix(fragment) {
   return links.length === 0 ? "" : ` (${links.join(", ")})`;
 }
 
+const platformLabels = {
+  android: "Android",
+  desktop: "Desktop",
+  ios: "iOS",
+  linux: "Linux",
+  macos: "macOS",
+  website: "Website",
+  windows: "Windows",
+};
+
+function platformPrefix(fragment) {
+  if (fragment.platforms.includes("all")) return "";
+  const labels = fragment.platforms.map((platform) => platformLabels[platform]);
+  return `[${labels.join(", ")}] `;
+}
+
 export function renderFragments(
   fragments,
   { headingLevel = 3, includeInternal = false, includeContext = true } = {},
@@ -272,12 +293,13 @@ export function renderFragments(
     sections.push("");
     for (const fragment of entries) {
       const suffix = includeContext ? contextSuffix(fragment) : "";
+      const prefix = platformPrefix(fragment);
       if (suffix) {
         const punctuation = fragment.summary.at(-1);
         const summary = fragment.summary.slice(0, -1);
-        sections.push(`- ${summary}${suffix}${punctuation}`);
+        sections.push(`- ${prefix}${summary}${suffix}${punctuation}`);
       } else {
-        sections.push(`- ${fragment.summary}`);
+        sections.push(`- ${prefix}${fragment.summary}`);
       }
     }
     sections.push("");
@@ -348,7 +370,11 @@ async function gitChangedFiles(repositoryRoot, base, head) {
       const fields = line.split("\t");
       const status = fields[0][0];
       const file = fields.at(-1);
-      return { file, status };
+      const sourceFile =
+        (status === "R" || status === "C") && fields.length >= 3
+          ? fields[1]
+          : null;
+      return { file, sourceFile, status };
     });
 }
 
@@ -358,6 +384,25 @@ export async function checkDiffHasFragment(
   head = "HEAD",
 ) {
   const changed = await gitChangedFiles(repositoryRoot, base, head);
+  const archiveChanges = changed.filter(
+    ({ file, sourceFile }) =>
+      file.startsWith("changes/archive/") ||
+      sourceFile?.startsWith("changes/archive/"),
+  );
+  for (const change of archiveChanges) {
+    const permittedReleaseMove =
+      change.status === "R" &&
+      change.sourceFile !== null &&
+      /^changes\/unreleased\/[a-z0-9][a-z0-9-]*\.md$/.test(
+        change.sourceFile,
+      ) &&
+      archivedFragmentPattern.test(change.file);
+    if (!permittedReleaseMove) {
+      fail(
+        `${change.file}: archived changelog fragments are immutable; only rename unreleased fragments into a version archive.`,
+      );
+    }
+  }
   const substantive = changed.filter(
     ({ file }) => !file.startsWith("changes/"),
   );

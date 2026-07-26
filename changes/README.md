@@ -10,7 +10,8 @@ Use a lowercase hyphenated filename that is unique to the change:
 changes/unreleased/218-raw-preview.md
 ```
 
-The format is strict and intentionally small:
+The format is strict and intentionally small. Use ordinary ASCII punctuation;
+normal UTF-8 letters remain valid for names and translated text:
 
 ```text
 category: feature

@@ -50,6 +50,26 @@ test("strict fragment metadata parses into a stable record", () => {
   });
 });
 
+test("normal UTF-8 letters are accepted while control characters are rejected", () => {
+  const localized = parseFragment(
+    fragment({
+      summary: "Synchronisatie toont nu ge\u00ebxporteerde items in een overzicht.",
+    }),
+    "changes/unreleased/localized.md",
+  );
+  assert.equal(localized.summary.includes("ge\u00ebxporteerde"), true);
+  assert.throws(
+    () =>
+      parseFragment(
+        fragment({
+          summary: "A control character\u0007 is not valid changelog text.",
+        }),
+        "changes/unreleased/control.md",
+      ),
+    /must not contain control characters/,
+  );
+});
+
 test("internal work requires an explicit no-user-facing marker", () => {
   assert.throws(
     () =>
@@ -96,7 +116,7 @@ test("rendering is deterministic and omits internal implementation records", () 
     [
       "### Features",
       "",
-      "- Native collections now provide a focused list and detail workspace (issue #42).",
+      "- [Android, Desktop] Native collections now provide a focused list and detail workspace (issue #42).",
       "",
       "### Fixes",
       "",
@@ -134,6 +154,7 @@ test("release note preparation shares the user-facing aggregation", () => {
   const notes = composeReleaseNotes("0.2.0-alpha.1", [parsed]);
   assert.match(notes, /^# Nextcloud Native 0\.2\.0-alpha\.1/m);
   assert.match(notes, /^## Features$/m);
+  assert.match(notes, /\[Android, Desktop\]/);
   assert.doesNotMatch(notes, /issue #42/);
   assert.match(notes, /^## Known limitations$/m);
 });
@@ -206,6 +227,89 @@ test("diff enforcement accepts a fragment and rejects unrecorded work", async ()
     );
     await execFileAsync("git", ["add", "changes"], { cwd: root });
     await execFileAsync("git", ["commit", "-qm", "fragment"], { cwd: root });
+    await checkDiffHasFragment(root, base);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("diff enforcement protects archived fragments and permits release moves", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nc-native-archive-diff-"));
+  try {
+    await execFileAsync("git", ["init", "-q"], { cwd: root });
+    await execFileAsync("git", ["config", "user.name", "Test"], { cwd: root });
+    await execFileAsync("git", ["config", "user.email", "test@example.invalid"], {
+      cwd: root,
+    });
+    await mkdir(path.join(root, "changes", "unreleased"), { recursive: true });
+    await mkdir(path.join(root, "changes", "archive", "0.1.0-alpha.1"), {
+      recursive: true,
+    });
+    const archived = path.join(
+      root,
+      "changes",
+      "archive",
+      "0.1.0-alpha.1",
+      "8-fix.md",
+    );
+    await writeFile(
+      archived,
+      fragment({
+        category: "fix",
+        issue: "none",
+        pull: "8",
+        platforms: "all",
+        summary: "The first preview now opens without duplicate navigation.",
+      }),
+    );
+    const unreleased = path.join(root, "changes", "unreleased", "42-feature.md");
+    await writeFile(unreleased, fragment());
+    await execFileAsync("git", ["add", "changes"], { cwd: root });
+    await execFileAsync("git", ["commit", "-qm", "base"], { cwd: root });
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+    });
+    const base = stdout.trim();
+
+    await writeFile(
+      archived,
+      fragment({
+        category: "fix",
+        issue: "none",
+        pull: "8",
+        platforms: "all",
+        summary: "Published history was rewritten after the release shipped.",
+      }),
+    );
+    await execFileAsync("git", ["add", "changes"], { cwd: root });
+    await execFileAsync("git", ["commit", "-qm", "rewrite archive"], {
+      cwd: root,
+    });
+    await assert.rejects(
+      checkDiffHasFragment(root, base),
+      /archived changelog fragments are immutable/,
+    );
+
+    await execFileAsync("git", ["reset", "--hard", base], { cwd: root });
+    const releaseDirectory = path.join(
+      root,
+      "changes",
+      "archive",
+      "0.2.0-alpha.1",
+    );
+    await mkdir(releaseDirectory, { recursive: true });
+    await execFileAsync(
+      "git",
+      [
+        "mv",
+        "changes/unreleased/42-feature.md",
+        "changes/archive/0.2.0-alpha.1/42-feature.md",
+      ],
+      { cwd: root },
+    );
+    await execFileAsync("git", ["commit", "-qm", "archive release"], {
+      cwd: root,
+    });
     await checkDiffHasFragment(root, base);
   } finally {
     await rm(root, { recursive: true, force: true });

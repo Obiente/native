@@ -83,10 +83,11 @@ bash tools/check-repository.sh
 Focused tests are useful while iterating, but the full suite must pass before a
 pull request is ready for review.
 
-Repository-authored text uses ordinary ASCII punctuation. Run
+Repository-authored text uses ordinary ASCII punctuation while allowing normal
+UTF-8 letters and translations. Run
 `bash tools/check-repository.sh` to catch smart quotes, typographic dashes,
 Unicode ellipses, Unicode minus signs, no-break spaces, and invisible
-formatting characters. Normal UTF-8 letters and translations remain supported.
+formatting characters.
 
 ### Isolated Android emulator tests
 
