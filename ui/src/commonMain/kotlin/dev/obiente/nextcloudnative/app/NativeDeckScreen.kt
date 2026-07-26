@@ -144,6 +144,12 @@ fun NativeDeckScreen(
                 if (isAmbiguousDeckMutationFailure(responseStatus)) {
                     mutationOutcomeUnknown = true
                     mutationError = "Deck may have applied this action. Refreshing before another change."
+                    if (returnToBoards) {
+                        requestedBoard = null
+                        requestedBoardId = null
+                        requestedCardId = null
+                        state = DeckWorkspaceState.Loading
+                    }
                     refreshBoard()
                 } else {
                     mutationError = error.deckMessage()
