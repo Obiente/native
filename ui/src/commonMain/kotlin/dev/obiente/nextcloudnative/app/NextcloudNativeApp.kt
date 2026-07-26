@@ -169,6 +169,8 @@ private sealed interface Screen {
     @Serializable
     data object OfflineCenter : Screen
     @Serializable
+    data object Transfers : Screen
+    @Serializable
     data object ProjectNews : Screen
     @Serializable
     data class ProjectNewsArticleView(val article: ProjectNewsArticle) : Screen
@@ -541,6 +543,10 @@ private fun AuthenticatedApp(
                 screen = Screen.Root
                 destination = NextcloudDestination.Settings
             }
+            Screen.Transfers -> {
+                screen = Screen.Root
+                destination = NextcloudDestination.Settings
+            }
             Screen.ProjectNews -> {
                 screen = Screen.Root
                 destination = NextcloudDestination.Settings
@@ -612,6 +618,7 @@ private fun AuthenticatedApp(
                     onThemePreferenceChanged = onThemePreferenceChanged,
                     onAdminApps = { screen = Screen.AdminApps },
                     onOfflineCenter = { screen = Screen.OfflineCenter },
+                    onTransfers = { screen = Screen.Transfers },
                     onProjectNews = { screen = Screen.ProjectNews },
                     onLoggedOut = onLoggedOut,
                 )
@@ -630,6 +637,11 @@ private fun AuthenticatedApp(
             services = services,
             session = session,
             userId = serverInfo?.userId.orEmpty(),
+            onBack = ::navigateBack,
+        )
+        Screen.Transfers -> NativeMediaTransferCenterHost(
+            services = services,
+            session = session,
             onBack = ::navigateBack,
         )
         is Screen.Files -> FilesScreen(
@@ -7571,6 +7583,7 @@ private fun SettingsScreen(
     onThemePreferenceChanged: (ThemePreference) -> Unit,
     onAdminApps: () -> Unit,
     onOfflineCenter: () -> Unit,
+    onTransfers: () -> Unit,
     onProjectNews: () -> Unit,
     onLoggedOut: () -> Unit,
 ) {
@@ -7691,6 +7704,44 @@ private fun SettingsScreen(
                             contentDescription = "Open Sync & offline",
                             modifier = Modifier.size(20.dp),
                         )
+                    }
+                }
+            }
+            if (services.supportsMediaTransferCenter) {
+                item {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onTransfers,
+                        color = NextcloudTheme.colors.appTile,
+                        shape = RoundedCornerShape(NextcloudRadii.Card),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
+                                Icon(
+                                    NextcloudIcons.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.padding(12.dp).size(26.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Media transfers", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Pending, active, failed, and completed uploads",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Icon(
+                                NextcloudIcons.ChevronRight,
+                                contentDescription = "Open media transfers",
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
                     }
                 }
             }

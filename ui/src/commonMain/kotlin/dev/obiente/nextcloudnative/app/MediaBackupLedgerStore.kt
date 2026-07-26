@@ -174,6 +174,63 @@ class MediaBackupLedgerStore internal constructor(
         )
     }
 
+    suspend fun retryFailed(
+        accountId: String,
+        localKey: String,
+        updatedAtEpochMillis: Long,
+    ): Boolean = mutex.withLock {
+        requireAccountId(accountId)
+        requireLocalKey(localKey)
+        require(updatedAtEpochMillis >= 0L)
+        connection.prepare(
+            """
+            UPDATE media_backup_ledger
+            SET transfer_state = 'Pending', failure_message = NULL, updated_at = ?
+            WHERE account_id = ? AND local_key = ? AND transfer_state = 'Failed'
+            """.trimIndent(),
+        ).use { statement ->
+            statement.bindLong(1, updatedAtEpochMillis)
+            statement.bindText(2, accountId)
+            statement.bindText(3, localKey)
+            check(!statement.step())
+        }
+        changedRowCount() == 1
+    }
+
+    /**
+     * Removes a queued projection after its authoritative scheduler has accepted cancellation.
+     *
+     * Uploading rows are deliberately excluded: callers must stop their worker first and then
+     * recover it to Pending before removing the projection.
+     */
+    suspend fun removePending(
+        accountId: String,
+        localKey: String,
+    ): Boolean = mutex.withLock {
+        requireAccountId(accountId)
+        requireLocalKey(localKey)
+        connection.prepare(
+            "DELETE FROM media_backup_ledger " +
+                "WHERE account_id = ? AND local_key = ? AND transfer_state = 'Pending'",
+        ).use { statement ->
+            statement.bindText(1, accountId)
+            statement.bindText(2, localKey)
+            check(!statement.step())
+        }
+        changedRowCount() == 1
+    }
+
+    suspend fun clearCompleted(accountId: String): Int = mutex.withLock {
+        requireAccountId(accountId)
+        connection.prepare(
+            "DELETE FROM media_backup_ledger WHERE account_id = ? AND transfer_state = 'Succeeded'",
+        ).use { statement ->
+            statement.bindText(1, accountId)
+            check(!statement.step())
+        }
+        changedRowCount()
+    }
+
     suspend fun statusesForRemotePaths(
         accountId: String,
         remotePaths: Collection<String>,
@@ -276,6 +333,14 @@ class MediaBackupLedgerStore internal constructor(
             "SELECT COUNT(*) FROM media_backup_ledger WHERE account_id = ?",
         ).use { statement ->
             statement.bindText(1, accountId)
+            check(statement.step())
+            val count = statement.getLong(0)
+            check(count in 0..Int.MAX_VALUE.toLong())
+            count.toInt()
+        }
+
+    private fun changedRowCount(): Int =
+        connection.prepare("SELECT changes()").use { statement ->
             check(statement.step())
             val count = statement.getLong(0)
             check(count in 0..Int.MAX_VALUE.toLong())

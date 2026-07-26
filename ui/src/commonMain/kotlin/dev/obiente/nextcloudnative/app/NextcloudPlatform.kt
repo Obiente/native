@@ -552,6 +552,29 @@ interface NextcloudPlatformServices {
     /** Emits after this device changes backup evidence for the active account. */
     fun observeMediaBackupStatusChanges(session: NextcloudSession): Flow<Unit> = emptyFlow()
 
+    /** True when the platform maintains an account-scoped, bounded media upload ledger. */
+    val supportsMediaTransferCenter: Boolean get() = false
+
+    /**
+     * Loads one bounded window of device-local media transfer history.
+     *
+     * This is a local projection only. Implementations must not perform remote mutations while
+     * loading it, and must scope every row to the authenticated account.
+     */
+    suspend fun loadMediaTransferCenter(
+        session: NextcloudSession,
+        section: MediaTransferSection,
+        after: MediaBackupLedgerCursor? = null,
+    ): MediaTransferCenterState = mediaTransferCenterState(
+        summary = MediaBackupLedgerSummary(0, 0, 0, 0),
+        section = section,
+        page = MediaBackupLedgerPage(emptyList(), null),
+        canLoadNewer = after != null,
+    )
+
+    /** Clears only completed local history. It must never delete device or Nextcloud media. */
+    suspend fun clearCompletedMediaTransferHistory(session: NextcloudSession): Int = 0
+
     /**
      * Resolves stable server file IDs to current authoritative Files records.
      *
