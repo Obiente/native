@@ -96,6 +96,7 @@ data class NextcloudMultipartUploadRequest(
     }
 }
 
+@ConsistentCopyVisibility
 data class PreparedMultipartUpload internal constructor(
     val contentType: String,
     val prefix: ByteArray,
