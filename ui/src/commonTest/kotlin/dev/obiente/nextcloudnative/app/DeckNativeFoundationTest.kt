@@ -87,6 +87,10 @@ class DeckNativeFoundationTest {
                     "PERMISSION_SHARE": false
                   },
                   "owner": {"uid": "owner", "displayname": "Owner"},
+                  "users": [
+                    {"participant": {"uid": "member", "displayname": "Member"}},
+                    {"uid": "owner", "displayname": "Owner"}
+                  ],
                   "labels": [{"id": 4, "title": "Bug", "color": "ff0000"}]
                 }]
                 """.trimIndent(),
@@ -104,6 +108,7 @@ class DeckNativeFoundationTest {
         assertEquals("Product", picker.boards.single().title)
         assertEquals("a970ff", picker.boards.single().color)
         assertTrue(picker.boards.single().permissions.canEdit)
+        assertEquals(listOf("Owner", "Member"), picker.boards.single().users.map(DeckUser::displayName))
     }
 
     @Test
@@ -123,6 +128,8 @@ class DeckNativeFoundationTest {
                       "stackId": 11,
                       "title": "Native board",
                       "description": "Use **semantic** cards",
+                      "owner": "card-owner",
+                      "color": "A970FF",
                       "order": 2,
                       "archived": false,
                       "done": null,
@@ -155,6 +162,8 @@ class DeckNativeFoundationTest {
         assertEquals(7L, card.boardId)
         assertEquals(11L, card.stackId)
         assertEquals("Use **semantic** cards", card.descriptionMarkdown)
+        assertEquals("card-owner", card.ownerId)
+        assertEquals("a970ff", card.color)
         assertEquals("UX", card.labels.single().title)
         assertEquals("Person", card.assignees.single().displayName)
         assertEquals(3, card.attachmentCount)

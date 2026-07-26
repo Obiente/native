@@ -54,6 +54,7 @@ data class DeckBoard(
     val archived: Boolean,
     val owner: DeckUser?,
     val labels: List<DeckLabel>,
+    val users: List<DeckUser> = emptyList(),
     val permissions: DeckPermissions,
     val shared: Boolean,
     val lastModified: Long?,
@@ -66,6 +67,8 @@ data class DeckCard(
     val stackId: Long,
     val title: String,
     val descriptionMarkdown: String?,
+    val ownerId: String?,
+    val color: String?,
     val order: Long,
     val dueAt: String?,
     val startAt: String?,
@@ -197,13 +200,24 @@ fun parseDeckBoards(response: NextcloudApiResponse): List<DeckBoard> {
     return response.deckPayload("Deck boards").requireArray("Deck boards").map { element ->
         val value = element.requireObject("Deck board")
         val permissions = value["permissions"] as? JsonObject
+        val owner = (value["owner"] as? JsonObject)?.toDeckUser()
+        val users = buildList {
+            owner?.let(::add)
+            value.array("users").mapNotNullTo(this) { userElement ->
+                val assignment = userElement as? JsonObject ?: return@mapNotNullTo null
+                (assignment["participant"] as? JsonObject)?.toDeckUser()
+                    ?: (assignment["user"] as? JsonObject)?.toDeckUser()
+                    ?: assignment.toDeckUser()
+            }
+        }.distinctBy(DeckUser::id)
         DeckBoard(
             id = value.requirePositiveId("id", "Deck board"),
             title = value.requireString("title", "Deck board"),
             color = value.string("color")?.normalizeDeckColor(),
             archived = value.boolean("archived") ?: false,
-            owner = (value["owner"] as? JsonObject)?.toDeckUser(),
+            owner = owner,
             labels = value.array("labels").mapNotNull(JsonElement::toDeckLabel),
+            users = users,
             permissions = DeckPermissions(
                 canRead = permissions?.boolean("PERMISSION_READ") ?: true,
                 canEdit = permissions?.boolean("PERMISSION_EDIT") ?: false,
@@ -293,6 +307,11 @@ private fun JsonObject.toDeckCard(boardId: Long, expectedStackId: Long): DeckCar
         stackId = stackId,
         title = requireString("title", "Deck card"),
         descriptionMarkdown = string("description"),
+        ownerId = string("owner")
+            ?: (this["owner"] as? JsonObject)?.let { owner ->
+                owner.string("uid") ?: owner.string("primaryKey") ?: owner.string("id")
+            },
+        color = string("color")?.normalizeDeckColor(),
         order = long("order") ?: 0L,
         dueAt = string("duedate"),
         startAt = string("startdate"),
