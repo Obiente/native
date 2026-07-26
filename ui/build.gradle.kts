@@ -159,6 +159,10 @@ tasks.register<JavaExec>("captureMarketingScreenshots") {
         "obsidian-vault-sync.png",
         "media-backup-queue.png",
         "adaptive-dynamic-data.png",
+        "raw-preview-loading-mobile.png",
+        "raw-preview-error-mobile.png",
+        "raw-preview-memories-ready-mobile.png",
+        "raw-preview-high-detail-desktop.png",
         ).map { fileName ->
             rootProject.file("website/public/screenshots/$fileName").absolutePath
         },

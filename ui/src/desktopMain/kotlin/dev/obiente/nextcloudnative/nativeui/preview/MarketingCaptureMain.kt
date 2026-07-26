@@ -55,16 +55,23 @@ private fun capture(
     assets: MarketingCaptureAssets,
 ) {
     Files.createDirectories(output.parent)
+    val rawMediaCapture = RawMediaMarketingCapture.forScenarioOrNull(scenario)
     val scene = ImageComposeScene(
         width = width,
         height = height,
         density = density,
         coroutineContext = Dispatchers.Unconfined,
     ) {
-        NextcloudNativeMarketingCapture(scenario, assets)
+        if (rawMediaCapture == null) {
+            NextcloudNativeMarketingCapture(scenario, assets)
+        } else {
+            rawMediaCapture.Content()
+        }
     }
     try {
-        val encoded = requireNotNull(scene.render().encodeToData(EncodedImageFormat.PNG)) {
+        val rendered = scene.render()
+        rawMediaCapture?.verify()
+        val encoded = requireNotNull(rendered.encodeToData(EncodedImageFormat.PNG)) {
             "Compose could not encode ${output.fileName}."
         }
         Files.write(output, encoded.bytes)

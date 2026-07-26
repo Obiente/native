@@ -333,6 +333,11 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.ObsidianSync -> MarketingObsidianSyncScenario()
                     MarketingCaptureScenario.MediaBackup -> MarketingMediaBackupScenario()
                     MarketingCaptureScenario.AdaptiveApp -> MarketingAdaptiveAppScenario()
+                    MarketingCaptureScenario.RawPreviewLoadingMobile,
+                    MarketingCaptureScenario.RawPreviewErrorMobile,
+                    MarketingCaptureScenario.RawPreviewMemoriesReadyMobile,
+                    MarketingCaptureScenario.RawPreviewHighDetailDesktop,
+                    -> error("RAW preview captures require the isolated desktop fixture renderer.")
                     MarketingCaptureScenario.DesktopHome,
                     MarketingCaptureScenario.MobileHome,
                     -> {

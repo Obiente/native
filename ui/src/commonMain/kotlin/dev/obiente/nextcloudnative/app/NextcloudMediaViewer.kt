@@ -63,6 +63,9 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -89,6 +92,8 @@ fun NextcloudMediaViewer(
     onSelect: (NextcloudFile) -> Unit,
     onSourceRemoved: (NextcloudFile) -> Unit,
     onClose: () -> Unit,
+    initialZoom: Float = 1f,
+    onStateObserved: (MediaViewerStateObservation) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val items = remember(media, selected) {
@@ -106,7 +111,9 @@ fun NextcloudMediaViewer(
     var fullQualityState by remember(selected.path) {
         mutableStateOf<FullQualityState>(FullQualityState.Idle)
     }
-    var zoom by remember(selected.path) { mutableStateOf(1f) }
+    var zoom by remember(selected.path) {
+        mutableStateOf(initialZoom.coerceIn(MINIMUM_MEDIA_ZOOM, MAXIMUM_MEDIA_ZOOM))
+    }
     var panOffset by remember(selected.path) { mutableStateOf(Offset.Zero) }
     var editing by remember(selected.path) { mutableStateOf(false) }
     var tagging by remember(selected.path) { mutableStateOf(false) }
@@ -293,7 +300,7 @@ fun NextcloudMediaViewer(
                             memoriesPhotoDecodableApiRequest(fileId, etag),
                         )
                         check(response.status in 200..299) {
-                            "Full-quality Memories source failed (HTTP ${response.status})."
+                            "High-detail Memories render failed (HTTP ${response.status})."
                         }
                         response.body
                     },
@@ -324,6 +331,17 @@ fun NextcloudMediaViewer(
         } ?: FullQualityState.Error
     }
 
+    LaunchedEffect(selected.path, previewState, fullQualityState, zoom) {
+        onStateObserved(
+            mediaViewerStateObservation(
+                selectedPath = selected.path,
+                previewState = previewState,
+                highDetailState = fullQualityState,
+                requestedZoom = zoom,
+            ),
+        )
+    }
+
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
     }
@@ -350,6 +368,15 @@ fun NextcloudMediaViewer(
         modifier = modifier
             .fillMaxSize()
             .background(ViewerBackground)
+            .testTag(MEDIA_VIEWER_ROOT_TEST_TAG)
+            .semantics {
+                stateDescription = mediaViewerStateObservation(
+                    selectedPath = selected.path,
+                    previewState = previewState,
+                    highDetailState = fullQualityState,
+                    requestedZoom = zoom,
+                ).readiness.description
+            }
             .focusRequester(focusRequester)
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) {
@@ -407,7 +434,10 @@ fun NextcloudMediaViewer(
                 modifier = mediaCanvasModifier
                     .pointerInput(selected.path) {
                         detectTransformGestures { _, pan, gestureZoom, _ ->
-                            val nextZoom = (zoom * gestureZoom).coerceIn(1f, 5f)
+                            val nextZoom = (zoom * gestureZoom).coerceIn(
+                                MINIMUM_MEDIA_ZOOM,
+                                MAXIMUM_MEDIA_ZOOM,
+                            )
                             zoom = nextZoom
                             panOffset = if (nextZoom == 1f) Offset.Zero else panOffset + pan
                         }
@@ -503,20 +533,20 @@ fun NextcloudMediaViewer(
                     append(
                         when (fullQualityState) {
                             FullQualityState.Idle ->
-                                if (zoom < FULL_QUALITY_MEDIA_ZOOM_THRESHOLD) " · Preview" else ""
-                            FullQualityState.Loading -> " · Loading full quality..."
-                            is FullQualityState.Ready -> " · Full quality"
-                            FullQualityState.Error -> " · Preview (full quality unavailable)"
+                                if (zoom < FULL_QUALITY_MEDIA_ZOOM_THRESHOLD) " - Preview" else ""
+                            FullQualityState.Loading -> " - Loading high-detail render..."
+                            is FullQualityState.Ready -> " - High-detail render"
+                            FullQualityState.Error -> " - Preview (high-detail render unavailable)"
                         },
                     )
                     val activeSource = fullQuality?.source ?: readyPreview?.source
                     if (activeSource != null) {
-                        append(" · ")
+                        append(" - ")
                         append(
                             describeMediaDisplaySource(
                                 selected = sourcePlan.selected,
                                 displayed = activeSource,
-                                fullQuality = fullQuality != null,
+                                highDetail = fullQuality != null,
                                 payloadKind = when (fullQuality) {
                                     is FullQualityState.Ready -> fullQualityMediaPayloadKind(
                                         displayed = fullQuality.source,
@@ -1028,6 +1058,55 @@ private sealed interface FullQualityState {
     data object Error : FullQualityState
 }
 
+enum class MediaViewerReadiness(val description: String) {
+    Loading("Loading rendered preview"),
+    RenderUnavailable("Rendered preview unavailable"),
+    RenderReady("Rendered preview ready"),
+    HighDetailLoading("Loading high-detail render"),
+    HighDetailReady("High-detail render ready"),
+}
+
+data class MediaViewerStateObservation(
+    val readiness: MediaViewerReadiness,
+    val selectedPath: String,
+    val displayedPath: String?,
+    val payloadKind: MediaDisplayPayloadKind?,
+    val requestedZoom: Float,
+)
+
+private fun mediaViewerStateObservation(
+    selectedPath: String,
+    previewState: MediaPreviewState,
+    highDetailState: FullQualityState,
+    requestedZoom: Float,
+): MediaViewerStateObservation {
+    val preview = previewState as? MediaPreviewState.Ready
+    val highDetail = highDetailState as? FullQualityState.Ready
+    return MediaViewerStateObservation(
+        readiness = when {
+            highDetail != null -> MediaViewerReadiness.HighDetailReady
+            highDetailState is FullQualityState.Loading -> MediaViewerReadiness.HighDetailLoading
+            preview != null -> MediaViewerReadiness.RenderReady
+            previewState is MediaPreviewState.Error -> MediaViewerReadiness.RenderUnavailable
+            else -> MediaViewerReadiness.Loading
+        },
+        selectedPath = selectedPath,
+        displayedPath = highDetail?.source?.file?.path ?: preview?.source?.file?.path,
+        payloadKind = when {
+            highDetail != null -> fullQualityMediaPayloadKind(
+                displayed = highDetail.source,
+                payloadSource = highDetail.payloadSource,
+            )
+            preview != null -> preview.payloadKind
+            else -> null
+        },
+        requestedZoom = requestedZoom,
+    )
+}
+
+internal const val MEDIA_VIEWER_ROOT_TEST_TAG = "nextcloud-media-viewer"
+internal const val MINIMUM_MEDIA_ZOOM = 1f
+internal const val MAXIMUM_MEDIA_ZOOM = 5f
 private const val MAXIMUM_PREVIEW_IMAGE_DIMENSION = 1_600
 private const val MAXIMUM_DISPLAY_IMAGE_DIMENSION = 4_096
 

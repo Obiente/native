@@ -111,6 +111,10 @@ test("marketing screenshots are rendered offscreen without an Android device", a
       "obsidian-vault-sync",
       "media-backup-queue",
       "adaptive-dynamic-data",
+      "raw-preview-loading-mobile",
+      "raw-preview-error-mobile",
+      "raw-preview-memories-ready-mobile",
+      "raw-preview-high-detail-desktop",
     ],
   );
   assert.deepEqual(
@@ -123,6 +127,10 @@ test("marketing screenshots are rendered offscreen without an Android device", a
     ["obsidian-vault-sync", [1080, 1000]],
     ["media-backup-queue", [1080, 1800]],
     ["adaptive-dynamic-data", [960, 360]],
+    ["raw-preview-loading-mobile", [1080, 1200]],
+    ["raw-preview-error-mobile", [1080, 1200]],
+    ["raw-preview-memories-ready-mobile", [1080, 1600]],
+    ["raw-preview-high-detail-desktop", [1440, 900]],
   ]);
   for (const capture of manifest.captures) {
     assert.deepEqual(
