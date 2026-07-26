@@ -174,6 +174,45 @@ fun NativeDeckScreen(
         }
     }
 
+    fun moveCardToIndex(
+        card: DeckCard,
+        destinationStack: DeckStack,
+        insertionIndex: Int,
+    ) {
+        val board = boardState()?.board ?: return
+        runCatching {
+            planDeckCardInsertion(
+                source = card,
+                destination = destinationStack,
+                insertionIndex = insertionIndex,
+            )
+        }.onSuccess { plan ->
+            when (plan) {
+                is DeckCardInsertionPlan.MoveReady -> runMutation(
+                    request = {
+                        writePlan().moveCard(boardAccess(board), plan.move)
+                    },
+                    onResponse = { response ->
+                        parseDeckCardMove(plan.move, response)
+                    },
+                )
+                DeckCardInsertionPlan.Unchanged -> {
+                    interaction = null
+                    mutationError = null
+                }
+                is DeckCardInsertionPlan.RebalanceRequired -> {
+                    mutationError = "Refresh this board before moving the card to that position."
+                    interaction = DeckUiInteraction.MoveCard(card)
+                    refreshBoard()
+                }
+            }
+        }.onFailure { error ->
+            mutationError = error.deckMessage()
+            interaction = DeckUiInteraction.MoveCard(card)
+            refreshBoard()
+        }
+    }
+
     fun withAuthoritativeCard(
         card: DeckCard,
         action: (DeckCard, DeckStack) -> Unit,
@@ -287,10 +326,16 @@ fun NativeDeckScreen(
                 )
                 parseDeckAttachments(cardContext(card), response)
             }.onSuccess { values ->
+                val handoffCapability =
+                    (services.externalFileHandoffSupport as? ExternalFileHandoffSupport.Available)
+                        ?.capability
                 attachmentRecords = values.associateBy(DeckAttachment::deckUiKey)
                 attachmentsState = DeckUiAttachmentsState(
                     attachments = values.map { attachment ->
-                        attachment.toDeckUiAttachment(board.permissions.canEdit)
+                        attachment.toDeckUiAttachment(
+                            canEdit = board.permissions.canEdit,
+                            handoffCapability = handoffCapability,
+                        )
                     },
                     canAdd = board.permissions.canEdit,
                 )
@@ -674,6 +719,13 @@ fun NativeDeckScreen(
                 }
             }
         },
+        onMoveCard = currentBoard?.takeIf {
+            it.permissions.canEdit && !mutationBusy
+        }?.let {
+            { card, destinationStack, insertionIndex ->
+                moveCardToIndex(card, destinationStack, insertionIndex)
+            }
+        },
         modifier = modifier,
     )
 
@@ -789,32 +841,15 @@ fun NativeDeckScreen(
             errorMessage = mutationError,
             onDismiss = { if (!mutationBusy) interaction = null },
             onMove = { target, placement ->
-                val board = checkNotNull(boardState()?.board)
-                val order = when (placement) {
-                    DeckUiCardPlacement.Top -> 0L
-                    DeckUiCardPlacement.Bottom ->
-                        target.cards.maxOfOrNull(DeckCard::order)?.plus(1L) ?: 0L
+                val remainingCardCount = target.cards.count { card ->
+                    card.id != overlay.card.id
                 }
-                runMutation(
-                    request = {
-                        writePlan().moveCard(
-                            boardAccess(board),
-                            DeckCardMove(
-                                source = cardContext(overlay.card),
-                                destinationStack = stackContext(target),
-                                order = order,
-                            ),
-                        )
-                    },
-                    onResponse = { response ->
-                        parseDeckCardMove(
-                            DeckCardMove(
-                                source = cardContext(overlay.card),
-                                destinationStack = stackContext(target),
-                                order = order,
-                            ),
-                            response,
-                        )
+                moveCardToIndex(
+                    card = overlay.card,
+                    destinationStack = target,
+                    insertionIndex = when (placement) {
+                        DeckUiCardPlacement.Top -> 0
+                        DeckUiCardPlacement.Bottom -> remainingCardCount
                     },
                 )
             },
@@ -965,10 +1000,35 @@ fun NativeDeckScreen(
             onRefresh = { loadAttachments(overlay.card) },
             onLoadMore = {},
             onAdd = { addAttachment(overlay.card) },
-            onOpen = {
-                attachmentsState = attachmentsState.copy(
-                    errorMessage = "Native attachment opening is not available yet.",
-                )
+            onOpen = { attachment ->
+                val board = checkNotNull(boardState()?.board)
+                val record = checkNotNull(attachmentRecords[attachment.key])
+                scope.launch {
+                    attachmentsState = attachmentsState.copy(errorMessage = null)
+                    runCatching {
+                        services.handoffDeckAttachmentToExternalApp(
+                            session = session,
+                            target = writePlan().openAttachment(
+                                boardAccess(board),
+                                DeckAttachmentReference(
+                                    card = cardContext(overlay.card),
+                                    type = record.type,
+                                    attachmentId = record.id,
+                                ),
+                            ),
+                            attachment = record,
+                        )
+                    }.onSuccess { result ->
+                        attachmentsState = attachmentsState.copy(
+                            errorMessage = result.deckAttachmentHandoffMessage(),
+                        )
+                    }.onFailure { error ->
+                        if (error is CancellationException) throw error
+                        attachmentsState = attachmentsState.copy(
+                            errorMessage = error.deckMessage(),
+                        )
+                    }
+                }
             },
             onDelete = { attachment ->
                 val record = checkNotNull(attachmentRecords[attachment.key])
@@ -1129,7 +1189,10 @@ private fun DeckComment.toDeckUiComment(currentUserId: String): DeckUiComment =
 
 private fun DeckAttachment.deckUiKey(): String = "${type.serverValue}:$id"
 
-private fun DeckAttachment.toDeckUiAttachment(canEdit: Boolean): DeckUiAttachment =
+private fun DeckAttachment.toDeckUiAttachment(
+    canEdit: Boolean,
+    handoffCapability: ExternalFileHandoffCapability?,
+): DeckUiAttachment =
     DeckUiAttachment(
         key = deckUiKey(),
         fileName = name,
@@ -1138,9 +1201,19 @@ private fun DeckAttachment.toDeckUiAttachment(canEdit: Boolean): DeckUiAttachmen
         byteCount?.let(::deckByteCountLabel),
         createdBy,
     ).joinToString(" - ").ifBlank { null },
-        canOpen = false,
+        canOpen = handoffCapability != null &&
+            ExternalFileHandoffAction.OpenWith in handoffCapability.supportedActions &&
+            (byteCount == null || byteCount <= handoffCapability.maximumFileBytes),
         canDelete = canEdit,
     )
+
+private fun ExternalFileHandoffResult.deckAttachmentHandoffMessage(): String? = when (this) {
+    is ExternalFileHandoffResult.Launched -> null
+    is ExternalFileHandoffResult.NoCompatibleApplication ->
+        "No installed app can open this attachment."
+    is ExternalFileHandoffResult.Rejected -> message
+    is ExternalFileHandoffResult.Unsupported -> reason
+}
 
 private fun deckByteCountLabel(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
