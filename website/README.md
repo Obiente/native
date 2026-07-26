@@ -46,13 +46,15 @@ These surfaces intentionally serve different readers:
   boundaries, and UI wording current when the product changes.
 - per-version release notes are short installer-facing summaries and
   limitations under `/releases/`.
-- the dedicated `/changelog/` page renders the canonical root `CHANGELOG.md` as
-  concise chronological Added, Changed, Fixed, and Security records.
+- `changes/unreleased/*.md` provides the live user-facing entries contributed
+  by individual pull requests without a shared-file merge conflict.
+- the dedicated `/changelog/` page combines those validated fragments with the
+  immutable release history in the canonical root `CHANGELOG.md`.
 
-The content build uses a clearly marked empty changelog state before the first
-root changelog is present. It never manufactures changelog entries from news.
-Changelog entries and per-release notes are immutable historical records; later
-clarifications belong in a new entry or release, not a rewritten past artifact.
+The content build never manufactures changelog entries from news or pull
+request titles. Changelog entries and per-release notes are immutable
+historical records; later clarifications belong in a new entry or release, not
+a rewritten past artifact.
 
 ## Product screenshots
 
