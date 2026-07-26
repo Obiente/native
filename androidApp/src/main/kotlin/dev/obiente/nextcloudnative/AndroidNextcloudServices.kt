@@ -574,6 +574,9 @@ internal class AndroidNextcloudServices(
         )
         try {
             val accountId = NextcloudDocumentIds.accountKey(session)
+            if (!fileSyncEngine.hasRunningWorkForAccount(accountId)) {
+                store.recoverInterruptedTransfers(accountId)
+            }
             mediaTransferCenterState(
                 summary = store.summary(
                     accountId = accountId,

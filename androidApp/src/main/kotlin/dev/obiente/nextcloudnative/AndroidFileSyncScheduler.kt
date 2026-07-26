@@ -7,11 +7,13 @@ import androidx.work.Data
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncNetworkPolicy
 import dev.obiente.nextcloudnative.app.FileSyncPowerPolicy
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.first
 
 /** Durable WorkManager schedule for one sync pair. WorkManager restores it after reboot. */
 internal class AndroidFileSyncScheduler(context: Context) {
@@ -62,6 +64,15 @@ internal class AndroidFileSyncScheduler(context: Context) {
 
     fun cancelAll() {
         workManager.cancelAllWorkByTag(TAG)
+    }
+
+    suspend fun hasRunningWork(pairIds: Collection<String>): Boolean {
+        for (pairId in pairIds) {
+            val running = workManager.getWorkInfosForUniqueWorkFlow(workName(pairId)).first()
+                .any { work -> work.state == WorkInfo.State.RUNNING }
+            if (running) return true
+        }
+        return false
     }
 
     private fun workName(pairId: String): String = "nextcloud-native-file-sync-$pairId"

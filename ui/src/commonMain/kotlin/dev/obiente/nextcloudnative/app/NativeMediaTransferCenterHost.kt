@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -17,6 +19,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,9 +34,20 @@ internal fun NativeMediaTransferCenterHost(
     session: NextcloudSession,
     onBack: () -> Unit,
 ) {
-    var section by remember(session) { mutableStateOf(MediaTransferSection.Pending) }
-    var cursorHistory by remember(session, section) {
-        mutableStateOf<List<MediaBackupLedgerCursor?>>(listOf(null))
+    var sectionName by rememberSaveable(session.serverUrl, session.loginName) {
+        mutableStateOf(MediaTransferSection.Pending.name)
+    }
+    val section = MediaTransferSection.entries.firstOrNull { it.name == sectionName }
+        ?: MediaTransferSection.Pending
+    var encodedCursorHistory by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        sectionName,
+    ) {
+        mutableStateOf(encodeMediaTransferCursorHistory(listOf(null)))
+    }
+    val cursorHistory = remember(encodedCursorHistory) {
+        restoreMediaTransferCursorHistory(encodedCursorHistory)
     }
     var state by remember(session) { mutableStateOf<MediaTransferCenterState?>(null) }
     var loading by remember(session) { mutableStateOf(true) }
@@ -42,8 +56,47 @@ internal fun NativeMediaTransferCenterHost(
     var details by remember(session) { mutableStateOf<MediaBackupLedgerRecord?>(null) }
     var notice by remember(session) { mutableStateOf<String?>(null) }
     var clearingCompleted by remember(session) { mutableStateOf(false) }
+    var retryOperation by remember(session) {
+        mutableStateOf(MediaTransferRetryOperation.Load)
+    }
     val scope = rememberCoroutineScope()
     val cursor = cursorHistory.last()
+    val listState = rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        sectionName,
+        encodedCursorHistory,
+        saver = LazyListState.Saver,
+    ) {
+        LazyListState()
+    }
+
+    fun clearCompletedHistory() {
+        if (clearingCompleted) return
+        scope.launch {
+            clearingCompleted = true
+            error = null
+            notice = null
+            try {
+                val removed = services.clearCompletedMediaTransferHistory(session)
+                notice = if (removed == 1) {
+                    "Cleared 1 completed transfer from local history."
+                } else {
+                    "Cleared $removed completed transfers from local history."
+                }
+                encodedCursorHistory = encodeMediaTransferCursorHistory(listOf(null))
+                retryOperation = MediaTransferRetryOperation.Load
+                refreshAttempt += 1
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                retryOperation = MediaTransferRetryOperation.ClearCompleted
+                error = failure.message ?: "Could not clear completed transfer history."
+            } finally {
+                clearingCompleted = false
+            }
+        }
+    }
 
     LaunchedEffect(session) {
         services.observeMediaBackupStatusChanges(session).collectLatest {
@@ -58,6 +111,7 @@ internal fun NativeMediaTransferCenterHost(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
+            retryOperation = MediaTransferRetryOperation.Load
             error = failure.message ?: "Could not load media transfers."
         } finally {
             loading = false
@@ -68,6 +122,7 @@ internal fun NativeMediaTransferCenterHost(
     when {
         current != null -> MediaTransferCenterScreen(
             state = current,
+            listState = listState,
             loading = loading,
             busyLocalKey = null,
             clearingCompleted = clearingCompleted,
@@ -77,7 +132,8 @@ internal fun NativeMediaTransferCenterHost(
             onSelectSection = { selected ->
                 if (section != selected) {
                     state = null
-                    section = selected
+                    sectionName = selected.name
+                    encodedCursorHistory = encodeMediaTransferCursorHistory(listOf(null))
                     notice = null
                     error = null
                     details = null
@@ -85,46 +141,30 @@ internal fun NativeMediaTransferCenterHost(
             },
             onLoadNewer = {
                 if (cursorHistory.size > 1) {
-                    cursorHistory = cursorHistory.dropLast(1)
+                    encodedCursorHistory = encodeMediaTransferCursorHistory(cursorHistory.dropLast(1))
                 }
             },
             onLoadOlder = { nextCursor ->
                 if (cursorHistory.last() != nextCursor) {
-                    cursorHistory = cursorHistory + nextCursor
+                    encodedCursorHistory = encodeMediaTransferCursorHistory(
+                        boundedMediaTransferCursorHistory(cursorHistory + nextCursor),
+                    )
                 }
             },
-            onRetry = { refreshAttempt += 1 },
+            onRetry = {
+                if (retryOperation == MediaTransferRetryOperation.ClearCompleted) {
+                    clearCompletedHistory()
+                } else {
+                    refreshAttempt += 1
+                }
+            },
             onAction = { record, action ->
                 if (action == MediaTransferAction.Details) details = record
             },
-            onClearCompleted = {
-                if (!clearingCompleted) {
-                    scope.launch {
-                        clearingCompleted = true
-                        error = null
-                        notice = null
-                        try {
-                            val removed = services.clearCompletedMediaTransferHistory(session)
-                            notice = if (removed == 1) {
-                                "Cleared 1 completed transfer from local history."
-                            } else {
-                                "Cleared $removed completed transfers from local history."
-                            }
-                            cursorHistory = listOf(null)
-                            refreshAttempt += 1
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (failure: Throwable) {
-                            error = failure.message ?: "Could not clear completed transfer history."
-                        } finally {
-                            clearingCompleted = false
-                        }
-                    }
-                }
-            },
+            onClearCompleted = ::clearCompletedHistory,
             visibleActions = { setOf(MediaTransferAction.Details) },
         )
-        else -> Column(modifier = Modifier.fillMaxSize()) {
+        else -> Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
             ScreenHeader("Transfers", "Device-local upload history", onBack)
             Column(
                 modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
@@ -175,4 +215,9 @@ internal fun NativeMediaTransferCenterHost(
             },
         )
     }
+}
+
+private enum class MediaTransferRetryOperation {
+    Load,
+    ClearCompleted,
 }

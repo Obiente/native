@@ -2,11 +2,42 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import java.nio.file.Files
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class MediaBackupLedgerPersistenceTest {
+    @Test
+    fun concurrentFirstOpenSerializesSchemaMigration() = runBlocking {
+        val directory = Files.createTempDirectory("media-ledger-concurrent-")
+        val databasePath = directory.resolve("ledger.db").toString()
+
+        val stores = coroutineScope {
+            List(4) {
+                async(Dispatchers.IO) {
+                    MediaBackupLedgerStore(
+                        databasePath = databasePath,
+                        recoverInterruptedTransfers = false,
+                    )
+                }
+            }.awaitAll()
+        }
+        stores.forEach { store -> store.close() }
+
+        val reopened = MediaBackupLedgerStore(
+            databasePath = databasePath,
+            recoverInterruptedTransfers = false,
+        )
+        assertEquals(0, reopened.summary("0123456789abcdef0123456789abcdef").total)
+        reopened.close()
+        directory.toFile().deleteRecursively()
+        Unit
+    }
+
     @Test
     fun readOnlyUiConnectionDoesNotRecoverAnActiveUpload() = runBlocking {
         val directory = Files.createTempDirectory("media-ledger-reader-")

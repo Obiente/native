@@ -72,6 +72,21 @@ internal class AndroidFileSyncEngine(context: Context) {
         )
     }
 
+    /**
+     * Checks WorkManager's authoritative state before the transfer ledger recovers interrupted
+     * uploads. A failed query is treated conservatively as active work so a running worker is
+     * never rewritten to pending merely because WorkManager could not be inspected.
+     */
+    suspend fun hasRunningWorkForAccount(accountId: String): Boolean {
+        if (ENGINE_LOCK.isLocked) return true
+        val pairIds = store.load().coordinator.pairs
+            .asSequence()
+            .filter { pair -> pair.accountId == accountId }
+            .map(FileSyncPair::id)
+            .toList()
+        return runCatching { scheduler.hasRunningWork(pairIds) }.getOrDefault(true)
+    }
+
     suspend fun addPair(
         session: NextcloudSession,
         userId: String,

@@ -127,6 +127,41 @@ fun MediaTransferSection.transferState(): MediaBackupTransferState = when (this)
     MediaTransferSection.Completed -> MediaBackupTransferState.Succeeded
 }
 
+internal fun boundedMediaTransferCursorHistory(
+    history: List<MediaBackupLedgerCursor?>,
+): List<MediaBackupLedgerCursor?> {
+    require(history.isNotEmpty() && history.first() == null)
+    if (history.size <= MAX_SAVED_MEDIA_TRANSFER_WINDOWS) return history
+    return listOf(null) + history.drop(1).takeLast(MAX_SAVED_MEDIA_TRANSFER_WINDOWS - 1)
+}
+
+internal fun encodeMediaTransferCursorHistory(
+    history: List<MediaBackupLedgerCursor?>,
+): String = boundedMediaTransferCursorHistory(history).joinToString("\n") { cursor ->
+    cursor?.let { "${it.updatedAtEpochMillis}:${it.localKey}" } ?: "-"
+}
+
+internal fun restoreMediaTransferCursorHistory(
+    encoded: String,
+): List<MediaBackupLedgerCursor?> = runCatching {
+    val entries = encoded.split('\n')
+    require(entries.isNotEmpty() && entries.size <= MAX_SAVED_MEDIA_TRANSFER_WINDOWS)
+    require(entries.first() == "-")
+    entries.mapIndexed { index, value ->
+        if (index == 0) {
+            require(value == "-")
+            null
+        } else {
+            val separator = value.indexOf(':')
+            require(separator > 0 && separator < value.lastIndex)
+            MediaBackupLedgerCursor(
+                updatedAtEpochMillis = value.substring(0, separator).toLong(),
+                localKey = value.substring(separator + 1),
+            )
+        }
+    }
+}.getOrElse { listOf(null) }
+
 fun MediaBackupLedgerSummary.count(section: MediaTransferSection): Int = when (section) {
     MediaTransferSection.Pending -> pending
     MediaTransferSection.Active -> uploading
@@ -255,4 +290,5 @@ const val MEDIA_TRANSFER_CENTER_PAGE_SIZE = 50
 const val MAX_MEDIA_BACKUP_STATUS_PATHS = 500
 const val MAX_MEDIA_BACKUP_LEDGER_QUERY_KEYS = 500
 const val MAX_MEDIA_BACKUP_LEDGER_WRITE_BATCH = 500
+private const val MAX_SAVED_MEDIA_TRANSFER_WINDOWS = 64
 private const val MAX_MEDIA_BACKUP_ATTEMPTS = 1_000

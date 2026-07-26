@@ -282,39 +282,56 @@ class MediaBackupLedgerStore internal constructor(
         }
     }
 
+    suspend fun recoverInterruptedTransfers(accountId: String): Int = mutex.withLock {
+        requireAccountId(accountId)
+        transaction {
+            connection.prepare(
+                "UPDATE media_backup_ledger SET transfer_state = 'Pending', failure_message = NULL " +
+                    "WHERE account_id = ? AND transfer_state = 'Uploading'",
+            ).use { statement ->
+                statement.bindText(1, accountId)
+                check(!statement.step())
+            }
+            changedRowCount()
+        }
+    }
+
     suspend fun close() = mutex.withLock {
         connection.close()
     }
 
     private fun initializeSchema(recoverInterruptedTransfers: Boolean) {
+        connection.execSQL("PRAGMA busy_timeout = $SCHEMA_MIGRATION_BUSY_TIMEOUT_MILLIS")
         connection.prepare("PRAGMA journal_mode = WAL").use(SQLiteStatement::step)
         connection.execSQL("PRAGMA synchronous = FULL")
         connection.execSQL("PRAGMA foreign_keys = ON")
-        val version = connection.prepare("PRAGMA user_version").use { statement ->
-            check(statement.step())
-            statement.getLong(0).toInt()
-        }
-        when (version) {
-            0 -> transaction {
-                connection.execSQL(CREATE_TABLE)
-                connection.execSQL(CREATE_ACCOUNT_STATE_INDEX)
-                connection.execSQL(CREATE_ACCOUNT_UPDATED_INDEX)
-                connection.execSQL(CREATE_ACCOUNT_REMOTE_PATH_INDEX)
-                connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
+        transaction {
+            val version = connection.prepare("PRAGMA user_version").use { statement ->
+                check(statement.step())
+                statement.getLong(0).toInt()
             }
-            1 -> transaction {
-                connection.execSQL(ADD_HISTORY_VISIBLE_COLUMN)
-                connection.execSQL(CREATE_ACCOUNT_REMOTE_PATH_INDEX)
-                connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
+            when (version) {
+                0 -> {
+                    connection.execSQL(CREATE_TABLE)
+                    connection.execSQL(CREATE_ACCOUNT_STATE_INDEX)
+                    connection.execSQL(CREATE_ACCOUNT_UPDATED_INDEX)
+                    connection.execSQL(CREATE_ACCOUNT_REMOTE_PATH_INDEX)
+                    connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
+                }
+                1 -> {
+                    connection.execSQL(ADD_HISTORY_VISIBLE_COLUMN)
+                    connection.execSQL(CREATE_ACCOUNT_REMOTE_PATH_INDEX)
+                    connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
+                }
+                2 -> {
+                    connection.execSQL(ADD_HISTORY_VISIBLE_COLUMN)
+                    connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
+                }
+                SCHEMA_VERSION -> Unit
+                else -> throw MediaBackupLedgerStoreException(
+                    "Media backup ledger schema version $version is unsupported.",
+                )
             }
-            2 -> transaction {
-                connection.execSQL(ADD_HISTORY_VISIBLE_COLUMN)
-                connection.execSQL("PRAGMA user_version = $SCHEMA_VERSION")
-            }
-            SCHEMA_VERSION -> Unit
-            else -> throw MediaBackupLedgerStoreException(
-                "Media backup ledger schema version $version is unsupported.",
-            )
         }
         if (recoverInterruptedTransfers) {
             transaction {
@@ -455,6 +472,7 @@ class MediaBackupLedgerStore internal constructor(
 
     private companion object {
         const val SCHEMA_VERSION = 3
+        const val SCHEMA_MIGRATION_BUSY_TIMEOUT_MILLIS = 5_000
 
         const val SELECT_COLUMNS =
             "SELECT account_id, local_key, local_display_name, local_size, local_revision, " +

@@ -118,6 +118,60 @@ class MediaTransferCenterTest {
     }
 
     @Test
+    fun interruptedTransferRecoveryIsAccountScoped() = runBlocking {
+        val otherAccountId = "fedcba9876543210fedcba9876543210"
+        val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))
+        store.upsertAll(
+            listOf(
+                record(MediaBackupTransferState.Uploading, "media:active"),
+                record(MediaBackupTransferState.Pending, "media:pending"),
+                record(MediaBackupTransferState.Uploading, "media:other").copy(
+                    accountId = otherAccountId,
+                ),
+            ),
+        )
+
+        assertEquals(1, store.recoverInterruptedTransfers(accountId))
+        assertEquals(
+            MediaBackupTransferState.Pending,
+            store.load(accountId, "media:active")?.transferState,
+        )
+        assertEquals(
+            MediaBackupTransferState.Pending,
+            store.load(accountId, "media:pending")?.transferState,
+        )
+        assertEquals(
+            MediaBackupTransferState.Uploading,
+            store.load(otherAccountId, "media:other")?.transferState,
+        )
+        assertEquals(0, store.recoverInterruptedTransfers(accountId))
+        store.close()
+    }
+
+    @Test
+    fun savedCursorHistoryIsBoundedAndRejectsInvalidState() {
+        val history = listOf<MediaBackupLedgerCursor?>(null) +
+            List(80) { index ->
+                MediaBackupLedgerCursor(
+                    updatedAtEpochMillis = index.toLong(),
+                    localKey = "media:$index",
+                )
+            }
+
+        val bounded = boundedMediaTransferCursorHistory(history)
+        assertEquals(64, bounded.size)
+        assertNull(bounded.first())
+        assertEquals("media:17", bounded[1]?.localKey)
+        assertEquals("media:79", bounded.last()?.localKey)
+        assertEquals(
+            bounded,
+            restoreMediaTransferCursorHistory(encodeMediaTransferCursorHistory(history)),
+        )
+        assertEquals(listOf(null), restoreMediaTransferCursorHistory("not-a-cursor"))
+        assertEquals(listOf(null), restoreMediaTransferCursorHistory("-\ninvalid"))
+    }
+
+    @Test
     fun tenThousandPersistedCompletionsKeepHistoryAndUiWindowsBounded() = runBlocking {
         val retainedHistory = 1_000
         val store = MediaBackupLedgerStore(
