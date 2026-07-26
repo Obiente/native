@@ -2,6 +2,8 @@ FROM node:22-alpine AS build
 
 WORKDIR /source
 
+RUN apk add --no-cache git
+
 COPY website/package.json website/package-lock.json ./website/
 RUN npm ci --prefix website
 
