@@ -43,6 +43,7 @@ fun NativeDeckScreen(
     var loadAttempt by remember(session) { mutableStateOf(0) }
     var interaction by remember(session) { mutableStateOf<DeckUiInteraction?>(null) }
     var mutationBusy by remember(session) { mutableStateOf(false) }
+    var mutationOutcomeUnknown by remember(session) { mutableStateOf(false) }
     var mutationError by remember(session) { mutableStateOf<String?>(null) }
     var commentsState by remember(session) {
         mutableStateOf(DeckUiCommentsState(comments = emptyList()))
@@ -118,12 +119,16 @@ fun NativeDeckScreen(
             parseDeckMutationReceipt(response)
         },
     ) {
-        if (mutationBusy) return
+        if (mutationBusy || mutationOutcomeUnknown) return
         scope.launch {
             mutationBusy = true
             mutationError = null
+            var responseStatus: Int? = null
             runCatching {
-                services.executeNextcloudApi(session, request()).also(onResponse)
+                services.executeNextcloudApi(session, request()).also {
+                    responseStatus = it.status
+                    onResponse(it)
+                }
             }.onSuccess {
                 interaction = null
                 if (returnToBoards) {
@@ -136,8 +141,67 @@ fun NativeDeckScreen(
                 refreshBoard()
             }.onFailure { error ->
                 if (error is CancellationException) throw error
-                mutationError = error.deckMessage()
+                if (isAmbiguousDeckMutationFailure(responseStatus)) {
+                    mutationOutcomeUnknown = true
+                    mutationError = "Deck may have applied this action. Refreshing before another change."
+                    refreshBoard()
+                } else {
+                    mutationError = error.deckMessage()
+                }
             }
+            mutationBusy = false
+        }
+    }
+
+    fun runRevalidatedCardMutation(
+        original: DeckCard,
+        conflictInteraction: (DeckCard, DeckStack) -> DeckUiInteraction,
+        update: (DeckCard) -> DeckCardUpdate,
+    ) {
+        if (mutationBusy || mutationOutcomeUnknown) return
+        scope.launch {
+            mutationBusy = true
+            mutationError = null
+            runCatching { fetchAuthoritativeCard(original) }
+                .onSuccess { current ->
+                    replaceCard(current)
+                    if (!original.hasSameAuthoritativeRevision(current)) {
+                        interaction = conflictInteraction(current, stackFor(current))
+                        mutationError = "This card changed elsewhere. Review the latest version before saving."
+                    } else {
+                        var responseStatus: Int? = null
+                        runCatching {
+                            services.executeNextcloudApi(
+                                session,
+                                writePlan().updateCard(
+                                    boardAccess(checkNotNull(boardState()?.board)),
+                                    cardContext(current),
+                                    update(current),
+                                ),
+                            ).also {
+                                responseStatus = it.status
+                                parseDeckMutationReceipt(it)
+                            }
+                        }.onSuccess {
+                            interaction = null
+                            refreshBoard()
+                        }.onFailure { error ->
+                            if (error is CancellationException) throw error
+                            if (isAmbiguousDeckMutationFailure(responseStatus)) {
+                                mutationOutcomeUnknown = true
+                                mutationError =
+                                    "Deck may have applied this card update. Refreshing before another change."
+                                refreshBoard()
+                            } else {
+                                mutationError = error.deckMessage()
+                            }
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    mutationError = error.deckMessage()
+                }
             mutationBusy = false
         }
     }
@@ -200,11 +264,6 @@ fun NativeDeckScreen(
                 DeckCardInsertionPlan.Unchanged -> {
                     interaction = null
                     mutationError = null
-                }
-                is DeckCardInsertionPlan.RebalanceRequired -> {
-                    mutationError = "Refresh this board before moving the card to that position."
-                    interaction = DeckUiInteraction.MoveCard(card)
-                    refreshBoard()
                 }
             }
         }.onFailure { error ->
@@ -298,20 +357,34 @@ fun NativeDeckScreen(
             parseDeckCommentMutationReceipt(response)
         },
     ) {
-        if (commentsState.submitting) return
+        if (commentsState.submitting || mutationOutcomeUnknown) return
         commentsState = commentsState.copy(submitting = true, errorMessage = null)
         scope.launch {
+            var responseStatus: Int? = null
             runCatching {
-                services.executeNextcloudApi(session, request()).also(onResponse)
+                services.executeNextcloudApi(session, request()).also {
+                    responseStatus = it.status
+                    onResponse(it)
+                }
             }.onSuccess {
                 commentsState = commentsState.copy(submitting = false)
                 loadComments(card, append = false)
             }.onFailure { error ->
                 if (error is CancellationException) throw error
-                commentsState = commentsState.copy(
-                    submitting = false,
-                    errorMessage = error.deckMessage(),
-                )
+                if (isAmbiguousDeckMutationFailure(responseStatus)) {
+                    mutationOutcomeUnknown = true
+                    commentsState = commentsState.copy(
+                        submitting = false,
+                        errorMessage = "Deck may have applied this comment action. Checking the card first.",
+                    )
+                    loadComments(card, append = false)
+                    refreshBoard()
+                } else {
+                    commentsState = commentsState.copy(
+                        submitting = false,
+                        errorMessage = error.deckMessage(),
+                    )
+                }
             }
         }
     }
@@ -485,6 +558,7 @@ fun NativeDeckScreen(
             runCatching {
                 loadDeckBoards(services, session)
             }.onSuccess { loaded ->
+                val reconciledUnknownMutation = mutationOutcomeUnknown
                 loadedBoards = loaded.boards
                 capabilities = loaded.capabilities
                 activeRoute = loaded.route
@@ -510,6 +584,11 @@ fun NativeDeckScreen(
                         )
                     }
                 }
+                if (reconciledUnknownMutation) {
+                    mutationOutcomeUnknown = false
+                    interaction = null
+                    mutationError = null
+                }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 state = DeckWorkspaceState.Error(
@@ -534,6 +613,7 @@ fun NativeDeckScreen(
                     preferredRoute = activeRoute,
                 )
             }.onSuccess { loaded ->
+                val reconciledUnknownMutation = mutationOutcomeUnknown
                 activeRoute = loaded.route
                 val restoredCardId = selectedCardId?.takeIf { cardId ->
                     loaded.stacks.any { stack -> stack.cards.any { it.id == cardId } }
@@ -544,6 +624,11 @@ fun NativeDeckScreen(
                     stacks = loaded.stacks,
                     selectedCardId = restoredCardId,
                 )
+                if (reconciledUnknownMutation) {
+                    mutationOutcomeUnknown = false
+                    interaction = null
+                    mutationError = null
+                }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 state = DeckWorkspaceState.Error(
@@ -824,16 +909,16 @@ fun NativeDeckScreen(
                         },
                     )
                 } else {
-                    runMutation(
-                        request = {
-                            writePlan().updateCard(
-                                boardAccess(board),
-                                cardContext(overlay.card),
-                                overlay.card.toUpdate(
-                                    title = draft.title,
-                                    description = draft.descriptionMarkdown,
-                                    dueAt = deckUiInstant(draft.dueDate, draft.dueTime),
-                                ),
+                    runRevalidatedCardMutation(
+                        original = overlay.card,
+                        conflictInteraction = { current, stack ->
+                            DeckUiInteraction.CardEditor(stack, current)
+                        },
+                        update = { current ->
+                            current.toUpdate(
+                                title = draft.title,
+                                description = draft.descriptionMarkdown,
+                                dueAt = deckUiInstant(draft.dueDate, draft.dueTime),
                             )
                         },
                     )
@@ -915,26 +1000,20 @@ fun NativeDeckScreen(
             quickDueDates = deckQuickDueDates(),
             onDismiss = { if (!mutationBusy) interaction = null },
             onSubmit = { date, time ->
-                val board = checkNotNull(boardState()?.board)
-                runMutation(
-                    request = {
-                        writePlan().updateCard(
-                            boardAccess(board),
-                            cardContext(overlay.card),
-                            overlay.card.toUpdate(dueAt = deckUiInstant(date, time)),
-                        )
+                runRevalidatedCardMutation(
+                    original = overlay.card,
+                    conflictInteraction = { current, _ -> DeckUiInteraction.DueDate(current) },
+                    update = { current ->
+                        current.toUpdate(dueAt = deckUiInstant(date, time))
                     },
                 )
             },
             onClear = {
-                val board = checkNotNull(boardState()?.board)
-                runMutation(
-                    request = {
-                        writePlan().updateCard(
-                            boardAccess(board),
-                            cardContext(overlay.card),
-                            overlay.card.toUpdate(dueAt = null),
-                        )
+                runRevalidatedCardMutation(
+                    original = overlay.card,
+                    conflictInteraction = { current, _ -> DeckUiInteraction.DueDate(current) },
+                    update = { current ->
+                        current.toUpdate(dueAt = null)
                     },
                 )
             },
