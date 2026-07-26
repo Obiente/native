@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -35,15 +38,23 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
@@ -51,6 +62,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
+import kotlin.math.roundToInt
 
 @Composable
 fun NativeDeckBoardSurface(
@@ -67,6 +79,7 @@ fun NativeDeckBoardSurface(
     boardActions: (DeckBoard) -> List<NextcloudCardAction> = { emptyList() },
     stackActions: (DeckStack) -> List<NextcloudCardAction> = { emptyList() },
     cardActions: (DeckCard) -> List<NextcloudCardAction> = { emptyList() },
+    onMoveCard: ((DeckCard, DeckStack, Int) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     when (state) {
@@ -111,6 +124,7 @@ fun NativeDeckBoardSurface(
             boardActions = boardActions,
             stackActions = stackActions,
             cardActions = cardActions,
+            onMoveCard = onMoveCard,
             modifier = modifier,
         )
     }
@@ -241,6 +255,7 @@ private fun DeckBoardWorkspace(
     boardActions: (DeckBoard) -> List<NextcloudCardAction>,
     stackActions: (DeckStack) -> List<NextcloudCardAction>,
     cardActions: (DeckCard) -> List<NextcloudCardAction>,
+    onMoveCard: ((DeckCard, DeckStack, Int) -> Unit)?,
     modifier: Modifier,
 ) {
     val activeBoardActions = boardActions(state.board)
@@ -289,6 +304,7 @@ private fun DeckBoardWorkspace(
                     onCreateCard = onCreateCard,
                     stackActions = stackActions,
                     cardActions = cardActions,
+                    onMoveCard = onMoveCard,
                     modifier = Modifier.weight(1f),
                 )
                 if (showInspector) {
@@ -354,6 +370,7 @@ private fun DeckLanes(
     onCreateCard: ((DeckStack) -> Unit)?,
     stackActions: (DeckStack) -> List<NextcloudCardAction>,
     cardActions: (DeckCard) -> List<NextcloudCardAction>,
+    onMoveCard: ((DeckCard, DeckStack, Int) -> Unit)?,
     modifier: Modifier,
 ) {
     if (stacks.isEmpty()) {
@@ -366,22 +383,87 @@ private fun DeckLanes(
         }
         return
     }
-    LazyRow(
-        modifier = modifier.fillMaxHeight(),
-        contentPadding = PaddingValues(NextcloudSpacing.Large),
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+    val stackBounds = remember { mutableStateMapOf<Long, DeckUiRect>() }
+    val cardBounds = remember { mutableStateMapOf<Long, DeckUiRect>() }
+    var draggedCard by remember { mutableStateOf<DeckCard?>(null) }
+    var dragPosition by remember { mutableStateOf<Offset?>(null) }
+    var dragGrabOffset by remember { mutableStateOf(Offset.Zero) }
+    var dropTarget by remember { mutableStateOf<DeckUiCardDropTarget?>(null) }
+    var lanesBounds by remember { mutableStateOf<DeckUiRect?>(null) }
+
+    fun resolveDropTarget(card: DeckCard, position: Offset): DeckUiCardDropTarget? =
+        resolveDeckUiCardDropTarget(
+            pointerX = position.x,
+            pointerY = position.y,
+            zones = stacks.mapNotNull { stack ->
+                stackBounds[stack.id]?.let { bounds ->
+                    DeckUiStackDropZone(
+                        stack = stack,
+                        bounds = bounds,
+                        cards = stack.cards.mapNotNull { candidate ->
+                            cardBounds[candidate.id]?.let { cardBounds ->
+                                DeckUiCardDropZone(candidate, cardBounds)
+                            }
+                        },
+                    )
+                }
+            },
+            draggedCard = card,
+        )
+
+    fun clearDrag() {
+        draggedCard = null
+        dragPosition = null
+        dragGrabOffset = Offset.Zero
+        dropTarget = null
+    }
+
+    Box(
+        modifier = modifier.fillMaxHeight().onGloballyPositioned { coordinates ->
+            lanesBounds = coordinates.boundsInWindow().toDeckUiRect()
+        },
     ) {
-        items(stacks, key = DeckStack::id) { stack ->
+        LazyRow(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(NextcloudSpacing.Large),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        ) {
+            items(stacks, key = DeckStack::id) { stack ->
             val actions = stackActions(stack)
             var menuExpanded by remember(stack.id) { mutableStateOf(false) }
+            val laneShape = RoundedCornerShape(NextcloudRadii.Card)
+            val isDropTarget = dropTarget?.stack?.id == stack.id
             Card(
-                modifier = Modifier.width(316.dp).fillMaxHeight(),
+                modifier = Modifier.width(316.dp).fillMaxHeight()
+                    .onGloballyPositioned { coordinates ->
+                        stackBounds[stack.id] = coordinates.boundsInWindow().toDeckUiRect()
+                    }
+                    .then(
+                        if (isDropTarget) {
+                            Modifier.border(
+                                width = 2.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = laneShape,
+                            )
+                        } else {
+                            Modifier
+                        },
+                    ),
+                shape = laneShape,
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                 ),
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                    modifier = Modifier.fillMaxWidth()
+                        .nextcloudCardInteractions(
+                            onOpen = null,
+                            onShowActions = actions.takeIf { it.isNotEmpty() }?.let {
+                                { menuExpanded = true }
+                            },
+                            actionsLabel = "Actions for ${stack.title}",
+                        )
+                        .padding(NextcloudSpacing.Medium),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
@@ -413,14 +495,68 @@ private fun DeckLanes(
                     ),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                 ) {
-                    items(stack.cards, key = DeckCard::id) { card ->
-                        DeckCardItem(
-                            card = card,
-                            selected = card.id == selectedCardId,
-                            onOpen = { onOpenCard(card) },
-                            onSelect = { onSelectCard(card) },
-                            actions = cardActions(card),
-                        )
+                    val activeCard = draggedCard
+                    val activeTarget = dropTarget?.takeIf { it.stack.id == stack.id }
+                    stack.cards.forEachIndexed { index, card ->
+                        val insertionBefore = stack.cards
+                            .take(index)
+                            .count { candidate -> candidate.id != activeCard?.id }
+                        if (
+                            card.id != activeCard?.id &&
+                            activeTarget?.insertionIndex == insertionBefore
+                        ) {
+                            item(key = "drop-${stack.id}-$insertionBefore") {
+                                DeckDropIndicator()
+                            }
+                        }
+                        item(key = card.id) {
+                            DeckCardItem(
+                                card = card,
+                                selected = card.id == selectedCardId,
+                                dragging = card.id == activeCard?.id,
+                                dragEnabled = onMoveCard != null,
+                                onBoundsChanged = { bounds -> cardBounds[card.id] = bounds },
+                                onDragStart = dragStart@{ localPosition ->
+                                    val bounds = cardBounds[card.id] ?: return@dragStart
+                                    val position = Offset(
+                                        x = bounds.left + localPosition.x,
+                                        y = bounds.top + localPosition.y,
+                                    )
+                                    draggedCard = card
+                                    dragGrabOffset = localPosition
+                                    dragPosition = position
+                                    dropTarget = resolveDropTarget(card, position)
+                                },
+                                onDrag = drag@{ amount ->
+                                    val position = (dragPosition ?: return@drag) + amount
+                                    dragPosition = position
+                                    dropTarget = resolveDropTarget(card, position)
+                                },
+                                onDragEnd = {
+                                    val target = dropTarget
+                                    if (target != null && !target.isNoOpFor(card, stacks)) {
+                                        onMoveCard?.invoke(
+                                            card,
+                                            target.stack,
+                                            target.insertionIndex,
+                                        )
+                                    }
+                                    clearDrag()
+                                },
+                                onDragCancel = ::clearDrag,
+                                onOpen = { onOpenCard(card) },
+                                onSelect = { onSelectCard(card) },
+                                actions = cardActions(card),
+                            )
+                        }
+                    }
+                    val remainingCardCount = stack.cards.count { card ->
+                        card.id != activeCard?.id
+                    }
+                    if (activeTarget?.insertionIndex == remainingCardCount) {
+                        item(key = "drop-${stack.id}-$remainingCardCount") {
+                            DeckDropIndicator()
+                        }
                     }
                     if (stack.cards.isEmpty()) {
                         item {
@@ -433,6 +569,32 @@ private fun DeckLanes(
                     }
                 }
             }
+            }
+        }
+        val previewCard = draggedCard
+        val previewPosition = dragPosition
+        val viewport = lanesBounds
+        if (previewCard != null && previewPosition != null && viewport != null) {
+            DeckDraggedCardPreview(
+                card = previewCard,
+                target = dropTarget,
+                modifier = Modifier
+                    .offset {
+                        IntOffset(
+                            x = (
+                                previewPosition.x -
+                                    viewport.left -
+                                    dragGrabOffset.x
+                                ).roundToInt(),
+                            y = (
+                                previewPosition.y -
+                                    viewport.top -
+                                    dragGrabOffset.y
+                                ).roundToInt(),
+                        )
+                    }
+                    .zIndex(2f),
+            )
         }
     }
 }
@@ -441,6 +603,13 @@ private fun DeckLanes(
 private fun DeckCardItem(
     card: DeckCard,
     selected: Boolean,
+    dragging: Boolean,
+    dragEnabled: Boolean,
+    onBoundsChanged: (DeckUiRect) -> Unit,
+    onDragStart: (Offset) -> Unit,
+    onDrag: (Offset) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit,
     onOpen: () -> Unit,
     onSelect: () -> Unit,
     actions: List<NextcloudCardAction>,
@@ -452,14 +621,42 @@ private fun DeckCardItem(
         NextcloudTheme.colors.appTile
     }
     Card(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(NextcloudRadii.Card))
+        modifier = Modifier.fillMaxWidth()
+            .onGloballyPositioned { coordinates ->
+                onBoundsChanged(coordinates.boundsInWindow().toDeckUiRect())
+            }
+            .graphicsLayer {
+                alpha = if (dragging) 0.18f else 1f
+            }
+            .then(
+                if (dragEnabled) {
+                    Modifier.pointerInput(card.id) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = onDragStart,
+                            onDragEnd = onDragEnd,
+                            onDragCancel = onDragCancel,
+                            onDrag = { change, amount ->
+                                change.consume()
+                                onDrag(amount)
+                            },
+                        )
+                    }
+                } else {
+                    Modifier
+                },
+            )
+            .clip(RoundedCornerShape(NextcloudRadii.Card))
             .nextcloudCardInteractions(
                 onOpen = {
                     onSelect()
                     onOpen()
                 },
-                onShowActions = actions.takeIf { it.isNotEmpty() }?.let {
-                    { menuExpanded = true }
+                onShowActions = if (dragEnabled) {
+                    null
+                } else {
+                    actions.takeIf { it.isNotEmpty() }?.let {
+                        { menuExpanded = true }
+                    }
                 },
                 openLabel = "Open ${card.title}",
                 actionsLabel = "Actions for ${card.title}",
@@ -521,6 +718,58 @@ private fun DeckCardItem(
         }
     }
 }
+
+@Composable
+private fun DeckDraggedCardPreview(
+    card: DeckCard,
+    target: DeckUiCardDropTarget?,
+    modifier: Modifier,
+) {
+    Card(
+        modifier = modifier.width(300.dp),
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+        ) {
+            Text(
+                card.title,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                target?.let { "Move to ${it.stack.title}" } ?: "Move over a list",
+                style = MaterialTheme.typography.labelMedium,
+                color = target?.let { MaterialTheme.colorScheme.primary }
+                    ?: MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DeckDropIndicator() {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Small),
+        shape = RoundedCornerShape(NextcloudRadii.Pill),
+        color = MaterialTheme.colorScheme.primary,
+    ) {
+        Spacer(modifier = Modifier.fillMaxWidth().heightIn(min = 4.dp))
+    }
+}
+
+private fun androidx.compose.ui.geometry.Rect.toDeckUiRect() = DeckUiRect(
+    left = left,
+    top = top,
+    right = right,
+    bottom = bottom,
+)
 
 @Composable
 private fun DeckCardInspector(
