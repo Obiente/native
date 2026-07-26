@@ -57,51 +57,28 @@ internal fun ExistingFileShareManager(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    "${shareTypeLabel(share.shareType)} · ${fileSharePermissionsLabel(share.permissions)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (safeUrl != null) {
-                TextButton(
-                    enabled = !running,
-                    onClick = {
-                        error = if (services.copyTextToClipboard("Nextcloud share link", safeUrl)) {
-                            null
-                        } else {
-                            "Could not copy the link."
-                        }
-                    },
-                ) { Text("Copy") }
-            }
-        }
-        if (share.passwordProtected || share.expiration != null) {
-            Text(
-                buildList {
-                    if (share.passwordProtected) add("Password protected")
-                    share.expiration?.let { add("Expires $it") }
-                }.joinToString(" - "),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        share.note?.let { note ->
-            Text(
-                note,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        ExistingFileShareSummary(
+            share = share,
+            running = running,
+            canCopy = safeUrl != null,
+            showManagementActions = !editing,
+            onCopy = {
+                error = if (safeUrl != null && services.copyTextToClipboard("Nextcloud share link", safeUrl)) {
+                    null
+                } else {
+                    "Could not copy the link."
+                }
+            },
+            onPermissions = {
+                draft = existingFileShareEditDraft(share)
+                error = null
+                editing = true
+            },
+            onRevoke = {
+                error = null
+                confirmRevoke = true
+            },
+        )
         if (editing) {
             Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                 FilterChip(selected = true, enabled = false, onClick = {}, label = { Text("Can view") })
@@ -241,26 +218,6 @@ internal fun ExistingFileShareManager(
                     Text("Save")
                 }
             }
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                OutlinedButton(
-                    enabled = !running,
-                    onClick = {
-                        draft = existingFileShareEditDraft(share)
-                        error = null
-                        editing = true
-                    },
-                ) { Text("Permissions") }
-                TextButton(
-                    enabled = !running,
-                    onClick = {
-                        error = null
-                        confirmRevoke = true
-                    },
-                ) {
-                    Text("Revoke", color = MaterialTheme.colorScheme.error)
-                }
-            }
         }
         error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -304,6 +261,77 @@ internal fun ExistingFileShareManager(
                 }
             },
         )
+    }
+}
+
+@Composable
+internal fun ExistingFileShareSummary(
+    share: NextcloudFileShare,
+    running: Boolean,
+    canCopy: Boolean,
+    showManagementActions: Boolean,
+    onCopy: () -> Unit,
+    onPermissions: () -> Unit,
+    onRevoke: () -> Unit,
+) {
+    val label = share.displayName ?: share.shareWith ?: shareTypeLabel(share.shareType)
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    "${shareTypeLabel(share.shareType)} - ${fileSharePermissionsLabel(share.permissions)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (canCopy) {
+                TextButton(
+                    enabled = !running,
+                    onClick = onCopy,
+                ) { Text("Copy") }
+            }
+        }
+        if (share.passwordProtected || share.expiration != null) {
+            Text(
+                buildList {
+                    if (share.passwordProtected) add("Password protected")
+                    share.expiration?.let { add("Expires $it") }
+                }.joinToString(" - "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        share.note?.let { note ->
+            Text(
+                note,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (showManagementActions) {
+            Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                OutlinedButton(
+                    enabled = !running,
+                    onClick = onPermissions,
+                ) { Text("Permissions") }
+                TextButton(
+                    enabled = !running,
+                    onClick = onRevoke,
+                ) {
+                    Text("Revoke", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
     }
 }
 

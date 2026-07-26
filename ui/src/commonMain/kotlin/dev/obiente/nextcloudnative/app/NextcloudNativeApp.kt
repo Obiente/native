@@ -333,6 +333,11 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.ObsidianSync -> MarketingObsidianSyncScenario()
                     MarketingCaptureScenario.MediaBackup -> MarketingMediaBackupScenario()
                     MarketingCaptureScenario.AdaptiveApp -> MarketingAdaptiveAppScenario()
+                    MarketingCaptureScenario.FileShareUserMobile,
+                    MarketingCaptureScenario.FileShareGroupDesktop,
+                    MarketingCaptureScenario.FileShareLoadingMobile,
+                    MarketingCaptureScenario.FileShareErrorMobile,
+                    -> MarketingFileShareScenario(scenario)
                     MarketingCaptureScenario.DesktopHome,
                     MarketingCaptureScenario.MobileHome,
                     -> {
@@ -4320,211 +4325,97 @@ private fun FilesScreen(
     }
 
     shareTarget?.let { target ->
-        val supportedTargets = FileShareTarget.entries.filter(effectiveFileSharing::canOffer)
-        val requestedPermissions = (
-            if (shareAllowsEditing) FileSharePermissionPreset.Edit else FileSharePermissionPreset.View
-            ).toPermissions(target.isDirectory)
-        val creationPlan = planFileShareCreation(
-            file = target,
-            target = shareType,
-            recipient = shareRecipient.takeIf { shareType.requiresRecipient },
-            permissions = requestedPermissions,
-            capabilities = effectiveFileSharing,
-            details = shareDetails,
-        )
-        AlertDialog(
-            onDismissRequest = {
-                if (!shareRunning) {
-                    shareTarget = null
-                    shareError = null
-                    shareNotice = null
+        FileShareDialog(
+            state = FileShareDialogUiState(
+                file = target,
+                capabilities = effectiveFileSharing,
+                existingShares = fileShares,
+                target = shareType,
+                recipient = shareRecipient,
+                allowEditing = shareAllowsEditing,
+                details = shareDetails,
+                running = shareRunning,
+                notice = shareNotice,
+                error = shareError,
+            ),
+            onDismiss = {
+                shareTarget = null
+                shareError = null
+                shareNotice = null
+            },
+            onTargetChanged = { targetType ->
+                shareType = targetType
+                shareRecipient = ""
+                shareDetails = shareDetails.copy(
+                    password = "",
+                    expiration = FileShareExpiration.ServerDefault,
+                )
+                shareError = null
+            },
+            onAllowEditingChanged = { shareAllowsEditing = it },
+            onDetailsChanged = {
+                shareDetails = it
+                shareError = null
+            },
+            onCreate = { ready ->
+                shareRunning = true
+                shareError = null
+                shareNotice = null
+                scope.launch {
+                    runCatching { services.createFileShare(session, ready.request) }
+                        .onSuccess { created ->
+                            val safeUrl = safeFileShareUrl(session, created)
+                            val copied = safeUrl != null &&
+                                services.copyTextToClipboard("Nextcloud share link", safeUrl)
+                            shareNotice = if (copied) "Share created and link copied" else "Share created"
+                            fileShares = runCatching {
+                                services.listFileShares(session, target.path)
+                            }.getOrElse { fileShares.orEmpty() + created }
+                            shareRecipient = ""
+                        }
+                        .onFailure {
+                            shareError = it.message ?: "Could not create the share."
+                        }
+                    shareRunning = false
                 }
             },
-            title = { Text("Share ${target.name}") },
-            text = {
-                Column(
-                    modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                ) {
-                    Text(
-                        if (target.isDirectory) {
-                            "Manage access to this folder on your Nextcloud server."
-                        } else {
-                            "Manage access to this file on your Nextcloud server."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text("Existing access", style = MaterialTheme.typography.titleSmall)
-                    when (val loadedShares = fileShares) {
-                        null -> CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                        else -> if (loadedShares.isEmpty()) {
-                            Text(
-                                "Not shared yet.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        } else {
-                            loadedShares.take(12).forEach { existing ->
-                                ExistingFileShareManager(
-                                    share = existing,
-                                    sourceIsDirectory = target.isDirectory,
-                                    session = session,
-                                    services = services,
-                                    capabilities = effectiveFileSharing,
-                                    onChanged = { changed ->
-                                        fileShares = fileShares.orEmpty().map {
-                                            if (it.id == changed.id) changed else it
-                                        }
-                                    },
-                                    onRevoked = { revoked ->
-                                        fileShares = fileShares.orEmpty().filterNot { it.id == revoked.id }
-                                        shareNotice = "Access revoked"
-                                    },
-                                )
-                            }
-                            if (loadedShares.size > 12) {
-                                Text(
-                                    "${loadedShares.size - 12} more shares are active.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                    if (supportedTargets.isNotEmpty()) {
-                        HorizontalDivider()
-                        Text("Create access", style = MaterialTheme.typography.titleSmall)
-                        LazyRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                            contentPadding = PaddingValues(end = NextcloudSpacing.Small),
-                        ) {
-                            listItems(supportedTargets, key = FileShareTarget::name) { targetType ->
-                                FilterChip(
-                                    selected = shareType == targetType,
-                                    enabled = !shareRunning,
-                                    onClick = {
-                                        shareType = targetType
-                                        shareRecipient = ""
-                                        shareDetails = shareDetails.copy(
-                                            password = "",
-                                            expiration = FileShareExpiration.ServerDefault,
-                                        )
-                                        shareError = null
-                                    },
-                                    label = {
-                                        Text(
-                                            targetType.presentation().label,
-                                            maxLines = 1,
-                                        )
-                                    },
-                                )
-                            }
-                        }
-                        if (shareType.requiresRecipient) {
-                            FileShareRecipientPicker(
-                                session = session,
-                                services = services,
-                                target = shareType,
-                                file = target,
-                                selectedRecipient = shareRecipient,
-                                enabled = !shareRunning,
-                                onSelected = {
-                                    shareRecipient = it?.id.orEmpty()
-                                    shareError = null
-                                },
-                                onResultsObserved = { recipients ->
-                                    effectiveFileSharing = effectiveFileSharing.withObservedRecipientProvider(
-                                        shareType,
-                                        recipients,
-                                    )
-                                },
-                            )
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                            FilterChip(
-                                selected = !shareAllowsEditing,
-                                enabled = !shareRunning,
-                                onClick = { shareAllowsEditing = false },
-                                label = { Text("Can view") },
-                            )
-                            FilterChip(
-                                selected = shareAllowsEditing,
-                                enabled = !shareRunning,
-                                onClick = { shareAllowsEditing = true },
-                                label = { Text("Can edit") },
-                            )
-                        }
-                        FileShareCreationFields(
-                            target = shareType,
-                            capabilities = effectiveFileSharing,
-                            details = shareDetails,
-                            enabled = !shareRunning,
-                            onDetailsChanged = {
-                                shareDetails = it
-                                shareError = null
-                            },
-                        )
-                        (creationPlan as? FileShareCreationPlan.Blocked)?.let {
-                            Text(
-                                it.reason,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                    }
-                    shareNotice?.let {
-                        Text(it, color = NextcloudTheme.colors.success, style = MaterialTheme.typography.bodySmall)
-                    }
-                    shareError?.let {
-                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(
+            recipientPicker = { targetType ->
+                FileShareRecipientPicker(
+                    session = session,
+                    services = services,
+                    target = targetType,
+                    file = target,
+                    selectedRecipient = shareRecipient,
                     enabled = !shareRunning,
-                    onClick = {
-                        shareTarget = null
+                    onSelected = {
+                        shareRecipient = it?.id.orEmpty()
                         shareError = null
-                        shareNotice = null
                     },
-                ) { Text("Close") }
+                    onResultsObserved = { recipients ->
+                        effectiveFileSharing = effectiveFileSharing.withObservedRecipientProvider(
+                            targetType,
+                            recipients,
+                        )
+                    },
+                )
             },
-            confirmButton = {
-                Button(
-                    enabled = creationPlan is FileShareCreationPlan.Ready && !shareRunning,
-                    onClick = {
-                        val ready = creationPlan as? FileShareCreationPlan.Ready ?: return@Button
-                        shareRunning = true
-                        shareError = null
-                        shareNotice = null
-                        scope.launch {
-                            runCatching { services.createFileShare(session, ready.request) }
-                                .onSuccess { created ->
-                                    val safeUrl = safeFileShareUrl(session, created)
-                                    val copied = safeUrl != null &&
-                                        services.copyTextToClipboard("Nextcloud share link", safeUrl)
-                                    shareNotice = if (copied) "Share created and link copied" else "Share created"
-                                    fileShares = runCatching {
-                                        services.listFileShares(session, target.path)
-                                    }.getOrElse { current -> fileShares.orEmpty() + created }
-                                    shareRecipient = ""
-                                }
-                                .onFailure {
-                                    shareError = it.message ?: "Could not create the share."
-                                }
-                            shareRunning = false
+            existingShare = { existing ->
+                ExistingFileShareManager(
+                    share = existing,
+                    sourceIsDirectory = target.isDirectory,
+                    session = session,
+                    services = services,
+                    capabilities = effectiveFileSharing,
+                    onChanged = { changed ->
+                        fileShares = fileShares.orEmpty().map {
+                            if (it.id == changed.id) changed else it
                         }
                     },
-                ) {
-                    if (shareRunning) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.size(8.dp))
-                    }
-                    Text(if (shareRunning) "Creating..." else "Create")
-                }
+                    onRevoked = { revoked ->
+                        fileShares = fileShares.orEmpty().filterNot { it.id == revoked.id }
+                        shareNotice = "Access revoked"
+                    },
+                )
             },
         )
     }
