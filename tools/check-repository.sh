@@ -55,6 +55,8 @@ bash tools/test-apksigner-certificate-parser.sh
 bash tools/test-build-jvm-criteria.sh
 node tools/changelog-fragments.mjs validate
 node --test tools/changelog-fragments.test.mjs
+bash tools/test-desktop-package-version.sh
+bash tools/test-android-update-manifest-assets.sh
 bash tools/test-nightly-release-workflow.sh
 
 printf 'Repository hygiene checks passed.\n'

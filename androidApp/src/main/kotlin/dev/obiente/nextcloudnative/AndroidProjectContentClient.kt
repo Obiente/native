@@ -9,7 +9,6 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
-import dev.obiente.nextcloudnative.app.ANDROID_PRERELEASE_DISCOVERY_URL
 import dev.obiente.nextcloudnative.app.AndroidDirectRelease
 import dev.obiente.nextcloudnative.app.AndroidUpdateChannel
 import dev.obiente.nextcloudnative.app.AppDistributionChannel
@@ -18,7 +17,6 @@ import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallState
 import dev.obiente.nextcloudnative.app.AppUpdateSupport
 import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_APK_BYTES
-import dev.obiente.nextcloudnative.app.MAX_ANDROID_RELEASE_DISCOVERY_BYTES
 import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_METADATA_BYTES
 import dev.obiente.nextcloudnative.app.MAX_PROJECT_NEWS_FEED_BYTES
 import dev.obiente.nextcloudnative.app.MAX_PROJECT_NEWS_IMAGE_BYTES
@@ -28,9 +26,9 @@ import dev.obiente.nextcloudnative.app.ProjectNewsImage
 import dev.obiente.nextcloudnative.app.isNewerAndroidRelease
 import dev.obiente.nextcloudnative.app.isCanonicalAndroidUpdateManifestUrl
 import dev.obiente.nextcloudnative.app.isCanonicalProjectNewsImageUrl
+import dev.obiente.nextcloudnative.app.manifestUrl
 import dev.obiente.nextcloudnative.app.parseAndroidDirectRelease
 import dev.obiente.nextcloudnative.app.parseAndroidUpdateChannel
-import dev.obiente.nextcloudnative.app.parseAndroidUpdateManifestUrl
 import dev.obiente.nextcloudnative.app.parseProjectNewsFeed
 import dev.obiente.nextcloudnative.app.validateAndroidDirectRelease
 import java.io.File
@@ -183,11 +181,7 @@ internal class AndroidProjectContentClient(
         val support = support()
         if (!support.canCheckDirectUpdates) return AppUpdateCheckResult.Unavailable(support)
         return runCatching {
-            val bytes = getBounded(
-                ANDROID_PRERELEASE_DISCOVERY_URL,
-                MAX_ANDROID_RELEASE_DISCOVERY_BYTES.toLong(),
-            )
-            val metadataUrl = parseAndroidUpdateManifestUrl(bytes, channel)
+            val metadataUrl = channel.manifestUrl()
             val metadata = getBounded(metadataUrl, MAX_ANDROID_UPDATE_METADATA_BYTES.toLong())
             val release = parseAndroidDirectRelease(metadata, metadataUrl)
             if (isNewerAndroidRelease(support.currentVersionCode, release)) {
@@ -372,16 +366,10 @@ internal class AndroidProjectContentClient(
     private fun getBounded(url: String, maximumBytes: Long): ByteArray {
         require(
             url == PROJECT_NEWS_FEED_URL ||
-                url == ANDROID_PRERELEASE_DISCOVERY_URL ||
                 isCanonicalAndroidUpdateManifestUrl(url) ||
                 isCanonicalProjectNewsImageUrl(url),
         )
-        val request = Request.Builder().url(url).get().apply {
-            if (url == ANDROID_PRERELEASE_DISCOVERY_URL) {
-                header("Accept", "application/vnd.github+json")
-                header("X-GitHub-Api-Version", "2022-11-28")
-            }
-        }.build()
+        val request = Request.Builder().url(url).get().build()
         executeWithTrustedGitHubReleaseRedirect(client, request).use { response ->
             check(response.isSuccessful) { "Public content request failed (HTTP ${response.code})." }
             val body = requireNotNull(response.body)

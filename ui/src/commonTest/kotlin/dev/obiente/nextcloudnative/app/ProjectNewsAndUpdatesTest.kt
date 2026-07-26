@@ -131,9 +131,8 @@ class ProjectNewsAndUpdatesTest {
     }
 
     @Test
-    fun prereleaseParserMatchesTheWorkflowManifestAndDiscoveryContract() {
-        val metadataUrl =
-            "https://github.com/Obiente/nc-native/releases/download/v0.1.0-alpha.1/update-manifest.json"
+    fun prereleaseParserMatchesTheStableChannelPointerContract() {
+        val metadataUrl = AndroidUpdateChannel.Alpha.manifestUrl()
         val release = AndroidDirectRelease(
             schemaVersion = 1,
             channel = "prerelease-v1",
@@ -151,26 +150,15 @@ class ProjectNewsAndUpdatesTest {
                 "https://github.com/Obiente/nc-native/releases/tag/v0.1.0-alpha.1",
         )
         val encoded = Json.encodeToString(release).encodeToByteArray()
+        val immutableMetadataUrl =
+            "https://github.com/Obiente/nc-native/releases/download/" +
+                "v0.1.0-alpha.1/update-manifest.json"
 
         assertEquals(release, parseAndroidDirectRelease(encoded, metadataUrl))
+        assertEquals(release, parseAndroidDirectRelease(encoded, immutableMetadataUrl))
         assertTrue(isNewerAndroidRelease(0, release))
         assertFalse(isNewerAndroidRelease(1, release))
-        val discovery = """
-            [
-              {
-                "tag_name": "v0.1.0-alpha.1",
-                "draft": false,
-                "prerelease": true,
-                "assets": [
-                  {
-                    "name": "update-manifest.json",
-                    "browser_download_url": "$metadataUrl"
-                  }
-                ]
-              }
-            ]
-        """.trimIndent().encodeToByteArray()
-        assertEquals(metadataUrl, parseAndroidPrereleaseManifestUrl(discovery))
+        assertTrue(isCanonicalAndroidPrereleaseManifestUrl(metadataUrl))
         assertFailsWith<IllegalArgumentException> {
             validateAndroidDirectRelease(
                 release.copy(apkUrl = "https://downloads.invalid/nc-native.apk"),
@@ -207,8 +195,7 @@ class ProjectNewsAndUpdatesTest {
     @Test
     fun nightlyParserBindsManifestAndAssetsToTheImmutableTag() {
         val tag = "nightly-20260726-1430-run42-abcdef12"
-        val metadataUrl =
-            "https://github.com/Obiente/nc-native/releases/download/$tag/update-manifest.json"
+        val metadataUrl = AndroidUpdateChannel.Nightly.manifestUrl()
         val release = AndroidDirectRelease(
             schemaVersion = 1,
             channel = "nightly-v1",
@@ -225,43 +212,17 @@ class ProjectNewsAndUpdatesTest {
             releaseNotesUrl = "https://github.com/Obiente/nc-native/releases/tag/$tag",
         )
         val encoded = Json.encodeToString(release).encodeToByteArray()
-        val discovery = """
-            [
-              {
-                "tag_name": "nightly-20260726-1500-run43-fedcba98",
-                "draft": false,
-                "prerelease": true,
-                "assets": [
-                  {
-                    "name": "nextcloud-native-linux.rpm",
-                    "browser_download_url": "https://github.com/Obiente/nc-native/releases/download/nightly-20260726-1500-run43-fedcba98/nextcloud-native-linux.rpm"
-                  }
-                ]
-              },
-              {
-                "tag_name": "$tag",
-                "draft": false,
-                "prerelease": true,
-                "assets": [
-                  {
-                    "name": "update-manifest.json",
-                    "browser_download_url": "$metadataUrl"
-                  }
-                ]
-              }
-            ]
-        """.trimIndent().encodeToByteArray()
+        val immutableMetadataUrl =
+            "https://github.com/Obiente/nc-native/releases/download/$tag/update-manifest.json"
 
-        assertEquals(
-            metadataUrl,
-            parseAndroidUpdateManifestUrl(discovery, AndroidUpdateChannel.Nightly),
-        )
         assertEquals(release, parseAndroidDirectRelease(encoded, metadataUrl))
+        assertEquals(release, parseAndroidDirectRelease(encoded, immutableMetadataUrl))
         assertTrue(isCanonicalAndroidUpdateManifestUrl(metadataUrl))
+        assertTrue(isCanonicalAndroidUpdateManifestUrl(immutableMetadataUrl))
         assertFailsWith<IllegalArgumentException> {
             parseAndroidDirectRelease(
                 encoded,
-                metadataUrl.replace(tag, "nightly-20260726-1430-run43-abcdef12"),
+                AndroidUpdateChannel.Alpha.manifestUrl(),
             )
         }
         assertFailsWith<IllegalArgumentException> {
