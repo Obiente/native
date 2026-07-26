@@ -313,7 +313,7 @@ internal fun CreateFileShareRequest.toNextcloudApiRequest(
 private fun FileShareExpiration.toWireValue(dateSource: FileShareDateSource): String? = when (this) {
     FileShareExpiration.ServerDefault -> null
     FileShareExpiration.NoExpiration -> ""
-    is FileShareExpiration.OnDate -> requireNonPastFileShareDate(isoDate, dateSource)
+    is FileShareExpiration.OnDate -> requireFutureFileShareDate(isoDate, dateSource)
 }
 
 internal fun requireValidFileShareDate(value: String): String {
@@ -336,7 +336,7 @@ internal fun requireValidFileShareDate(value: String): String {
     return value
 }
 
-internal fun requireNonPastFileShareDate(
+internal fun requireFutureFileShareDate(
     value: String,
     dateSource: FileShareDateSource = DeviceLocalFileShareDateSource,
 ): String {
@@ -346,8 +346,8 @@ internal fun requireNonPastFileShareDate(
         month = valid.substring(5, 7).toInt(),
         day = valid.substring(8, 10).toInt(),
     )
-    require(selectedDate >= dateSource.currentDeviceLocalDate()) {
-        "Choose today or a future expiration date."
+    require(selectedDate > dateSource.currentDeviceLocalDate()) {
+        "Choose a future expiration date."
     }
     return valid
 }

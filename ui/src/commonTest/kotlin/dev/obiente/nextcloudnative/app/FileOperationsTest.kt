@@ -129,13 +129,16 @@ class FileOperationsTest {
     }
 
     @Test
-    fun expirationDatesUseAnInjectedDeviceLocalCalendarBoundary() {
+    fun expirationDatesMustBeFutureInTheInjectedDeviceLocalCalendar() {
         assertEquals(
-            "2026-07-25",
-            requireNonPastFileShareDate("2026-07-25", syntheticFileShareDateSource),
+            "2026-07-26",
+            requireFutureFileShareDate("2026-07-26", syntheticFileShareDateSource),
         )
         assertFailsWith<IllegalArgumentException> {
-            requireNonPastFileShareDate("2026-07-24", syntheticFileShareDateSource)
+            requireFutureFileShareDate("2026-07-25", syntheticFileShareDateSource)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            requireFutureFileShareDate("2026-07-24", syntheticFileShareDateSource)
         }
         assertFailsWith<IllegalArgumentException> {
             CreateFileShareRequest(

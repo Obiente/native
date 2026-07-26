@@ -2,8 +2,9 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -47,34 +48,44 @@ internal fun FileShareCreationFields(
 
         if (expirationPolicy.supported) {
             Text("Expiration", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                FilterChip(
-                    selected = details.expiration == FileShareExpiration.ServerDefault,
-                    enabled = enabled,
-                    onClick = {
-                        onDetailsChanged(details.copy(expiration = FileShareExpiration.ServerDefault))
-                    },
-                    label = { Text("Server default") },
-                )
-                if (!expirationPolicy.enforced) {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                contentPadding = PaddingValues(end = NextcloudSpacing.Small),
+            ) {
+                item {
                     FilterChip(
-                        selected = details.expiration == FileShareExpiration.NoExpiration,
+                        selected = details.expiration == FileShareExpiration.ServerDefault,
                         enabled = enabled,
                         onClick = {
-                            onDetailsChanged(details.copy(expiration = FileShareExpiration.NoExpiration))
+                            onDetailsChanged(details.copy(expiration = FileShareExpiration.ServerDefault))
                         },
-                        label = { Text("No expiration") },
+                        label = { Text("Server default", maxLines = 1) },
                     )
                 }
-                FilterChip(
-                    selected = details.expiration is FileShareExpiration.OnDate,
-                    enabled = enabled,
-                    onClick = {
-                        val current = (details.expiration as? FileShareExpiration.OnDate)?.isoDate.orEmpty()
-                        onDetailsChanged(details.copy(expiration = FileShareExpiration.OnDate(current)))
-                    },
-                    label = { Text("Choose date") },
-                )
+                if (!expirationPolicy.enforced) {
+                    item {
+                        FilterChip(
+                            selected = details.expiration == FileShareExpiration.NoExpiration,
+                            enabled = enabled,
+                            onClick = {
+                                onDetailsChanged(details.copy(expiration = FileShareExpiration.NoExpiration))
+                            },
+                            label = { Text("No expiration", maxLines = 1) },
+                        )
+                    }
+                }
+                item {
+                    FilterChip(
+                        selected = details.expiration is FileShareExpiration.OnDate,
+                        enabled = enabled,
+                        onClick = {
+                            val current = (details.expiration as? FileShareExpiration.OnDate)?.isoDate.orEmpty()
+                            onDetailsChanged(details.copy(expiration = FileShareExpiration.OnDate(current)))
+                        },
+                        label = { Text("Choose date", maxLines = 1) },
+                    )
+                }
             }
             (details.expiration as? FileShareExpiration.OnDate)?.let { expiration ->
                 OutlinedTextField(

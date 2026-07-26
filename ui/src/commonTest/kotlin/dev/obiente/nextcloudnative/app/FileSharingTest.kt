@@ -64,6 +64,29 @@ class FileSharingTest {
     }
 
     @Test
+    fun federatedExpirationAcceptsDocumentedObjectAndLegacyBooleanShapes() {
+        fun parseCapability(value: String): NextcloudFileSharingCapabilities =
+            parseNextcloudFileSharingCapabilities(
+                """
+                {
+                  "files_sharing": {
+                    "api_enabled": true,
+                    "federation": {
+                      "outgoing": true,
+                      "expire_date_supported": $value
+                    }
+                  }
+                }
+                """.trimIndent(),
+            )
+
+        assertTrue(parseCapability("""{"enabled": true}""").remoteExpirationSupported)
+        assertTrue(parseCapability("true").remoteExpirationSupported)
+        assertFalse(parseCapability("""{"enabled": false}""").remoteExpirationSupported)
+        assertFalse(parseCapability("false").remoteExpirationSupported)
+    }
+
+    @Test
     fun disabledOrMalformedCapabilitiesNeverGuessShareSupport() {
         assertEquals(
             NextcloudFileSharingCapabilities.Unavailable,
@@ -438,6 +461,32 @@ class FileSharingTest {
             ),
         )
         assertEquals(15, update.permissions?.mask)
+
+        val customShare = share.copy(permissions = 5)
+        val reshareEnabled = assertNotNull(
+            planExistingFileShareUpdate(
+                share = customShare,
+                draft = existingFileShareEditDraft(customShare).copy(allowResharing = true),
+                sourceIsDirectory = true,
+                target = FileShareTarget.Group,
+                expirationPolicy = FileShareFeaturePolicy(supported = false),
+                dateSource = syntheticFileShareDateSource,
+            ),
+        )
+        assertEquals(21, reshareEnabled.permissions?.mask)
+
+        val reshareDisabled = assertNotNull(
+            planExistingFileShareUpdate(
+                share = customShare.copy(permissions = 21),
+                draft = existingFileShareEditDraft(customShare.copy(permissions = 21))
+                    .copy(allowResharing = false),
+                sourceIsDirectory = true,
+                target = FileShareTarget.Group,
+                expirationPolicy = FileShareFeaturePolicy(supported = false),
+                dateSource = syntheticFileShareDateSource,
+            ),
+        )
+        assertEquals(5, reshareDisabled.permissions?.mask)
     }
 
     @Test

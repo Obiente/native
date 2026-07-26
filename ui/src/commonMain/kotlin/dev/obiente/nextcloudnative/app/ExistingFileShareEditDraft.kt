@@ -36,13 +36,24 @@ internal fun planExistingFileShareUpdate(
     ) {
         null
     } else {
-        FileSharePermissions(
-            read = true,
-            update = draft.allowEditing,
-            create = draft.allowEditing && sourceIsDirectory,
-            delete = draft.allowEditing && sourceIsDirectory,
-            reshare = draft.allowResharing,
-        )
+        var mask = share.permissions ?: FileSharePermissions(read = true).mask
+        if (draft.allowEditing != originalDraft.allowEditing) {
+            val editingMask = FILE_SHARE_UPDATE_PERMISSION or
+                if (sourceIsDirectory) {
+                    FILE_SHARE_CREATE_PERMISSION or FILE_SHARE_DELETE_PERMISSION
+                } else {
+                    0
+                }
+            mask = if (draft.allowEditing) mask or editingMask else mask and editingMask.inv()
+        }
+        if (draft.allowResharing != originalDraft.allowResharing) {
+            mask = if (draft.allowResharing) {
+                mask or FILE_SHARE_RESHARE_PERMISSION
+            } else {
+                mask and FILE_SHARE_RESHARE_PERMISSION.inv()
+            }
+        }
+        fileSharePermissionsFromMask(mask)
     }
     val password = when {
         draft.removePassword -> ""
@@ -55,7 +66,7 @@ internal fun planExistingFileShareUpdate(
         normalizedExpiration.isEmpty() && expirationPolicy.enforced ->
             error("This server requires an expiration date.")
         normalizedExpiration.isEmpty() -> ""
-        else -> requireNonPastFileShareDate(normalizedExpiration, dateSource)
+        else -> requireFutureFileShareDate(normalizedExpiration, dateSource)
     }
     val note = draft.note.takeIf { it != share.note.orEmpty() }
     if (permissions == null && password == null && expirationDate == null && note == null) return null
@@ -68,3 +79,8 @@ internal fun planExistingFileShareUpdate(
         note = note,
     )
 }
+
+private const val FILE_SHARE_UPDATE_PERMISSION = 2
+private const val FILE_SHARE_CREATE_PERMISSION = 4
+private const val FILE_SHARE_DELETE_PERMISSION = 8
+private const val FILE_SHARE_RESHARE_PERMISSION = 16

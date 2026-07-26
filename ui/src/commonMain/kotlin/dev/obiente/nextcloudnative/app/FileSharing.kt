@@ -101,9 +101,8 @@ fun parseNextcloudFileSharingCapabilities(json: String): NextcloudFileSharingCap
         emailExpirationSupported = shareByMail?.booleanAt("enabled") == true &&
             emailExpiration?.booleanAt("enabled") == true,
         emailExpirationEnforced = emailExpiration?.booleanAt("enforced") == true,
-        remoteExpirationSupported = federation
-            ?.objectAt("expire_date_supported")
-            ?.booleanAt("enabled") == true,
+        remoteExpirationSupported = federation?.booleanAt("expire_date_supported") == true ||
+            federation?.objectAt("expire_date_supported")?.booleanAt("enabled") == true,
         defaultPermissions = sharing.intAt("default_permissions")?.takeIf { it in 1..31 },
     )
 }
@@ -325,7 +324,7 @@ internal fun UpdateFileShareRequest.toNextcloudApiRequest(
             target == FileShareTarget.Email,
     ) { "Passwords are only available for link and email shares." }
     val safeExpiration = expirationDate?.let {
-        if (it.isEmpty()) "" else requireNonPastFileShareDate(it, dateSource)
+        if (it.isEmpty()) "" else requireFutureFileShareDate(it, dateSource)
     }
     require(note == null || note.length <= MAX_UPDATE_FILE_SHARE_NOTE_LENGTH && note.none(Char::isISOControl)) {
         "The share note is invalid or too long."
