@@ -25,6 +25,52 @@ data class FujiRafEmbeddedPreview(
     val length: Int,
 )
 
+fun MediaDisplayPayloadKind.orientationPolicy(): EncodedImageOrientationPolicy = when (this) {
+    MediaDisplayPayloadKind.ServerPreview,
+    MediaDisplayPayloadKind.MemoriesRawRender,
+    -> EncodedImageOrientationPolicy.PixelsAlreadyUpright
+    MediaDisplayPayloadKind.EmbeddedCameraPreview -> EncodedImageOrientationPolicy.ApplyExif
+}
+
+/**
+ * Validates the response identity for one HTTP byte range without relying on a permissive regex.
+ *
+ * A `206` status and the expected body length are not sufficient: a proxy can return a different
+ * range of the same size. Unknown complete lengths (`*`) are allowed by HTTP, while a numeric
+ * complete length must extend beyond the returned inclusive end.
+ */
+fun isExactHttpByteContentRange(
+    value: String?,
+    expectedStart: Long,
+    expectedEndInclusive: Long,
+): Boolean {
+    if (expectedStart < 0L || expectedEndInclusive < expectedStart) return false
+    val contentRange = value?.trim() ?: return false
+    if (
+        !contentRange.regionMatches(
+            thisOffset = 0,
+            other = HTTP_BYTES_RANGE_PREFIX,
+            otherOffset = 0,
+            length = HTTP_BYTES_RANGE_PREFIX.length,
+            ignoreCase = true,
+        )
+    ) {
+        return false
+    }
+    val rangeAndLength = contentRange.substring(HTTP_BYTES_RANGE_PREFIX.length)
+    val slash = rangeAndLength.indexOf('/')
+    if (slash <= 0 || slash != rangeAndLength.lastIndexOf('/')) return false
+    val range = rangeAndLength.substring(0, slash)
+    val dash = range.indexOf('-')
+    if (dash <= 0 || dash != range.lastIndexOf('-')) return false
+    val start = range.substring(0, dash).toLongOrNull() ?: return false
+    val endInclusive = range.substring(dash + 1).toLongOrNull() ?: return false
+    if (start != expectedStart || endInclusive != expectedEndInclusive) return false
+    val completeLength = rangeAndLength.substring(slash + 1)
+    return completeLength == "*" ||
+        completeLength.toLongOrNull()?.let { it > expectedEndInclusive } == true
+}
+
 /**
  * Reads the documented Fuji RAF embedded JPEG directory fields.
  *
@@ -105,7 +151,7 @@ internal suspend fun <T> loadFirstUsableMediaPreviewSource(
     candidates: List<MediaSourceChoice>,
     maximumPayloadBytes: Int = MAX_RAW_DISPLAY_PREVIEW_BYTES,
     load: suspend (NextcloudFile) -> MediaDisplayPayload,
-    decode: (ByteArray) -> T?,
+    decode: (MediaDisplayPayload) -> T?,
 ): LoadedMediaPreview<T>? {
     require(maximumPayloadBytes >= MIN_RAW_EMBEDDED_PREVIEW_BYTES)
     candidates.forEachIndexed { index, candidate ->
@@ -114,7 +160,7 @@ internal suspend fun <T> loadFirstUsableMediaPreviewSource(
             require(isBoundedDisplayImagePayload(payload.bytes, maximumPayloadBytes)) {
                 "The server did not return a bounded display image."
             }
-            val decoded = requireNotNull(decode(payload.bytes)) {
+            val decoded = requireNotNull(decode(payload)) {
                 "The display image could not be decoded."
             }
             decoded to payload.kind
@@ -171,3 +217,4 @@ private const val FUJI_RAF_SIGNATURE = "FUJIFILMCCD-RAW "
 private const val FUJI_RAF_JPEG_OFFSET_POSITION = 0x54
 private const val FUJI_RAF_JPEG_LENGTH_POSITION = 0x58
 private const val FUJI_RAF_DIRECTORY_END = 0x5C
+private const val HTTP_BYTES_RANGE_PREFIX = "bytes "

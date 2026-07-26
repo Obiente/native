@@ -122,6 +122,69 @@ class RawPhotoPreviewTest {
         assertEquals(listOf(raw), candidates.map(MediaSourceChoice::file))
     }
 
+    @Test
+    fun embeddedCameraPreviewAppliesExifWhileServerRendersStayUpright() {
+        assertEquals(
+            EncodedImageOrientationPolicy.ApplyExif,
+            MediaDisplayPayloadKind.EmbeddedCameraPreview.orientationPolicy(),
+        )
+        assertEquals(
+            EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+            MediaDisplayPayloadKind.ServerPreview.orientationPolicy(),
+        )
+        assertEquals(
+            EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+            MediaDisplayPayloadKind.MemoriesRawRender.orientationPolicy(),
+        )
+    }
+
+    @Test
+    fun contentRangeMustIdentifyTheExactRequestedBytes() {
+        assertEquals(true, isExactHttpByteContentRange("bytes 4096-8191/64000000", 4_096L, 8_191L))
+        assertEquals(true, isExactHttpByteContentRange("Bytes 4096-8191/64000000", 4_096L, 8_191L))
+        assertEquals(true, isExactHttpByteContentRange("bytes 4096-8191/*", 4_096L, 8_191L))
+        assertEquals(false, isExactHttpByteContentRange("bytes 0-4095/64000000", 4_096L, 8_191L))
+        assertEquals(false, isExactHttpByteContentRange("bytes 4096-8191/8191", 4_096L, 8_191L))
+        assertEquals(false, isExactHttpByteContentRange("bytes */64000000", 4_096L, 8_191L))
+        assertEquals(false, isExactHttpByteContentRange(null, 4_096L, 8_191L))
+    }
+
+    @Test
+    fun memoriesPreviewRequestUsesTheRawDisplayBound() {
+        val request = memoriesPhotoDecodableApiRequest(
+            fileId = 1_001L,
+            etag = "raw-etag",
+            maximumResponseBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES.toLong(),
+        )
+
+        assertEquals(MAX_RAW_DISPLAY_PREVIEW_BYTES.toLong(), request.maximumResponseBytes)
+    }
+
+    @Test
+    fun displayLabelsDistinguishGeneratedAndEmbeddedRawRepresentations() {
+        val raw = rawFile(hasPreview = false)
+        val source = planMediaSources(listOf(raw), raw).previewCandidates.single()
+
+        assertEquals(
+            "Generated RAW render",
+            describeMediaDisplaySource(
+                selected = source,
+                displayed = source,
+                fullQuality = false,
+                payloadKind = MediaDisplayPayloadKind.MemoriesRawRender,
+            ),
+        )
+        assertEquals(
+            "RAW embedded camera preview",
+            describeMediaDisplaySource(
+                selected = source,
+                displayed = source,
+                fullQuality = false,
+                payloadKind = MediaDisplayPayloadKind.EmbeddedCameraPreview,
+            ),
+        )
+    }
+
     private fun rawFile(
         hasPreview: Boolean,
         size: Long = 64L * 1024L * 1024L,

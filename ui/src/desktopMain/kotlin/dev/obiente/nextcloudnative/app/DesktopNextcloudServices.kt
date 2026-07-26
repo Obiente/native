@@ -705,6 +705,9 @@ class DesktopNextcloudServices(
         check(response.status == 206) {
             "The server did not honor the bounded file range request (HTTP ${response.status})."
         }
+        check(isExactHttpByteContentRange(response.contentRange, offset, endInclusive)) {
+            "The server returned a different file range than requested."
+        }
         check(response.body.size == length) {
             "The server returned an incomplete file range."
         }
@@ -1598,6 +1601,7 @@ class DesktopNextcloudServices(
                 response.header("ETag") ?: response.header("OC-Etag"),
                 response.header("Location"),
                 response.header("X-Chat-Last-Given"),
+                response.header("Content-Range"),
             )
         }
     }
@@ -1744,6 +1748,7 @@ class DesktopNextcloudServices(
         val etag: String? = null,
         val location: String? = null,
         val chatLastGiven: String? = null,
+        val contentRange: String? = null,
     ) {
         val text: String get() = body.toString(StandardCharsets.UTF_8)
     }

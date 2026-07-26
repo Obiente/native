@@ -227,7 +227,11 @@ fun NextcloudMediaViewer(
                         }
                         val response = services.executeNextcloudApi(
                             session,
-                            memoriesPhotoDecodableApiRequest(fileId, candidate.etag),
+                            memoriesPhotoDecodableApiRequest(
+                                fileId = fileId,
+                                etag = candidate.etag,
+                                maximumResponseBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES.toLong(),
+                            ),
                         )
                         check(response.status in 200..299) {
                             "The Memories RAW render failed (HTTP ${response.status})."
@@ -248,17 +252,24 @@ fun NextcloudMediaViewer(
                     },
                 )
             },
-            decode = { bytes ->
+            decode = { payload ->
                 decodePlatformImageSampled(
-                    bytes,
+                    payload.bytes,
                     MAXIMUM_PREVIEW_IMAGE_DIMENSION,
-                    EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+                    payload.kind.orientationPolicy(),
                 )?.image
             },
         )
         previewState = loaded?.let {
             MediaPreviewState.Ready(it.value, it.source, it.usedFallback, it.payloadKind)
-        } ?: MediaPreviewState.Error
+        } ?: MediaPreviewState.Error(
+            detail = if (selected.isRawPhoto()) {
+                "No server render or embedded camera preview could be loaded or decoded. " +
+                    "The RAW original is unchanged."
+            } else {
+                "No supported preview could be loaded or decoded. The original file is unchanged."
+            },
+        )
     }
 
     LaunchedEffect(
@@ -415,7 +426,8 @@ fun NextcloudMediaViewer(
                 contentScale = ContentScale.Fit,
             )
 
-            MediaPreviewState.Error -> PreviewError(
+            is MediaPreviewState.Error -> PreviewError(
+                detail = state.detail,
                 onRetry = { retryKey += 1 },
                 onOpenExternal = if (selected.originalAccessAllowed && userId.isNotBlank()) {
                     ::openInMediaApp
@@ -921,6 +933,7 @@ private fun ViewerNavigationButton(
 
 @Composable
 private fun PreviewError(
+    detail: String,
     onRetry: () -> Unit,
     onOpenExternal: (() -> Unit)?,
     openingExternal: Boolean,
@@ -936,6 +949,11 @@ private fun PreviewError(
             text = "Couldn't open this preview",
             color = Color.White,
             style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            text = detail,
+            color = Color.White.copy(alpha = 0.78f),
+            style = MaterialTheme.typography.bodyMedium,
         )
         Button(onClick = onRetry) {
             Icon(
@@ -985,7 +1003,7 @@ private sealed interface MediaPreviewState {
         val payloadKind: MediaDisplayPayloadKind,
     ) : MediaPreviewState
 
-    data object Error : MediaPreviewState
+    data class Error(val detail: String) : MediaPreviewState
 }
 
 private sealed interface FullQualityState {

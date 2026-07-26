@@ -58,7 +58,7 @@ fun describeMediaDisplaySource(
 ): String {
     val source = when {
         payloadKind == MediaDisplayPayloadKind.MemoriesRawRender ->
-            if (fullQuality) "RAW full-resolution render" else "RAW render"
+            if (fullQuality) "Generated full-resolution RAW render" else "Generated RAW render"
         payloadKind == MediaDisplayPayloadKind.EmbeddedCameraPreview -> "RAW embedded camera preview"
         else -> when (displayed.format) {
             MediaAssetFormat.Raw ->

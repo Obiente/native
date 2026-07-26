@@ -91,6 +91,7 @@ import dev.obiente.nextcloudnative.app.fileOperationException
 import dev.obiente.nextcloudnative.app.fileVersionHistoryRequest
 import dev.obiente.nextcloudnative.app.fileVersionRestoreRequest
 import dev.obiente.nextcloudnative.app.historicalFileCopyName
+import dev.obiente.nextcloudnative.app.isExactHttpByteContentRange
 import dev.obiente.nextcloudnative.app.normalizeFileVersionHistory
 import dev.obiente.nextcloudnative.app.requireMatchingFileVersion
 import dev.obiente.nextcloudnative.app.discoverRecognizeBridge
@@ -691,6 +692,9 @@ internal class AndroidNextcloudServices(
         )
         check(response.status == 206) {
             "The server did not honor the bounded file range request (HTTP ${response.status})."
+        }
+        check(isExactHttpByteContentRange(response.contentRange, offset, endInclusive)) {
+            "The server returned a different file range than requested."
         }
         check(response.body.size == length) {
             "The server returned an incomplete file range."
@@ -1504,6 +1508,7 @@ internal class AndroidNextcloudServices(
                 etag = response.header("ETag") ?: response.header("OC-Etag"),
                 location = response.header("Location"),
                 chatLastGiven = response.header("X-Chat-Last-Given"),
+                contentRange = response.header("Content-Range"),
             )
         }
     }
@@ -1659,6 +1664,7 @@ internal class AndroidNextcloudServices(
         val etag: String? = null,
         val location: String? = null,
         val chatLastGiven: String? = null,
+        val contentRange: String? = null,
     ) {
         val text: String get() = body.toString(StandardCharsets.UTF_8)
     }

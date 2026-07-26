@@ -447,13 +447,18 @@ internal suspend fun loadFullResolutionPhotoPayload(
     )
 }
 
-fun memoriesPhotoDecodableApiRequest(fileId: Long, etag: String? = null): NextcloudApiRequest {
+fun memoriesPhotoDecodableApiRequest(
+    fileId: Long,
+    etag: String? = null,
+    maximumResponseBytes: Long = MAX_PHOTO_EDIT_SOURCE_BYTES,
+): NextcloudApiRequest {
     require(fileId > 0)
+    require(maximumResponseBytes in 1..MAX_PHOTO_EDIT_SOURCE_BYTES)
     return NextcloudApiRequest(
         method = NextcloudApiMethod.GET,
         relativePath = "/index.php/apps/memories/api/image/decodable/$fileId",
         queryParameters = etag?.takeIf(String::isNotBlank)?.let { mapOf("etag" to it) }.orEmpty(),
-        maximumResponseBytes = MAX_PHOTO_EDIT_SOURCE_BYTES,
+        maximumResponseBytes = maximumResponseBytes,
     ).requireSafe()
 }
 
