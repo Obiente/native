@@ -281,7 +281,7 @@ private fun Char.isMultipartBoundaryCharacter(): Boolean =
     isLetterOrDigit() || this == '-' || this == '_'
 
 private fun String.asciiFilenameFallback(): String = buildString {
-    forEach { character ->
+    this@asciiFilenameFallback.forEach { character ->
         append(
             when {
                 character.code in 0x21..0x7e && character != '"' && character != '\\' -> character
