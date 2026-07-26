@@ -20,6 +20,11 @@ import {
   roadmapSnapshotFromLive,
   shippedPriorityItems,
 } from "./roadmap-data.mjs";
+import {
+  composeChangelogSource,
+  loadFragments,
+  validateArchivedReleaseHistory,
+} from "../../tools/changelog-fragments.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(websiteRoot, "..");
@@ -238,15 +243,21 @@ if (
     "CHANGELOG.md must contain a Changelog title, a release section, and a Keep a Changelog category.",
   );
 }
+const allFragments = await loadFragments(repositoryRoot, { includeArchive: true });
+await validateArchivedReleaseHistory(repositoryRoot, allFragments);
+const unreleasedFragments = await loadFragments(repositoryRoot);
+if (changelogAvailable) {
+  changelogSource = composeChangelogSource(changelogSource, unreleasedFragments);
+}
 const changelogBody = changelogSource.replace(/^#\s+Changelog\s*\n+/i, "");
 const changelogText = textOnly(changelogBody);
 const changelog = {
-  file: "CHANGELOG.md",
+  file: "changes/unreleased and CHANGELOG.md",
   path: changelogRoute,
   title: "Changelog",
   shortTitle: "Changelog",
   description:
-    "Concise Added, Changed, Fixed, and Security records for each Nextcloud Native release.",
+    "Concise user-facing changes from independent pull-request fragments and immutable release history.",
   html: markdown.render(changelogBody),
   text: changelogText,
   headings: headingsFrom(changelogBody),
@@ -255,7 +266,7 @@ const changelog = {
 };
 await writeFile(
   path.join(generatedDirectory, "changelog.js"),
-  `// Generated from the canonical root CHANGELOG.md when available. Do not edit.\nexport const changelog = ${JSON.stringify(changelog, null, 2)};\n`,
+  `// Generated from changes/unreleased and the canonical root CHANGELOG.md. Do not edit.\nexport const changelog = ${JSON.stringify(changelog, null, 2)};\n`,
 );
 
 const newsFiles = (await readdir(newsDirectory))

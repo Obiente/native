@@ -54,9 +54,10 @@ test("living news metadata and native feed share the canonical Markdown source",
 });
 
 test("changelog remains a dedicated root-sourced searchable surface", async () => {
-  assert.equal(changelog.file, "CHANGELOG.md");
+  assert.equal(changelog.file, "changes/unreleased and CHANGELOG.md");
   assert.equal(changelog.path, "/changelog/");
   assert.doesNotMatch(changelog.description, /product stor|development note/i);
+  assert.match(changelog.html, /Unreleased/);
 
   const searchIndex = JSON.parse(
     await readFile(path.join(websiteRoot, "public", "search-index.json"), "utf8"),
@@ -65,6 +66,15 @@ test("changelog remains a dedicated root-sourced searchable surface", async () =
   assert.equal(indexed.length, 1);
   assert.equal(indexed[0].contentType, "Changelog");
   assert.ok(news.every((post) => post.path !== changelog.path));
+
+  const generator = await readFile(
+    path.join(websiteRoot, "scripts", "generate-content.mjs"),
+    "utf8",
+  );
+  assert.match(
+    generator,
+    /if \(changelogAvailable\) \{\s+changelogSource = composeChangelogSource/u,
+  );
 });
 
 test("marketing screenshots are rendered offscreen without an Android device", async () => {
