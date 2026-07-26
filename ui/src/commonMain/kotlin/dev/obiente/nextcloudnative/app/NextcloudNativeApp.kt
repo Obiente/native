@@ -3600,11 +3600,8 @@ private fun FilesScreen(
                 fileShares = null
                 shareRecipient = ""
                 shareAllowsEditing = false
-                shareType = when {
-                    fileSharing.publicLinks -> FileShareTarget.PublicLink
-                    fileSharing.userShares -> FileShareTarget.User
-                    else -> FileShareTarget.Group
-                }
+                shareType = FileShareTarget.entries.firstOrNull(fileSharing::supports)
+                    ?: FileShareTarget.PublicLink
                 shareError = null
                 shareNotice = null
                 scope.launch {
@@ -4320,23 +4317,14 @@ private fun FilesScreen(
     }
 
     shareTarget?.let { target ->
-        val supportedTargets = FileShareTarget.entries.filter { targetType ->
-            when (targetType) {
-                FileShareTarget.PublicLink -> fileSharing.publicLinks
-                FileShareTarget.User -> fileSharing.userShares
-                FileShareTarget.Group -> fileSharing.groupShares
-            }
-        }
-        val requestedPermissions = FileSharePermissions(
-            read = true,
-            update = shareAllowsEditing,
-            create = shareAllowsEditing && target.isDirectory,
-            delete = shareAllowsEditing && target.isDirectory,
-        )
+        val supportedTargets = FileShareTarget.entries.filter(fileSharing::supports)
+        val requestedPermissions = (
+            if (shareAllowsEditing) FileSharePermissionPreset.Edit else FileSharePermissionPreset.View
+            ).toPermissions(target.isDirectory)
         val creationPlan = planFileShareCreation(
             file = target,
             target = shareType,
-            recipient = shareRecipient.takeUnless { shareType == FileShareTarget.PublicLink },
+            recipient = shareRecipient.takeIf { shareType.requiresRecipient },
             permissions = requestedPermissions,
             capabilities = fileSharing,
         )
@@ -4412,15 +4400,16 @@ private fun FilesScreen(
                                         shareRecipient = ""
                                         shareError = null
                                     },
-                                    label = { Text(targetType.fileShareTargetLabel()) },
+                                    label = { Text(targetType.presentation().label) },
                                 )
                             }
                         }
-                        if (shareType != FileShareTarget.PublicLink) {
+                        if (shareType.requiresRecipient) {
                             FileShareRecipientPicker(
                                 session = session,
                                 services = services,
                                 target = shareType,
+                                file = target,
                                 selectedRecipient = shareRecipient,
                                 enabled = !shareRunning,
                                 onSelected = {
@@ -4505,12 +4494,6 @@ private fun FilesScreen(
             },
         )
     }
-}
-
-private fun FileShareTarget.fileShareTargetLabel(): String = when (this) {
-    FileShareTarget.PublicLink -> "Public link"
-    FileShareTarget.User -> "User"
-    FileShareTarget.Group -> "Group"
 }
 
 @Composable

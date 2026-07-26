@@ -33,17 +33,19 @@ internal fun FileShareRecipientPicker(
     session: NextcloudSession,
     services: NextcloudPlatformServices,
     target: FileShareTarget,
+    file: NextcloudFile,
     selectedRecipient: String,
     enabled: Boolean,
     onSelected: (FileShareRecipient?) -> Unit,
 ) {
-    require(target != FileShareTarget.PublicLink)
-    var query by remember(target) { mutableStateOf("") }
-    var results by remember(target) { mutableStateOf<List<FileShareRecipient>>(emptyList()) }
-    var loading by remember(target) { mutableStateOf(false) }
-    var searchError by remember(target) { mutableStateOf<String?>(null) }
+    require(target.requiresRecipient)
+    val presentation = target.presentation()
+    var query by remember(target, file.path) { mutableStateOf("") }
+    var results by remember(target, file.path) { mutableStateOf<List<FileShareRecipient>>(emptyList()) }
+    var loading by remember(target, file.path) { mutableStateOf(false) }
+    var searchError by remember(target, file.path) { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(query, target, session, selectedRecipient) {
+    LaunchedEffect(query, target, file.path, session, selectedRecipient) {
         val normalized = query.trim()
         if (selectedRecipient.isNotBlank()) {
             results = emptyList()
@@ -61,7 +63,7 @@ internal fun FileShareRecipientPicker(
         loading = true
         searchError = null
         try {
-            results = services.searchFileShareRecipients(session, normalized, target)
+            results = services.searchFileShareRecipients(session, normalized, target, file)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
@@ -81,7 +83,7 @@ internal fun FileShareRecipientPicker(
                 searchError = null
                 onSelected(null)
             },
-            label = { Text(if (target == FileShareTarget.Group) "Search groups" else "Search people") },
+            label = { Text(presentation.searchLabel) },
             placeholder = { Text("Enter at least two characters") },
             trailingIcon = {
                 if (loading) {
@@ -93,7 +95,7 @@ internal fun FileShareRecipientPicker(
                     selectedRecipient.isNotBlank() -> Text("Selected: $selectedRecipient")
                     query.trim().length < MIN_FILE_SHARE_RECIPIENT_QUERY_LENGTH ->
                         Text("Search your Nextcloud server and select a result.")
-                    !loading && searchError == null && results.isEmpty() -> Text("No matching recipients")
+                    !loading && searchError == null && results.isEmpty() -> Text(presentation.emptyMessage)
                 }
             },
             singleLine = true,
@@ -135,7 +137,7 @@ internal fun FileShareRecipientPicker(
                     }
                 }
                 Text(
-                    if (target == FileShareTarget.Group) "Group" else "User",
+                    presentation.resultLabel,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                 )

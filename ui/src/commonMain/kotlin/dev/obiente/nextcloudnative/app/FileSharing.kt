@@ -20,10 +20,24 @@ data class NextcloudFileSharingCapabilities(
     val publicLinks: Boolean = false,
     val userShares: Boolean = false,
     val groupShares: Boolean = false,
+    /**
+     * Whether the standard sharee endpoint can be queried for email recipients.
+     *
+     * This is transport capability only. It does not prove that an email share provider exists.
+     */
+    val emailRecipientQuery: Boolean = false,
+    /** Whether the server explicitly advertises its share-by-mail provider. */
+    val emailProviderAdvertised: Boolean = false,
+    /** Whether a filtered sharee response actually returned an email provider result. */
+    val emailProviderObserved: Boolean = false,
+    val remoteShares: Boolean = false,
     val defaultPermissions: Int? = null,
 ) {
+    val emailShares: Boolean
+        get() = emailProviderAdvertised || emailProviderObserved
+
     val supportsAnyCreation: Boolean
-        get() = apiEnabled && (publicLinks || userShares || groupShares)
+        get() = apiEnabled && (publicLinks || userShares || groupShares || emailShares || remoteShares)
 
     companion object {
         val Unavailable = NextcloudFileSharingCapabilities()
@@ -44,14 +58,49 @@ fun parseNextcloudFileSharingCapabilities(json: String): NextcloudFileSharingCap
     if (!apiEnabled) return NextcloudFileSharingCapabilities.Unavailable
     val public = sharing.objectAt("public")
     val group = sharing.objectAt("group")
+    val publicLinks = public?.booleanAt("enabled") == true
     return NextcloudFileSharingCapabilities(
         apiEnabled = true,
-        publicLinks = public?.booleanAt("enabled") == true,
+        publicLinks = publicLinks,
         userShares = sharing["user"] is JsonObject,
         groupShares = group?.booleanAt("enabled") == true || sharing.booleanAt("group_sharing") == true,
+        emailRecipientQuery = true,
+        emailProviderAdvertised = publicLinks &&
+            sharing.objectAt("sharebymail")?.booleanAt("enabled") == true,
+        remoteShares = sharing.objectAt("federation")?.booleanAt("outgoing") == true,
         defaultPermissions = sharing.intAt("default_permissions")?.takeIf { it in 1..31 },
     )
 }
+
+fun NextcloudFileSharingCapabilities.supports(target: FileShareTarget): Boolean =
+    apiEnabled && when (target) {
+        FileShareTarget.PublicLink -> publicLinks
+        FileShareTarget.User -> userShares
+        FileShareTarget.Group -> groupShares
+        FileShareTarget.Email -> emailShares
+        FileShareTarget.Remote -> remoteShares
+    }
+
+fun NextcloudFileSharingCapabilities.withObservedRecipientProvider(
+    target: FileShareTarget,
+    recipients: List<FileShareRecipient>,
+): NextcloudFileSharingCapabilities =
+    if (
+        target == FileShareTarget.Email &&
+        recipients.any { it.target == FileShareTarget.Email }
+    ) {
+        copy(emailProviderObserved = true)
+    } else {
+        this
+    }
+
+enum class FileShareItemType(val wireValue: String) {
+    File("file"),
+    Folder("folder"),
+}
+
+fun NextcloudFile.fileShareItemType(): FileShareItemType =
+    if (isDirectory) FileShareItemType.Folder else FileShareItemType.File
 
 data class ListFileSharesRequest(
     val path: String,
@@ -61,6 +110,7 @@ data class ListFileSharesRequest(
 data class SearchFileShareRecipientsRequest(
     val query: String,
     val target: FileShareTarget,
+    val itemType: FileShareItemType = FileShareItemType.File,
     val limit: Int = DEFAULT_FILE_SHARE_RECIPIENT_LIMIT,
 )
 
@@ -80,7 +130,7 @@ fun SearchFileShareRecipientsRequest.toNextcloudApiRequest(): NextcloudApiReques
         safeQuery.length <= MAX_FILE_SHARE_RECIPIENT_QUERY_LENGTH &&
             safeQuery.none(Char::isISOControl),
     ) { "The recipient search is invalid or too long." }
-    require(target != FileShareTarget.PublicLink) {
+    require(target.requiresRecipient) {
         "Public links do not use recipient discovery."
     }
     require(limit in 1..MAX_FILE_SHARE_RECIPIENT_LIMIT) {
@@ -92,7 +142,8 @@ fun SearchFileShareRecipientsRequest.toNextcloudApiRequest(): NextcloudApiReques
         queryParameters = mapOf(
             "format" to "json",
             "search" to safeQuery,
-            "itemType" to "file",
+            "itemType" to itemType.wireValue,
+            "shareType" to target.wireValue.toString(),
             "lookup" to "false",
             "perPage" to limit.toString(),
         ),
@@ -105,9 +156,10 @@ suspend fun NextcloudPlatformServices.searchFileShareRecipients(
     session: NextcloudSession,
     query: String,
     target: FileShareTarget,
+    file: NextcloudFile,
     limit: Int = DEFAULT_FILE_SHARE_RECIPIENT_LIMIT,
 ): List<FileShareRecipient> {
-    val request = SearchFileShareRecipientsRequest(query, target, limit)
+    val request = SearchFileShareRecipientsRequest(query, target, file.fileShareItemType(), limit)
     return parseFileShareRecipientsResponse(executeNextcloudApi(session, request.toNextcloudApiRequest()), target)
 }
 
@@ -115,7 +167,7 @@ fun parseFileShareRecipientsResponse(
     response: NextcloudApiResponse,
     target: FileShareTarget,
 ): List<FileShareRecipient> {
-    require(target != FileShareTarget.PublicLink) {
+    require(target.requiresRecipient) {
         "Public links do not use recipient discovery."
     }
     if (response.status !in 200..299) throw fileOperationException(response.status)
@@ -128,6 +180,8 @@ fun parseFileShareRecipientsResponse(
     val collectionName = when (target) {
         FileShareTarget.User -> "users"
         FileShareTarget.Group -> "groups"
+        FileShareTarget.Email -> "emails"
+        FileShareTarget.Remote -> "remotes"
         FileShareTarget.PublicLink -> error("Public links do not use recipient discovery.")
     }
     val exactResults = data.objectAt("exact")
@@ -292,6 +346,10 @@ fun planFileShareCreation(
             if (capabilities.userShares) null else "Sharing with users is unavailable on this server."
         FileShareTarget.Group ->
             if (capabilities.groupShares) null else "Sharing with groups is unavailable on this server."
+        FileShareTarget.Email ->
+            if (capabilities.emailShares) null else "Sharing by email is unavailable on this server."
+        FileShareTarget.Remote ->
+            if (capabilities.remoteShares) null else "Federated sharing is unavailable on this server."
     }
     if (targetReason != null) return FileShareCreationPlan.Blocked(targetReason)
     val request = CreateFileShareRequest(
@@ -379,6 +437,8 @@ private fun parseFileShareRecipient(
     val resultTarget = when (value.intAt("shareType") ?: value.textAt("shareType")?.toIntOrNull()) {
         FileShareTarget.User.wireValue -> FileShareTarget.User
         FileShareTarget.Group.wireValue -> FileShareTarget.Group
+        FileShareTarget.Email.wireValue -> FileShareTarget.Email
+        FileShareTarget.Remote.wireValue -> FileShareTarget.Remote
         else -> return null
     }
     if (resultTarget != expectedTarget) return null

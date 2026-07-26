@@ -122,6 +122,22 @@ class FileOperationsTest {
     }
 
     @Test
+    fun reusableShareTargetsAndPermissionPresetsMatchSelectedItemContext() {
+        assertEquals("Remote user", FileShareTarget.Remote.presentation().label)
+        assertEquals("Search email addresses", FileShareTarget.Email.presentation().searchLabel)
+        assertTrue(FileShareTarget.Email.requiresRecipient)
+        assertFalse(FileShareTarget.PublicLink.requiresRecipient)
+        assertEquals(
+            FileSharePermissions(read = true, update = true, create = true, delete = true),
+            FileSharePermissionPreset.Edit.toPermissions(sourceIsDirectory = true),
+        )
+        assertEquals(
+            FileSharePermissions(read = true),
+            FileSharePermissionPreset.View.toPermissions(sourceIsDirectory = false),
+        )
+    }
+
+    @Test
     fun `share request rejects oversized paths and unsafe recipients before transport`() {
         assertFailsWith<IllegalArgumentException> {
             CreateFileShareRequest(

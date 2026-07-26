@@ -22,7 +22,9 @@ class FileSharingTest {
                       "public": {"enabled": true, "multiple_links": true},
                       "user": {"expire_date": {"enabled": false}},
                       "group": {"enabled": true},
-                      "group_sharing": true
+                      "group_sharing": true,
+                      "sharebymail": {"enabled": true},
+                      "federation": {"outgoing": true}
                     }
                   }
                 }
@@ -35,6 +37,10 @@ class FileSharingTest {
         assertTrue(capabilities.publicLinks)
         assertTrue(capabilities.userShares)
         assertTrue(capabilities.groupShares)
+        assertTrue(capabilities.emailRecipientQuery)
+        assertTrue(capabilities.emailProviderAdvertised)
+        assertTrue(capabilities.emailShares)
+        assertTrue(capabilities.remoteShares)
         assertEquals(31, capabilities.defaultPermissions)
         assertTrue(capabilities.supportsAnyCreation)
     }
@@ -54,6 +60,10 @@ class FileSharingTest {
         )
         assertFalse(noUserContract.userShares)
         assertFalse(noUserContract.publicLinks)
+        assertTrue(noUserContract.emailRecipientQuery)
+        assertFalse(noUserContract.emailProviderAdvertised)
+        assertFalse(noUserContract.emailProviderObserved)
+        assertFalse(noUserContract.supports(FileShareTarget.Email))
     }
 
     @Test
@@ -90,6 +100,7 @@ class FileSharingTest {
                 "format" to "json",
                 "search" to "Ada",
                 "itemType" to "file",
+                "shareType" to "0",
                 "lookup" to "false",
                 "perPage" to "20",
             ),
@@ -98,6 +109,18 @@ class FileSharingTest {
         assertTrue(request.ocsApiRequest)
         assertEquals(512L * 1024L, request.maximumResponseBytes)
         assertNull(request.body)
+    }
+
+    @Test
+    fun recipientSearchUsesSelectedFolderContextAndRequestedRemoteType() {
+        val request = SearchFileShareRecipientsRequest(
+            query = "person",
+            target = FileShareTarget.Remote,
+            itemType = FileShareItemType.Folder,
+        ).toNextcloudApiRequest()
+
+        assertEquals("folder", request.queryParameters["itemType"])
+        assertEquals(FileShareTarget.Remote.wireValue.toString(), request.queryParameters["shareType"])
     }
 
     @Test
@@ -137,6 +160,67 @@ class FileSharingTest {
         assertEquals(FileShareRecipient("ada", "Ada Lovelace", FileShareTarget.User, exact = true), recipients[0])
         assertEquals("adam", recipients[1].id)
         assertFalse(recipients[1].exact)
+    }
+
+    @Test
+    fun recipientSearchParsesEmailAndRemoteProvidersWithoutCrossTypeResults() {
+        val response = NextcloudApiResponse(
+            status = 200,
+            body = """
+                {
+                  "ocs": {
+                    "data": {
+                      "exact": {
+                        "emails": [
+                          {"label":"Person","value":{"shareType":4,"shareWith":"person@example.test"}}
+                        ],
+                        "remotes": [
+                          {"label":"Remote Person","value":{"shareType":6,"shareWith":"person@cloud.example.test"}}
+                        ]
+                      },
+                      "emails": [
+                        {"label":"Another Person","value":{"shareType":"4","shareWith":"other@example.test"}},
+                        {"label":"Wrong type","value":{"shareType":0,"shareWith":"local-person"}}
+                      ],
+                      "remotes": []
+                    }
+                  }
+                }
+            """.trimIndent().encodeToByteArray(),
+            contentType = "application/json",
+            etag = null,
+        )
+
+        val emails = parseFileShareRecipientsResponse(response, FileShareTarget.Email)
+        val remotes = parseFileShareRecipientsResponse(response, FileShareTarget.Remote)
+
+        assertEquals(listOf("person@example.test", "other@example.test"), emails.map(FileShareRecipient::id))
+        assertTrue(emails.first().exact)
+        assertEquals(listOf("person@cloud.example.test"), remotes.map(FileShareRecipient::id))
+        assertTrue(remotes.first().exact)
+    }
+
+    @Test
+    fun emailProviderBecomesAvailableOnlyAfterAdvertisementOrObservedResults() {
+        val queryOnly = NextcloudFileSharingCapabilities(
+            apiEnabled = true,
+            publicLinks = true,
+            emailRecipientQuery = true,
+        )
+        assertFalse(queryOnly.supports(FileShareTarget.Email))
+
+        val observed = queryOnly.withObservedRecipientProvider(
+            FileShareTarget.Email,
+            listOf(
+                FileShareRecipient(
+                    id = "person@example.test",
+                    displayName = "Person",
+                    target = FileShareTarget.Email,
+                ),
+            ),
+        )
+        assertTrue(observed.emailProviderObserved)
+        assertTrue(observed.supports(FileShareTarget.Email))
     }
 
     @Test
@@ -326,6 +410,38 @@ class FileSharingTest {
                 capabilities,
             ),
         )
+    }
+
+    @Test
+    fun emailAndRemoteSharePlansUseVerifiedProvidersAndAdvertisedCapabilities() {
+        val capabilities = NextcloudFileSharingCapabilities(
+            apiEnabled = true,
+            emailProviderObserved = true,
+            remoteShares = true,
+        )
+        val file = file(path = "Notes/todo.md", permissions = null)
+
+        val email = assertIs<FileShareCreationPlan.Ready>(
+            planFileShareCreation(
+                file,
+                FileShareTarget.Email,
+                "person@example.test",
+                FileSharePermissionPreset.View.toPermissions(sourceIsDirectory = false),
+                capabilities,
+            ),
+        )
+        val remote = assertIs<FileShareCreationPlan.Ready>(
+            planFileShareCreation(
+                file,
+                FileShareTarget.Remote,
+                "person@cloud.example.test",
+                FileSharePermissionPreset.Edit.toPermissions(sourceIsDirectory = false),
+                capabilities,
+            ),
+        )
+
+        assertTrue(email.request.toNextcloudApiRequest().body!!.decodeToString().contains("shareType=4"))
+        assertTrue(remote.request.toNextcloudApiRequest().body!!.decodeToString().contains("shareType=6"))
     }
 
     @Test

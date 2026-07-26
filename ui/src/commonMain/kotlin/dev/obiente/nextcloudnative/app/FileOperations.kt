@@ -139,10 +139,69 @@ fun fileOperationException(status: Int): NextcloudFileOperationException {
 }
 
 enum class FileShareTarget(val wireValue: Int) {
+    PublicLink(3),
     User(0),
     Group(1),
-    PublicLink(3),
+    Email(4),
+    Remote(6),
+    ;
+
+    val requiresRecipient: Boolean
+        get() = this != PublicLink
 }
+
+data class FileShareTargetPresentation(
+    val label: String,
+    val searchLabel: String,
+    val resultLabel: String,
+    val emptyMessage: String,
+)
+
+fun FileShareTarget.presentation(): FileShareTargetPresentation = when (this) {
+    FileShareTarget.PublicLink -> FileShareTargetPresentation(
+        label = "Public link",
+        searchLabel = "",
+        resultLabel = "Link",
+        emptyMessage = "",
+    )
+    FileShareTarget.User -> FileShareTargetPresentation(
+        label = "User",
+        searchLabel = "Search people",
+        resultLabel = "User",
+        emptyMessage = "No matching people",
+    )
+    FileShareTarget.Group -> FileShareTargetPresentation(
+        label = "Group",
+        searchLabel = "Search groups",
+        resultLabel = "Group",
+        emptyMessage = "No matching groups",
+    )
+    FileShareTarget.Email -> FileShareTargetPresentation(
+        label = "Email",
+        searchLabel = "Search email addresses",
+        resultLabel = "Email",
+        emptyMessage = "No matching email addresses",
+    )
+    FileShareTarget.Remote -> FileShareTargetPresentation(
+        label = "Remote user",
+        searchLabel = "Search remote users",
+        resultLabel = "Remote",
+        emptyMessage = "No matching remote users",
+    )
+}
+
+enum class FileSharePermissionPreset {
+    View,
+    Edit,
+}
+
+fun FileSharePermissionPreset.toPermissions(sourceIsDirectory: Boolean): FileSharePermissions =
+    FileSharePermissions(
+        read = true,
+        update = this == FileSharePermissionPreset.Edit,
+        create = this == FileSharePermissionPreset.Edit && sourceIsDirectory,
+        delete = this == FileSharePermissionPreset.Edit && sourceIsDirectory,
+    )
 
 data class FileSharePermissions(
     val read: Boolean = true,
@@ -184,7 +243,11 @@ fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
     }
     when (target) {
         FileShareTarget.PublicLink -> require(recipient == null) { "Public links cannot name a recipient." }
-        FileShareTarget.User, FileShareTarget.Group -> require(recipient != null) { "A share recipient is required." }
+        FileShareTarget.User,
+        FileShareTarget.Group,
+        FileShareTarget.Email,
+        FileShareTarget.Remote,
+        -> require(recipient != null) { "A share recipient is required." }
     }
     require(recipient == null || recipient.length <= MAX_FILE_SHARE_RECIPIENT_LENGTH &&
         recipient.none(Char::isISOControl)

@@ -198,11 +198,11 @@ internal fun ExistingFileShareManager(
 }
 
 private fun shareTypeLabel(type: Int?): String = when (type) {
-    FileShareTarget.User.wireValue -> "User"
-    FileShareTarget.Group.wireValue -> "Group"
-    FileShareTarget.PublicLink.wireValue -> "Public link"
-    4 -> "Email"
-    6 -> "Federated"
+    FileShareTarget.User.wireValue -> FileShareTarget.User.presentation().label
+    FileShareTarget.Group.wireValue -> FileShareTarget.Group.presentation().label
+    FileShareTarget.PublicLink.wireValue -> FileShareTarget.PublicLink.presentation().label
+    FileShareTarget.Email.wireValue -> FileShareTarget.Email.presentation().label
+    FileShareTarget.Remote.wireValue -> FileShareTarget.Remote.presentation().label
     7 -> "Circle"
     10 -> "Talk conversation"
     else -> "Shared access"
