@@ -118,6 +118,7 @@ jobs:
             :contractAcquisition:test \
             :ui:desktopTest \
             :androidApp:testDebugUnitTest \
+            :androidApp:verifyReleaseLintGate \
             :ui:createDistributable \
             :androidApp:assembleDebug
 
