@@ -69,6 +69,38 @@ fun validateExternalFileHandoff(
     else -> null
 }
 
+fun validateDeckAttachmentHandoff(
+    attachment: DeckAttachment,
+    action: ExternalFileHandoffAction,
+    capability: ExternalFileHandoffCapability,
+): ExternalFileHandoffResult.Rejected? = when {
+    action !in capability.supportedActions -> ExternalFileHandoffResult.Rejected(
+        ExternalFileHandoffRejection.UnsupportedAction,
+        "This platform does not support opening this attachment in another app.",
+    )
+    attachment.byteCount != null && attachment.byteCount > capability.maximumFileBytes ->
+        ExternalFileHandoffResult.Rejected(
+            ExternalFileHandoffRejection.FileTooLarge,
+            "${attachment.name} is larger than the external handoff limit.",
+        )
+    else -> null
+}
+
+fun verifyDownloadedDeckAttachmentSize(
+    declaredByteCount: Long?,
+    downloadedByteCount: Long,
+) {
+    require(declaredByteCount == null || declaredByteCount >= 0L) {
+        "The Deck attachment has an invalid declared size."
+    }
+    require(downloadedByteCount >= 0L) {
+        "The downloaded Deck attachment has an invalid size."
+    }
+    check(declaredByteCount == null || downloadedByteCount == declaredByteCount) {
+        "The downloaded Deck attachment does not match its declared size."
+    }
+}
+
 /**
  * Verifies the detached bytes after download and before exposing them to another process.
  *

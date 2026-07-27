@@ -6,6 +6,7 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -77,6 +78,92 @@ class DesktopExternalFileHandoffTest {
     }
 
     @Test
+    fun `deck attachment streams to a detached read-only copy without DAV identity`() = runBlocking {
+        val root = Files.createTempDirectory("nextcloud-desktop-attachment-").toFile()
+        var launched: File? = null
+        try {
+            val result = DesktopExternalFileHandoff(root) { file ->
+                launched = file
+                true
+            }.launchDetached(
+                attachment = attachment(byteCount = 13L),
+                action = ExternalFileHandoffAction.OpenWith,
+                capability = capability(),
+                download = { output, _ ->
+                    val content = "detached copy".encodeToByteArray()
+                    output.write(content)
+                    DesktopDetachedDownload(content.size.toLong())
+                },
+            )
+
+            assertIs<ExternalFileHandoffResult.Launched>(result)
+            val staged = requireNotNull(launched)
+            assertEquals("report.pdf", staged.name)
+            assertEquals("detached copy", staged.readText())
+            assertFalse(staged.canWrite())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `oversized streamed deck attachment is cleaned before launch`() = runBlocking {
+        val root = Files.createTempDirectory("nextcloud-desktop-attachment-").toFile()
+        var launchCalls = 0
+        try {
+            assertFailsWith<IllegalStateException> {
+                DesktopExternalFileHandoff(root) {
+                    launchCalls += 1
+                    true
+                }.launchDetached(
+                    attachment = attachment(byteCount = null),
+                    action = ExternalFileHandoffAction.OpenWith,
+                    capability = ExternalFileHandoffCapability(
+                        supportedActions = setOf(ExternalFileHandoffAction.OpenWith),
+                        maximumFileBytes = 4L,
+                    ),
+                    download = { output, _ ->
+                        output.write(byteArrayOf(1, 2, 3, 4, 5))
+                        DesktopDetachedDownload(5L)
+                    },
+                )
+            }
+
+            assertEquals(0, launchCalls)
+            assertTrue(root.listFiles().orEmpty().isEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `short streamed deck attachment is cleaned before launch`() = runBlocking {
+        val root = Files.createTempDirectory("nextcloud-desktop-attachment-").toFile()
+        var launchCalls = 0
+        try {
+            assertFailsWith<IllegalStateException> {
+                DesktopExternalFileHandoff(root) {
+                    launchCalls += 1
+                    true
+                }.launchDetached(
+                    attachment = attachment(byteCount = 5L),
+                    action = ExternalFileHandoffAction.OpenWith,
+                    capability = capability(),
+                    download = { output, _ ->
+                        output.write(byteArrayOf(1, 2, 3))
+                        DesktopDetachedDownload(3L)
+                    },
+                )
+            }
+
+            assertEquals(0, launchCalls)
+            assertTrue(root.listFiles().orEmpty().isEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `desktop cache pruning removes expired detached copies`() {
         val root = Files.createTempDirectory("nextcloud-desktop-handoff-").toFile()
         try {
@@ -113,5 +200,17 @@ class DesktopExternalFileHandoffTest {
         hasPreview = true,
         etag = "\"v1\"",
         permissions = "RGDNVW",
+    )
+
+    private fun attachment(byteCount: Long?): DeckAttachment = DeckAttachment(
+        id = 7L,
+        cardId = 11L,
+        type = DeckAttachmentType.DeckFile,
+        name = "report.pdf",
+        mimeType = "application/pdf",
+        byteCount = byteCount,
+        createdBy = "user",
+        createdAt = null,
+        lastModified = null,
     )
 }

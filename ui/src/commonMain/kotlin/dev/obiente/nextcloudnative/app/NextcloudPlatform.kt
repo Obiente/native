@@ -111,6 +111,11 @@ enum class NextcloudApiMethod {
     DELETE,
 }
 
+enum class NextcloudApiCachePolicy {
+    PreferCache,
+    ForceNetwork,
+}
+
 /**
  * Restricted same-origin transport used by schema-declared dynamic app actions.
  *
@@ -126,6 +131,7 @@ data class NextcloudApiRequest(
     val body: ByteArray? = null,
     val ocsApiRequest: Boolean = false,
     val maximumResponseBytes: Long = DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES,
+    val cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
 )
 
 data class NextcloudApiResponse(
@@ -383,6 +389,24 @@ interface NextcloudPlatformServices {
 
     fun clearSession()
 
+    /** Loads one bounded, account-scoped unsaved Deck editor draft from app-private storage. */
+    suspend fun loadDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ): PersistedDeckCardDraft? = null
+
+    /** Persists one bounded Deck editor draft without storing account credentials in its key. */
+    suspend fun saveDeckCardDraft(
+        session: NextcloudSession,
+        draft: PersistedDeckCardDraft,
+    ) = Unit
+
+    /** Clears a draft after an explicit cancel or a confirmed successful server mutation. */
+    suspend fun clearDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ) = Unit
+
     fun openExternalUrl(url: String)
 
     /** Copies bounded application text without exposing session credentials to another process. */
@@ -396,6 +420,23 @@ interface NextcloudPlatformServices {
     ): ExternalFileHandoffResult = ExternalFileHandoffResult.Unsupported(
         (externalFileHandoffSupport as? ExternalFileHandoffSupport.Unsupported)?.reason
             ?: "External file handoff is not supported on this platform.",
+    )
+
+    /**
+     * Streams an authenticated Deck attachment into a detached private platform cache.
+     *
+     * The typed target comes from the permission-checked Deck route planner. Implementations must
+     * reject redirects, enforce the external handoff byte limit while streaming, and must not
+     * invent a DAV path or ETag for the attachment.
+     */
+    suspend fun handoffDeckAttachmentToExternalApp(
+        session: NextcloudSession,
+        target: DeckAttachmentOpenTarget,
+        attachment: DeckAttachment,
+        action: ExternalFileHandoffAction = ExternalFileHandoffAction.OpenWith,
+    ): ExternalFileHandoffResult = ExternalFileHandoffResult.Unsupported(
+        (externalFileHandoffSupport as? ExternalFileHandoffSupport.Unsupported)?.reason
+            ?: "Deck attachment handoff is not supported on this platform.",
     )
 
     suspend fun beginLogin(serverUrl: String): LoginChallenge
@@ -705,6 +746,77 @@ interface NextcloudPlatformServices {
         session: NextcloudSession,
         request: NextcloudApiRequest,
     ): NextcloudApiResponse
+
+    /**
+     * Opens the platform document picker. Only a file explicitly selected by the user can produce
+     * an opaque [LocalUploadFile] capability.
+     */
+    suspend fun chooseLocalUploadFile(
+        acceptedMimeTypes: List<String> = listOf("*/*"),
+        maximumBytes: Long = DEFAULT_LOCAL_UPLOAD_LIMIT_BYTES,
+    ): LocalUploadSelectionResult = LocalUploadSelectionResult.Unavailable(
+        "Local file selection is unavailable on this platform.",
+    )
+
+    /** Releases an opaque picker capability without changing or deleting the local file. */
+    fun releaseLocalUploadFile(file: LocalUploadFile) = Unit
+
+    /**
+     * Streams one picker-authorized file to a reviewed same-origin multipart endpoint.
+     *
+     * Implementations attach the active account credentials, reject redirects, enforce both
+     * request and response limits, and never accept an arbitrary local path from shared code.
+     */
+    suspend fun executeNextcloudMultipartUpload(
+        session: NextcloudSession,
+        request: NextcloudMultipartUploadRequest,
+    ): NextcloudApiResponse {
+        error("Multipart upload is unavailable on this platform.")
+    }
+
+    /**
+     * Takes ownership of a picker capability and schedules a lifecycle-independent upload.
+     *
+     * The default implementation completes synchronously for platforms without a background
+     * scheduler. Android overrides this with app-private durable state and WorkManager.
+     */
+    suspend fun enqueueDurableMultipartUpload(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+        request: NextcloudMultipartUploadRequest,
+    ): DurableUploadEnqueueResult {
+        val status = DurableUploadStatus(
+            id = request.file.selectionId,
+            scope = scope,
+            displayName = request.file.displayName,
+            state = DurableUploadState.Uploading,
+        )
+        return runCatching {
+            val response = executeNextcloudMultipartUpload(session, request)
+            require(response.status in 200..299) {
+                "The attachment upload failed (HTTP ${response.status})."
+            }
+            DurableUploadEnqueueResult.Completed(status.copy(state = DurableUploadState.Completed))
+        }.getOrElse { error ->
+            DurableUploadEnqueueResult.Rejected(
+                error.message?.take(MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS)
+                    ?: "The attachment upload failed.",
+            )
+        }
+    }
+
+    /** Returns bounded persisted upload state for the active account and resource. */
+    suspend fun durableMultipartUploadStatuses(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+    ): List<DurableUploadStatus> = emptyList()
+
+    /** Dismisses one terminal upload status. Active work cannot be removed through the UI. */
+    suspend fun dismissDurableMultipartUpload(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+        uploadId: String,
+    ): Boolean = false
 
     /**
      * Dedicated same-origin CalDAV/CardDAV transport.

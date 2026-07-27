@@ -6,15 +6,19 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.core.content.FileProvider
+import dev.obiente.nextcloudnative.app.DeckAttachment
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffAction
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffCapability
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffResult
+import dev.obiente.nextcloudnative.app.MAX_EXTERNAL_FILE_HANDOFF_BYTES
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.sanitizeExternalFileName
 import dev.obiente.nextcloudnative.app.sanitizeExternalMimeType
+import dev.obiente.nextcloudnative.app.validateDeckAttachmentHandoff
 import dev.obiente.nextcloudnative.app.validateDownloadedExternalFile
 import dev.obiente.nextcloudnative.app.validateExternalFileHandoff
+import dev.obiente.nextcloudnative.app.verifyDownloadedDeckAttachmentSize
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -46,7 +50,35 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         }
         if (staged is StagedExternalFile.Rejected) return staged.result
         staged as StagedExternalFile.Ready
+        return launchStaged(staged, action)
+    }
 
+    suspend fun launchDetached(
+        attachment: DeckAttachment,
+        action: ExternalFileHandoffAction,
+        capability: ExternalFileHandoffCapability,
+        download: suspend (
+            output: FileOutputStream,
+            maximumBytes: Long,
+        ) -> AndroidDetachedDownload,
+    ): ExternalFileHandoffResult {
+        validateDeckAttachmentHandoff(attachment, action, capability)?.let { return it }
+        val staged = withContext(Dispatchers.IO) {
+            stageStreamedCopy(
+                sourceName = attachment.name,
+                declaredMimeType = attachment.mimeType,
+                declaredByteCount = attachment.byteCount,
+                maximumBytes = capability.maximumFileBytes,
+                download = download,
+            )
+        }
+        return launchStaged(staged, action)
+    }
+
+    private suspend fun launchStaged(
+        staged: StagedExternalFile.Ready,
+        action: ExternalFileHandoffAction,
+    ): ExternalFileHandoffResult {
         val authority = context.packageName + EXTERNAL_FILE_PROVIDER_AUTHORITY_SUFFIX
         val uri = try {
             FileProvider.getUriForFile(context, authority, staged.file)
@@ -70,6 +102,57 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 staged.file.parentFile?.deleteRecursively()
                 ExternalFileHandoffResult.NoCompatibleApplication(action)
             }
+        }
+    }
+
+    private suspend fun stageStreamedCopy(
+        sourceName: String,
+        declaredMimeType: String?,
+        declaredByteCount: Long?,
+        maximumBytes: Long,
+        download: suspend (FileOutputStream, Long) -> AndroidDetachedDownload,
+    ): StagedExternalFile.Ready {
+        require(maximumBytes in 1L..MAX_EXTERNAL_FILE_HANDOFF_BYTES) {
+            "The external attachment limit is outside the supported range."
+        }
+        val root = File(context.cacheDir, EXTERNAL_SHARE_CACHE_DIRECTORY)
+        check(root.isDirectory || root.mkdirs()) { "Could not create the private external-share cache." }
+        val canonicalRoot = root.canonicalFile
+        pruneExternalShareCache(canonicalRoot, maximumBytes)
+
+        val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
+        check(operationDirectory.mkdir()) { "Could not create a private external-share directory." }
+        check(operationDirectory.canonicalFile.parentFile == canonicalRoot) { "Unsafe external-share directory." }
+        val target = File(operationDirectory, sanitizeExternalFileName(sourceName))
+        check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) { "Unsafe external-share filename." }
+        val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
+        try {
+            val downloaded = FileOutputStream(temporary).use { output ->
+                download(output, maximumBytes).also {
+                    output.fd.sync()
+                }
+            }
+            check(downloaded.byteCount in 0L..maximumBytes) {
+                "The downloaded attachment is larger than the external handoff limit."
+            }
+            verifyDownloadedDeckAttachmentSize(declaredByteCount, downloaded.byteCount)
+            check(temporary.length() == downloaded.byteCount) {
+                "The external-share cache copy is incomplete."
+            }
+            check(!target.exists() && temporary.renameTo(target)) {
+                "Could not publish the external-share cache copy."
+            }
+            check(target.setWritable(false, true) || !target.canWrite()) {
+                "Could not make the detached attachment read-only."
+            }
+            val declaredMime = sanitizeExternalMimeType(declaredMimeType)
+            val responseMime = sanitizeExternalMimeType(downloaded.mimeType)
+            val mimeType = declaredMime.takeUnless { it == GENERIC_MIME_TYPE } ?: responseMime
+            return StagedExternalFile.Ready(target, mimeType)
+        } catch (failure: Throwable) {
+            temporary.delete()
+            operationDirectory.deleteRecursively()
+            throw failure
         }
     }
 
@@ -132,6 +215,11 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         data class Rejected(val result: ExternalFileHandoffResult.Rejected) : StagedExternalFile
     }
 }
+
+internal data class AndroidDetachedDownload(
+    val byteCount: Long,
+    val mimeType: String?,
+)
 
 internal data class AndroidExternalFileIntentPlan(
     val action: String,

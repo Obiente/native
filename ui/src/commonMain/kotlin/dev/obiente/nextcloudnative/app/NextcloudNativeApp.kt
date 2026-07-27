@@ -169,6 +169,8 @@ private sealed interface Screen {
     @Serializable
     data object Contacts : Screen
     @Serializable
+    data object Deck : Screen
+    @Serializable
     data object AdminApps : Screen
     @Serializable
     data object OfflineCenter : Screen
@@ -349,6 +351,9 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.TransferDesktopActive,
                     MarketingCaptureScenario.TransferDesktopCompleted,
                     -> MarketingMediaTransferScenario(scenario)
+                    MarketingCaptureScenario.DeckBoardDesktop,
+                    MarketingCaptureScenario.DeckBoardMobile,
+                    -> MarketingDeckBoardScenario()
                     MarketingCaptureScenario.DesktopHome,
                     MarketingCaptureScenario.MobileHome,
                     -> {
@@ -515,6 +520,7 @@ private fun AuthenticatedApp(
             "user_status" -> Screen.UserStatus
             "calendar" -> Screen.Calendar
             "contacts" -> Screen.Contacts
+            "deck" -> Screen.Deck
             "activity" -> {
                 destination = NextcloudDestination.Activity
                 Screen.Root
@@ -544,6 +550,7 @@ private fun AuthenticatedApp(
             Screen.UserStatus,
             Screen.Calendar,
             Screen.Contacts,
+            Screen.Deck,
             is Screen.AppInfo,
             -> {
                 screen = Screen.Root
@@ -766,6 +773,13 @@ private fun AuthenticatedApp(
             session = session,
             userId = serverInfo?.userId ?: session.loginName,
             onBack = ::navigateBack,
+        )
+        Screen.Deck -> NativeDeckScreen(
+            services = services,
+            session = session,
+            currentUserId = serverInfo?.userId ?: session.loginName,
+            onBack = ::navigateBack,
+            modifier = Modifier.fillMaxSize().safeDrawingPadding(),
         )
         Screen.AdminApps -> AdminAppsScreen(
             services = services,

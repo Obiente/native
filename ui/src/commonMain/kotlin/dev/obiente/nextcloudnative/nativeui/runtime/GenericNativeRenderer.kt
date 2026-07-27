@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -57,19 +58,27 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
 import com.mohamedrejeb.richeditor.model.rememberRichTextState
 import com.mohamedrejeb.richeditor.annotation.ExperimentalRichTextApi
 import com.mohamedrejeb.richeditor.ui.material3.RichText
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
+import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragHandle
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
@@ -85,6 +94,7 @@ import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 fun interface NativeFileFieldPicker {
     fun requestFile(field: FieldSpec, onSelected: (String) -> Unit)
@@ -124,6 +134,9 @@ fun GenericNativeAppScreen(
     mediaArtworkResolver: NativeMediaArtworkResolver? = null,
 ) {
     val resource = schema.resource(view.resourceId)
+    val boardMoveReconciliation = remember(schema.app.id, view.id, resource?.id) {
+        NativeBoardMoveReconciliation()
+    }
     val readyRecords = (state as? NativeScreenState.Ready)?.records.orEmpty()
     val displayResource = remember(resource, readyRecords) {
         resource?.withEphemeralDisplayFields(readyRecords)
@@ -199,6 +212,7 @@ fun GenericNativeAppScreen(
                     onSelectRecord = onSelectRecord,
                     actionExecutor = actionExecutor,
                     onActionSucceeded = onInlineActionSucceeded ?: onActionSucceeded,
+                    reconciliation = boardMoveReconciliation,
                 )
                 GenericNativeSurface.Mailbox -> GenericMailboxCollection(presentedResource, presentedRecords, onSelectRecord)
                 GenericNativeSurface.MediaLibrary -> GenericMediaLibraryCollection(
@@ -1645,10 +1659,17 @@ private fun GenericRecordBoard(
     onSelectRecord: ((NativeRecord) -> Unit)?,
     actionExecutor: NativeActionExecutor,
     onActionSucceeded: (() -> Unit)?,
+    reconciliation: NativeBoardMoveReconciliation,
 ) {
-    val lanes = remember(resource, records, declaredLanes) {
+    val discoveredLanes = remember(resource, records, declaredLanes) {
         declaredLanes ?: nativeBoardLanes(resource, records)
     }
+    val initialLaneOrder = remember(resource.id) { discoveredLanes.map(NativeBoardLane::key) }
+    val orderedLaneKeys = stableNativeBoardLaneOrder(
+        initialLaneKeys = initialLaneOrder,
+        currentLaneKeys = discoveredLanes.map(NativeBoardLane::key),
+    )
+    val lanes = discoveredLanes.sortedBy { lane -> orderedLaneKeys.indexOf(lane.key) }
     val scope = rememberCoroutineScope()
     var editTarget by remember(resource.id) { mutableStateOf<NativeBoardEditTarget?>(null) }
     var moveTarget by remember(resource.id) { mutableStateOf<NativeBoardMoveTargetSelection?>(null) }
@@ -1657,9 +1678,33 @@ private fun GenericRecordBoard(
     var busyRecordId by remember(resource.id) { mutableStateOf<String?>(null) }
     var actionMessage by remember(resource.id) { mutableStateOf<String?>(null) }
     var actionError by remember(resource.id) { mutableStateOf<String?>(null) }
-    var pendingMove by remember(resource.id) { mutableStateOf<PendingNativeBoardMove?>(null) }
+    val laneBounds = remember(resource.id) { mutableStateMapOf<String, Rect>() }
+    var boardBounds by remember(resource.id) { mutableStateOf<Rect?>(null) }
+    var draggedRecord by remember(resource.id) { mutableStateOf<NativeRecord?>(null) }
+    var dragPosition by remember(resource.id) { mutableStateOf<Offset?>(null) }
+    var dragTargetLaneKey by remember(resource.id) { mutableStateOf<String?>(null) }
+    var dragAllowedLaneKeys by remember(resource.id) { mutableStateOf<Set<String>>(emptySet()) }
     val fingerprint = remember(lanes) { nativeBoardFingerprint(lanes) }
 
+    fun resolveDragTarget(position: Offset): String? = resolveNativeBoardLaneDropTarget(
+        position = position,
+        laneBounds = laneBounds,
+        allowedLaneKeys = dragAllowedLaneKeys,
+    )
+
+    fun updateDragPosition(position: Offset) {
+        dragPosition = position
+        dragTargetLaneKey = resolveDragTarget(position)
+    }
+
+    fun clearDrag() {
+        draggedRecord = null
+        dragPosition = null
+        dragTargetLaneKey = null
+        dragAllowedLaneKeys = emptySet()
+    }
+
+    val pendingMove = reconciliation.pendingMove
     LaunchedEffect(fingerprint, pendingMove) {
         val pending = pendingMove ?: return@LaunchedEffect
         if (fingerprint == pending.beforeFingerprint) return@LaunchedEffect
@@ -1683,12 +1728,12 @@ private fun GenericRecordBoard(
             }
             NativeBoardMoveVerification.WaitingForRefresh -> return@LaunchedEffect
         }
-        pendingMove = null
+        reconciliation.clear(pending)
     }
     LaunchedEffect(pendingMove) {
         val pending = pendingMove ?: return@LaunchedEffect
         delay(BOARD_MOVE_VERIFICATION_TIMEOUT_MILLIS)
-        if (pendingMove != pending) return@LaunchedEffect
+        if (reconciliation.pendingMove != pending) return@LaunchedEffect
         when (
             verifyNativeBoardMove(
                 lanes = lanes,
@@ -1710,7 +1755,7 @@ private fun GenericRecordBoard(
                     "unchanged in this view."
             }
         }
-        pendingMove = null
+        reconciliation.clear(pending)
     }
 
     fun executeEdit(target: NativeBoardEditTarget, values: Map<String, String>) {
@@ -1738,7 +1783,7 @@ private fun GenericRecordBoard(
             when (val result = actionExecutor.execute(target.plan.request(destination.key))) {
                 is NativeActionExecutionResult.Success -> {
                     moveTarget = null
-                    pendingMove = PendingNativeBoardMove(
+                    reconciliation.begin(
                         recordId = target.record.id,
                         targetLaneKey = destination.key,
                         targetLaneTitle = destination.title,
@@ -1813,19 +1858,41 @@ private fun GenericRecordBoard(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-    Row(
-        modifier = Modifier.weight(1f).fillMaxWidth().horizontalScroll(rememberScrollState())
-            .padding(NextcloudSpacing.Large),
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-    ) {
-        lanes.forEach { lane ->
-            val createPlan = remember(schema, resource, lane) {
-                nativeBoardLaneCreatePlan(schema, resource, lane)
-            }
-            Column(
-                modifier = Modifier.width(284.dp).fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        Box(
+            modifier = Modifier.weight(1f).fillMaxWidth()
+                .onGloballyPositioned { coordinates ->
+                    boardBounds = coordinates.boundsInWindow()
+                },
+        ) {
+            Row(
+                modifier = Modifier.fillMaxSize().horizontalScroll(rememberScrollState())
+                    .padding(NextcloudSpacing.Large),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
+                lanes.forEach { lane ->
+                    val createPlan = remember(schema, resource, lane) {
+                        nativeBoardLaneCreatePlan(schema, resource, lane)
+                    }
+                    val isDragTarget = dragTargetLaneKey == lane.key
+                    Column(
+                        modifier = Modifier.width(284.dp).fillMaxHeight()
+                            .onGloballyPositioned { coordinates ->
+                                laneBounds[lane.key] = coordinates.boundsInWindow()
+                            }
+                            .then(
+                                if (isDragTarget) {
+                                    Modifier.border(
+                                        width = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        shape = RoundedCornerShape(NextcloudRadii.Card),
+                                    )
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .padding(NextcloudSpacing.XSmall),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.XSmall),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1864,41 +1931,111 @@ private fun GenericRecordBoard(
                         )
                     }
                 }
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    contentPadding = PaddingValues(bottom = NextcloudSpacing.XXLarge),
-                ) {
-                    items(lane.records, key = NativeRecord::id) { record ->
-                        val actions = remember(schema, resource, record, lanes) {
-                            nativeBoardCardActionPlan(schema, resource, record, lanes)
-                        }
-                        GenericBoardCard(
-                            resource = resource,
-                            record = record,
-                            actions = actions,
-                            busy = busyRecordId == record.id,
-                            onOpen = onSelectRecord?.let { callback -> { callback(record) } },
-                            onEdit = actions.edit?.let { plan ->
-                                { editTarget = NativeBoardEditTarget(record, plan) }
-                            },
-                            onMove = actions.move?.let { plan ->
-                                { moveTarget = NativeBoardMoveTargetSelection(record, plan) }
-                            },
-                            onDirectAction = { plan ->
-                                val target = NativeBoardDirectActionTarget(record, plan)
-                                if (plan.kind == NativeBoardDirectActionKind.Delete) {
-                                    confirmTarget = target
-                                } else {
-                                    executeDirect(target)
+                        LazyColumn(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            contentPadding = PaddingValues(bottom = NextcloudSpacing.XXLarge),
+                        ) {
+                            items(lane.records, key = NativeRecord::id) { record ->
+                                val actions = remember(schema, resource, record, lanes) {
+                                    nativeBoardCardActionPlan(schema, resource, record, lanes)
                                 }
-                            },
+                                val movePlan = actions.move
+                                GenericBoardCard(
+                                    resource = resource,
+                                    record = record,
+                                    actions = actions,
+                                    busy = busyRecordId == record.id,
+                                    dragging = draggedRecord?.id == record.id,
+                                    onOpen = onSelectRecord?.let { callback -> { callback(record) } },
+                                    onEdit = actions.edit?.let { plan ->
+                                        { editTarget = NativeBoardEditTarget(record, plan) }
+                                    },
+                                    onMove = movePlan?.let { plan ->
+                                        { moveTarget = NativeBoardMoveTargetSelection(record, plan) }
+                                    },
+                                    onDragStart = movePlan?.takeIf { busyRecordId == null }?.let {
+                                        { position ->
+                                            draggedRecord = record
+                                            dragAllowedLaneKeys = movePlan.targets
+                                                .mapTo(linkedSetOf(), NativeBoardMoveTarget::key)
+                                            updateDragPosition(position)
+                                        }
+                                    },
+                                    onDrag = { amount ->
+                                        dragPosition?.let { position ->
+                                            updateDragPosition(position + amount)
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        val destination = dragTargetLaneKey?.let { targetKey ->
+                                            movePlan?.targets?.firstOrNull { it.key == targetKey }
+                                        }
+                                        clearDrag()
+                                        if (movePlan != null && destination != null) {
+                                            executeMove(
+                                                NativeBoardMoveTargetSelection(record, movePlan),
+                                                destination,
+                                            )
+                                        }
+                                    },
+                                    onDragCancel = ::clearDrag,
+                                    onDirectAction = { plan ->
+                                        val target = NativeBoardDirectActionTarget(record, plan)
+                                        if (plan.kind == NativeBoardDirectActionKind.Delete) {
+                                            confirmTarget = target
+                                        } else {
+                                            executeDirect(target)
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            val previewRecord = draggedRecord
+            val previewPosition = dragPosition
+            val viewport = boardBounds
+            if (previewRecord != null && previewPosition != null && viewport != null) {
+                val preview = nativeRecordPresentation(resource, previewRecord)
+                Surface(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                x = (previewPosition.x - viewport.left - 20.dp.toPx()).roundToInt(),
+                                y = (previewPosition.y - viewport.top - 20.dp.toPx()).roundToInt(),
+                            )
+                        }
+                        .width(264.dp)
+                        .zIndex(2f),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                    shadowElevation = 12.dp,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(NextcloudSpacing.Medium),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                    ) {
+                        Text(
+                            preview.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            dragTargetLaneKey
+                                ?.let { key -> lanes.firstOrNull { it.key == key }?.title }
+                                ?.let { title -> "Move to $title" }
+                                ?: "Move over a list",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = dragTargetLaneKey?.let { MaterialTheme.colorScheme.primary }
+                                ?: MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
             }
         }
-    }
     }
     editTarget?.let { target ->
         NativeBoardEditDialog(
@@ -1949,12 +2086,35 @@ private data class NativeBoardDirectActionTarget(
     val plan: NativeBoardDirectActionPlan,
 )
 
-private data class PendingNativeBoardMove(
+internal data class PendingNativeBoardMove(
     val recordId: String,
     val targetLaneKey: String,
     val targetLaneTitle: String,
     val beforeFingerprint: String,
 )
+
+internal class NativeBoardMoveReconciliation {
+    var pendingMove by mutableStateOf<PendingNativeBoardMove?>(null)
+        private set
+
+    fun begin(
+        recordId: String,
+        targetLaneKey: String,
+        targetLaneTitle: String,
+        beforeFingerprint: String,
+    ) {
+        pendingMove = PendingNativeBoardMove(
+            recordId = recordId,
+            targetLaneKey = targetLaneKey,
+            targetLaneTitle = targetLaneTitle,
+            beforeFingerprint = beforeFingerprint,
+        )
+    }
+
+    fun clear(expected: PendingNativeBoardMove) {
+        if (pendingMove == expected) pendingMove = null
+    }
+}
 
 @Composable
 private fun GenericBoardCard(
@@ -1962,9 +2122,14 @@ private fun GenericBoardCard(
     record: NativeRecord,
     actions: NativeBoardCardActionPlan,
     busy: Boolean,
+    dragging: Boolean,
     onOpen: (() -> Unit)?,
     onEdit: (() -> Unit)?,
     onMove: (() -> Unit)?,
+    onDragStart: ((Offset) -> Unit)?,
+    onDrag: (Offset) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit,
     onDirectAction: (NativeBoardDirectActionPlan) -> Unit,
 ) {
     val presentation = nativeRecordPresentation(resource, record)
@@ -1984,16 +2149,20 @@ private fun GenericBoardCard(
         }
     }
     Card(
-        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
-            onOpen = onOpen,
-            onShowActions = if (menuActions.isNotEmpty()) {
-                { actionMenuExpanded = true }
-            } else {
-                null
-            },
-            openLabel = "Open ${presentation.title}",
-            actionsLabel = "Show actions for ${presentation.title}",
-        ),
+        modifier = Modifier.fillMaxWidth()
+            .graphicsLayer {
+                alpha = if (dragging) 0.18f else 1f
+            }
+            .nextcloudCardInteractions(
+                onOpen = onOpen,
+                onShowActions = if (menuActions.isNotEmpty()) {
+                    { actionMenuExpanded = true }
+                } else {
+                    null
+                },
+                openLabel = "Open ${presentation.title}",
+                actionsLabel = "Show actions for ${presentation.title}",
+            ),
         colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
         shape = RoundedCornerShape(NextcloudRadii.Card),
     ) {
@@ -2003,6 +2172,15 @@ private fun GenericBoardCard(
                 verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             ) {
+                onDragStart?.let { startDrag ->
+                    NextcloudBoardDragHandle(
+                        itemLabel = presentation.title,
+                        onDragStart = startDrag,
+                        onDrag = onDrag,
+                        onDragEnd = onDragEnd,
+                        onDragCancel = onDragCancel,
+                    )
+                }
                 Text(
                     presentation.title,
                     modifier = Modifier.weight(1f),

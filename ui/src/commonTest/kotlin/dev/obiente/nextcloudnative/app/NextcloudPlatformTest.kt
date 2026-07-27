@@ -57,6 +57,20 @@ class NextcloudPlatformTest {
     }
 
     @Test
+    fun forceNetworkReadsKeepTheSameCredentialFreeCacheIdentity() {
+        val cached = NextcloudApiRequest(
+            method = NextcloudApiMethod.GET,
+            relativePath = "/index.php/apps/deck/api/v1.1/boards/7",
+        )
+        val authoritative = cached.copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork)
+
+        assertEquals(NextcloudApiCachePolicy.PreferCache, cached.cachePolicy)
+        assertEquals(NextcloudApiCachePolicy.ForceNetwork, authoritative.cachePolicy)
+        assertEquals(cached.dynamicReadCacheIdentity(), authoritative.dynamicReadCacheIdentity())
+        assertEquals(authoritative, authoritative.requireSafe())
+    }
+
+    @Test
     fun rejectsDynamicApiTraversalAndEmbeddedOrigins() {
         listOf(
             "https://other.example/api",

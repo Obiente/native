@@ -166,8 +166,36 @@ tasks.register<JavaExec>("captureMarketingScreenshots") {
         "transfer-mobile-failed-cached.png",
         "transfer-desktop-active.png",
         "transfer-desktop-completed-page.png",
+        "deck-board-desktop.png",
+        "deck-board-mobile.png",
         ).map { fileName ->
             rootProject.file("website/public/screenshots/$fileName").absolutePath
         },
+    )
+}
+
+tasks.register<JavaExec>("runDeckInteractionPreview") {
+    group = "verification"
+    description = "Opens a network-free synthetic Deck workspace for pointer and layout QA."
+    dependsOn(desktopCaptureCompilation.compileTaskProvider)
+    classpath(
+        desktopCaptureCompilation.output.allOutputs,
+        desktopCaptureCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set(
+        "dev.obiente.nextcloudnative.nativeui.preview.DeckInteractionPreviewMainKt",
+    )
+}
+
+tasks.register<JavaExec>("runDynamicBoardInteractionPreview") {
+    group = "verification"
+    description = "Opens a network-free discovered board for adaptive drag and layout QA."
+    dependsOn(desktopCaptureCompilation.compileTaskProvider)
+    classpath(
+        desktopCaptureCompilation.output.allOutputs,
+        desktopCaptureCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set(
+        "dev.obiente.nextcloudnative.nativeui.preview.DynamicBoardInteractionPreviewMainKt",
     )
 }
