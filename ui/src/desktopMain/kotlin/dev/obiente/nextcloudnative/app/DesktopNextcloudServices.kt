@@ -555,18 +555,7 @@ class DesktopNextcloudServices(
 
     override suspend fun listMedia(session: NextcloudSession, userId: String): List<NextcloudFile> =
         withContext(Dispatchers.IO) {
-            val rawFileNameFilters = rawPhotoFileNameSearchPatterns().joinToString("") { pattern ->
-                """<d:like caseless="yes"><d:prop><d:displayname/></d:prop><d:literal>$pattern</d:literal></d:like>"""
-            }
-            val search = """
-                <?xml version="1.0" encoding="UTF-8"?>
-                <d:searchrequest xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns"><d:basicsearch>
-                  <d:select><d:prop><d:displayname/><d:getcontenttype/><d:getlastmodified/><d:getcontentlength/><d:getetag/><oc:fileid/><oc:size/><oc:permissions/><nc:has-preview/></d:prop></d:select>
-                  <d:from><d:scope><d:href>/files/${escapeXml(userId)}</d:href><d:depth>infinity</d:depth></d:scope></d:from>
-                  <d:where><d:or><d:like><d:prop><d:getcontenttype/></d:prop><d:literal>image/%</d:literal></d:like><d:like><d:prop><d:getcontenttype/></d:prop><d:literal>video/%</d:literal></d:like>$rawFileNameFilters</d:or></d:where>
-                  <d:orderby><d:order><d:prop><d:getlastmodified/></d:prop><d:descending/></d:order></d:orderby><d:limit><d:nresults>80</d:nresults></d:limit>
-                </d:basicsearch></d:searchrequest>
-            """.trimIndent()
+            val search = mediaSearchDavRequestBody(userId)
             val response = request(
                 "SEARCH", session.serverUrl + "/remote.php/dav/", session, search,
                 "application/xml; charset=utf-8", headers = mapOf("Accept" to "application/xml"),

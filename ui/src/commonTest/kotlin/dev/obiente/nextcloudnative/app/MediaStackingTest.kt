@@ -3,11 +3,27 @@ package dev.obiente.nextcloudnative.app
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class MediaStackingTest {
+    @Test
+    fun mediaSearchRequestsResourceTypeAndBoundsItsResultSet() {
+        val body = mediaSearchDavRequestBody("account<&\"'")
+
+        assertTrue("<d:resourcetype/>" in body)
+        assertTrue("<d:href>/files/account&lt;&amp;&quot;&apos;</d:href>" in body)
+        assertTrue("<d:nresults>$MAXIMUM_MEDIA_SEARCH_RESULTS</d:nresults>" in body)
+        rawPhotoFileNameSearchPatterns().forEach { pattern ->
+            assertTrue("<d:literal>$pattern</d:literal>" in body)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            mediaSearchDavRequestBody("account", MAXIMUM_MEDIA_SEARCH_RESULTS + 1)
+        }
+    }
+
     @Test
     fun mediaSearchDropsCollectionsEvenWhenTheirNamesLookLikeRawFiles() {
         val rawDirectory = file("Photos/archive.raw", "httpd/unix-directory").copy(isDirectory = true)
