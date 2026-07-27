@@ -117,11 +117,13 @@ import dev.obiente.nextcloudnative.app.requireSafeFileRangeEtag
 import dev.obiente.nextcloudnative.app.discoverRecognizeBridge
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
 import dev.obiente.nextcloudnative.app.dynamicReadCacheIdentity
-import dev.obiente.nextcloudnative.app.parseTalkMessageJson
-import dev.obiente.nextcloudnative.app.parseNextcloudFileSharingCapabilities
+import dev.obiente.nextcloudnative.app.collectMediaSearchDavPages
+import dev.obiente.nextcloudnative.app.mediaSearchDavRequests
+import dev.obiente.nextcloudnative.app.MediaSearchDavTransportResponse
+import dev.obiente.nextcloudnative.app.mergeMediaSearchResultPages
 import dev.obiente.nextcloudnative.app.normalizeSystemTagsDavResponse
-import dev.obiente.nextcloudnative.app.mediaSearchDavRequestBody
-import dev.obiente.nextcloudnative.app.selectMediaSearchFiles
+import dev.obiente.nextcloudnative.app.parseNextcloudFileSharingCapabilities
+import dev.obiente.nextcloudnative.app.parseTalkMessageJson
 import dev.obiente.nextcloudnative.app.requireSafe
 import dev.obiente.nextcloudnative.app.systemTagsDavDiscoveryRequest
 import dev.obiente.nextcloudnative.app.toWebDavMutationSpec
@@ -636,17 +638,22 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         userId: String,
     ): List<NextcloudFile> = withContext(Dispatchers.IO) {
-        val body = mediaSearchDavRequestBody(userId)
-        val response = request(
-            method = "SEARCH",
-            url = session.serverUrl + "/remote.php/dav/",
-            session = session,
-            body = body,
-            contentType = "application/xml; charset=utf-8",
-            headers = mapOf("Accept" to "application/xml"),
+        val pages = collectMediaSearchDavPages(
+            requests = mediaSearchDavRequests(userId),
+            execute = { body ->
+                val response = request(
+                    method = "SEARCH",
+                    url = session.serverUrl + "/remote.php/dav/",
+                    session = session,
+                    body = body,
+                    contentType = "application/xml; charset=utf-8",
+                    headers = mapOf("Accept" to "application/xml"),
+                )
+                MediaSearchDavTransportResponse(response.status, response.body)
+            },
+            parse = { body -> parseDavFiles(body, userId) },
         )
-        check(response.status == 207) { "WebDAV media search failed (HTTP ${response.status})." }
-        selectMediaSearchFiles(parseDavFiles(response.body, userId))
+        mergeMediaSearchResultPages(pages)
     }
 
     override suspend fun loadMediaBackupStatuses(
