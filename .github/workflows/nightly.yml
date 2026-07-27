@@ -90,6 +90,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
 
       - name: Set up JDK 21
         uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
@@ -302,13 +303,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
-      successful-platforms: ${{ steps.platforms.outputs.successful }}
-      available-platforms: ${{ steps.platforms.outputs.available }}
+      successful-platforms: ${{ steps.release.outputs.successful }}
+      available-platforms: ${{ steps.release.outputs.available }}
       already-published: ${{ steps.release.outputs.already-published }}
     permissions:
       actions: read
       contents: write
     steps:
+      - name: Check out the exact tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+
       - name: Download successful nightly packages
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -316,8 +323,14 @@ jobs:
           pattern: nextcloud-native-*
           path: artifacts
 
-      - name: Count successful platforms
-        id: platforms
+      - name: Prepare immutable release assets
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts dist
+          tools/stage-nightly-assets.sh artifacts dist
+
+      - name: Count staged platforms
+        id: staged-platforms
         env:
           GH_TOKEN: ${{ github.token }}
           NIGHTLY_TAG: ${{ needs.source.outputs.tag }}
@@ -329,36 +342,16 @@ jobs:
               --json assets \
               --jq '.assets[].name' 2>/dev/null || true
           )"
-          successful=0
-          available=()
+          printf '%s\n' "${existing_assets}" >"${RUNNER_TEMP}/existing-nightly-assets.txt"
+          mapfile -t platform_state < <(
+            tools/count-nightly-platforms.sh \
+              dist \
+              "${RUNNER_TEMP}/existing-nightly-assets.txt"
+          )
+          successful="${platform_state[0]#successful=}"
+          available="${platform_state[1]#available=}"
           for platform in android linux windows macos; do
-            artifact="artifacts/nextcloud-native-${platform}"
-            staged=false
-            case "${platform}" in
-              android)
-                grep -Eq '^nextcloud-native-.*-android\.apk$' <<<"${existing_assets}" &&
-                  grep -Fxq 'update-manifest.json' <<<"${existing_assets}" &&
-                  staged=true
-                ;;
-              linux)
-                grep -Eq '\.(deb|rpm)$' <<<"${existing_assets}" &&
-                  staged=true
-                ;;
-              windows)
-                grep -Eq '\.msi$' <<<"${existing_assets}" &&
-                  staged=true
-                ;;
-              macos)
-                grep -Eq '\.dmg$' <<<"${existing_assets}" &&
-                  staged=true
-                ;;
-            esac
-            if {
-              [[ -d "${artifact}" ]] &&
-                find "${artifact}" -type f -print -quit | grep -q .
-            } || [[ "${staged}" = "true" ]]; then
-              successful=$((successful + 1))
-              available+=("${platform}")
+            if [[ ",${available}," == *",${platform},"* ]]; then
               echo "${platform}: available"
             else
               echo "${platform}: unavailable"
@@ -366,7 +359,7 @@ jobs:
           done
           echo "Successful platforms: ${successful}/4"
           echo "successful=${successful}" >>"${GITHUB_OUTPUT}"
-          echo "available=$(IFS=,; echo "${available[*]}")" >>"${GITHUB_OUTPUT}"
+          echo "available=${available}" >>"${GITHUB_OUTPUT}"
           if [[ "${successful}" -eq 0 ]]; then
             test "$(
               gh release view "${NIGHTLY_TAG}" \
@@ -375,20 +368,6 @@ jobs:
                 --jq '.isDraft'
             )" = "false"
           fi
-
-      - name: Prepare immutable release assets
-        if: steps.platforms.outputs.successful != '0'
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts dist
-          if [[ -d artifacts/nextcloud-native-android ]]; then
-            test -f artifacts/nextcloud-native-android/update-manifest.json
-            test -f artifacts/nextcloud-native-android/android-apk.sha256
-          fi
-          find artifacts -mindepth 2 -maxdepth 2 -type f \
-            ! -name android-apk.sha256 \
-            ! -name android-certificate.sha256 \
-            -exec cp -t dist -- {} +
 
       - name: Create or verify immutable nightly prerelease
         id: release
@@ -399,11 +378,10 @@ jobs:
           NIGHTLY_VERSION: ${{ needs.source.outputs.version }}
           NIGHTLY_VERSION_CODE: ${{ needs.source.outputs.version-code }}
           SOURCE_RUN_URL: ${{ github.event.workflow_run.html_url }}
-          SUCCESSFUL_PLATFORMS: ${{ steps.platforms.outputs.successful }}
-          AVAILABLE_PLATFORMS: ${{ steps.platforms.outputs.available }}
+          STAGED_SUCCESSFUL_PLATFORMS: ${{ steps.staged-platforms.outputs.successful }}
+          STAGED_AVAILABLE_PLATFORMS: ${{ steps.staged-platforms.outputs.available }}
         run: |
           set -euo pipefail
-          echo "already-published=false" >>"${GITHUB_OUTPUT}"
           tag_ref_response="${RUNNER_TEMP}/nightly-tag-ref.json"
           tag_ref_error="${RUNNER_TEMP}/nightly-tag-ref.error"
           existing_sha=""
@@ -438,34 +416,43 @@ jobs:
           if [[ -n "${existing_release}" ]] &&
             [[ "$(jq -r '.isDraft' <<<"${existing_release}")" = "false" ]]; then
             echo "already-published=true" >>"${GITHUB_OUTPUT}"
+            echo "successful=0" >>"${GITHUB_OUTPUT}"
+            echo "available=" >>"${GITHUB_OUTPUT}"
             echo "Published nightly ${NIGHTLY_TAG} is immutable; no assets or metadata were changed."
             exit 0
           fi
 
-          test "${SUCCESSFUL_PLATFORMS}" -gt 0
-          printf 'Automated nightly from the tested main branch.\n\nSource CI: %s\n' \
-            "${SOURCE_RUN_URL}" >"${RUNNER_TEMP}/release-notes.md"
-          if [[ "${SUCCESSFUL_PLATFORMS}" -lt 4 ]]; then
-            {
-              printf '\n## Build availability\n\n'
-              printf '| Platform | Status |\n'
-              printf '| --- | --- |\n'
-              for platform in android linux windows macos; do
-                artifact="artifacts/nextcloud-native-${platform}"
-                case "${platform}" in
-                  android) label="Android" ;;
-                  linux) label="Linux" ;;
-                  windows) label="Windows" ;;
-                  macos) label="macOS" ;;
-                esac
-                if [[ ",${AVAILABLE_PLATFORMS}," == *",${platform},"* ]]; then
-                  printf '| %s | Available |\n' "${label}"
-                else
-                  printf '| %s | Unavailable |\n' "${label}"
-                fi
-              done
-            } >>"${RUNNER_TEMP}/release-notes.md"
-          fi
+          echo "already-published=false" >>"${GITHUB_OUTPUT}"
+          test "${STAGED_SUCCESSFUL_PLATFORMS}" -gt 0
+          write_release_notes() {
+            platform_count="$1"
+            available_platforms="$2"
+            printf 'Automated nightly from the tested main branch.\n\nSource CI: %s\n' \
+              "${SOURCE_RUN_URL}" >"${RUNNER_TEMP}/release-notes.md"
+            if [[ "${platform_count}" -lt 4 ]]; then
+              {
+                printf '\n## Build availability\n\n'
+                printf '| Platform | Status |\n'
+                printf '| --- | --- |\n'
+                for platform in android linux windows macos; do
+                  case "${platform}" in
+                    android) label="Android" ;;
+                    linux) label="Linux" ;;
+                    windows) label="Windows" ;;
+                    macos) label="macOS" ;;
+                  esac
+                  if [[ ",${available_platforms}," == *",${platform},"* ]]; then
+                    printf '| %s | Available |\n' "${label}"
+                  else
+                    printf '| %s | Unavailable |\n' "${label}"
+                  fi
+                done
+              } >>"${RUNNER_TEMP}/release-notes.md"
+            fi
+          }
+          write_release_notes \
+            "${STAGED_SUCCESSFUL_PLATFORMS}" \
+            "${STAGED_AVAILABLE_PLATFORMS}"
           mapfile -d '' assets < <(find dist -maxdepth 1 -type f -print0 | sort -z)
 
           if [[ -n "${existing_release}" ]]; then
@@ -506,39 +493,12 @@ jobs:
                     ;;
                 esac
               done <<<"${existing_assets}"
-              existing_assets="$(
-                gh release view "${NIGHTLY_TAG}" \
-                  --repo "${GITHUB_REPOSITORY}" \
-                  --json assets \
-                  --jq '.assets[].name'
-              )"
             fi
             for asset in "${assets[@]}"; do
-              name="$(basename "${asset}")"
-              case "${name}" in
-                nextcloud-native-*-android.apk|nextcloud-native-*-android.aab|update-manifest.json)
-                  if [[ "${current_android}" = "true" ]]; then
-                    gh release upload "${NIGHTLY_TAG}" "${asset}" \
-                      --repo "${GITHUB_REPOSITORY}" \
-                      --clobber
-                    continue
-                  fi
-                  ;;
-              esac
-              if grep -Fxq "${name}" <<<"${existing_assets}"; then
-                echo "Retaining immutable staged asset ${name}."
-              else
-                gh release upload "${NIGHTLY_TAG}" "${asset}" \
-                  --repo "${GITHUB_REPOSITORY}"
-              fi
+              gh release upload "${NIGHTLY_TAG}" "${asset}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --clobber
             done
-            gh release edit "${NIGHTLY_TAG}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --verify-tag \
-              --prerelease \
-              --latest=false \
-              --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${NIGHTLY_VERSION}"
           else
             test "${#assets[@]}" -gt 0
             gh release create "${NIGHTLY_TAG}" "${assets[@]}" \
@@ -551,15 +511,35 @@ jobs:
               --title "Nextcloud Native ${NIGHTLY_VERSION}"
           fi
 
-          if [[ "${SUCCESSFUL_PLATFORMS}" -ge 3 ]]; then
-            canonical="${RUNNER_TEMP}/canonical-release-assets"
-            mkdir -p "${canonical}"
-            gh release download "${NIGHTLY_TAG}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --dir "${canonical}"
-            if [[ -f "${canonical}/SHA256SUMS" ]]; then
-              rm "${canonical}/SHA256SUMS"
-            fi
+          canonical="${RUNNER_TEMP}/canonical-release-assets"
+          mkdir -p "${canonical}"
+          gh release download "${NIGHTLY_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir "${canonical}"
+          if [[ -f "${canonical}/SHA256SUMS" ]]; then
+            rm "${canonical}/SHA256SUMS"
+          fi
+          : >"${RUNNER_TEMP}/no-existing-nightly-assets.txt"
+          mapfile -t canonical_state < <(
+            tools/count-nightly-platforms.sh \
+              "${canonical}" \
+              "${RUNNER_TEMP}/no-existing-nightly-assets.txt"
+          )
+          canonical_successful="${canonical_state[0]#successful=}"
+          canonical_available="${canonical_state[1]#available=}"
+          echo "successful=${canonical_successful}" >>"${GITHUB_OUTPUT}"
+          echo "available=${canonical_available}" >>"${GITHUB_OUTPUT}"
+
+          write_release_notes "${canonical_successful}" "${canonical_available}"
+          gh release edit "${NIGHTLY_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --prerelease \
+            --latest=false \
+            --notes-file "${RUNNER_TEMP}/release-notes.md" \
+            --title "Nextcloud Native ${NIGHTLY_VERSION}"
+
+          if [[ "${canonical_successful}" -ge 3 ]]; then
             mapfile -d '' canonical_apks < <(
               find "${canonical}" -maxdepth 1 -type f \
                 -name 'nextcloud-native-*-android.apk' -print0
