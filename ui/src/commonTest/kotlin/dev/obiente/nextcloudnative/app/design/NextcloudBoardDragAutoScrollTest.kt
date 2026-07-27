@@ -3,6 +3,12 @@ package dev.obiente.nextcloudnative.app.design
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.PinnableContainer
+import androidx.compose.ui.unit.LayoutDirection
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -203,6 +209,69 @@ class NextcloudBoardDragAutoScrollTest {
     }
 
     @Test
+    fun `physical horizontal edge velocity maps to logical LTR and RTL scroll deltas`() {
+        assertEquals(
+            -5f,
+            resolveBoardDragHorizontalScrollDelta(
+                physicalVelocity = -10f,
+                elapsedSeconds = 0.5f,
+                layoutDirection = LayoutDirection.Ltr,
+            ),
+        )
+        assertEquals(
+            5f,
+            resolveBoardDragHorizontalScrollDelta(
+                physicalVelocity = 10f,
+                elapsedSeconds = 0.5f,
+                layoutDirection = LayoutDirection.Ltr,
+            ),
+        )
+        assertEquals(
+            5f,
+            resolveBoardDragHorizontalScrollDelta(
+                physicalVelocity = -10f,
+                elapsedSeconds = 0.5f,
+                layoutDirection = LayoutDirection.Rtl,
+            ),
+        )
+        assertEquals(
+            -5f,
+            resolveBoardDragHorizontalScrollDelta(
+                physicalVelocity = 10f,
+                elapsedSeconds = 0.5f,
+                layoutDirection = LayoutDirection.Rtl,
+            ),
+        )
+    }
+
+    @Test
+    fun `fast first drag uses the synchronous gesture origin`() {
+        assertTrue(
+            resolveBoardDragHorizontalEdgeScrollVelocity(
+                pointer = 20f,
+                dragOrigin = 80f,
+                viewportStart = 0f,
+                viewportEnd = 320f,
+                edgeThreshold = 56f,
+                intentThreshold = 12f,
+                maxVelocity = 720f,
+            ) < 0f,
+        )
+        assertEquals(
+            0f,
+            resolveBoardDragHorizontalEdgeScrollVelocity(
+                pointer = 20f,
+                dragOrigin = 20f,
+                viewportStart = 0f,
+                viewportEnd = 320f,
+                edgeThreshold = 56f,
+                intentThreshold = 12f,
+                maxVelocity = 720f,
+            ),
+        )
+    }
+
+    @Test
     fun `vertical lane selection uses visible lane geometry`() {
         assertEquals(
             "visible",
@@ -341,36 +410,27 @@ class NextcloudBoardDragAutoScrollTest {
     }
 
     @Test
-    fun `release while refresh is pending refreshes before terminal drop`() {
-        val pendingState = BoardDragTargetRefreshState()
-            .afterScroll(horizontalConsumed = 8f, verticalConsumed = 0f)
+    fun `terminal drop waits for scroll cancellation before refresh and completion`() = runBlocking {
+        val events = mutableListOf<String>()
+        val scrollMutation = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                events += "scroll-cancelled"
+            }
+        }
+        scrollMutation.cancelAndJoin()
 
-        val releaseFrame = pendingState.beginFrame(terminalDropRequested = true)
+        completeBoardDragTerminalDrop(
+            awaitLayoutFrame = { events += "layout-frame" },
+            onTargetRefresh = { events += "refresh-target" },
+            onTerminalDropReady = { events += "complete-drop" },
+        )
 
-        assertTrue(releaseFrame.shouldRefresh)
-        assertTrue(releaseFrame.terminalDropReady)
-        assertFalse(releaseFrame.nextState.pending)
-    }
-
-    @Test
-    fun `release without pending scroll still refreshes current target before terminal drop`() {
-        val releaseFrame = BoardDragTargetRefreshState()
-            .beginFrame(terminalDropRequested = true)
-
-        assertTrue(releaseFrame.shouldRefresh)
-        assertTrue(releaseFrame.terminalDropReady)
-        assertFalse(releaseFrame.nextState.pending)
-    }
-
-    @Test
-    fun `pending refresh without release does not signal terminal drop`() {
-        val pendingState = BoardDragTargetRefreshState()
-            .afterScroll(horizontalConsumed = 0f, verticalConsumed = 4f)
-
-        val refreshFrame = pendingState.beginFrame()
-
-        assertTrue(refreshFrame.shouldRefresh)
-        assertFalse(refreshFrame.terminalDropReady)
+        assertEquals(
+            listOf("scroll-cancelled", "layout-frame", "refresh-target", "complete-drop"),
+            events,
+        )
     }
 
     @Test

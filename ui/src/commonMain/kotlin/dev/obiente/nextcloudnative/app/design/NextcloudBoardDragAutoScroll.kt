@@ -10,6 +10,8 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 
 private const val NANOS_PER_SECOND = 1_000_000_000f
@@ -22,17 +24,15 @@ internal data class BoardDragVerticalScrollTarget(
 
 internal data class BoardDragTargetRefreshFrame(
     val shouldRefresh: Boolean,
-    val terminalDropReady: Boolean,
     val nextState: BoardDragTargetRefreshState,
 )
 
 internal data class BoardDragTargetRefreshState(
     val pending: Boolean = false,
 ) {
-    fun beginFrame(terminalDropRequested: Boolean = false): BoardDragTargetRefreshFrame =
+    fun beginFrame(): BoardDragTargetRefreshFrame =
         BoardDragTargetRefreshFrame(
-            shouldRefresh = pending || terminalDropRequested,
-            terminalDropReady = terminalDropRequested,
+            shouldRefresh = pending,
             nextState = copy(pending = false),
         )
 
@@ -48,6 +48,7 @@ internal data class BoardDragTargetRefreshState(
 internal fun NextcloudBoardDragAutoScroll(
     activeDragKey: Any?,
     position: Offset?,
+    dragOrigin: Offset?,
     boardViewport: Rect?,
     horizontalScrollState: ScrollableState,
     verticalScrollTargetAt: (Offset, Rect, Float) -> BoardDragVerticalScrollTarget?,
@@ -56,39 +57,34 @@ internal fun NextcloudBoardDragAutoScroll(
     onTerminalDropReady: () -> Unit,
 ) {
     val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
     val edgeThresholdPx = with(density) { 56.dp.toPx() }
     val horizontalIntentThresholdPx = with(density) { 12.dp.toPx() }
     val verticalActivationHaloPx = with(density) { 16.dp.toPx() }
     val maxVelocityPxPerSecond = with(density) { 720.dp.toPx() }
     val currentPosition by rememberUpdatedState(position)
+    val currentDragOrigin by rememberUpdatedState(dragOrigin)
     val currentBoardViewport by rememberUpdatedState(boardViewport)
+    val currentLayoutDirection by rememberUpdatedState(layoutDirection)
     val currentHorizontalScrollState by rememberUpdatedState(horizontalScrollState)
     val currentVerticalScrollTargetAt by rememberUpdatedState(verticalScrollTargetAt)
-    val currentTerminalDropRequested by rememberUpdatedState(terminalDropRequested)
     val currentOnTargetRefresh by rememberUpdatedState(onTargetRefresh)
     val currentOnTerminalDropReady by rememberUpdatedState(onTerminalDropReady)
 
-    LaunchedEffect(activeDragKey) {
-        if (activeDragKey == null) return@LaunchedEffect
+    LaunchedEffect(activeDragKey, terminalDropRequested) {
+        if (activeDragKey == null || terminalDropRequested) return@LaunchedEffect
         var previousFrameNanos = 0L
         var targetRefreshState = BoardDragTargetRefreshState()
-        var horizontalDragOrigin = currentPosition?.x
         while (true) {
             val frameNanos = withFrameNanos { it }
             if (previousFrameNanos == 0L) {
                 previousFrameNanos = frameNanos
                 continue
             }
-            val refreshFrame = targetRefreshState.beginFrame(
-                terminalDropRequested = currentTerminalDropRequested,
-            )
+            val refreshFrame = targetRefreshState.beginFrame()
             targetRefreshState = refreshFrame.nextState
             if (refreshFrame.shouldRefresh) {
                 currentOnTargetRefresh()
-            }
-            if (refreshFrame.terminalDropReady) {
-                currentOnTerminalDropReady()
-                continue
             }
             val elapsedSeconds = (
                 (frameNanos - previousFrameNanos).toFloat() / NANOS_PER_SECOND
@@ -97,12 +93,10 @@ internal fun NextcloudBoardDragAutoScroll(
 
             val currentDragPosition = currentPosition ?: continue
             val currentViewport = currentBoardViewport ?: continue
-            val dragOrigin = horizontalDragOrigin ?: currentDragPosition.x.also {
-                horizontalDragOrigin = it
-            }
+            val currentHorizontalDragOrigin = currentDragOrigin?.x ?: continue
             val horizontalVelocity = resolveBoardDragHorizontalEdgeScrollVelocity(
                 pointer = currentDragPosition.x,
-                dragOrigin = dragOrigin,
+                dragOrigin = currentHorizontalDragOrigin,
                 viewportStart = currentViewport.left,
                 viewportEnd = currentViewport.right,
                 edgeThreshold = edgeThresholdPx,
@@ -112,7 +106,13 @@ internal fun NextcloudBoardDragAutoScroll(
             val horizontalConsumed = if (horizontalVelocity == 0f) {
                 0f
             } else {
-                currentHorizontalScrollState.scrollBy(horizontalVelocity * elapsedSeconds)
+                currentHorizontalScrollState.scrollBy(
+                    resolveBoardDragHorizontalScrollDelta(
+                        physicalVelocity = horizontalVelocity,
+                        elapsedSeconds = elapsedSeconds,
+                        layoutDirection = currentLayoutDirection,
+                    ),
+                )
             }
 
             val verticalScrollTarget = currentVerticalScrollTargetAt(
@@ -141,6 +141,46 @@ internal fun NextcloudBoardDragAutoScroll(
             )
         }
     }
+
+    LaunchedEffect(activeDragKey, terminalDropRequested) {
+        if (activeDragKey == null || !terminalDropRequested) return@LaunchedEffect
+        completeBoardDragTerminalDrop(
+            awaitLayoutFrame = { withFrameNanos { } },
+            onTargetRefresh = currentOnTargetRefresh,
+            onTerminalDropReady = currentOnTerminalDropReady,
+        )
+    }
+}
+
+internal suspend fun completeBoardDragTerminalDrop(
+    awaitLayoutFrame: suspend () -> Unit,
+    onTargetRefresh: () -> Unit,
+    onTerminalDropReady: () -> Unit,
+) {
+    awaitLayoutFrame()
+    onTargetRefresh()
+    onTerminalDropReady()
+}
+
+internal fun resolveBoardDragHorizontalScrollDelta(
+    physicalVelocity: Float,
+    elapsedSeconds: Float,
+    layoutDirection: LayoutDirection,
+): Float {
+    if (
+        !physicalVelocity.isFinite() ||
+        !elapsedSeconds.isFinite() ||
+        elapsedSeconds < 0f
+    ) {
+        return 0f
+    }
+    val logicalDirection = when (layoutDirection) {
+        LayoutDirection.Ltr -> 1f
+        LayoutDirection.Rtl -> -1f
+    }
+    return (physicalVelocity * elapsedSeconds * logicalDirection)
+        .takeIf { delta -> delta.isFinite() }
+        ?: 0f
 }
 
 internal fun resolveBoardDragHorizontalEdgeScrollVelocity(

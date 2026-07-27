@@ -543,6 +543,7 @@ private fun DeckLanes(
     val laneScrollStates = remember { mutableMapOf<Long, LazyListState>() }
     val boardScrollState = rememberLazyListState()
     var draggedCard by remember { mutableStateOf<DeckCard?>(null) }
+    var dragOrigin by remember { mutableStateOf<Offset?>(null) }
     var dragPosition by remember { mutableStateOf<Offset?>(null) }
     var dragGrabOffset by remember { mutableStateOf(Offset.Zero) }
     var dropTarget by remember { mutableStateOf<DeckUiCardDropTarget?>(null) }
@@ -601,6 +602,7 @@ private fun DeckLanes(
 
     fun clearDrag() {
         draggedCard = null
+        dragOrigin = null
         dragPosition = null
         dragGrabOffset = Offset.Zero
         dropTarget = null
@@ -634,6 +636,7 @@ private fun DeckLanes(
     NextcloudBoardDragAutoScroll(
         activeDragKey = draggedCard?.id,
         position = dragPosition,
+        dragOrigin = dragOrigin,
         boardViewport = lanesBounds,
         horizontalScrollState = boardScrollState,
         verticalScrollTargetAt = { position, boardViewport, activationHalo ->
@@ -796,6 +799,7 @@ private fun DeckLanes(
                                         y = bounds.top + localPosition.y,
                                     )
                                     draggedCard = card
+                                    dragOrigin = position
                                     dragGrabOffset = localPosition
                                     dragPosition = position
                                     dropTarget = resolveDropTarget(card, position)

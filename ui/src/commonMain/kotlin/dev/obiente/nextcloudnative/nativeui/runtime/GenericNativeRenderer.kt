@@ -1840,6 +1840,7 @@ private fun GenericRecordBoard(
     var boardBounds by remember(resource.id) { mutableStateOf<Rect?>(null) }
     var draggedRecord by remember(resource.id) { mutableStateOf<NativeRecord?>(null) }
     var draggedMovePlan by remember(resource.id) { mutableStateOf<NativeBoardMovePlan?>(null) }
+    var dragOrigin by remember(resource.id) { mutableStateOf<Offset?>(null) }
     var dragPosition by remember(resource.id) { mutableStateOf<Offset?>(null) }
     var dragTargetLaneKey by remember(resource.id) { mutableStateOf<String?>(null) }
     var dragAllowedLaneKeys by remember(resource.id) { mutableStateOf<Set<String>>(emptySet()) }
@@ -1864,6 +1865,7 @@ private fun GenericRecordBoard(
     fun clearDrag() {
         draggedRecord = null
         draggedMovePlan = null
+        dragOrigin = null
         dragPosition = null
         dragTargetLaneKey = null
         dragAllowedLaneKeys = emptySet()
@@ -2016,6 +2018,7 @@ private fun GenericRecordBoard(
     NextcloudBoardDragAutoScroll(
         activeDragKey = draggedRecord?.id,
         position = dragPosition,
+        dragOrigin = dragOrigin,
         boardViewport = boardBounds,
         horizontalScrollState = boardScrollState,
         verticalScrollTargetAt = { position, boardViewport, activationHalo ->
@@ -2186,6 +2189,7 @@ private fun GenericRecordBoard(
                                         { position ->
                                             draggedRecord = record
                                             draggedMovePlan = movePlan
+                                            dragOrigin = position
                                             dragAllowedLaneKeys = movePlan.targets
                                                 .mapTo(linkedSetOf(), NativeBoardMoveTarget::key)
                                             terminalDropRequested = false
