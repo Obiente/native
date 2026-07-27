@@ -1,15 +1,23 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
@@ -39,7 +47,78 @@ enum class MarketingCaptureScenario(
     ObsidianSync("obsidian-vault-sync", "obsidian-vault-sync.png", NextcloudPresentation.Adaptive, 1_080, 1_000, 2.625f),
     MediaBackup("media-backup-queue", "media-backup-queue.png", NextcloudPresentation.Adaptive, 1_080, 1_800, 2.625f),
     AdaptiveApp("adaptive-dynamic-data", "adaptive-dynamic-data.png", NextcloudPresentation.Desktop, 960, 360, 1f),
+    FileShareUserMobile(
+        id = "file-share-user-mobile",
+        fileName = "file-share-user-mobile.png",
+        presentation = NextcloudPresentation.Adaptive,
+        width = 1_080,
+        height = 1_800,
+        density = 2.625f,
+    ),
+    FileShareGroupDesktop(
+        id = "file-share-group-desktop",
+        fileName = "file-share-group-desktop.png",
+        presentation = NextcloudPresentation.Desktop,
+        width = 1_440,
+        height = 900,
+        density = 1f,
+    ),
+    FileShareLoadingMobile(
+        id = "file-share-loading-mobile",
+        fileName = "file-share-loading-mobile.png",
+        presentation = NextcloudPresentation.Adaptive,
+        width = 1_080,
+        height = 1_800,
+        density = 2.625f,
+    ),
+    FileShareErrorMobile(
+        id = "file-share-error-mobile",
+        fileName = "file-share-error-mobile.png",
+        presentation = NextcloudPresentation.Adaptive,
+        width = 1_080,
+        height = 1_800,
+        density = 2.625f,
+    ),
+    TransferMobilePending(
+        "transfer-mobile-pending",
+        "transfer-mobile-pending.png",
+        NextcloudPresentation.Adaptive,
+        1_080,
+        1_800,
+        2.625f,
+    ),
+    TransferMobileFailed(
+        "transfer-mobile-failed-cached",
+        "transfer-mobile-failed-cached.png",
+        NextcloudPresentation.Adaptive,
+        1_080,
+        1_800,
+        2.625f,
+    ),
+    TransferDesktopActive(
+        "transfer-desktop-active",
+        "transfer-desktop-active.png",
+        NextcloudPresentation.Desktop,
+        1_280,
+        800,
+        1f,
+    ),
+    TransferDesktopCompleted(
+        "transfer-desktop-completed-page",
+        "transfer-desktop-completed-page.png",
+        NextcloudPresentation.Desktop,
+        1_280,
+        800,
+        1f,
+    ),
 }
+
+internal val fileShareCaptureScenarios: List<MarketingCaptureScenario> = listOf(
+    MarketingCaptureScenario.FileShareUserMobile,
+    MarketingCaptureScenario.FileShareGroupDesktop,
+    MarketingCaptureScenario.FileShareLoadingMobile,
+    MarketingCaptureScenario.FileShareErrorMobile,
+)
 
 val marketingCaptureScenarios: List<MarketingCaptureScenario> =
     MarketingCaptureScenario.entries
@@ -47,6 +126,152 @@ val marketingCaptureScenarios: List<MarketingCaptureScenario> =
 data class MarketingCaptureAssets(
     val avatar: ImageBitmap,
 )
+
+@Composable
+internal fun MarketingFileShareScenario(
+    scenario: MarketingCaptureScenario,
+    fixture: MarketingFileShareFixture = nextcloudNativeMarketingFileShareFixture,
+) {
+    val capture = marketingFileShareCaptureState(scenario, fixture)
+    val desktop = scenario.presentation == NextcloudPresentation.Desktop
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(if (desktop) NextcloudSpacing.XLarge else NextcloudSpacing.Medium),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            modifier = Modifier
+                .widthIn(max = if (desktop) 760.dp else 560.dp)
+                .fillMaxWidth(),
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+        ) {
+            Column(
+                modifier = Modifier.padding(NextcloudSpacing.XLarge),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+            ) {
+                Text(
+                    text = "Share ${capture.dialog.file.name}",
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+                FileShareDialogContent(
+                    state = capture.dialog,
+                    onTargetChanged = { _ -> },
+                    onAllowEditingChanged = { _ -> },
+                    onDetailsChanged = { _ -> },
+                    recipientPicker = { target ->
+                        FileShareRecipientPickerContent(
+                            target = target,
+                            state = capture.recipientPicker,
+                            enabled = !capture.dialog.running,
+                            onQueryChanged = { _ -> },
+                            onSelected = { _ -> },
+                        )
+                    },
+                    existingShare = { share ->
+                        ExistingFileShareSummary(
+                            share = share,
+                            running = false,
+                            canCopy = false,
+                            showManagementActions = true,
+                            onCopy = {},
+                            onPermissions = {},
+                            onRevoke = {},
+                        )
+                    },
+                    maximumHeight = when {
+                        desktop -> 620.dp
+                        scenario == MarketingCaptureScenario.FileShareLoadingMobile -> 420.dp
+                        scenario == MarketingCaptureScenario.FileShareErrorMobile -> 470.dp
+                        else -> 480.dp
+                    },
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(
+                        NextcloudSpacing.Small,
+                        Alignment.End,
+                    ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FileShareDialogDismissAction(
+                        state = capture.dialog,
+                        onDismiss = {},
+                    )
+                    FileShareDialogConfirmAction(
+                        state = capture.dialog,
+                        onCreate = { _ -> },
+                    )
+                }
+            }
+        }
+    }
+}
+
+internal data class MarketingFileShareCaptureState(
+    val dialog: FileShareDialogUiState,
+    val recipientPicker: FileShareRecipientPickerUiState,
+)
+
+internal fun marketingFileShareCaptureState(
+    scenario: MarketingCaptureScenario,
+    fixture: MarketingFileShareFixture = nextcloudNativeMarketingFileShareFixture,
+): MarketingFileShareCaptureState {
+    val target: FileShareTarget
+    val existingShares: List<NextcloudFileShare>
+    val picker: FileShareRecipientPickerUiState
+    val capabilities: NextcloudFileSharingCapabilities
+    when (scenario) {
+        MarketingCaptureScenario.FileShareUserMobile -> {
+            target = FileShareTarget.User
+            existingShares = listOf(fixture.existingGroupShare)
+            capabilities = fixture.capabilities
+            picker = FileShareRecipientPickerUiState(
+                query = "de",
+                results = fixture.userResults,
+            )
+        }
+        MarketingCaptureScenario.FileShareGroupDesktop -> {
+            target = FileShareTarget.Group
+            existingShares = listOf(fixture.existingUserShare)
+            capabilities = fixture.capabilities
+            picker = FileShareRecipientPickerUiState(
+                query = "de",
+                results = fixture.groupResults,
+            )
+        }
+        MarketingCaptureScenario.FileShareLoadingMobile -> {
+            target = FileShareTarget.User
+            existingShares = listOf(fixture.existingGroupShare)
+            capabilities = fixture.capabilities.copy(userExpirationSupported = false)
+            picker = FileShareRecipientPickerUiState(
+                query = "de",
+                loading = true,
+            )
+        }
+        MarketingCaptureScenario.FileShareErrorMobile -> {
+            target = FileShareTarget.User
+            existingShares = listOf(fixture.existingGroupShare)
+            capabilities = fixture.capabilities.copy(userExpirationSupported = false)
+            picker = FileShareRecipientPickerUiState(
+                query = "de",
+                error = "Could not search recipients. Check your connection and try again.",
+            )
+        }
+        else -> error("${scenario.id} is not a file-share capture.")
+    }
+    return MarketingFileShareCaptureState(
+        dialog = FileShareDialogUiState(
+            file = fixture.file,
+            capabilities = capabilities,
+            existingShares = existingShares,
+            target = target,
+        ),
+        recipientPicker = picker,
+    )
+}
 
 @Composable
 internal fun MarketingObsidianSyncScenario() {

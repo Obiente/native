@@ -152,6 +152,60 @@ class MediaBackupLedgerTest {
     }
 
     @Test
+    fun snapshotReturnsSummaryAndPageFromOneLedgerRead() = runBlocking {
+        val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))
+        repeat(3) { index ->
+            store.upsert(pendingRecord(accountId, "external:$index", 1_000L + index))
+        }
+        store.upsert(succeededRecord("external:complete", 2_000))
+
+        val snapshot = store.snapshot(
+            accountId = accountId,
+            transferState = MediaBackupTransferState.Pending,
+            limit = 2,
+        )
+
+        assertEquals(3, snapshot.summary.pending)
+        assertEquals(1, snapshot.summary.succeeded)
+        assertEquals(2, snapshot.page.records.size)
+        assertEquals(
+            listOf("external:2", "external:1"),
+            snapshot.page.records.map(MediaBackupLedgerRecord::localKey),
+        )
+        store.close()
+    }
+
+    @Test
+    fun pairScopedKeyMigrationPreservesReceiptAndRemovesLegacyIdentity() = runBlocking {
+        val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))
+        val legacyKey = "legacy-pair-key"
+        val currentKey = "pair-scoped-key"
+        store.upsert(
+            succeededRecord(legacyKey, 2_000),
+        )
+        val remotePath = requireNotNull(store.load(accountId, legacyKey)?.receipt).remotePath
+
+        store.migrateSourceLocalKeys(
+            accountId = accountId,
+            sourceId = "pair-1",
+            migrations = listOf(
+                MediaBackupLedgerKeyMigration(
+                    legacyLocalKey = legacyKey,
+                    currentLocalKey = currentKey,
+                    remotePath = remotePath,
+                ),
+            ),
+        )
+
+        assertEquals(null, store.load(accountId, legacyKey))
+        val migrated = store.load(accountId, currentKey)
+        assertEquals(currentKey, migrated?.localKey)
+        assertEquals(currentKey, migrated?.receipt?.localKey)
+        assertEquals("pair-1", migrated?.sourceId)
+        store.close()
+    }
+
+    @Test
     fun remotePathStatusLookupIsBoundedAccountScopedAndUsesNewestRecord() = runBlocking {
         val otherAccount = "fedcba9876543210fedcba9876543210"
         val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))
@@ -221,7 +275,7 @@ class MediaBackupLedgerTest {
         store.close()
 
         val future = BundledSQLiteDriver().open(":memory:")
-        future.execSQL("PRAGMA user_version = 3")
+        future.execSQL("PRAGMA user_version = 5")
         assertFailsWith<MediaBackupLedgerStoreException> {
             MediaBackupLedgerStore(future)
         }
@@ -233,14 +287,44 @@ class MediaBackupLedgerTest {
         val connection = BundledSQLiteDriver().open(":memory:")
         MediaBackupLedgerStore(connection)
         connection.execSQL("DROP INDEX media_backup_account_remote_path_updated")
+        connection.execSQL("DROP INDEX media_backup_account_source")
+        connection.execSQL("ALTER TABLE media_backup_ledger DROP COLUMN source_id")
+        connection.execSQL("ALTER TABLE media_backup_ledger DROP COLUMN history_visible")
         connection.execSQL("PRAGMA user_version = 1")
 
         val migrated = MediaBackupLedgerStore(connection)
 
         connection.prepare("PRAGMA user_version").use { statement ->
             check(statement.step())
-            assertEquals(2L, statement.getLong(0))
+            assertEquals(4L, statement.getLong(0))
         }
+        migrated.close()
+    }
+
+    @Test
+    fun versionTwoLedgerMigratesHistoryVisibilityWithoutLosingReceipts() = runBlocking {
+        val connection = BundledSQLiteDriver().open(":memory:")
+        val current = MediaBackupLedgerStore(connection)
+        current.upsert(succeededRecord("external:migrated", 2_000))
+        connection.execSQL("DROP INDEX media_backup_account_source")
+        connection.execSQL("ALTER TABLE media_backup_ledger DROP COLUMN source_id")
+        connection.execSQL("ALTER TABLE media_backup_ledger DROP COLUMN history_visible")
+        connection.execSQL("PRAGMA user_version = 2")
+
+        val migrated = MediaBackupLedgerStore(connection)
+
+        connection.prepare("PRAGMA user_version").use { statement ->
+            check(statement.step())
+            assertEquals(4L, statement.getLong(0))
+        }
+        assertEquals(
+            MediaBackupStatus.BackedUp,
+            migrated.load(accountId, "external:migrated")?.resolveMediaBackupStatus(),
+        )
+        assertEquals(
+            1,
+            migrated.summary(accountId, includeClearedCompleted = false).succeeded,
+        )
         migrated.close()
     }
 

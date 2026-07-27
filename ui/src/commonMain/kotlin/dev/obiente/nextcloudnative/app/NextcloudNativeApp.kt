@@ -4,6 +4,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -52,6 +54,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -77,6 +80,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -170,6 +174,8 @@ private sealed interface Screen {
     data object AdminApps : Screen
     @Serializable
     data object OfflineCenter : Screen
+    @Serializable
+    data object Transfers : Screen
     @Serializable
     data object ProjectNews : Screen
     @Serializable
@@ -335,6 +341,16 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.ObsidianSync -> MarketingObsidianSyncScenario()
                     MarketingCaptureScenario.MediaBackup -> MarketingMediaBackupScenario()
                     MarketingCaptureScenario.AdaptiveApp -> MarketingAdaptiveAppScenario()
+                    MarketingCaptureScenario.FileShareUserMobile,
+                    MarketingCaptureScenario.FileShareGroupDesktop,
+                    MarketingCaptureScenario.FileShareLoadingMobile,
+                    MarketingCaptureScenario.FileShareErrorMobile,
+                    -> MarketingFileShareScenario(scenario)
+                    MarketingCaptureScenario.TransferMobilePending,
+                    MarketingCaptureScenario.TransferMobileFailed,
+                    MarketingCaptureScenario.TransferDesktopActive,
+                    MarketingCaptureScenario.TransferDesktopCompleted,
+                    -> MarketingMediaTransferScenario(scenario)
                     MarketingCaptureScenario.DesktopHome,
                     MarketingCaptureScenario.MobileHome,
                     -> {
@@ -545,6 +561,10 @@ private fun AuthenticatedApp(
                 screen = Screen.Root
                 destination = NextcloudDestination.Settings
             }
+            Screen.Transfers -> {
+                screen = Screen.Root
+                destination = NextcloudDestination.Settings
+            }
             Screen.ProjectNews -> {
                 screen = Screen.Root
                 destination = NextcloudDestination.Settings
@@ -616,6 +636,7 @@ private fun AuthenticatedApp(
                     onThemePreferenceChanged = onThemePreferenceChanged,
                     onAdminApps = { screen = Screen.AdminApps },
                     onOfflineCenter = { screen = Screen.OfflineCenter },
+                    onTransfers = { screen = Screen.Transfers },
                     onProjectNews = { screen = Screen.ProjectNews },
                     onLoggedOut = onLoggedOut,
                 )
@@ -634,6 +655,11 @@ private fun AuthenticatedApp(
             services = services,
             session = session,
             userId = serverInfo?.userId.orEmpty(),
+            onBack = ::navigateBack,
+        )
+        Screen.Transfers -> NativeMediaTransferCenterHost(
+            services = services,
+            session = session,
             onBack = ::navigateBack,
         )
         is Screen.Files -> FilesScreen(
@@ -3473,6 +3499,8 @@ private fun FilesScreen(
     var shareType by remember(path, userId) { mutableStateOf(FileShareTarget.PublicLink) }
     var shareRecipient by remember(path, userId) { mutableStateOf("") }
     var shareAllowsEditing by remember(path, userId) { mutableStateOf(false) }
+    var shareDetails by remember(path, userId) { mutableStateOf(FileShareCreationDetails()) }
+    var effectiveFileSharing by remember(path, userId, fileSharing) { mutableStateOf(fileSharing) }
     var shareRunning by remember(path, userId) { mutableStateOf(false) }
     var shareError by remember(path, userId) { mutableStateOf<String?>(null) }
     var shareNotice by remember(path, userId) { mutableStateOf<String?>(null) }
@@ -3611,11 +3639,9 @@ private fun FilesScreen(
                 fileShares = null
                 shareRecipient = ""
                 shareAllowsEditing = false
-                shareType = when {
-                    fileSharing.publicLinks -> FileShareTarget.PublicLink
-                    fileSharing.userShares -> FileShareTarget.User
-                    else -> FileShareTarget.Group
-                }
+                shareDetails = FileShareCreationDetails()
+                shareType = FileShareTarget.entries.firstOrNull(effectiveFileSharing::canOffer)
+                    ?: FileShareTarget.PublicLink
                 shareError = null
                 shareNotice = null
                 scope.launch {
@@ -4331,197 +4357,100 @@ private fun FilesScreen(
     }
 
     shareTarget?.let { target ->
-        val supportedTargets = FileShareTarget.entries.filter { targetType ->
-            when (targetType) {
-                FileShareTarget.PublicLink -> fileSharing.publicLinks
-                FileShareTarget.User -> fileSharing.userShares
-                FileShareTarget.Group -> fileSharing.groupShares
-            }
-        }
-        val requestedPermissions = FileSharePermissions(
-            read = true,
-            update = shareAllowsEditing,
-            create = shareAllowsEditing && target.isDirectory,
-            delete = shareAllowsEditing && target.isDirectory,
-        )
-        val creationPlan = planFileShareCreation(
-            file = target,
-            target = shareType,
-            recipient = shareRecipient.takeUnless { shareType == FileShareTarget.PublicLink },
-            permissions = requestedPermissions,
-            capabilities = fileSharing,
-        )
-        AlertDialog(
-            onDismissRequest = {
-                if (!shareRunning) {
-                    shareTarget = null
-                    shareError = null
-                    shareNotice = null
+        FileShareDialog(
+            state = FileShareDialogUiState(
+                file = target,
+                capabilities = effectiveFileSharing,
+                existingShares = fileShares,
+                target = shareType,
+                recipient = shareRecipient,
+                allowEditing = shareAllowsEditing,
+                details = shareDetails,
+                running = shareRunning,
+                notice = shareNotice,
+                error = shareError,
+            ),
+            onDismiss = {
+                shareTarget = null
+                shareError = null
+                shareNotice = null
+            },
+            onTargetChanged = { targetType ->
+                shareType = targetType
+                shareRecipient = ""
+                shareDetails = shareDetails.copy(
+                    password = "",
+                    expiration = FileShareExpiration.ServerDefault,
+                )
+                shareError = null
+            },
+            onAllowEditingChanged = { shareAllowsEditing = it },
+            onDetailsChanged = {
+                shareDetails = it
+                shareError = null
+            },
+            onCreate = { ready ->
+                shareRunning = true
+                shareError = null
+                shareNotice = null
+                scope.launch {
+                    runCatching { services.createFileShare(session, ready.request) }
+                        .onSuccess { created ->
+                            val safeUrl = safeFileShareUrl(session, created)
+                            val copied = safeUrl != null &&
+                                services.copyTextToClipboard("Nextcloud share link", safeUrl)
+                            shareNotice = if (copied) "Share created and link copied" else "Share created"
+                            fileShares = runCatching {
+                                services.listFileShares(session, target.path)
+                            }.getOrElse { fileShares.orEmpty() + created }
+                            shareRecipient = ""
+                        }
+                        .onFailure {
+                            shareError = it.message ?: "Could not create the share."
+                        }
+                    shareRunning = false
                 }
             },
-            title = { Text("Share ${target.name}") },
-            text = {
-                Column(
-                    modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                ) {
-                    Text(
-                        if (target.isDirectory) {
-                            "Manage access to this folder on your Nextcloud server."
-                        } else {
-                            "Manage access to this file on your Nextcloud server."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text("Existing access", style = MaterialTheme.typography.titleSmall)
-                    when (val loadedShares = fileShares) {
-                        null -> CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                        else -> if (loadedShares.isEmpty()) {
-                            Text(
-                                "Not shared yet.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        } else {
-                            loadedShares.take(12).forEach { existing ->
-                                ExistingFileShareManager(
-                                    share = existing,
-                                    sourceIsDirectory = target.isDirectory,
-                                    session = session,
-                                    services = services,
-                                    onChanged = { changed ->
-                                        fileShares = fileShares.orEmpty().map {
-                                            if (it.id == changed.id) changed else it
-                                        }
-                                    },
-                                    onRevoked = { revoked ->
-                                        fileShares = fileShares.orEmpty().filterNot { it.id == revoked.id }
-                                        shareNotice = "Access revoked"
-                                    },
-                                )
-                            }
-                            if (loadedShares.size > 12) {
-                                Text(
-                                    "${loadedShares.size - 12} more shares are active.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                    if (supportedTargets.isNotEmpty()) {
-                        HorizontalDivider()
-                        Text("Create access", style = MaterialTheme.typography.titleSmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                            supportedTargets.forEach { targetType ->
-                                FilterChip(
-                                    selected = shareType == targetType,
-                                    enabled = !shareRunning,
-                                    onClick = {
-                                        shareType = targetType
-                                        shareRecipient = ""
-                                        shareError = null
-                                    },
-                                    label = { Text(targetType.fileShareTargetLabel()) },
-                                )
-                            }
-                        }
-                        if (shareType != FileShareTarget.PublicLink) {
-                            FileShareRecipientPicker(
-                                session = session,
-                                services = services,
-                                target = shareType,
-                                selectedRecipient = shareRecipient,
-                                enabled = !shareRunning,
-                                onSelected = {
-                                    shareRecipient = it?.id.orEmpty()
-                                    shareError = null
-                                },
-                            )
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                            FilterChip(
-                                selected = !shareAllowsEditing,
-                                enabled = !shareRunning,
-                                onClick = { shareAllowsEditing = false },
-                                label = { Text("Can view") },
-                            )
-                            FilterChip(
-                                selected = shareAllowsEditing,
-                                enabled = !shareRunning,
-                                onClick = { shareAllowsEditing = true },
-                                label = { Text("Can edit") },
-                            )
-                        }
-                        (creationPlan as? FileShareCreationPlan.Blocked)?.let {
-                            Text(
-                                it.reason,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                    }
-                    shareNotice?.let {
-                        Text(it, color = NextcloudTheme.colors.success, style = MaterialTheme.typography.bodySmall)
-                    }
-                    shareError?.let {
-                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(
+            recipientPicker = { targetType ->
+                FileShareRecipientPicker(
+                    session = session,
+                    services = services,
+                    target = targetType,
+                    file = target,
+                    selectedRecipient = shareRecipient,
                     enabled = !shareRunning,
-                    onClick = {
-                        shareTarget = null
+                    onSelected = {
+                        shareRecipient = it?.id.orEmpty()
                         shareError = null
-                        shareNotice = null
                     },
-                ) { Text("Close") }
+                    onResultsObserved = { recipients ->
+                        effectiveFileSharing = effectiveFileSharing.withObservedRecipientProvider(
+                            targetType,
+                            recipients,
+                        )
+                    },
+                )
             },
-            confirmButton = {
-                Button(
-                    enabled = creationPlan is FileShareCreationPlan.Ready && !shareRunning,
-                    onClick = {
-                        val ready = creationPlan as? FileShareCreationPlan.Ready ?: return@Button
-                        shareRunning = true
-                        shareError = null
-                        shareNotice = null
-                        scope.launch {
-                            runCatching { services.createFileShare(session, ready.request) }
-                                .onSuccess { created ->
-                                    val safeUrl = safeFileShareUrl(session, created)
-                                    val copied = safeUrl != null &&
-                                        services.copyTextToClipboard("Nextcloud share link", safeUrl)
-                                    shareNotice = if (copied) "Share created and link copied" else "Share created"
-                                    fileShares = runCatching {
-                                        services.listFileShares(session, target.path)
-                                    }.getOrElse { current -> fileShares.orEmpty() + created }
-                                    shareRecipient = ""
-                                }
-                                .onFailure {
-                                    shareError = it.message ?: "Could not create the share."
-                                }
-                            shareRunning = false
+            existingShare = { existing ->
+                ExistingFileShareManager(
+                    share = existing,
+                    sourceIsDirectory = target.isDirectory,
+                    session = session,
+                    services = services,
+                    capabilities = effectiveFileSharing,
+                    onChanged = { changed ->
+                        fileShares = fileShares.orEmpty().map {
+                            if (it.id == changed.id) changed else it
                         }
                     },
-                ) {
-                    if (shareRunning) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.size(8.dp))
-                    }
-                    Text(if (shareRunning) "Creating..." else "Create")
-                }
+                    onRevoked = { revoked ->
+                        fileShares = fileShares.orEmpty().filterNot { it.id == revoked.id }
+                        shareNotice = "Access revoked"
+                    },
+                )
             },
         )
     }
-}
-
-private fun FileShareTarget.fileShareTargetLabel(): String = when (this) {
-    FileShareTarget.PublicLink -> "Public link"
-    FileShareTarget.User -> "User"
-    FileShareTarget.Group -> "Group"
 }
 
 @Composable
@@ -7369,6 +7298,12 @@ private fun ProjectNewsArticleScreen(
 private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
     val scope = rememberCoroutineScope()
     val support = remember(services) { services.appUpdateSupport() }
+    var updateChannel by remember(services) {
+        mutableStateOf(services.loadAppUpdateChannel())
+    }
+    val channelPresentation = remember(support, updateChannel) {
+        appUpdateChannelPresentation(support, updateChannel)
+    }
     val updateState by remember(services) {
         services.observeAppUpdateInstallState()
     }.collectAsState(AppUpdateInstallState.Idle)
@@ -7415,19 +7350,24 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("App updates", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Version ${support.currentVersionName} · ${support.channel.name}",
+                        if (channelPresentation.selectorVisible) {
+                            "Version ${support.currentVersionName} - ${updateChannel.name} channel"
+                        } else {
+                            "Version ${support.currentVersionName} - ${support.channel.name}"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (support.canCheckDirectUpdates) {
                     TextButton(
-                        enabled = !checking,
+                        enabled = !checking && updateChannel.available,
                         onClick = {
                             checking = true
+                            checkResult = null
                             installMessage = null
                             scope.launch {
-                                checkResult = services.checkForAppUpdate()
+                                checkResult = services.checkForAppUpdate(updateChannel)
                                 checking = false
                             }
                         },
@@ -7445,6 +7385,66 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (channelPresentation.selectorVisible) {
+                Text(
+                    "Update channel",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Column(modifier = Modifier.selectableGroup()) {
+                    channelPresentation.options.forEach { option ->
+                        val enabled = option.enabled && !checking && !installing
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = option.selected,
+                                    enabled = enabled,
+                                    role = Role.RadioButton,
+                                    onClick = {
+                                        if (services.saveAppUpdateChannel(option.channel)) {
+                                            checkResult = retainedAppUpdateCheckResult(
+                                                previousChannel = updateChannel,
+                                                selectedChannel = option.channel,
+                                                previousResult = checkResult,
+                                            )
+                                            updateChannel = option.channel
+                                            installMessage = null
+                                        }
+                                    },
+                                )
+                                .padding(vertical = NextcloudSpacing.Small),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = option.selected,
+                                enabled = enabled,
+                                onClick = null,
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(option.label, style = MaterialTheme.typography.titleSmall)
+                                    option.availabilityLabel?.let { label ->
+                                        Text(
+                                            label,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                                Text(
+                                    option.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             when (val checked = checkResult) {
                 is AppUpdateCheckResult.Available -> {
                     val release = checked.release
@@ -7582,6 +7582,7 @@ private fun SettingsScreen(
     onThemePreferenceChanged: (ThemePreference) -> Unit,
     onAdminApps: () -> Unit,
     onOfflineCenter: () -> Unit,
+    onTransfers: () -> Unit,
     onProjectNews: () -> Unit,
     onLoggedOut: () -> Unit,
 ) {
@@ -7702,6 +7703,44 @@ private fun SettingsScreen(
                             contentDescription = "Open Sync & offline",
                             modifier = Modifier.size(20.dp),
                         )
+                    }
+                }
+            }
+            if (services.supportsMediaTransferCenter) {
+                item {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onTransfers,
+                        color = NextcloudTheme.colors.appTile,
+                        shape = RoundedCornerShape(NextcloudRadii.Card),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
+                                Icon(
+                                    NextcloudIcons.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.padding(12.dp).size(26.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Media transfers", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Pending, active, failed, and completed uploads",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Icon(
+                                NextcloudIcons.ChevronRight,
+                                contentDescription = "Open media transfers",
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
                     }
                 }
             }

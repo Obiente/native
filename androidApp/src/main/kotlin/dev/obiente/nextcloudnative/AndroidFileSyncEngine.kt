@@ -17,6 +17,7 @@ import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.MediaBackupLedgerStore
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.addFileSyncPair
@@ -70,6 +71,26 @@ internal class AndroidFileSyncEngine(context: Context) {
                     )
                 },
         )
+    }
+
+    /**
+     * Checks WorkManager's authoritative state before the transfer ledger recovers interrupted
+     * uploads. A failed query is treated conservatively as active work so a running worker is
+     * never rewritten to pending merely because WorkManager could not be inspected.
+     */
+    suspend fun reconcileMediaTransfersForDisplay(
+        accountId: String,
+        mediaStore: MediaBackupLedgerStore,
+    ) = reconcileWhenFileSyncIdle(ENGINE_LOCK) {
+        val activeSourceIds = runCatching {
+            val pairIds = store.load().coordinator.pairs
+                .asSequence()
+                .filter { pair -> pair.accountId == accountId }
+                .map(FileSyncPair::id)
+                .toList()
+            scheduler.runningPairIds(pairIds)
+        }.getOrNull() ?: return@reconcileWhenFileSyncIdle
+        mediaStore.reconcileInterruptedTransfers(accountId, activeSourceIds)
     }
 
     suspend fun addPair(
@@ -145,11 +166,37 @@ internal class AndroidFileSyncEngine(context: Context) {
                 )
             }
             val remaining = removeFileSyncPair(current.coordinator, pairId)
-            store.save(
-                current.copy(
-                    coordinator = remaining,
-                    localDisplayNames = current.localDisplayNames - pairId,
-                ),
+            val mediaStore = createAndroidMediaBackupLedgerStore(
+                context = appContext,
+                recoverInterruptedTransfers = false,
+            )
+            removeConfiguredFileSyncPair(
+                cleanLedger = {
+                    try {
+                        mediaStore.deleteUnfinishedSource(
+                            accountId = pair.accountId,
+                            sourceId = pair.id,
+                            legacyLocalKeys = (pair.baselines.asSequence().map(FileSyncBaseline::relativePath) +
+                                pair.workItems.asSequence().map { work -> work.relativePath })
+                                .distinct()
+                                .map { relativePath ->
+                                    legacyMediaBackupLocalKey(pair.localRootId, relativePath)
+                                }
+                                .toList(),
+                        )
+                    } finally {
+                        mediaStore.close()
+                    }
+                },
+                persistRemoval = {
+                    store.save(
+                        current.copy(
+                            coordinator = remaining,
+                            localDisplayNames = current.localDisplayNames - pairId,
+                        ),
+                    )
+                },
+                cancelSchedule = { scheduler.cancel(pairId) },
             )
             if (
                 pair.localRootId.startsWith("content://") &&
@@ -162,7 +209,6 @@ internal class AndroidFileSyncEngine(context: Context) {
                     )
                 }
             }
-            scheduler.cancel(pairId)
             FileSyncCenterActionResult.Completed("Folder sync pair removed. No local or server files were deleted.")
         }
 
@@ -560,3 +606,20 @@ internal fun isAndroidFileSyncExecutionAllowed(
     operation: FileSyncOperation,
 ): Boolean =
     !localRootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX) || operation is FileSyncOperation.Upload
+
+internal suspend fun reconcileWhenFileSyncIdle(
+    lock: Mutex,
+    reconcile: suspend () -> Unit,
+) = lock.withLock {
+    reconcile()
+}
+
+internal suspend fun removeConfiguredFileSyncPair(
+    cleanLedger: suspend () -> Unit,
+    persistRemoval: suspend () -> Unit,
+    cancelSchedule: suspend () -> Unit,
+) {
+    cleanLedger()
+    persistRemoval()
+    cancelSchedule()
+}

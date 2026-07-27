@@ -52,6 +52,11 @@ import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
 import dev.obiente.nextcloudnative.app.MediaSyncFolderDiscovery
 import dev.obiente.nextcloudnative.app.MAX_MEDIA_BACKUP_STATUS_PATHS
 import dev.obiente.nextcloudnative.app.MediaBackupStatus
+import dev.obiente.nextcloudnative.app.MediaBackupLedgerCursor
+import dev.obiente.nextcloudnative.app.MediaTransferCenterState
+import dev.obiente.nextcloudnative.app.MediaTransferSection
+import dev.obiente.nextcloudnative.app.mediaTransferCenterState
+import dev.obiente.nextcloudnative.app.transferState
 import dev.obiente.nextcloudnative.app.MediaSyncFolderPreview
 import dev.obiente.nextcloudnative.app.MediaSyncFolderSuggestion
 import dev.obiente.nextcloudnative.app.filesByIdDavSearchRequest
@@ -80,6 +85,7 @@ import dev.obiente.nextcloudnative.app.ThemePreference
 import dev.obiente.nextcloudnative.app.PlatformCapability
 import dev.obiente.nextcloudnative.app.PlatformCapabilityStatus
 import dev.obiente.nextcloudnative.app.AndroidDirectRelease
+import dev.obiente.nextcloudnative.app.AndroidUpdateChannel
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallState
@@ -225,8 +231,13 @@ internal class AndroidNextcloudServices(
 
     override fun appUpdateSupport(): AppUpdateSupport = projectContent.support()
 
-    override suspend fun checkForAppUpdate(): AppUpdateCheckResult =
-        withContext(Dispatchers.IO) { projectContent.checkForUpdate() }
+    override fun loadAppUpdateChannel(): AndroidUpdateChannel = projectContent.updateChannel()
+
+    override fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean =
+        projectContent.saveUpdateChannel(channel)
+
+    override suspend fun checkForAppUpdate(channel: AndroidUpdateChannel): AppUpdateCheckResult =
+        withContext(Dispatchers.IO) { projectContent.checkForUpdate(channel) }
 
     override fun observeAppUpdateInstallState(): Flow<AppUpdateInstallState> =
         projectContent.observeUpdateState()
@@ -669,6 +680,51 @@ internal class AndroidNextcloudServices(
             .filter { changedAccountId -> changedAccountId == accountId }
             .map { }
     }
+
+    override val supportsMediaTransferCenter: Boolean = true
+
+    override suspend fun loadMediaTransferCenter(
+        session: NextcloudSession,
+        section: MediaTransferSection,
+        after: MediaBackupLedgerCursor?,
+    ): MediaTransferCenterState = withContext(Dispatchers.IO) {
+        val store = createAndroidMediaBackupLedgerStore(
+            context = appContext,
+            recoverInterruptedTransfers = false,
+        )
+        try {
+            val accountId = NextcloudDocumentIds.accountKey(session)
+            fileSyncEngine.reconcileMediaTransfersForDisplay(accountId, store)
+            val snapshot = store.snapshot(
+                accountId = accountId,
+                transferState = section.transferState(),
+                after = after,
+                limit = dev.obiente.nextcloudnative.app.MEDIA_TRANSFER_CENTER_PAGE_SIZE,
+                includeClearedCompleted = false,
+            )
+            mediaTransferCenterState(
+                summary = snapshot.summary,
+                section = section,
+                page = snapshot.page,
+                canLoadNewer = after != null,
+            )
+        } finally {
+            store.close()
+        }
+    }
+
+    override suspend fun clearCompletedMediaTransferHistory(session: NextcloudSession): Int =
+        withContext(Dispatchers.IO) {
+            val store = createAndroidMediaBackupLedgerStore(
+                context = appContext,
+                recoverInterruptedTransfers = false,
+            )
+            try {
+                store.clearCompleted(NextcloudDocumentIds.accountKey(session))
+            } finally {
+                store.close()
+            }
+        }
 
     override suspend fun listSystemTags(session: NextcloudSession): List<NextcloudSystemTag> =
         withContext(Dispatchers.IO) {

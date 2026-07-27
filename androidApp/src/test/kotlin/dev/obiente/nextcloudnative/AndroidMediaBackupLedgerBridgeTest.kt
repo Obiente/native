@@ -55,12 +55,30 @@ class AndroidMediaBackupLedgerBridgeTest {
 
     @Test
     fun localIdentityIsStableNonPersonalSha256() {
-        val key = mediaBackupLocalKey(localRoot, local.relativePath)
+        val key = mediaBackupLocalKey(pair.id, localRoot, local.relativePath)
 
         assertEquals(64, key.length)
         assertTrue(key.all { it in "0123456789abcdef" })
-        assertEquals(key, mediaBackupLocalKey(localRoot, local.relativePath))
-        assertNotEquals(key, mediaBackupLocalKey(localRoot, "IMG_0043.jpg"))
+        assertEquals(key, mediaBackupLocalKey(pair.id, localRoot, local.relativePath))
+        assertNotEquals(key, mediaBackupLocalKey(pair.id, localRoot, "IMG_0043.jpg"))
+        assertNotEquals(key, mediaBackupLocalKey("pair-2", localRoot, local.relativePath))
+        assertNotEquals(key, legacyMediaBackupLocalKey(localRoot, local.relativePath))
+    }
+
+    @Test
+    fun sameSourceFileInTwoPairsProducesIndependentLedgerRecords() {
+        val work = uploadWork(FileSyncExecutionState.Ready)
+        val secondPair = pair.copy(
+            id = "pair-2",
+            remoteRootPath = "Archive/Camera",
+        )
+
+        val primary = mediaBackupLedgerRecordForWork(pair, work, null, 1_000)
+        val secondary = mediaBackupLedgerRecordForWork(secondPair, work, null, 1_000)
+
+        assertNotEquals(primary.localKey, secondary.localKey)
+        assertEquals(pair.id, primary.sourceId)
+        assertEquals(secondPair.id, secondary.sourceId)
     }
 
     @Test
@@ -69,6 +87,7 @@ class AndroidMediaBackupLedgerBridgeTest {
 
         var record = mediaBackupLedgerRecordForWork(pair, ready, existing = null, nowEpochMillis = 1_000)
         assertEquals(MediaBackupStatus.Pending, record.resolveMediaBackupStatus())
+        assertEquals(pair.id, record.sourceId)
 
         val running = ready.copy(state = FileSyncExecutionState.Running, attemptCount = 1)
         record = mediaBackupLedgerRecordForWork(
@@ -104,6 +123,7 @@ class AndroidMediaBackupLedgerBridgeTest {
             nowEpochMillis = 4_000,
         )
         assertEquals(MediaBackupStatus.BackedUp, record.resolveMediaBackupStatus())
+        assertEquals(pair.id, record.sourceId)
         assertEquals("Photos/Camera/IMG_0042.jpg", record.receipt?.remotePath)
 
         val changed = local.copy(revision = "generation:10")

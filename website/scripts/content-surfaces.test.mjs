@@ -54,9 +54,10 @@ test("living news metadata and native feed share the canonical Markdown source",
 });
 
 test("changelog remains a dedicated root-sourced searchable surface", async () => {
-  assert.equal(changelog.file, "CHANGELOG.md");
+  assert.equal(changelog.file, "changes/unreleased and CHANGELOG.md");
   assert.equal(changelog.path, "/changelog/");
   assert.doesNotMatch(changelog.description, /product stor|development note/i);
+  assert.match(changelog.html, /Unreleased/);
 
   const searchIndex = JSON.parse(
     await readFile(path.join(websiteRoot, "public", "search-index.json"), "utf8"),
@@ -65,6 +66,15 @@ test("changelog remains a dedicated root-sourced searchable surface", async () =
   assert.equal(indexed.length, 1);
   assert.equal(indexed[0].contentType, "Changelog");
   assert.ok(news.every((post) => post.path !== changelog.path));
+
+  const generator = await readFile(
+    path.join(websiteRoot, "scripts", "generate-content.mjs"),
+    "utf8",
+  );
+  assert.match(
+    generator,
+    /if \(changelogAvailable\) \{\s+changelogSource = composeChangelogSource/u,
+  );
 });
 
 test("marketing screenshots are rendered offscreen without an Android device", async () => {
@@ -111,6 +121,14 @@ test("marketing screenshots are rendered offscreen without an Android device", a
       "obsidian-vault-sync",
       "media-backup-queue",
       "adaptive-dynamic-data",
+      "file-share-user-mobile",
+      "file-share-group-desktop",
+      "file-share-loading-mobile",
+      "file-share-error-mobile",
+      "transfer-mobile-pending",
+      "transfer-mobile-failed-cached",
+      "transfer-desktop-active",
+      "transfer-desktop-completed-page",
     ],
   );
   assert.deepEqual(
@@ -123,6 +141,14 @@ test("marketing screenshots are rendered offscreen without an Android device", a
     ["obsidian-vault-sync", [1080, 1000]],
     ["media-backup-queue", [1080, 1800]],
     ["adaptive-dynamic-data", [960, 360]],
+    ["file-share-user-mobile", [1080, 1800]],
+    ["file-share-group-desktop", [1440, 900]],
+    ["file-share-loading-mobile", [1080, 1800]],
+    ["file-share-error-mobile", [1080, 1800]],
+    ["transfer-mobile-pending", [1080, 1800]],
+    ["transfer-mobile-failed-cached", [1080, 1800]],
+    ["transfer-desktop-active", [1280, 800]],
+    ["transfer-desktop-completed-page", [1280, 800]],
   ]);
   for (const capture of manifest.captures) {
     assert.deepEqual(
