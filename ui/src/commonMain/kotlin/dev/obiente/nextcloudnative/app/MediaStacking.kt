@@ -250,7 +250,14 @@ fun isBoundedDisplayImagePayload(
 fun NextcloudFile.isRawPhoto(): Boolean = mediaAssetFormat() == MediaAssetFormat.Raw
 
 fun NextcloudFile.canOpenInMediaViewer(): Boolean =
-    fileId != null && (hasPreview || isRawPhoto())
+    fileId != null && (hasPreview || isRawPhoto()) || canUseEmbeddedRafPreview()
+
+internal fun NextcloudFile.canUseEmbeddedRafPreview(): Boolean =
+    isRawPhoto() &&
+        name.substringAfterLast('.', missingDelimiterValue = "").equals("raf", ignoreCase = true) &&
+        originalAccessAllowed &&
+        runCatching { requireSafeFilePath(path, allowRoot = false) }.isSuccess &&
+        etag?.let { runCatching { requireSafeFileRangeEtag(it) }.isSuccess } == true
 
 fun NextcloudFile.isPhotoMedia(): Boolean = mediaAssetFormat() in setOf(
     MediaAssetFormat.Raw,

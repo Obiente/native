@@ -21,6 +21,7 @@ class RawPhotoPreviewTest {
                 rangeReads += 1
                 error("RAF range fallback should not be needed.")
             },
+            decode = { it },
         )
 
         assertEquals(MediaDisplayPayloadKind.MemoriesRawRender, payload.kind)
@@ -45,6 +46,7 @@ class RawPhotoPreviewTest {
                     rangeReads += 1
                     jpegFixture()
                 },
+                decode = { it },
             )
         }
 
@@ -76,6 +78,7 @@ class RawPhotoPreviewTest {
                     else -> error("Unexpected RAF range.")
                 }
             },
+            decode = { it },
         )
 
         assertEquals(MediaDisplayPayloadKind.EmbeddedCameraPreview, payload.kind)
@@ -105,6 +108,7 @@ class RawPhotoPreviewTest {
                     reads += 1
                     header
                 },
+                decode = { it },
             )
         }
 
@@ -118,10 +122,9 @@ class RawPhotoPreviewTest {
         val candidates = planMediaSources(listOf(raw), raw).previewCandidates
 
         assertFailsWith<CancellationException> {
-            loadFirstUsableMediaPreviewSource(
+            loadFirstUsableMediaPreviewSource<String>(
                 candidates = candidates,
                 load = { throw CancellationException("viewer closed") },
-                decode = { "decoded" },
             )
         }
         Unit
@@ -151,6 +154,7 @@ class RawPhotoPreviewTest {
         val candidates = planMediaSources(listOf(raw), raw).previewCandidates
 
         assertEquals(listOf(raw), candidates.map(MediaSourceChoice::file))
+        assertEquals(true, raw.canOpenInMediaViewer())
     }
 
     @Test
@@ -214,14 +218,36 @@ class RawPhotoPreviewTest {
     @Test
     fun rangeReadsRequireASafeStrongGenerationEtag() {
         assertEquals("\"generation-1\"", requireSafeFileRangeEtag("\"generation-1\""))
+        assertEquals("\"generation-1\"", requireSafeFileRangeEtag("generation-1"))
         assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("W/\"generation-1\"") }
         assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("w/\"generation-1\"") }
         assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("*") }
-        assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("generation-1") }
         assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("\"generation-1") }
         assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("generation-1\"") }
         assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("\"generation\"1\"") }
         assertFailsWith<IllegalArgumentException> { requireSafeFileRangeEtag("\"generation-1\"\r\n") }
+    }
+
+    @Test
+    fun undecodableCorePayloadFallsThroughToMemoriesForTheSameRawFile() = runBlocking {
+        val raw = rawFile(hasPreview = true)
+        var memoriesCalls = 0
+
+        val loaded = loadMediaDisplayPayload(
+            file = raw,
+            loadCorePreview = { jpegFixture() },
+            loadMemoriesRawRender = {
+                memoriesCalls += 1
+                jpegFixture()
+            },
+            loadFileRange = { _, _, _ -> error("The Memories render should decode.") },
+            decode = { payload ->
+                payload.takeUnless { it.kind == MediaDisplayPayloadKind.ServerPreview }
+            },
+        )
+
+        assertEquals(MediaDisplayPayloadKind.MemoriesRawRender, loaded.kind)
+        assertEquals(1, memoriesCalls)
     }
 
     @Test

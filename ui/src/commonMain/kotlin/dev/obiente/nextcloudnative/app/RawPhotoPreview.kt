@@ -13,6 +13,14 @@ data class MediaDisplayPayload(
     val kind: MediaDisplayPayloadKind,
 )
 
+data class DecodedMediaDisplayPayload<T>(
+    val value: T,
+    val payload: MediaDisplayPayload,
+) {
+    val bytes: ByteArray get() = payload.bytes
+    val kind: MediaDisplayPayloadKind get() = payload.kind
+}
+
 data class LoadedMediaPreview<T>(
     val value: T,
     val source: MediaSourceChoice,
@@ -104,17 +112,19 @@ fun parseFujiRafEmbeddedPreview(
  * full RAW render. Fuji RAF finally falls back to its own embedded camera JPEG through two bounded
  * WebDAV range reads. This does not require or invent a sibling JPEG file.
  */
-suspend fun loadMediaDisplayPayload(
+suspend fun <T> loadMediaDisplayPayload(
     file: NextcloudFile,
     loadCorePreview: suspend () -> ByteArray,
     loadMemoriesRawRender: suspend () -> ByteArray,
     loadFileRange: suspend (offset: Long, length: Int, expectedEtag: String) -> ByteArray,
-): MediaDisplayPayload {
+    decode: (MediaDisplayPayload) -> T?,
+): DecodedMediaDisplayPayload<T> {
     if (file.hasPreview) {
-        attemptDisplayPayload(
+        attemptDecodedDisplayPayload(
             kind = MediaDisplayPayloadKind.ServerPreview,
             maximumPayloadBytes = MAX_MEDIA_PREVIEW_BYTES,
             load = loadCorePreview,
+            decode = decode,
         )?.let { return it }
     }
 
@@ -123,10 +133,11 @@ suspend fun loadMediaDisplayPayload(
     }
 
     if (file.originalAccessAllowed) {
-        attemptDisplayPayload(
+        attemptDecodedDisplayPayload(
             kind = MediaDisplayPayloadKind.MemoriesRawRender,
             maximumPayloadBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES,
             load = loadMemoriesRawRender,
+            decode = decode,
         )?.let { return it }
     }
 
@@ -140,12 +151,12 @@ suspend fun loadMediaDisplayPayload(
         val location = parseFujiRafEmbeddedPreview(header, file.size)
             ?: error("The RAF embedded preview directory is invalid.")
         val embedded = loadFileRange(location.offset, location.length, expectedEtag)
-        if (isBoundedDisplayImagePayload(embedded, MAX_RAW_EMBEDDED_PREVIEW_BYTES)) {
-            return MediaDisplayPayload(
-                bytes = embedded,
-                kind = MediaDisplayPayloadKind.EmbeddedCameraPreview,
-            )
-        }
+        decodeDisplayPayload(
+            bytes = embedded,
+            kind = MediaDisplayPayloadKind.EmbeddedCameraPreview,
+            maximumPayloadBytes = MAX_RAW_EMBEDDED_PREVIEW_BYTES,
+            decode = decode,
+        )?.let { return it }
     }
 
     error("No displayable RAW render or embedded preview is available.")
@@ -153,21 +164,11 @@ suspend fun loadMediaDisplayPayload(
 
 internal suspend fun <T> loadFirstUsableMediaPreviewSource(
     candidates: List<MediaSourceChoice>,
-    maximumPayloadBytes: Int = MAX_RAW_DISPLAY_PREVIEW_BYTES,
-    load: suspend (NextcloudFile) -> MediaDisplayPayload,
-    decode: (MediaDisplayPayload) -> T?,
+    load: suspend (NextcloudFile) -> DecodedMediaDisplayPayload<T>,
 ): LoadedMediaPreview<T>? {
-    require(maximumPayloadBytes >= MIN_RAW_EMBEDDED_PREVIEW_BYTES)
     candidates.forEachIndexed { index, candidate ->
         val loaded = try {
-            val payload = load(candidate.file)
-            require(isBoundedDisplayImagePayload(payload.bytes, maximumPayloadBytes)) {
-                "The server did not return a bounded display image."
-            }
-            val decoded = requireNotNull(decode(payload)) {
-                "The display image could not be decoded."
-            }
-            decoded to payload.kind
+            load(candidate.file)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -175,31 +176,38 @@ internal suspend fun <T> loadFirstUsableMediaPreviewSource(
         }
         if (loaded != null) {
             return LoadedMediaPreview(
-                value = loaded.first,
+                value = loaded.value,
                 source = candidate,
                 usedFallback = index > 0,
-                payloadKind = loaded.second,
+                payloadKind = loaded.kind,
             )
         }
     }
     return null
 }
 
-private suspend fun attemptDisplayPayload(
+private suspend fun <T> attemptDecodedDisplayPayload(
     kind: MediaDisplayPayloadKind,
     maximumPayloadBytes: Int,
     load: suspend () -> ByteArray,
-): MediaDisplayPayload? = try {
-    val bytes = load()
-    if (isBoundedDisplayImagePayload(bytes, maximumPayloadBytes)) {
-        MediaDisplayPayload(bytes, kind)
-    } else {
-        null
-    }
+    decode: (MediaDisplayPayload) -> T?,
+): DecodedMediaDisplayPayload<T>? = try {
+    decodeDisplayPayload(load(), kind, maximumPayloadBytes, decode)
 } catch (cancelled: CancellationException) {
     throw cancelled
 } catch (_: Exception) {
     null
+}
+
+private fun <T> decodeDisplayPayload(
+    bytes: ByteArray,
+    kind: MediaDisplayPayloadKind,
+    maximumPayloadBytes: Int,
+    decode: (MediaDisplayPayload) -> T?,
+): DecodedMediaDisplayPayload<T>? {
+    if (!isBoundedDisplayImagePayload(bytes, maximumPayloadBytes)) return null
+    val payload = MediaDisplayPayload(bytes, kind)
+    return decode(payload)?.let { DecodedMediaDisplayPayload(value = it, payload = payload) }
 }
 
 private fun ByteArray.readUnsignedBigEndianInt(offset: Int): Long {

@@ -941,17 +941,29 @@ const val DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 4L * 1024L * 1024L
 const val MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 16L * 1024L * 1024L
 const val MAX_FILE_RANGE_ETAG_LENGTH = 1_024
 
-fun requireSafeFileRangeEtag(value: String): String = value.also {
+fun requireSafeFileRangeEtag(value: String): String {
+    require(value == value.trim() && value.isNotEmpty() && value.length <= MAX_FILE_RANGE_ETAG_LENGTH) {
+        "A safe current strong ETag is required for a file range read."
+    }
+    if (value.first() == '"' || value.last() == '"') {
+        require(
+            value.length >= 2 &&
+                value.first() == '"' &&
+                value.last() == '"' &&
+                value.substring(1, value.lastIndex).all(::isHttpEntityTagCharacter),
+        ) {
+            "A safe current strong ETag is required for a file range read."
+        }
+        return value
+    }
     require(
-        it.length >= 2 &&
-            it == it.trim() &&
-            it.length <= MAX_FILE_RANGE_ETAG_LENGTH &&
-            it.first() == '"' &&
-            it.last() == '"' &&
-            it.substring(1, it.lastIndex).all(::isHttpEntityTagCharacter),
+        value != "*" &&
+            value.length <= MAX_FILE_RANGE_ETAG_LENGTH - 2 &&
+            value.all(::isHttpEntityTagCharacter),
     ) {
         "A safe current strong ETag is required for a file range read."
     }
+    return "\"$value\""
 }
 
 private fun isHttpEntityTagCharacter(character: Char): Boolean =

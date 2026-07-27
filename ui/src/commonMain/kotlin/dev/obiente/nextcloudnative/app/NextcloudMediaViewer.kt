@@ -225,7 +225,6 @@ fun NextcloudMediaViewer(
         previewState = MediaPreviewState.Loading
         val loaded = loadFirstUsableMediaPreviewSource(
             candidates = sourcePlan.previewCandidates,
-            maximumPayloadBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES,
             load = { candidate ->
                 loadMediaDisplayPayload(
                     file = candidate,
@@ -262,14 +261,14 @@ fun NextcloudMediaViewer(
                             expectedEtag = expectedEtag,
                         )
                     },
+                    decode = { payload ->
+                        decodePlatformImageSampled(
+                            payload.bytes,
+                            MAXIMUM_PREVIEW_IMAGE_DIMENSION,
+                            payload.kind.orientationPolicy(),
+                        )?.image
+                    },
                 )
-            },
-            decode = { payload ->
-                decodePlatformImageSampled(
-                    payload.bytes,
-                    MAXIMUM_PREVIEW_IMAGE_DIMENSION,
-                    payload.kind.orientationPolicy(),
-                )?.image
             },
         )
         previewState = loaded?.let {

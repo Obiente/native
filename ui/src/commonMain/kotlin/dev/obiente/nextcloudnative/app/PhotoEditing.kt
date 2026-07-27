@@ -460,7 +460,8 @@ internal fun NextcloudFile.memoriesFullResolutionPhotoSource(): FullResolutionPh
     val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase()
     return if (
         normalizedMimeType in MEMORIES_DECODABLE_PASSTHROUGH_MIME_TYPES ||
-        normalizedMimeType.isEmpty() && extension in MEMORIES_DECODABLE_PASSTHROUGH_EXTENSIONS
+        normalizedMimeType in MEMORIES_UNINFORMATIVE_MIME_TYPES &&
+        extension in MEMORIES_DECODABLE_PASSTHROUGH_EXTENSIONS
     ) {
         FullResolutionPhotoSource.MemoriesPassthrough
     } else {
@@ -817,6 +818,12 @@ private val MEMORIES_DECODABLE_PASSTHROUGH_MIME_TYPES = setOf(
     "image/jpeg",
     "image/png",
     "image/webp",
+)
+
+private val MEMORIES_UNINFORMATIVE_MIME_TYPES = setOf(
+    "",
+    "application/octet-stream",
+    "binary/octet-stream",
 )
 
 private val MEMORIES_DECODABLE_PASSTHROUGH_EXTENSIONS = setOf(
