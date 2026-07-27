@@ -46,18 +46,26 @@ data class TalkAttachmentRenderModel(
 ) {
     val canOpen: Boolean get() = canLoadServerRaster || canDownloadOriginal
 
-    fun asNextcloudFile(): NextcloudFile = NextcloudFile(
-        path = attachment.path ?: "Talk/${attachment.fileId ?: attachment.name}",
-        name = attachment.name,
-        isDirectory = false,
-        mimeType = attachment.mimeType,
-        size = attachment.size,
-        lastModified = null,
-        fileId = attachment.fileId,
-        hasPreview = canLoadServerRaster,
-        etag = attachment.etag,
-        originalAccessAllowed = canDownloadOriginal,
-    )
+    fun asNextcloudFile(): NextcloudFile {
+        val authoritativePath = attachment.path
+            ?.takeIf(String::isNotBlank)
+            ?.takeIf { path ->
+                runCatching { requireSafeFilePath(path, allowRoot = false) }.isSuccess
+            }
+        return NextcloudFile(
+            path = authoritativePath ?: "Talk/${attachment.fileId ?: attachment.name}",
+            name = attachment.name,
+            isDirectory = false,
+            mimeType = attachment.mimeType,
+            size = attachment.size,
+            lastModified = null,
+            fileId = attachment.fileId,
+            hasPreview = canLoadServerRaster,
+            etag = attachment.etag,
+            originalAccessAllowed = canDownloadOriginal,
+            davPathAuthoritative = authoritativePath != null,
+        )
+    }
 }
 
 sealed interface TalkMessageRenderModel {

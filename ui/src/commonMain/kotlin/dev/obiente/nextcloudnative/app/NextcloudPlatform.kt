@@ -86,6 +86,13 @@ data class NextcloudFile(
      * explicitly preserve a server-side no-download policy through generic file handoffs.
      */
     val originalAccessAllowed: Boolean = true,
+    /**
+     * Whether [path] identifies the original object in the authenticated Files DAV tree.
+     *
+     * Surfaces such as Talk can carry a stable file ID without supplying a DAV path. Their
+     * display-only placeholder must never be used for original byte reads.
+     */
+    val davPathAuthoritative: Boolean = true,
     /** Raw DAV permission flags. `W` is required before planning an edit session. */
     val permissions: String? = null,
     /** Strong content identities supplied by DAV clients, for example `SHA256:<hex>`. */
@@ -147,7 +154,8 @@ data class NextcloudApiResponse(
  * Stable credential-free identity for a dynamic GET response.
  *
  * Length-prefixed query fields avoid ambiguous delimiter collisions while retaining a readable
- * prefix for diagnostics. Authentication and request bodies are deliberately excluded.
+ * prefix for diagnostics. The response bound is part of the representation identity so a smaller
+ * in-flight read cannot satisfy a larger request. Authentication and request bodies are excluded.
  */
 fun NextcloudApiRequest.dynamicReadCacheIdentity(): String = buildString {
     append(method.name)
@@ -155,6 +163,8 @@ fun NextcloudApiRequest.dynamicReadCacheIdentity(): String = buildString {
     append(relativePath)
     append(" ocs=")
     append(ocsApiRequest)
+    append(" max=")
+    append(maximumResponseBytes)
     queryParameters.toSortedMap().forEach { (name, value) ->
         val encodedName = encodeUrlComponent(name)
         val encodedValue = encodeUrlComponent(value)
@@ -657,6 +667,23 @@ interface NextcloudPlatformServices {
     ): NextcloudFileContent
 
     /**
+     * Reads one exact, bounded byte range from a Files WebDAV object.
+     *
+     * Platforms must send [expectedEtag] through If-Match, require an HTTP 206 response, and reject
+     * servers that ignore the Range header. This keeps both reads pinned to one remote generation
+     * and keeps large media containers out of memory when only an embedded preview is needed. The
+     * returned bytes are detached and may never be written back automatically.
+     */
+    suspend fun downloadFileRange(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        offset: Long,
+        length: Int,
+        expectedEtag: String,
+    ): ByteArray = error("Bounded file range reads are not supported on this platform.")
+
+    /**
      * Lists immutable historical generations for the exact Files record.
      *
      * Implementations authenticate against the active account and use the official versions DAV
@@ -1036,6 +1063,37 @@ const val MAX_ACTIVITY_LIMIT = 200
 const val MAX_NOTE_BYTES = 4L * 1024L * 1024L
 const val DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 4L * 1024L * 1024L
 const val MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 16L * 1024L * 1024L
+const val MAX_FILE_RANGE_ETAG_LENGTH = 1_024
+
+fun requireSafeFileRangeEtag(value: String): String {
+    require(value == value.trim() && value.isNotEmpty() && value.length <= MAX_FILE_RANGE_ETAG_LENGTH) {
+        "A safe current strong ETag is required for a file range read."
+    }
+    if (value.first() == '"' || value.last() == '"') {
+        require(
+            value.length >= 2 &&
+                value.first() == '"' &&
+                value.last() == '"' &&
+                value.substring(1, value.lastIndex).all(::isHttpEntityTagCharacter),
+        ) {
+            "A safe current strong ETag is required for a file range read."
+        }
+        return value
+    }
+    require(
+        value != "*" &&
+            value.length <= MAX_FILE_RANGE_ETAG_LENGTH - 2 &&
+            value.all(::isHttpEntityTagCharacter),
+    ) {
+        "A safe current strong ETag is required for a file range read."
+    }
+    return "\"$value\""
+}
+
+private fun isHttpEntityTagCharacter(character: Char): Boolean =
+    character.code == 0x21 ||
+        character.code in 0x23..0x7E ||
+        character.code in 0x80..0xFF
 
 fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
     require(relativePath.startsWith('/') && !relativePath.startsWith("//")) {

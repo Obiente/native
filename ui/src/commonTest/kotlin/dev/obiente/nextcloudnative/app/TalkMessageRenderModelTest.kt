@@ -84,6 +84,121 @@ class TalkMessageRenderModelTest {
     }
 
     @Test
+    fun genericFileHandoffOnlyMarksServerSuppliedDavPathsAsAuthoritative() {
+        val withPath = parseAttachmentModel(
+            messageType = "comment",
+            mimeType = "image/x-fuji-raf",
+            previewAvailable = false,
+        )
+        val withoutPath = parseAttachmentModel(
+            messageType = "comment",
+            mimeType = "image/x-fuji-raf",
+            previewAvailable = false,
+            includePath = false,
+        )
+
+        val authoritative = withPath.asNextcloudFile()
+        val placeholder = withoutPath.asNextcloudFile()
+
+        assertTrue(authoritative.davPathAuthoritative)
+        assertTrue(authoritative.hasAuthoritativeMediaDavAccess("alice"))
+        assertFalse(authoritative.hasAuthoritativeMediaDavAccess(""))
+        assertFalse(placeholder.davPathAuthoritative)
+        assertFalse(placeholder.hasAuthoritativeMediaDavAccess("alice"))
+        assertFalse(placeholder.canUseEmbeddedRafPreview())
+    }
+
+    @Test
+    fun blankTalkPathsRemainNonAuthoritativeAndCannotExposeAlbumWrites() {
+        val blankPath = parseAttachmentModel(
+            messageType = "comment",
+            mimeType = "image/jpeg",
+            previewAvailable = true,
+            path = "",
+        ).asNextcloudFile()
+
+        assertEquals("Talk/901", blankPath.path)
+        assertFalse(blankPath.davPathAuthoritative)
+        assertFalse(blankPath.hasAuthoritativeMediaDavAccess("alice"))
+        assertFalse(
+            MediaViewerAction.AddToAlbum in availableMediaViewerActions(
+                file = blankPath,
+                userId = "alice",
+                taggingAvailable = true,
+                sharingCapabilities = NextcloudFileSharingCapabilities.Unavailable,
+                externalActions = emptySet(),
+            ),
+        )
+    }
+
+    @Test
+    fun unsafeTalkPathsRemainNonAuthoritative() {
+        val unsafePath = parseAttachmentModel(
+            messageType = "comment",
+            mimeType = "image/jpeg",
+            previewAvailable = true,
+            path = "../Secrets/photo.jpg",
+        ).asNextcloudFile()
+
+        assertEquals("Talk/901", unsafePath.path)
+        assertFalse(unsafePath.davPathAuthoritative)
+        assertFalse(unsafePath.hasAuthoritativeMediaDavAccess("alice"))
+    }
+
+    @Test
+    fun albumActionRequiresAnAuthoritativeTalkDavPath() {
+        val authoritative = parseAttachmentModel(
+            messageType = "comment",
+            mimeType = "image/jpeg",
+            previewAvailable = true,
+        ).asNextcloudFile()
+        val placeholder = parseAttachmentModel(
+            messageType = "comment",
+            mimeType = "image/jpeg",
+            previewAvailable = true,
+            includePath = false,
+        ).asNextcloudFile()
+
+        val authoritativeActions = availableMediaViewerActions(
+            file = authoritative,
+            userId = "alice",
+            taggingAvailable = true,
+            sharingCapabilities = NextcloudFileSharingCapabilities.Unavailable,
+            externalActions = emptySet(),
+        )
+        val placeholderActions = availableMediaViewerActions(
+            file = placeholder,
+            userId = "alice",
+            taggingAvailable = true,
+            sharingCapabilities = NextcloudFileSharingCapabilities.Unavailable,
+            externalActions = emptySet(),
+        )
+
+        assertTrue(MediaViewerAction.AddToAlbum in authoritativeActions)
+        assertFalse(MediaViewerAction.AddToAlbum in placeholderActions)
+    }
+
+    @Test
+    fun nativeVideoPlaybackRejectsSyntheticTalkPaths() {
+        val authoritative = parseAttachmentModel(
+            messageType = "comment",
+            mimeType = "video/mp4",
+            previewAvailable = true,
+        ).asNextcloudFile()
+        val placeholder = parseAttachmentModel(
+            messageType = "comment",
+            mimeType = "video/mp4",
+            previewAvailable = true,
+            includePath = false,
+        ).asNextcloudFile()
+
+        assertTrue(authoritative.canUsePlatformNativeVideoPlayback("alice", true))
+        assertFalse(placeholder.canUsePlatformNativeVideoPlayback("alice", true))
+        assertFalse(authoritative.canUsePlatformNativeVideoPlayback("", true))
+        assertFalse(authoritative.canUsePlatformNativeVideoPlayback("alice", false))
+    }
+
+    @Test
     fun mapsDeletedAndCallMessagesToDedicatedRenderModels() {
         val deleted = requireNotNull(
             parseTalkMessageJson(
@@ -207,7 +322,10 @@ class TalkMessageRenderModelTest {
         previewAvailable: Boolean,
         hideDownload: Boolean = false,
         size: Long = 4_096,
+        includePath: Boolean = true,
+        path: String = "Talk/recording.bin",
     ): TalkAttachmentRenderModel {
+        val pathProperty = if (includePath) "\"path\": \"$path\"," else ""
         val message = requireNotNull(
             parseTalkMessageJson(
                 """
@@ -220,7 +338,7 @@ class TalkMessageRenderModelTest {
                       "type": "file",
                       "id": "901",
                       "name": "recording.bin",
-                      "path": "Talk/recording.bin",
+                      $pathProperty
                       "mimetype": "$mimeType",
                       "size": "$size",
                       "preview-available": "${if (previewAvailable) "yes" else "no"}",

@@ -9,14 +9,12 @@ import org.jetbrains.skia.Data
 import org.jetbrains.skia.EncodedOrigin
 import org.jetbrains.skia.Image
 import org.jetbrains.skia.Matrix33
-import org.jetbrains.skia.SamplingMode
-import kotlin.math.roundToInt
 
 actual fun decodePlatformImage(
     bytes: ByteArray,
     orientationPolicy: EncodedImageOrientationPolicy,
 ): ImageBitmap? = runCatching {
-    val decoded = decodeDesktopImage(bytes, orientationPolicy)
+    val decoded = decodeDesktopImage(bytes, orientationPolicy, maximumDimension = null)
     try {
         decoded.image.toComposeImageBitmap()
     } catch (failure: Throwable) {
@@ -31,40 +29,19 @@ actual fun decodePlatformImageSampled(
     orientationPolicy: EncodedImageOrientationPolicy,
 ): PlatformDecodedImage? = runCatching {
     require(maximumDimension > 0)
-    val decoded = decodeDesktopImage(bytes, orientationPolicy)
+    val decoded = decodeDesktopImage(bytes, orientationPolicy, maximumDimension)
     val source = decoded.image
     val sourceWidth = decoded.width
     val sourceHeight = decoded.height
     try {
-        val sampled = if (maxOf(sourceWidth, sourceHeight) <= maximumDimension) {
-            source
-        } else {
-            val scale = maximumDimension.toFloat() / maxOf(sourceWidth, sourceHeight)
-            val width = (sourceWidth * scale).roundToInt().coerceAtLeast(1)
-            val height = (sourceHeight * scale).roundToInt().coerceAtLeast(1)
-            Bitmap().use { target ->
-                check(target.allocN32Pixels(width, height, false)) {
-                    "Could not allocate a display-safe image."
-                }
-                val targetPixels = checkNotNull(target.peekPixels()) {
-                    "Could not access display-safe image pixels."
-                }
-                check(source.scalePixels(targetPixels, SamplingMode.MITCHELL, true)) {
-                    "Could not create a display-safe image."
-                }
-                Image.makeFromBitmap(target)
-            }.also {
-                source.close()
-            }
-        }
         try {
             PlatformDecodedImage(
-                image = sampled.toComposeImageBitmap(),
+                image = source.toComposeImageBitmap(),
                 sourceWidth = sourceWidth,
                 sourceHeight = sourceHeight,
             )
         } catch (failure: Throwable) {
-            sampled.close()
+            source.close()
             throw failure
         }
     } catch (failure: Throwable) {
@@ -88,20 +65,29 @@ private data class DesktopDecodedImage(
 private fun decodeDesktopImage(
     bytes: ByteArray,
     orientationPolicy: EncodedImageOrientationPolicy,
+    maximumDimension: Int?,
 ): DesktopDecodedImage {
     return Data.makeFromBytes(bytes).use { data ->
         Codec.makeFromData(data).use { codec ->
-            codec.readPixels().use { rawBitmap ->
+            val sourceWidth = codec.width
+            val sourceHeight = codec.height
+            val target = desktopDecodeTargetDimensions(sourceWidth, sourceHeight, maximumDimension)
+            Bitmap().use { rawBitmap ->
+                val targetInfo = codec.imageInfo.withWidthHeight(target.width, target.height)
+                check(rawBitmap.allocPixels(targetInfo)) {
+                    "Could not allocate a bounded desktop image."
+                }
+                codec.readPixels(rawBitmap)
                 val rawImage = Image.makeFromBitmap(rawBitmap)
                 val orientation = when (orientationPolicy) {
                     EncodedImageOrientationPolicy.ApplyExif -> codec.encodedOrigin.exifOrientation()
                     EncodedImageOrientationPolicy.PixelsAlreadyUpright -> 1
                 }
                 if (orientation == 1) {
-                    return@use DesktopDecodedImage(rawImage, rawImage.width, rawImage.height)
+                    return@use DesktopDecodedImage(rawImage, sourceWidth, sourceHeight)
                 }
                 rawImage.use { source ->
-                    val dimensions = exifOrientedDimensions(source.width, source.height, orientation)
+                    val dimensions = exifOrientedDimensions(sourceWidth, sourceHeight, orientation)
                     DesktopDecodedImage(
                         image = renderDesktopExifOrientation(source, orientation),
                         width = dimensions.width,
@@ -111,6 +97,38 @@ private fun decodeDesktopImage(
             }
         }
     }
+}
+
+internal data class DesktopDecodeDimensions(
+    val width: Int,
+    val height: Int,
+)
+
+internal fun desktopDecodeTargetDimensions(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    maximumDimension: Int?,
+): DesktopDecodeDimensions {
+    require(sourceWidth > 0 && sourceHeight > 0)
+    require(sourceWidth <= MAX_DESKTOP_ENCODED_DIMENSION && sourceHeight <= MAX_DESKTOP_ENCODED_DIMENSION) {
+        "The encoded image dimensions are unsafe."
+    }
+    if (maximumDimension == null) {
+        require(sourceWidth.toLong() * sourceHeight <= MAX_DESKTOP_UNSAMPLED_PIXELS) {
+            "The encoded image is too large for an unsampled desktop decode."
+        }
+        return DesktopDecodeDimensions(sourceWidth, sourceHeight)
+    }
+    require(maximumDimension in 1..MAX_DESKTOP_SAMPLED_DIMENSION)
+    var divisor = 1
+    val sourceMaximum = maxOf(sourceWidth, sourceHeight)
+    while ((sourceMaximum + divisor - 1) / divisor > maximumDimension) {
+        divisor = Math.multiplyExact(divisor, 2)
+    }
+    return DesktopDecodeDimensions(
+        width = ((sourceWidth + divisor - 1) / divisor).coerceAtLeast(1),
+        height = ((sourceHeight + divisor - 1) / divisor).coerceAtLeast(1),
+    )
 }
 
 internal fun renderDesktopExifOrientation(source: Image, orientation: Int): Image {
@@ -162,3 +180,7 @@ private fun EncodedOrigin.exifOrientation(): Int = when (this) {
     EncodedOrigin.RIGHT_BOTTOM -> 7
     EncodedOrigin.LEFT_BOTTOM -> 8
 }
+
+private const val MAX_DESKTOP_ENCODED_DIMENSION = 1_000_000
+private const val MAX_DESKTOP_UNSAMPLED_PIXELS = 32_000_000L
+private const val MAX_DESKTOP_SAMPLED_DIMENSION = 8_192

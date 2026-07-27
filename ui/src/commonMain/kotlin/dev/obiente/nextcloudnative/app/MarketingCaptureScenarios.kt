@@ -47,6 +47,38 @@ enum class MarketingCaptureScenario(
     ObsidianSync("obsidian-vault-sync", "obsidian-vault-sync.png", NextcloudPresentation.Adaptive, 1_080, 1_000, 2.625f),
     MediaBackup("media-backup-queue", "media-backup-queue.png", NextcloudPresentation.Adaptive, 1_080, 1_800, 2.625f),
     AdaptiveApp("adaptive-dynamic-data", "adaptive-dynamic-data.png", NextcloudPresentation.Desktop, 960, 360, 1f),
+    RawPreviewLoadingMobile(
+        "raw-preview-loading-mobile",
+        "raw-preview-loading-mobile.png",
+        NextcloudPresentation.Adaptive,
+        1_080,
+        1_200,
+        2.625f,
+    ),
+    RawPreviewErrorMobile(
+        "raw-preview-error-mobile",
+        "raw-preview-error-mobile.png",
+        NextcloudPresentation.Adaptive,
+        1_080,
+        1_200,
+        2.625f,
+    ),
+    RawPreviewMemoriesReadyMobile(
+        "raw-preview-memories-ready-mobile",
+        "raw-preview-memories-ready-mobile.png",
+        NextcloudPresentation.Adaptive,
+        1_080,
+        1_600,
+        2.625f,
+    ),
+    RawPreviewHighDetailDesktop(
+        "raw-preview-high-detail-desktop",
+        "raw-preview-high-detail-desktop.png",
+        NextcloudPresentation.Desktop,
+        1_440,
+        900,
+        1f,
+    ),
     FileShareUserMobile(
         id = "file-share-user-mobile",
         fileName = "file-share-user-mobile.png",
@@ -124,6 +156,13 @@ internal val fileShareCaptureScenarios: List<MarketingCaptureScenario> = listOf(
 
 val marketingCaptureScenarios: List<MarketingCaptureScenario> =
     MarketingCaptureScenario.entries
+
+val rawPreviewCaptureScenarios: List<MarketingCaptureScenario> = listOf(
+    MarketingCaptureScenario.RawPreviewLoadingMobile,
+    MarketingCaptureScenario.RawPreviewErrorMobile,
+    MarketingCaptureScenario.RawPreviewMemoriesReadyMobile,
+    MarketingCaptureScenario.RawPreviewHighDetailDesktop,
+)
 
 data class MarketingCaptureAssets(
     val avatar: ImageBitmap,

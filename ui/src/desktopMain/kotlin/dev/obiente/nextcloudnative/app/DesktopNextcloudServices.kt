@@ -654,21 +654,13 @@ class DesktopNextcloudServices(
 
     override suspend fun listMedia(session: NextcloudSession, userId: String): List<NextcloudFile> =
         withContext(Dispatchers.IO) {
-            val search = """
-                <?xml version="1.0" encoding="UTF-8"?>
-                <d:searchrequest xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns"><d:basicsearch>
-                  <d:select><d:prop><d:displayname/><d:getcontenttype/><d:getlastmodified/><d:getcontentlength/><d:getetag/><oc:fileid/><oc:size/><oc:permissions/><nc:has-preview/></d:prop></d:select>
-                  <d:from><d:scope><d:href>/files/${escapeXml(userId)}</d:href><d:depth>infinity</d:depth></d:scope></d:from>
-                  <d:where><d:or><d:like><d:prop><d:getcontenttype/></d:prop><d:literal>image/%</d:literal></d:like><d:like><d:prop><d:getcontenttype/></d:prop><d:literal>video/%</d:literal></d:like></d:or></d:where>
-                  <d:orderby><d:order><d:prop><d:getlastmodified/></d:prop><d:descending/></d:order></d:orderby><d:limit><d:nresults>80</d:nresults></d:limit>
-                </d:basicsearch></d:searchrequest>
-            """.trimIndent()
+            val search = mediaSearchDavRequestBody(userId)
             val response = request(
                 "SEARCH", session.serverUrl + "/remote.php/dav/", session, search,
                 "application/xml; charset=utf-8", headers = mapOf("Accept" to "application/xml"),
             )
             check(response.status == 207) { "WebDAV media search failed (HTTP ${response.status})." }
-            parseDavFiles(response.body, userId).take(80)
+            selectMediaSearchFiles(parseDavFiles(response.body, userId))
         }
 
     override suspend fun listSystemTags(session: NextcloudSession): List<NextcloudSystemTag> =
@@ -779,6 +771,42 @@ class DesktopNextcloudServices(
         } catch (failure: IOException) {
             cached?.let { NextcloudFileContent(it.bytes, it.mimeType, it.etag) } ?: throw failure
         }
+    }
+
+    override suspend fun downloadFileRange(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        offset: Long,
+        length: Int,
+        expectedEtag: String,
+    ): ByteArray = withContext(Dispatchers.IO) {
+        require(offset >= 0L) { "The file range offset must not be negative." }
+        require(length > 0) { "The file range length must be greater than zero." }
+        val safeEtag = requireSafeFileRangeEtag(expectedEtag)
+        val endInclusive = Math.addExact(offset, length.toLong() - 1L)
+        val response = request(
+            "GET",
+            buildNextcloudFileUrl(session.serverUrl, userId, path),
+            session,
+            headers = mapOf(
+                "Accept" to "application/octet-stream",
+                "Range" to "bytes=$offset-$endInclusive",
+                "If-Match" to safeEtag,
+            ),
+            maxResponseBytes = length.toLong(),
+            client = noRedirectHttpClient,
+        )
+        check(response.status == 206) {
+            "The server did not honor the bounded file range request (HTTP ${response.status})."
+        }
+        check(isExactHttpByteContentRange(response.contentRange, offset, endInclusive)) {
+            "The server returned a different file range than requested."
+        }
+        check(response.body.size == length) {
+            "The server returned an incomplete file range."
+        }
+        response.body
     }
 
     override suspend fun listFileVersions(
@@ -1723,6 +1751,7 @@ class DesktopNextcloudServices(
                 response.header("ETag") ?: response.header("OC-Etag"),
                 response.header("Location"),
                 response.header("X-Chat-Last-Given"),
+                response.header("Content-Range"),
             )
         }
     }
@@ -1861,15 +1890,12 @@ class DesktopNextcloudServices(
             val fileId = item.optLong("fileid", -1L).takeIf { it >= 0L } ?: continue
             target.putIfAbsent(
                 fileId,
-                NextcloudFile(
-                    path = "memories/people/${person.id}/$fileId",
-                    name = item.optString("basename").ifBlank { "Photo $fileId" },
-                    isDirectory = false,
-                    mimeType = item.optString("mimetype").takeIf(String::isNotBlank),
-                    size = null,
-                    lastModified = item.optLong("epoch", 0L).takeIf { it > 0L }?.toString(),
+                syntheticMemoriesPersonFile(
+                    personId = person.id.toString(),
                     fileId = fileId,
-                    hasPreview = true,
+                    name = item.optString("basename").ifBlank { "Photo $fileId" },
+                    mimeType = item.optString("mimetype").takeIf(String::isNotBlank),
+                    lastModified = item.optLong("epoch", 0L).takeIf { it > 0L }?.toString(),
                     etag = item.optString("etag").takeIf(String::isNotBlank),
                 ),
             )
@@ -1888,6 +1914,7 @@ class DesktopNextcloudServices(
         val etag: String? = null,
         val location: String? = null,
         val chatLastGiven: String? = null,
+        val contentRange: String? = null,
     ) {
         val text: String get() = body.toString(StandardCharsets.UTF_8)
     }

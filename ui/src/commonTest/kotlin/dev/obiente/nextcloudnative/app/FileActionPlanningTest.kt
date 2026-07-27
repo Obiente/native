@@ -169,6 +169,21 @@ class FileActionPlanningTest {
     }
 
     @Test
+    fun previewlessRawFileKeepsPreviewInTheLongPressPlan() {
+        val raw = file(
+            name = "capture.raf",
+            mimeType = "application/octet-stream",
+            fileId = 77,
+            etag = "raw-v1",
+        )
+
+        assertEquals(
+            FileMenuAction.Preview,
+            planFileActions(raw).primary.first().action,
+        )
+    }
+
+    @Test
     fun versionHistoryIsReachableOnlyForStableReadableFileRecords() {
         val readable = file(
             name = "draft.md",

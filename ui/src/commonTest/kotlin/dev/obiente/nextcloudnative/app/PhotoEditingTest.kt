@@ -17,7 +17,7 @@ class PhotoEditingTest {
     fun fullResolutionLoaderPrefersMemoriesForRawCompatibility() = runBlocking {
         var filesReads = 0
         val payload = loadFullResolutionPhotoPayload(
-            original = file(path = "Photos/source.raw", etag = "current"),
+            original = file(path = "Photos/source.raw", etag = "current").copy(mimeType = "image/x-dcraw"),
             loadMemories = { fileId, etag ->
                 assertEquals(7L, fileId)
                 assertEquals("current", etag)
@@ -29,9 +29,62 @@ class PhotoEditingTest {
             },
         )
 
-        assertEquals(FullResolutionPhotoSource.Memories, payload.source)
+        assertEquals(FullResolutionPhotoSource.MemoriesTranscoded, payload.source)
+        assertEquals(EncodedImageOrientationPolicy.PixelsAlreadyUpright, payload.source.orientationPolicy())
         assertEquals(listOf<Byte>(1, 2, 3), payload.bytes.toList())
         assertEquals(0, filesReads)
+    }
+
+    @Test
+    fun memoriesKeepsPassthroughImageExifSemanticsSeparateFromTranscodedRaw() = runBlocking {
+        val passthroughMimeTypes = listOf(
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
+            "image/webp",
+            "image/gif",
+        )
+
+        passthroughMimeTypes.forEach { mimeType ->
+            val payload = loadFullResolutionPhotoPayload(
+                original = file(path = "Photos/source.jpg").copy(mimeType = mimeType),
+                loadMemories = { _, _ -> byteArrayOf(1) },
+                loadFilesDav = null,
+            )
+
+            assertEquals(FullResolutionPhotoSource.MemoriesPassthrough, payload.source)
+            assertEquals(EncodedImageOrientationPolicy.ApplyExif, payload.source.orientationPolicy())
+        }
+
+        val rawPayload = loadFullResolutionPhotoPayload(
+            original = file(path = "Photos/source.raw").copy(mimeType = "image/x-dcraw"),
+            loadMemories = { _, _ -> byteArrayOf(2) },
+            loadFilesDav = null,
+        )
+
+        assertEquals(FullResolutionPhotoSource.MemoriesTranscoded, rawPayload.source)
+        assertEquals(EncodedImageOrientationPolicy.PixelsAlreadyUpright, rawPayload.source.orientationPolicy())
+
+        assertEquals(
+            FullResolutionPhotoSource.MemoriesPassthrough,
+            file(path = "Photos/source.jpg").copy(mimeType = null).memoriesFullResolutionPhotoSource(),
+        )
+        assertEquals(
+            FullResolutionPhotoSource.MemoriesPassthrough,
+            file(path = "Photos/source.jpg")
+                .copy(mimeType = "application/octet-stream")
+                .memoriesFullResolutionPhotoSource(),
+        )
+        assertEquals(
+            FullResolutionPhotoSource.MemoriesTranscoded,
+            file(path = "Photos/source.raw").copy(mimeType = null).memoriesFullResolutionPhotoSource(),
+        )
+        assertEquals(
+            FullResolutionPhotoSource.MemoriesTranscoded,
+            file(path = "Photos/source.raf")
+                .copy(mimeType = "image/jpeg")
+                .memoriesFullResolutionPhotoSource(),
+        )
     }
 
     @Test
@@ -52,20 +105,29 @@ class PhotoEditingTest {
 
     @Test
     fun fullResolutionLoaderNeverSendsSyntheticOrReadOnlyPathsToFilesDav() = runBlocking {
-        var filesRead = false
-        kotlin.test.assertFails {
-            loadFullResolutionPhotoPayload(
-                original = file(path = "memories/people/recognize/1/2/7").copy(
-                    originalAccessAllowed = false,
-                ),
-                loadMemories = { _, _ -> error("Memories unavailable") },
-                loadFilesDav = {
-                    filesRead = true
-                    byteArrayOf(1)
-                },
-            )
+        val unsafeFiles = listOf(
+            file(path = "memories/people/recognize/1/2/7").copy(
+                originalAccessAllowed = false,
+            ),
+            file(path = "Talk/attachment.jpg").copy(
+                davPathAuthoritative = false,
+            ),
+        )
+
+        unsafeFiles.forEach { unsafe ->
+            var filesRead = false
+            kotlin.test.assertFails {
+                loadFullResolutionPhotoPayload(
+                    original = unsafe,
+                    loadMemories = { _, _ -> error("Memories unavailable") },
+                    loadFilesDav = {
+                        filesRead = true
+                        byteArrayOf(1)
+                    },
+                )
+            }
+            assertFalse(filesRead)
         }
-        assertFalse(filesRead)
     }
 
     @Test
@@ -407,6 +469,7 @@ class PhotoEditingTest {
         assertEquals("Photos/DCIM/Camera/20250906_020658.jpg", resolved?.path)
         assertEquals("20250906_020658.jpg", resolved?.name)
         assertEquals(2169263, resolved?.fileId)
+        assertTrue(resolved?.davPathAuthoritative == true)
     }
 
     @Test
@@ -420,6 +483,23 @@ class PhotoEditingTest {
         }
 
         assertEquals(original, resolved)
+        assertEquals(0, identityRequests)
+    }
+
+    @Test
+    fun nonAuthoritativeOrdinaryPathCannotBecomeSidecarSource() = runBlocking {
+        val placeholder = file(path = "Talk/44321").copy(
+            fileId = 44321,
+            davPathAuthoritative = false,
+        )
+        var identityRequests = 0
+
+        val resolved = resolvePhotoEditDavSource(placeholder) {
+            identityRequests += 1
+            error("Non-Memories placeholders must not be looked up through Memories.")
+        }
+
+        assertEquals(null, resolved)
         assertEquals(0, identityRequests)
     }
 

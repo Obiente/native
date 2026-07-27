@@ -1,13 +1,46 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class MediaStackingTest {
+    @Test
+    fun mediaSearchRequestsResourceTypeAndBoundsItsResultSet() {
+        val body = mediaSearchDavRequestBody("account<&\"'")
+
+        assertTrue("<d:resourcetype/>" in body)
+        assertTrue("<d:href>/files/account&lt;&amp;&quot;&apos;</d:href>" in body)
+        assertTrue("<d:nresults>$MAXIMUM_MEDIA_SEARCH_RESULTS</d:nresults>" in body)
+        val collectionExclusion = "<d:not><d:is-collection/></d:not>"
+        assertTrue(collectionExclusion in body)
+        assertTrue(body.indexOf(collectionExclusion) < body.indexOf("<d:limit>"))
+        rawPhotoFileNameSearchPatterns().forEach { pattern ->
+            assertTrue("<d:literal>$pattern</d:literal>" in body)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            mediaSearchDavRequestBody("account", MAXIMUM_MEDIA_SEARCH_RESULTS + 1)
+        }
+    }
+
+    @Test
+    fun mediaSearchDropsCollectionsEvenWhenTheirNamesLookLikeRawFiles() {
+        val rawDirectory = file("Photos/archive.raw", "httpd/unix-directory").copy(isDirectory = true)
+        val rawFile = file("Photos/frame.RAF", "application/octet-stream")
+        val jpegFile = file("Photos/frame.JPG", "image/jpeg")
+
+        assertEquals(
+            listOf(rawFile, jpegFile),
+            selectMediaSearchFiles(listOf(rawDirectory, rawFile, jpegFile)),
+        )
+    }
+
     @Test
     fun rawAndJpegWithTheSameFolderAndStemBecomeOneStack() {
         val raw = file("Photos/Trip/DSCF0001.RAF", "image/x-fuji-raf")
@@ -111,19 +144,19 @@ class MediaStackingTest {
 
         assertEquals(
             "RAW server preview",
-            describeMediaDisplaySource(plan.selected, rawChoice, fullQuality = false),
+            describeMediaDisplaySource(plan.selected, rawChoice, highDetail = false),
         )
         assertEquals(
-            "RAW full-resolution render",
-            describeMediaDisplaySource(plan.selected, rawChoice, fullQuality = true),
+            "High-detail RAW render",
+            describeMediaDisplaySource(plan.selected, rawChoice, highDetail = true),
         )
         assertEquals(
-            "JPEG server preview fallback · actions target DSCF0001.RAF",
-            describeMediaDisplaySource(plan.selected, jpegChoice, fullQuality = false),
+            "JPEG server preview fallback - actions target DSCF0001.RAF",
+            describeMediaDisplaySource(plan.selected, jpegChoice, highDetail = false),
         )
         assertEquals(
-            "JPEG original fallback · actions target DSCF0001.RAF",
-            describeMediaDisplaySource(plan.selected, jpegChoice, fullQuality = true),
+            "High-detail JPEG render fallback - actions target DSCF0001.RAF",
+            describeMediaDisplaySource(plan.selected, jpegChoice, highDetail = true),
         )
     }
 
@@ -210,6 +243,59 @@ class MediaStackingTest {
         val plan = planMediaSources(listOf(raw, jpeg), raw)
 
         assertEquals(listOf(jpeg), plan.fullQualityCandidates.map(MediaSourceChoice::file))
+    }
+
+    @Test
+    fun cancelledFullQualityLoadRecoversTheRetryGate() = runBlocking {
+        var recovered = false
+
+        assertFailsWith<CancellationException> {
+            withFullQualityCancellationRecovery(
+                onCancelled = { recovered = true },
+                load = { throw CancellationException("zoom fell below the high-detail threshold") },
+            )
+        }
+
+        assertTrue(recovered)
+    }
+
+    @Test
+    fun restoredViewerGetsANewLoadIdentityWhenTheFilesUserArrives() {
+        val beforeServerInfo = MediaViewerSourceLoadIdentity(
+            selectedPath = "Photos/Samples/SAMPLE0001.RAF",
+            filesUserId = "",
+        )
+        val afterServerInfo = beforeServerInfo.copy(filesUserId = "account")
+
+        assertNotEquals(beforeServerInfo, afterServerInfo)
+        assertEquals(beforeServerInfo.selectedPath, afterServerInfo.selectedPath)
+    }
+
+    @Test
+    fun viewerLoadIdentityChangesWithAccountAndSourceGeneration() {
+        val original = file("Photos/Samples/SAMPLE0001.RAF", "image/x-fuji-raf")
+        val firstGeneration = original.copy(etag = "first")
+            .mediaViewerSourceGenerationIdentity()
+        val baseline = MediaViewerSourceLoadIdentity(
+            selectedPath = original.path,
+            filesUserId = "account",
+            serverUrl = "https://cloud.example.test",
+            loginName = "account",
+            candidates = listOf(firstGeneration),
+        )
+
+        assertNotEquals(
+            baseline,
+            baseline.copy(
+                candidates = listOf(
+                    firstGeneration.copy(etag = "second"),
+                ),
+            ),
+        )
+        assertNotEquals(
+            baseline,
+            baseline.copy(loginName = "another-account"),
+        )
     }
 
     private fun file(path: String, mime: String) = NextcloudFile(

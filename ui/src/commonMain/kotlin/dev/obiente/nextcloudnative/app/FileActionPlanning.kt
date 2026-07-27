@@ -59,7 +59,7 @@ fun planFileActions(
     val descriptor = describeDocument(file)
     val previewable = !file.isDirectory && (
         descriptor.method != DocumentPreviewMethod.Unsupported ||
-            (file.hasPreview && file.fileId != null) || support.platformViewer
+            file.canOpenInMediaViewer() || support.platformViewer
         )
     val hasVersion = !file.etag.isNullOrBlank()
     val mutationReason = when {
