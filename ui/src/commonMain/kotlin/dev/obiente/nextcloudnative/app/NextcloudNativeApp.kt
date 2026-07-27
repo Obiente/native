@@ -351,6 +351,9 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.TransferDesktopActive,
                     MarketingCaptureScenario.TransferDesktopCompleted,
                     -> MarketingMediaTransferScenario(scenario)
+                    MarketingCaptureScenario.DeckBoardDesktop,
+                    MarketingCaptureScenario.DeckBoardMobile,
+                    -> MarketingDeckBoardScenario()
                     MarketingCaptureScenario.DesktopHome,
                     MarketingCaptureScenario.MobileHome,
                     -> {

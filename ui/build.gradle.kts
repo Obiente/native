@@ -166,6 +166,8 @@ tasks.register<JavaExec>("captureMarketingScreenshots") {
         "transfer-mobile-failed-cached.png",
         "transfer-desktop-active.png",
         "transfer-desktop-completed-page.png",
+        "deck-board-desktop.png",
+        "deck-board-mobile.png",
         ).map { fileName ->
             rootProject.file("website/public/screenshots/$fileName").absolutePath
         },
