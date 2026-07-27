@@ -210,7 +210,7 @@ test("contributor Node.js guidance matches the website engine exactly", async ()
   );
 });
 
-test("CI enforces fragments on pushes and human pull requests without blocking Dependabot", async () => {
+test("CI enforces fragments without blocking GitHub-attributed Dependabot changes", async () => {
   const workflow = await readFile(
     path.join(defaultRepositoryRoot, ".github", "workflows", "ci.yml"),
     "utf8",
@@ -220,6 +220,10 @@ test("CI enforces fragments on pushes and human pull requests without blocking D
   assert.match(
     workflow,
     /github\.event\.pull_request\.user\.login != 'dependabot\[bot\]'/,
+  );
+  assert.match(
+    workflow,
+    /github\.event\.head_commit\.author\.username != 'dependabot\[bot\]'/,
   );
 });
 
