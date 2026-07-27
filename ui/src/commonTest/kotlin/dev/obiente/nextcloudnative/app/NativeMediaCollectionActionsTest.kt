@@ -138,6 +138,13 @@ class NativeMediaCollectionActionsTest {
         assertFalse(
             planAddFileToMediaCollection(
                 own,
+                sourceFile(davPathAuthoritative = false),
+                "ada",
+            ).enabled,
+        )
+        assertFalse(
+            planAddFileToMediaCollection(
+                own,
                 sourceFile(permissions = null),
                 "ada",
             ).enabled,
@@ -243,6 +250,7 @@ class NativeMediaCollectionActionsTest {
         name: String = "photo.jpg",
         etag: String? = "\"source-etag\"",
         permissions: String? = "RGDNV",
+        davPathAuthoritative: Boolean = true,
     ) = NextcloudFile(
         path = path,
         name = name,
@@ -253,6 +261,7 @@ class NativeMediaCollectionActionsTest {
         fileId = 41,
         hasPreview = true,
         etag = etag,
+        davPathAuthoritative = davPathAuthoritative,
         permissions = permissions,
     )
 

@@ -156,47 +156,13 @@ fun NextcloudMediaViewer(
         val externalActions = (
             services.externalFileHandoffSupport as? ExternalFileHandoffSupport.Available
             )?.capability?.supportedActions.orEmpty()
-        val authoritativeDavAccess = selected.hasAuthoritativeMediaDavAccess(userId)
-        buildList {
-            if (
-                authoritativeDavAccess &&
-                ExternalFileHandoffAction.Share in externalActions
-            ) {
-                add(MediaViewerAction.SendCopy)
-            }
-            if (
-                authoritativeDavAccess &&
-                sharingCapabilities.supportsAnyCreation
-            ) {
-                add(MediaViewerAction.ShareNextcloud)
-            }
-            if (
-                selected.originalAccessAllowed && taggingAvailable &&
-                selected.fileId != null && userId.isNotBlank()
-            ) {
-                add(MediaViewerAction.AddToAlbum)
-            }
-            if (
-                authoritativeDavAccess &&
-                !selected.etag.isNullOrBlank()
-            ) {
-                add(MediaViewerAction.Move)
-                add(MediaViewerAction.Copy)
-            }
-            if (
-                authoritativeDavAccess &&
-                ExternalFileHandoffAction.OpenWith in externalActions
-            ) {
-                add(MediaViewerAction.OpenWith)
-            }
-            add(MediaViewerAction.Info)
-            if (
-                authoritativeDavAccess &&
-                !selected.etag.isNullOrBlank()
-            ) {
-                add(MediaViewerAction.Delete)
-            }
-        }
+        availableMediaViewerActions(
+            file = selected,
+            userId = userId,
+            taggingAvailable = taggingAvailable,
+            sharingCapabilities = sharingCapabilities,
+            externalActions = externalActions,
+        )
     }
 
     fun selectPrevious() {

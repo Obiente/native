@@ -42,6 +42,42 @@ internal enum class MediaViewerAction(val label: String) {
     Delete("Delete"),
 }
 
+internal fun availableMediaViewerActions(
+    file: NextcloudFile,
+    userId: String,
+    taggingAvailable: Boolean,
+    sharingCapabilities: NextcloudFileSharingCapabilities,
+    externalActions: Set<ExternalFileHandoffAction>,
+): List<MediaViewerAction> {
+    val authoritativeDavAccess = file.hasAuthoritativeMediaDavAccess(userId)
+    return buildList {
+        if (authoritativeDavAccess && ExternalFileHandoffAction.Share in externalActions) {
+            add(MediaViewerAction.SendCopy)
+        }
+        if (authoritativeDavAccess && sharingCapabilities.supportsAnyCreation) {
+            add(MediaViewerAction.ShareNextcloud)
+        }
+        if (
+            authoritativeDavAccess &&
+            taggingAvailable &&
+            file.fileId != null
+        ) {
+            add(MediaViewerAction.AddToAlbum)
+        }
+        if (authoritativeDavAccess && !file.etag.isNullOrBlank()) {
+            add(MediaViewerAction.Move)
+            add(MediaViewerAction.Copy)
+        }
+        if (authoritativeDavAccess && ExternalFileHandoffAction.OpenWith in externalActions) {
+            add(MediaViewerAction.OpenWith)
+        }
+        add(MediaViewerAction.Info)
+        if (authoritativeDavAccess && !file.etag.isNullOrBlank()) {
+            add(MediaViewerAction.Delete)
+        }
+    }
+}
+
 @Composable
 internal fun MediaViewerActionDialog(
     action: MediaViewerAction,
