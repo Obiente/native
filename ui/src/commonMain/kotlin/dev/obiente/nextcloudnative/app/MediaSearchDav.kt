@@ -180,7 +180,7 @@ private fun isSafeRawMediaSearchPattern(pattern: String): Boolean =
         pattern.startsWith("%.") &&
         pattern.drop(2).all { character -> character in 'a'..'z' || character in '0'..'9' }
 
-private fun parseDavMediaSearchTimestamp(value: String): Long? {
+internal fun parseDavMediaSearchTimestamp(value: String): Long? {
     value.trim().toLongOrNull()?.takeIf { it >= 0L }?.let { return it }
     val parts = value.trim().split(' ').filter(String::isNotBlank)
     if (parts.size != 6 || !parts[0].endsWith(',') || parts[5] !in setOf("GMT", "UTC")) return null
@@ -200,7 +200,9 @@ private fun parseDavMediaSearchTimestamp(value: String): Long? {
         "Dec" -> 12
         else -> return null
     }
-    val year = parts[3].toIntOrNull()?.takeIf { it in 1970..9999 } ?: return null
+    val yearToken = parts[3]
+    if (yearToken.length != 4 || !yearToken.all { character -> character in '0'..'9' }) return null
+    val year = yearToken.toIntOrNull()?.takeIf { it in 1..9999 } ?: return null
     val time = parts[4].split(':')
     if (time.size != 3) return null
     val hour = time[0].toIntOrNull()?.takeIf { it in 0..23 } ?: return null

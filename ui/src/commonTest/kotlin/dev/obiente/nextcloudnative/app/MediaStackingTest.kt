@@ -7,6 +7,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -206,6 +207,46 @@ class MediaStackingTest {
                 maximumResults = 2,
             ),
         )
+    }
+
+    @Test
+    fun mediaSearchGloballyOrdersPreEpochDatesAcrossPartitions() {
+        val image = file("Photos/scan.jpg", "image/jpeg")
+            .copy(lastModified = "Sat, 01 Jan 1955 00:00:00 GMT")
+        val video = file("Photos/archive.mp4", "video/mp4")
+            .copy(lastModified = "Wed, 31 Dec 1969 23:59:59 GMT")
+        val raw = file("Photos/frame.RAF", "application/octet-stream")
+            .copy(lastModified = "Fri, 01 Jan 1965 00:00:00 GMT")
+
+        assertEquals(
+            listOf(video, raw, image),
+            mergeMediaSearchResultPages(
+                pages = listOf(
+                    listOf(image),
+                    listOf(video),
+                    listOf(raw),
+                ),
+            ),
+        )
+        assertTrue(assertNotNull(parseDavMediaSearchTimestamp(video.lastModified.orEmpty())) < 0L)
+        assertEquals(
+            -62_135_596_800L,
+            parseDavMediaSearchTimestamp("Mon, 01 Jan 0001 00:00:00 GMT"),
+        )
+    }
+
+    @Test
+    fun mediaSearchRejectsInvalidGregorianAndMalformedDavDates() {
+        listOf(
+            "Sat, 01 Jan 0000 00:00:00 GMT",
+            "Wed, 01 Jan 197 00:00:00 GMT",
+            "Wed, 01 Jan 01970 00:00:00 GMT",
+            "Fri, 31 Feb 1969 00:00:00 GMT",
+            "Fri, 01 Jan 1969 24:00:00 GMT",
+            "01 Jan 1969 00:00:00 GMT",
+        ).forEach { invalid ->
+            assertNull(parseDavMediaSearchTimestamp(invalid), invalid)
+        }
     }
 
     @Test
