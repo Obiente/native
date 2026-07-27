@@ -338,9 +338,27 @@ fun NextcloudNativeMarketingCapture(
                 ),
             ) {
                 when (scenario) {
+                    MarketingCaptureScenario.DesktopHome,
+                    MarketingCaptureScenario.MobileHome,
+                    -> {
+                        RootShell(
+                            presentation = scenario.presentation,
+                            selected = NextcloudDestination.Home,
+                            onSelected = {},
+                            identity = NextcloudDesktopIdentity(
+                                displayName = fixture.displayName,
+                                cloudName = fixture.cloudName,
+                                avatar = assets.avatar,
+                            ),
+                        ) {
+                            MarketingHomeDashboardScenario(scenario, fixture)
+                        }
+                    }
+                    MarketingCaptureScenario.AdaptiveApp,
+                    MarketingCaptureScenario.AdaptiveAppMobile,
+                    -> MarketingAdaptiveAppScenario(scenario)
                     MarketingCaptureScenario.ObsidianSync -> MarketingObsidianSyncScenario()
                     MarketingCaptureScenario.MediaBackup -> MarketingMediaBackupScenario()
-                    MarketingCaptureScenario.AdaptiveApp -> MarketingAdaptiveAppScenario()
                     MarketingCaptureScenario.RawPreviewLoadingMobile,
                     MarketingCaptureScenario.RawPreviewErrorMobile,
                     MarketingCaptureScenario.RawPreviewMemoriesReadyMobile,
@@ -359,34 +377,6 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.DeckBoardDesktop,
                     MarketingCaptureScenario.DeckBoardMobile,
                     -> MarketingDeckBoardScenario()
-                    MarketingCaptureScenario.DesktopHome,
-                    MarketingCaptureScenario.MobileHome,
-                    -> {
-                        val serverInfo = remember(fixture) { fixture.serverInfo() }
-                        RootShell(
-                            presentation = scenario.presentation,
-                            selected = NextcloudDestination.Home,
-                            onSelected = {},
-                            identity = NextcloudDesktopIdentity(
-                                displayName = fixture.displayName,
-                                cloudName = fixture.cloudName,
-                                avatar = assets.avatar,
-                            ),
-                        ) {
-                            MarketingHomeScreen(
-                                serverInfo = serverInfo,
-                                error = null,
-                                lastOpenedAppId = "files",
-                                onRetry = {},
-                                onSettings = {},
-                                onSearch = {},
-                                onApps = {},
-                                onOpenApp = {},
-                                marketingAvatar = assets.avatar,
-                                accountDisplayName = fixture.displayName,
-                            )
-                        }
-                    }
                 }
             }
         }
@@ -983,212 +973,6 @@ private fun RootShell(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun MarketingHomeScreen(
-    serverInfo: NextcloudServerInfo?,
-    error: String?,
-    lastOpenedAppId: String,
-    onRetry: () -> Unit,
-    onSettings: () -> Unit,
-    onSearch: () -> Unit,
-    onApps: () -> Unit,
-    onOpenApp: (NextcloudAppEntry) -> Unit,
-    marketingAvatar: ImageBitmap? = null,
-    accountDisplayName: String? = null,
-) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        ProductHeader(
-            title = "Nextcloud Native",
-            onSettings = onSettings,
-            onSearch = onSearch,
-            accountAvatar = marketingAvatar,
-            accountDisplayName = accountDisplayName,
-        )
-        when {
-            error != null -> ErrorMessage(error, onRetry)
-            serverInfo == null -> LoadingMessage("Discovering your cloud...")
-            else -> {
-                val apps = serverInfo.apps
-                val files = apps.firstOrNull { it.id == "files" }
-                val media = apps.firstOrNull { it.id == "photos" || it.id == "memories" }
-                val talk = apps.firstOrNull { it.id == "spreed" || it.id == "talk" }
-                val lastOpened = apps.firstOrNull { it.id == lastOpenedAppId && it.id in nativeAppIds } ?: files
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(
-                        start = NextcloudSpacing.XLarge,
-                        top = NextcloudSpacing.XLarge,
-                        end = NextcloudSpacing.XLarge,
-                        bottom = NextcloudSpacing.XXLarge,
-                    ),
-                ) {
-                    item {
-                        Text(
-                            "Welcome back, ${serverInfo.displayName.substringBefore(' ')}",
-                            style = MaterialTheme.typography.displaySmall,
-                        )
-                        Row(
-                            modifier = Modifier.padding(top = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        ) {
-                            Icon(
-                                NextcloudIcons.CheckCircle,
-                                contentDescription = null,
-                                tint = NextcloudTheme.colors.success,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Text(
-                                "Connected to ${serverInfo.themeName ?: "Nextcloud"}",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    lastOpened?.let { app ->
-                        item {
-                            SectionTitle("Continue", Modifier.padding(top = 34.dp, bottom = 12.dp))
-                            ContinueCard(app = app, onClick = { onOpenApp(app) })
-                        }
-                    }
-                    item { SectionTitle("Your cloud", Modifier.padding(top = 32.dp, bottom = 8.dp)) }
-                    files?.let { app ->
-                        item {
-                            CloudRow(
-                                title = "My stuff",
-                                subtitle = "Files, photos and notes",
-                                icon = NextcloudIcons.Folder,
-                                onClick = { onOpenApp(app) },
-                            )
-                        }
-                    }
-                    media?.let { app ->
-                        item {
-                            CloudRow(
-                                title = "Photos & Memories",
-                                subtitle = "Albums and RAW previews",
-                                icon = NextcloudIcons.Photo,
-                                onClick = { onOpenApp(app) },
-                            )
-                        }
-                    }
-                    talk?.let { app ->
-                        item {
-                            CloudRow(
-                                title = "Conversations",
-                                subtitle = "Talk and messages",
-                                icon = NextcloudIcons.app(app.id),
-                                onClick = { onOpenApp(app) },
-                            )
-                        }
-                    }
-                    item {
-                        SectionTitle("Discover", Modifier.padding(top = 32.dp, bottom = 8.dp))
-                        TimelineRow(
-                            title = "Your native apps are ready",
-                            subtitle = "${apps.count { it.id in nativeAppIds }} connected experiences",
-                            icon = NextcloudIcons.CheckCircle,
-                            accent = true,
-                            onClick = onApps,
-                        )
-                        TimelineRow(
-                            title = "Explore every installed app",
-                            subtitle = "Discovery stays separate from your home",
-                            icon = NextcloudIcons.Apps,
-                            accent = false,
-                            onClick = onApps,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ContinueCard(app: NextcloudAppEntry, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp),
-        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-        ) {
-            Surface(color = NextcloudTheme.colors.appIconContainer, shape = RoundedCornerShape(12.dp)) {
-                Icon(
-                    NextcloudIcons.app(app.id),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(10.dp).size(28.dp),
-                )
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(app.name, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    nativeSubtitle(app.id),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Icon(NextcloudIcons.ChevronRight, contentDescription = "Open ${app.name}")
-        }
-    }
-}
-
-@Composable
-private fun CloudRow(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-    ) {
-        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(36.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Icon(NextcloudIcons.ChevronRight, contentDescription = "Open $title", modifier = Modifier.size(20.dp))
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-}
-
-@Composable
-private fun TimelineRow(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    accent: Boolean,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-    ) {
-        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = if (accent) NextcloudTheme.colors.success else MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(11.dp).size(24.dp),
-            )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Icon(NextcloudIcons.ChevronRight, contentDescription = "Open $title", modifier = Modifier.size(20.dp))
     }
 }
 
@@ -2165,9 +1949,9 @@ private fun DynamicDiscoveredAppScreen(
     )
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val compactLandscape = maxWidth > maxHeight && maxHeight < 600.dp
+        val compactLandscape = shouldUseCompactDynamicAppChrome(maxWidth.value, maxHeight.value)
         Column(modifier = Modifier.fillMaxSize()) {
-            ScreenHeader(
+            DynamicAppChromeHeader(
                 title = descriptor.app.name,
                 subtitle = selectedRecord?.dynamicContextSubtitle(
                     selectedView,
@@ -2175,6 +1959,7 @@ private fun DynamicDiscoveredAppScreen(
                 ) ?: selectedView.dynamicRootSubtitle(descriptor.app.name),
                 onBack = ::navigateWithinDynamicApp,
                 compact = compactLandscape,
+                onContractInfo = { contractInfoExpanded = true },
                 trailingContent = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (actionViews.isNotEmpty()) {
@@ -2208,16 +1993,6 @@ private fun DynamicDiscoveredAppScreen(
                     }
                 },
             )
-            if (!compactLandscape) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    TextButton(onClick = { contractInfoExpanded = true }) {
-                        Text("Contract info")
-                    }
-                }
-            }
             if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback) {
             Surface(
                 modifier = Modifier.fillMaxWidth().padding(
@@ -2562,6 +2337,43 @@ private fun DynamicDiscoveredAppScreen(
                 }
             },
         )
+    }
+}
+
+internal fun shouldUseCompactDynamicAppChrome(widthDp: Float, heightDp: Float): Boolean =
+    widthDp > heightDp && heightDp < 600f
+
+/**
+ * Shared contextual chrome for discovered native app surfaces.
+ *
+ * The runtime and deterministic captures both render this component. Loading, route resolution,
+ * action execution, and contract diagnostics remain owned by their respective hosts.
+ */
+@Composable
+internal fun DynamicAppChromeHeader(
+    title: String,
+    subtitle: String?,
+    onBack: () -> Unit,
+    compact: Boolean,
+    onContractInfo: () -> Unit,
+    trailingContent: @Composable () -> Unit = {},
+) {
+    ScreenHeader(
+        title = title,
+        subtitle = subtitle,
+        onBack = onBack,
+        compact = compact,
+        trailingContent = trailingContent,
+    )
+    if (!compact) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            TextButton(onClick = onContractInfo) {
+                Text("Contract info")
+            }
+        }
     }
 }
 
