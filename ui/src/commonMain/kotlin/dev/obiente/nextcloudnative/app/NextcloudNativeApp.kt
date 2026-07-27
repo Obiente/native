@@ -4,6 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -52,6 +53,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -77,6 +79,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -7283,6 +7286,12 @@ private fun ProjectNewsArticleScreen(
 private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
     val scope = rememberCoroutineScope()
     val support = remember(services) { services.appUpdateSupport() }
+    var updateChannel by remember(services) {
+        mutableStateOf(services.loadAppUpdateChannel())
+    }
+    val channelPresentation = remember(support, updateChannel) {
+        appUpdateChannelPresentation(support, updateChannel)
+    }
     val updateState by remember(services) {
         services.observeAppUpdateInstallState()
     }.collectAsState(AppUpdateInstallState.Idle)
@@ -7290,9 +7299,6 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
     var installing by remember { mutableStateOf(false) }
     var checkResult by remember { mutableStateOf<AppUpdateCheckResult?>(null) }
     var installMessage by remember { mutableStateOf<String?>(null) }
-    var updateChannel by remember(services) {
-        mutableStateOf(services.loadAppUpdateChannel())
-    }
     fun beginInstall(release: AndroidDirectRelease) {
         installing = true
         installMessage = null
@@ -7332,16 +7338,21 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("App updates", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Version ${support.currentVersionName} · ${support.channel.name}",
+                        if (channelPresentation.selectorVisible) {
+                            "Version ${support.currentVersionName} - ${updateChannel.name} channel"
+                        } else {
+                            "Version ${support.currentVersionName} - ${support.channel.name}"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (support.canCheckDirectUpdates) {
                     TextButton(
-                        enabled = !checking,
+                        enabled = !checking && updateChannel.available,
                         onClick = {
                             checking = true
+                            checkResult = null
                             installMessage = null
                             scope.launch {
                                 checkResult = services.checkForAppUpdate(updateChannel)
@@ -7362,46 +7373,63 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (support.canCheckDirectUpdates) {
+            if (channelPresentation.selectorVisible) {
                 Text(
                     "Update channel",
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.titleSmall,
                 )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    AndroidUpdateChannel.entries.forEach { channel ->
-                        FilterChip(
-                            selected = updateChannel == channel,
-                            enabled = !checking && !installing,
-                            onClick = {
-                                updateChannel = channel
-                                services.saveAppUpdateChannel(channel)
-                                checkResult = null
-                                installMessage = null
-                            },
-                            label = {
-                                Text(
-                                    when (channel) {
-                                        AndroidUpdateChannel.Alpha -> "Alpha"
-                                        AndroidUpdateChannel.Nightly -> "Nightly"
-                                    },
-                                )
-                            },
+                channelPresentation.options.forEach { option ->
+                    val enabled = option.enabled && !checking && !installing
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = option.selected,
+                                enabled = enabled,
+                                role = Role.RadioButton,
+                                onClick = {
+                                    if (services.saveAppUpdateChannel(option.channel)) {
+                                        checkResult = retainedAppUpdateCheckResult(
+                                            previousChannel = updateChannel,
+                                            selectedChannel = option.channel,
+                                            previousResult = checkResult,
+                                        )
+                                        updateChannel = option.channel
+                                        installMessage = null
+                                    }
+                                },
+                            )
+                            .padding(vertical = NextcloudSpacing.Small),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = option.selected,
+                            enabled = enabled,
+                            onClick = null,
                         )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(option.label, style = MaterialTheme.typography.titleSmall)
+                                option.availabilityLabel?.let { label ->
+                                    Text(
+                                        label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            Text(
+                                option.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
-                Text(
-                    when (updateChannel) {
-                        AndroidUpdateChannel.Alpha ->
-                            "Alpha follows curated prereleases."
-                        AndroidUpdateChannel.Nightly ->
-                            "Nightly follows the latest successful main build."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
             when (val checked = checkResult) {
                 is AppUpdateCheckResult.Available -> {
