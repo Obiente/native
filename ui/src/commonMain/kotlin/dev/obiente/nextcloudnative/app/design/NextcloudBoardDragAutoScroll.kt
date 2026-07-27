@@ -163,9 +163,19 @@ internal fun resolveBoardDragHorizontalEdgeScrollVelocity(
         maxVelocity = maxVelocity,
     )
     val horizontalDisplacement = pointer - dragOrigin
+    val availableOutwardDistance = when {
+        edgeVelocity < 0f -> (dragOrigin - viewportStart).coerceAtLeast(0f)
+        edgeVelocity > 0f -> (viewportEnd - dragOrigin).coerceAtLeast(0f)
+        else -> return 0f
+    }
+    val requiredOutwardDisplacement = minOf(intentThreshold, availableOutwardDistance)
     return when {
-        edgeVelocity < 0f && horizontalDisplacement <= -intentThreshold -> edgeVelocity
-        edgeVelocity > 0f && horizontalDisplacement >= intentThreshold -> edgeVelocity
+        edgeVelocity < 0f &&
+            horizontalDisplacement < 0f &&
+            -horizontalDisplacement >= requiredOutwardDisplacement -> edgeVelocity
+        edgeVelocity > 0f &&
+            horizontalDisplacement > 0f &&
+            horizontalDisplacement >= requiredOutwardDisplacement -> edgeVelocity
         else -> 0f
     }
 }

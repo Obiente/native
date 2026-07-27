@@ -117,6 +117,15 @@ class NativeBoardDragPlacementTest {
     }
 
     @Test
+    fun boardScrollStateIdentityChangesWhenResourceChanges() {
+        val firstResource = NativeBoardScrollStateKey(resourceId = "board-one-cards")
+        val secondResource = NativeBoardScrollStateKey(resourceId = "board-two-cards")
+
+        assertEquals(NativeBoardScrollStateKey(resourceId = "board-one-cards"), firstResource)
+        assertNotEquals(firstResource, secondResource)
+    }
+
+    @Test
     fun preservesTheInitialLaneOrderWhenRecordsMoveBetweenLanes() {
         assertEquals(
             listOf("planned", "active", "done"),

@@ -9,6 +9,10 @@ internal data class NativeBoardLaneStateKey(
     val laneKey: String,
 )
 
+internal data class NativeBoardScrollStateKey(
+    val resourceId: String,
+)
+
 internal fun resolveNativeBoardLaneDropTarget(
     position: Offset,
     boardViewport: Rect,

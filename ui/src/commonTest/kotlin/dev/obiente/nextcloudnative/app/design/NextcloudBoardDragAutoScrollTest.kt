@@ -153,6 +153,56 @@ class NextcloudBoardDragAutoScrollTest {
     }
 
     @Test
+    fun `horizontal edge intent adapts to limited outward distance near both viewport edges`() {
+        assertEquals(
+            0f,
+            resolveBoardDragHorizontalEdgeScrollVelocity(
+                pointer = 4f,
+                dragOrigin = 4f,
+                viewportStart = 0f,
+                viewportEnd = 320f,
+                edgeThreshold = 56f,
+                intentThreshold = 12f,
+                maxVelocity = 720f,
+            ),
+        )
+        assertTrue(
+            resolveBoardDragHorizontalEdgeScrollVelocity(
+                pointer = 0f,
+                dragOrigin = 4f,
+                viewportStart = 0f,
+                viewportEnd = 320f,
+                edgeThreshold = 56f,
+                intentThreshold = 12f,
+                maxVelocity = 720f,
+            ) < 0f,
+        )
+        assertEquals(
+            0f,
+            resolveBoardDragHorizontalEdgeScrollVelocity(
+                pointer = 316f,
+                dragOrigin = 316f,
+                viewportStart = 0f,
+                viewportEnd = 320f,
+                edgeThreshold = 56f,
+                intentThreshold = 12f,
+                maxVelocity = 720f,
+            ),
+        )
+        assertTrue(
+            resolveBoardDragHorizontalEdgeScrollVelocity(
+                pointer = 320f,
+                dragOrigin = 316f,
+                viewportStart = 0f,
+                viewportEnd = 320f,
+                edgeThreshold = 56f,
+                intentThreshold = 12f,
+                maxVelocity = 720f,
+            ) > 0f,
+        )
+    }
+
+    @Test
     fun `vertical lane selection uses visible lane geometry`() {
         assertEquals(
             "visible",

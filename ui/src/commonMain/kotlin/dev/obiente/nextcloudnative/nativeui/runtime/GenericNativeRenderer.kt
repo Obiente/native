@@ -1834,7 +1834,9 @@ private fun GenericRecordBoard(
     val laneBounds = remember(resource.id) { mutableStateMapOf<String, Rect>() }
     val laneScrollBounds = remember(resource.id) { mutableMapOf<String, Rect>() }
     val laneScrollStates = remember(resource.id) { mutableMapOf<String, LazyListState>() }
-    val boardScrollState = rememberScrollState()
+    val boardScrollState = key(NativeBoardScrollStateKey(resource.id)) {
+        rememberScrollState()
+    }
     var boardBounds by remember(resource.id) { mutableStateOf<Rect?>(null) }
     var draggedRecord by remember(resource.id) { mutableStateOf<NativeRecord?>(null) }
     var draggedMovePlan by remember(resource.id) { mutableStateOf<NativeBoardMovePlan?>(null) }
