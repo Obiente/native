@@ -295,6 +295,35 @@ internal fun publishDesktopProjectContentCache(temporary: File, destination: Fil
     }
 }
 
+internal suspend fun executeDesktopDynamicApiGet(
+    accountId: String,
+    requestIdentity: String,
+    cachePolicy: NextcloudApiCachePolicy,
+    coalescer: DynamicApiRequestCoalescer<NextcloudApiResponse>,
+    loadCached: () -> NextcloudApiResponse?,
+    invalidateCached: () -> Unit,
+    executeNetwork: suspend () -> NextcloudApiResponse,
+    commit: (NextcloudApiResponse) -> Unit,
+): NextcloudApiResponse {
+    if (cachePolicy == NextcloudApiCachePolicy.PreferCache) {
+        loadCached()?.let { return it }
+    } else {
+        coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
+    }
+    return coalescer.execute(
+        accountId = accountId,
+        requestIdentity = requestIdentity,
+        load = {
+            if (cachePolicy == NextcloudApiCachePolicy.ForceNetwork) {
+                executeNetwork()
+            } else {
+                loadCached() ?: executeNetwork()
+            }
+        },
+        commit = commit,
+    )
+}
+
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
 ) : NextcloudPlatformServices {
@@ -950,16 +979,7 @@ class DesktopNextcloudServices(
         val safeRequest = request.requireSafe()
         val accountId = desktopFileCacheAccountId(session)
         val cacheIdentity = safeRequest.dynamicReadCacheIdentity()
-        if (safeRequest.method == NextcloudApiMethod.GET) {
-            dynamicApiReadCache.load(accountId, cacheIdentity, safeRequest.maximumResponseBytes)?.let { cached ->
-                return@withContext NextcloudApiResponse(
-                    cached.status,
-                    cached.body,
-                    cached.contentType,
-                    cached.etag,
-                )
-            }
-        } else {
+        if (safeRequest.method != NextcloudApiMethod.GET) {
             dynamicApiRequestCoalescer.invalidateAccount(accountId) {
                 runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
             }
@@ -992,16 +1012,21 @@ class DesktopNextcloudServices(
                 }
             }
         }
-        dynamicApiRequestCoalescer.execute(
+        executeDesktopDynamicApiGet(
             accountId = accountId,
             requestIdentity = cacheIdentity,
-            load = {
+            cachePolicy = safeRequest.cachePolicy,
+            coalescer = dynamicApiRequestCoalescer,
+            loadCached = {
                 dynamicApiReadCache.load(accountId, cacheIdentity, safeRequest.maximumResponseBytes)
                     ?.let { cached ->
                         NextcloudApiResponse(cached.status, cached.body, cached.contentType, cached.etag)
                     }
-                    ?: executeNetworkRequest()
             },
+            invalidateCached = {
+                runCatching { dynamicApiReadCache.invalidate(accountId, cacheIdentity) }
+            },
+            executeNetwork = ::executeNetworkRequest,
             commit = { result ->
                 if (
                     result.status in 200..299 &&

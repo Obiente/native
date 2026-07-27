@@ -19,6 +19,7 @@ import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
 import dev.obiente.nextcloudnative.app.MAX_NOTE_BYTES
 import dev.obiente.nextcloudnative.app.MAX_TALK_MESSAGE_PAGE_SIZE
+import dev.obiente.nextcloudnative.app.NextcloudApiCachePolicy
 import dev.obiente.nextcloudnative.app.NextcloudApiRequest
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
 import dev.obiente.nextcloudnative.app.LocalUploadFile
@@ -136,6 +137,35 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+
+internal suspend fun executeAndroidDynamicApiGet(
+    accountId: String,
+    requestIdentity: String,
+    cachePolicy: NextcloudApiCachePolicy,
+    coalescer: DynamicApiRequestCoalescer<NextcloudApiResponse>,
+    loadCached: () -> NextcloudApiResponse?,
+    invalidateCached: () -> Unit,
+    executeNetwork: suspend () -> NextcloudApiResponse,
+    commit: (NextcloudApiResponse) -> Unit,
+): NextcloudApiResponse {
+    if (cachePolicy == NextcloudApiCachePolicy.PreferCache) {
+        loadCached()?.let { return it }
+    } else {
+        coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
+    }
+    return coalescer.execute(
+        accountId = accountId,
+        requestIdentity = requestIdentity,
+        load = {
+            if (cachePolicy == NextcloudApiCachePolicy.ForceNetwork) {
+                executeNetwork()
+            } else {
+                loadCached() ?: executeNetwork()
+            }
+        },
+        commit = commit,
+    )
+}
 
 internal class AndroidNextcloudServices(
     context: Context,
@@ -942,16 +972,7 @@ internal class AndroidNextcloudServices(
         val safeRequest = request.requireSafe()
         val accountId = NextcloudDocumentIds.cacheAccountId(session)
         val cacheIdentity = safeRequest.dynamicReadCacheIdentity()
-        if (safeRequest.method == dev.obiente.nextcloudnative.app.NextcloudApiMethod.GET) {
-            dynamicApiReadCache.load(accountId, cacheIdentity, safeRequest.maximumResponseBytes)?.let { cached ->
-                return@withContext NextcloudApiResponse(
-                    cached.status,
-                    cached.body,
-                    cached.contentType,
-                    cached.etag,
-                )
-            }
-        } else {
+        if (safeRequest.method != dev.obiente.nextcloudnative.app.NextcloudApiMethod.GET) {
             dynamicApiRequestCoalescer.invalidateAccount(accountId) {
                 runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
             }
@@ -984,16 +1005,21 @@ internal class AndroidNextcloudServices(
                 }
             }
         }
-        dynamicApiRequestCoalescer.execute(
+        executeAndroidDynamicApiGet(
             accountId = accountId,
             requestIdentity = cacheIdentity,
-            load = {
+            cachePolicy = safeRequest.cachePolicy,
+            coalescer = dynamicApiRequestCoalescer,
+            loadCached = {
                 dynamicApiReadCache.load(accountId, cacheIdentity, safeRequest.maximumResponseBytes)
                     ?.let { cached ->
                         NextcloudApiResponse(cached.status, cached.body, cached.contentType, cached.etag)
                     }
-                    ?: executeNetworkRequest()
             },
+            invalidateCached = {
+                runCatching { dynamicApiReadCache.invalidate(accountId, cacheIdentity) }
+            },
+            executeNetwork = ::executeNetworkRequest,
             commit = { result ->
                 if (
                     result.status in 200..299 &&
