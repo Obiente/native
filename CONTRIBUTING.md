@@ -63,9 +63,9 @@ direction, or speak on your behalf.
 
 ## Development setup
 
-Install JDK 21, Rust stable, and Android SDK Platform 36 with Build Tools
-35.0.0. Set `ANDROID_HOME` or `ANDROID_SDK_ROOT` to your local SDK directory.
-Do not add local SDK paths to project files.
+Install JDK 21, Rust stable, Node.js `^20.19.0 || >=22.12.0`, and Android SDK
+Platform 36 with Build Tools 35.0.0. Set `ANDROID_HOME` or `ANDROID_SDK_ROOT`
+to your local SDK directory. Do not add local SDK paths to project files.
 
 Run the complete local verification suite:
 
@@ -83,10 +83,11 @@ bash tools/check-repository.sh
 Focused tests are useful while iterating, but the full suite must pass before a
 pull request is ready for review.
 
-Repository-authored text uses ordinary ASCII punctuation. Run
+Repository-authored text uses ordinary ASCII punctuation while allowing normal
+UTF-8 letters and translations. Run
 `bash tools/check-repository.sh` to catch smart quotes, typographic dashes,
 Unicode ellipses, Unicode minus signs, no-break spaces, and invisible
-formatting characters. Normal UTF-8 letters and translations remain supported.
+formatting characters.
 
 ### Isolated Android emulator tests
 
@@ -150,6 +151,10 @@ real account or copy those generated artifacts into the repository.
 ## Pull requests
 
 - Keep changes focused and explain the user-facing outcome.
+- Add one small file under `changes/unreleased/` for every pull request. Use a
+  user-facing category for product changes or an explicit `internal` fragment
+  with `user-facing: no` for maintenance that should not appear in release
+  notes. See [changes/README.md](changes/README.md) for the format.
 - Add regression tests for bug fixes and contract tests for API behavior.
 - Describe any server versions and apps tested without exposing account data.
 - Include screenshots for visible UI changes on the affected form factors.
