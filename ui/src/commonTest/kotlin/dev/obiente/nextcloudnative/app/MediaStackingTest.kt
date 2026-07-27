@@ -80,6 +80,79 @@ class MediaStackingTest {
     }
 
     @Test
+    fun mediaSearchDoesNotProbeRawWhenMimeResultsContainNoRawFiles() = runBlocking {
+        val requests = mediaSearchDavRequests("account")
+        val executed = mutableListOf<String>()
+        val image = file("Photos/holiday.jpg", "image/jpeg")
+        val video = file("Photos/clip.mp4", "video/mp4")
+
+        val pages = collectMediaSearchDavPages(
+            requests = requests,
+            execute = { body ->
+                executed += body
+                val marker = when (body) {
+                    requests[0].body -> "image"
+                    requests[1].body -> "video"
+                    else -> error("A RAW request was executed without a detected RAW file.")
+                }
+                MediaSearchDavTransportResponse(207, marker.encodeToByteArray())
+            },
+            parse = { body ->
+                when (body.decodeToString()) {
+                    "image" -> listOf(image)
+                    "video" -> listOf(video)
+                    else -> error("Unexpected response marker.")
+                }
+            },
+            shouldSearchRaw = { files -> files.any(NextcloudFile::isRawPhoto) },
+            rawCompatibilityPolicy = RawMediaSearchCompatibilityPolicy.KeepAvailableResults,
+        )
+
+        assertEquals(2, executed.size)
+        assertEquals(2, pages.size)
+        assertEquals(listOf(image, video), pages.flatten())
+        assertEquals(requests.take(2).map(MediaSearchDavRequest::body), executed)
+    }
+
+    @Test
+    fun optionalRawCompatibilityFailureKeepsMimeResults() = runBlocking {
+        val requests = mediaSearchDavRequests("account")
+        val executed = mutableListOf<String>()
+        val image = file("Photos/holiday.jpg", "image/jpeg")
+        val raf = file("Photos/DSCF0001.RAF", "image/x-fuji-raf")
+        val video = file("Photos/clip.mp4", "video/mp4")
+
+        val pages = collectMediaSearchDavPages(
+            requests = requests,
+            execute = { body ->
+                executed += body
+                val isRawRequest = rawPhotoFileNameSearchPatterns().any { pattern -> pattern in body }
+                if (isRawRequest) {
+                    MediaSearchDavTransportResponse(400, "unsupported".encodeToByteArray())
+                } else {
+                    val marker = if (body == requests[0].body) "image" else "video"
+                    MediaSearchDavTransportResponse(207, marker.encodeToByteArray())
+                }
+            },
+            parse = { body ->
+                when (body.decodeToString()) {
+                    "image" -> listOf(image, raf)
+                    "video" -> listOf(video)
+                    else -> error("A rejected RAW response must not be parsed.")
+                }
+            },
+            shouldSearchRaw = { files -> files.any(NextcloudFile::isRawPhoto) },
+            rawCompatibilityPolicy = RawMediaSearchCompatibilityPolicy.KeepAvailableResults,
+        )
+
+        assertEquals(listOf(image, raf, video), pages.flatten())
+        assertEquals(2, executed.count { body -> body in requests.take(2).map(MediaSearchDavRequest::body) })
+        assertEquals(4, executed.count { body ->
+            rawPhotoFileNameSearchPatterns().any { pattern -> pattern in body }
+        })
+    }
+
+    @Test
     fun rawCompatibilityRejectionReducesGlobalChunkSizeWithoutRefetchingMime() = runBlocking {
         val requests = mediaSearchDavRequests("account")
         val executed = mutableListOf<String>()
@@ -101,6 +174,7 @@ class MediaStackingTest {
                 }
             },
             parse = { body -> listOf(body.decodeToString()) },
+            shouldSearchRaw = { true },
         )
 
         val successfulBodies = pages.flatten()
@@ -142,6 +216,7 @@ class MediaStackingTest {
                         }
                     },
                     parse = { body -> listOf(body.decodeToString()) },
+                    shouldSearchRaw = { true },
                 )
             }
         }
@@ -189,6 +264,7 @@ class MediaStackingTest {
                         }
                     },
                     parse = { body -> listOf(body.decodeToString()) },
+                    shouldSearchRaw = { true },
                 )
             }
         }
@@ -222,6 +298,7 @@ class MediaStackingTest {
                             }
                         },
                         parse = { body -> listOf(body.decodeToString()) },
+                        shouldSearchRaw = { true },
                     )
                 }
             }
@@ -249,6 +326,7 @@ class MediaStackingTest {
                 }
             },
             parse = { body -> listOf(body.decodeToString()) },
+            shouldSearchRaw = { true },
         )
 
         assertEquals(8, rawSizes.first())
@@ -276,6 +354,7 @@ class MediaStackingTest {
                 }
             },
             parse = { body -> listOf(body.decodeToString()) },
+            shouldSearchRaw = { true },
         )
 
         assertEquals(listOf(8, 8, 8, 2, 1, 1), rawSizes)
@@ -295,6 +374,7 @@ class MediaStackingTest {
                             )
                         },
                         parse = { body -> listOf(body.decodeToString()) },
+                        shouldSearchRaw = { true },
                     )
                 }
             }
@@ -324,6 +404,7 @@ class MediaStackingTest {
                             }
                         },
                         parse = { body -> listOf(body.decodeToString()) },
+                        shouldSearchRaw = { true },
                     )
                 }
             }
@@ -345,6 +426,7 @@ class MediaStackingTest {
                     )
                 },
                 parse = { throw IllegalArgumentException("Malformed DAV response.") },
+                shouldSearchRaw = { true },
             )
         }
 
@@ -383,6 +465,7 @@ class MediaStackingTest {
                     }
                     listOf(body.decodeToString())
                 },
+                shouldSearchRaw = { true },
             )
         }
 

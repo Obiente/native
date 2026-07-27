@@ -120,6 +120,8 @@ import dev.obiente.nextcloudnative.app.dynamicReadCacheIdentity
 import dev.obiente.nextcloudnative.app.collectMediaSearchDavPages
 import dev.obiente.nextcloudnative.app.mediaSearchDavRequests
 import dev.obiente.nextcloudnative.app.MediaSearchDavTransportResponse
+import dev.obiente.nextcloudnative.app.RawMediaSearchCompatibilityPolicy
+import dev.obiente.nextcloudnative.app.isRawPhoto
 import dev.obiente.nextcloudnative.app.mergeMediaSearchResultPages
 import dev.obiente.nextcloudnative.app.normalizeSystemTagsDavResponse
 import dev.obiente.nextcloudnative.app.parseNextcloudFileSharingCapabilities
@@ -652,6 +654,8 @@ internal class AndroidNextcloudServices(
                 MediaSearchDavTransportResponse(response.status, response.body)
             },
             parse = { body -> parseDavFiles(body, userId) },
+            shouldSearchRaw = { files -> files.any(NextcloudFile::isRawPhoto) },
+            rawCompatibilityPolicy = RawMediaSearchCompatibilityPolicy.KeepAvailableResults,
         )
         mergeMediaSearchResultPages(pages)
     }

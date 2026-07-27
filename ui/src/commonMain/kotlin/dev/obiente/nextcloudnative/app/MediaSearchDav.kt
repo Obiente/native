@@ -11,6 +11,11 @@ enum class MediaSearchDavPartition {
     Raw,
 }
 
+enum class RawMediaSearchCompatibilityPolicy {
+    Fail,
+    KeepAvailableResults,
+}
+
 data class MediaSearchDavRequest(
     val partition: MediaSearchDavPartition,
     val body: String,
@@ -132,10 +137,21 @@ fun mediaSearchDavRequests(
         }
 }
 
+/**
+ * Collects the required MIME pages before considering optional filename-based RAW enrichment.
+ *
+ * The caller must explicitly decide whether the parsed MIME results justify RAW discovery. This
+ * keeps ordinary photo libraries from paying for unsupported RAW queries. When compatibility
+ * fallback is enabled, only RAW-specific 400/422 responses and the bounded request limit keep the
+ * already available MIME pages; authentication, transport, parsing, and server failures remain
+ * visible.
+ */
 suspend fun <T> collectMediaSearchDavPages(
     requests: List<MediaSearchDavRequest>,
     execute: suspend (body: String) -> MediaSearchDavTransportResponse,
     parse: (body: ByteArray) -> List<T>,
+    shouldSearchRaw: (List<T>) -> Boolean,
+    rawCompatibilityPolicy: RawMediaSearchCompatibilityPolicy = RawMediaSearchCompatibilityPolicy.Fail,
 ): List<List<T>> {
     require(requests.getOrNull(0)?.partition == MediaSearchDavPartition.ImageMime)
     require(requests.getOrNull(1)?.partition == MediaSearchDavPartition.VideoMime)
@@ -157,14 +173,19 @@ suspend fun <T> collectMediaSearchDavPages(
         }
         pages += parse(response.body)
     }
+    if (!shouldSearchRaw(pages.flatten())) return pages
 
     var rawOffset = 0
     var rawChunkSize = MAXIMUM_RAW_MEDIA_SEARCH_PATTERNS_PER_REQUEST
     var rawRequests = 0
     while (rawOffset < plannedRawPatterns.size) {
-        check(++rawRequests <= MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS) {
-            "WebDAV RAW media search exceeded the compatibility request limit."
+        if (rawRequests == MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS) {
+            if (rawCompatibilityPolicy == RawMediaSearchCompatibilityPolicy.KeepAvailableResults) {
+                return pages
+            }
+            error("WebDAV RAW media search exceeded the compatibility request limit.")
         }
+        rawRequests += 1
         val patterns = plannedRawPatterns.drop(rawOffset).take(rawChunkSize)
         val request = rawMediaSearchDavRequest(
             rawContext.userId,
@@ -181,6 +202,9 @@ suspend fun <T> collectMediaSearchDavPages(
                 rawChunkSize = (patterns.size + 1) / 2
             }
             isMediaSearchCompatibilityRejection(response.status) -> {
+                if (rawCompatibilityPolicy == RawMediaSearchCompatibilityPolicy.KeepAvailableResults) {
+                    return pages
+                }
                 error("WebDAV RAW media search is not supported by this server (HTTP ${response.status}).")
             }
             else -> error("WebDAV media search failed (HTTP ${response.status}).")
