@@ -68,8 +68,9 @@ data class PhotoTimelineLoadStart(
  *
  * Platforms load one page for the returned token, then pass the same token to [accept] or [fail].
  * A refresh or cancellation advances [generation], so a late result cannot replace newer state.
- * The retained limit is an in-memory safety boundary; a later persistent timeline cache can page
- * older ranges back in without changing the token or date-index contracts.
+ * The retained limit is an in-memory safety boundary. When the window is full, accepting an older
+ * page evicts the same number of newest entries while preserving the opaque cursor. Paging can
+ * therefore reach the complete server history with bounded memory, and refresh returns to newest.
  */
 data class PhotoTimelineState(
     val entries: List<PhotoTimelineEntry> = emptyList(),
@@ -79,7 +80,7 @@ data class PhotoTimelineState(
     val generation: Long = 0L,
     val pageSize: Int = DEFAULT_PHOTO_TIMELINE_PAGE_SIZE,
     val retentionLimit: Int = DEFAULT_PHOTO_TIMELINE_RETAINED_ITEMS,
-    val retentionLimitReached: Boolean = false,
+    val discardedNewerEntries: Int = 0,
 ) {
     init {
         require(pageSize in 1..MAX_PHOTO_TIMELINE_PAGE_SIZE) {
@@ -90,6 +91,9 @@ data class PhotoTimelineState(
         }
         require(entries.size <= retentionLimit) {
             "The photo timeline contains more entries than its retention limit."
+        }
+        require(discardedNewerEntries >= 0) {
+            "The discarded photo timeline count is invalid."
         }
         require(entries.map(PhotoTimelineEntry::identity).distinct().size == entries.size) {
             "The photo timeline contains duplicate media identities."
@@ -102,7 +106,10 @@ data class PhotoTimelineState(
     }
 
     val canLoadNextPage: Boolean
-        get() = loading == null && nextCursor != null && !retentionLimitReached
+        get() = loading == null && nextCursor != null
+
+    val hasDiscardedNewerEntries: Boolean
+        get() = discardedNewerEntries > 0
 
     fun beginRefresh(): PhotoTimelineLoadStart {
         val nextGeneration = generation + 1L
@@ -117,7 +124,7 @@ data class PhotoTimelineState(
                 loading = token,
                 error = null,
                 generation = nextGeneration,
-                retentionLimitReached = false,
+                discardedNewerEntries = 0,
             ),
             token = token,
         )
@@ -147,13 +154,22 @@ data class PhotoTimelineState(
             PhotoTimelineLoadKind.NextPage -> entries
         }
         val merged = mergePhotoTimelineEntries(source, page.entries)
+        val overflow = (merged.size - retentionLimit).coerceAtLeast(0)
+        val retained = if (overflow == 0) merged else merged.drop(overflow)
+        val retainedSameIdentities = retained.size == entries.size &&
+            retained.zip(entries).all { (next, current) ->
+                next.identity == current.identity
+            }
         val stalled = token.kind == PhotoTimelineLoadKind.NextPage &&
-            merged.size == entries.size &&
-            page.nextCursor == token.cursor
+            (
+                page.entries.none { incoming ->
+                    entries.none { existing -> existing.identity == incoming.identity }
+                } ||
+                    retainedSameIdentities
+                )
         val acceptedCursor = page.nextCursor.takeUnless { stalled }
-        val reachedLimit = merged.size >= retentionLimit && acceptedCursor != null
         return copy(
-            entries = merged.take(retentionLimit),
+            entries = retained,
             nextCursor = acceptedCursor,
             loading = null,
             error = if (stalled) {
@@ -161,7 +177,15 @@ data class PhotoTimelineState(
             } else {
                 null
             },
-            retentionLimitReached = reachedLimit,
+            discardedNewerEntries = if (token.kind == PhotoTimelineLoadKind.Refresh) {
+                0
+            } else if (stalled) {
+                discardedNewerEntries
+            } else {
+                (discardedNewerEntries.toLong() + overflow)
+                    .coerceAtMost(Int.MAX_VALUE.toLong())
+                    .toInt()
+            },
         )
     }
 
@@ -206,6 +230,41 @@ fun mergePhotoTimelineEntries(
             .thenBy(PhotoTimelineEntry::identity),
     )
 }
+
+/**
+ * Builds rendered media stacks without allowing folder grouping to change timeline chronology.
+ */
+data class PhotoTimelineStackEntry(
+    val stack: MediaStack,
+    val capturedAtEpochSeconds: Long,
+) {
+    val timelineEntry: PhotoTimelineEntry
+        get() = PhotoTimelineEntry(stack.cover, capturedAtEpochSeconds)
+}
+
+fun buildPhotoTimelineStackEntries(
+    entries: List<PhotoTimelineEntry>,
+): List<PhotoTimelineStackEntry> {
+    val timestamps = entries.associate { entry ->
+        entry.identity to entry.capturedAtEpochSeconds
+    }
+    return stackMediaFiles(entries.map(PhotoTimelineEntry::file))
+        .mapNotNull { stack ->
+            stack.members
+                .mapNotNull { member -> timestamps[member.toPhotoTimelineEntryIdentity()] }
+                .maxOrNull()
+                ?.let { capturedAt -> PhotoTimelineStackEntry(stack, capturedAt) }
+        }
+        .sortedWith(
+            compareByDescending<PhotoTimelineStackEntry>(
+                PhotoTimelineStackEntry::capturedAtEpochSeconds,
+            ).thenBy { entry -> entry.stack.id },
+        )
+}
+
+private fun NextcloudFile.toPhotoTimelineEntryIdentity(): String =
+    fileId?.takeIf { it > 0L }?.let { "file:$it" }
+        ?: "path:${path.trim('/')}"
 
 data class PhotoTimelineMonth(
     val year: Int,
@@ -288,6 +347,8 @@ class FixedOffsetPhotoTimelineMonthResolver(
 
 val UtcPhotoTimelineMonthResolver: PhotoTimelineMonthResolver =
     FixedOffsetPhotoTimelineMonthResolver(0)
+
+internal expect fun platformLocalPhotoTimelineMonthResolver(): PhotoTimelineMonthResolver
 
 fun buildPhotoTimelineDateIndex(
     entries: List<PhotoTimelineEntry>,

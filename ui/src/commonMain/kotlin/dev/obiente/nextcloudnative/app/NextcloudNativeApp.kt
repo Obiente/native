@@ -195,8 +195,8 @@ private sealed interface Screen {
     ) : Screen
     @Serializable
     data class MediaViewer(
-        val media: List<NextcloudFile>,
-        val selected: NextcloudFile,
+        val navigationKey: String,
+        val selectedIndex: Int,
         val returnTo: Screen,
     ) : Screen
     @Serializable
@@ -238,6 +238,33 @@ private val screenSaver = Saver<Screen, String>(
         runCatching { navigationStateJson.decodeFromString<Screen>(encoded) }.getOrDefault(Screen.Root)
     },
 )
+
+private class PhotoTimelineUiState {
+    val timeline = mutableStateOf(PhotoTimelineState(pageSize = MAX_PHOTO_TIMELINE_PAGE_SIZE))
+    val backupStatuses = mutableStateOf<Map<String, MediaBackupStatus>>(emptyMap())
+    val initialLoadCompleted = mutableStateOf(false)
+}
+
+private object PhotoTimelineUiStateRepository {
+    private const val MAXIMUM_ACCOUNT_STATES = 4
+    private val accountStates = linkedMapOf<String, PhotoTimelineUiState>()
+
+    fun stateFor(session: NextcloudSession): PhotoTimelineUiState {
+        val accountKey = previewCacheDigest(session)
+        accountStates.remove(accountKey)?.let { existing ->
+            accountStates[accountKey] = existing
+            return existing
+        }
+        val created = PhotoTimelineUiState()
+        accountStates[accountKey] = created
+        while (accountStates.size > MAXIMUM_ACCOUNT_STATES) {
+            accountStates.remove(accountStates.keys.first())
+        }
+        return created
+    }
+}
+
+private val mediaViewerNavigationRepository = MediaViewerNavigationRepository()
 
 private inline fun <reified T : Enum<T>> enumSaver() = Saver<T, String>(
     save = { value -> value.name },
@@ -495,6 +522,10 @@ private fun AuthenticatedApp(
     var mediaMode by rememberSaveable(stateSaver = enumSaver<MediaMode>()) { mutableStateOf(MediaMode.Timeline) }
     val mediaCollectionsState = remember(session) { MediaCollectionsUiState() }
     val mediaCollectionGridState = rememberLazyGridState()
+    val photoTimelineUiState = remember(session) {
+        PhotoTimelineUiStateRepository.stateFor(session)
+    }
+    val photoTimelineGridState = rememberLazyGridState()
 
     LaunchedEffect(session, discoveryAttempt) {
         serverInfo = null
@@ -531,6 +562,27 @@ private fun AuthenticatedApp(
     fun openSearch() {
         returnDestination = destination
         screen = Screen.Search
+    }
+
+    fun mediaViewerScreen(
+        media: List<NextcloudFile>,
+        selected: NextcloudFile,
+        returnTo: Screen,
+    ): Screen.MediaViewer {
+        val route = mediaViewerNavigationRepository.register(media, selected)
+        return Screen.MediaViewer(
+            navigationKey = route.key,
+            selectedIndex = route.selectedIndex,
+            returnTo = returnTo,
+        )
+    }
+
+    fun openMediaViewer(
+        media: List<NextcloudFile>,
+        selected: NextcloudFile,
+        returnTo: Screen,
+    ) {
+        screen = mediaViewerScreen(media, selected, returnTo)
     }
 
     fun navigateBack() {
@@ -575,7 +627,10 @@ private fun AuthenticatedApp(
             is Screen.PersonMedia -> screen = Screen.Media
             is Screen.Chat -> screen = Screen.Talk
             is Screen.NoteEditor -> screen = Screen.Notes
-            is Screen.MediaViewer -> screen = current.returnTo
+            is Screen.MediaViewer -> {
+                mediaViewerNavigationRepository.release(current.navigationKey)
+                screen = current.returnTo
+            }
             is Screen.FileInfo -> screen = Screen.Files(current.parentPath)
             is Screen.DocumentPreview -> screen = Screen.Files(current.parentPath)
             is Screen.TextEditor -> screen = Screen.Files(current.parentPath)
@@ -680,10 +735,10 @@ private fun AuthenticatedApp(
                     file.isEditableText() -> Screen.TextEditor(file, current.path)
                     document.method == DocumentPreviewMethod.ServerRaster ->
                         Screen.DocumentPreview(file, current.path)
-                    file.canOpenInMediaViewer() -> Screen.MediaViewer(
-                        media = siblings.filter(NextcloudFile::canOpenInMediaViewer),
-                        selected = file,
-                        returnTo = current,
+                    file.canOpenInMediaViewer() -> mediaViewerScreen(
+                        siblings.filter(NextcloudFile::canOpenInMediaViewer),
+                        file,
+                        current,
                     )
                     else -> Screen.FileInfo(file, current.path)
                 }
@@ -696,10 +751,10 @@ private fun AuthenticatedApp(
                         screen = if (document.method != DocumentPreviewMethod.Unsupported) {
                             Screen.DocumentPreview(file, current.path)
                         } else if (file.canOpenInMediaViewer()) {
-                            Screen.MediaViewer(
-                                media = siblings.filter(NextcloudFile::canOpenInMediaViewer),
-                                selected = file,
-                                returnTo = current,
+                            mediaViewerScreen(
+                                siblings.filter(NextcloudFile::canOpenInMediaViewer),
+                                file,
+                                current,
                             )
                         } else {
                             Screen.FileInfo(file, current.path)
@@ -794,10 +849,12 @@ private fun AuthenticatedApp(
             mode = mediaMode,
             collectionState = mediaCollectionsState,
             collectionGridState = mediaCollectionGridState,
+            timelineState = photoTimelineUiState,
+            timelineGridState = photoTimelineGridState,
             onModeChanged = { mediaMode = it },
             onBack = ::navigateBack,
             onOpenMedia = { file, media ->
-                screen = Screen.MediaViewer(media = media, selected = file, returnTo = Screen.Media)
+                openMediaViewer(media, file, Screen.Media)
             },
             onOpenPerson = { screen = Screen.PersonMedia(it) },
         )
@@ -810,7 +867,7 @@ private fun AuthenticatedApp(
             onBack = ::navigateBack,
             onPersonChanged = { refreshed -> screen = Screen.PersonMedia(refreshed) },
             onOpenMedia = { file, media ->
-                screen = Screen.MediaViewer(media = media, selected = file, returnTo = current)
+                openMediaViewer(media, file, current)
             },
         )
         Screen.Talk -> TalkScreen(
@@ -838,11 +895,7 @@ private fun AuthenticatedApp(
             room = current.room,
             onBack = ::navigateBack,
             onOpenAttachment = { file ->
-                screen = Screen.MediaViewer(
-                    media = listOf(file),
-                    selected = file,
-                    returnTo = current,
-                )
+                openMediaViewer(listOf(file), file, current)
             },
         )
         is Screen.AppInfo -> AppInfoScreen(
@@ -868,18 +921,43 @@ private fun AuthenticatedApp(
             },
             onBack = ::navigateBack,
         )
-        is Screen.MediaViewer -> NextcloudMediaViewer(
-            media = current.media,
-            selected = current.selected,
-            session = session,
-            userId = serverInfo?.userId.orEmpty(),
-            services = services,
-            taggingAvailable = serverInfo?.apps?.any { it.id == "memories" } == true,
-            sharingCapabilities = serverInfo?.fileSharing ?: NextcloudFileSharingCapabilities.Unavailable,
-            onSelect = { screen = current.copy(selected = it) },
-            onSourceRemoved = { screen = current.returnTo },
-            onClose = { screen = current.returnTo },
-        )
+        is Screen.MediaViewer -> {
+            val route = MediaViewerNavigationRoute(
+                key = current.navigationKey,
+                selectedIndex = current.selectedIndex,
+            )
+            val snapshot = mediaViewerNavigationRepository.resolve(route)
+            if (snapshot == null) {
+                LaunchedEffect(current.navigationKey) {
+                    screen = current.returnTo
+                }
+                LoadingMessage("Restoring the media timeline...")
+            } else {
+                NextcloudMediaViewer(
+                    media = snapshot.media,
+                    selected = snapshot.selected,
+                    session = session,
+                    userId = serverInfo?.userId.orEmpty(),
+                    services = services,
+                    taggingAvailable = serverInfo?.apps?.any { it.id == "memories" } == true,
+                    sharingCapabilities = serverInfo?.fileSharing
+                        ?: NextcloudFileSharingCapabilities.Unavailable,
+                    onSelect = { selected ->
+                        mediaViewerNavigationRepository.select(route, selected)?.let { next ->
+                            screen = current.copy(selectedIndex = next.selectedIndex)
+                        }
+                    },
+                    onSourceRemoved = {
+                        mediaViewerNavigationRepository.release(current.navigationKey)
+                        screen = current.returnTo
+                    },
+                    onClose = {
+                        mediaViewerNavigationRepository.release(current.navigationKey)
+                        screen = current.returnTo
+                    },
+                )
+            }
+        }
         is Screen.FileInfo -> FileInfoScreen(
             services = services,
             session = session,
@@ -4547,17 +4625,31 @@ private fun MediaScreen(
     mode: MediaMode,
     collectionState: MediaCollectionsUiState,
     collectionGridState: LazyGridState,
+    timelineState: PhotoTimelineUiState,
+    timelineGridState: LazyGridState,
     onModeChanged: (MediaMode) -> Unit,
     onBack: () -> Unit,
     onOpenMedia: (NextcloudFile, List<NextcloudFile>) -> Unit,
     onOpenPerson: (NextcloudPerson) -> Unit,
 ) {
-    var timeline by remember(userId) {
-        mutableStateOf(PhotoTimelineState(pageSize = MAX_PHOTO_TIMELINE_PAGE_SIZE))
+    var timeline by timelineState.timeline
+    var mediaBackupStatuses by timelineState.backupStatuses
+    var timelineInitialLoadCompleted by timelineState.initialLoadCompleted
+    val timelineMonthResolver = remember { platformLocalPhotoTimelineMonthResolver() }
+    val indexedTimelineStacks = remember(timeline.entries) {
+        buildPhotoTimelineStackEntries(timeline.entries)
     }
-    val timelineGridState = rememberLazyGridState()
-    var mediaBackupStatuses by remember(userId) {
-        mutableStateOf<Map<String, MediaBackupStatus>>(emptyMap())
+    val timelineStacks = remember(indexedTimelineStacks) {
+        indexedTimelineStacks.map(PhotoTimelineStackEntry::stack)
+    }
+    val timelineDateIndex = remember(indexedTimelineStacks, timelineMonthResolver) {
+        buildPhotoTimelineDateIndex(
+            indexedTimelineStacks.map(PhotoTimelineStackEntry::timelineEntry),
+            timelineMonthResolver,
+        )
+    }
+    val timelineViewerSequence = remember(timelineStacks) {
+        timelineStacks.flatMap(MediaStack::members)
     }
     val peopleByBackend = remember(userId) {
         mutableStateMapOf<NextcloudPeopleBackend, List<NextcloudPerson>>()
@@ -4595,11 +4687,15 @@ private fun MediaScreen(
             val page = services.listMediaTimelinePage(session, userId, token.cursor)
             val files = page.entries.map(PhotoTimelineEntry::file)
             timeline = timeline.accept(token, page)
+            if (refresh) timelineInitialLoadCompleted = true
             val statuses = runCatching {
                 services.loadMediaBackupStatuses(session, userId, files)
             }.getOrDefault(emptyMap())
             if (timeline.generation == token.generation) {
-                mediaBackupStatuses = if (refresh) statuses else mediaBackupStatuses + statuses
+                val retainedPaths = timeline.entries
+                    .mapTo(mutableSetOf()) { entry -> entry.file.path.trim('/') }
+                mediaBackupStatuses = (if (refresh) statuses else mediaBackupStatuses + statuses)
+                    .filterKeys(retainedPaths::contains)
             }
         } catch (cancellation: CancellationException) {
             timeline = timeline.cancel(token)
@@ -4609,11 +4705,13 @@ private fun MediaScreen(
                 token,
                 failure.message ?: "Could not load the photo timeline.",
             )
+            if (refresh) timelineInitialLoadCompleted = true
         }
     }
 
     LaunchedEffect(userId, mediaLoadAttempt) {
         if (userId == null) return@LaunchedEffect
+        if (timelineInitialLoadCompleted && mediaLoadAttempt == 0) return@LaunchedEffect
         loadTimelinePage(refresh = true)
     }
     LaunchedEffect(
@@ -5137,14 +5235,8 @@ private fun MediaScreen(
                     timeline.entries.isEmpty() -> LoadingMessage("Building your photo timeline...")
                 timeline.entries.isEmpty() -> EmptyMessage("No previewable media was found.")
                 else -> {
-                    val stacks = stackMediaFiles(timeline.entries.map(PhotoTimelineEntry::file))
-                    val indexedStacks = stacks.mapNotNull { stack ->
-                        stack.cover.toPhotoTimelineEntryOrNull()?.let { entry -> stack to entry }
-                    }
-                    val dateIndex = buildPhotoTimelineDateIndex(indexedStacks.map { it.second })
-                    val viewerSequence = stacks.flatMap(MediaStack::members)
                     val activeSectionIndex = activePhotoTimelineSectionIndex(
-                        dateIndex,
+                        timelineDateIndex,
                         timelineGridState.firstVisibleItemIndex,
                     )
                     Box(modifier = Modifier.fillMaxSize()) {
@@ -5160,7 +5252,7 @@ private fun MediaScreen(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            dateIndex.sections.forEach { section ->
+                            timelineDateIndex.sections.forEach { section ->
                                 item(
                                     key = "month:${section.month.year}:${section.month.month}",
                                     span = { GridItemSpan(maxLineSpan) },
@@ -5178,17 +5270,23 @@ private fun MediaScreen(
                                 items(
                                     count = section.itemCount,
                                     key = { offset ->
-                                        indexedStacks[section.firstItemIndex + offset].first.id
+                                        indexedTimelineStacks[
+                                            section.firstItemIndex + offset
+                                        ].stack.id
                                     },
                                 ) { offset ->
-                                    val stack = indexedStacks[section.firstItemIndex + offset].first
+                                    val stack = indexedTimelineStacks[
+                                        section.firstItemIndex + offset
+                                    ].stack
                                     MediaTile(
                                         services = services,
                                         session = session,
                                         file = stack.cover,
                                         badge = stack.badge,
                                         backupStatus = mediaBackupStatuses[stack.cover.path.trim('/')],
-                                        onClick = { onOpenMedia(stack.cover, viewerSequence) },
+                                        onClick = {
+                                            onOpenMedia(stack.cover, timelineViewerSequence)
+                                        },
                                         onLongClick = {
                                             mediaToAdd = stack.cover
                                             mutationError = null
@@ -5223,18 +5321,6 @@ private fun MediaScreen(
                                         scope.launch { loadTimelinePage(refresh = false) }
                                     }
                                 }
-                            } else if (timeline.retentionLimitReached) {
-                                item(
-                                    key = "timeline-retention",
-                                    span = { GridItemSpan(maxLineSpan) },
-                                ) {
-                                    Text(
-                                        "Older photos remain on Nextcloud. Refine the timeline before loading more.",
-                                        modifier = Modifier.padding(NextcloudSpacing.Large),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                    )
-                                }
                             } else if (timeline.canLoadNextPage) {
                                 item(
                                     key = "timeline-load-older",
@@ -5260,7 +5346,7 @@ private fun MediaScreen(
                             }
                         }
                         PhotoTimelineDateScrubber(
-                            dateIndex = dateIndex,
+                            dateIndex = timelineDateIndex,
                             activeSectionIndex = activeSectionIndex,
                             onJumpToGridItem = { index ->
                                 timelineGridState.scrollToItem(index)
@@ -5269,6 +5355,23 @@ private fun MediaScreen(
                                 .align(Alignment.CenterEnd)
                                 .padding(end = NextcloudSpacing.Small),
                         )
+                        if (timeline.hasDiscardedNewerEntries) {
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        loadTimelinePage(refresh = true)
+                                    }
+                                },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(
+                                        top = NextcloudSpacing.Small,
+                                        end = NextcloudSpacing.Small,
+                                    ),
+                            ) {
+                                Text("Back to newest")
+                            }
+                        }
                     }
                 }
             }
