@@ -26,8 +26,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,29 +48,35 @@ internal fun PhotoAdaptiveNavigationLayout(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
+    val latestContent = rememberUpdatedState(content)
+    val movableContent = remember {
+        movableContentOf {
+            latestContent.value()
+        }
+    }
     when (intent.placement) {
         PhotoNavigationPlacement.BottomBar -> Column(modifier.fillMaxSize()) {
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                content()
+                movableContent()
             }
             PhotoBottomNavigation(intent, onDestinationSelected)
         }
         PhotoNavigationPlacement.CompactMenu -> Column(modifier.fillMaxSize()) {
             PhotoCompactNavigationMenu(intent, onDestinationSelected)
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                content()
+                movableContent()
             }
         }
         PhotoNavigationPlacement.NavigationRail -> Row(modifier.fillMaxSize()) {
             PhotoNavigationRail(intent, onDestinationSelected)
             Box(Modifier.fillMaxHeight().weight(1f)) {
-                content()
+                movableContent()
             }
         }
         PhotoNavigationPlacement.Sidebar -> Row(modifier.fillMaxSize()) {
             PhotoNavigationSidebar(intent, onDestinationSelected)
             Box(Modifier.fillMaxHeight().weight(1f)) {
-                content()
+                movableContent()
             }
         }
     }

@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlinx.serialization.Serializable
+import kotlin.time.Instant
 
 /**
  * Controls which folder and media records are visible for the selected folder.
@@ -228,10 +229,26 @@ private fun PhotoFolderBrowseScope.showsFolders(): Boolean =
 private fun MediaStack.folderPath(): String = cover.path.parentFolderPath()
 
 private val photoFolderMediaOrder = compareByDescending<MediaStack> { stack ->
-    stack.members.mapNotNull(NextcloudFile::lastModified).maxOrNull().orEmpty()
+    stack.members
+        .mapNotNull { file -> file.lastModified?.let(::parsePhotoFolderTimestamp) }
+        .maxOrNull()
+        ?: Long.MIN_VALUE
 }.thenBy { it.cover.name.lowercase() }
     .thenBy { it.cover.path.lowercase() }
     .thenBy { it.cover.path }
+
+private fun parsePhotoFolderTimestamp(value: String): Long? =
+    parseDavMediaSearchTimestamp(value)
+        ?: runCatching { Instant.parse(value.trim()).epochSeconds }.getOrNull()
+
+internal fun sanitizePhotoFolderQuery(value: String): String = buildString(
+    minOf(value.length, MAX_PHOTO_FOLDER_QUERY_LENGTH),
+) {
+    value.asSequence()
+        .map { character -> if (character.isISOControl()) ' ' else character }
+        .take(MAX_PHOTO_FOLDER_QUERY_LENGTH)
+        .forEach(::append)
+}
 
 private fun String.parentFolderPath(): String = substringBeforeLast('/', missingDelimiterValue = "")
 

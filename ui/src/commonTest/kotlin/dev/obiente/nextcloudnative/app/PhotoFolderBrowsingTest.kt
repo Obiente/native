@@ -153,6 +153,45 @@ class PhotoFolderBrowsingTest {
         )
         assertEquals("Photos in folder", photoFolderScopeLabel(PhotoFolderBrowseScope.DirectMediaOnly))
         assertEquals("All nested photos", photoFolderScopeLabel(PhotoFolderBrowseScope.RecursiveMedia))
+        assertEquals("Grid view", photoFolderViewModeLabel(PhotoFolderViewMode.Grid))
+        assertEquals("List view", photoFolderViewModeLabel(PhotoFolderViewMode.List))
+    }
+
+    @Test
+    fun `pasted search controls are sanitized before browse state construction`() {
+        val sanitized = sanitizePhotoFolderQuery("Trips\t2026\nSummer\u0000")
+
+        assertEquals("Trips 2026 Summer ", sanitized)
+        assertTrue(sanitized.none(Char::isISOControl))
+        assertEquals(sanitized, PhotoFolderBrowseState(query = sanitized).query)
+        assertEquals(
+            MAX_PHOTO_FOLDER_QUERY_LENGTH,
+            sanitizePhotoFolderQuery("x".repeat(MAX_PHOTO_FOLDER_QUERY_LENGTH + 10)).length,
+        )
+    }
+
+    @Test
+    fun `folder media order parses RFC 1123 timestamps instead of sorting their text`() {
+        val older = file(
+            path = "Photos/older.jpg",
+            mimeType = "image/jpeg",
+            modified = "Mon, 27 Jul 2026 10:00:00 GMT",
+        )
+        val newer = file(
+            path = "Photos/newer.jpg",
+            mimeType = "image/jpeg",
+            modified = "Fri, 31 Jul 2026 10:00:00 GMT",
+        )
+
+        val result = buildPhotoFolderBrowseResult(
+            inventory = listOf(older, newer),
+            state = PhotoFolderBrowseState(
+                selectedFolderPath = "Photos",
+                scope = PhotoFolderBrowseScope.DirectMediaOnly,
+            ),
+        )
+
+        assertEquals(listOf("newer.jpg", "older.jpg"), result.media.map { it.cover.name })
     }
 
     @Test

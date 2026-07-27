@@ -30,6 +30,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -241,38 +244,33 @@ private fun PhotoFolderToolbar(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            IconButton(
-                onClick = { onViewModeChanged(PhotoFolderViewMode.Grid) },
-            ) {
-                Icon(
-                    NextcloudIcons.Apps,
-                    contentDescription = "Grid view",
-                    tint = if (state.preference.viewMode == PhotoFolderViewMode.Grid) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-            IconButton(
-                onClick = { onViewModeChanged(PhotoFolderViewMode.List) },
-            ) {
-                Icon(
-                    NextcloudIcons.ListView,
-                    contentDescription = "List view",
-                    tint = if (state.preference.viewMode == PhotoFolderViewMode.List) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
+            SingleChoiceSegmentedButtonRow {
+                PhotoFolderViewMode.entries.forEachIndexed { index, mode ->
+                    SegmentedButton(
+                        selected = state.preference.viewMode == mode,
+                        onClick = { onViewModeChanged(mode) },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = PhotoFolderViewMode.entries.size,
+                        ),
+                        label = {
+                            Icon(
+                                imageVector = when (mode) {
+                                    PhotoFolderViewMode.Grid -> NextcloudIcons.Apps
+                                    PhotoFolderViewMode.List -> NextcloudIcons.ListView
+                                },
+                                contentDescription = photoFolderViewModeLabel(mode),
+                            )
+                        },
+                    )
+                }
             }
         }
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val search: @Composable (Modifier) -> Unit = { modifier ->
                 OutlinedTextField(
                     value = state.query,
-                    onValueChange = { onQueryChanged(it.take(MAX_PHOTO_FOLDER_QUERY_LENGTH)) },
+                    onValueChange = { onQueryChanged(sanitizePhotoFolderQuery(it)) },
                     modifier = modifier,
                     label = { Text("Find folders") },
                     leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
@@ -412,12 +410,17 @@ private fun PhotoFolderMediaListItem(
     var image by remember(stack.cover.fileId, stack.cover.etag) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(stack.cover.fileId, stack.cover.etag) {
         if (stack.cover.fileId == null || !stack.cover.hasPreview) return@LaunchedEffect
-        image = runCatching {
-            decodePlatformImage(
-                services.loadPreviewCached(session, stack.cover),
-                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
-            )
-        }.getOrNull()
+        val encoded = runCatching {
+            services.loadPreviewCached(session, stack.cover)
+        }.getOrNull() ?: return@LaunchedEffect
+        image = withContext(Dispatchers.Default) {
+            runCatching {
+                decodePlatformImage(
+                    encoded,
+                    EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+                )
+            }.getOrNull()
+        }
     }
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -474,6 +477,11 @@ internal fun photoFolderScopeLabel(scope: PhotoFolderBrowseScope): String = when
     PhotoFolderBrowseScope.DirectMediaAndSubfolders -> "Folder and photos"
     PhotoFolderBrowseScope.DirectMediaOnly -> "Photos in folder"
     PhotoFolderBrowseScope.RecursiveMedia -> "All nested photos"
+}
+
+internal fun photoFolderViewModeLabel(viewMode: PhotoFolderViewMode): String = when (viewMode) {
+    PhotoFolderViewMode.Grid -> "Grid view"
+    PhotoFolderViewMode.List -> "List view"
 }
 
 private fun photoFolderSummary(folder: PhotoFolderSummary): String = buildList {
