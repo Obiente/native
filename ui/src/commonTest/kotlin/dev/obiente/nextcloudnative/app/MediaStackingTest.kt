@@ -478,7 +478,7 @@ class MediaStackingTest {
     }
 
     @Test
-    fun mediaSearchPagesAreGloballySortedDeduplicatedAndBounded() {
+    fun mediaSearchPagesAreGloballySortedDeduplicatedAndBoundedPerPartition() {
         val newest = file("Photos/newest.jpg", "image/jpeg")
             .copy(lastModified = "Sun, 27 Jul 2026 09:00:00 GMT")
         val middleOld = file("Photos/middle.RAF", "application/octet-stream")
@@ -493,13 +493,13 @@ class MediaStackingTest {
             .copy(isDirectory = true, lastModified = "Mon, 28 Jul 2026 09:00:00 GMT")
 
         assertEquals(
-            listOf(newest, middleNew),
+            listOf(newest, middleNew, oldest),
             mergeMediaSearchResultPages(
                 pages = listOf(
                     listOf(oldest, middleOld, directory),
                     listOf(newest, middleNew),
                 ),
-                maximumResults = 2,
+                maximumResultsPerPage = 2,
             ),
         )
     }

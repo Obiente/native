@@ -118,11 +118,15 @@ import dev.obiente.nextcloudnative.app.discoverRecognizeBridge
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
 import dev.obiente.nextcloudnative.app.dynamicReadCacheIdentity
 import dev.obiente.nextcloudnative.app.collectMediaSearchDavPages
+import dev.obiente.nextcloudnative.app.collectMediaTimelineDavPage
 import dev.obiente.nextcloudnative.app.mediaSearchDavRequests
 import dev.obiente.nextcloudnative.app.MediaSearchDavTransportResponse
+import dev.obiente.nextcloudnative.app.PhotoTimelineCursor
+import dev.obiente.nextcloudnative.app.PhotoTimelinePage
 import dev.obiente.nextcloudnative.app.RawMediaSearchCompatibilityPolicy
 import dev.obiente.nextcloudnative.app.isRawPhoto
 import dev.obiente.nextcloudnative.app.mergeMediaSearchResultPages
+import dev.obiente.nextcloudnative.app.toPhotoTimelineEntryOrNull
 import dev.obiente.nextcloudnative.app.normalizeSystemTagsDavResponse
 import dev.obiente.nextcloudnative.app.parseNextcloudFileSharingCapabilities
 import dev.obiente.nextcloudnative.app.parseTalkMessageJson
@@ -658,6 +662,34 @@ internal class AndroidNextcloudServices(
             rawCompatibilityPolicy = RawMediaSearchCompatibilityPolicy.KeepAvailableResults,
         )
         mergeMediaSearchResultPages(pages)
+    }
+
+    override suspend fun listMediaTimelinePage(
+        session: NextcloudSession,
+        userId: String,
+        cursor: PhotoTimelineCursor?,
+    ): PhotoTimelinePage = withContext(Dispatchers.IO) {
+        val page = collectMediaTimelineDavPage(
+            userId = userId,
+            cursor = cursor,
+            execute = { body ->
+                val response = request(
+                    method = "SEARCH",
+                    url = session.serverUrl + "/remote.php/dav/",
+                    session = session,
+                    body = body,
+                    contentType = "application/xml; charset=utf-8",
+                    headers = mapOf("Accept" to "application/xml"),
+                )
+                MediaSearchDavTransportResponse(response.status, response.body)
+            },
+            parse = { body -> parseDavFiles(body, userId) },
+            shouldSearchRaw = { files -> files.any(NextcloudFile::isRawPhoto) },
+        )
+        PhotoTimelinePage(
+            entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),
+            nextCursor = page.nextCursor,
+        )
     }
 
     override suspend fun loadMediaBackupStatuses(

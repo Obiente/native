@@ -670,6 +670,30 @@ class DesktopNextcloudServices(
             mergeMediaSearchResultPages(pages)
         }
 
+    override suspend fun listMediaTimelinePage(
+        session: NextcloudSession,
+        userId: String,
+        cursor: PhotoTimelineCursor?,
+    ): PhotoTimelinePage = withContext(Dispatchers.IO) {
+        val page = collectMediaTimelineDavPage(
+            userId = userId,
+            cursor = cursor,
+            execute = { body ->
+                val response = request(
+                    "SEARCH", session.serverUrl + "/remote.php/dav/", session, body,
+                    "application/xml; charset=utf-8", headers = mapOf("Accept" to "application/xml"),
+                )
+                MediaSearchDavTransportResponse(response.status, response.body)
+            },
+            parse = { body -> parseDavFiles(body, userId) },
+            shouldSearchRaw = { files -> files.any(NextcloudFile::isRawPhoto) },
+        )
+        PhotoTimelinePage(
+            entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),
+            nextCursor = page.nextCursor,
+        )
+    }
+
     override suspend fun listSystemTags(session: NextcloudSession): List<NextcloudSystemTag> =
         withContext(Dispatchers.IO) {
             val discovery = systemTagsDavDiscoveryRequest()
