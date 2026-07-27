@@ -2,11 +2,14 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import dev.obiente.nextcloudnative.app.design.resolveBoardDragVerticalLane
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
 class NativeBoardDragPlacementTest {
+    private val boardViewport = Rect(left = 0f, top = 0f, right = 360f, bottom = 400f)
     private val lanes = linkedMapOf(
         "planned" to Rect(left = 0f, top = 0f, right = 100f, bottom = 400f),
         "active" to Rect(left = 120f, top = 0f, right = 220f, bottom = 400f),
@@ -19,6 +22,7 @@ class NativeBoardDragPlacementTest {
             "active",
             resolveNativeBoardLaneDropTarget(
                 position = Offset(180f, 160f),
+                boardViewport = boardViewport,
                 laneBounds = lanes,
                 allowedLaneKeys = setOf("active", "done"),
             ),
@@ -30,6 +34,7 @@ class NativeBoardDragPlacementTest {
         assertNull(
             resolveNativeBoardLaneDropTarget(
                 position = Offset(40f, 160f),
+                boardViewport = boardViewport,
                 laneBounds = lanes,
                 allowedLaneKeys = setOf("active", "done"),
             ),
@@ -41,10 +46,83 @@ class NativeBoardDragPlacementTest {
         assertNull(
             resolveNativeBoardLaneDropTarget(
                 position = Offset(400f, 160f),
+                boardViewport = boardViewport,
                 laneBounds = lanes,
                 allowedLaneKeys = setOf("active", "done"),
             ),
         )
+    }
+
+    @Test
+    fun resolvesNearestAllowedLaneAcrossBoardGapAndPadding() {
+        assertEquals(
+            "active",
+            resolveNativeBoardLaneDropTarget(
+                position = Offset(116f, 160f),
+                boardViewport = boardViewport,
+                laneBounds = lanes,
+                allowedLaneKeys = setOf("active", "done"),
+            ),
+        )
+        assertEquals(
+            "done",
+            resolveNativeBoardLaneDropTarget(
+                position = Offset(352f, 160f),
+                boardViewport = boardViewport,
+                laneBounds = lanes,
+                allowedLaneKeys = setOf("active", "done"),
+            ),
+        )
+    }
+
+    @Test
+    fun reusableBoardAutoScrollSelectsOnlyTheVisibleLaneAtThePointer() {
+        val boardViewport = Rect(left = 0f, top = 0f, right = 220f, bottom = 400f)
+
+        assertEquals(
+            "active",
+            resolveBoardDragVerticalLane(
+                position = Offset(180f, 380f),
+                boardViewport = boardViewport,
+                laneViewports = lanes,
+                verticalActivationHalo = 16f,
+            ),
+        )
+        assertNull(
+            resolveBoardDragVerticalLane(
+                position = Offset(280f, 380f),
+                boardViewport = boardViewport,
+                laneViewports = lanes,
+                verticalActivationHalo = 16f,
+            ),
+        )
+    }
+
+    @Test
+    fun laneScrollStateIdentityChangesWhenResourceChangesWithTheSameLaneKey() {
+        val firstResourceLane = NativeBoardLaneStateKey(
+            resourceId = "board-one-cards",
+            laneKey = "doing",
+        )
+        val secondResourceLane = NativeBoardLaneStateKey(
+            resourceId = "board-two-cards",
+            laneKey = "doing",
+        )
+
+        assertEquals(
+            NativeBoardLaneStateKey(resourceId = "board-one-cards", laneKey = "doing"),
+            firstResourceLane,
+        )
+        assertNotEquals(firstResourceLane, secondResourceLane)
+    }
+
+    @Test
+    fun boardScrollStateIdentityChangesWhenResourceChanges() {
+        val firstResource = NativeBoardScrollStateKey(resourceId = "board-one-cards")
+        val secondResource = NativeBoardScrollStateKey(resourceId = "board-two-cards")
+
+        assertEquals(NativeBoardScrollStateKey(resourceId = "board-one-cards"), firstResource)
+        assertNotEquals(firstResource, secondResource)
     }
 
     @Test
