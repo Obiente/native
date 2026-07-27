@@ -156,15 +156,16 @@ fun NextcloudMediaViewer(
         val externalActions = (
             services.externalFileHandoffSupport as? ExternalFileHandoffSupport.Available
             )?.capability?.supportedActions.orEmpty()
+        val authoritativeDavAccess = selected.hasAuthoritativeMediaDavAccess(userId)
         buildList {
             if (
-                selected.originalAccessAllowed && userId.isNotBlank() &&
+                authoritativeDavAccess &&
                 ExternalFileHandoffAction.Share in externalActions
             ) {
                 add(MediaViewerAction.SendCopy)
             }
             if (
-                selected.originalAccessAllowed &&
+                authoritativeDavAccess &&
                 sharingCapabilities.supportsAnyCreation
             ) {
                 add(MediaViewerAction.ShareNextcloud)
@@ -176,21 +177,21 @@ fun NextcloudMediaViewer(
                 add(MediaViewerAction.AddToAlbum)
             }
             if (
-                selected.originalAccessAllowed && userId.isNotBlank() &&
+                authoritativeDavAccess &&
                 !selected.etag.isNullOrBlank()
             ) {
                 add(MediaViewerAction.Move)
                 add(MediaViewerAction.Copy)
             }
             if (
-                selected.originalAccessAllowed && userId.isNotBlank() &&
+                authoritativeDavAccess &&
                 ExternalFileHandoffAction.OpenWith in externalActions
             ) {
                 add(MediaViewerAction.OpenWith)
             }
             add(MediaViewerAction.Info)
             if (
-                selected.originalAccessAllowed && userId.isNotBlank() &&
+                authoritativeDavAccess &&
                 !selected.etag.isNullOrBlank()
             ) {
                 add(MediaViewerAction.Delete)
@@ -207,7 +208,7 @@ fun NextcloudMediaViewer(
     }
 
     fun handoffToExternalApp(action: ExternalFileHandoffAction) {
-        if (externalOpening || !selected.originalAccessAllowed) return
+        if (externalOpening || !selected.hasAuthoritativeMediaDavAccess(userId)) return
         externalOpening = true
         externalError = null
         scope.launch {
@@ -488,7 +489,7 @@ fun NextcloudMediaViewer(
             is MediaPreviewState.Error -> PreviewError(
                 detail = state.detail,
                 onRetry = { retryKey += 1 },
-                onOpenExternal = if (selected.originalAccessAllowed && userId.isNotBlank()) {
+                onOpenExternal = if (selected.hasAuthoritativeMediaDavAccess(userId)) {
                     ::openInMediaApp
                 } else {
                     null
@@ -507,7 +508,7 @@ fun NextcloudMediaViewer(
             ) {
                 Button(
                     onClick = ::openInMediaApp,
-                    enabled = !externalOpening && selected.originalAccessAllowed && userId.isNotBlank(),
+                    enabled = !externalOpening && selected.hasAuthoritativeMediaDavAccess(userId),
                     modifier = Modifier.align(Alignment.Center),
                 ) {
                     if (externalOpening) {
@@ -542,7 +543,7 @@ fun NextcloudMediaViewer(
                     )
                     TextButton(
                         onClick = ::openInMediaApp,
-                        enabled = !externalOpening && selected.originalAccessAllowed,
+                        enabled = !externalOpening && selected.hasAuthoritativeMediaDavAccess(userId),
                     ) {
                         Text(if (externalOpening) "Preparing..." else "Open in another app")
                     }
@@ -1187,6 +1188,9 @@ internal fun canEditMediaPreview(
         userId.isNotBlank() &&
         file.isPhotoMedia() &&
         file.originalAccessAllowed
+
+internal fun NextcloudFile.hasAuthoritativeMediaDavAccess(userId: String): Boolean =
+    originalAccessAllowed && davPathAuthoritative && userId.isNotBlank()
 
 private const val MAXIMUM_PREVIEW_IMAGE_DIMENSION = 1_600
 private const val MAXIMUM_DISPLAY_IMAGE_DIMENSION = 4_096

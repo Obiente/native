@@ -97,9 +97,15 @@ class TalkMessageRenderModelTest {
             includePath = false,
         )
 
-        assertTrue(withPath.asNextcloudFile().davPathAuthoritative)
-        assertFalse(withoutPath.asNextcloudFile().davPathAuthoritative)
-        assertFalse(withoutPath.asNextcloudFile().canUseEmbeddedRafPreview())
+        val authoritative = withPath.asNextcloudFile()
+        val placeholder = withoutPath.asNextcloudFile()
+
+        assertTrue(authoritative.davPathAuthoritative)
+        assertTrue(authoritative.hasAuthoritativeMediaDavAccess("alice"))
+        assertFalse(authoritative.hasAuthoritativeMediaDavAccess(""))
+        assertFalse(placeholder.davPathAuthoritative)
+        assertFalse(placeholder.hasAuthoritativeMediaDavAccess("alice"))
+        assertFalse(placeholder.canUseEmbeddedRafPreview())
     }
 
     @Test
