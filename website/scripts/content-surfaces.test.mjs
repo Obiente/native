@@ -125,6 +125,10 @@ test("marketing screenshots are rendered offscreen without an Android device", a
       "raw-preview-error-mobile",
       "raw-preview-memories-ready-mobile",
       "raw-preview-high-detail-desktop",
+      "transfer-mobile-pending",
+      "transfer-mobile-failed-cached",
+      "transfer-desktop-active",
+      "transfer-desktop-completed-page",
     ],
   );
   assert.deepEqual(
@@ -141,6 +145,10 @@ test("marketing screenshots are rendered offscreen without an Android device", a
     ["raw-preview-error-mobile", [1080, 1200]],
     ["raw-preview-memories-ready-mobile", [1080, 1600]],
     ["raw-preview-high-detail-desktop", [1440, 900]],
+    ["transfer-mobile-pending", [1080, 1800]],
+    ["transfer-mobile-failed-cached", [1080, 1800]],
+    ["transfer-desktop-active", [1280, 800]],
+    ["transfer-desktop-completed-page", [1280, 800]],
   ]);
   for (const capture of manifest.captures) {
     assert.deepEqual(

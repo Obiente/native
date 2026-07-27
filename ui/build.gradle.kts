@@ -162,6 +162,10 @@ tasks.register<JavaExec>("captureMarketingScreenshots") {
         "raw-preview-error-mobile.png",
         "raw-preview-memories-ready-mobile.png",
         "raw-preview-high-detail-desktop.png",
+        "transfer-mobile-pending.png",
+        "transfer-mobile-failed-cached.png",
+        "transfer-desktop-active.png",
+        "transfer-desktop-completed-page.png",
         ).map { fileName ->
             rootProject.file("website/public/screenshots/$fileName").absolutePath
         },

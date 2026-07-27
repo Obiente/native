@@ -110,6 +110,19 @@ test("internal work requires an explicit no-user-facing marker", () => {
   assert.equal(parsed.userFacing, false);
 });
 
+test("security fragments retain their release category", () => {
+  const parsed = parseFragment(
+    fragment({
+      category: "security",
+      platforms: "all",
+      summary: "Release verification now rejects an unexpected signing identity.",
+    }),
+    "changes/unreleased/security.md",
+  );
+  assert.equal(parsed.category, "security");
+  assert.match(renderFragments([parsed]), /^### Security$/m);
+});
+
 test("rendering is deterministic and omits internal implementation records", () => {
   const feature = parseFragment(fragment(), "changes/unreleased/z-feature.md");
   const fix = parseFragment(
@@ -194,6 +207,23 @@ test("contributor Node.js guidance matches the website engine exactly", async ()
   assert.equal(
     contributing.includes(`Node.js \`${packageMetadata.engines.node}\``),
     true,
+  );
+});
+
+test("CI enforces fragments without blocking GitHub-attributed Dependabot changes", async () => {
+  const workflow = await readFile(
+    path.join(defaultRepositoryRoot, ".github", "workflows", "ci.yml"),
+    "utf8",
+  );
+  assert.match(workflow, /github\.event_name != 'workflow_dispatch'/);
+  assert.match(workflow, /github\.event_name != 'pull_request'/);
+  assert.match(
+    workflow,
+    /github\.event\.pull_request\.user\.login != 'dependabot\[bot\]'/,
+  );
+  assert.match(
+    workflow,
+    /github\.event\.head_commit\.author\.username != 'dependabot\[bot\]'/,
   );
 });
 
@@ -557,6 +587,45 @@ test("archived fragments reconcile with changelog and release notes", async () =
       ].join("\n"),
     );
     await validateArchivedReleaseHistory(root);
+
+    const wrongCategoryChangelog = changelog.replace(
+      "### Features",
+      "### Fixes",
+    );
+    const wrongCategoryReleaseNote = [
+      `# Nextcloud Native ${version}`,
+      "",
+      "## Fixes",
+      "",
+      `- ${expected}`,
+      "",
+      "## Known limitations",
+      "",
+      "- Testing build.",
+      "",
+    ].join("\n");
+    await writeFile(path.join(root, "CHANGELOG.md"), wrongCategoryChangelog);
+    await writeFile(releaseNotePath, wrongCategoryReleaseNote);
+    await assert.rejects(
+      validateArchivedReleaseHistory(root),
+      /do not match its archived fragments/,
+    );
+    await writeFile(path.join(root, "CHANGELOG.md"), changelog);
+    await writeFile(
+      releaseNotePath,
+      [
+        `# Nextcloud Native ${version}`,
+        "",
+        "## Features",
+        "",
+        `- ${expected}`,
+        "",
+        "## Known limitations",
+        "",
+        "- Testing build.",
+        "",
+      ].join("\n"),
+    );
 
     await writeFile(path.join(root, "CHANGELOG.md"), "# Changelog\n\n## Unreleased\n");
     await assert.rejects(

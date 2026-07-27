@@ -23,10 +23,12 @@ user-facing: yes
 Standalone RAW photos can now open when the server has no generated preview.
 ```
 
-Allowed categories are `feature`, `fix`, `platform`, `docs`, and `internal`.
-Allowed platforms are `all`, `android`, `desktop`, `ios`, `linux`, `macos`,
-`website`, and `windows`. Use `none` when either the issue or pull request does
-not exist, but always provide at least one positive reference.
+Allowed categories are `feature`, `fix`, `security`, `platform`, `docs`, and
+`internal`. Use `security` for user-facing fixes to confidentiality, integrity,
+authentication, signing, or other security boundaries. Allowed platforms are
+`all`, `android`, `desktop`, `ios`, `linux`, `macos`, `website`, and `windows`.
+Use `none` when either the issue or pull request does not exist, but always
+provide at least one positive reference.
 
 Internal maintenance still needs a fragment so automation does not have to
 guess whether a missing entry was intentional:
