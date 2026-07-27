@@ -31,6 +31,13 @@ import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import dev.obiente.nextcloudnative.app.toCenterSummary
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -49,18 +56,32 @@ internal class AndroidFileSyncEngine(context: Context) {
     private val scheduler by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         AndroidFileSyncScheduler(appContext)
     }
+    private val reconciliationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scheduledMediaReconciliations = ConcurrentHashMap.newKeySet<String>()
+    private val scheduledPairScheduling = DeferredFileSyncPairSchedulingRegistry()
     private val stagingRoot = File(appContext.cacheDir, "file-sync-staging")
 
     suspend fun loadCenter(
         session: NextcloudSession,
         userId: String,
-    ): FileSyncCenterSnapshot = ENGINE_LOCK.withLock {
+    ): FileSyncCenterSnapshot {
         val accountId = NextcloudDocumentIds.accountKey(session)
-        val persisted = store.load()
-        persisted.coordinator.pairs
-            .filter { it.accountId == accountId }
-            .forEach { scheduler.schedule(it.id, accountId, userId, it.configuration) }
-        FileSyncCenterSnapshot(
+        val schedulingToken = ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.capture(accountId)
+        val persisted = loadFileSyncPresentationSnapshot(
+            lock = ENGINE_LOCK,
+            load = store::load,
+            scheduleWhenIdle = { snapshot ->
+                schedulingToken?.let { token ->
+                    schedulePersistedPairs(snapshot, token, userId)
+                }
+            },
+            scheduleAfterIdle = {
+                schedulingToken?.let { token ->
+                    schedulePersistedPairsAfterIdle(token, userId)
+                }
+            },
+        )
+        return FileSyncCenterSnapshot(
             support = FileSyncCenterSupport.Available,
             pairs = persisted.coordinator.pairs
                 .filter { it.accountId == accountId }
@@ -81,16 +102,96 @@ internal class AndroidFileSyncEngine(context: Context) {
     suspend fun reconcileMediaTransfersForDisplay(
         accountId: String,
         mediaStore: MediaBackupLedgerStore,
-    ) = reconcileWhenFileSyncIdle(ENGINE_LOCK) {
-        val activeSourceIds = runCatching {
-            val pairIds = store.load().coordinator.pairs
+    ) {
+        var runningSourceIds: Set<String>? = null
+        val reconciled = try {
+            runWhenFileSyncIdle(ENGINE_LOCK) {
+                runningSourceIds = runningMediaSourceIds(accountId)
+                mediaStore.reconcileInterruptedTransfers(
+                    accountId = accountId,
+                    activeSourceIds = requireNotNull(runningSourceIds),
+                )
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Throwable) {
+            false
+        }
+        if (!reconciled || !runningSourceIds.isNullOrEmpty()) {
+            scheduleMediaTransferReconciliation(accountId)
+        }
+    }
+
+    private suspend fun runningMediaSourceIds(accountId: String): Set<String> =
+        scheduler.runningPairIds(
+            store.load().coordinator.pairs
                 .asSequence()
                 .filter { pair -> pair.accountId == accountId }
                 .map(FileSyncPair::id)
-                .toList()
-            scheduler.runningPairIds(pairIds)
-        }.getOrNull() ?: return@reconcileWhenFileSyncIdle
-        mediaStore.reconcileInterruptedTransfers(accountId, activeSourceIds)
+                .toList(),
+        )
+
+    private fun scheduleMediaTransferReconciliation(accountId: String) {
+        if (!scheduledMediaReconciliations.add(accountId)) return
+        reconciliationScope.launch {
+            try {
+                runFileSyncActionWhenSourceWorkIdle(
+                    lock = ENGINE_LOCK,
+                    runningSourceIds = { runningMediaSourceIds(accountId) },
+                    awaitSourcesNotRunning = scheduler::awaitPairsNotRunning,
+                ) {
+                    val mediaStore = createAndroidMediaBackupLedgerStore(
+                        context = appContext,
+                        recoverInterruptedTransfers = false,
+                    )
+                    try {
+                        mediaStore.reconcileInterruptedTransfers(
+                            accountId = accountId,
+                            activeSourceIds = emptySet(),
+                        )
+                    } finally {
+                        mediaStore.close()
+                    }
+                    MediaBackupStatusUpdates.changes.tryEmit(accountId)
+                }
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (_: Throwable) {
+                // Reconciliation is a display repair. The next load or status update can retry it.
+            } finally {
+                scheduledMediaReconciliations.remove(accountId)
+            }
+        }
+    }
+
+    private fun schedulePersistedPairs(
+        snapshot: AndroidFileSyncPersistedState,
+        token: AndroidFileSyncSessionSchedulingToken,
+        userId: String,
+    ) {
+        ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.runIfCurrent(token) {
+            snapshot.coordinator.pairs
+                .filter { it.accountId == token.accountId }
+                .forEach { pair ->
+                    scheduler.schedule(pair.id, token.accountId, userId, pair.configuration)
+                }
+        }
+    }
+
+    private fun schedulePersistedPairsAfterIdle(
+        token: AndroidFileSyncSessionSchedulingToken,
+        userId: String,
+    ) {
+        val scheduling = DeferredFileSyncPairScheduling(token, userId)
+        if (!scheduledPairScheduling.acquire(scheduling)) return
+        deferFileSyncSnapshotActionUntilIdle(
+            lock = ENGINE_LOCK,
+            scope = reconciliationScope,
+            load = store::load,
+            onFinished = { scheduledPairScheduling.release(scheduling) },
+        ) { current ->
+            schedulePersistedPairs(current, token, userId)
+        }
     }
 
     suspend fun addPair(
@@ -607,11 +708,93 @@ internal fun isAndroidFileSyncExecutionAllowed(
 ): Boolean =
     !localRootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX) || operation is FileSyncOperation.Upload
 
-internal suspend fun reconcileWhenFileSyncIdle(
+internal suspend fun runWhenFileSyncIdle(
     lock: Mutex,
-    reconcile: suspend () -> Unit,
-) = lock.withLock {
-    reconcile()
+    action: suspend () -> Unit,
+): Boolean {
+    if (!lock.tryLock()) return false
+    return try {
+        action()
+        true
+    } finally {
+        lock.unlock()
+    }
+}
+
+internal fun deferFileSyncActionUntilIdle(
+    lock: Mutex,
+    scope: CoroutineScope,
+    action: suspend () -> Unit,
+): Job = scope.launch {
+    lock.withLock {
+        action()
+    }
+}
+
+/**
+ * Runs [action] only when both the engine and its WorkManager sources are idle.
+ *
+ * Source state is inspected while [lock] is held. A running worker is then awaited without the
+ * engine lock so it can finish, after which current persisted sources are loaded and checked again.
+ */
+internal suspend fun runFileSyncActionWhenSourceWorkIdle(
+    lock: Mutex,
+    runningSourceIds: suspend () -> Set<String>,
+    awaitSourcesNotRunning: suspend (Set<String>) -> Unit,
+    action: suspend () -> Unit,
+) {
+    while (true) {
+        var completed = false
+        val running = lock.withLock {
+            runningSourceIds().also { activeSourceIds ->
+                if (activeSourceIds.isEmpty()) {
+                    action()
+                    completed = true
+                }
+            }
+        }
+        if (completed) return
+        awaitSourcesNotRunning(running)
+    }
+}
+
+internal fun <T> deferFileSyncSnapshotActionUntilIdle(
+    lock: Mutex,
+    scope: CoroutineScope,
+    load: () -> T,
+    onFinished: () -> Unit = {},
+    action: (T) -> Unit,
+): Job {
+    val job = scope.launch {
+        lock.withLock {
+            action(load())
+        }
+    }
+    job.invokeOnCompletion { onFinished() }
+    return job
+}
+
+/**
+ * Reads a complete atomic snapshot without waiting for active execution.
+ *
+ * Scheduling is allowed only from a snapshot loaded after acquiring [lock], so a concurrent pair
+ * removal cannot be followed by stale work being re-enqueued. A busy read requests a deferred
+ * post-idle reload rather than scheduling from the displayed, potentially stale snapshot.
+ */
+internal fun <T> loadFileSyncPresentationSnapshot(
+    lock: Mutex,
+    load: () -> T,
+    scheduleWhenIdle: (T) -> Unit,
+    scheduleAfterIdle: () -> Unit = {},
+): T {
+    if (!lock.tryLock()) {
+        return load().also { scheduleAfterIdle() }
+    }
+    return try {
+        load().also(scheduleWhenIdle)
+    } finally {
+        lock.unlock()
+    }
 }
 
 internal suspend fun removeConfiguredFileSyncPair(

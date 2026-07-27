@@ -268,15 +268,21 @@ internal class AndroidNextcloudServices(
     }
 
     override fun loadSession(): NextcloudSession? {
-        val encrypted = preferences.getString(KEY_SESSION, null) ?: return null
-        return runCatching {
-            val json = JSONObject(sessionCipher.decrypt(encrypted))
-            NextcloudSession(
-                serverUrl = json.getString("serverUrl"),
-                loginName = json.getString("loginName"),
-                appPassword = json.getString("appPassword"),
-            )
-        }.getOrNull()
+        return ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.restorePersistedSession(
+            load = {
+                val encrypted = preferences.getString(KEY_SESSION, null)
+                    ?: return@restorePersistedSession null
+                runCatching {
+                    val json = JSONObject(sessionCipher.decrypt(encrypted))
+                    NextcloudSession(
+                        serverUrl = json.getString("serverUrl"),
+                        loginName = json.getString("loginName"),
+                        appPassword = json.getString("appPassword"),
+                    )
+                }.getOrNull()
+            },
+            accountIdOf = NextcloudDocumentIds::accountKey,
+        )
     }
 
     override fun saveSession(session: NextcloudSession) {
@@ -285,10 +291,18 @@ internal class AndroidNextcloudServices(
             .put("loginName", session.loginName)
             .put("appPassword", session.appPassword)
             .toString()
-        preferences.edit()
-            .putString(KEY_SESSION, sessionCipher.encrypt(json))
-            .remove(KEY_TEST_READ_ONLY)
-            .apply()
+        val encrypted = sessionCipher.encrypt(json)
+        val scheduler = AndroidFileSyncScheduler(appContext)
+        ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.replaceSession(
+            replacementAccountId = NextcloudDocumentIds.accountKey(session),
+            persist = {
+                preferences.edit()
+                    .putString(KEY_SESSION, encrypted)
+                    .remove(KEY_TEST_READ_ONLY)
+                    .apply()
+            },
+            cancelAll = scheduler::cancelAll,
+        )
         notifyDocumentsRootsChanged()
     }
 
@@ -314,11 +328,16 @@ internal class AndroidNextcloudServices(
     }
 
     override fun clearSession() {
-        preferences.edit()
-            .remove(KEY_SESSION)
-            .remove(KEY_TEST_READ_ONLY)
-            .apply()
-        AndroidFileSyncScheduler(appContext).cancelAll()
+        val scheduler = AndroidFileSyncScheduler(appContext)
+        ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.clearSession(
+            persist = {
+                preferences.edit()
+                    .remove(KEY_SESSION)
+                    .remove(KEY_TEST_READ_ONLY)
+                    .apply()
+            },
+            cancelAll = scheduler::cancelAll,
+        )
         notifyDocumentsRootsChanged()
     }
 
