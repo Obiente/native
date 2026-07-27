@@ -10,10 +10,18 @@ const execFileAsync = promisify(execFile);
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 export const defaultRepositoryRoot = path.resolve(moduleDirectory, "..");
 
-export const categoryOrder = ["feature", "fix", "platform", "docs", "internal"];
+export const categoryOrder = [
+  "feature",
+  "fix",
+  "security",
+  "platform",
+  "docs",
+  "internal",
+];
 export const categoryHeadings = {
   feature: "Features",
   fix: "Fixes",
+  security: "Security",
   platform: "Platform",
   docs: "Documentation",
   internal: "Internal",
@@ -374,22 +382,32 @@ function normalizeRenderedEntry(entry) {
 }
 
 function extractRenderedEntries(source) {
-  const headings = new Set(Object.values(categoryHeadings));
+  const headingCategories = new Map(
+    Object.entries(categoryHeadings).map(([category, heading]) => [
+      heading,
+      category,
+    ]),
+  );
   const entries = [];
-  let inCategory = false;
+  let currentCategory = null;
   let current = null;
   const flush = () => {
-    if (current !== null) entries.push(normalizeRenderedEntry(current));
+    if (current !== null && currentCategory !== null) {
+      entries.push({
+        category: currentCategory,
+        entry: normalizeRenderedEntry(current),
+      });
+    }
     current = null;
   };
   for (const line of source.split("\n")) {
     const heading = /^#{2,4}\s+(.+?)\s*$/u.exec(line);
     if (heading) {
       flush();
-      inCategory = headings.has(heading[1]);
+      currentCategory = headingCategories.get(heading[1]) ?? null;
       continue;
     }
-    if (!inCategory) continue;
+    if (currentCategory === null) continue;
     if (line.startsWith("- ")) {
       flush();
       current = line.slice(2);
@@ -413,10 +431,7 @@ async function readReleaseRecord(repositoryRoot, relativePath) {
 }
 
 function assertReleaseEntries(version, recordName, expected, actual) {
-  if (
-    expected.length !== actual.length ||
-    expected.some((entry, index) => entry !== actual[index])
-  ) {
+  if (JSON.stringify(expected) !== JSON.stringify(actual)) {
     fail(
       `${recordName}: user-facing entries for ${version} do not match its archived fragments. ` +
         `Expected ${JSON.stringify(expected)} but found ${JSON.stringify(actual)}.`,
@@ -447,7 +462,10 @@ export async function validateArchivedReleaseHistory(
   for (const [version, archived] of [...archivedByVersion.entries()].sort()) {
     const expected = sortFragments(archived)
       .filter((fragment) => fragment.userFacing)
-      .map((fragment) => normalizeRenderedEntry(renderFragmentEntry(fragment, false)));
+      .map((fragment) => ({
+        category: fragment.category,
+        entry: normalizeRenderedEntry(renderFragmentEntry(fragment, false)),
+      }));
     const changelogSection = changelogSections.get(version);
     if (changelogSection === undefined) {
       fail(`CHANGELOG.md: archived version ${version} needs a corresponding released section.`);
