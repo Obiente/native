@@ -5,6 +5,11 @@
     "cloudIdentity": "Nextcloud",
     "networkAccess": false,
     "captureSources": [
+        "build.gradle.kts",
+        "gradle.properties",
+        "gradle/libs.versions.toml",
+        "gradle/wrapper/gradle-wrapper.properties",
+        "settings.gradle.kts",
         "tools/marketing-capture-inputs.txt",
         "ui/build.gradle.kts",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivitySemantics.kt",
@@ -126,6 +131,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShell.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShellLayout.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShellShortcuts.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudBoardDragAutoScroll.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudBoardDragHandle.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudCardActions.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudComponents.kt",
@@ -168,7 +174,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "2c7267b916de63c592d2ce2bbae824ea36154f6ea55ac4c2db9084a032d74d86",
+    "captureSourceSha256": "f671f0e7fc16db7c4614b0a861d37bf0fc5e1aeac5f31631b0f07a8729ab566e",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {

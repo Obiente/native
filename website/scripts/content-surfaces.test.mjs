@@ -8,6 +8,8 @@ import { changelog } from "../src/generated/changelog.js";
 import { marketingCaptures } from "../src/generated/captures.js";
 import { news } from "../src/generated/news.js";
 import {
+  decodePngDimensions,
+  discoverCaptureSources,
   readCaptureManifest,
   stableCapturePath,
   verifyCaptureAssets,
@@ -173,6 +175,11 @@ test("marketing screenshots are rendered offscreen without an Android device", a
     manifest.captureSources.every(
       (relative) =>
         relative === "ui/build.gradle.kts" ||
+        relative === "build.gradle.kts" ||
+        relative === "settings.gradle.kts" ||
+        relative === "gradle.properties" ||
+        relative === "gradle/libs.versions.toml" ||
+        relative === "gradle/wrapper/gradle-wrapper.properties" ||
         relative === "tools/marketing-capture-inputs.txt" ||
         relative.startsWith("ui/src/commonMain/") ||
         relative.startsWith(
@@ -181,19 +188,20 @@ test("marketing screenshots are rendered offscreen without an Android device", a
         relative.startsWith("ui/src/desktopMain/resources/marketing/"),
     ),
   );
-  const sourceDigest = createHash("sha256");
-  for (const relative of manifest.captureSources) {
-    sourceDigest.update(relative);
-    sourceDigest.update(new Uint8Array([0]));
-    sourceDigest.update(await readFile(path.join(repositoryRoot, relative)));
-  }
-  assert.equal(manifest.captureSourceSha256, sourceDigest.digest("hex"));
   for (const capture of manifest.captures) {
     const bytes = await readFile(
       path.join(websiteRoot, "public", "screenshots", capture.file),
     );
+    assert.deepEqual(decodePngDimensions(bytes), {
+      width: capture.width,
+      height: capture.height,
+    });
     assert.equal(createHash("sha256").update(bytes).digest("hex"), capture.sha256);
   }
+  const validPng = await readFile(
+    path.join(websiteRoot, "public", "screenshots", manifest.captures[0].file),
+  );
+  assert.throws(() => decodePngDimensions(validPng.subarray(0, 40)));
   const avatar = await readFile(
     path.join(repositoryRoot, "ui", "src", "desktopMain", "resources", "marketing", "obiente-avatar.png"),
   );
@@ -203,6 +211,54 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   );
   const websiteAvatar = await readFile(path.join(websiteRoot, "public", "obiente-avatar.png"));
   assert.deepEqual(websiteAvatar, avatar);
+});
+
+test("deploy builds verify committed captures while review CI checks freshness", async () => {
+  const packageJson = JSON.parse(
+    await readFile(path.join(websiteRoot, "package.json"), "utf8"),
+  );
+  const captureWrapper = await readFile(
+    path.join(repositoryRoot, "tools", "capture-marketing-screenshots.sh"),
+    "utf8",
+  );
+  const ciWorkflow = await readFile(
+    path.join(repositoryRoot, ".github", "workflows", "ci.yml"),
+    "utf8",
+  );
+
+  assert.equal(
+    packageJson.scripts["verify:captures"],
+    "node scripts/verify-marketing-capture-assets.mjs",
+  );
+  assert.equal(
+    packageJson.scripts["verify:captures:fresh"],
+    "node scripts/verify-marketing-captures.mjs",
+  );
+  assert.match(packageJson.scripts.build, /\bnpm run verify:captures\b/u);
+  assert.doesNotMatch(packageJson.scripts.build, /\bverify:captures:fresh\b/u);
+  assert.match(captureWrapper, /\bnpm run --prefix website verify:captures:fresh\b/u);
+  assert.match(
+    ciWorkflow,
+    /\bnode website\/scripts\/verify-marketing-captures\.mjs\b/u,
+  );
+  assert.match(ciWorkflow, /steps\.changes\.outputs\.capture_inputs == 'true'/u);
+  assert.match(ciWorkflow, /- "ui\/src\/commonMain\/\*\*"/u);
+  assert.match(ciWorkflow, /- "gradle\/libs\.versions\.toml"/u);
+  assert.match(ciWorkflow, /- "website\/public\/screenshots\/\*\*"/u);
+});
+
+test("capture freshness tracks renderer build configuration", async () => {
+  const sources = new Set(await discoverCaptureSources());
+  for (const requiredSource of [
+    "build.gradle.kts",
+    "settings.gradle.kts",
+    "gradle.properties",
+    "gradle/libs.versions.toml",
+    "gradle/wrapper/gradle-wrapper.properties",
+    "ui/build.gradle.kts",
+  ]) {
+    assert.ok(sources.has(requiredSource), `${requiredSource} must affect capture freshness`);
+  }
 });
 
 test("visual QA and mobile navigation are driven by registered captures", async () => {

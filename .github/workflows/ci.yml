@@ -46,11 +46,29 @@ jobs:
               - "gradle/**"
               - "gradlew"
               - "gradlew.bat"
+            capture_inputs:
+              - "tools/marketing-capture-inputs.txt"
+              - "build.gradle.kts"
+              - "settings.gradle.kts"
+              - "gradle.properties"
+              - "gradle/libs.versions.toml"
+              - "gradle/wrapper/gradle-wrapper.properties"
+              - "ui/build.gradle.kts"
+              - "ui/src/commonMain/**"
+              - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/**"
+              - "ui/src/desktopMain/resources/marketing/**"
+              - "website/public/screenshots/**"
 
       - name: Check repository hygiene
         run: |
           bash tools/check-repository.sh
           bash tools/test-prerelease-update-contract.sh
+
+      - name: Verify marketing capture freshness
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outputs.capture_inputs == 'true'
+        run: node website/scripts/verify-marketing-captures.mjs
 
       - name: Require a changelog fragment
         if: >-
