@@ -84,6 +84,25 @@ class TalkMessageRenderModelTest {
     }
 
     @Test
+    fun genericFileHandoffOnlyMarksServerSuppliedDavPathsAsAuthoritative() {
+        val withPath = parseAttachmentModel(
+            messageType = "comment",
+            mimeType = "image/x-fuji-raf",
+            previewAvailable = false,
+        )
+        val withoutPath = parseAttachmentModel(
+            messageType = "comment",
+            mimeType = "image/x-fuji-raf",
+            previewAvailable = false,
+            includePath = false,
+        )
+
+        assertTrue(withPath.asNextcloudFile().davPathAuthoritative)
+        assertFalse(withoutPath.asNextcloudFile().davPathAuthoritative)
+        assertFalse(withoutPath.asNextcloudFile().canUseEmbeddedRafPreview())
+    }
+
+    @Test
     fun mapsDeletedAndCallMessagesToDedicatedRenderModels() {
         val deleted = requireNotNull(
             parseTalkMessageJson(
@@ -207,7 +226,9 @@ class TalkMessageRenderModelTest {
         previewAvailable: Boolean,
         hideDownload: Boolean = false,
         size: Long = 4_096,
+        includePath: Boolean = true,
     ): TalkAttachmentRenderModel {
+        val pathProperty = if (includePath) "\"path\": \"Talk/recording.bin\"," else ""
         val message = requireNotNull(
             parseTalkMessageJson(
                 """
@@ -220,7 +241,7 @@ class TalkMessageRenderModelTest {
                       "type": "file",
                       "id": "901",
                       "name": "recording.bin",
-                      "path": "Talk/recording.bin",
+                      $pathProperty
                       "mimetype": "$mimeType",
                       "size": "$size",
                       "preview-available": "${if (previewAvailable) "yes" else "no"}",

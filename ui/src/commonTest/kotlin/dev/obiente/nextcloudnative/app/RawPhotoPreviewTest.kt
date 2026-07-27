@@ -158,6 +158,36 @@ class RawPhotoPreviewTest {
     }
 
     @Test
+    fun rawNamedDirectoryNeverOpensInMediaViewer() {
+        val directory = rawFile(hasPreview = true).copy(isDirectory = true)
+
+        assertEquals(false, directory.canOpenInMediaViewer())
+        assertEquals(false, directory.canUseEmbeddedRafPreview())
+    }
+
+    @Test
+    fun syntheticTalkPathNeverUsesEmbeddedRafRangeReads() = runBlocking {
+        val raw = rawFile(hasPreview = false).copy(davPathAuthoritative = false)
+        var rangeReads = 0
+
+        assertFailsWith<IllegalStateException> {
+            loadMediaDisplayPayload(
+                file = raw,
+                loadCorePreview = { error("The file has no server preview.") },
+                loadMemoriesRawRender = { error("Memories cannot decode this file.") },
+                loadFileRange = { _, _, _ ->
+                    rangeReads += 1
+                    error("A synthetic Talk path must not be read through Files DAV.")
+                },
+                decode = { it },
+            )
+        }
+
+        assertEquals(false, raw.canUseEmbeddedRafPreview())
+        assertEquals(0, rangeReads)
+    }
+
+    @Test
     fun rawDiscoveryPatternsCoverEveryRecognizedRawExtension() {
         val patterns = rawPhotoFileNameSearchPatterns()
 

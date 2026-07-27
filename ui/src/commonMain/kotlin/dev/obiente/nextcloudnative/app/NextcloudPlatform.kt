@@ -86,6 +86,13 @@ data class NextcloudFile(
      * explicitly preserve a server-side no-download policy through generic file handoffs.
      */
     val originalAccessAllowed: Boolean = true,
+    /**
+     * Whether [path] identifies the original object in the authenticated Files DAV tree.
+     *
+     * Surfaces such as Talk can carry a stable file ID without supplying a DAV path. Their
+     * display-only placeholder must never be used for original byte reads.
+     */
+    val davPathAuthoritative: Boolean = true,
     /** Raw DAV permission flags. `W` is required before planning an edit session. */
     val permissions: String? = null,
     /** Strong content identities supplied by DAV clients, for example `SHA256:<hex>`. */

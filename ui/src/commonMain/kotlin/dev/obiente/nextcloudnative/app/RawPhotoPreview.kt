@@ -141,12 +141,8 @@ suspend fun <T> loadMediaDisplayPayload(
         )?.let { return it }
     }
 
-    if (
-        file.originalAccessAllowed &&
-        file.etag != null &&
-        file.name.substringAfterLast('.', missingDelimiterValue = "").equals("raf", ignoreCase = true)
-    ) {
-        val expectedEtag = file.etag
+    if (file.canUseEmbeddedRafPreview()) {
+        val expectedEtag = requireNotNull(file.etag)
         val header = loadFileRange(0L, FUJI_RAF_DIRECTORY_END, expectedEtag)
         val location = parseFujiRafEmbeddedPreview(header, file.size)
             ?: error("The RAF embedded preview directory is invalid.")

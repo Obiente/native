@@ -696,6 +696,7 @@ class DesktopNextcloudServices(
                 "If-Match" to safeEtag,
             ),
             maxResponseBytes = length.toLong(),
+            client = noRedirectHttpClient,
         )
         check(response.status == 206) {
             "The server did not honor the bounded file range request (HTTP ${response.status})."

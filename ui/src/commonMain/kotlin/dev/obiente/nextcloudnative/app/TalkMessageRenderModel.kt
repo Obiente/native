@@ -57,6 +57,7 @@ data class TalkAttachmentRenderModel(
         hasPreview = canLoadServerRaster,
         etag = attachment.etag,
         originalAccessAllowed = canDownloadOriginal,
+        davPathAuthoritative = attachment.path != null,
     )
 }
 
