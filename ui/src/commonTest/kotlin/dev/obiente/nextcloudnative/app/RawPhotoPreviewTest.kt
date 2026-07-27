@@ -345,6 +345,15 @@ class RawPhotoPreviewTest {
                 userId = "files-user",
             ),
         )
+        assertEquals(
+            true,
+            canEditMediaPreview(
+                file = raw,
+                payloadKind = MediaDisplayPayloadKind.EmbeddedCameraPreview,
+                userId = "files-user",
+                highDetailSourceReady = true,
+            ),
+        )
     }
 
     @Test

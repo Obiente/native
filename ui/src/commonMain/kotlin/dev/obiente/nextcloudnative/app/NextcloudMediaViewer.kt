@@ -569,7 +569,14 @@ fun NextcloudMediaViewer(
                 sourceChoices = sourcePlan.choices,
                 selectedSourcePath = selected.path,
                 onSelectSource = { choice -> onSelect(choice.file) },
-                onEdit = if (canEditMediaPreview(selected, readyPreview?.payloadKind, userId)) {
+                onEdit = if (
+                    canEditMediaPreview(
+                        file = selected,
+                        payloadKind = readyPreview?.payloadKind,
+                        userId = userId,
+                        highDetailSourceReady = fullQuality != null,
+                    )
+                ) {
                     { editing = true }
                 } else {
                     null
@@ -1131,9 +1138,13 @@ internal fun canEditMediaPreview(
     file: NextcloudFile,
     payloadKind: MediaDisplayPayloadKind?,
     userId: String,
+    highDetailSourceReady: Boolean = false,
 ): Boolean =
     payloadKind != null &&
-        payloadKind != MediaDisplayPayloadKind.EmbeddedCameraPreview &&
+        (
+            payloadKind != MediaDisplayPayloadKind.EmbeddedCameraPreview ||
+                highDetailSourceReady
+        ) &&
         userId.isNotBlank() &&
         file.isPhotoMedia() &&
         file.originalAccessAllowed
