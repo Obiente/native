@@ -383,8 +383,16 @@ fun calculatePhotoEditOutputDimensions(
 }
 
 enum class FullResolutionPhotoSource(val label: String) {
-    Memories("Memories optimized source"),
+    MemoriesPassthrough("Original via Memories"),
+    MemoriesTranscoded("Memories optimized source"),
     FilesDav("Original from Files"),
+}
+
+fun FullResolutionPhotoSource.orientationPolicy(): EncodedImageOrientationPolicy = when (this) {
+    FullResolutionPhotoSource.MemoriesTranscoded -> EncodedImageOrientationPolicy.PixelsAlreadyUpright
+    FullResolutionPhotoSource.MemoriesPassthrough,
+    FullResolutionPhotoSource.FilesDav,
+    -> EncodedImageOrientationPolicy.ApplyExif
 }
 
 data class FullResolutionPhotoPayload(
@@ -415,7 +423,7 @@ internal suspend fun loadFullResolutionPhotoPayload(
         try {
             return FullResolutionPhotoPayload(
                 bytes = loadMemories(fileId, original.etag),
-                source = FullResolutionPhotoSource.Memories,
+                source = original.memoriesFullResolutionPhotoSource(),
             )
         } catch (failure: Exception) {
             if (failure is CancellationException) throw failure
@@ -424,6 +432,7 @@ internal suspend fun loadFullResolutionPhotoPayload(
     }
     if (
         original.originalAccessAllowed &&
+        original.davPathAuthoritative &&
         original.path.isSafeDavRelativePath() &&
         loadFilesDav != null
     ) {
@@ -447,13 +456,34 @@ internal suspend fun loadFullResolutionPhotoPayload(
     )
 }
 
-fun memoriesPhotoDecodableApiRequest(fileId: Long, etag: String? = null): NextcloudApiRequest {
+internal fun NextcloudFile.memoriesFullResolutionPhotoSource(): FullResolutionPhotoSource {
+    val normalizedMimeType = mimeType?.substringBefore(';')?.trim()?.lowercase().orEmpty()
+    val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase()
+    return if (mediaAssetFormat() == MediaAssetFormat.Raw) {
+        FullResolutionPhotoSource.MemoriesTranscoded
+    } else if (
+        normalizedMimeType in MEMORIES_DECODABLE_PASSTHROUGH_MIME_TYPES ||
+        normalizedMimeType in MEMORIES_UNINFORMATIVE_MIME_TYPES &&
+        extension in MEMORIES_DECODABLE_PASSTHROUGH_EXTENSIONS
+    ) {
+        FullResolutionPhotoSource.MemoriesPassthrough
+    } else {
+        FullResolutionPhotoSource.MemoriesTranscoded
+    }
+}
+
+fun memoriesPhotoDecodableApiRequest(
+    fileId: Long,
+    etag: String? = null,
+    maximumResponseBytes: Long = MAX_PHOTO_EDIT_SOURCE_BYTES,
+): NextcloudApiRequest {
     require(fileId > 0)
+    require(maximumResponseBytes in 1..MAX_PHOTO_EDIT_SOURCE_BYTES)
     return NextcloudApiRequest(
         method = NextcloudApiMethod.GET,
         relativePath = "/index.php/apps/memories/api/image/decodable/$fileId",
         queryParameters = etag?.takeIf(String::isNotBlank)?.let { mapOf("etag" to it) }.orEmpty(),
-        maximumResponseBytes = MAX_PHOTO_EDIT_SOURCE_BYTES,
+        maximumResponseBytes = maximumResponseBytes,
     ).requireSafe()
 }
 
@@ -507,7 +537,11 @@ internal suspend fun resolvePhotoEditDavSource(
     original: NextcloudFile,
     loadIdentity: suspend (Long) -> MemoriesPhotoFileIdentity,
 ): NextcloudFile? {
-    if (!original.path.isSyntheticMemoriesMediaPath()) return original
+    if (!original.path.isSyntheticMemoriesMediaPath()) {
+        return original.takeIf {
+            it.davPathAuthoritative && it.path.isSafeDavRelativePath()
+        }
+    }
     val fileId = original.fileId ?: return null
     val identity = loadIdentity(fileId)
     require(identity.fileId == fileId)
@@ -516,6 +550,7 @@ internal suspend fun resolvePhotoEditDavSource(
         name = identity.name,
         mimeType = identity.mimeType ?: original.mimeType,
         etag = identity.etag ?: original.etag,
+        davPathAuthoritative = true,
     )
 }
 
@@ -786,3 +821,24 @@ private const val MAX_PHOTO_IDENTITY_RESPONSE_BYTES = 512L * 1024L
 private const val MAX_PHOTO_IDENTITY_ETAG_LENGTH = 1_024
 private const val MAX_PHOTO_IDENTITY_MIME_LENGTH = 256
 private const val MAX_PHOTO_EDIT_SIDECAR_CANDIDATES = 16
+private val MEMORIES_DECODABLE_PASSTHROUGH_MIME_TYPES = setOf(
+    "image/gif",
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+)
+
+private val MEMORIES_UNINFORMATIVE_MIME_TYPES = setOf(
+    "",
+    "application/octet-stream",
+    "binary/octet-stream",
+)
+
+private val MEMORIES_DECODABLE_PASSTHROUGH_EXTENSIONS = setOf(
+    "gif",
+    "jpeg",
+    "jpg",
+    "png",
+    "webp",
+)

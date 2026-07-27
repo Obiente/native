@@ -23,6 +23,7 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.prefs.Preferences
 import javax.xml.parsers.DocumentBuilderFactory
@@ -31,6 +32,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -293,6 +295,35 @@ internal fun publishDesktopProjectContentCache(temporary: File, destination: Fil
     }
 }
 
+internal suspend fun executeDesktopDynamicApiGet(
+    accountId: String,
+    requestIdentity: String,
+    cachePolicy: NextcloudApiCachePolicy,
+    coalescer: DynamicApiRequestCoalescer<NextcloudApiResponse>,
+    loadCached: () -> NextcloudApiResponse?,
+    invalidateCached: () -> Unit,
+    executeNetwork: suspend () -> NextcloudApiResponse,
+    commit: (NextcloudApiResponse) -> Unit,
+): NextcloudApiResponse {
+    if (cachePolicy == NextcloudApiCachePolicy.PreferCache) {
+        loadCached()?.let { return it }
+    } else {
+        coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
+    }
+    return coalescer.execute(
+        accountId = accountId,
+        requestIdentity = requestIdentity,
+        load = {
+            if (cachePolicy == NextcloudApiCachePolicy.ForceNetwork) {
+                executeNetwork()
+            } else {
+                loadCached() ?: executeNetwork()
+            }
+        },
+        commit = commit,
+    )
+}
+
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
 ) : NextcloudPlatformServices {
@@ -313,6 +344,8 @@ class DesktopNextcloudServices(
     )
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
     private val externalFileHandoff = DesktopExternalFileHandoff()
+    private val localUploadPicker = DesktopLocalUploadPicker()
+    private val deckCardDrafts = DesktopDeckCardDraftStore()
     private val projectNewsCache = File(
         desktopContractCacheDirectory("responses").parentFile,
         "project-content/news-feed-v1.json",
@@ -432,6 +465,27 @@ class DesktopNextcloudServices(
         preferences.remove(KEY_LOGIN)
     }
 
+    override suspend fun loadDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ): PersistedDeckCardDraft? = withContext(Dispatchers.IO) {
+        deckCardDrafts.load(session, key)
+    }
+
+    override suspend fun saveDeckCardDraft(
+        session: NextcloudSession,
+        draft: PersistedDeckCardDraft,
+    ) = withContext(Dispatchers.IO) {
+        deckCardDrafts.save(session, draft)
+    }
+
+    override suspend fun clearDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ) = withContext(Dispatchers.IO) {
+        deckCardDrafts.clear(session, key)
+    }
+
     override fun openExternalUrl(url: String) {
         Desktop.getDesktop().browse(URI(url))
     }
@@ -445,6 +499,51 @@ class DesktopNextcloudServices(
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
         return externalFileHandoff.launch(file, action, capability) { maximumBytes ->
             downloadFile(session, userId, file.path, maximumBytes)
+        }
+    }
+
+    override suspend fun handoffDeckAttachmentToExternalApp(
+        session: NextcloudSession,
+        target: DeckAttachmentOpenTarget,
+        attachment: DeckAttachment,
+        action: ExternalFileHandoffAction,
+    ): ExternalFileHandoffResult {
+        require(target.method == NextcloudApiMethod.GET) {
+            "Deck attachments can only be opened with a read request."
+        }
+        val requestSpec = NextcloudApiRequest(
+            method = target.method,
+            relativePath = target.relativePath,
+            ocsApiRequest = true,
+        ).requireSafe()
+        val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
+        return externalFileHandoff.launchDetached(attachment, action, capability) { output, maximumBytes ->
+            withContext(Dispatchers.IO) {
+                val authorization = Base64.getEncoder().encodeToString(
+                    "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
+                )
+                val request = Request.Builder()
+                    .url(buildNextcloudApiUrl(session.serverUrl, requestSpec))
+                    .get()
+                    .header("Accept", "*/*")
+                    .header("OCS-APIRequest", "true")
+                    .header("User-Agent", USER_AGENT)
+                    .header("Authorization", "Basic $authorization")
+                    .build()
+                noRedirectHttpClient.newCall(request).execute().use { response ->
+                    check(response.isSuccessful) {
+                        "Opening the Deck attachment failed (HTTP ${response.code})."
+                    }
+                    val responseBody = response.body
+                    val contentLength = responseBody.contentLength()
+                    check(contentLength <= maximumBytes || contentLength == -1L) {
+                        "The Deck attachment is larger than the external handoff limit."
+                    }
+                    DesktopDetachedDownload(
+                        responseBody.byteStream().copyBoundedTo(output, maximumBytes),
+                    )
+                }
+            }
         }
     }
 
@@ -555,21 +654,13 @@ class DesktopNextcloudServices(
 
     override suspend fun listMedia(session: NextcloudSession, userId: String): List<NextcloudFile> =
         withContext(Dispatchers.IO) {
-            val search = """
-                <?xml version="1.0" encoding="UTF-8"?>
-                <d:searchrequest xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns"><d:basicsearch>
-                  <d:select><d:prop><d:displayname/><d:getcontenttype/><d:getlastmodified/><d:getcontentlength/><d:getetag/><oc:fileid/><oc:size/><oc:permissions/><nc:has-preview/></d:prop></d:select>
-                  <d:from><d:scope><d:href>/files/${escapeXml(userId)}</d:href><d:depth>infinity</d:depth></d:scope></d:from>
-                  <d:where><d:or><d:like><d:prop><d:getcontenttype/></d:prop><d:literal>image/%</d:literal></d:like><d:like><d:prop><d:getcontenttype/></d:prop><d:literal>video/%</d:literal></d:like></d:or></d:where>
-                  <d:orderby><d:order><d:prop><d:getlastmodified/></d:prop><d:descending/></d:order></d:orderby><d:limit><d:nresults>80</d:nresults></d:limit>
-                </d:basicsearch></d:searchrequest>
-            """.trimIndent()
+            val search = mediaSearchDavRequestBody(userId)
             val response = request(
                 "SEARCH", session.serverUrl + "/remote.php/dav/", session, search,
                 "application/xml; charset=utf-8", headers = mapOf("Accept" to "application/xml"),
             )
             check(response.status == 207) { "WebDAV media search failed (HTTP ${response.status})." }
-            parseDavFiles(response.body, userId).take(80)
+            selectMediaSearchFiles(parseDavFiles(response.body, userId))
         }
 
     override suspend fun listSystemTags(session: NextcloudSession): List<NextcloudSystemTag> =
@@ -680,6 +771,42 @@ class DesktopNextcloudServices(
         } catch (failure: IOException) {
             cached?.let { NextcloudFileContent(it.bytes, it.mimeType, it.etag) } ?: throw failure
         }
+    }
+
+    override suspend fun downloadFileRange(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        offset: Long,
+        length: Int,
+        expectedEtag: String,
+    ): ByteArray = withContext(Dispatchers.IO) {
+        require(offset >= 0L) { "The file range offset must not be negative." }
+        require(length > 0) { "The file range length must be greater than zero." }
+        val safeEtag = requireSafeFileRangeEtag(expectedEtag)
+        val endInclusive = Math.addExact(offset, length.toLong() - 1L)
+        val response = request(
+            "GET",
+            buildNextcloudFileUrl(session.serverUrl, userId, path),
+            session,
+            headers = mapOf(
+                "Accept" to "application/octet-stream",
+                "Range" to "bytes=$offset-$endInclusive",
+                "If-Match" to safeEtag,
+            ),
+            maxResponseBytes = length.toLong(),
+            client = noRedirectHttpClient,
+        )
+        check(response.status == 206) {
+            "The server did not honor the bounded file range request (HTTP ${response.status})."
+        }
+        check(isExactHttpByteContentRange(response.contentRange, offset, endInclusive)) {
+            "The server returned a different file range than requested."
+        }
+        check(response.body.size == length) {
+            "The server returned an incomplete file range."
+        }
+        response.body
     }
 
     override suspend fun listFileVersions(
@@ -902,16 +1029,7 @@ class DesktopNextcloudServices(
         val safeRequest = request.requireSafe()
         val accountId = desktopFileCacheAccountId(session)
         val cacheIdentity = safeRequest.dynamicReadCacheIdentity()
-        if (safeRequest.method == NextcloudApiMethod.GET) {
-            dynamicApiReadCache.load(accountId, cacheIdentity, safeRequest.maximumResponseBytes)?.let { cached ->
-                return@withContext NextcloudApiResponse(
-                    cached.status,
-                    cached.body,
-                    cached.contentType,
-                    cached.etag,
-                )
-            }
-        } else {
+        if (safeRequest.method != NextcloudApiMethod.GET) {
             dynamicApiRequestCoalescer.invalidateAccount(accountId) {
                 runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
             }
@@ -944,16 +1062,21 @@ class DesktopNextcloudServices(
                 }
             }
         }
-        dynamicApiRequestCoalescer.execute(
+        executeDesktopDynamicApiGet(
             accountId = accountId,
             requestIdentity = cacheIdentity,
-            load = {
+            cachePolicy = safeRequest.cachePolicy,
+            coalescer = dynamicApiRequestCoalescer,
+            loadCached = {
                 dynamicApiReadCache.load(accountId, cacheIdentity, safeRequest.maximumResponseBytes)
                     ?.let { cached ->
                         NextcloudApiResponse(cached.status, cached.body, cached.contentType, cached.etag)
                     }
-                    ?: executeNetworkRequest()
             },
+            invalidateCached = {
+                runCatching { dynamicApiReadCache.invalidate(accountId, cacheIdentity) }
+            },
+            executeNetwork = ::executeNetworkRequest,
             commit = { result ->
                 if (
                     result.status in 200..299 &&
@@ -974,6 +1097,63 @@ class DesktopNextcloudServices(
                 }
             },
         )
+    }
+
+    override suspend fun chooseLocalUploadFile(
+        acceptedMimeTypes: List<String>,
+        maximumBytes: Long,
+    ): LocalUploadSelectionResult =
+        localUploadPicker.choose(acceptedMimeTypes, maximumBytes)
+
+    override fun releaseLocalUploadFile(file: LocalUploadFile) {
+        localUploadPicker.release(file)
+    }
+
+    override suspend fun executeNextcloudMultipartUpload(
+        session: NextcloudSession,
+        request: NextcloudMultipartUploadRequest,
+    ): NextcloudApiResponse = withContext(Dispatchers.IO) {
+        val safeRequest = request.requireSafe()
+        val envelope = prepareMultipartUpload(
+            safeRequest,
+            "nc-native-${UUID.randomUUID()}",
+        )
+        val requestBody = DesktopStreamingMultipartRequestBody(envelope) {
+            localUploadPicker.open(safeRequest.file)
+        }
+        val apiRequest = NextcloudApiRequest(
+            method = safeRequest.method,
+            relativePath = safeRequest.relativePath,
+            queryParameters = safeRequest.queryParameters,
+            ocsApiRequest = safeRequest.ocsApiRequest,
+            maximumResponseBytes = safeRequest.maximumResponseBytes,
+        )
+        val accountId = desktopFileCacheAccountId(session)
+        dynamicApiRequestCoalescer.invalidateAccount(accountId) {
+            runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
+        }
+        try {
+            val response = request(
+                method = safeRequest.method.name,
+                url = buildNextcloudApiUrl(session.serverUrl, apiRequest),
+                session = session,
+                ocsRequest = safeRequest.ocsApiRequest,
+                streamingBody = requestBody,
+                maxResponseBytes = safeRequest.maximumResponseBytes,
+                client = noRedirectHttpClient,
+            )
+            NextcloudApiResponse(
+                response.status,
+                response.body,
+                response.contentType,
+                response.etag,
+                response.location,
+            )
+        } finally {
+            dynamicApiRequestCoalescer.invalidateAccount(accountId) {
+                runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
+            }
+        }
     }
 
     override suspend fun executeGroupwareDav(
@@ -1540,8 +1720,10 @@ class DesktopNextcloudServices(
         rawBody: ByteArray? = null,
         maxResponseBytes: Long = MAX_API_RESPONSE_BYTES,
         client: OkHttpClient = httpClient,
+        streamingBody: RequestBody? = null,
     ): HttpResponse {
         val requestBody = when {
+            streamingBody != null -> streamingBody
             rawBody != null -> rawBody.toRequestBody(contentType?.toMediaType())
             body != null -> body.toRequestBody(contentType?.toMediaType())
             method == "POST" || method == "PUT" || method == "PATCH" -> byteArrayOf().toRequestBody(null)
@@ -1569,6 +1751,7 @@ class DesktopNextcloudServices(
                 response.header("ETag") ?: response.header("OC-Etag"),
                 response.header("Location"),
                 response.header("X-Chat-Last-Given"),
+                response.header("Content-Range"),
             )
         }
     }
@@ -1587,6 +1770,25 @@ class DesktopNextcloudServices(
             output.write(buffer, 0, read)
         }
         return output.toByteArray()
+    }
+
+    private fun java.io.InputStream.copyBoundedTo(
+        output: java.io.OutputStream,
+        maxBytes: Long,
+    ): Long {
+        require(maxBytes > 0L)
+        val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
+        var total = 0L
+        while (true) {
+            val read = read(buffer)
+            if (read == -1) break
+            total += read
+            check(total <= maxBytes) {
+                "The Deck attachment is larger than the external handoff limit."
+            }
+            output.write(buffer, 0, read)
+        }
+        return total
     }
 
     private fun formatByteLimit(bytes: Long): String = when {
@@ -1688,15 +1890,12 @@ class DesktopNextcloudServices(
             val fileId = item.optLong("fileid", -1L).takeIf { it >= 0L } ?: continue
             target.putIfAbsent(
                 fileId,
-                NextcloudFile(
-                    path = "memories/people/${person.id}/$fileId",
-                    name = item.optString("basename").ifBlank { "Photo $fileId" },
-                    isDirectory = false,
-                    mimeType = item.optString("mimetype").takeIf(String::isNotBlank),
-                    size = null,
-                    lastModified = item.optLong("epoch", 0L).takeIf { it > 0L }?.toString(),
+                syntheticMemoriesPersonFile(
+                    personId = person.id.toString(),
                     fileId = fileId,
-                    hasPreview = true,
+                    name = item.optString("basename").ifBlank { "Photo $fileId" },
+                    mimeType = item.optString("mimetype").takeIf(String::isNotBlank),
+                    lastModified = item.optLong("epoch", 0L).takeIf { it > 0L }?.toString(),
                     etag = item.optString("etag").takeIf(String::isNotBlank),
                 ),
             )
@@ -1715,6 +1914,7 @@ class DesktopNextcloudServices(
         val etag: String? = null,
         val location: String? = null,
         val chatLastGiven: String? = null,
+        val contentRange: String? = null,
     ) {
         val text: String get() = body.toString(StandardCharsets.UTF_8)
     }

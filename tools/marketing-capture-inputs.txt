@@ -1,5 +1,6 @@
 # Capture source inventory shared by the Compose renderer and freshness verifier.
 ui/build.gradle.kts
 ui/src/commonMain/kotlin
+?ui/src/commonMain/resources
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview
 ui/src/desktopMain/resources/marketing

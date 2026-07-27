@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +21,21 @@ export async function readCaptureManifest() {
 
 export function validateCaptureManifest(manifest) {
   requireObject(manifest, "Capture manifest");
+  requireExactKeys(
+    manifest,
+    [
+      "schemaVersion",
+      "renderer",
+      "identity",
+      "cloudIdentity",
+      "networkAccess",
+      "captureSources",
+      "captureSourceSha256",
+      "avatarSha256",
+      "captures",
+    ],
+    "Capture manifest",
+  );
   requireValue(manifest.schemaVersion === 2, "schemaVersion must be 2");
   requireValue(
     manifest.renderer === "Compose ImageComposeScene",
@@ -30,9 +45,7 @@ export function validateCaptureManifest(manifest) {
   requireValue(manifest.cloudIdentity === "Nextcloud", "cloudIdentity must be Nextcloud");
   requireValue(manifest.networkAccess === false, "networkAccess must be false");
   requireSha256(manifest.captureSourceSha256, "captureSourceSha256");
-  if (manifest.avatarSha256 !== undefined) {
-    requireSha256(manifest.avatarSha256, "avatarSha256");
-  }
+  requireSha256(manifest.avatarSha256, "avatarSha256");
 
   requireValue(
     Array.isArray(manifest.captureSources) && manifest.captureSources.length > 0,
@@ -54,6 +67,23 @@ export function validateCaptureManifest(manifest) {
   const files = new Set();
   for (const capture of manifest.captures) {
     requireObject(capture, "Capture");
+    const expectedCaptureKeys = [
+      "scenario",
+      "file",
+      "width",
+      "height",
+      "density",
+      "feature",
+      "surface",
+      "state",
+      "purpose",
+      "platform",
+      "viewport",
+      "sha256",
+    ];
+    if (capture.pullRequest !== undefined) expectedCaptureKeys.push("pullRequest");
+    if (capture.issue !== undefined) expectedCaptureKeys.push("issue");
+    requireExactKeys(capture, expectedCaptureKeys, "Capture");
     requireSlug(capture.scenario, "capture scenario");
     requireValue(
       !scenarios.has(capture.scenario),
@@ -86,6 +116,9 @@ export function validateCaptureManifest(manifest) {
     requireSlug(capture.viewport, `${capture.scenario} viewport`);
     if (capture.pullRequest !== undefined) {
       requirePositiveInteger(capture.pullRequest, `${capture.scenario} pullRequest`);
+    }
+    if (capture.issue !== undefined) {
+      requirePositiveInteger(capture.issue, `${capture.scenario} issue`);
     }
   }
   return manifest;
@@ -181,21 +214,34 @@ export async function verifyCaptureFreshness(manifest) {
   return failures;
 }
 
-export async function discoverCaptureSources() {
-  const inventoryPath = path.join(repositoryRoot, captureInventoryRelativePath);
+export async function discoverCaptureSources(root = repositoryRoot) {
+  const realRoot = await realpath(root);
+  const inventoryPath = path.resolve(root, captureInventoryRelativePath);
+  await requireSafeRepositoryEntry(root, realRoot, inventoryPath, captureInventoryRelativePath);
   const entries = (await readFile(inventoryPath, "utf8"))
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith("#"));
   const discovered = [];
-  for (const relative of entries) {
+  for (const entry of entries) {
+    const optional = entry.startsWith("?");
+    const relative = optional ? entry.slice(1) : entry;
     requireSafeRelativePath(relative, "capture input");
-    const absolute = path.join(repositoryRoot, relative);
-    const info = await stat(absolute);
+    const absolute = path.resolve(root, relative);
+    requireContainedPath(root, absolute, relative);
+    let info;
+    try {
+      info = await lstat(absolute);
+    } catch (error) {
+      if (optional && error.code === "ENOENT") continue;
+      throw error;
+    }
+    requireValue(!info.isSymbolicLink(), `capture input must not be a symbolic link: ${relative}`);
+    await requireSafeRepositoryEntry(root, realRoot, absolute, relative);
     if (info.isFile()) {
       discovered.push(relative);
     } else if (info.isDirectory()) {
-      await walkFiles(absolute, discovered);
+      await walkFiles(absolute, discovered, root, realRoot);
     } else {
       throw new Error(`Capture input is not a file or directory: ${relative}`);
     }
@@ -204,14 +250,19 @@ export async function discoverCaptureSources() {
   return [...new Set(discovered)].sort();
 }
 
-async function walkFiles(directory, output) {
+async function walkFiles(directory, output, root, realRoot) {
   const entries = await readdir(directory, { withFileTypes: true });
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
     const absolute = path.join(directory, entry.name);
+    const relative = path.relative(root, absolute).split(path.sep).join("/");
+    requireValue(!entry.isSymbolicLink(), `capture input must not be a symbolic link: ${relative}`);
+    await requireSafeRepositoryEntry(root, realRoot, absolute, relative);
     if (entry.isDirectory()) {
-      await walkFiles(absolute, output);
+      await walkFiles(absolute, output, root, realRoot);
     } else if (entry.isFile()) {
-      output.push(path.relative(repositoryRoot, absolute).split(path.sep).join("/"));
+      output.push(relative);
+    } else {
+      throw new Error(`Capture input is not a regular file or directory: ${relative}`);
     }
   }
 }
@@ -246,6 +297,38 @@ function requireObject(value, label) {
   requireValue(
     value !== null && typeof value === "object" && !Array.isArray(value),
     `${label} must be an object`,
+  );
+}
+
+function requireExactKeys(value, expected, label) {
+  const actualKeys = Object.keys(value).sort();
+  const expectedKeys = [...expected].sort();
+  requireValue(
+    actualKeys.length === expectedKeys.length &&
+      actualKeys.every((key, index) => key === expectedKeys[index]),
+    `${label} has unexpected or missing fields`,
+  );
+}
+
+function requireContainedPath(root, absolute, label) {
+  const relative = path.relative(path.resolve(root), absolute);
+  requireValue(
+    relative.length > 0 && !relative.startsWith(`..${path.sep}`) && relative !== ".." &&
+      !path.isAbsolute(relative),
+    `capture input escaped the repository: ${label}`,
+  );
+}
+
+async function requireSafeRepositoryEntry(root, realRoot, absolute, label) {
+  requireContainedPath(root, absolute, label);
+  const info = await lstat(absolute);
+  requireValue(!info.isSymbolicLink(), `capture input must not be a symbolic link: ${label}`);
+  const resolved = await realpath(absolute);
+  const relative = path.relative(realRoot, resolved);
+  requireValue(
+    relative === "" ||
+      (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)),
+    `capture input escaped the real repository: ${label}`,
   );
 }
 

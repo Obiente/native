@@ -86,6 +86,13 @@ data class NextcloudFile(
      * explicitly preserve a server-side no-download policy through generic file handoffs.
      */
     val originalAccessAllowed: Boolean = true,
+    /**
+     * Whether [path] identifies the original object in the authenticated Files DAV tree.
+     *
+     * Surfaces such as Talk can carry a stable file ID without supplying a DAV path. Their
+     * display-only placeholder must never be used for original byte reads.
+     */
+    val davPathAuthoritative: Boolean = true,
     /** Raw DAV permission flags. `W` is required before planning an edit session. */
     val permissions: String? = null,
     /** Strong content identities supplied by DAV clients, for example `SHA256:<hex>`. */
@@ -111,6 +118,11 @@ enum class NextcloudApiMethod {
     DELETE,
 }
 
+enum class NextcloudApiCachePolicy {
+    PreferCache,
+    ForceNetwork,
+}
+
 /**
  * Restricted same-origin transport used by schema-declared dynamic app actions.
  *
@@ -126,6 +138,7 @@ data class NextcloudApiRequest(
     val body: ByteArray? = null,
     val ocsApiRequest: Boolean = false,
     val maximumResponseBytes: Long = DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES,
+    val cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
 )
 
 data class NextcloudApiResponse(
@@ -141,7 +154,8 @@ data class NextcloudApiResponse(
  * Stable credential-free identity for a dynamic GET response.
  *
  * Length-prefixed query fields avoid ambiguous delimiter collisions while retaining a readable
- * prefix for diagnostics. Authentication and request bodies are deliberately excluded.
+ * prefix for diagnostics. The response bound is part of the representation identity so a smaller
+ * in-flight read cannot satisfy a larger request. Authentication and request bodies are excluded.
  */
 fun NextcloudApiRequest.dynamicReadCacheIdentity(): String = buildString {
     append(method.name)
@@ -149,6 +163,8 @@ fun NextcloudApiRequest.dynamicReadCacheIdentity(): String = buildString {
     append(relativePath)
     append(" ocs=")
     append(ocsApiRequest)
+    append(" max=")
+    append(maximumResponseBytes)
     queryParameters.toSortedMap().forEach { (name, value) ->
         val encodedName = encodeUrlComponent(name)
         val encodedValue = encodeUrlComponent(value)
@@ -318,7 +334,18 @@ interface NextcloudPlatformServices {
         explanation = "In-app update checks are unavailable on this platform.",
     )
 
-    suspend fun checkForAppUpdate(): AppUpdateCheckResult =
+    fun loadAppUpdateChannel(): AndroidUpdateChannel = AndroidUpdateChannel.Alpha
+
+    /**
+     * Persists an available direct update channel.
+     *
+     * Store-owned and unsupported installations return false and remain unchanged.
+     */
+    fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean = false
+
+    suspend fun checkForAppUpdate(
+        channel: AndroidUpdateChannel = loadAppUpdateChannel(),
+    ): AppUpdateCheckResult =
         AppUpdateCheckResult.Unavailable(appUpdateSupport())
 
     /** Observable direct-APK download, verification, cancellation, and retry state. */
@@ -372,6 +399,24 @@ interface NextcloudPlatformServices {
 
     fun clearSession()
 
+    /** Loads one bounded, account-scoped unsaved Deck editor draft from app-private storage. */
+    suspend fun loadDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ): PersistedDeckCardDraft? = null
+
+    /** Persists one bounded Deck editor draft without storing account credentials in its key. */
+    suspend fun saveDeckCardDraft(
+        session: NextcloudSession,
+        draft: PersistedDeckCardDraft,
+    ) = Unit
+
+    /** Clears a draft after an explicit cancel or a confirmed successful server mutation. */
+    suspend fun clearDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ) = Unit
+
     fun openExternalUrl(url: String)
 
     /** Copies bounded application text without exposing session credentials to another process. */
@@ -385,6 +430,23 @@ interface NextcloudPlatformServices {
     ): ExternalFileHandoffResult = ExternalFileHandoffResult.Unsupported(
         (externalFileHandoffSupport as? ExternalFileHandoffSupport.Unsupported)?.reason
             ?: "External file handoff is not supported on this platform.",
+    )
+
+    /**
+     * Streams an authenticated Deck attachment into a detached private platform cache.
+     *
+     * The typed target comes from the permission-checked Deck route planner. Implementations must
+     * reject redirects, enforce the external handoff byte limit while streaming, and must not
+     * invent a DAV path or ETag for the attachment.
+     */
+    suspend fun handoffDeckAttachmentToExternalApp(
+        session: NextcloudSession,
+        target: DeckAttachmentOpenTarget,
+        attachment: DeckAttachment,
+        action: ExternalFileHandoffAction = ExternalFileHandoffAction.OpenWith,
+    ): ExternalFileHandoffResult = ExternalFileHandoffResult.Unsupported(
+        (externalFileHandoffSupport as? ExternalFileHandoffSupport.Unsupported)?.reason
+            ?: "Deck attachment handoff is not supported on this platform.",
     )
 
     suspend fun beginLogin(serverUrl: String): LoginChallenge
@@ -552,6 +614,29 @@ interface NextcloudPlatformServices {
     /** Emits after this device changes backup evidence for the active account. */
     fun observeMediaBackupStatusChanges(session: NextcloudSession): Flow<Unit> = emptyFlow()
 
+    /** True when the platform maintains an account-scoped, bounded media upload ledger. */
+    val supportsMediaTransferCenter: Boolean get() = false
+
+    /**
+     * Loads one bounded window of device-local media transfer history.
+     *
+     * This is a local projection only. Implementations must not perform remote mutations while
+     * loading it, and must scope every row to the authenticated account.
+     */
+    suspend fun loadMediaTransferCenter(
+        session: NextcloudSession,
+        section: MediaTransferSection,
+        after: MediaBackupLedgerCursor? = null,
+    ): MediaTransferCenterState = mediaTransferCenterState(
+        summary = MediaBackupLedgerSummary(0, 0, 0, 0),
+        section = section,
+        page = MediaBackupLedgerPage(emptyList(), null),
+        canLoadNewer = after != null,
+    )
+
+    /** Clears only completed local history. It must never delete device or Nextcloud media. */
+    suspend fun clearCompletedMediaTransferHistory(session: NextcloudSession): Int = 0
+
     /**
      * Resolves stable server file IDs to current authoritative Files records.
      *
@@ -580,6 +665,23 @@ interface NextcloudPlatformServices {
         path: String,
         maxBytes: Long = DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES,
     ): NextcloudFileContent
+
+    /**
+     * Reads one exact, bounded byte range from a Files WebDAV object.
+     *
+     * Platforms must send [expectedEtag] through If-Match, require an HTTP 206 response, and reject
+     * servers that ignore the Range header. This keeps both reads pinned to one remote generation
+     * and keeps large media containers out of memory when only an embedded preview is needed. The
+     * returned bytes are detached and may never be written back automatically.
+     */
+    suspend fun downloadFileRange(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        offset: Long,
+        length: Int,
+        expectedEtag: String,
+    ): ByteArray = error("Bounded file range reads are not supported on this platform.")
 
     /**
      * Lists immutable historical generations for the exact Files record.
@@ -671,6 +773,77 @@ interface NextcloudPlatformServices {
         session: NextcloudSession,
         request: NextcloudApiRequest,
     ): NextcloudApiResponse
+
+    /**
+     * Opens the platform document picker. Only a file explicitly selected by the user can produce
+     * an opaque [LocalUploadFile] capability.
+     */
+    suspend fun chooseLocalUploadFile(
+        acceptedMimeTypes: List<String> = listOf("*/*"),
+        maximumBytes: Long = DEFAULT_LOCAL_UPLOAD_LIMIT_BYTES,
+    ): LocalUploadSelectionResult = LocalUploadSelectionResult.Unavailable(
+        "Local file selection is unavailable on this platform.",
+    )
+
+    /** Releases an opaque picker capability without changing or deleting the local file. */
+    fun releaseLocalUploadFile(file: LocalUploadFile) = Unit
+
+    /**
+     * Streams one picker-authorized file to a reviewed same-origin multipart endpoint.
+     *
+     * Implementations attach the active account credentials, reject redirects, enforce both
+     * request and response limits, and never accept an arbitrary local path from shared code.
+     */
+    suspend fun executeNextcloudMultipartUpload(
+        session: NextcloudSession,
+        request: NextcloudMultipartUploadRequest,
+    ): NextcloudApiResponse {
+        error("Multipart upload is unavailable on this platform.")
+    }
+
+    /**
+     * Takes ownership of a picker capability and schedules a lifecycle-independent upload.
+     *
+     * The default implementation completes synchronously for platforms without a background
+     * scheduler. Android overrides this with app-private durable state and WorkManager.
+     */
+    suspend fun enqueueDurableMultipartUpload(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+        request: NextcloudMultipartUploadRequest,
+    ): DurableUploadEnqueueResult {
+        val status = DurableUploadStatus(
+            id = request.file.selectionId,
+            scope = scope,
+            displayName = request.file.displayName,
+            state = DurableUploadState.Uploading,
+        )
+        return runCatching {
+            val response = executeNextcloudMultipartUpload(session, request)
+            require(response.status in 200..299) {
+                "The attachment upload failed (HTTP ${response.status})."
+            }
+            DurableUploadEnqueueResult.Completed(status.copy(state = DurableUploadState.Completed))
+        }.getOrElse { error ->
+            DurableUploadEnqueueResult.Rejected(
+                error.message?.take(MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS)
+                    ?: "The attachment upload failed.",
+            )
+        }
+    }
+
+    /** Returns bounded persisted upload state for the active account and resource. */
+    suspend fun durableMultipartUploadStatuses(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+    ): List<DurableUploadStatus> = emptyList()
+
+    /** Dismisses one terminal upload status. Active work cannot be removed through the UI. */
+    suspend fun dismissDurableMultipartUpload(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+        uploadId: String,
+    ): Boolean = false
 
     /**
      * Dedicated same-origin CalDAV/CardDAV transport.
@@ -890,6 +1063,37 @@ const val MAX_ACTIVITY_LIMIT = 200
 const val MAX_NOTE_BYTES = 4L * 1024L * 1024L
 const val DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 4L * 1024L * 1024L
 const val MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 16L * 1024L * 1024L
+const val MAX_FILE_RANGE_ETAG_LENGTH = 1_024
+
+fun requireSafeFileRangeEtag(value: String): String {
+    require(value == value.trim() && value.isNotEmpty() && value.length <= MAX_FILE_RANGE_ETAG_LENGTH) {
+        "A safe current strong ETag is required for a file range read."
+    }
+    if (value.first() == '"' || value.last() == '"') {
+        require(
+            value.length >= 2 &&
+                value.first() == '"' &&
+                value.last() == '"' &&
+                value.substring(1, value.lastIndex).all(::isHttpEntityTagCharacter),
+        ) {
+            "A safe current strong ETag is required for a file range read."
+        }
+        return value
+    }
+    require(
+        value != "*" &&
+            value.length <= MAX_FILE_RANGE_ETAG_LENGTH - 2 &&
+            value.all(::isHttpEntityTagCharacter),
+    ) {
+        "A safe current strong ETag is required for a file range read."
+    }
+    return "\"$value\""
+}
+
+private fun isHttpEntityTagCharacter(character: Char): Boolean =
+    character.code == 0x21 ||
+        character.code in 0x23..0x7E ||
+        character.code in 0x80..0xFF
 
 fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
     require(relativePath.startsWith('/') && !relativePath.startsWith("//")) {

@@ -2,6 +2,7 @@ import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 val desktopArchitecture = System.getProperty("os.arch").lowercase()
 val ncDesktopPackageVersion = providers.gradleProperty("ncDesktopPackageVersion").get()
+val ncMacosPackageVersion = providers.gradleProperty("ncMacosPackageVersion").get()
 val javafxClassifier = when {
     System.getProperty("os.name").startsWith("Mac", ignoreCase = true) &&
         desktopArchitecture in setOf("aarch64", "arm64") -> "mac-aarch64"
@@ -127,9 +128,7 @@ compose.desktop {
                 iconFile.set(project.file("src/desktopMain/resources/nextcloud-native.ico"))
             }
             macOS {
-                // Apple's package metadata requires the first numeric component
-                // to be greater than zero, independently of our prerelease name.
-                packageVersion = "1.0.1"
+                packageVersion = ncMacosPackageVersion
             }
         }
     }
@@ -152,4 +151,30 @@ tasks.register<JavaExec>("captureMarketingScreenshots") {
         "dev.obiente.nextcloudnative.nativeui.preview.MarketingCaptureMainKt",
     )
     workingDir(rootProject.projectDir)
+}
+
+tasks.register<JavaExec>("runDeckInteractionPreview") {
+    group = "verification"
+    description = "Opens a network-free synthetic Deck workspace for pointer and layout QA."
+    dependsOn(desktopCaptureCompilation.compileTaskProvider)
+    classpath(
+        desktopCaptureCompilation.output.allOutputs,
+        desktopCaptureCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set(
+        "dev.obiente.nextcloudnative.nativeui.preview.DeckInteractionPreviewMainKt",
+    )
+}
+
+tasks.register<JavaExec>("runDynamicBoardInteractionPreview") {
+    group = "verification"
+    description = "Opens a network-free discovered board for adaptive drag and layout QA."
+    dependsOn(desktopCaptureCompilation.compileTaskProvider)
+    classpath(
+        desktopCaptureCompilation.output.allOutputs,
+        desktopCaptureCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set(
+        "dev.obiente.nextcloudnative.nativeui.preview.DynamicBoardInteractionPreviewMainKt",
+    )
 }

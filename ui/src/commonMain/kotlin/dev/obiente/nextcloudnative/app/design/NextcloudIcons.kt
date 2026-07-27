@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.Contacts
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Edit
@@ -82,6 +83,7 @@ object NextcloudIcons {
     val Settings: ImageVector = Icons.Outlined.Settings
     val Back: ImageVector = Icons.AutoMirrored.Outlined.ArrowBack
     val More: ImageVector = Icons.Outlined.MoreHoriz
+    val Drag: ImageVector = Icons.Outlined.DragIndicator
     val Add: ImageVector = Icons.Outlined.Add
     val ChevronRight: ImageVector = Icons.Outlined.ChevronRight
     val Refresh: ImageVector = Icons.Outlined.Refresh

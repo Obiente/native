@@ -36,13 +36,96 @@ internal class DesktopExternalFileHandoff(
         }
         if (staged is DesktopStagedExternalFile.Rejected) return staged.result
         staged as DesktopStagedExternalFile.Ready
-        return withContext(Dispatchers.IO) {
-            if (launchFile(staged.file)) {
+        return launchStaged(staged.file, action)
+    }
+
+    suspend fun launchDetached(
+        attachment: DeckAttachment,
+        action: ExternalFileHandoffAction,
+        capability: ExternalFileHandoffCapability,
+        download: suspend (
+            output: FileOutputStream,
+            maximumBytes: Long,
+        ) -> DesktopDetachedDownload,
+    ): ExternalFileHandoffResult {
+        validateDeckAttachmentHandoff(attachment, action, capability)?.let { return it }
+        val staged = withContext(Dispatchers.IO) {
+            stageStreamedCopy(
+                sourceName = attachment.name,
+                declaredByteCount = attachment.byteCount,
+                maximumBytes = capability.maximumFileBytes,
+                download = download,
+            )
+        }
+        return launchStaged(staged, action)
+    }
+
+    private suspend fun launchStaged(
+        staged: File,
+        action: ExternalFileHandoffAction,
+    ): ExternalFileHandoffResult =
+        withContext(Dispatchers.IO) {
+            if (launchFile(staged)) {
                 ExternalFileHandoffResult.Launched(action)
             } else {
-                staged.file.parentFile?.deleteRecursively()
+                staged.parentFile?.deleteRecursively()
                 ExternalFileHandoffResult.NoCompatibleApplication(action)
             }
+        }
+
+    private suspend fun stageStreamedCopy(
+        sourceName: String,
+        declaredByteCount: Long?,
+        maximumBytes: Long,
+        download: suspend (FileOutputStream, Long) -> DesktopDetachedDownload,
+    ): File {
+        require(maximumBytes in 1L..MAX_EXTERNAL_FILE_HANDOFF_BYTES) {
+            "The external attachment limit is outside the supported range."
+        }
+        check(root.isDirectory || root.mkdirs()) { "Could not create the desktop external-file cache." }
+        val canonicalRoot = root.canonicalFile
+        pruneDesktopExternalFileCache(canonicalRoot, maximumBytes)
+        val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
+        check(operationDirectory.mkdir()) { "Could not create a private desktop handoff directory." }
+        check(operationDirectory.canonicalFile.parentFile == canonicalRoot) { "Unsafe desktop handoff directory." }
+        val target = File(operationDirectory, sanitizeExternalFileName(sourceName))
+        check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) {
+            "Unsafe desktop handoff filename."
+        }
+        val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
+        try {
+            val downloaded = FileOutputStream(temporary).use { output ->
+                download(output, maximumBytes).also {
+                    output.fd.sync()
+                }
+            }
+            check(downloaded.byteCount in 0L..maximumBytes) {
+                "The downloaded attachment is larger than the external handoff limit."
+            }
+            verifyDownloadedDeckAttachmentSize(declaredByteCount, downloaded.byteCount)
+            check(temporary.length() == downloaded.byteCount) {
+                "The desktop attachment cache copy is incomplete."
+            }
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary.toPath(), target.toPath())
+            }
+            check(target.isFile && target.length() == downloaded.byteCount) {
+                "Could not publish the desktop attachment cache copy."
+            }
+            check(target.setWritable(false, false) || !target.canWrite()) {
+                "Could not make the detached desktop attachment read-only."
+            }
+            return target
+        } catch (failure: Throwable) {
+            temporary.delete()
+            operationDirectory.deleteRecursively()
+            throw failure
         }
     }
 
@@ -93,6 +176,10 @@ internal class DesktopExternalFileHandoff(
         data class Rejected(val result: ExternalFileHandoffResult.Rejected) : DesktopStagedExternalFile
     }
 }
+
+internal data class DesktopDetachedDownload(
+    val byteCount: Long,
+)
 
 internal fun desktopExternalFileHandoffDirectory(): File {
     val xdgCache = System.getenv("XDG_CACHE_HOME")?.takeIf(String::isNotBlank)

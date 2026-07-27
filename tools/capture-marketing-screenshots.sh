@@ -9,7 +9,7 @@ if (($#)); then
 fi
 
 cd "$repository_root"
-./gradlew --no-daemon :ui:captureMarketingScreenshots
+./gradlew --no-daemon --max-workers=1 :ui:captureMarketingScreenshots
 npm run --prefix website verify:captures
 
 echo "Workstation Compose captures are ready in website/public/screenshots/."

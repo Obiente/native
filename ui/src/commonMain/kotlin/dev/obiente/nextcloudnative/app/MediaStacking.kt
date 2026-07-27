@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
+
 enum class MediaAssetFormat { Raw, Jpeg, Image, Video, Other }
 
 data class MediaStack(
@@ -46,6 +48,26 @@ data class LoadedMediaSource<T>(
     val usedFallback: Boolean,
 )
 
+data class LoadedFullResolutionMediaSource<T>(
+    val value: T,
+    val source: MediaSourceChoice,
+    val usedFallback: Boolean,
+    val payloadSource: FullResolutionPhotoSource,
+)
+
+fun fullQualityMediaPayloadKind(
+    displayed: MediaSourceChoice,
+    payloadSource: FullResolutionPhotoSource,
+): MediaDisplayPayloadKind =
+    if (
+        payloadSource == FullResolutionPhotoSource.MemoriesTranscoded &&
+        displayed.format == MediaAssetFormat.Raw
+    ) {
+        MediaDisplayPayloadKind.MemoriesRawRender
+    } else {
+        MediaDisplayPayloadKind.ServerPreview
+    }
+
 /**
  * Describes what is actually visible without confusing a rendered RAW preview with RAW bytes.
  * Mutations always continue to target [selected], even when a sibling is used for display.
@@ -53,22 +75,28 @@ data class LoadedMediaSource<T>(
 fun describeMediaDisplaySource(
     selected: MediaSourceChoice,
     displayed: MediaSourceChoice,
-    fullQuality: Boolean,
+    highDetail: Boolean,
+    payloadKind: MediaDisplayPayloadKind = MediaDisplayPayloadKind.ServerPreview,
 ): String {
-    val source = when (displayed.format) {
-        MediaAssetFormat.Raw ->
-            if (fullQuality) "RAW full-resolution render" else "RAW server preview"
-        MediaAssetFormat.Jpeg ->
-            if (fullQuality) "JPEG original" else "JPEG server preview"
-        MediaAssetFormat.Image ->
-            if (fullQuality) "Full-resolution image" else "Image preview"
-        MediaAssetFormat.Video -> "Video preview"
-        MediaAssetFormat.Other -> "File preview"
+    val source = when {
+        payloadKind == MediaDisplayPayloadKind.MemoriesRawRender ->
+            if (highDetail) "Generated high-detail RAW render" else "Generated RAW render"
+        payloadKind == MediaDisplayPayloadKind.EmbeddedCameraPreview -> "RAW embedded camera preview"
+        else -> when (displayed.format) {
+            MediaAssetFormat.Raw ->
+                if (highDetail) "High-detail RAW render" else "RAW server preview"
+            MediaAssetFormat.Jpeg ->
+                if (highDetail) "High-detail JPEG render" else "JPEG server preview"
+            MediaAssetFormat.Image ->
+                if (highDetail) "High-detail image render" else "Image preview"
+            MediaAssetFormat.Video -> "Video preview"
+            MediaAssetFormat.Other -> "File preview"
+        }
     }
     return if (displayed.file.path == selected.file.path) {
         source
     } else {
-        "$source fallback · actions target ${selected.file.name}"
+        "$source fallback - actions target ${selected.file.name}"
     }
 }
 
@@ -129,7 +157,10 @@ fun planMediaSources(files: List<NextcloudFile>, selected: NextcloudFile): Media
             val format = file.mediaAssetFormat()
             MediaSourceChoice(file, format.sourceLabel(), format)
         }
-    val previewCandidates = ordered.filter { it.file.fileId != null && it.file.hasPreview }
+    val previewCandidates = ordered.filter {
+        (it.file.fileId != null && it.file.hasPreview) ||
+            (it.file.isRawPhoto() && it.file.originalAccessAllowed)
+    }
     val fullQualityCandidates = ordered.filter {
         it.file.fileId != null && it.file.originalAccessAllowed && it.format != MediaAssetFormat.Video
     }
@@ -168,6 +199,36 @@ internal suspend fun <T> loadFirstUsableMediaSource(
     return null
 }
 
+internal suspend fun <T> loadFirstUsableFullResolutionMediaSource(
+    candidates: List<MediaSourceChoice>,
+    maximumPayloadBytes: Int = MAX_MEDIA_PREVIEW_BYTES,
+    load: suspend (NextcloudFile) -> FullResolutionPhotoPayload,
+    decode: (FullResolutionPhotoPayload) -> T?,
+): LoadedFullResolutionMediaSource<T>? {
+    require(maximumPayloadBytes >= MIN_MEDIA_IMAGE_PAYLOAD_BYTES)
+    candidates.forEachIndexed { index, candidate ->
+        val decoded = try {
+            val payload = load(candidate.file)
+            require(isBoundedDisplayImagePayload(payload.bytes, maximumPayloadBytes)) {
+                "The server did not return a bounded full-resolution image."
+            }
+            requireNotNull(decode(payload)) { "The full-resolution image could not be decoded." } to payload.source
+        } catch (failure: Exception) {
+            if (failure is CancellationException) throw failure
+            null
+        }
+        if (decoded != null) {
+            return LoadedFullResolutionMediaSource(
+                value = decoded.first,
+                source = candidate,
+                usedFallback = index > 0,
+                payloadSource = decoded.second,
+            )
+        }
+    }
+    return null
+}
+
 fun isBoundedDisplayImagePayload(
     bytes: ByteArray,
     maximumPayloadBytes: Int = MAX_MEDIA_PREVIEW_BYTES,
@@ -188,11 +249,43 @@ fun isBoundedDisplayImagePayload(
 
 fun NextcloudFile.isRawPhoto(): Boolean = mediaAssetFormat() == MediaAssetFormat.Raw
 
+fun NextcloudFile.canOpenInMediaViewer(): Boolean =
+    !isDirectory && (
+        (
+            fileId != null &&
+                (hasPreview || (isRawPhoto() && originalAccessAllowed))
+        ) ||
+            canUseEmbeddedRafPreview()
+    )
+
+internal fun NextcloudFile.canUseEmbeddedRafPreview(): Boolean =
+    !isDirectory &&
+        isRawPhoto() &&
+        name.substringAfterLast('.', missingDelimiterValue = "").equals("raf", ignoreCase = true) &&
+        originalAccessAllowed &&
+        davPathAuthoritative &&
+        runCatching { requireSafeFilePath(path, allowRoot = false) }.isSuccess &&
+        etag?.let { runCatching { requireSafeFileRangeEtag(it) }.isSuccess } == true
+
 fun NextcloudFile.isPhotoMedia(): Boolean = mediaAssetFormat() in setOf(
     MediaAssetFormat.Raw,
     MediaAssetFormat.Jpeg,
     MediaAssetFormat.Image,
 )
+
+fun rawPhotoFileNameSearchPatterns(): List<String> =
+    rawPhotoExtensions.sorted().map { extension -> "%.$extension" }
+
+fun selectMediaSearchFiles(
+    results: List<NextcloudFile>,
+    maximumResults: Int = 80,
+): List<NextcloudFile> {
+    require(maximumResults > 0)
+    return results.asSequence()
+        .filterNot(NextcloudFile::isDirectory)
+        .take(maximumResults)
+        .toList()
+}
 
 fun NextcloudFile.mediaAssetFormat(): MediaAssetFormat {
     val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase()

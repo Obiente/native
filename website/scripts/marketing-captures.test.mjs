@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   articleCapture,
+  discoverCaptureSources,
   stableCapturePath,
   validateCaptureManifest,
   websiteCapturePath,
@@ -41,7 +45,7 @@ function validManifest() {
   };
 }
 
-test("capture manifest accepts optional pull request metadata", () => {
+test("capture manifest accepts optional pull request and issue metadata", () => {
   const withoutPullRequest = validManifest();
   assert.equal(validateCaptureManifest(withoutPullRequest).schemaVersion, 2);
 
@@ -54,6 +58,17 @@ test("capture manifest accepts optional pull request metadata", () => {
   assert.throws(
     () => validateCaptureManifest(invalidPullRequest),
     /pullRequest must be a positive integer/u,
+  );
+
+  const withIssue = validManifest();
+  withIssue.captures[0].issue = 456;
+  assert.equal(validateCaptureManifest(withIssue).captures[0].issue, 456);
+
+  const invalidIssue = validManifest();
+  invalidIssue.captures[0].issue = 0;
+  assert.throws(
+    () => validateCaptureManifest(invalidIssue),
+    /issue must be a positive integer/u,
   );
 });
 
@@ -106,4 +121,54 @@ test("capture manifest rejects duplicate scenarios and obsolete schemas", () => 
   const obsolete = validManifest();
   obsolete.schemaVersion = 1;
   assert.throws(() => validateCaptureManifest(obsolete), /schemaVersion must be 2/u);
+});
+
+test("capture manifest rejects unexpected schema fields", () => {
+  const topLevel = validManifest();
+  topLevel.internalNote = "not public";
+  assert.throws(() => validateCaptureManifest(topLevel), /unexpected or missing fields/u);
+
+  const capture = validManifest();
+  capture.captures[0].debugPath = "/private";
+  assert.throws(() => validateCaptureManifest(capture), /unexpected or missing fields/u);
+});
+
+test("capture source discovery rejects traversal, backslashes, and symlinks", async () => {
+  const repository = await mkdtemp(path.join(os.tmpdir(), "capture-source-js-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "capture-source-outside-js-"));
+  try {
+    await mkdir(path.join(repository, "tools"), { recursive: true });
+    await mkdir(path.join(repository, "ui", "source"), { recursive: true });
+    await writeFile(
+      path.join(repository, "tools", "marketing-capture-inputs.txt"),
+      "ui/source\n",
+    );
+    await writeFile(path.join(repository, "ui", "source", "A.kt"), "a");
+    assert.deepEqual(
+      await discoverCaptureSources(repository),
+      ["tools/marketing-capture-inputs.txt", "ui/source/A.kt"],
+    );
+
+    for (const unsafe of ["../outside", "ui\\source", "/absolute"]) {
+      await writeFile(
+        path.join(repository, "tools", "marketing-capture-inputs.txt"),
+        `${unsafe}\n`,
+      );
+      await assert.rejects(() => discoverCaptureSources(repository));
+    }
+
+    await writeFile(path.join(outside, "private.kt"), "private");
+    await symlink(outside, path.join(repository, "linked"));
+    await writeFile(
+      path.join(repository, "tools", "marketing-capture-inputs.txt"),
+      "linked\n",
+    );
+    await assert.rejects(
+      () => discoverCaptureSources(repository),
+      /must not be a symbolic link/u,
+    );
+  } finally {
+    await rm(repository, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
 });

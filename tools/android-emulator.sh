@@ -339,19 +339,20 @@ reuse_desktop_session() {
     "$adb" -s "$serial" shell run-as "$package_name" true >/dev/null 2>&1 ||
         fail "install a debuggable Nextcloud Native APK on '$instance' first"
 
+    "$adb" -s "$serial" shell run-as "$package_name" mkdir -p files
     java "$project_root/tools/DesktopSessionExport.java" |
         "$adb" -s "$serial" shell \
-            run-as "$package_name" \
-            sh -c 'umask 077; cat > files/nc-native-test-session.json'
+            "run-as '$package_name' sh -c 'umask 077; cat > files/nc-native-test-session.json'"
     "$adb" -s "$serial" shell am force-stop "$package_name"
     "$adb" -s "$serial" shell am start -W -n "$activity_name" >/dev/null
 
     local deadline=$((SECONDS + session_import_timeout_seconds))
     while ((SECONDS < deadline)); do
-        if "$adb" -s "$serial" shell run-as "$package_name" \
-            sh -c 'test ! -e files/nc-native-test-session.json' >/dev/null 2>&1; then
-            if "$adb" -s "$serial" shell run-as "$package_name" \
-                sh -c 'grep -q emulator_test_read_only shared_prefs/nextcloud_native.xml' \
+        if "$adb" -s "$serial" shell \
+            "run-as '$package_name' test ! -e files/nc-native-test-session.json" \
+            >/dev/null 2>&1; then
+            if "$adb" -s "$serial" shell \
+                "run-as '$package_name' grep -q emulator_test_read_only shared_prefs/nextcloud_native.xml" \
                 >/dev/null 2>&1; then
                 printf '%s\n' \
                     "Desktop session imported into $instance in enforced read-only mode." \

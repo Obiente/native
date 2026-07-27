@@ -63,10 +63,14 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
@@ -89,12 +93,32 @@ fun NextcloudMediaViewer(
     onSelect: (NextcloudFile) -> Unit,
     onSourceRemoved: (NextcloudFile) -> Unit,
     onClose: () -> Unit,
+    initialZoom: Float = 1f,
+    onStateObserved: (MediaViewerStateObservation) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val items = remember(media, selected) {
         if (media.any { it.path == selected.path }) media else listOf(selected)
     }
     val sourcePlan = remember(items, selected) { planMediaSources(items, selected) }
+    val fullQualityGeneration = sourcePlan.fullQualityCandidates.map { choice ->
+        choice.file.mediaViewerSourceGenerationIdentity()
+    }
+    val sourceLoadIdentity = remember(
+        selected.path,
+        userId,
+        session.serverUrl,
+        session.loginName,
+        fullQualityGeneration,
+    ) {
+        MediaViewerSourceLoadIdentity(
+            selectedPath = selected.path,
+            filesUserId = userId,
+            serverUrl = session.serverUrl,
+            loginName = session.loginName,
+            candidates = fullQualityGeneration,
+        )
+    }
     val selectedIndex = items.indexOfFirst { it.path == selected.path }.coerceAtLeast(0)
     val canGoPrevious = selectedIndex > 0
     val canGoNext = selectedIndex < items.lastIndex
@@ -103,10 +127,12 @@ fun NextcloudMediaViewer(
     var previewState by remember(selected.path, retryKey) {
         mutableStateOf<MediaPreviewState>(MediaPreviewState.Loading)
     }
-    var fullQualityState by remember(selected.path) {
+    var fullQualityState by remember(sourceLoadIdentity) {
         mutableStateOf<FullQualityState>(FullQualityState.Idle)
     }
-    var zoom by remember(selected.path) { mutableStateOf(1f) }
+    var zoom by remember(selected.path) {
+        mutableStateOf(initialZoom.coerceIn(MINIMUM_MEDIA_ZOOM, MAXIMUM_MEDIA_ZOOM))
+    }
     var panOffset by remember(selected.path) { mutableStateOf(Offset.Zero) }
     var editing by remember(selected.path) { mutableStateOf(false) }
     var tagging by remember(selected.path) { mutableStateOf(false) }
@@ -130,46 +156,13 @@ fun NextcloudMediaViewer(
         val externalActions = (
             services.externalFileHandoffSupport as? ExternalFileHandoffSupport.Available
             )?.capability?.supportedActions.orEmpty()
-        buildList {
-            if (
-                selected.originalAccessAllowed && userId.isNotBlank() &&
-                ExternalFileHandoffAction.Share in externalActions
-            ) {
-                add(MediaViewerAction.SendCopy)
-            }
-            if (
-                selected.originalAccessAllowed &&
-                sharingCapabilities.supportsAnyCreation
-            ) {
-                add(MediaViewerAction.ShareNextcloud)
-            }
-            if (
-                selected.originalAccessAllowed && taggingAvailable &&
-                selected.fileId != null && userId.isNotBlank()
-            ) {
-                add(MediaViewerAction.AddToAlbum)
-            }
-            if (
-                selected.originalAccessAllowed && userId.isNotBlank() &&
-                !selected.etag.isNullOrBlank()
-            ) {
-                add(MediaViewerAction.Move)
-                add(MediaViewerAction.Copy)
-            }
-            if (
-                selected.originalAccessAllowed && userId.isNotBlank() &&
-                ExternalFileHandoffAction.OpenWith in externalActions
-            ) {
-                add(MediaViewerAction.OpenWith)
-            }
-            add(MediaViewerAction.Info)
-            if (
-                selected.originalAccessAllowed && userId.isNotBlank() &&
-                !selected.etag.isNullOrBlank()
-            ) {
-                add(MediaViewerAction.Delete)
-            }
-        }
+        availableMediaViewerActions(
+            file = selected,
+            userId = userId,
+            taggingAvailable = taggingAvailable,
+            sharingCapabilities = sharingCapabilities,
+            externalActions = externalActions,
+        )
     }
 
     fun selectPrevious() {
@@ -181,7 +174,7 @@ fun NextcloudMediaViewer(
     }
 
     fun handoffToExternalApp(action: ExternalFileHandoffAction) {
-        if (externalOpening || !selected.originalAccessAllowed) return
+        if (externalOpening || !selected.hasAuthoritativeMediaDavAccess(userId)) return
         externalOpening = true
         externalError = null
         scope.launch {
@@ -210,69 +203,132 @@ fun NextcloudMediaViewer(
 
     fun openInMediaApp() = handoffToExternalApp(ExternalFileHandoffAction.OpenWith)
 
-    LaunchedEffect(selected.path, selected.fileId, session, retryKey, sourcePlan.previewCandidates) {
+    LaunchedEffect(sourceLoadIdentity, selected.fileId, session, retryKey, sourcePlan.previewCandidates) {
         previewState = MediaPreviewState.Loading
-        val loaded = loadFirstUsableMediaSource(
+        val loaded = loadFirstUsableMediaPreviewSource(
             candidates = sourcePlan.previewCandidates,
             load = { candidate ->
-                services.loadPreviewCached(session, candidate, width = 1_600, height = 1_600)
-            },
-            decode = { bytes ->
-                decodePlatformImageSampled(
-                    bytes,
-                    MAXIMUM_PREVIEW_IMAGE_DIMENSION,
-                    EncodedImageOrientationPolicy.PixelsAlreadyUpright,
-                )?.image
+                loadMediaDisplayPayload(
+                    file = candidate,
+                    loadCorePreview = {
+                        services.loadPreviewCached(session, candidate, width = 1_600, height = 1_600)
+                    },
+                    loadMemoriesRawRender = {
+                        val fileId = requireNotNull(candidate.fileId) {
+                            "The RAW file has no stable server file ID."
+                        }
+                        val response = services.executeNextcloudApi(
+                            session,
+                            memoriesPhotoDecodableApiRequest(
+                                fileId = fileId,
+                                etag = candidate.etag,
+                                maximumResponseBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES.toLong(),
+                            ),
+                        )
+                        check(response.status in 200..299) {
+                            "The Memories RAW render failed (HTTP ${response.status})."
+                        }
+                        response.body
+                    },
+                    loadFileRange = { offset, length, expectedEtag ->
+                        check(userId.isNotBlank()) {
+                            "The authenticated Files user ID is unavailable."
+                        }
+                        services.downloadFileRange(
+                            session = session,
+                            userId = userId,
+                            path = candidate.path,
+                            offset = offset,
+                            length = length,
+                            expectedEtag = expectedEtag,
+                        )
+                    },
+                    decode = { payload ->
+                        decodePlatformImageSampled(
+                            payload.bytes,
+                            MAXIMUM_PREVIEW_IMAGE_DIMENSION,
+                            payload.kind.orientationPolicy(),
+                        )?.image
+                    },
+                )
             },
         )
         previewState = loaded?.let {
-            MediaPreviewState.Ready(it.value, it.source, it.usedFallback)
-        } ?: MediaPreviewState.Error
+            MediaPreviewState.Ready(it.value, it.source, it.usedFallback, it.payloadKind)
+        } ?: MediaPreviewState.Error(
+            detail = if (selected.isRawPhoto()) {
+                "No server render or embedded camera preview could be loaded or decoded. " +
+                    "The RAW original is unchanged."
+            } else {
+                "No supported preview could be loaded or decoded. The original file is unchanged."
+            },
+        )
     }
 
     LaunchedEffect(
-        selected.path,
+        sourceLoadIdentity,
         zoom >= FULL_QUALITY_MEDIA_ZOOM_THRESHOLD,
         sourcePlan.fullQualityCandidates,
     ) {
         val qualityCandidates = sourcePlan.fullQualityCandidatesAtZoom(zoom)
         if (qualityCandidates.isEmpty() || fullQualityState !is FullQualityState.Idle) return@LaunchedEffect
         fullQualityState = FullQualityState.Loading
-        val loaded = loadFirstUsableMediaSource(
-            candidates = qualityCandidates,
-            maximumPayloadBytes = MAX_PHOTO_EDIT_SOURCE_BYTES.toInt(),
-            load = { candidate ->
-                loadFullResolutionPhotoPayload(
-                    original = candidate,
-                    loadMemories = { fileId, etag ->
-                        val response = services.executeNextcloudApi(
-                            session,
-                            memoriesPhotoDecodableApiRequest(fileId, etag),
-                        )
-                        check(response.status in 200..299) {
-                            "Full-quality Memories source failed (HTTP ${response.status})."
-                        }
-                        response.body
-                    },
-                    loadFilesDav = if (candidate.originalAccessAllowed && userId.isNotBlank()) {
-                        { path ->
-                            services.downloadFile(
-                                session = session,
-                                userId = userId,
-                                path = path,
-                                maxBytes = MAX_PHOTO_EDIT_SOURCE_BYTES,
-                            ).bytes
-                        }
-                    } else {
-                        null
-                    },
-                ).bytes
-            },
-            decode = { bytes -> decodePlatformImageSampled(bytes, MAXIMUM_DISPLAY_IMAGE_DIMENSION)?.image },
+        withFullQualityCancellationRecovery(
+            onCancelled = { fullQualityState = FullQualityState.Idle },
+        ) {
+            val loaded = loadFirstUsableFullResolutionMediaSource(
+                candidates = qualityCandidates,
+                maximumPayloadBytes = MAX_PHOTO_EDIT_SOURCE_BYTES.toInt(),
+                load = { candidate ->
+                    loadFullResolutionPhotoPayload(
+                        original = candidate,
+                        loadMemories = { fileId, etag ->
+                            val response = services.executeNextcloudApi(
+                                session,
+                                memoriesPhotoDecodableApiRequest(fileId, etag),
+                            )
+                            check(response.status in 200..299) {
+                                "High-detail Memories render failed (HTTP ${response.status})."
+                            }
+                            response.body
+                        },
+                        loadFilesDav = if (candidate.originalAccessAllowed && userId.isNotBlank()) {
+                            { path ->
+                                services.downloadFile(
+                                    session = session,
+                                    userId = userId,
+                                    path = path,
+                                    maxBytes = MAX_PHOTO_EDIT_SOURCE_BYTES,
+                                ).bytes
+                            }
+                        } else {
+                            null
+                        },
+                    )
+                },
+                decode = { payload ->
+                    decodePlatformImageSampled(
+                        payload.bytes,
+                        MAXIMUM_DISPLAY_IMAGE_DIMENSION,
+                        payload.source.orientationPolicy(),
+                    )?.image
+                },
+            )
+            fullQualityState = loaded?.let {
+                FullQualityState.Ready(it.value, it.source, it.usedFallback, it.payloadSource)
+            } ?: FullQualityState.Error
+        }
+    }
+
+    LaunchedEffect(selected.path, previewState, fullQualityState, zoom) {
+        onStateObserved(
+            mediaViewerStateObservation(
+                selectedPath = selected.path,
+                previewState = previewState,
+                highDetailState = fullQualityState,
+                requestedZoom = zoom,
+            ),
         )
-        fullQualityState = loaded?.let {
-            FullQualityState.Ready(it.value, it.source, it.usedFallback)
-        } ?: FullQualityState.Error
     }
 
     LaunchedEffect(Unit) {
@@ -301,6 +357,15 @@ fun NextcloudMediaViewer(
         modifier = modifier
             .fillMaxSize()
             .background(ViewerBackground)
+            .testTag(MEDIA_VIEWER_ROOT_TEST_TAG)
+            .semantics {
+                stateDescription = mediaViewerStateObservation(
+                    selectedPath = selected.path,
+                    previewState = previewState,
+                    highDetailState = fullQualityState,
+                    requestedZoom = zoom,
+                ).readiness.description
+            }
             .focusRequester(focusRequester)
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) {
@@ -335,9 +400,10 @@ fun NextcloudMediaViewer(
                 onCancel = { editing = false },
                 modifier = Modifier.fillMaxSize(),
             )
-        } else if (
-            selected.mediaAssetFormat() == MediaAssetFormat.Video &&
-            platformNativeVideoPlaybackAvailable
+        } else if (selected.canUsePlatformNativeVideoPlayback(
+                userId = userId,
+                nativePlaybackAvailable = platformNativeVideoPlaybackAvailable,
+            )
         ) {
             PlatformNativeVideoPlayer(
                 session = session,
@@ -358,7 +424,10 @@ fun NextcloudMediaViewer(
                 modifier = mediaCanvasModifier
                     .pointerInput(selected.path) {
                         detectTransformGestures { _, pan, gestureZoom, _ ->
-                            val nextZoom = (zoom * gestureZoom).coerceIn(1f, 5f)
+                            val nextZoom = (zoom * gestureZoom).coerceIn(
+                                MINIMUM_MEDIA_ZOOM,
+                                MAXIMUM_MEDIA_ZOOM,
+                            )
                             zoom = nextZoom
                             panOffset = if (nextZoom == 1f) Offset.Zero else panOffset + pan
                         }
@@ -384,16 +453,19 @@ fun NextcloudMediaViewer(
                 contentScale = ContentScale.Fit,
             )
 
-            MediaPreviewState.Error -> PreviewError(
+            is MediaPreviewState.Error -> PreviewError(
+                detail = state.detail,
                 onRetry = { retryKey += 1 },
-                onOpenExternal = if (selected.originalAccessAllowed && userId.isNotBlank()) {
+                onOpenExternal = if (selected.hasAuthoritativeMediaDavAccess(userId)) {
                     ::openInMediaApp
                 } else {
                     null
                 },
                 openingExternal = externalOpening,
                 externalError = externalError,
-                modifier = Modifier.align(Alignment.Center),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 40.dp),
             )
         }
 
@@ -405,7 +477,7 @@ fun NextcloudMediaViewer(
             ) {
                 Button(
                     onClick = ::openInMediaApp,
-                    enabled = !externalOpening && selected.originalAccessAllowed && userId.isNotBlank(),
+                    enabled = !externalOpening && selected.hasAuthoritativeMediaDavAccess(userId),
                     modifier = Modifier.align(Alignment.Center),
                 ) {
                     if (externalOpening) {
@@ -440,7 +512,7 @@ fun NextcloudMediaViewer(
                     )
                     TextButton(
                         onClick = ::openInMediaApp,
-                        enabled = !externalOpening && selected.originalAccessAllowed,
+                        enabled = !externalOpening && selected.hasAuthoritativeMediaDavAccess(userId),
                     ) {
                         Text(if (externalOpening) "Preparing..." else "Open in another app")
                     }
@@ -453,20 +525,28 @@ fun NextcloudMediaViewer(
                     append(
                         when (fullQualityState) {
                             FullQualityState.Idle ->
-                                if (zoom < FULL_QUALITY_MEDIA_ZOOM_THRESHOLD) " · Preview" else ""
-                            FullQualityState.Loading -> " · Loading full quality..."
-                            is FullQualityState.Ready -> " · Full quality"
-                            FullQualityState.Error -> " · Preview (full quality unavailable)"
+                                if (zoom < FULL_QUALITY_MEDIA_ZOOM_THRESHOLD) " - Preview" else ""
+                            FullQualityState.Loading -> " - Loading high-detail render..."
+                            is FullQualityState.Ready -> " - High-detail render"
+                            FullQualityState.Error -> " - Preview (high-detail render unavailable)"
                         },
                     )
                     val activeSource = fullQuality?.source ?: readyPreview?.source
                     if (activeSource != null) {
-                        append(" · ")
+                        append(" - ")
                         append(
                             describeMediaDisplaySource(
                                 selected = sourcePlan.selected,
                                 displayed = activeSource,
-                                fullQuality = fullQuality != null,
+                                highDetail = fullQuality != null,
+                                payloadKind = when (fullQuality) {
+                                    is FullQualityState.Ready -> fullQualityMediaPayloadKind(
+                                        displayed = fullQuality.source,
+                                        payloadSource = fullQuality.payloadSource,
+                                    )
+                                    else ->
+                                        readyPreview?.payloadKind ?: MediaDisplayPayloadKind.ServerPreview
+                                },
                             ),
                         )
                     }
@@ -475,8 +555,13 @@ fun NextcloudMediaViewer(
                 selectedSourcePath = selected.path,
                 onSelectSource = { choice -> onSelect(choice.file) },
                 onEdit = if (
-                    readyPreview != null && userId.isNotBlank() && selected.isPhotoMedia() &&
-                    selected.originalAccessAllowed
+                    canEditMediaPreview(
+                        file = selected,
+                        payloadKind = readyPreview?.payloadKind,
+                        userId = userId,
+                        previewSourceFile = readyPreview?.source?.file,
+                        highDetailSourceFile = fullQuality?.source?.file,
+                    )
                 ) {
                     { editing = true }
                 } else {
@@ -885,6 +970,7 @@ private fun ViewerNavigationButton(
 
 @Composable
 private fun PreviewError(
+    detail: String,
     onRetry: () -> Unit,
     onOpenExternal: (() -> Unit)?,
     openingExternal: Boolean,
@@ -900,6 +986,11 @@ private fun PreviewError(
             text = "Couldn't open this preview",
             color = Color.White,
             style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            text = detail,
+            color = Color.White.copy(alpha = 0.78f),
+            style = MaterialTheme.typography.bodyMedium,
         )
         Button(onClick = onRetry) {
             Icon(
@@ -946,9 +1037,10 @@ private sealed interface MediaPreviewState {
         val image: ImageBitmap,
         val source: MediaSourceChoice,
         val usedFallback: Boolean,
+        val payloadKind: MediaDisplayPayloadKind,
     ) : MediaPreviewState
 
-    data object Error : MediaPreviewState
+    data class Error(val detail: String) : MediaPreviewState
 }
 
 private sealed interface FullQualityState {
@@ -958,9 +1050,134 @@ private sealed interface FullQualityState {
         val image: ImageBitmap,
         val source: MediaSourceChoice,
         val usedFallback: Boolean,
+        val payloadSource: FullResolutionPhotoSource,
     ) : FullQualityState
     data object Error : FullQualityState
 }
+
+internal suspend fun <T> withFullQualityCancellationRecovery(
+    onCancelled: () -> Unit,
+    load: suspend () -> T,
+): T = try {
+    load()
+} catch (cancelled: CancellationException) {
+    onCancelled()
+    throw cancelled
+}
+
+internal data class MediaViewerSourceLoadIdentity(
+    val selectedPath: String,
+    val filesUserId: String,
+    val serverUrl: String = "",
+    val loginName: String = "",
+    val candidates: List<MediaViewerSourceGenerationIdentity> = emptyList(),
+)
+
+internal data class MediaViewerSourceGenerationIdentity(
+    val path: String,
+    val fileId: Long?,
+    val etag: String?,
+    val size: Long?,
+    val lastModified: String?,
+    val originalAccessAllowed: Boolean,
+    val davPathAuthoritative: Boolean,
+)
+
+internal fun NextcloudFile.mediaViewerSourceGenerationIdentity(): MediaViewerSourceGenerationIdentity =
+    MediaViewerSourceGenerationIdentity(
+        path = path,
+        fileId = fileId,
+        etag = etag,
+        size = size,
+        lastModified = lastModified,
+        originalAccessAllowed = originalAccessAllowed,
+        davPathAuthoritative = davPathAuthoritative,
+    )
+
+enum class MediaViewerReadiness(val description: String) {
+    Loading("Loading rendered preview"),
+    RenderUnavailable("Rendered preview unavailable"),
+    RenderReady("Rendered preview ready"),
+    HighDetailLoading("Loading high-detail render"),
+    HighDetailReady("High-detail render ready"),
+}
+
+data class MediaViewerStateObservation(
+    val readiness: MediaViewerReadiness,
+    val selectedPath: String,
+    val displayedPath: String?,
+    val payloadKind: MediaDisplayPayloadKind?,
+    val requestedZoom: Float,
+)
+
+private fun mediaViewerStateObservation(
+    selectedPath: String,
+    previewState: MediaPreviewState,
+    highDetailState: FullQualityState,
+    requestedZoom: Float,
+): MediaViewerStateObservation {
+    val preview = previewState as? MediaPreviewState.Ready
+    val highDetail = highDetailState as? FullQualityState.Ready
+    return MediaViewerStateObservation(
+        readiness = when {
+            highDetail != null -> MediaViewerReadiness.HighDetailReady
+            highDetailState is FullQualityState.Loading -> MediaViewerReadiness.HighDetailLoading
+            preview != null -> MediaViewerReadiness.RenderReady
+            previewState is MediaPreviewState.Error -> MediaViewerReadiness.RenderUnavailable
+            else -> MediaViewerReadiness.Loading
+        },
+        selectedPath = selectedPath,
+        displayedPath = highDetail?.source?.file?.path ?: preview?.source?.file?.path,
+        payloadKind = when {
+            highDetail != null -> fullQualityMediaPayloadKind(
+                displayed = highDetail.source,
+                payloadSource = highDetail.payloadSource,
+            )
+            preview != null -> preview.payloadKind
+            else -> null
+        },
+        requestedZoom = requestedZoom,
+    )
+}
+
+internal const val MEDIA_VIEWER_ROOT_TEST_TAG = "nextcloud-media-viewer"
+internal const val MINIMUM_MEDIA_ZOOM = 1f
+internal const val MAXIMUM_MEDIA_ZOOM = 5f
+
+internal fun canEditMediaPreview(
+    file: NextcloudFile,
+    payloadKind: MediaDisplayPayloadKind?,
+    userId: String,
+    previewSourceFile: NextcloudFile? = null,
+    highDetailSourceFile: NextcloudFile? = null,
+): Boolean {
+    val previewMatchesSelected = previewSourceFile?.mediaViewerSourceGenerationIdentity() ==
+        file.mediaViewerSourceGenerationIdentity()
+    val highDetailMatchesSelected = highDetailSourceFile?.mediaViewerSourceGenerationIdentity() ==
+        file.mediaViewerSourceGenerationIdentity()
+    val displayedSourceMatchesSelected = if (highDetailSourceFile != null) {
+        highDetailMatchesSelected
+    } else {
+        previewMatchesSelected
+    }
+    return payloadKind != null &&
+        displayedSourceMatchesSelected &&
+        (payloadKind != MediaDisplayPayloadKind.EmbeddedCameraPreview || highDetailMatchesSelected) &&
+        userId.isNotBlank() &&
+        file.isPhotoMedia() &&
+        file.originalAccessAllowed
+}
+
+internal fun NextcloudFile.hasAuthoritativeMediaDavAccess(userId: String): Boolean =
+    originalAccessAllowed && davPathAuthoritative && userId.isNotBlank()
+
+internal fun NextcloudFile.canUsePlatformNativeVideoPlayback(
+    userId: String,
+    nativePlaybackAvailable: Boolean,
+): Boolean =
+    nativePlaybackAvailable &&
+        mediaAssetFormat() == MediaAssetFormat.Video &&
+        hasAuthoritativeMediaDavAccess(userId)
 
 private const val MAXIMUM_PREVIEW_IMAGE_DIMENSION = 1_600
 private const val MAXIMUM_DISPLAY_IMAGE_DIMENSION = 4_096

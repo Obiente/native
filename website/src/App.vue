@@ -775,12 +775,17 @@ const frequentlyAsked = [
           </p>
           <div class="visual-qa-filter-set">
             <span>State</span>
-            <div class="visual-qa-filters" aria-label="Filter captures by state purpose">
+            <div
+              class="visual-qa-filters"
+              role="group"
+              aria-label="Filter captures by state purpose"
+            >
               <button
                 v-for="purpose in visualQaPurposes"
                 :key="purpose.value"
                 type="button"
                 :class="{ active: visualQaPurpose === purpose.value }"
+                :aria-pressed="visualQaPurpose === purpose.value"
                 @click="visualQaPurpose = purpose.value"
               >
                 {{ purpose.label }}
@@ -789,12 +794,17 @@ const frequentlyAsked = [
           </div>
           <div class="visual-qa-filter-set">
             <span>Platform</span>
-            <div class="visual-qa-filters" aria-label="Filter captures by platform">
+            <div
+              class="visual-qa-filters"
+              role="group"
+              aria-label="Filter captures by platform"
+            >
               <button
                 v-for="platform in visualQaPlatforms"
                 :key="platform"
                 type="button"
                 :class="{ active: visualQaPlatform === platform }"
+                :aria-pressed="visualQaPlatform === platform"
                 @click="visualQaPlatform = platform"
               >
                 {{ platform === "all" ? "All platforms" : platform }}
@@ -803,12 +813,17 @@ const frequentlyAsked = [
           </div>
           <div class="visual-qa-filter-set">
             <span>Review source</span>
-            <div class="visual-qa-filters" aria-label="Filter captures by pull request">
+            <div
+              class="visual-qa-filters"
+              role="group"
+              aria-label="Filter captures by pull request"
+            >
               <button
                 v-for="pullRequest in visualQaPullRequests"
                 :key="pullRequest"
                 type="button"
                 :class="{ active: visualQaPullRequest === pullRequest }"
+                :aria-pressed="visualQaPullRequest === pullRequest"
                 @click="visualQaPullRequest = pullRequest"
               >
                 {{
@@ -823,6 +838,10 @@ const frequentlyAsked = [
           </div>
         </header>
 
+        <p class="sr-only" aria-live="polite">
+          {{ visualQaGroups.reduce((total, group) => total + group.captures.length, 0) }}
+          captures match the selected filters.
+        </p>
         <div v-if="visualQaGroups.length" class="visual-qa-groups">
           <section
             v-for="group in visualQaGroups"
@@ -866,6 +885,30 @@ const frequentlyAsked = [
                     <div><dt>Platform</dt><dd>{{ capture.platform }}</dd></div>
                     <div><dt>Viewport</dt><dd>{{ capture.viewport }}</dd></div>
                     <div><dt>Pixels</dt><dd>{{ capture.width }} x {{ capture.height }}</dd></div>
+                    <div v-if="capture.pullRequest">
+                      <dt>Review</dt>
+                      <dd>
+                        <a
+                          :href="`${githubUrl}/pull/${capture.pullRequest}`"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          PR #{{ capture.pullRequest }}
+                        </a>
+                      </dd>
+                    </div>
+                    <div v-if="capture.issue">
+                      <dt>Issue</dt>
+                      <dd>
+                        <a
+                          :href="`${githubUrl}/issues/${capture.issue}`"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          #{{ capture.issue }}
+                        </a>
+                      </dd>
+                    </div>
                   </dl>
                   <a
                     class="visual-qa-full-size"

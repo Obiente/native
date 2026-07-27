@@ -107,6 +107,73 @@ class FileOperationsTest {
     }
 
     @Test
+    fun linkShareEncodesPasswordExpirationAndNoteWithoutLosingFieldBoundaries() {
+        val request = CreateFileShareRequest(
+            path = "Documents/Guide.pdf",
+            target = FileShareTarget.PublicLink,
+            permissions = FileSharePermissions(read = true),
+            details = FileShareCreationDetails(
+                password = "synthetic secret",
+                expiration = FileShareExpiration.OnDate("2028-02-29"),
+                note = "For the project team\r\nSecond paragraph",
+            ),
+        ).toNextcloudApiRequest()
+
+        assertEquals(
+            "path=%2FDocuments%2FGuide.pdf&shareType=3&permissions=1&" +
+                "password=synthetic%20secret&expireDate=2028-02-29&" +
+                "note=For%20the%20project%20team%0D%0ASecond%20paragraph",
+            request.body?.decodeToString(),
+        )
+        assertEquals("2028-02-29", requireValidFileShareDate("2028-02-29"))
+        assertFailsWith<IllegalArgumentException> { requireValidFileShareDate("2027-02-29") }
+        assertFailsWith<IllegalArgumentException> {
+            CreateFileShareRequest(
+                path = "Documents/Guide.pdf",
+                target = FileShareTarget.PublicLink,
+                details = FileShareCreationDetails(note = "Unsafe\u0007note"),
+            ).toNextcloudApiRequest()
+        }
+    }
+
+    @Test
+    fun expirationDatesAreCalendarValidatedWithoutDeviceTimezoneAuthority() {
+        assertEquals(
+            "2020-01-01",
+            requireValidFileShareDate("2020-01-01"),
+        )
+        val request = CreateFileShareRequest(
+            path = "Documents/Guide.pdf",
+            target = FileShareTarget.PublicLink,
+            details = FileShareCreationDetails(
+                expiration = FileShareExpiration.OnDate("2020-01-01"),
+            ),
+        ).toNextcloudApiRequest()
+        assertTrue(request.body!!.decodeToString().contains("expireDate=2020-01-01"))
+        assertFailsWith<IllegalArgumentException> { requireValidFileShareDate("2020-02-30") }
+        assertFailsWith<IllegalArgumentException> { requireValidFileShareDate("2020-1-01") }
+    }
+
+    @Test
+    fun explicitNoExpirationUsesTheDocumentedEmptyFieldAndPasswordsStayLinkScoped() {
+        val noExpiration = CreateFileShareRequest(
+            path = "Documents/Guide.pdf",
+            target = FileShareTarget.PublicLink,
+            details = FileShareCreationDetails(expiration = FileShareExpiration.NoExpiration),
+        ).toNextcloudApiRequest()
+        assertTrue(noExpiration.body!!.decodeToString().contains("expireDate="))
+
+        assertFailsWith<IllegalArgumentException> {
+            CreateFileShareRequest(
+                path = "Documents/Guide.pdf",
+                target = FileShareTarget.User,
+                shareWith = "synthetic-user",
+                details = FileShareCreationDetails(password = "not-allowed"),
+            ).toNextcloudApiRequest()
+        }
+    }
+
+    @Test
     fun userShareRequiresRecipientAndCombinesPermissions() {
         assertFailsWith<IllegalArgumentException> {
             CreateFileShareRequest("a.txt", FileShareTarget.User).toNextcloudApiRequest()
@@ -119,6 +186,22 @@ class FileOperationsTest {
         ).toNextcloudApiRequest()
         assertEquals(19, FileSharePermissions(read = true, update = true, reshare = true).mask)
         assertTrue(request.body!!.decodeToString().contains("shareWith=ada%40example.test"))
+    }
+
+    @Test
+    fun reusableShareTargetsAndPermissionPresetsMatchSelectedItemContext() {
+        assertEquals("Remote user", FileShareTarget.Remote.presentation().label)
+        assertEquals("Search email addresses", FileShareTarget.Email.presentation().searchLabel)
+        assertTrue(FileShareTarget.Email.requiresRecipient)
+        assertFalse(FileShareTarget.PublicLink.requiresRecipient)
+        assertEquals(
+            FileSharePermissions(read = true, update = true, create = true, delete = true),
+            FileSharePermissionPreset.Edit.toPermissions(sourceIsDirectory = true),
+        )
+        assertEquals(
+            FileSharePermissions(read = true),
+            FileSharePermissionPreset.View.toPermissions(sourceIsDirectory = false),
+        )
     }
 
     @Test

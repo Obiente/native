@@ -69,13 +69,33 @@ class PersonMediaPagingTest {
             "memories/people/recognize/42/${dayIds.first()}/${dayIds.first()}",
             first.items.first().toPersonMediaFile(person).path,
         )
-        assertFalse(first.items.first().toPersonMediaFile(person).originalAccessAllowed)
+        val personFile = first.items.first().toPersonMediaFile(person)
+        assertFalse(personFile.originalAccessAllowed)
+        assertFalse(personFile.davPathAuthoritative)
         assertEquals(3, observed.size)
         assertTrue(observed.all { it.method == NextcloudApiMethod.GET && it.body == null })
         assertTrue(observed.drop(1).all {
             it.relativePath.substringAfterLast('/').split(',').size <= MAX_MEMORIES_DAY_BATCH
         })
         assertTrue(observed.all { it.maximumResponseBytes <= MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES })
+    }
+
+    @Test
+    fun legacySyntheticPersonFileCannotAuthorizeOriginalDavReads() {
+        val file = syntheticMemoriesPersonFile(
+            personId = "recognize/42",
+            fileId = 91L,
+            name = "capture.raf",
+            mimeType = "image/x-fuji-raf",
+            lastModified = "1784800000",
+            etag = "\"generation\"",
+        )
+
+        assertEquals("memories/people/recognize/42/91", file.path)
+        assertFalse(file.originalAccessAllowed)
+        assertFalse(file.davPathAuthoritative)
+        assertFalse(file.canUseEmbeddedRafPreview())
+        assertFalse(file.hasAuthoritativeMediaDavAccess("ada"))
     }
 
     @Test

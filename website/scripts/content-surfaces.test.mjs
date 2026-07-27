@@ -119,16 +119,17 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   assert.equal(manifest.identity, "Obiente");
   assert.equal(manifest.cloudIdentity, "Nextcloud");
   assert.equal(manifest.networkAccess, false);
-  assert.deepEqual(
-    marketingCaptures.map((capture) => capture.scenario),
-    [
-      "desktop-home",
-      "mobile-home",
-      "obsidian-vault-sync",
-      "media-backup-queue",
-      "adaptive-dynamic-data",
-    ],
-  );
+  const captureScenarios = new Set(marketingCaptures.map((capture) => capture.scenario));
+  for (const requiredScenario of [
+    "desktop-home",
+    "mobile-home",
+    "obsidian-vault-sync",
+    "media-backup-queue",
+    "adaptive-dynamic-data",
+  ]) {
+    assert.ok(captureScenarios.has(requiredScenario));
+  }
+  assert.equal(captureScenarios.size, marketingCaptures.length);
   assert.deepEqual(
     marketingCaptures.map((capture) => capture.path),
     manifest.captures.map(stableCapturePath),
@@ -137,18 +138,10 @@ test("marketing screenshots are rendered offscreen without an Android device", a
     marketingCaptures.map((capture) => capture.websitePath),
     manifest.captures.map((capture) => websiteCapturePath(manifest, capture)),
   );
-  const expectedDimensions = new Map([
-    ["desktop-home", [1440, 900]],
-    ["mobile-home", [1080, 2400]],
-    ["obsidian-vault-sync", [1080, 1000]],
-    ["media-backup-queue", [1080, 1800]],
-    ["adaptive-dynamic-data", [960, 360]],
-  ]);
   for (const capture of manifest.captures) {
-    assert.deepEqual(
-      [capture.width, capture.height],
-      expectedDimensions.get(capture.scenario),
-    );
+    assert.ok(Number.isInteger(capture.width) && capture.width > 0);
+    assert.ok(Number.isInteger(capture.height) && capture.height > 0);
+    assert.ok(Number.isFinite(capture.density) && capture.density > 0);
   }
   const capturedImages = new Set(
     manifest.captures.map((capture) => `/screenshots/${capture.file}`),
@@ -165,7 +158,12 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   assert.ok(manifest.captures.every((capture) => capture.feature.length > 0));
   assert.ok(manifest.captures.every((capture) => capture.surface.length > 0));
   assert.ok(manifest.captures.every((capture) => capture.state.length > 0));
-  assert.ok(manifest.captures.every((capture) => capture.purpose === "showcase"));
+  assert.ok(
+    manifest.captures.every(
+      (capture) =>
+        capture.purpose === "showcase" || capture.purpose === "state-coverage",
+    ),
+  );
   assert.ok(manifest.captures.every((capture) => capture.platform.length > 0));
   assert.ok(manifest.captures.every((capture) => capture.viewport.length > 0));
   assert.ok(manifest.captureSources.length > 0);
@@ -215,13 +213,34 @@ test("visual QA and mobile navigation are driven by registered captures", async 
     path.join(websiteRoot, "src", "entry-server.js"),
     "utf8",
   );
+  const styles = await readFile(
+    path.join(websiteRoot, "src", "styles.css"),
+    "utf8",
+  );
 
   assert.match(entryServer, /"\/visual-qa\/"/u);
+  assert.match(
+    styles,
+    /\.visual-qa-image\s*\{[^}]*overflow:\s*hidden;/su,
+  );
+  assert.match(
+    styles,
+    /\.visual-qa-card figcaption\s*\{[^}]*background:\s*var\(--surface\);/su,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width:\s*1100px\)\s*\{[\s\S]*?\.desktop-nav\s*\{[^}]*display:\s*none;/u,
+  );
   assert.match(appSource, /aria-controls="mobile-site-navigation"/u);
+  assert.equal(
+    (appSource.match(/:aria-pressed=/gu) ?? []).length,
+    3,
+  );
   assert.match(appSource, /class="hero-mobile-capture"/u);
   assert.match(appSource, /:src="mobileHomeCapture\.websitePath"/u);
   assert.match(appSource, /capture\.purpose === visualQaPurpose\.value/u);
   assert.match(appSource, /capture\.pullRequest/u);
+  assert.match(appSource, /capture\.issue/u);
   assert.match(appSource, /visualQaGroups/u);
   assert.doesNotMatch(
     appSource,

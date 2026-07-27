@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -57,6 +58,28 @@ class ExternalFileHandoffTest {
 
         assertIs<ExternalFileHandoffResult.Rejected>(rejection)
         assertEquals(ExternalFileHandoffRejection.UnsupportedAction, rejection.reason)
+    }
+
+    @Test
+    fun `deck attachments do not require invented DAV identity`() {
+        assertNull(
+            validateDeckAttachmentHandoff(
+                attachment = attachment(byteCount = 12L),
+                action = ExternalFileHandoffAction.OpenWith,
+                capability = capability,
+            ),
+        )
+    }
+
+    @Test
+    fun `known oversized deck attachment is rejected before streaming`() {
+        val rejection = validateDeckAttachmentHandoff(
+            attachment = attachment(byteCount = MAX_EXTERNAL_FILE_HANDOFF_BYTES + 1L),
+            action = ExternalFileHandoffAction.OpenWith,
+            capability = capability,
+        )
+
+        assertEquals(ExternalFileHandoffRejection.FileTooLarge, rejection?.reason)
     }
 
     @Test
@@ -117,6 +140,16 @@ class ExternalFileHandoffTest {
         assertEquals("application/octet-stream", sanitizeExternalMimeType(null))
     }
 
+    @Test
+    fun `deck attachment download must match a declared byte count`() {
+        verifyDownloadedDeckAttachmentSize(declaredByteCount = 3L, downloadedByteCount = 3L)
+        verifyDownloadedDeckAttachmentSize(declaredByteCount = null, downloadedByteCount = 2L)
+
+        assertFailsWith<IllegalStateException> {
+            verifyDownloadedDeckAttachmentSize(declaredByteCount = 3L, downloadedByteCount = 2L)
+        }
+    }
+
     private fun file(
         name: String,
         directory: Boolean = false,
@@ -131,5 +164,17 @@ class ExternalFileHandoffTest {
         fileId = null,
         hasPreview = false,
         etag = "\"v1\"",
+    )
+
+    private fun attachment(byteCount: Long?): DeckAttachment = DeckAttachment(
+        id = 7L,
+        cardId = 11L,
+        type = DeckAttachmentType.DeckFile,
+        name = "report.pdf",
+        mimeType = "application/pdf",
+        byteCount = byteCount,
+        createdBy = "user",
+        createdAt = null,
+        lastModified = null,
     )
 }

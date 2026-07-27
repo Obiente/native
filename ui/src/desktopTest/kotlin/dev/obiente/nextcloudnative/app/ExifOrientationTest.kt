@@ -188,6 +188,27 @@ class ExifOrientationTest {
     }
 
     @Test
+    fun photoEditorAppliesExifToMemoriesPassthroughAndTrustsTranscodedRawPixels() {
+        val encoded = syntheticCornerJpeg().withExifOrientation(6)
+
+        val passthrough = requireNotNull(
+            decodePhotoEditorSource(
+                FullResolutionPhotoPayload(encoded, FullResolutionPhotoSource.MemoriesPassthrough),
+            ),
+        )
+        val transcodedRaw = requireNotNull(
+            decodePhotoEditorSource(
+                FullResolutionPhotoPayload(encoded, FullResolutionPhotoSource.MemoriesTranscoded),
+            ),
+        )
+
+        assertEquals(30, passthrough.sourceWidth)
+        assertEquals(40, passthrough.sourceHeight)
+        assertEquals(40, transcodedRaw.sourceWidth)
+        assertEquals(30, transcodedRaw.sourceHeight)
+    }
+
+    @Test
     fun desktopOrientationPreservesPartialTransparency() {
         val source = BufferedImage(3, 2, BufferedImage.TYPE_INT_ARGB).apply {
             setRGB(0, 0, 0x40FF0000)

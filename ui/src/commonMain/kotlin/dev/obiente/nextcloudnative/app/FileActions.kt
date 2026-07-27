@@ -12,7 +12,7 @@ internal fun availableFileActions(file: NextcloudFile): List<FileAction> = build
         add(FileAction.Open)
     } else if (
         describeDocument(file).method != DocumentPreviewMethod.Unsupported ||
-        (file.hasPreview && file.fileId != null)
+        file.canOpenInMediaViewer()
     ) {
         add(FileAction.Preview)
     }
@@ -27,7 +27,7 @@ internal fun availableFileActions(file: NextcloudFile): List<FileAction> = build
 internal fun primaryFileActionLabel(file: NextcloudFile): String = when {
     file.isDirectory -> "Open folder ${file.name}"
     file.isEditableText() -> "Edit ${file.name}"
-    file.hasPreview && file.fileId != null -> "Preview ${file.name}"
+    file.canOpenInMediaViewer() -> "Preview ${file.name}"
     else -> "Show details for ${file.name}"
 }
 

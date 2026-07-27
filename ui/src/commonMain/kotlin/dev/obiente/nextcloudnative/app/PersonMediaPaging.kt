@@ -104,4 +104,32 @@ fun NativeMediaItem.toPersonMediaFile(person: PersonMediaReference): NextcloudFi
     hasPreview = true,
     etag = etag,
     originalAccessAllowed = false,
+    davPathAuthoritative = false,
+)
+
+/**
+ * Builds a preview-only file for the legacy platform person-media readers.
+ *
+ * The generated path is a stable UI identity, not a path in the authenticated Files DAV tree.
+ * Original reads must first resolve [fileId] to an authoritative Files record.
+ */
+fun syntheticMemoriesPersonFile(
+    personId: String,
+    fileId: Long,
+    name: String,
+    mimeType: String?,
+    lastModified: String?,
+    etag: String?,
+): NextcloudFile = NextcloudFile(
+    path = "memories/people/$personId/$fileId",
+    name = name,
+    isDirectory = false,
+    mimeType = mimeType,
+    size = null,
+    lastModified = lastModified,
+    fileId = fileId,
+    hasPreview = true,
+    etag = etag,
+    originalAccessAllowed = false,
+    davPathAuthoritative = false,
 )

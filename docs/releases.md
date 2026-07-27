@@ -10,23 +10,37 @@ Supported versions use one of these forms:
 - `0.x.y-beta.n` for feature-complete testing
 - `0.x.y-rc.n` for release candidates
 
-The canonical version lives in `gradle.properties`. Android and desktop builds
-read it from there. `ncDesktopPackageVersion` contains the numeric `0.x.y`
-portion because native desktop packagers do not consistently accept SemVer
-prerelease suffixes.
+The canonical product version lives in `gradle.properties`. Android and desktop
+development builds read their defaults from there. `ncDesktopPackageVersion`
+contains the numeric `0.x.y` portion because native desktop packagers do not
+consistently accept SemVer prerelease suffixes.
 
-Android version codes are deterministic:
+Signed installable builds derive their monotonically ordered package versions
+from the full Git history reachable from the immutable tagged commit. This
+makes the shipped package identity reproducible from the tagged repository
+instead of depending on mutable workflow-run metadata.
+
+Android version codes use:
 
 ```text
-minor * 10,000,000 + patch * 3,000 + phase offset + prerelease number
+20,000,000 + main history sequence * 10 + channel lane
 ```
 
-Phase offsets are `0` for alpha, `1,000` for beta, and `2,000` for release
-candidates. Each prerelease number is between 1 and 999.
+Channel lanes are `1` for nightly, `2` for alpha, `3` for beta, and `4` for
+release candidates. Desktop packages use the same source sequence and channel
+lane, mapped into a native packager-compatible numeric version.
+
+To reproduce the package identities for a tag:
+
+```bash
+source_sequence="$(git rev-list --count v0.2.0-alpha.1)"
+tools/derive-android-version-code.sh "$source_sequence" alpha
+tools/derive-desktop-package-version.sh "$source_sequence" alpha
+```
 
 ## Creating a prerelease
 
-1. Update the three `ncVersion*` values in `gradle.properties`.
+1. Update the three `ncVersion*` development defaults in `gradle.properties`.
 2. Prepare the release-note draft from the validated unreleased fragments:
 
    ```bash
@@ -53,9 +67,10 @@ the shared root changelog. Published `CHANGELOG.md` sections and archived
 fragments remain immutable.
 
 The protected `prerelease` GitHub environment should require approval. The
-workflow tests the source again, builds platform artifacts, verifies Android
-signing, creates checksums and update metadata, and publishes a GitHub
-prerelease. It refuses tags that do not match the checked-in version or Android
+workflow tests the source again, derives package identities from the tagged
+commit's full history, builds platform artifacts, verifies Android signing,
+creates checksums and update metadata, and publishes a GitHub prerelease. It
+refuses tags that do not match the checked-in product version or Android
 artifacts whose signing identity differs from
 `release/android-signing-certificate.sha256`.
 

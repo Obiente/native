@@ -163,6 +163,9 @@ fun planAddFileToMediaCollection(
     if (file.isDirectory || file.fileId == null) {
         return base.copy(disabledReason = "Only an exact media file can be added to an album.")
     }
+    if (!file.davPathAuthoritative) {
+        return base.copy(disabledReason = "The source file path could not be verified.")
+    }
     if (file.permissions == null || 'R' !in file.permissions) {
         return base.copy(disabledReason = "Refresh media permissions before adding this file.")
     }
