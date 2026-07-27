@@ -244,7 +244,11 @@ private fun DeckBoardRecoveryBanner(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "${recovery.board.title} was deleted",
+                    when (recovery.verification) {
+                        DeckBoardRecoveryVerification.DeleteOutcome -> "Checking board deletion"
+                        DeckBoardRecoveryVerification.RestoreOutcome -> "Checking board restore"
+                        null -> "${recovery.board.title} was deleted"
+                    },
                     style = MaterialTheme.typography.labelLarge,
                 )
                 Text(
@@ -255,11 +259,17 @@ private fun DeckBoardRecoveryBanner(
             }
             TextButton(
                 onClick = { onRestore?.invoke(recovery.board) },
-                enabled = onRestore != null && !recovery.restoring,
+                enabled = onRestore != null && !recovery.restoring && !recovery.verifying,
             ) {
-                Text(if (recovery.restoring) "Restoring..." else "Undo")
+                Text(
+                    when {
+                        recovery.verifying -> "Checking..."
+                        recovery.restoring -> "Restoring..."
+                        else -> "Undo"
+                    },
+                )
             }
-            if (onDismiss != null && !recovery.restoring) {
+            if (onDismiss != null && !recovery.restoring && !recovery.verifying) {
                 TextButton(onClick = onDismiss) { Text("Dismiss") }
             }
         }

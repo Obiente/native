@@ -196,7 +196,7 @@ fun DeckUiCardEditorDialog(
     onDraftChange: (DeckUiCardDraft) -> Unit = {},
     onSubmit: (DeckUiCardDraft) -> Unit,
 ) {
-    var draft by remember(stack, card, initialDraft) {
+    var draft by remember(stack, card, recoveredDraft) {
         mutableStateOf(initialDraft ?: card.toDeckUiDraft())
     }
     LaunchedEffect(draft) {

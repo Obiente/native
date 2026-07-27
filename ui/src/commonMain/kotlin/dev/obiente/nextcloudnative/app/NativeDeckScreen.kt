@@ -45,6 +45,7 @@ fun NativeDeckScreen(
     var loadAttempt by remember(session) { mutableStateOf(0) }
     var interaction by remember(session) { mutableStateOf<DeckUiInteraction?>(null) }
     var restoredCardDraft by remember(session) { mutableStateOf<PersistedDeckCardDraft?>(null) }
+    var loadedCardDraftKey by remember(session) { mutableStateOf<DeckCardDraftKey?>(null) }
     var recoveredCardDraftNotice by remember(session) { mutableStateOf(false) }
     var draftPersistenceJob by remember(session) { mutableStateOf<Job?>(null) }
     var mutationBusy by remember(session) { mutableStateOf(false) }
@@ -142,6 +143,7 @@ fun NativeDeckScreen(
         request: () -> NextcloudApiRequest,
         returnToBoards: Boolean = false,
         dismissInteractionOnSuccess: Boolean = true,
+        outcomeUnknownBoardRecovery: DeckBoard? = null,
         afterSuccess: suspend () -> Unit = {},
         onResponse: (NextcloudApiResponse) -> Unit = { response ->
             parseDeckMutationReceipt(response)
@@ -173,6 +175,13 @@ fun NativeDeckScreen(
                 if (isAmbiguousDeckMutationFailure(responseStatus)) {
                     mutationOutcomeUnknown = true
                     mutationError = "Deck may have applied this action. Refreshing before another change."
+                    outcomeUnknownBoardRecovery?.let { board ->
+                        boardRecovery = DeckUiBoardRecovery(
+                            board = board,
+                            errorMessage = "Deck may have deleted this board. Checking the board list.",
+                            verification = DeckBoardRecoveryVerification.DeleteOutcome,
+                        )
+                    }
                     if (returnToBoards) {
                         requestedBoard = null
                         requestedBoardId = null
@@ -215,6 +224,7 @@ fun NativeDeckScreen(
                         board = board,
                         restoring = false,
                         errorMessage = "Deck may have restored this board. Checking the board list.",
+                        verification = DeckBoardRecoveryVerification.RestoreOutcome,
                     ).also {
                         loadedBoards = emptyList()
                         refreshBoard()
@@ -356,16 +366,21 @@ fun NativeDeckScreen(
         requests: () -> List<NextcloudApiRequest>,
         reconciledInteraction: (DeckCard) -> DeckUiInteraction,
     ) {
-        if (mutationBusy) return
+        if (mutationBusy || mutationOutcomeUnknown) return
         scope.launch {
             mutationBusy = true
             mutationError = null
+            var confirmedWrites = 0
+            var failedResponseStatus: Int? = null
             runCatching {
                 requests().forEach { request ->
                     val response = services.executeNextcloudApi(session, request)
+                    failedResponseStatus = response.status
                     require(response.status in 200..299) {
                         "The Deck action failed (HTTP ${response.status})."
                     }
+                    confirmedWrites += 1
+                    failedResponseStatus = null
                 }
             }.onSuccess {
                 interaction = null
@@ -373,11 +388,21 @@ fun NativeDeckScreen(
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 mutationError = error.deckMessage()
-                runCatching { fetchAuthoritativeCard(card) }
+                val requiresReconciliation = requiresDeckBatchMutationReconciliation(
+                    confirmedWrites = confirmedWrites,
+                    failedResponseStatus = failedResponseStatus,
+                )
+                val reconciliation = runCatching { fetchAuthoritativeCard(card) }
+                reconciliation
                     .onSuccess { current ->
                         replaceCard(current)
                         interaction = reconciledInteraction(current)
                     }
+                if (requiresReconciliation && reconciliation.isFailure) {
+                    mutationOutcomeUnknown = true
+                    mutationError =
+                        "Deck may have applied part of this change. Refreshing before another change."
+                }
                 refreshBoard()
             }
             mutationBusy = false
@@ -775,14 +800,18 @@ fun NativeDeckScreen(
 
     LaunchedEffect(interaction) {
         val editor = interaction as? DeckUiInteraction.CardEditor
+        loadedCardDraftKey = null
         recoveredCardDraftNotice = false
-        restoredCardDraft = editor?.let { activeEditor ->
+        restoredCardDraft = null
+        if (editor == null) return@LaunchedEffect
+        val key = cardDraftKey(editor)
+        restoredCardDraft = try {
             draftPersistenceJob?.join()
-            services.loadDeckCardDraft(session, cardDraftKey(activeEditor))
+            services.loadDeckCardDraft(session, key)
                 ?.let { persisted ->
                     val reconciled = persisted.copy(
                         draft = persisted.draft.reconcileUntouchedDueDate(
-                            activeEditor.card.toDeckUiDraft(),
+                            editor.card.toDeckUiDraft(),
                         ),
                     )
                     if (reconciled != persisted) {
@@ -791,7 +820,12 @@ fun NativeDeckScreen(
                     recoveredCardDraftNotice = true
                     reconciled
                 }
+        } catch (failure: Exception) {
+            if (failure is CancellationException) throw failure
+            mutationError = "The saved card draft could not be restored safely."
+            null
         }
+        loadedCardDraftKey = key
     }
 
     LaunchedEffect(session, requestedBoard?.id, loadAttempt) {
@@ -805,14 +839,9 @@ fun NativeDeckScreen(
                 loadedBoards = loaded.boards
                 capabilities = loaded.capabilities
                 activeRoute = loaded.route
-                if (reconciledUnknownMutation && boardRecovery != null) {
-                    boardRecovery = if (loaded.boards.any { it.id == boardRecovery?.board?.id }) {
-                        null
-                    } else {
-                        boardRecovery?.copy(
-                            restoring = false,
-                            errorMessage = "The restore could not be confirmed. You can try again.",
-                        )
+                if (reconciledUnknownMutation) {
+                    boardRecovery = boardRecovery?.let { recovery ->
+                        reconcileDeckBoardRecovery(recovery, loaded.boards)
                     }
                 }
                 val restoredBoard = requestedBoardId?.let { boardId ->
@@ -1106,13 +1135,13 @@ fun NativeDeckScreen(
         boardRecovery = boardRecovery.takeIf { requestedBoard == null },
         onRestoreBoard = boardRecovery
             ?.takeIf { requestedBoard == null }
-            ?.takeUnless(DeckUiBoardRecovery::restoring)
+            ?.takeUnless { it.restoring || it.verifying }
             ?.let {
             ::restoreDeletedBoard
         },
         onDismissBoardRecovery = boardRecovery
             ?.takeIf { requestedBoard == null }
-            ?.takeUnless(DeckUiBoardRecovery::restoring)
+            ?.takeUnless { it.restoring || it.verifying }
             ?.let {
             { boardRecovery = null }
         },
@@ -1180,7 +1209,8 @@ fun NativeDeckScreen(
                 }
             },
         )
-        is DeckUiInteraction.CardEditor -> DeckUiCardEditorDialog(
+        is DeckUiInteraction.CardEditor -> if (loadedCardDraftKey == cardDraftKey(overlay)) {
+            DeckUiCardEditorDialog(
             stack = overlay.stack,
             card = overlay.card,
             initialDraft = restoredCardDraft
@@ -1310,7 +1340,8 @@ fun NativeDeckScreen(
                     )
                 }
             },
-        )
+            )
+        }
         is DeckUiInteraction.MoveCard -> DeckUiMoveCardDialog(
             card = overlay.card,
             stacks = boardState()?.stacks.orEmpty(),
@@ -1612,6 +1643,7 @@ fun NativeDeckScreen(
                 runMutation(
                     request = { writePlan().deleteBoard(boardAccess(overlay.board)) },
                     returnToBoards = true,
+                    outcomeUnknownBoardRecovery = overlay.board,
                     afterSuccess = {
                         boardRecovery = DeckUiBoardRecovery(overlay.board)
                     },

@@ -144,7 +144,46 @@ data class DeckUiBoardRecovery(
     val board: DeckBoard,
     val restoring: Boolean = false,
     val errorMessage: String? = null,
-)
+    val verification: DeckBoardRecoveryVerification? = null,
+) {
+    val verifying: Boolean
+        get() = verification != null
+}
+
+enum class DeckBoardRecoveryVerification {
+    DeleteOutcome,
+    RestoreOutcome,
+}
+
+internal fun reconcileDeckBoardRecovery(
+    recovery: DeckUiBoardRecovery,
+    boards: List<DeckBoard>,
+): DeckUiBoardRecovery? {
+    val boardExists = boards.any { it.id == recovery.board.id }
+    return when (recovery.verification) {
+        DeckBoardRecoveryVerification.DeleteOutcome -> {
+            if (boardExists) {
+                null
+            } else {
+                recovery.copy(
+                    verification = null,
+                    errorMessage = "Deck deleted this board. You can restore it.",
+                )
+            }
+        }
+        DeckBoardRecoveryVerification.RestoreOutcome -> {
+            if (boardExists) {
+                null
+            } else {
+                recovery.copy(
+                    verification = null,
+                    errorMessage = "The restore could not be confirmed. You can try again.",
+                )
+            }
+        }
+        null -> recovery
+    }
+}
 
 data class DeckUiDueDateOption(
     val label: String,

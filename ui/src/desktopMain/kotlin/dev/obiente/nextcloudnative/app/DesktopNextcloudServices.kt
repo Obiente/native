@@ -345,6 +345,7 @@ class DesktopNextcloudServices(
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
     private val externalFileHandoff = DesktopExternalFileHandoff()
     private val localUploadPicker = DesktopLocalUploadPicker()
+    private val deckCardDrafts = DesktopDeckCardDraftStore()
     private val projectNewsCache = File(
         desktopContractCacheDirectory("responses").parentFile,
         "project-content/news-feed-v1.json",
@@ -462,6 +463,27 @@ class DesktopNextcloudServices(
         if (server != null && login != null) secretTool("clear", server, login)
         preferences.remove(KEY_SERVER)
         preferences.remove(KEY_LOGIN)
+    }
+
+    override suspend fun loadDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ): PersistedDeckCardDraft? = withContext(Dispatchers.IO) {
+        deckCardDrafts.load(session, key)
+    }
+
+    override suspend fun saveDeckCardDraft(
+        session: NextcloudSession,
+        draft: PersistedDeckCardDraft,
+    ) = withContext(Dispatchers.IO) {
+        deckCardDrafts.save(session, draft)
+    }
+
+    override suspend fun clearDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ) = withContext(Dispatchers.IO) {
+        deckCardDrafts.clear(session, key)
     }
 
     override fun openExternalUrl(url: String) {

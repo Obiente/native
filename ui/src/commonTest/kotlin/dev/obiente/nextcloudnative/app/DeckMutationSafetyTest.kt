@@ -2,6 +2,8 @@ package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DeckMutationSafetyTest {
@@ -11,6 +13,68 @@ class DeckMutationSafetyTest {
         assertTrue(isAmbiguousDeckMutationFailure(200))
         assertTrue(isAmbiguousDeckMutationFailure(503))
         assertFalse(isAmbiguousDeckMutationFailure(409))
+    }
+
+    @Test
+    fun batchReconciliationBlocksAmbiguousAndPartiallyAppliedMutations() {
+        assertTrue(
+            requiresDeckBatchMutationReconciliation(
+                confirmedWrites = 0,
+                failedResponseStatus = null,
+            ),
+        )
+        assertTrue(
+            requiresDeckBatchMutationReconciliation(
+                confirmedWrites = 0,
+                failedResponseStatus = 503,
+            ),
+        )
+        assertTrue(
+            requiresDeckBatchMutationReconciliation(
+                confirmedWrites = 1,
+                failedResponseStatus = 409,
+            ),
+        )
+        assertFalse(
+            requiresDeckBatchMutationReconciliation(
+                confirmedWrites = 0,
+                failedResponseStatus = 409,
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            requiresDeckBatchMutationReconciliation(
+                confirmedWrites = -1,
+                failedResponseStatus = 409,
+            )
+        }
+    }
+
+    @Test
+    fun unknownBoardDeletePreservesUndoOnlyWhenTheBoardDisappeared() {
+        val board = board(etag = "\"board-1\"")
+        val recovery = DeckUiBoardRecovery(
+            board = board,
+            verification = DeckBoardRecoveryVerification.DeleteOutcome,
+        )
+
+        assertNull(reconcileDeckBoardRecovery(recovery, listOf(board)))
+        val confirmedDelete = requireNotNull(reconcileDeckBoardRecovery(recovery, emptyList()))
+        assertFalse(confirmedDelete.verifying)
+        assertTrue(confirmedDelete.errorMessage?.contains("restore") == true)
+    }
+
+    @Test
+    fun unknownBoardRestoreClearsRecoveryOnlyWhenTheBoardReturned() {
+        val board = board(etag = "\"board-1\"")
+        val recovery = DeckUiBoardRecovery(
+            board = board,
+            verification = DeckBoardRecoveryVerification.RestoreOutcome,
+        )
+
+        assertNull(reconcileDeckBoardRecovery(recovery, listOf(board)))
+        val unconfirmedRestore = requireNotNull(reconcileDeckBoardRecovery(recovery, emptyList()))
+        assertFalse(unconfirmedRestore.verifying)
+        assertTrue(unconfirmedRestore.errorMessage?.contains("try again") == true)
     }
 
     @Test
