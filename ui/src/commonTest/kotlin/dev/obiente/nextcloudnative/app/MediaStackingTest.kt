@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -256,6 +257,18 @@ class MediaStackingTest {
         }
 
         assertTrue(recovered)
+    }
+
+    @Test
+    fun restoredViewerGetsANewLoadIdentityWhenTheFilesUserArrives() {
+        val beforeServerInfo = MediaViewerSourceLoadIdentity(
+            selectedPath = "Photos/Samples/SAMPLE0001.RAF",
+            filesUserId = "",
+        )
+        val afterServerInfo = beforeServerInfo.copy(filesUserId = "account")
+
+        assertNotEquals(beforeServerInfo, afterServerInfo)
+        assertEquals(beforeServerInfo.selectedPath, afterServerInfo.selectedPath)
     }
 
     private fun file(path: String, mime: String) = NextcloudFile(

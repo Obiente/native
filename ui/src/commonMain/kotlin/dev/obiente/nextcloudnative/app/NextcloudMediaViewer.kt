@@ -101,6 +101,9 @@ fun NextcloudMediaViewer(
         if (media.any { it.path == selected.path }) media else listOf(selected)
     }
     val sourcePlan = remember(items, selected) { planMediaSources(items, selected) }
+    val sourceLoadIdentity = remember(selected.path, userId) {
+        MediaViewerSourceLoadIdentity(selected.path, userId)
+    }
     val selectedIndex = items.indexOfFirst { it.path == selected.path }.coerceAtLeast(0)
     val canGoPrevious = selectedIndex > 0
     val canGoNext = selectedIndex < items.lastIndex
@@ -109,7 +112,7 @@ fun NextcloudMediaViewer(
     var previewState by remember(selected.path, retryKey) {
         mutableStateOf<MediaPreviewState>(MediaPreviewState.Loading)
     }
-    var fullQualityState by remember(selected.path) {
+    var fullQualityState by remember(sourceLoadIdentity) {
         mutableStateOf<FullQualityState>(FullQualityState.Idle)
     }
     var zoom by remember(selected.path) {
@@ -218,7 +221,7 @@ fun NextcloudMediaViewer(
 
     fun openInMediaApp() = handoffToExternalApp(ExternalFileHandoffAction.OpenWith)
 
-    LaunchedEffect(selected.path, selected.fileId, session, retryKey, sourcePlan.previewCandidates) {
+    LaunchedEffect(sourceLoadIdentity, selected.fileId, session, retryKey, sourcePlan.previewCandidates) {
         previewState = MediaPreviewState.Loading
         val loaded = loadFirstUsableMediaPreviewSource(
             candidates = sourcePlan.previewCandidates,
@@ -282,7 +285,7 @@ fun NextcloudMediaViewer(
     }
 
     LaunchedEffect(
-        selected.path,
+        sourceLoadIdentity,
         zoom >= FULL_QUALITY_MEDIA_ZOOM_THRESHOLD,
         sourcePlan.fullQualityCandidates,
     ) {
@@ -1072,6 +1075,11 @@ internal suspend fun <T> withFullQualityCancellationRecovery(
     onCancelled()
     throw cancelled
 }
+
+internal data class MediaViewerSourceLoadIdentity(
+    val selectedPath: String,
+    val filesUserId: String,
+)
 
 enum class MediaViewerReadiness(val description: String) {
     Loading("Loading rendered preview"),

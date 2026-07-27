@@ -188,7 +188,11 @@ class RawPhotoPreviewTest {
         )
         assertEquals(
             EncodedImageOrientationPolicy.PixelsAlreadyUpright,
-            FullResolutionPhotoSource.Memories.orientationPolicy(),
+            FullResolutionPhotoSource.MemoriesTranscoded.orientationPolicy(),
+        )
+        assertEquals(
+            EncodedImageOrientationPolicy.ApplyExif,
+            FullResolutionPhotoSource.MemoriesPassthrough.orientationPolicy(),
         )
         assertEquals(
             EncodedImageOrientationPolicy.ApplyExif,
@@ -276,13 +280,13 @@ class RawPhotoPreviewTest {
             load = {
                 FullResolutionPhotoPayload(
                     bytes = jpegFixture(),
-                    source = FullResolutionPhotoSource.Memories,
+                    source = FullResolutionPhotoSource.MemoriesTranscoded,
                 )
             },
             decode = { "decoded" },
         )
 
-        assertEquals(FullResolutionPhotoSource.Memories, loaded?.payloadSource)
+        assertEquals(FullResolutionPhotoSource.MemoriesTranscoded, loaded?.payloadSource)
         assertEquals(candidate, loaded?.source)
         assertEquals(
             MediaDisplayPayloadKind.MemoriesRawRender,

@@ -383,13 +383,16 @@ fun calculatePhotoEditOutputDimensions(
 }
 
 enum class FullResolutionPhotoSource(val label: String) {
-    Memories("Memories optimized source"),
+    MemoriesPassthrough("Original via Memories"),
+    MemoriesTranscoded("Memories optimized source"),
     FilesDav("Original from Files"),
 }
 
 fun FullResolutionPhotoSource.orientationPolicy(): EncodedImageOrientationPolicy = when (this) {
-    FullResolutionPhotoSource.Memories -> EncodedImageOrientationPolicy.PixelsAlreadyUpright
-    FullResolutionPhotoSource.FilesDav -> EncodedImageOrientationPolicy.ApplyExif
+    FullResolutionPhotoSource.MemoriesTranscoded -> EncodedImageOrientationPolicy.PixelsAlreadyUpright
+    FullResolutionPhotoSource.MemoriesPassthrough,
+    FullResolutionPhotoSource.FilesDav,
+    -> EncodedImageOrientationPolicy.ApplyExif
 }
 
 data class FullResolutionPhotoPayload(
@@ -420,7 +423,7 @@ internal suspend fun loadFullResolutionPhotoPayload(
         try {
             return FullResolutionPhotoPayload(
                 bytes = loadMemories(fileId, original.etag),
-                source = FullResolutionPhotoSource.Memories,
+                source = original.memoriesFullResolutionPhotoSource(),
             )
         } catch (failure: Exception) {
             if (failure is CancellationException) throw failure
@@ -450,6 +453,19 @@ internal suspend fun loadFullResolutionPhotoPayload(
             "Could not load a full-resolution photo source. $detail"
         },
     )
+}
+
+internal fun NextcloudFile.memoriesFullResolutionPhotoSource(): FullResolutionPhotoSource {
+    val normalizedMimeType = mimeType?.substringBefore(';')?.trim()?.lowercase().orEmpty()
+    val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase()
+    return if (
+        normalizedMimeType in MEMORIES_DECODABLE_PASSTHROUGH_MIME_TYPES ||
+        normalizedMimeType.isEmpty() && extension in MEMORIES_DECODABLE_PASSTHROUGH_EXTENSIONS
+    ) {
+        FullResolutionPhotoSource.MemoriesPassthrough
+    } else {
+        FullResolutionPhotoSource.MemoriesTranscoded
+    }
 }
 
 fun memoriesPhotoDecodableApiRequest(
@@ -796,3 +812,17 @@ private const val MAX_PHOTO_IDENTITY_RESPONSE_BYTES = 512L * 1024L
 private const val MAX_PHOTO_IDENTITY_ETAG_LENGTH = 1_024
 private const val MAX_PHOTO_IDENTITY_MIME_LENGTH = 256
 private const val MAX_PHOTO_EDIT_SIDECAR_CANDIDATES = 16
+private val MEMORIES_DECODABLE_PASSTHROUGH_MIME_TYPES = setOf(
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+)
+
+private val MEMORIES_DECODABLE_PASSTHROUGH_EXTENSIONS = setOf(
+    "gif",
+    "jpeg",
+    "jpg",
+    "png",
+    "webp",
+)

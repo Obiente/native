@@ -59,7 +59,10 @@ fun fullQualityMediaPayloadKind(
     displayed: MediaSourceChoice,
     payloadSource: FullResolutionPhotoSource,
 ): MediaDisplayPayloadKind =
-    if (payloadSource == FullResolutionPhotoSource.Memories && displayed.format == MediaAssetFormat.Raw) {
+    if (
+        payloadSource == FullResolutionPhotoSource.MemoriesTranscoded &&
+        displayed.format == MediaAssetFormat.Raw
+    ) {
         MediaDisplayPayloadKind.MemoriesRawRender
     } else {
         MediaDisplayPayloadKind.ServerPreview

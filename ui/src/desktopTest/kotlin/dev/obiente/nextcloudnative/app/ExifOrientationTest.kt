@@ -188,24 +188,24 @@ class ExifOrientationTest {
     }
 
     @Test
-    fun photoEditorUsesTheOrientationPolicyOfItsLoadedSource() {
+    fun photoEditorAppliesExifToMemoriesPassthroughAndTrustsTranscodedRawPixels() {
         val encoded = syntheticCornerJpeg().withExifOrientation(6)
 
-        val memories = requireNotNull(
+        val passthrough = requireNotNull(
             decodePhotoEditorSource(
-                FullResolutionPhotoPayload(encoded, FullResolutionPhotoSource.Memories),
+                FullResolutionPhotoPayload(encoded, FullResolutionPhotoSource.MemoriesPassthrough),
             ),
         )
-        val filesDav = requireNotNull(
+        val transcodedRaw = requireNotNull(
             decodePhotoEditorSource(
-                FullResolutionPhotoPayload(encoded, FullResolutionPhotoSource.FilesDav),
+                FullResolutionPhotoPayload(encoded, FullResolutionPhotoSource.MemoriesTranscoded),
             ),
         )
 
-        assertEquals(40, memories.sourceWidth)
-        assertEquals(30, memories.sourceHeight)
-        assertEquals(30, filesDav.sourceWidth)
-        assertEquals(40, filesDav.sourceHeight)
+        assertEquals(30, passthrough.sourceWidth)
+        assertEquals(40, passthrough.sourceHeight)
+        assertEquals(40, transcodedRaw.sourceWidth)
+        assertEquals(30, transcodedRaw.sourceHeight)
     }
 
     @Test

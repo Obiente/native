@@ -17,7 +17,7 @@ class PhotoEditingTest {
     fun fullResolutionLoaderPrefersMemoriesForRawCompatibility() = runBlocking {
         var filesReads = 0
         val payload = loadFullResolutionPhotoPayload(
-            original = file(path = "Photos/source.raw", etag = "current"),
+            original = file(path = "Photos/source.raw", etag = "current").copy(mimeType = "image/x-dcraw"),
             loadMemories = { fileId, etag ->
                 assertEquals(7L, fileId)
                 assertEquals("current", etag)
@@ -29,9 +29,44 @@ class PhotoEditingTest {
             },
         )
 
-        assertEquals(FullResolutionPhotoSource.Memories, payload.source)
+        assertEquals(FullResolutionPhotoSource.MemoriesTranscoded, payload.source)
+        assertEquals(EncodedImageOrientationPolicy.PixelsAlreadyUpright, payload.source.orientationPolicy())
         assertEquals(listOf<Byte>(1, 2, 3), payload.bytes.toList())
         assertEquals(0, filesReads)
+    }
+
+    @Test
+    fun memoriesKeepsPassthroughImageExifSemanticsSeparateFromTranscodedRaw() = runBlocking {
+        val passthroughMimeTypes = listOf("image/jpeg", "image/png", "image/webp", "image/gif")
+
+        passthroughMimeTypes.forEach { mimeType ->
+            val payload = loadFullResolutionPhotoPayload(
+                original = file(path = "Photos/source.jpg").copy(mimeType = mimeType),
+                loadMemories = { _, _ -> byteArrayOf(1) },
+                loadFilesDav = null,
+            )
+
+            assertEquals(FullResolutionPhotoSource.MemoriesPassthrough, payload.source)
+            assertEquals(EncodedImageOrientationPolicy.ApplyExif, payload.source.orientationPolicy())
+        }
+
+        val rawPayload = loadFullResolutionPhotoPayload(
+            original = file(path = "Photos/source.raw").copy(mimeType = "image/x-dcraw"),
+            loadMemories = { _, _ -> byteArrayOf(2) },
+            loadFilesDav = null,
+        )
+
+        assertEquals(FullResolutionPhotoSource.MemoriesTranscoded, rawPayload.source)
+        assertEquals(EncodedImageOrientationPolicy.PixelsAlreadyUpright, rawPayload.source.orientationPolicy())
+
+        assertEquals(
+            FullResolutionPhotoSource.MemoriesPassthrough,
+            file(path = "Photos/source.jpg").copy(mimeType = null).memoriesFullResolutionPhotoSource(),
+        )
+        assertEquals(
+            FullResolutionPhotoSource.MemoriesTranscoded,
+            file(path = "Photos/source.raw").copy(mimeType = null).memoriesFullResolutionPhotoSource(),
+        )
     }
 
     @Test
