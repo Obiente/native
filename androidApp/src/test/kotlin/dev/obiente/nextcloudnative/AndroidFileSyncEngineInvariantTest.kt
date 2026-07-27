@@ -5,6 +5,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 
@@ -62,6 +64,28 @@ class AndroidFileSyncEngineInvariantTest {
         }
 
         assertTrue(completed)
+        assertTrue(reconciled)
+    }
+
+    @Test
+    fun reconciliationCanBeDeferredWithoutBlockingTheInitialRead() = runBlocking {
+        val lock = Mutex(locked = true)
+        var reconciled = false
+        var deferred: Job? = null
+
+        val completed = runWhenFileSyncIdle(lock) {
+            reconciled = true
+        }
+        if (!completed) {
+            deferred = deferFileSyncActionUntilIdle(lock, CoroutineScope(coroutineContext)) {
+                reconciled = true
+            }
+        }
+
+        assertFalse(completed)
+        assertFalse(reconciled)
+        lock.unlock()
+        deferred?.join()
         assertTrue(reconciled)
     }
 

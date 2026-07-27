@@ -31,6 +31,13 @@ import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import dev.obiente.nextcloudnative.app.toCenterSummary
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -49,6 +56,8 @@ internal class AndroidFileSyncEngine(context: Context) {
     private val scheduler by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         AndroidFileSyncScheduler(appContext)
     }
+    private val reconciliationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scheduledMediaReconciliations = ConcurrentHashMap.newKeySet<String>()
     private val stagingRoot = File(appContext.cacheDir, "file-sync-staging")
 
     suspend fun loadCenter(
@@ -86,7 +95,17 @@ internal class AndroidFileSyncEngine(context: Context) {
     suspend fun reconcileMediaTransfersForDisplay(
         accountId: String,
         mediaStore: MediaBackupLedgerStore,
-    ) = runWhenFileSyncIdle(ENGINE_LOCK) {
+    ) {
+        val reconciled = runWhenFileSyncIdle(ENGINE_LOCK) {
+            reconcileMediaTransfers(accountId, mediaStore)
+        }
+        if (!reconciled) scheduleMediaTransferReconciliation(accountId)
+    }
+
+    private suspend fun reconcileMediaTransfers(
+        accountId: String,
+        mediaStore: MediaBackupLedgerStore,
+    ) {
         val activeSourceIds = runCatching {
             val pairIds = store.load().coordinator.pairs
                 .asSequence()
@@ -94,8 +113,32 @@ internal class AndroidFileSyncEngine(context: Context) {
                 .map(FileSyncPair::id)
                 .toList()
             scheduler.runningPairIds(pairIds)
-        }.getOrNull() ?: return@runWhenFileSyncIdle
+        }.getOrNull() ?: return
         mediaStore.reconcileInterruptedTransfers(accountId, activeSourceIds)
+    }
+
+    private fun scheduleMediaTransferReconciliation(accountId: String) {
+        if (!scheduledMediaReconciliations.add(accountId)) return
+        deferFileSyncActionUntilIdle(ENGINE_LOCK, reconciliationScope) {
+            try {
+                val mediaStore = createAndroidMediaBackupLedgerStore(
+                    context = appContext,
+                    recoverInterruptedTransfers = false,
+                )
+                try {
+                    reconcileMediaTransfers(accountId, mediaStore)
+                } finally {
+                    mediaStore.close()
+                }
+                MediaBackupStatusUpdates.changes.tryEmit(accountId)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (_: Throwable) {
+                // Reconciliation is a display repair. The next load or status update can retry it.
+            } finally {
+                scheduledMediaReconciliations.remove(accountId)
+            }
+        }
     }
 
     suspend fun addPair(
@@ -622,6 +665,16 @@ internal suspend fun runWhenFileSyncIdle(
         true
     } finally {
         lock.unlock()
+    }
+}
+
+internal fun deferFileSyncActionUntilIdle(
+    lock: Mutex,
+    scope: CoroutineScope,
+    action: suspend () -> Unit,
+): Job = scope.launch {
+    lock.withLock {
+        action()
     }
 }
 
