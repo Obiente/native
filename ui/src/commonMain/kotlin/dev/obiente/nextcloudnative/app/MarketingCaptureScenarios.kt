@@ -143,6 +143,8 @@ enum class MarketingCaptureScenario(
         800,
         1f,
     ),
+    DeckBoardDesktop("deck-board-desktop", "deck-board-desktop.png", NextcloudPresentation.Desktop, 1_440, 900, 1f),
+    DeckBoardMobile("deck-board-mobile", "deck-board-mobile.png", NextcloudPresentation.Adaptive, 1_080, 1_800, 2.625f),
 }
 
 internal val fileShareCaptureScenarios: List<MarketingCaptureScenario> = listOf(
@@ -443,6 +445,27 @@ internal fun MarketingAdaptiveAppScenario() {
     }
 }
 
+@Composable
+internal fun MarketingDeckBoardScenario() {
+    NativeDeckBoardSurface(
+        state = DeckWorkspaceState.Board(
+            board = marketingDeckBoard,
+            stacks = marketingDeckStacks,
+        ),
+        onExit = {},
+        onSelectBoard = {},
+        onBackToBoards = {},
+        onOpenCard = {},
+        onSelectCard = {},
+        onDismissCard = {},
+        onRetry = {},
+        onCreateStack = {},
+        onCreateCard = {},
+        onMoveCard = { _, _, _ -> },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
 private fun marketingSyncPair(
     id: String,
     name: String,
@@ -530,4 +553,93 @@ private val marketingAdaptiveRecords = listOf(
             "updated" to "2026-07-22",
         ),
     ),
+)
+
+private val marketingDeckBoard = DeckBoard(
+    id = 1,
+    title = "Home renovation",
+    color = "8b5cf6",
+    archived = false,
+    owner = DeckUser("fixture-owner", "Demo owner"),
+    labels = emptyList(),
+    permissions = DeckPermissions(
+        canRead = true,
+        canEdit = true,
+        canManage = true,
+        canShare = false,
+    ),
+    shared = false,
+    lastModified = null,
+    etag = null,
+)
+
+private val marketingDeckStacks = listOf(
+    marketingDeckStack(
+        id = 10,
+        title = "Planned",
+        cards = listOf(
+            marketingDeckCard(100, 10, "Measure kitchen cabinets", 100),
+            marketingDeckCard(101, 10, "Compare paint samples", 200),
+            marketingDeckCard(102, 10, "Request tile samples", 300),
+        ),
+    ),
+    marketingDeckStack(
+        id = 20,
+        title = "In progress",
+        cards = listOf(
+            marketingDeckCard(200, 20, "Book the electrician", 100),
+            marketingDeckCard(201, 20, "Choose hallway lighting", 200),
+            marketingDeckCard(202, 20, "Patch the living room wall", 300),
+        ),
+    ),
+    marketingDeckStack(
+        id = 30,
+        title = "Done",
+        cards = listOf(
+            marketingDeckCard(300, 30, "Order shelf brackets", 100),
+            marketingDeckCard(301, 30, "Set the renovation budget", 200),
+            marketingDeckCard(302, 30, "Photograph existing wiring", 300),
+        ),
+    ),
+)
+
+private fun marketingDeckStack(
+    id: Long,
+    title: String,
+    cards: List<DeckCard>,
+) = DeckStack(
+    id = id,
+    boardId = marketingDeckBoard.id,
+    title = title,
+    order = id,
+    doneColumn = title == "Done",
+    cards = cards,
+    lastModified = null,
+    etag = null,
+)
+
+private fun marketingDeckCard(
+    id: Long,
+    stackId: Long,
+    title: String,
+    order: Long,
+) = DeckCard(
+    id = id,
+    boardId = marketingDeckBoard.id,
+    stackId = stackId,
+    title = title,
+    descriptionMarkdown = null,
+    ownerId = "fixture-owner",
+    color = null,
+    order = order,
+    dueAt = null,
+    startAt = null,
+    completedAt = null,
+    archived = false,
+    overdue = false,
+    labels = emptyList(),
+    assignees = emptyList(),
+    attachmentCount = 0,
+    unreadCommentCount = 0,
+    etag = null,
 )

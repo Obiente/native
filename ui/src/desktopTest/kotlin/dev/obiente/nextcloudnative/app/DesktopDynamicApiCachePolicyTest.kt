@@ -1,0 +1,41 @@
+package dev.obiente.nextcloudnative.app
+
+import kotlinx.coroutines.runBlocking
+import kotlin.test.Test
+import kotlin.test.assertEquals
+
+class DesktopDynamicApiCachePolicyTest {
+    @Test
+    fun `force network bypasses both desktop dynamic cache reads`() = runBlocking {
+        val coalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
+        val cached = NextcloudApiResponse(200, "cached".encodeToByteArray(), "application/json", "\"cached\"")
+        val network = NextcloudApiResponse(200, "network".encodeToByteArray(), "application/json", "\"network\"")
+        var cacheLoads = 0
+        var invalidations = 0
+        var networkLoads = 0
+        val committed = mutableListOf<NextcloudApiResponse>()
+
+        val result = executeDesktopDynamicApiGet(
+            accountId = "a".repeat(64),
+            requestIdentity = "GET /apps/deck/api/v1.1/boards/7",
+            cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+            coalescer = coalescer,
+            loadCached = {
+                cacheLoads += 1
+                cached
+            },
+            invalidateCached = { invalidations += 1 },
+            executeNetwork = {
+                networkLoads += 1
+                network
+            },
+            commit = committed::add,
+        )
+
+        assertEquals(network, result)
+        assertEquals(0, cacheLoads)
+        assertEquals(1, invalidations)
+        assertEquals(1, networkLoads)
+        assertEquals(listOf(network), committed)
+    }
+}

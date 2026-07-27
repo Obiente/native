@@ -12,13 +12,23 @@ import android.util.Log
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContract
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContractSourceKind
 import dev.obiente.nextcloudnative.app.AcquiredContractKind
+import dev.obiente.nextcloudnative.app.DeckAttachment
+import dev.obiente.nextcloudnative.app.DeckAttachmentOpenTarget
+import dev.obiente.nextcloudnative.app.DeckCardDraftKey
+import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
+import dev.obiente.nextcloudnative.app.DurableUploadScope
+import dev.obiente.nextcloudnative.app.DurableUploadStatus
 import dev.obiente.nextcloudnative.app.LoginChallenge
 import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
 import dev.obiente.nextcloudnative.app.MAX_NOTE_BYTES
 import dev.obiente.nextcloudnative.app.MAX_TALK_MESSAGE_PAGE_SIZE
+import dev.obiente.nextcloudnative.app.NextcloudApiCachePolicy
 import dev.obiente.nextcloudnative.app.NextcloudApiRequest
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
+import dev.obiente.nextcloudnative.app.LocalUploadFile
+import dev.obiente.nextcloudnative.app.LocalUploadSelectionResult
+import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.GroupwareDavRequest
 import dev.obiente.nextcloudnative.app.NextcloudAppEntry
 import dev.obiente.nextcloudnative.app.NextcloudActivity
@@ -86,10 +96,12 @@ import dev.obiente.nextcloudnative.app.ProjectNewsImage
 import dev.obiente.nextcloudnative.app.PeopleMutationSurface
 import dev.obiente.nextcloudnative.app.PeopleTransportAuthorization
 import dev.obiente.nextcloudnative.app.PeopleTransportRequest
+import dev.obiente.nextcloudnative.app.PersistedDeckCardDraft
 import dev.obiente.nextcloudnative.app.boundedPreviewDimension
 import dev.obiente.nextcloudnative.app.boundedActivityLimit
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
 import dev.obiente.nextcloudnative.app.buildNextcloudApiUrl
+import dev.obiente.nextcloudnative.app.prepareMultipartUpload
 import dev.obiente.nextcloudnative.app.buildPeopleMutationUrl
 import dev.obiente.nextcloudnative.app.conflictConditionHeaders
 import dev.obiente.nextcloudnative.app.boundedFileVersionContentRequest
@@ -128,6 +140,7 @@ import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filter
@@ -136,13 +149,44 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 
+internal suspend fun executeAndroidDynamicApiGet(
+    accountId: String,
+    requestIdentity: String,
+    cachePolicy: NextcloudApiCachePolicy,
+    coalescer: DynamicApiRequestCoalescer<NextcloudApiResponse>,
+    loadCached: () -> NextcloudApiResponse?,
+    invalidateCached: () -> Unit,
+    executeNetwork: suspend () -> NextcloudApiResponse,
+    commit: (NextcloudApiResponse) -> Unit,
+): NextcloudApiResponse {
+    if (cachePolicy == NextcloudApiCachePolicy.PreferCache) {
+        loadCached()?.let { return it }
+    } else {
+        coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
+    }
+    return coalescer.execute(
+        accountId = accountId,
+        requestIdentity = requestIdentity,
+        load = {
+            if (cachePolicy == NextcloudApiCachePolicy.ForceNetwork) {
+                executeNetwork()
+            } else {
+                loadCached() ?: executeNetwork()
+            }
+        },
+        commit = commit,
+    )
+}
+
 internal class AndroidNextcloudServices(
     context: Context,
     private val fileSyncRootPicker: AndroidFileSyncRootPicker? = null,
+    private val localUploadPicker: AndroidLocalUploadPicker? = null,
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
 ) : NextcloudPlatformServices {
     private val appContext = context.applicationContext
@@ -166,6 +210,8 @@ internal class AndroidNextcloudServices(
     private val externalFileHandoff = AndroidExternalFileHandoff(appContext)
     private val platformCapabilities = AndroidPlatformCapabilities(appContext, context as? Activity)
     private val projectContent = AndroidProjectContentClient(appContext, context as? Activity)
+    private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext)
+    private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
 
     override val supportsFileOfflineStorage: Boolean = true
     override val supportsRecursiveFileOfflineStorage: Boolean = true
@@ -192,9 +238,8 @@ internal class AndroidNextcloudServices(
 
     override fun loadAppUpdateChannel(): AndroidUpdateChannel = projectContent.updateChannel()
 
-    override fun saveAppUpdateChannel(channel: AndroidUpdateChannel) {
+    override fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean =
         projectContent.saveUpdateChannel(channel)
-    }
 
     override suspend fun checkForAppUpdate(channel: AndroidUpdateChannel): AppUpdateCheckResult =
         withContext(Dispatchers.IO) { projectContent.checkForUpdate(channel) }
@@ -247,6 +292,27 @@ internal class AndroidNextcloudServices(
         notifyDocumentsRootsChanged()
     }
 
+    override suspend fun loadDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ): PersistedDeckCardDraft? = withContext(Dispatchers.IO) {
+        deckCardDrafts.load(session, key)
+    }
+
+    override suspend fun saveDeckCardDraft(
+        session: NextcloudSession,
+        draft: PersistedDeckCardDraft,
+    ) = withContext(Dispatchers.IO) {
+        deckCardDrafts.save(session, draft)
+    }
+
+    override suspend fun clearDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ) = withContext(Dispatchers.IO) {
+        deckCardDrafts.clear(session, key)
+    }
+
     override fun clearSession() {
         preferences.edit()
             .remove(KEY_SESSION)
@@ -280,6 +346,53 @@ internal class AndroidNextcloudServices(
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
         return externalFileHandoff.launch(file, action, capability) { maximumBytes ->
             downloadFile(session, userId, file.path, maximumBytes)
+        }
+    }
+
+    override suspend fun handoffDeckAttachmentToExternalApp(
+        session: NextcloudSession,
+        target: DeckAttachmentOpenTarget,
+        attachment: DeckAttachment,
+        action: ExternalFileHandoffAction,
+    ): ExternalFileHandoffResult {
+        require(target.method == dev.obiente.nextcloudnative.app.NextcloudApiMethod.GET) {
+            "Deck attachments can only be opened with a read request."
+        }
+        val requestSpec = NextcloudApiRequest(
+            method = target.method,
+            relativePath = target.relativePath,
+            ocsApiRequest = true,
+        ).requireSafe()
+        val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
+        return externalFileHandoff.launchDetached(attachment, action, capability) { output, maximumBytes ->
+            withContext(Dispatchers.IO) {
+                val authorization = Base64.encodeToString(
+                    "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
+                    Base64.NO_WRAP,
+                )
+                val request = Request.Builder()
+                    .url(buildNextcloudApiUrl(session.serverUrl, requestSpec))
+                    .get()
+                    .header("Accept", "*/*")
+                    .header("OCS-APIRequest", "true")
+                    .header("User-Agent", USER_AGENT)
+                    .header("Authorization", "Basic $authorization")
+                    .build()
+                noRedirectHttpClient.newCall(request).execute().use { response ->
+                    check(response.isSuccessful) {
+                        "Opening the Deck attachment failed (HTTP ${response.code})."
+                    }
+                    val responseBody = response.body
+                    val contentLength = responseBody.contentLength()
+                    check(contentLength <= maximumBytes || contentLength == -1L) {
+                        "The Deck attachment is larger than the external handoff limit."
+                    }
+                    AndroidDetachedDownload(
+                        byteCount = responseBody.byteStream().copyBoundedTo(output, maximumBytes),
+                        mimeType = responseBody.contentType()?.toString(),
+                    )
+                }
+            }
         }
     }
 
@@ -967,16 +1080,7 @@ internal class AndroidNextcloudServices(
         val safeRequest = request.requireSafe()
         val accountId = NextcloudDocumentIds.cacheAccountId(session)
         val cacheIdentity = safeRequest.dynamicReadCacheIdentity()
-        if (safeRequest.method == dev.obiente.nextcloudnative.app.NextcloudApiMethod.GET) {
-            dynamicApiReadCache.load(accountId, cacheIdentity, safeRequest.maximumResponseBytes)?.let { cached ->
-                return@withContext NextcloudApiResponse(
-                    cached.status,
-                    cached.body,
-                    cached.contentType,
-                    cached.etag,
-                )
-            }
-        } else {
+        if (safeRequest.method != dev.obiente.nextcloudnative.app.NextcloudApiMethod.GET) {
             dynamicApiRequestCoalescer.invalidateAccount(accountId) {
                 runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
             }
@@ -1009,16 +1113,21 @@ internal class AndroidNextcloudServices(
                 }
             }
         }
-        dynamicApiRequestCoalescer.execute(
+        executeAndroidDynamicApiGet(
             accountId = accountId,
             requestIdentity = cacheIdentity,
-            load = {
+            cachePolicy = safeRequest.cachePolicy,
+            coalescer = dynamicApiRequestCoalescer,
+            loadCached = {
                 dynamicApiReadCache.load(accountId, cacheIdentity, safeRequest.maximumResponseBytes)
                     ?.let { cached ->
                         NextcloudApiResponse(cached.status, cached.body, cached.contentType, cached.etag)
                     }
-                    ?: executeNetworkRequest()
             },
+            invalidateCached = {
+                runCatching { dynamicApiReadCache.invalidate(accountId, cacheIdentity) }
+            },
+            executeNetwork = ::executeNetworkRequest,
             commit = { result ->
                 if (
                     result.status in 200..299 &&
@@ -1039,6 +1148,92 @@ internal class AndroidNextcloudServices(
                 }
             },
         )
+    }
+
+    override suspend fun chooseLocalUploadFile(
+        acceptedMimeTypes: List<String>,
+        maximumBytes: Long,
+    ): LocalUploadSelectionResult =
+        localUploadPicker?.choose(acceptedMimeTypes, maximumBytes)
+            ?: LocalUploadSelectionResult.Unavailable(
+                "Local file selection is unavailable on this Android host.",
+            )
+
+    override fun releaseLocalUploadFile(file: LocalUploadFile) {
+        localUploadPicker?.release(file)
+    }
+
+    override suspend fun executeNextcloudMultipartUpload(
+        session: NextcloudSession,
+        request: NextcloudMultipartUploadRequest,
+    ): NextcloudApiResponse = withContext(Dispatchers.IO) {
+        val safeRequest = request.requireSafe()
+        val picker = checkNotNull(localUploadPicker) {
+            "Local file upload is unavailable on this Android host."
+        }
+        val envelope = prepareMultipartUpload(
+            safeRequest,
+            "nc-native-${UUID.randomUUID()}",
+        )
+        val requestBody = AndroidStreamingMultipartRequestBody(envelope) {
+            picker.open(safeRequest.file)
+        }
+        val apiRequest = NextcloudApiRequest(
+            method = safeRequest.method,
+            relativePath = safeRequest.relativePath,
+            queryParameters = safeRequest.queryParameters,
+            ocsApiRequest = safeRequest.ocsApiRequest,
+            maximumResponseBytes = safeRequest.maximumResponseBytes,
+        )
+        val accountId = NextcloudDocumentIds.cacheAccountId(session)
+        dynamicApiRequestCoalescer.invalidateAccount(accountId) {
+            runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
+        }
+        try {
+            val response = request(
+                method = safeRequest.method.name,
+                url = buildNextcloudApiUrl(session.serverUrl, apiRequest),
+                session = session,
+                ocsRequest = safeRequest.ocsApiRequest,
+                streamingBody = requestBody,
+                maxResponseBytes = safeRequest.maximumResponseBytes,
+                client = noRedirectHttpClient,
+            )
+            NextcloudApiResponse(
+                response.status,
+                response.body,
+                response.contentType,
+                response.etag,
+                response.location,
+            )
+        } finally {
+            dynamicApiRequestCoalescer.invalidateAccount(accountId) {
+                runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
+            }
+        }
+    }
+
+    override suspend fun enqueueDurableMultipartUpload(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+        request: NextcloudMultipartUploadRequest,
+    ): DurableUploadEnqueueResult = withContext(Dispatchers.IO) {
+        durableMultipartUploads.enqueue(session, scope, request)
+    }
+
+    override suspend fun durableMultipartUploadStatuses(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+    ): List<DurableUploadStatus> = withContext(Dispatchers.IO) {
+        durableMultipartUploads.statuses(session, scope)
+    }
+
+    override suspend fun dismissDurableMultipartUpload(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+        uploadId: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        durableMultipartUploads.dismiss(session, scope, uploadId)
     }
 
     override suspend fun executeGroupwareDav(
@@ -1517,6 +1712,7 @@ internal class AndroidNextcloudServices(
         rawBody: ByteArray? = null,
         maxResponseBytes: Long = MAX_API_RESPONSE_BYTES,
         client: OkHttpClient = httpClient,
+        streamingBody: RequestBody? = null,
     ): HttpResponse {
         check(
             !appContext.isReadOnlyTestMode() ||
@@ -1525,6 +1721,7 @@ internal class AndroidNextcloudServices(
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
         }
         val requestBody = when {
+            streamingBody != null -> streamingBody
             rawBody != null -> rawBody.toRequestBody(contentType?.toMediaType())
             body != null -> body.toRequestBody(contentType?.toMediaType())
             method == "POST" || method == "PUT" || method == "PATCH" -> byteArrayOf().toRequestBody(null)
@@ -1575,6 +1772,25 @@ internal class AndroidNextcloudServices(
             output.write(buffer, 0, read)
         }
         return output.toByteArray()
+    }
+
+    private fun java.io.InputStream.copyBoundedTo(
+        output: java.io.OutputStream,
+        maxBytes: Long,
+    ): Long {
+        require(maxBytes > 0L)
+        val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
+        var total = 0L
+        while (true) {
+            val read = read(buffer)
+            if (read == -1) break
+            total += read
+            check(total <= maxBytes) {
+                "The Deck attachment is larger than the external handoff limit."
+            }
+            output.write(buffer, 0, read)
+        }
+        return total
     }
 
     private fun formatByteLimit(bytes: Long): String = when {

@@ -27,6 +27,12 @@ class MainActivity : ComponentActivity() {
                 fileSyncRootPicker.complete(uri)
             },
         )
+        val localUploadPicker = AndroidLocalUploadPicker(this)
+        localUploadPicker.attach(
+            registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                localUploadPicker.complete(uri)
+            },
+        )
         setContent {
             // Keep the composition and its loaded screen state alive across rotations while still
             // observing the new window configuration so adaptive layouts recompose immediately.
@@ -36,6 +42,7 @@ class MainActivity : ComponentActivity() {
                 AndroidNextcloudServices(
                     context = this,
                     fileSyncRootPicker = fileSyncRootPicker,
+                    localUploadPicker = localUploadPicker,
                     onThemePreferenceChanged = { preference ->
                         themePreference.value = preference
                     },

@@ -54,6 +54,27 @@ class DynamicApiResponseCacheTest {
     }
 
     @Test
+    fun requestInvalidationPreservesOtherCachedResponses() {
+        val root = Files.createTempDirectory("ncn-dynamic-api-cache-").toFile()
+        try {
+            val cache = DynamicApiResponseCache(root)
+            val response = CachedDynamicApiResponse(200, byteArrayOf(1), "application/json", null)
+            cache.store(account, "GET /apps/example/target", response)
+            cache.store(account, "GET /apps/example/unrelated", response)
+
+            cache.invalidate(account, "GET /apps/example/target")
+
+            assertNull(cache.load(account, "GET /apps/example/target", 10))
+            assertEquals(
+                response.status,
+                cache.load(account, "GET /apps/example/unrelated", 10)?.status,
+            )
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun callersWithSmallerResponseLimitCannotReadOversizedCachedBody() {
         val root = Files.createTempDirectory("ncn-dynamic-api-cache-").toFile()
         try {

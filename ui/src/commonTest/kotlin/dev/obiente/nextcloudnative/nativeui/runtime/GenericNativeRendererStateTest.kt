@@ -26,6 +26,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -626,6 +627,24 @@ class GenericNativeRendererStateTest {
                 refreshCompleted = true,
             ),
         )
+    }
+
+    @Test
+    fun `board move reconciliation survives loading until refreshed lanes are verified`() {
+        val reconciliation = NativeBoardMoveReconciliation()
+        reconciliation.begin(
+            recordId = "42",
+            targetLaneKey = "2",
+            targetLaneTitle = "Done",
+            beforeFingerprint = "before",
+        )
+
+        val pendingDuringLoading = assertNotNull(reconciliation.pendingMove)
+        assertEquals("42", pendingDuringLoading.recordId)
+        assertEquals("2", pendingDuringLoading.targetLaneKey)
+
+        reconciliation.clear(pendingDuringLoading)
+        assertNull(reconciliation.pendingMove)
     }
 
     @Test
