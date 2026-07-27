@@ -2599,20 +2599,21 @@ private fun GenericCollectionCard(
             }
         }
     }
-    if (onSelectRecord != null) {
-        Card(
-            onClick = { onSelectRecord(record) },
-            colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-            shape = RoundedCornerShape(NextcloudRadii.Card),
-            content = content,
-        )
-    } else {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-            shape = RoundedCornerShape(NextcloudRadii.Card),
-            content = content,
-        )
-    }
+    Card(
+        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+            onOpen = onSelectRecord?.let { select -> { select(record) } },
+            onShowActions = if (secondaryActions.isNotEmpty()) {
+                { actionsExpanded = true }
+            } else {
+                null
+            },
+            openLabel = "Open ${presentation.title}",
+            actionsLabel = "Show actions for ${presentation.title}",
+        ),
+        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+        content = content,
+    )
 }
 
 @Composable
