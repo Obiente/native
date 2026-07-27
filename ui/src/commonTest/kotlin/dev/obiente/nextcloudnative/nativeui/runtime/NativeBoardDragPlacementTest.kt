@@ -5,6 +5,7 @@ import androidx.compose.ui.geometry.Rect
 import dev.obiente.nextcloudnative.app.design.resolveBoardDragVerticalLane
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
 class NativeBoardDragPlacementTest {
@@ -69,6 +70,24 @@ class NativeBoardDragPlacementTest {
                 verticalActivationHalo = 16f,
             ),
         )
+    }
+
+    @Test
+    fun laneScrollStateIdentityChangesWhenResourceChangesWithTheSameLaneKey() {
+        val firstResourceLane = NativeBoardLaneStateKey(
+            resourceId = "board-one-cards",
+            laneKey = "doing",
+        )
+        val secondResourceLane = NativeBoardLaneStateKey(
+            resourceId = "board-two-cards",
+            laneKey = "doing",
+        )
+
+        assertEquals(
+            NativeBoardLaneStateKey(resourceId = "board-one-cards", laneKey = "doing"),
+            firstResourceLane,
+        )
+        assertNotEquals(firstResourceLane, secondResourceLane)
     }
 
     @Test

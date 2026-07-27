@@ -2072,9 +2072,13 @@ private fun GenericRecordBoard(
                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
                 lanes.forEach { lane ->
-                    key(lane.key) {
+                    val laneStateKey = NativeBoardLaneStateKey(
+                        resourceId = resource.id,
+                        laneKey = lane.key,
+                    )
+                    key(laneStateKey) {
                     val laneScrollState = rememberLazyListState()
-                    DisposableEffect(lane.key, laneScrollState) {
+                    DisposableEffect(laneStateKey, laneScrollState) {
                         laneScrollStates[lane.key] = laneScrollState
                         onDispose {
                             if (laneScrollStates[lane.key] === laneScrollState) {

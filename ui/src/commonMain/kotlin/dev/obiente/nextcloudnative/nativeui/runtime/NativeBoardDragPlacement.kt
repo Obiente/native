@@ -3,6 +3,11 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 
+internal data class NativeBoardLaneStateKey(
+    val resourceId: String,
+    val laneKey: String,
+)
+
 internal fun resolveNativeBoardLaneDropTarget(
     position: Offset,
     laneBounds: Map<String, Rect>,
