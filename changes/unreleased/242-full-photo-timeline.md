@@ -1,6 +1,6 @@
 category: feature
 issue: 242
-pull: none
+pull: 246
 platforms: android, desktop
 user-facing: yes
 
