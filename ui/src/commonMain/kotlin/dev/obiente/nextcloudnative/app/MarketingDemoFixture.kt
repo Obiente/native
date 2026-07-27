@@ -37,3 +37,78 @@ val nextcloudNativeMarketingFixture = MarketingDemoFixture(
         NextcloudAppEntry("deck", "Deck", null),
     ),
 )
+
+data class MarketingFileShareFixture(
+    val file: NextcloudFile,
+    val capabilities: NextcloudFileSharingCapabilities,
+    val userResults: List<FileShareRecipient>,
+    val groupResults: List<FileShareRecipient>,
+    val existingUserShare: NextcloudFileShare,
+    val existingGroupShare: NextcloudFileShare,
+)
+
+val nextcloudNativeMarketingFileShareFixture = MarketingFileShareFixture(
+    file = NextcloudFile(
+        path = "Projects/Product brief.pdf",
+        name = "Product brief.pdf",
+        isDirectory = false,
+        mimeType = "application/pdf",
+        size = 248_320,
+        lastModified = null,
+        fileId = 4_242,
+        hasPreview = true,
+        etag = "fixture-product-brief",
+    ),
+    capabilities = NextcloudFileSharingCapabilities(
+        apiEnabled = true,
+        userShares = true,
+        groupShares = true,
+        userExpirationSupported = true,
+        groupExpirationSupported = true,
+        defaultPermissions = 1,
+    ),
+    userResults = listOf(
+        FileShareRecipient(
+            id = "demo-account",
+            displayName = "Demo account",
+            target = FileShareTarget.User,
+            exact = true,
+        ),
+        FileShareRecipient(
+            id = "example-collaborator",
+            displayName = "Example collaborator",
+            target = FileShareTarget.User,
+        ),
+    ),
+    groupResults = listOf(
+        FileShareRecipient(
+            id = "design-team",
+            displayName = "Design team",
+            target = FileShareTarget.Group,
+            exact = true,
+        ),
+        FileShareRecipient(
+            id = "development-team",
+            displayName = "Development team",
+            target = FileShareTarget.Group,
+        ),
+    ),
+    existingUserShare = NextcloudFileShare(
+        id = "fixture-share-user",
+        url = null,
+        token = null,
+        shareType = FileShareTarget.User.wireValue,
+        shareWith = "demo-collaborator",
+        displayName = "Demo collaborator",
+        permissions = 3,
+    ),
+    existingGroupShare = NextcloudFileShare(
+        id = "fixture-share-group",
+        url = null,
+        token = null,
+        shareType = FileShareTarget.Group.wireValue,
+        shareWith = "project-team",
+        displayName = "Project team",
+        permissions = 1,
+    ),
+)
