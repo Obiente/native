@@ -4,7 +4,21 @@ internal fun isAmbiguousDeckMutationFailure(responseStatus: Int?): Boolean =
     responseStatus == null || responseStatus in 200..299 || responseStatus >= 500
 
 internal fun DeckCard.hasSameAuthoritativeRevision(other: DeckCard): Boolean =
-    etag == null || other.etag == null || etag == other.etag
+    if (id != other.id || boardId != other.boardId || stackId != other.stackId) {
+        false
+    } else if (etag != null && other.etag != null) {
+        etag == other.etag
+    } else {
+        title == other.title &&
+            descriptionMarkdown == other.descriptionMarkdown &&
+            ownerId == other.ownerId &&
+            color == other.color &&
+            order == other.order &&
+            dueAt == other.dueAt &&
+            startAt == other.startAt &&
+            completedAt == other.completedAt &&
+            archived == other.archived
+    }
 
 internal fun DeckBoard.hasSameAuthoritativeRevision(other: DeckBoard): Boolean {
     if (id != other.id) return false

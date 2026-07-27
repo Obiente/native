@@ -288,6 +288,11 @@ class DeckBoardAccess private constructor(
         require(permissions.canEdit) { "Deck edit permission is required." }
     }
 
+    internal fun requireCommentWrite(expectedBoardId: DeckBoardId) {
+        requireRead(expectedBoardId)
+        require(!archived) { "Archived Deck boards are read-only." }
+    }
+
     internal fun requireManage(expectedBoardId: DeckBoardId) {
         requireRead(expectedBoardId)
         require(permissions.canManage) { "Deck manage permission is required." }
@@ -600,7 +605,7 @@ data class DeckWriteRoutePlan(
         return deckJsonRequest(
             method = NextcloudApiMethod.PUT,
             path = "$apiRoot/boards/${access.boardId.value}/labels/" +
-                labelId.requireDeckRelationshipId(),
+                access.requireLabel(labelId),
             body = buildJsonObject {
                 put("title", draft.normalizedTitle)
                 put("color", draft.normalizedColor)
@@ -616,7 +621,7 @@ data class DeckWriteRoutePlan(
         return deckRequest(
             method = NextcloudApiMethod.DELETE,
             path = "$apiRoot/boards/${access.boardId.value}/labels/" +
-                labelId.requireDeckRelationshipId(),
+                access.requireLabel(labelId),
         )
     }
 
@@ -641,7 +646,7 @@ data class DeckWriteRoutePlan(
         context: DeckCardContext,
         draft: DeckCommentDraft,
     ): NextcloudApiRequest {
-        access.requireRead(context.stack.boardId)
+        access.requireCommentWrite(context.stack.boardId)
         return deckJsonRequest(
             method = NextcloudApiMethod.POST,
             path = context.commentsPath(),
@@ -659,7 +664,7 @@ data class DeckWriteRoutePlan(
         currentUserId: String,
         update: DeckCommentUpdate,
     ): NextcloudApiRequest {
-        access.requireRead(context.stack.boardId)
+        access.requireCommentWrite(context.stack.boardId)
         require(comment.cardId == context.cardId) { "The Deck comment belongs to another card." }
         require(comment.authorId == currentUserId.requireDeckParticipantId()) {
             "Only the Deck comment author can update this comment."
@@ -679,7 +684,7 @@ data class DeckWriteRoutePlan(
         comment: DeckComment,
         currentUserId: String,
     ): NextcloudApiRequest {
-        access.requireRead(context.stack.boardId)
+        access.requireCommentWrite(context.stack.boardId)
         require(comment.cardId == context.cardId) { "The Deck comment belongs to another card." }
         require(comment.authorId == currentUserId.requireDeckParticipantId()) {
             "Only the Deck comment author can delete this comment."
@@ -869,6 +874,9 @@ fun parseDeckCardMove(
         ?: error("The Deck move response did not contain the moved card.")
     require(movedCard.stackId == move.destinationStack.stackId) {
         "The Deck move response placed the card in an unexpected stack."
+    }
+    require(movedCard.order == move.order) {
+        "The Deck move response placed the card at an unexpected position."
     }
     return positions
 }
@@ -1071,7 +1079,16 @@ private fun String.requireDeckColor(): String {
 }
 
 private fun String?.requireDeckOptionalColor(): String? =
-    this?.trim()?.takeIf(String::isNotEmpty)?.requireDeckColor()
+    this?.trim()?.takeIf(String::isNotEmpty)?.let { color ->
+        val normalized = color.removePrefix("#")
+        require(
+            normalized.length in setOf(3, 6, 8) &&
+                normalized.all(Char::isDeckHexDigit),
+        ) {
+            "The Deck card color must contain three, six, or eight hexadecimal characters."
+        }
+        normalized.lowercase()
+    }
 
 private fun Char.isDeckHexDigit(): Boolean =
     this in '0'..'9' || lowercaseChar() in 'a'..'f'

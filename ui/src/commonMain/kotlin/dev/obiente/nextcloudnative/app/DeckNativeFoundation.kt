@@ -132,6 +132,9 @@ data class DeckReadRoutePlan(
 
     fun board(boardId: Long): NextcloudApiRequest = deckGet("$apiRoot/boards/${boardId.requireDeckId()}")
 
+    fun authoritativeBoard(boardId: Long): NextcloudApiRequest =
+        board(boardId).copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork)
+
     fun stacks(boardId: Long): NextcloudApiRequest =
         deckGet("$apiRoot/boards/${boardId.requireDeckId()}/stacks")
 
@@ -139,6 +142,13 @@ data class DeckReadRoutePlan(
         "$apiRoot/boards/${boardId.requireDeckId()}/stacks/${stackId.requireDeckId()}/cards/" +
             cardId.requireDeckId(),
     )
+
+    fun authoritativeCard(
+        boardId: Long,
+        stackId: Long,
+        cardId: Long,
+    ): NextcloudApiRequest =
+        card(boardId, stackId, cardId).copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork)
 
     private fun deckGet(
         path: String,
@@ -170,6 +180,9 @@ data class DeckReadNegotiation(
         return candidates.getOrNull(index + 1)
     }
 }
+
+internal fun DeckReadRoutePlan.workspaceBoardMetadata(boardId: Long): NextcloudApiRequest =
+    authoritativeBoard(boardId)
 
 fun negotiateDeckReadRoutes(capabilities: DeckCapabilities?): DeckReadNegotiation {
     val advertised = capabilities?.apiVersions.orEmpty().mapNotNull { raw ->
@@ -244,8 +257,13 @@ fun parseDeckCard(
     response: NextcloudApiResponse,
 ): DeckCard {
     require(response.status in 200..299) { "The Deck card failed to load (HTTP ${response.status})." }
-    return response.deckPayload("Deck card").requireObject("Deck card")
+    val card = response.deckPayload("Deck card").requireObject("Deck card")
         .toDeckCard(boardId.requireDeckId(), stackId.requireDeckId())
+    return if (card.etag == null && response.etag != null) {
+        card.copy(etag = response.etag)
+    } else {
+        card
+    }
 }
 
 fun deckBoardState(

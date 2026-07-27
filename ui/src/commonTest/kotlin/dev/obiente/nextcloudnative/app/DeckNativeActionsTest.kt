@@ -105,6 +105,32 @@ class DeckNativeActionsTest {
     }
 
     @Test
+    fun `card update preserves every color format accepted from Deck`() {
+        mapOf(
+            "#abc" to "abc",
+            "A970FF" to "a970ff",
+            "#A970FF80" to "a970ff80",
+        ).forEach { (serverColor, expectedColor) ->
+            val request = routes.updateCard(
+                access,
+                card,
+                DeckCardUpdate(
+                    original = editableCard().copy(color = serverColor),
+                    title = "Updated",
+                    order = 15,
+                    descriptionMarkdown = "Details",
+                    dueAt = null,
+                    startAt = null,
+                    archived = false,
+                    completedAt = null,
+                ),
+            )
+
+            assertEquals(expectedColor, request.jsonBody().string("color"))
+        }
+    }
+
+    @Test
     fun `move keeps source context in path and destination stack only in body`() {
         val move = DeckCardMove(
             source = card,
@@ -210,6 +236,16 @@ class DeckNativeActionsTest {
         assertEquals("42b983", update.jsonBody().string("color"))
         assertEquals(update.relativePath, delete.relativePath)
         assertEquals(NextcloudApiMethod.DELETE, delete.method)
+        assertFailsWith<IllegalArgumentException> {
+            routes.updateLabel(
+                access,
+                labelId = 99,
+                draft = DeckLabelDraft(title = "Unknown", color = "42b983"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            routes.deleteLabel(access, labelId = 99)
+        }
     }
 
     @Test
@@ -310,6 +346,69 @@ class DeckNativeActionsTest {
     }
 
     @Test
+    fun `active readers may comment while archived boards reject comment writes`() {
+        val readerAccess = DeckBoardAccess.from(
+            editableBoard(
+                permissions = DeckPermissions(
+                    canRead = true,
+                    canEdit = false,
+                    canManage = false,
+                    canShare = false,
+                ),
+            ),
+        )
+        val archivedAccess = DeckBoardAccess.from(editableBoard(archived = true))
+        val comment = DeckComment(
+            id = 18,
+            cardId = 42,
+            message = "Original",
+            authorId = "reviewer",
+            authorDisplayName = "Reviewer",
+            createdAt = null,
+            mentions = emptyList(),
+            replyToId = null,
+        )
+
+        assertEquals(
+            NextcloudApiMethod.POST,
+            routes.createComment(readerAccess, card, DeckCommentDraft("Reader comment")).method,
+        )
+        assertEquals(
+            NextcloudApiMethod.PUT,
+            routes.updateComment(
+                readerAccess,
+                card,
+                comment,
+                currentUserId = "reviewer",
+                update = DeckCommentUpdate("Reader update"),
+            ).method,
+        )
+        assertEquals(
+            NextcloudApiMethod.DELETE,
+            routes.deleteComment(readerAccess, card, comment, currentUserId = "reviewer").method,
+        )
+        assertEquals(
+            NextcloudApiMethod.GET,
+            routes.comments(archivedAccess, card).method,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            routes.createComment(archivedAccess, card, DeckCommentDraft("Blocked"))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            routes.updateComment(
+                archivedAccess,
+                card,
+                comment,
+                currentUserId = "reviewer",
+                update = DeckCommentUpdate("Blocked"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            routes.deleteComment(archivedAccess, card, comment, currentUserId = "reviewer")
+        }
+    }
+
+    @Test
     fun `move parser verifies the moved card reached the typed destination`() {
         val move = DeckCardMove(card, destinationStack, order = 1)
         val positions = parseDeckCardMove(
@@ -331,6 +430,12 @@ class DeckNativeActionsTest {
             parseDeckCardMove(
                 move,
                 jsonResponse("""[{"id":42,"stackId":11,"order":1}]"""),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            parseDeckCardMove(
+                move,
+                jsonResponse("""[{"id":42,"stackId":12,"order":0}]"""),
             )
         }
     }

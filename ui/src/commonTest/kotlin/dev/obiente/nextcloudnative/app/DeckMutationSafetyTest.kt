@@ -14,11 +14,21 @@ class DeckMutationSafetyTest {
     }
 
     @Test
-    fun etagsDetectAChangedAuthoritativeCardWhenBothAreAvailable() {
+    fun etagsDetectChangesAndMissingEtagsCompareTheCompleteEditableCard() {
         val original = card("\"revision-1\"")
         assertTrue(original.hasSameAuthoritativeRevision(card("\"revision-1\"")))
         assertFalse(original.hasSameAuthoritativeRevision(card("\"revision-2\"")))
-        assertTrue(original.copy(etag = null).hasSameAuthoritativeRevision(card("\"revision-2\"")))
+        assertTrue(original.copy(etag = null).hasSameAuthoritativeRevision(card(null)))
+        assertFalse(
+            original.copy(etag = null).hasSameAuthoritativeRevision(
+                card(null).copy(descriptionMarkdown = "Changed elsewhere"),
+            ),
+        )
+        assertFalse(
+            original.copy(etag = null).hasSameAuthoritativeRevision(
+                card(null).copy(stackId = 99),
+            ),
+        )
     }
 
     @Test

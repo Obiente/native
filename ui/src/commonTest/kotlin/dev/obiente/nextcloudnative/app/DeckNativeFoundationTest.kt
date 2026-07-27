@@ -26,6 +26,18 @@ class DeckNativeFoundationTest {
         assertEquals("/index.php/apps/deck/api/v1.1/boards/7/stacks", request.relativePath)
         assertTrue(request.ocsApiRequest)
         assertTrue(request.queryParameters.isEmpty())
+        assertEquals(
+            NextcloudApiCachePolicy.ForceNetwork,
+            route.authoritativeBoard(7).cachePolicy,
+        )
+        assertEquals(
+            NextcloudApiCachePolicy.ForceNetwork,
+            route.authoritativeCard(7, 11, 42).cachePolicy,
+        )
+        assertEquals(
+            NextcloudApiCachePolicy.ForceNetwork,
+            route.workspaceBoardMetadata(7).cachePolicy,
+        )
     }
 
     @Test
@@ -202,6 +214,71 @@ class DeckNativeFoundationTest {
         assertEquals("Person", card.assignees.single().displayName)
         assertEquals(3, card.attachmentCount)
         assertEquals(2, card.unreadCommentCount)
+    }
+
+    @Test
+    fun `authoritative card detail uses the response header etag when the body omits it`() {
+        val card = parseDeckCard(
+            boardId = 7,
+            stackId = 11,
+            response = NextcloudApiResponse(
+                status = 200,
+                body = """
+                    {
+                      "id": 42,
+                      "stackId": 11,
+                      "title": "Current card",
+                      "owner": "card-owner",
+                      "order": 2,
+                      "archived": false
+                    }
+                """.trimIndent().encodeToByteArray(),
+                contentType = "application/json",
+                etag = "\"card-revision-2\"",
+            ),
+        )
+
+        assertEquals("\"card-revision-2\"", card.etag)
+    }
+
+    @Test
+    fun `refresh error presents cached board without enabling stale mutations`() {
+        val board = parseDeckBoard(
+            jsonResponse(
+                """
+                {
+                  "id": 7,
+                  "title": "Product",
+                  "color": "a970ff",
+                  "archived": false,
+                  "shared": 0,
+                  "permissions": {
+                    "PERMISSION_READ": true,
+                    "PERMISSION_EDIT": true,
+                    "PERMISSION_MANAGE": true,
+                    "PERMISSION_SHARE": true
+                  },
+                  "labels": [],
+                  "users": []
+                }
+                """.trimIndent(),
+            ),
+        )
+        val cached = DeckWorkspaceState.Board(board, stacks = emptyList())
+        val error = DeckWorkspaceState.Error(
+            title = "Board could not load",
+            message = "The server is unavailable.",
+            cachedState = cached,
+        )
+
+        val stalePresentation = resolveDeckWorkspacePresentation(error, board)
+        val loadedPresentation = resolveDeckWorkspacePresentation(cached, board)
+
+        assertEquals(cached, stalePresentation.visibleState)
+        assertEquals(board, stalePresentation.visibleBoard)
+        assertEquals(error, stalePresentation.cachedError)
+        assertFalse(stalePresentation.mutationsEnabled)
+        assertTrue(loadedPresentation.mutationsEnabled)
     }
 
     @Test
