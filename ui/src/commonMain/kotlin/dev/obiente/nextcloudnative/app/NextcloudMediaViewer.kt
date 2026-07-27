@@ -119,6 +119,9 @@ fun NextcloudMediaViewer(
             candidates = fullQualityGeneration,
         )
     }
+    val livePhotoDiscoveryIdentity = remember(selected) {
+        selected.livePhotoDiscoveryIdentity()
+    }
     val selectedIndex = items.indexOfFirst { it.path == selected.path }.coerceAtLeast(0)
     val canGoPrevious = selectedIndex > 0
     val canGoNext = selectedIndex < items.lastIndex
@@ -144,10 +147,20 @@ fun NextcloudMediaViewer(
     var externalOpening by remember(selected.path) { mutableStateOf(false) }
     var externalError by remember(selected.path) { mutableStateOf<String?>(null) }
     var nativeVideoError by remember(selected.path) { mutableStateOf<String?>(null) }
-    var livePhotoSource by remember(selected.path, selected.etag) {
+    var livePhotoSource by remember(
+        session.serverUrl,
+        session.loginName,
+        livePhotoDiscoveryIdentity,
+    ) {
         mutableStateOf<MemoriesLivePhotoSource?>(null)
     }
-    var motionPlaying by remember(selected.path, selected.etag) { mutableStateOf(false) }
+    var motionPlaying by remember(
+        session.serverUrl,
+        session.loginName,
+        livePhotoDiscoveryIdentity,
+    ) {
+        mutableStateOf(false)
+    }
     var viewerAction by remember(selected.path) { mutableStateOf<MediaViewerAction?>(null) }
     val scope = rememberCoroutineScope()
     val viewerActions = remember(
@@ -207,10 +220,22 @@ fun NextcloudMediaViewer(
 
     fun openInMediaApp() = handoffToExternalApp(ExternalFileHandoffAction.OpenWith)
 
-    LaunchedEffect(selected, taggingAvailable, session) {
+    LaunchedEffect(
+        livePhotoDiscoveryIdentity,
+        taggingAvailable,
+        platformNativeVideoPlaybackAvailable,
+        session,
+    ) {
         livePhotoSource = null
         motionPlaying = false
-        if (!taggingAvailable || !selected.canResolveMemoriesLivePhoto()) return@LaunchedEffect
+        if (
+            !selected.shouldDiscoverMemoriesLivePhoto(
+                memoriesAvailable = taggingAvailable,
+                nativePlaybackAvailable = platformNativeVideoPlaybackAvailable,
+            )
+        ) {
+            return@LaunchedEffect
+        }
         livePhotoSource = runCatching {
             resolveMemoriesLivePhotoSource(
                 services = services,
@@ -436,6 +461,11 @@ fun NextcloudMediaViewer(
                 session = session,
                 userId = userId,
                 source = playbackSource,
+                onPlaybackEnded = {
+                    if (playbackSource.restoresStillAfterPlaybackEnds()) {
+                        motionPlaying = false
+                    }
+                },
                 onError = { message ->
                     nativeVideoError = message
                     if (playbackSource is NativeVideoPlaybackSource.MemoriesLivePhoto) {

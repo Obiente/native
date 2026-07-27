@@ -74,6 +74,76 @@ class LivePhotosTest {
     }
 
     @Test
+    fun discoveryRequiresMemoriesAndNativePlayback() {
+        val candidate = photo("ordinary.jpg", "image/jpeg")
+
+        assertTrue(
+            candidate.shouldDiscoverMemoriesLivePhoto(
+                memoriesAvailable = true,
+                nativePlaybackAvailable = true,
+            ),
+        )
+        assertFalse(
+            candidate.shouldDiscoverMemoriesLivePhoto(
+                memoriesAvailable = false,
+                nativePlaybackAvailable = true,
+            ),
+        )
+        assertFalse(
+            candidate.shouldDiscoverMemoriesLivePhoto(
+                memoriesAvailable = true,
+                nativePlaybackAvailable = false,
+            ),
+        )
+        assertFalse(
+            photo("capture.png", "image/png").shouldDiscoverMemoriesLivePhoto(
+                memoriesAvailable = true,
+                nativePlaybackAvailable = true,
+            ),
+        )
+    }
+
+    @Test
+    fun discoveryIdentityChangesWithRemoteGeneration() {
+        val first = photo("ordinary.jpg", "image/jpeg")
+        val second = first.copy(etag = "generation-2")
+        val third = second.copy(
+            size = 2_048L,
+            lastModified = "2026-07-28T12:00:00Z",
+        )
+
+        assertFalse(first.livePhotoDiscoveryIdentity() == second.livePhotoDiscoveryIdentity())
+        assertFalse(second.livePhotoDiscoveryIdentity() == third.livePhotoDiscoveryIdentity())
+    }
+
+    @Test
+    fun memoriesPlaybackAddsOcsHeaderAndRestoresStillAtEnd() {
+        val authorization = "Basic opaque"
+        val still = photo("motion.jpg", "image/jpeg")
+        val live = MemoriesLivePhotoSource(
+            fileId = 42L,
+            reference = NextcloudLivePhotoReference("self__trailer"),
+            etag = "generation-1",
+        )
+        val davSource = NativeVideoPlaybackSource.DavFile(still)
+        val memoriesSource = NativeVideoPlaybackSource.MemoriesLivePhoto(live)
+
+        assertEquals(
+            mapOf("Authorization" to authorization),
+            davSource.authenticatedRequestProperties(authorization),
+        )
+        assertEquals(
+            mapOf(
+                "Authorization" to authorization,
+                "OCS-APIRequest" to "true",
+            ),
+            memoriesSource.authenticatedRequestProperties(authorization),
+        )
+        assertFalse(davSource.restoresStillAfterPlaybackEnds())
+        assertTrue(memoriesSource.restoresStillAfterPlaybackEnds())
+    }
+
+    @Test
     fun rejectsWrongIdentitiesDaysDuplicatesAndUnsafeTokens() {
         assertFailsWith<IllegalArgumentException> {
             parseMemoriesLivePhotoDayId(

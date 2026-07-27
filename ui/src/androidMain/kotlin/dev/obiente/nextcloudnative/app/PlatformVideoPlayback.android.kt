@@ -26,10 +26,13 @@ internal actual fun PlatformNativeVideoPlayer(
     session: NextcloudSession,
     userId: String,
     source: NativeVideoPlaybackSource,
+    onPlaybackEnded: () -> Unit,
     onError: (String) -> Unit,
     modifier: Modifier,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val currentOnPlaybackEnded = rememberUpdatedState(onPlaybackEnded)
+    val currentOnError = rememberUpdatedState(onError)
     val player = remember(session.serverUrl, session.loginName, userId, source) {
         val authorization = Base64.encodeToString(
             "${session.loginName}:${session.appPassword}".toByteArray(Charsets.UTF_8),
@@ -41,7 +44,9 @@ internal actual fun PlatformNativeVideoPlayer(
             .build()
         val sourceFactory = OkHttpDataSource.Factory(client)
             .setUserAgent("Nextcloud Native")
-            .setDefaultRequestProperties(mapOf("Authorization" to "Basic $authorization"))
+            .setDefaultRequestProperties(
+                source.authenticatedRequestProperties("Basic $authorization"),
+            )
         val mediaId = when (source) {
             is NativeVideoPlaybackSource.DavFile ->
                 source.file.fileId?.toString() ?: source.file.path
@@ -64,21 +69,28 @@ internal actual fun PlatformNativeVideoPlayer(
             }
             .build()
         ExoPlayer.Builder(context.applicationContext).build().apply {
+            addListener(
+                object : Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        if (playbackState == Player.STATE_ENDED) {
+                            currentOnPlaybackEnded.value()
+                        }
+                    }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        currentOnError.value(
+                            error.message ?: "Android could not play this video format.",
+                        )
+                    }
+                },
+            )
             setMediaSource(ProgressiveMediaSource.Factory(sourceFactory).createMediaSource(item))
             prepare()
             playWhenReady = source is NativeVideoPlaybackSource.MemoriesLivePhoto
         }
     }
-    val currentOnError = rememberUpdatedState(onError)
     DisposableEffect(player) {
-        val listener = object : Player.Listener {
-            override fun onPlayerError(error: PlaybackException) {
-                currentOnError.value(error.message ?: "Android could not play this video format.")
-            }
-        }
-        player.addListener(listener)
         onDispose {
-            player.removeListener(listener)
             player.release()
         }
     }

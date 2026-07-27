@@ -11,6 +11,7 @@ internal actual fun PlatformNativeVideoPlayer(
     session: NextcloudSession,
     userId: String,
     source: NativeVideoPlaybackSource,
+    onPlaybackEnded: () -> Unit,
     onError: (String) -> Unit,
     modifier: Modifier,
 ) {

@@ -31,6 +31,35 @@ data class MemoriesLivePhotoSource(
     }
 }
 
+internal data class LivePhotoDiscoveryIdentity(
+    val path: String,
+    val fileId: Long?,
+    val etag: String?,
+    val size: Long?,
+    val lastModified: String?,
+    val mimeType: String?,
+    val serverReference: String?,
+)
+
+internal fun NextcloudFile.livePhotoDiscoveryIdentity(): LivePhotoDiscoveryIdentity =
+    LivePhotoDiscoveryIdentity(
+        path = path,
+        fileId = fileId,
+        etag = etag,
+        size = size,
+        lastModified = lastModified,
+        mimeType = mimeType,
+        serverReference = livePhoto?.serverToken,
+    )
+
+internal fun NextcloudFile.shouldDiscoverMemoriesLivePhoto(
+    memoriesAvailable: Boolean,
+    nativePlaybackAvailable: Boolean,
+): Boolean =
+    memoriesAvailable &&
+        nativePlaybackAvailable &&
+        canResolveMemoriesLivePhoto()
+
 fun memoriesLivePhotoInfoRequest(fileId: Long): NextcloudApiRequest {
     require(fileId > 0L) { "The Live Photo file ID is invalid." }
     return NextcloudApiRequest(
