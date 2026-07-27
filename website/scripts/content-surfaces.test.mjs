@@ -125,6 +125,10 @@ test("marketing screenshots are rendered offscreen without an Android device", a
       "file-share-group-desktop",
       "file-share-loading-mobile",
       "file-share-error-mobile",
+      "transfer-mobile-pending",
+      "transfer-mobile-failed-cached",
+      "transfer-desktop-active",
+      "transfer-desktop-completed-page",
     ],
   );
   assert.deepEqual(
@@ -141,6 +145,10 @@ test("marketing screenshots are rendered offscreen without an Android device", a
     ["file-share-group-desktop", [1440, 900]],
     ["file-share-loading-mobile", [1080, 1800]],
     ["file-share-error-mobile", [1080, 1800]],
+    ["transfer-mobile-pending", [1080, 1800]],
+    ["transfer-mobile-failed-cached", [1080, 1800]],
+    ["transfer-desktop-active", [1280, 800]],
+    ["transfer-desktop-completed-page", [1280, 800]],
   ]);
   for (const capture of manifest.captures) {
     assert.deepEqual(

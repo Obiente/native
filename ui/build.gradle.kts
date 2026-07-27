@@ -162,6 +162,10 @@ tasks.register<JavaExec>("captureMarketingScreenshots") {
         "file-share-group-desktop.png",
         "file-share-loading-mobile.png",
         "file-share-error-mobile.png",
+        "transfer-mobile-pending.png",
+        "transfer-mobile-failed-cached.png",
+        "transfer-desktop-active.png",
+        "transfer-desktop-completed-page.png",
         ).map { fileName ->
             rootProject.file("website/public/screenshots/$fileName").absolutePath
         },

@@ -52,6 +52,7 @@ enum class MediaBackupTransferState {
 
 data class MediaBackupLedgerRecord(
     val accountId: String,
+    val sourceId: String? = null,
     val local: LocalMediaObject?,
     val receipt: MediaBackupReceipt?,
     val transferState: MediaBackupTransferState,
@@ -61,6 +62,7 @@ data class MediaBackupLedgerRecord(
 ) {
     init {
         require(accountId.isSafeMediaLedgerText(256))
+        require(sourceId == null || sourceId.isSafeMediaLedgerText(256))
         require(local != null || receipt != null)
         require(local == null || receipt == null || local.key == receipt.localKey)
         require(attemptCount in 0..MAX_MEDIA_BACKUP_ATTEMPTS)
@@ -112,6 +114,126 @@ data class MediaBackupLedgerSummary(
     val total: Int
         get() = pending + uploading + failed + succeeded
 }
+
+data class MediaBackupLedgerSnapshot(
+    val summary: MediaBackupLedgerSummary,
+    val page: MediaBackupLedgerPage,
+)
+
+data class MediaBackupLedgerKeyMigration(
+    val legacyLocalKey: String,
+    val currentLocalKey: String,
+    val remotePath: String,
+)
+
+enum class MediaTransferSection {
+    Pending,
+    Active,
+    Failed,
+    Completed,
+}
+
+fun MediaTransferSection.transferState(): MediaBackupTransferState = when (this) {
+    MediaTransferSection.Pending -> MediaBackupTransferState.Pending
+    MediaTransferSection.Active -> MediaBackupTransferState.Uploading
+    MediaTransferSection.Failed -> MediaBackupTransferState.Failed
+    MediaTransferSection.Completed -> MediaBackupTransferState.Succeeded
+}
+
+internal fun boundedMediaTransferCursorHistory(
+    history: List<MediaBackupLedgerCursor?>,
+): List<MediaBackupLedgerCursor?> {
+    require(history.isNotEmpty() && history.first() == null)
+    if (history.size <= MAX_SAVED_MEDIA_TRANSFER_WINDOWS) return history
+    return listOf(null) + history.drop(1).takeLast(MAX_SAVED_MEDIA_TRANSFER_WINDOWS - 1)
+}
+
+internal fun encodeMediaTransferCursorHistory(
+    history: List<MediaBackupLedgerCursor?>,
+): String = boundedMediaTransferCursorHistory(history).joinToString("\n") { cursor ->
+    cursor?.let { "${it.updatedAtEpochMillis}:${it.localKey}" } ?: "-"
+}
+
+internal fun restoreMediaTransferCursorHistory(
+    encoded: String,
+): List<MediaBackupLedgerCursor?> = runCatching {
+    val entries = encoded.split('\n')
+    require(entries.isNotEmpty() && entries.size <= MAX_SAVED_MEDIA_TRANSFER_WINDOWS)
+    require(entries.first() == "-")
+    entries.mapIndexed { index, value ->
+        if (index == 0) {
+            require(value == "-")
+            null
+        } else {
+            val separator = value.indexOf(':')
+            require(separator > 0 && separator < value.lastIndex)
+            MediaBackupLedgerCursor(
+                updatedAtEpochMillis = value.substring(0, separator).toLong(),
+                localKey = value.substring(separator + 1),
+            )
+        }
+    }
+}.getOrElse { listOf(null) }
+
+fun MediaBackupLedgerSummary.count(section: MediaTransferSection): Int = when (section) {
+    MediaTransferSection.Pending -> pending
+    MediaTransferSection.Active -> uploading
+    MediaTransferSection.Failed -> failed
+    MediaTransferSection.Completed -> succeeded
+}
+
+data class MediaTransferCenterPage(
+    val section: MediaTransferSection,
+    val records: List<MediaBackupLedgerRecord>,
+    val nextCursor: MediaBackupLedgerCursor?,
+) {
+    init {
+        require(records.size <= MEDIA_TRANSFER_CENTER_PAGE_SIZE)
+        require(records.all { it.transferState == section.transferState() })
+        require(records.map(MediaBackupLedgerRecord::localKey).distinct().size == records.size)
+    }
+}
+
+enum class MediaTransferAction {
+    Details,
+    Retry,
+    Cancel,
+}
+
+internal val PRODUCTION_MEDIA_TRANSFER_ACTIONS: Set<MediaTransferAction> =
+    setOf(MediaTransferAction.Details)
+
+fun MediaBackupLedgerRecord.availableTransferActions(): Set<MediaTransferAction> = when (transferState) {
+    MediaBackupTransferState.Pending -> setOf(MediaTransferAction.Details, MediaTransferAction.Cancel)
+    MediaBackupTransferState.Uploading -> setOf(MediaTransferAction.Details, MediaTransferAction.Cancel)
+    MediaBackupTransferState.Failed -> setOf(MediaTransferAction.Details, MediaTransferAction.Retry)
+    MediaBackupTransferState.Succeeded -> setOf(MediaTransferAction.Details)
+}
+
+data class MediaTransferCenterState(
+    val summary: MediaBackupLedgerSummary,
+    val page: MediaTransferCenterPage,
+    val canLoadNewer: Boolean,
+) {
+    init {
+        require(page.records.size <= MEDIA_TRANSFER_CENTER_PAGE_SIZE)
+    }
+}
+
+fun mediaTransferCenterState(
+    summary: MediaBackupLedgerSummary,
+    section: MediaTransferSection,
+    page: MediaBackupLedgerPage,
+    canLoadNewer: Boolean,
+): MediaTransferCenterState = MediaTransferCenterState(
+    summary = summary,
+    page = MediaTransferCenterPage(
+        section = section,
+        records = page.records,
+        nextCursor = page.nextCursor,
+    ),
+    canLoadNewer = canLoadNewer,
+)
 
 fun MediaBackupLedgerRecord.resolveMediaBackupStatus(): MediaBackupStatus = when {
     transferState == MediaBackupTransferState.Uploading -> MediaBackupStatus.Uploading
@@ -180,7 +302,11 @@ private fun String.isSafeMediaLedgerText(maxLength: Int): Boolean =
 
 internal const val MAX_MEDIA_BACKUP_LEDGER_RECORDS_PER_ACCOUNT = 25_000
 internal const val MAX_MEDIA_BACKUP_LEDGER_PAGE_SIZE = 200
+const val MEDIA_TRANSFER_CENTER_PAGE_SIZE = 50
 const val MAX_MEDIA_BACKUP_STATUS_PATHS = 500
 const val MAX_MEDIA_BACKUP_LEDGER_QUERY_KEYS = 500
 const val MAX_MEDIA_BACKUP_LEDGER_WRITE_BATCH = 500
+internal const val MAX_MEDIA_BACKUP_TRANSFER_SOURCES = 64
+internal const val MAX_MEDIA_BACKUP_SOURCE_LEGACY_KEYS = 40_000
+private const val MAX_SAVED_MEDIA_TRANSFER_WINDOWS = 64
 private const val MAX_MEDIA_BACKUP_ATTEMPTS = 1_000

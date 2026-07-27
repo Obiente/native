@@ -79,6 +79,38 @@ enum class MarketingCaptureScenario(
         height = 1_800,
         density = 2.625f,
     ),
+    TransferMobilePending(
+        "transfer-mobile-pending",
+        "transfer-mobile-pending.png",
+        NextcloudPresentation.Adaptive,
+        1_080,
+        1_800,
+        2.625f,
+    ),
+    TransferMobileFailed(
+        "transfer-mobile-failed-cached",
+        "transfer-mobile-failed-cached.png",
+        NextcloudPresentation.Adaptive,
+        1_080,
+        1_800,
+        2.625f,
+    ),
+    TransferDesktopActive(
+        "transfer-desktop-active",
+        "transfer-desktop-active.png",
+        NextcloudPresentation.Desktop,
+        1_280,
+        800,
+        1f,
+    ),
+    TransferDesktopCompleted(
+        "transfer-desktop-completed-page",
+        "transfer-desktop-completed-page.png",
+        NextcloudPresentation.Desktop,
+        1_280,
+        800,
+        1f,
+    ),
 }
 
 internal val fileShareCaptureScenarios: List<MarketingCaptureScenario> = listOf(
