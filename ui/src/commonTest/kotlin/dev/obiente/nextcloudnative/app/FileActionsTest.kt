@@ -34,6 +34,18 @@ class FileActionsTest {
         assertEquals("Show details for archive.bin", primaryFileActionLabel(binary))
     }
 
+    @Test
+    fun previewlessRawFilesExposeTheSameViewerActionAsActivation() {
+        val raw = file(
+            name = "capture.raf",
+            mimeType = "application/octet-stream",
+            fileId = 42L,
+        )
+
+        assertEquals(listOf(FileAction.Preview, FileAction.Details), availableFileActions(raw))
+        assertEquals("Preview capture.raf", primaryFileActionLabel(raw))
+    }
+
     private fun file(
         name: String,
         isDirectory: Boolean = false,
