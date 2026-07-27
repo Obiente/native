@@ -22,10 +22,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -49,8 +51,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
@@ -75,6 +79,8 @@ import androidx.compose.ui.zIndex
 import com.mohamedrejeb.richeditor.model.rememberRichTextState
 import com.mohamedrejeb.richeditor.annotation.ExperimentalRichTextApi
 import com.mohamedrejeb.richeditor.ui.material3.RichText
+import dev.obiente.nextcloudnative.app.design.BoardDragVerticalScrollTarget
+import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragAutoScroll
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
@@ -83,6 +89,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
+import dev.obiente.nextcloudnative.app.design.resolveBoardDragVerticalLane
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_LIST_FORMAT
@@ -1825,18 +1832,30 @@ private fun GenericRecordBoard(
     var actionMessage by remember(resource.id) { mutableStateOf<String?>(null) }
     var actionError by remember(resource.id) { mutableStateOf<String?>(null) }
     val laneBounds = remember(resource.id) { mutableStateMapOf<String, Rect>() }
+    val laneScrollBounds = remember(resource.id) { mutableMapOf<String, Rect>() }
+    val laneScrollStates = remember(resource.id) { mutableMapOf<String, LazyListState>() }
+    val boardScrollState = key(NativeBoardScrollStateKey(resource.id)) {
+        rememberScrollState()
+    }
     var boardBounds by remember(resource.id) { mutableStateOf<Rect?>(null) }
     var draggedRecord by remember(resource.id) { mutableStateOf<NativeRecord?>(null) }
+    var draggedMovePlan by remember(resource.id) { mutableStateOf<NativeBoardMovePlan?>(null) }
+    var dragOrigin by remember(resource.id) { mutableStateOf<Offset?>(null) }
     var dragPosition by remember(resource.id) { mutableStateOf<Offset?>(null) }
     var dragTargetLaneKey by remember(resource.id) { mutableStateOf<String?>(null) }
     var dragAllowedLaneKeys by remember(resource.id) { mutableStateOf<Set<String>>(emptySet()) }
+    var terminalDropRequested by remember(resource.id) { mutableStateOf(false) }
     val fingerprint = remember(lanes) { nativeBoardFingerprint(lanes) }
 
-    fun resolveDragTarget(position: Offset): String? = resolveNativeBoardLaneDropTarget(
-        position = position,
-        laneBounds = laneBounds,
-        allowedLaneKeys = dragAllowedLaneKeys,
-    )
+    fun resolveDragTarget(position: Offset): String? {
+        val viewport = boardBounds ?: return null
+        return resolveNativeBoardLaneDropTarget(
+            position = position,
+            boardViewport = viewport,
+            laneBounds = laneBounds,
+            allowedLaneKeys = dragAllowedLaneKeys,
+        )
+    }
 
     fun updateDragPosition(position: Offset) {
         dragPosition = position
@@ -1845,9 +1864,12 @@ private fun GenericRecordBoard(
 
     fun clearDrag() {
         draggedRecord = null
+        draggedMovePlan = null
+        dragOrigin = null
         dragPosition = null
         dragTargetLaneKey = null
         dragAllowedLaneKeys = emptySet()
+        terminalDropRequested = false
     }
 
     val pendingMove = reconciliation.pendingMove
@@ -1978,6 +2000,49 @@ private fun GenericRecordBoard(
         }
     }
 
+    fun commitDragDrop() {
+        val record = draggedRecord
+        val movePlan = draggedMovePlan
+        val destination = dragTargetLaneKey?.let { targetKey ->
+            movePlan?.targets?.firstOrNull { it.key == targetKey }
+        }
+        clearDrag()
+        if (record != null && movePlan != null && destination != null) {
+            executeMove(
+                NativeBoardMoveTargetSelection(record, movePlan),
+                destination,
+            )
+        }
+    }
+
+    NextcloudBoardDragAutoScroll(
+        activeDragKey = draggedRecord?.id,
+        position = dragPosition,
+        dragOrigin = dragOrigin,
+        boardViewport = boardBounds,
+        horizontalScrollState = boardScrollState,
+        verticalScrollTargetAt = { position, boardViewport, activationHalo ->
+            val laneKey = resolveBoardDragVerticalLane(
+                position = position,
+                boardViewport = boardViewport,
+                laneViewports = laneScrollBounds,
+                verticalActivationHalo = activationHalo,
+            )
+            val viewport = laneKey?.let(laneScrollBounds::get)
+            val state = laneKey?.let(laneScrollStates::get)
+            if (viewport != null && state != null) {
+                BoardDragVerticalScrollTarget(state, viewport)
+            } else {
+                null
+            }
+        },
+        terminalDropRequested = terminalDropRequested,
+        onTargetRefresh = {
+            dragPosition?.let(::updateDragPosition)
+        },
+        onTerminalDropReady = ::commitDragDrop,
+    )
+
     Column(modifier = Modifier.fillMaxSize()) {
         actionError?.let { message ->
             Surface(
@@ -2011,11 +2076,27 @@ private fun GenericRecordBoard(
                 },
         ) {
             Row(
-                modifier = Modifier.fillMaxSize().horizontalScroll(rememberScrollState())
+                modifier = Modifier.fillMaxSize().horizontalScroll(boardScrollState)
                     .padding(NextcloudSpacing.Large),
                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
                 lanes.forEach { lane ->
+                    val laneStateKey = NativeBoardLaneStateKey(
+                        resourceId = resource.id,
+                        laneKey = lane.key,
+                    )
+                    key(laneStateKey) {
+                    val laneScrollState = rememberLazyListState()
+                    DisposableEffect(laneStateKey, laneScrollState) {
+                        laneScrollStates[lane.key] = laneScrollState
+                        onDispose {
+                            if (laneScrollStates[lane.key] === laneScrollState) {
+                                laneBounds.remove(lane.key)
+                                laneScrollBounds.remove(lane.key)
+                                laneScrollStates.remove(lane.key)
+                            }
+                        }
+                    }
                     val createPlan = remember(schema, resource, lane) {
                         nativeBoardLaneCreatePlan(schema, resource, lane)
                     }
@@ -2078,7 +2159,11 @@ private fun GenericRecordBoard(
                     }
                 }
                         LazyColumn(
-                            modifier = Modifier.weight(1f),
+                            state = laneScrollState,
+                            modifier = Modifier.weight(1f)
+                                .onGloballyPositioned { coordinates ->
+                                    laneScrollBounds[lane.key] = coordinates.boundsInWindow()
+                                },
                             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                             contentPadding = PaddingValues(bottom = NextcloudSpacing.XXLarge),
                         ) {
@@ -2103,8 +2188,11 @@ private fun GenericRecordBoard(
                                     onDragStart = movePlan?.takeIf { busyRecordId == null }?.let {
                                         { position ->
                                             draggedRecord = record
+                                            draggedMovePlan = movePlan
+                                            dragOrigin = position
                                             dragAllowedLaneKeys = movePlan.targets
                                                 .mapTo(linkedSetOf(), NativeBoardMoveTarget::key)
+                                            terminalDropRequested = false
                                             updateDragPosition(position)
                                         }
                                     },
@@ -2113,18 +2201,7 @@ private fun GenericRecordBoard(
                                             updateDragPosition(position + amount)
                                         }
                                     },
-                                    onDragEnd = {
-                                        val destination = dragTargetLaneKey?.let { targetKey ->
-                                            movePlan?.targets?.firstOrNull { it.key == targetKey }
-                                        }
-                                        clearDrag()
-                                        if (movePlan != null && destination != null) {
-                                            executeMove(
-                                                NativeBoardMoveTargetSelection(record, movePlan),
-                                                destination,
-                                            )
-                                        }
-                                    },
+                                    onDragEnd = { terminalDropRequested = true },
                                     onDragCancel = ::clearDrag,
                                     onDirectAction = { plan ->
                                         val target = NativeBoardDirectActionTarget(record, plan)
@@ -2137,6 +2214,7 @@ private fun GenericRecordBoard(
                                 )
                             }
                         }
+                    }
                     }
                 }
             }
@@ -2321,6 +2399,7 @@ private fun GenericBoardCard(
                 onDragStart?.let { startDrag ->
                     NextcloudBoardDragHandle(
                         itemLabel = presentation.title,
+                        dragActive = dragging,
                         onDragStart = startDrag,
                         onDrag = onDrag,
                         onDragEnd = onDragEnd,
