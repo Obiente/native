@@ -168,7 +168,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "61423bda317772866abecf91053bbb73998ff2cf5de73432956130e9ff9eec0d",
+    "captureSourceSha256": "5a7d569e29bbcee6d8c62d41aae7b67117e83d53e240095cda87609b87a51f97",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {
@@ -183,7 +183,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "0e241b28972d37516ef6dbaeba3af734b62b9e2c74369c1e739529183c921231"
+            "sha256": "8c51b7a628149cd9c7dad580de118d55e653eb11708651d699346393e0cdb814"
         },
         {
             "scenario": "mobile-home",
@@ -197,7 +197,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "b754dc8b208db006c8393a15bcd6f84db67fa0259a51e8f14b5404d8947736ef"
+            "sha256": "071f9d85242b37a8cac81a06fb23e290d452bd0c48923c910155fc50882336bc"
         },
         {
             "scenario": "obsidian-vault-sync",
@@ -230,16 +230,30 @@
         {
             "scenario": "adaptive-dynamic-data",
             "file": "adaptive-dynamic-data.png",
-            "width": 960,
-            "height": 360,
+            "width": 1440,
+            "height": 900,
             "density": 1.0,
             "feature": "Dynamic apps",
             "surface": "Data table",
             "state": "Ready",
             "purpose": "showcase",
             "platform": "desktop",
-            "viewport": "embedded-wide",
-            "sha256": "4159f4903b21511d26a72aaa9694b2fbe78f6141f33b035763deb8238432885a"
+            "viewport": "wide",
+            "sha256": "8d67ba3f63f6a47eb314ca6c46bd48a080148afeb9f9182a2a87154b8c6e772c"
+        },
+        {
+            "scenario": "adaptive-dynamic-data-mobile",
+            "file": "adaptive-dynamic-data-mobile.png",
+            "width": 1080,
+            "height": 1800,
+            "density": 2.625,
+            "feature": "Dynamic apps",
+            "surface": "Data table",
+            "state": "Ready",
+            "purpose": "showcase",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "d26666e3003474770035814b00474979553994993066c6101bc1fced5f7fd237"
         },
         {
             "scenario": "raw-preview-loading-mobile",

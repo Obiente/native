@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -77,8 +78,6 @@ internal fun NativeDashboardScreen(
     onSettings: (() -> Unit)? = null,
 ) {
     var refreshAttempt by remember(session) { mutableStateOf(0) }
-    var customizeWorkspace by remember(session) { mutableStateOf(false) }
-    var workspacePersistenceError by remember(session) { mutableStateOf<String?>(null) }
     val state = rememberNativeDashboardState(
         services = services,
         session = session,
@@ -99,12 +98,65 @@ internal fun NativeDashboardScreen(
         mutableStateOf(workspaceRepository.load(workspaceScope))
     }
 
+    NativeDashboardPresentation(
+        state = state,
+        installedApps = installedApps,
+        workspaceLayout = workspaceLayout,
+        onWorkspaceLayoutChanged = { updated ->
+            workspaceLayout = updated
+            workspaceRepository.save(updated)
+        },
+        onOpenApp = onOpenApp,
+        onOpenStatus = onOpenStatus,
+        onOpenLink = { link ->
+            val appId = dashboardAppIdForLink(session, link)
+            val nativeApp = installedApps.firstOrNull { it.id == appId }
+            if (nativeApp != null) {
+                onOpenApp(nativeApp)
+            } else {
+                services.openExternalUrl(dashboardBrowserUrl(session, link))
+            }
+        },
+        onBack = onBack,
+        onRefresh = { refreshAttempt += 1 },
+        onSearch = onSearch,
+        onSettings = onSettings,
+    )
+}
+
+/**
+ * Shared production dashboard presentation.
+ *
+ * The authenticated host owns transport, cache, account identity, and persistence. Deterministic
+ * captures can provide synthetic state without replacing the UI with a separate preview screen.
+ */
+@Composable
+internal fun NativeDashboardPresentation(
+    state: DashboardSurfaceState,
+    installedApps: List<NextcloudAppEntry>,
+    workspaceLayout: HomeWorkspaceLayout,
+    onWorkspaceLayoutChanged: (HomeWorkspaceLayout) -> Boolean,
+    onOpenApp: (NextcloudAppEntry) -> Unit,
+    onOpenStatus: (() -> Unit)?,
+    onOpenLink: (String) -> Unit,
+    onBack: (() -> Unit)?,
+    onRefresh: () -> Unit,
+    onSearch: (() -> Unit)? = null,
+    onSettings: (() -> Unit)? = null,
+) {
+    var customizeWorkspace by remember(workspaceLayout.scope) { mutableStateOf(false) }
+    var workspacePersistenceError by remember(workspaceLayout.scope) { mutableStateOf<String?>(null) }
+    var activeWorkspaceLayout by remember(workspaceLayout.scope) { mutableStateOf(workspaceLayout) }
+    LaunchedEffect(workspaceLayout) {
+        if (workspaceLayout != activeWorkspaceLayout) activeWorkspaceLayout = workspaceLayout
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         DashboardHeader(
             title = "Home",
             subtitle = "Your cloud at a glance",
             onBack = onBack,
-            onRefresh = { refreshAttempt += 1 },
+            onRefresh = onRefresh,
             onCustomize = { customizeWorkspace = true },
             onSearch = onSearch,
             onSettings = onSettings,
@@ -113,7 +165,7 @@ internal fun NativeDashboardScreen(
             DashboardSurfaceState.Loading -> DashboardLoading()
             is DashboardSurfaceState.Failed -> DashboardFailure(
                 message = current.message,
-                onRetry = { refreshAttempt += 1 },
+                onRetry = onRefresh,
             )
             is DashboardSurfaceState.Available -> {
                 val bindings = remember(current.snapshot.widgets) {
@@ -127,13 +179,13 @@ internal fun NativeDashboardScreen(
                         }
                     }
                 }
-                val effectiveLayout = remember(workspaceLayout, availableSectionIds) {
-                    workspaceLayout.reconcileAvailableSections(availableSectionIds)
+                val effectiveLayout = remember(activeWorkspaceLayout, availableSectionIds) {
+                    activeWorkspaceLayout.reconcileAvailableSections(availableSectionIds)
                 }
                 LaunchedEffect(effectiveLayout) {
-                    if (effectiveLayout != workspaceLayout) {
-                        workspaceLayout = effectiveLayout
-                        workspaceRepository.save(effectiveLayout)
+                    if (effectiveLayout != activeWorkspaceLayout) {
+                        activeWorkspaceLayout = effectiveLayout
+                        onWorkspaceLayoutChanged(effectiveLayout)
                     }
                 }
                 val bindingsBySection = remember(bindings) {
@@ -164,15 +216,7 @@ internal fun NativeDashboardScreen(
                                     widget = binding.widget,
                                     items = current.snapshot.itemsByWidget[binding.widget.id].orEmpty(),
                                     size = section.size,
-                                    onOpenLink = { link ->
-                                        val appId = dashboardAppIdForLink(session, link)
-                                        val nativeApp = installedApps.firstOrNull { it.id == appId }
-                                        if (nativeApp != null) {
-                                            onOpenApp(nativeApp)
-                                        } else {
-                                            services.openExternalUrl(dashboardBrowserUrl(session, link))
-                                        }
-                                    },
+                                    onOpenLink = onOpenLink,
                                 )
                             }
                         }
@@ -192,8 +236,8 @@ internal fun NativeDashboardScreen(
                             workspacePersistenceError = null
                         },
                         onSave = { updated ->
-                            workspaceLayout = updated
-                            if (workspaceRepository.save(updated)) {
+                            activeWorkspaceLayout = updated
+                            if (onWorkspaceLayoutChanged(updated)) {
                                 customizeWorkspace = false
                                 workspacePersistenceError = null
                             } else {
@@ -407,11 +451,12 @@ private fun DashboardQuickActionsCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                LazyRow(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
                     horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
                 ) {
-                    items(quickApps, key = NextcloudAppEntry::id) { app ->
+                    quickApps.forEach { app ->
                         FilterChip(
                             selected = false,
                             onClick = { onOpenApp(app) },

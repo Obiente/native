@@ -490,7 +490,7 @@ private fun GenericTableCollection(
     }
     val insights = remember(projection) { nativeDatasetInsights(projection.resource, projection.records) }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val compactViewport = !datasetInsightsDefaultExpanded(maxWidth.value, maxHeight.value)
+        val compactViewport = shouldUseCompactTableRecordList(maxWidth.value)
         Column(modifier = Modifier.fillMaxSize()) {
             insights?.let {
                 DatasetInsightsDisclosure(
@@ -500,17 +500,26 @@ private fun GenericTableCollection(
                     stateKey = "table:${resource.id}",
                 )
             }
-            GenericRecordTable(
-                schema,
-                view,
-                resource,
-                records,
-                datasetContext,
-                actionExecutor,
-                onSelectRecord,
-                onInlineActionSucceeded,
-                Modifier.weight(1f),
-            )
+            if (compactViewport) {
+                GenericRecordList(
+                    resource = projection.resource,
+                    records = projection.records,
+                    onSelectRecord = onSelectRecord,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                GenericRecordTable(
+                    schema,
+                    view,
+                    resource,
+                    records,
+                    datasetContext,
+                    actionExecutor,
+                    onSelectRecord,
+                    onInlineActionSucceeded,
+                    Modifier.weight(1f),
+                )
+            }
         }
     }
 }
@@ -1521,6 +1530,8 @@ private fun GenericInsightCollection(
 
 internal fun datasetInsightsDefaultExpanded(widthDp: Float, heightDp: Float): Boolean =
     widthDp >= 720f && heightDp >= 600f
+
+internal fun shouldUseCompactTableRecordList(widthDp: Float): Boolean = widthDp < 720f
 
 @Composable
 private fun DatasetInsightsDisclosure(

@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -79,7 +80,12 @@ enum class MarketingCaptureScenario(
     AdaptiveApp(
         "adaptive-dynamic-data", "adaptive-dynamic-data.png", NextcloudPresentation.Desktop,
         "Dynamic apps", "Data table", "Ready", MarketingCapturePurpose.Showcase,
-        "desktop", "embedded-wide", width = 960, height = 360, density = 1f,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    AdaptiveAppMobile(
+        "adaptive-dynamic-data-mobile", "adaptive-dynamic-data-mobile.png", NextcloudPresentation.Adaptive,
+        "Dynamic apps", "Data table", "Ready", MarketingCapturePurpose.Showcase,
+        "mobile", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f,
     ),
     RawPreviewLoadingMobile(
         "raw-preview-loading-mobile", "raw-preview-loading-mobile.png",
@@ -543,14 +549,23 @@ internal fun MarketingMediaBackupScenario() {
 }
 
 @Composable
-internal fun MarketingAdaptiveAppScenario() {
+internal fun MarketingAdaptiveAppScenario(scenario: MarketingCaptureScenario) {
+    require(
+        scenario == MarketingCaptureScenario.AdaptiveApp ||
+            scenario == MarketingCaptureScenario.AdaptiveAppMobile,
+    ) {
+        "${scenario.id} is not an adaptive data capture."
+    }
     val schema = marketingAdaptiveSchema
     val view = schema.views.single()
+    val compact = scenario.presentation != NextcloudPresentation.Desktop
     Column(modifier = Modifier.fillMaxSize()) {
-        ScreenHeader(
-            title = "Community inventory",
-            subtitle = "Discovered native data",
+        DynamicAppChromeHeader(
+            title = schema.app.name,
+            subtitle = view.title,
             onBack = {},
+            compact = compact,
+            onContractInfo = {},
         )
         GenericNativeAppScreen(
             schema = schema,
@@ -559,9 +574,43 @@ internal fun MarketingAdaptiveAppScenario() {
             actionExecutor = NativeActionExecutor {
                 NativeActionExecutionResult.Failure("This fixture is read-only.")
             },
+            onSelectRecord = {},
             modifier = Modifier.weight(1f),
         )
     }
+}
+
+@Composable
+internal fun MarketingHomeDashboardScenario(
+    scenario: MarketingCaptureScenario,
+    fixture: MarketingDemoFixture,
+) {
+    val formFactor = when (scenario.presentation) {
+        NextcloudPresentation.Desktop -> HomeFormFactor.Desktop
+        NextcloudPresentation.Adaptive -> HomeFormFactor.Phone
+    }
+    val workspaceScope = remember(formFactor) {
+        HomeWorkspaceScope(
+            accountScopeDigest = "8a2df7f31f8de281a514cfe02d04ba13dc793be7b88b890b6c415f7e3290bd85",
+            formFactor = formFactor,
+        )
+    }
+    NativeDashboardPresentation(
+        state = DashboardSurfaceState.Available(
+            snapshot = marketingDashboardSnapshot,
+            status = marketingUserStatus,
+        ),
+        installedApps = fixture.apps,
+        workspaceLayout = defaultHomeWorkspaceLayout(workspaceScope),
+        onWorkspaceLayoutChanged = { true },
+        onOpenApp = {},
+        onOpenStatus = {},
+        onOpenLink = {},
+        onBack = null,
+        onRefresh = {},
+        onSearch = {},
+        onSettings = {},
+    )
 }
 
 @Composable
@@ -611,7 +660,7 @@ private fun marketingSyncPair(
     scheduleDescription = schedule,
 )
 
-private val marketingAdaptiveSchema = NativeAppSchema(
+internal val marketingAdaptiveSchema = NativeAppSchema(
     schemaVersion = "0.1",
     app = AppIdentity("fixture-inventory", "Community inventory", "fixture"),
     confidence = Confidence.verified,
@@ -623,7 +672,14 @@ private val marketingAdaptiveSchema = NativeAppSchema(
             fields = listOf(
                 FieldSpec("name", "Item", FieldKind.string, required = true, readOnly = true),
                 FieldSpec("category", "Category", FieldKind.string, required = false, readOnly = true),
-                FieldSpec("amount", "Value", FieldKind.currency, required = false, readOnly = true),
+                FieldSpec(
+                    "amount",
+                    "Value",
+                    FieldKind.currency,
+                    required = false,
+                    readOnly = true,
+                    format = "EUR",
+                ),
                 FieldSpec("status", "Status", FieldKind.enumeration, required = false, readOnly = true),
                 FieldSpec("updated", "Updated", FieldKind.date, required = false, readOnly = true),
             ),
@@ -641,13 +697,13 @@ private val marketingAdaptiveSchema = NativeAppSchema(
     ),
 )
 
-private val marketingAdaptiveRecords = listOf(
+internal val marketingAdaptiveRecords = listOf(
     NativeRecord(
         id = "item-1",
         values = mapOf(
             "name" to "Field recorder",
             "category" to "Audio",
-            "amount" to "€ 219.00",
+            "amount" to "219.00",
             "status" to "Available",
             "updated" to "2026-07-24",
         ),
@@ -657,7 +713,7 @@ private val marketingAdaptiveRecords = listOf(
         values = mapOf(
             "name" to "Tripod",
             "category" to "Camera",
-            "amount" to "€ 84.50",
+            "amount" to "84.50",
             "status" to "On loan",
             "updated" to "2026-07-23",
         ),
@@ -667,11 +723,135 @@ private val marketingAdaptiveRecords = listOf(
         values = mapOf(
             "name" to "USB-C hub",
             "category" to "Computer",
-            "amount" to "€ 49.95",
+            "amount" to "49.95",
             "status" to "Available",
             "updated" to "2026-07-22",
         ),
     ),
+    NativeRecord(
+        id = "item-4",
+        values = mapOf(
+            "name" to "Lighting kit",
+            "category" to "Camera",
+            "amount" to "135.00",
+            "status" to "Reserved",
+            "updated" to "2026-07-21",
+        ),
+    ),
+    NativeRecord(
+        id = "item-5",
+        values = mapOf(
+            "name" to "Studio monitor",
+            "category" to "Audio",
+            "amount" to "175.00",
+            "status" to "Available",
+            "updated" to "2026-07-19",
+        ),
+    ),
+)
+
+internal val marketingDashboardSnapshot = NativeDashboardSnapshot(
+    widgets = listOf(
+        marketingDashboardWidget("activity", "Recent activity", 10),
+        marketingDashboardWidget("calendar", "Upcoming events", 20),
+        marketingDashboardWidget("recommendations", "Recent files", 30),
+        marketingDashboardWidget("photos", "Photo backup", 40),
+    ),
+    itemsByWidget = mapOf(
+        "activity" to listOf(
+            marketingDashboardItem(
+                widgetId = "activity",
+                title = "Project brief was updated",
+                subtitle = "A few minutes ago",
+                sinceId = "activity-2",
+            ),
+            marketingDashboardItem(
+                widgetId = "activity",
+                title = "A design file was shared",
+                subtitle = "Today",
+                sinceId = "activity-1",
+            ),
+        ),
+        "calendar" to listOf(
+            marketingDashboardItem(
+                widgetId = "calendar",
+                title = "Product planning",
+                subtitle = "Today at 14:00",
+                sinceId = "calendar-2",
+            ),
+            marketingDashboardItem(
+                widgetId = "calendar",
+                title = "Community call",
+                subtitle = "Tomorrow at 10:30",
+                sinceId = "calendar-1",
+            ),
+        ),
+        "recommendations" to listOf(
+            marketingDashboardItem(
+                widgetId = "recommendations",
+                title = "Product brief.pdf",
+                subtitle = "Projects",
+                sinceId = "files-2",
+            ),
+            marketingDashboardItem(
+                widgetId = "recommendations",
+                title = "Release notes.md",
+                subtitle = "Notes",
+                sinceId = "files-1",
+            ),
+        ),
+        "photos" to listOf(
+            marketingDashboardItem(
+                widgetId = "photos",
+                title = "Camera backup is up to date",
+                subtitle = "128 photos and 14 videos",
+                sinceId = "photos-1",
+            ),
+        ),
+    ),
+)
+
+internal val marketingUserStatus = NativeUserStatus(
+    userId = "fixture-user",
+    presence = NativeUserPresence.Online,
+    message = "Building the next native experience",
+    icon = null,
+    messageId = null,
+    clearAtEpochSeconds = null,
+    messageIsPredefined = false,
+    statusIsUserDefined = true,
+)
+
+private fun marketingDashboardWidget(
+    id: String,
+    title: String,
+    order: Int,
+) = NativeDashboardWidget(
+    id = id,
+    title = title,
+    order = order,
+    iconUrl = null,
+    iconClass = null,
+    widgetUrl = null,
+    itemApiVersions = setOf(2),
+    itemIconsRound = false,
+    reloadIntervalSeconds = null,
+    actions = emptyList(),
+)
+
+private fun marketingDashboardItem(
+    widgetId: String,
+    title: String,
+    subtitle: String,
+    sinceId: String,
+) = NativeDashboardItem(
+    widgetId = widgetId,
+    title = title,
+    subtitle = subtitle,
+    link = null,
+    iconUrl = null,
+    overlayIconUrl = null,
+    sinceId = sinceId,
 )
 
 private val marketingDeckBoard = DeckBoard(
