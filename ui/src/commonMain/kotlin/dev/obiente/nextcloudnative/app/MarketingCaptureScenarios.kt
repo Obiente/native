@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -558,25 +559,27 @@ internal fun MarketingAdaptiveAppScenario(scenario: MarketingCaptureScenario) {
     }
     val schema = marketingAdaptiveSchema
     val view = schema.views.single()
-    val compact = scenario.presentation != NextcloudPresentation.Desktop
-    Column(modifier = Modifier.fillMaxSize()) {
-        DynamicAppChromeHeader(
-            title = schema.app.name,
-            subtitle = view.title,
-            onBack = {},
-            compact = compact,
-            onContractInfo = {},
-        )
-        GenericNativeAppScreen(
-            schema = schema,
-            view = view,
-            state = NativeScreenState.Ready(marketingAdaptiveRecords),
-            actionExecutor = NativeActionExecutor {
-                NativeActionExecutionResult.Failure("This fixture is read-only.")
-            },
-            onSelectRecord = {},
-            modifier = Modifier.weight(1f),
-        )
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val compact = shouldUseCompactDynamicAppChrome(maxWidth.value, maxHeight.value)
+        Column(modifier = Modifier.fillMaxSize()) {
+            DynamicAppChromeHeader(
+                title = schema.app.name,
+                subtitle = view.title,
+                onBack = {},
+                compact = compact,
+                onContractInfo = {},
+            )
+            GenericNativeAppScreen(
+                schema = schema,
+                view = view,
+                state = NativeScreenState.Ready(marketingAdaptiveRecords),
+                actionExecutor = NativeActionExecutor {
+                    NativeActionExecutionResult.Failure("This fixture is read-only.")
+                },
+                onSelectRecord = {},
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 

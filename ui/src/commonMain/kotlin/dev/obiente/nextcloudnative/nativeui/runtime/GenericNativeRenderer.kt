@@ -490,21 +490,26 @@ private fun GenericTableCollection(
     }
     val insights = remember(projection) { nativeDatasetInsights(projection.resource, projection.records) }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val compactViewport = shouldUseCompactTableRecordList(maxWidth.value)
+        val compactRecordList = shouldUseCompactTableRecordList(maxWidth.value)
+        val expandInsights = datasetInsightsDefaultExpanded(maxWidth.value, maxHeight.value)
         Column(modifier = Modifier.fillMaxSize()) {
             insights?.let {
                 DatasetInsightsDisclosure(
                     insights = it,
-                    compact = compactViewport,
-                    initiallyExpanded = !compactViewport,
+                    compact = !expandInsights,
+                    initiallyExpanded = expandInsights,
                     stateKey = "table:${resource.id}",
                 )
             }
-            if (compactViewport) {
-                GenericRecordList(
-                    resource = projection.resource,
+            if (compactRecordList) {
+                GenericEditableTableRecordList(
+                    schema = schema,
+                    sourceResource = resource,
+                    projection = projection,
                     records = projection.records,
                     onSelectRecord = onSelectRecord,
+                    actionExecutor = actionExecutor,
+                    onInlineActionSucceeded = onInlineActionSucceeded,
                     modifier = Modifier.weight(1f),
                 )
             } else {
@@ -705,6 +710,136 @@ private fun GenericRecordList(
         items(records, key = NativeRecord::id) { record ->
             GenericCollectionCard(resource, record, onSelectRecord)
         }
+    }
+}
+
+@Composable
+private fun GenericEditableTableRecordList(
+    schema: NativeAppSchema,
+    sourceResource: ResourceSpec,
+    projection: NativeTableProjection,
+    records: List<NativeRecord>,
+    onSelectRecord: ((NativeRecord) -> Unit)?,
+    actionExecutor: NativeActionExecutor,
+    onInlineActionSucceeded: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val fields = remember(projection) {
+        if (projection.composite) {
+            projection.resource.fields.filter { it.id in projection.projectedFieldIds } +
+                listOfNotNull(projection.resource.fields.firstOrNull { it.id == projection.frozenFieldId })
+        } else {
+            nativeTableFields(projection.resource, records)
+        }
+    }.distinctBy(FieldSpec::id)
+    var activeEdit by remember(schema, projection) { mutableStateOf<NativeCellEditPlan?>(null) }
+    var editValue by remember { mutableStateOf("") }
+    var editError by remember { mutableStateOf<String?>(null) }
+    var savingEdit by remember { mutableStateOf(false) }
+    val editedValues = remember(schema, projection) { mutableStateMapOf<NativeCellAddress, String>() }
+    val scope = rememberCoroutineScope()
+
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(
+            start = NextcloudSpacing.Large,
+            top = NextcloudSpacing.Medium,
+            end = NextcloudSpacing.Large,
+            bottom = NextcloudSpacing.XXLarge,
+        ),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+    ) {
+        items(records, key = NativeRecord::id) { record ->
+            val editedFields = fields.mapNotNull { field ->
+                editedValues[NativeCellAddress(record.id, field.id)]?.let { field.id to it }
+            }.toMap()
+            val displayRecord = record.copy(
+                values = record.values + editedFields,
+                displayValues = record.displayValues - editedFields.keys,
+            )
+            val editPlans = fields.mapNotNull { field ->
+                nativeCellEditPlan(schema, sourceResource, projection, record, field)
+            }
+            GenericCollectionCard(
+                resource = projection.resource,
+                record = displayRecord,
+                onSelectRecord = onSelectRecord,
+                secondaryActions = editPlans.map { plan ->
+                    NextcloudCardAction(
+                        label = "Edit ${plan.field.label}",
+                        enabled = !savingEdit,
+                        onClick = {
+                            activeEdit = plan.copy(
+                                originalValue = editedValues[
+                                    NativeCellAddress(plan.recordId, plan.field.id)
+                                ] ?: plan.originalValue,
+                            )
+                            editValue = editedValues[
+                                NativeCellAddress(plan.recordId, plan.field.id)
+                            ] ?: plan.originalValue
+                            editError = null
+                        },
+                    )
+                },
+            )
+        }
+    }
+
+    activeEdit?.let { plan ->
+        AlertDialog(
+            onDismissRequest = { if (!savingEdit) activeEdit = null },
+            title = { Text("Edit ${plan.field.label}") },
+            text = {
+                OutlinedTextField(
+                    value = editValue,
+                    onValueChange = {
+                        editValue = it
+                        editError = null
+                    },
+                    enabled = !savingEdit,
+                    label = { Text(plan.field.label) },
+                    supportingText = editError?.let { message -> { Text(message) } },
+                    isError = editError != null,
+                    singleLine = plan.field.kind != FieldKind.longText,
+                    minLines = if (plan.field.kind == FieldKind.longText) 3 else 1,
+                )
+            },
+            dismissButton = {
+                TextButton(enabled = !savingEdit, onClick = { activeEdit = null }) { Text("Cancel") }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !savingEdit,
+                    onClick = {
+                        val validation = validateNativeCellEdit(plan.field, editValue)
+                        if (validation != null) {
+                            editError = validation
+                        } else {
+                            savingEdit = true
+                            scope.launch {
+                                when (val result = actionExecutor.execute(plan.request(editValue.trim()))) {
+                                    is NativeActionExecutionResult.Success -> {
+                                        editedValues[
+                                            NativeCellAddress(plan.recordId, plan.field.id)
+                                        ] = editValue.trim()
+                                        activeEdit = null
+                                        onInlineActionSucceeded?.invoke()
+                                    }
+                                    is NativeActionExecutionResult.Failure -> editError = result.message
+                                }
+                                savingEdit = false
+                            }
+                        }
+                    },
+                ) {
+                    if (savingEdit) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Save")
+                    }
+                }
+            },
+        )
     }
 }
 
@@ -2419,8 +2554,10 @@ private fun GenericCollectionCard(
     resource: ResourceSpec,
     record: NativeRecord,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    secondaryActions: List<NextcloudCardAction> = emptyList(),
 ) {
     val presentation = nativeRecordPresentation(resource, record)
+    var actionsExpanded by rememberSaveable(record.id) { mutableStateOf(false) }
     val content: @Composable ColumnScope.() -> Unit = {
         Row(
             modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
@@ -2445,7 +2582,14 @@ private fun GenericCollectionCard(
                     )
                 }
             }
-            if (onSelectRecord != null) {
+            if (secondaryActions.isNotEmpty()) {
+                NextcloudCardOverflow(
+                    itemLabel = presentation.title,
+                    actions = secondaryActions,
+                    expanded = actionsExpanded,
+                    onExpandedChange = { actionsExpanded = it },
+                )
+            } else if (onSelectRecord != null) {
                 Icon(
                     NextcloudIcons.ChevronRight,
                     contentDescription = "Open ${presentation.title}",

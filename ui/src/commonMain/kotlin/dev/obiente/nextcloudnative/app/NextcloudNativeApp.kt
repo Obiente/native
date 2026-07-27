@@ -1949,7 +1949,7 @@ private fun DynamicDiscoveredAppScreen(
     )
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val compactLandscape = maxWidth > maxHeight && maxHeight < 600.dp
+        val compactLandscape = shouldUseCompactDynamicAppChrome(maxWidth.value, maxHeight.value)
         Column(modifier = Modifier.fillMaxSize()) {
             DynamicAppChromeHeader(
                 title = descriptor.app.name,
@@ -2339,6 +2339,9 @@ private fun DynamicDiscoveredAppScreen(
         )
     }
 }
+
+internal fun shouldUseCompactDynamicAppChrome(widthDp: Float, heightDp: Float): Boolean =
+    widthDp > heightDp && heightDp < 600f
 
 /**
  * Shared contextual chrome for discovered native app surfaces.

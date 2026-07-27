@@ -36,6 +36,8 @@ class MarketingProductionCaptureTest {
         assertFalse(shouldUseCompactTableRecordList(widthDp = 1_440f))
         assertFalse(shouldUseCompactTableRecordList(widthDp = 900f))
         assertTrue(shouldUseCompactTableRecordList(widthDp = 412f))
+        assertFalse(shouldUseCompactDynamicAppChrome(widthDp = 412f, heightDp = 686f))
+        assertTrue(shouldUseCompactDynamicAppChrome(widthDp = 900f, heightDp = 420f))
     }
 
     @Test
