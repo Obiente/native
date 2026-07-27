@@ -19,8 +19,8 @@ class NativeDeckDragPlacementTest {
             stackZone(
                 destination,
                 cardZones = listOf(
-                    cardZone(destinationCards[0], top = 100f, bottom = 180f),
-                    cardZone(destinationCards[1], top = 200f, bottom = 280f),
+                    cardZone(destinationCards[0], insertionIndex = 0, top = 100f, bottom = 180f),
+                    cardZone(destinationCards[1], insertionIndex = 1, top = 200f, bottom = 280f),
                 ),
             ),
         )
@@ -66,9 +66,8 @@ class NativeDeckDragPlacementTest {
                 stackZone(
                     source,
                     cardZones = listOf(
-                        cardZone(cards[0], top = 100f, bottom = 180f),
-                        cardZone(cards[1], top = 200f, bottom = 280f),
-                        cardZone(cards[2], top = 300f, bottom = 380f),
+                        cardZone(cards[0], insertionIndex = 0, top = 100f, bottom = 180f),
+                        cardZone(cards[2], insertionIndex = 1, top = 300f, bottom = 380f),
                     ),
                 ),
             ),
@@ -95,9 +94,8 @@ class NativeDeckDragPlacementTest {
                 stackZone(
                     source,
                     cardZones = listOf(
-                        cardZone(cards[0], top = 100f, bottom = 180f),
-                        cardZone(cards[1], top = 200f, bottom = 280f),
-                        cardZone(cards[2], top = 300f, bottom = 380f),
+                        cardZone(cards[0], insertionIndex = 0, top = 100f, bottom = 180f),
+                        cardZone(cards[2], insertionIndex = 1, top = 300f, bottom = 380f),
                     ),
                 ),
             ),
@@ -121,6 +119,54 @@ class NativeDeckDragPlacementTest {
         )
 
         assertNull(target)
+    }
+
+    @Test
+    fun `scrolled lane preserves absolute insertion indices for visible cards`() {
+        val draggedCard = card(id = 1, stackId = 10)
+        val destinationCards = (2L..61L).map { id -> card(id = id, stackId = 20) }
+        val destination = stack(id = 20, cards = destinationCards)
+        val visible = destinationCards.slice(49..54)
+
+        val beforeFirstVisible = resolveDeckUiCardDropTarget(
+            pointerX = 120f,
+            pointerY = 80f,
+            zones = listOf(
+                stackZone(
+                    destination,
+                    cardZones = visible.mapIndexed { visibleIndex, candidate ->
+                        cardZone(
+                            card = candidate,
+                            insertionIndex = 49 + visibleIndex,
+                            top = 100f + visibleIndex * 100f,
+                            bottom = 180f + visibleIndex * 100f,
+                        )
+                    },
+                ),
+            ),
+            draggedCard = draggedCard,
+        )
+        val afterLastVisible = resolveDeckUiCardDropTarget(
+            pointerX = 120f,
+            pointerY = 680f,
+            zones = listOf(
+                stackZone(
+                    destination,
+                    cardZones = visible.mapIndexed { visibleIndex, candidate ->
+                        cardZone(
+                            card = candidate,
+                            insertionIndex = 49 + visibleIndex,
+                            top = 100f + visibleIndex * 100f,
+                            bottom = 180f + visibleIndex * 100f,
+                        )
+                    },
+                ),
+            ),
+            draggedCard = draggedCard,
+        )
+
+        assertEquals(49, beforeFirstVisible?.insertionIndex)
+        assertEquals(55, afterLastVisible?.insertionIndex)
     }
 
     @Test
@@ -151,11 +197,13 @@ class NativeDeckDragPlacementTest {
 
     private fun cardZone(
         card: DeckCard,
+        insertionIndex: Int,
         top: Float,
         bottom: Float,
     ) = DeckUiCardDropZone(
         card = card,
         bounds = DeckUiRect(left = 70f, top = top, right = 330f, bottom = bottom),
+        insertionIndex = insertionIndex,
     )
 
     private fun stack(

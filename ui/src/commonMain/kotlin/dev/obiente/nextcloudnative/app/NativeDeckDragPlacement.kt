@@ -13,7 +13,12 @@ internal data class DeckUiRect(
 internal data class DeckUiCardDropZone(
     val card: DeckCard,
     val bounds: DeckUiRect,
-)
+    val insertionIndex: Int,
+) {
+    init {
+        require(insertionIndex >= 0) { "A Deck card drop-zone index cannot be negative." }
+    }
+}
 
 internal data class DeckUiStackDropZone(
     val stack: DeckStack,
@@ -61,14 +66,19 @@ internal fun resolveDeckUiCardDropTarget(
         zone.bounds.contains(pointerX, pointerY)
     } ?: return null
 
-    val remainingCards = destination.cards
+    val visibleRemainingCards = destination.cards
         .asSequence()
         .filterNot { it.card.id == draggedCard.id }
         .sortedBy { it.bounds.top }
         .toList()
-    val insertionIndex = remainingCards.indexOfFirst { zone ->
+    val insertionIndex = visibleRemainingCards.firstOrNull { zone ->
         pointerY < (zone.bounds.top + zone.bounds.bottom) / 2f
-    }.takeIf { it >= 0 } ?: remainingCards.size
+    }?.insertionIndex ?: visibleRemainingCards.lastOrNull()?.let { it.insertionIndex + 1 }
+        ?: if (destination.stack.cards.all { it.id == draggedCard.id }) {
+            0
+        } else {
+            return null
+        }
 
     return DeckUiCardDropTarget(
         stack = destination.stack,

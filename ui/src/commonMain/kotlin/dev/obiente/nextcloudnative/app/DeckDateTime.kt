@@ -20,3 +20,11 @@ internal expect fun deckLocalDateTimeToInstant(date: String, time: String): Stri
 
 /** Returns a local calendar date relative to today for quick native due-date choices. */
 internal expect fun deckLocalDatePlusDays(days: Int): String
+
+/**
+ * Presents a Deck instant in the device timezone without discarding an unrecognized server value.
+ */
+internal fun deckInstantDisplayLabel(value: String): String =
+    deckInstantToLocalDateTime(value)?.let { local ->
+        "${local.date} ${local.time}"
+    } ?: value

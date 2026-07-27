@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import com.mikepenz.markdown.m3.Markdown
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragHandle
 import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
@@ -62,6 +63,30 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 import kotlin.math.roundToInt
+
+internal data class DeckWorkspacePresentation(
+    val visibleState: DeckWorkspaceState,
+    val visibleBoard: DeckBoard?,
+    val cachedError: DeckWorkspaceState.Error?,
+    val mutationsEnabled: Boolean,
+)
+
+internal fun resolveDeckWorkspacePresentation(
+    state: DeckWorkspaceState,
+    boardContext: DeckBoard?,
+): DeckWorkspacePresentation {
+    val error = state as? DeckWorkspaceState.Error
+    val cachedState = error?.cachedState?.takeUnless { it is DeckWorkspaceState.Error }
+    val visibleState = cachedState ?: state
+    return DeckWorkspacePresentation(
+        visibleState = visibleState,
+        visibleBoard = (visibleState as? DeckWorkspaceState.Board)?.board ?: boardContext,
+        cachedError = error?.takeIf { cachedState != null },
+        mutationsEnabled = state is DeckWorkspaceState.Board ||
+            state is DeckWorkspaceState.BoardPicker ||
+            state is DeckWorkspaceState.Empty,
+    )
+}
 
 @Composable
 fun NativeDeckBoardSurface(
@@ -81,32 +106,38 @@ fun NativeDeckBoardSurface(
     stackActions: (DeckStack) -> List<NextcloudCardAction> = { emptyList() },
     cardActions: (DeckCard) -> List<NextcloudCardAction> = { emptyList() },
     onMoveCard: ((DeckCard, DeckStack, Int) -> Unit)? = null,
+    boardRecovery: DeckUiBoardRecovery? = null,
+    onRestoreBoard: ((DeckBoard) -> Unit)? = null,
+    onDismissBoardRecovery: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    val activeBoard = (state as? DeckWorkspaceState.Board)?.board ?: boardContext
-    val activeBoardActions = activeBoard?.let(boardActions).orEmpty()
+    val presentation = resolveDeckWorkspacePresentation(state, boardContext)
+    val visibleState = presentation.visibleState
+    val activeBoard = presentation.visibleBoard
+    val authoritativeBoard = (state as? DeckWorkspaceState.Board)?.board
+    val activeBoardActions = authoritativeBoard?.let(boardActions).orEmpty()
     var boardMenuExpanded by remember(activeBoard?.id) { mutableStateOf(false) }
     Column(modifier = modifier.fillMaxSize()) {
         ScreenHeader(
             title = activeBoard?.title ?: "Deck",
-            subtitle = (state as? DeckWorkspaceState.Board)?.let { boardState ->
+            subtitle = (visibleState as? DeckWorkspaceState.Board)?.let { boardState ->
                 "${boardState.stacks.size} lists - " +
                     "${boardState.stacks.sumOf { it.cards.size }} cards"
             } ?: "Boards, stacks, and cards",
             onBack = if (activeBoard == null) onExit else onBackToBoards,
             trailingContent = {
                 if (
-                    activeBoard != null &&
+                    authoritativeBoard != null &&
                     onCreateStack != null &&
-                    activeBoard.permissions.canManage
+                    authoritativeBoard.permissions.canManage
                 ) {
-                    IconButton(onClick = { onCreateStack(activeBoard) }) {
+                    IconButton(onClick = { onCreateStack(authoritativeBoard) }) {
                         Icon(NextcloudIcons.Add, contentDescription = "Add list")
                     }
                 }
-                if (activeBoard != null) {
+                if (authoritativeBoard != null) {
                     NextcloudCardOverflow(
-                        itemLabel = activeBoard.title,
+                        itemLabel = authoritativeBoard.title,
                         actions = activeBoardActions,
                         expanded = boardMenuExpanded,
                         onExpandedChange = { boardMenuExpanded = it },
@@ -115,50 +146,158 @@ fun NativeDeckBoardSurface(
             },
         )
         HorizontalDivider()
-        when (state) {
+        boardRecovery?.let { recovery ->
+            DeckBoardRecoveryBanner(
+                recovery = recovery,
+                onRestore = onRestoreBoard,
+                onDismiss = onDismissBoardRecovery,
+            )
+        }
+        presentation.cachedError?.let { error ->
+            DeckCachedErrorBanner(error, onRetry)
+        }
+        when (visibleState) {
             DeckWorkspaceState.Loading -> NativeDeckCenteredState(Modifier.weight(1f)) {
                 CircularProgressIndicator()
             }
             is DeckWorkspaceState.Empty -> NativeDeckCenteredState(Modifier.weight(1f)) {
                 Icon(NextcloudIcons.app("deck"), contentDescription = null, modifier = Modifier.size(44.dp))
-                Text(state.title, style = MaterialTheme.typography.headlineSmall)
+                Text(visibleState.title, style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    state.message,
+                    visibleState.message,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                if (state.canCreateBoards && onCreateBoard != null) {
+                if (
+                    visibleState.canCreateBoards &&
+                    onCreateBoard != null &&
+                    presentation.mutationsEnabled
+                ) {
                     Button(onClick = onCreateBoard) { Text("Create board") }
                 }
             }
             is DeckWorkspaceState.Error -> NativeDeckCenteredState(Modifier.weight(1f)) {
                 Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(44.dp))
-                Text(state.title, style = MaterialTheme.typography.headlineSmall)
+                Text(visibleState.title, style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    state.message,
+                    visibleState.message,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                if (state.canRetry) OutlinedButton(onClick = onRetry) { Text("Try again") }
+                if (visibleState.canRetry) OutlinedButton(onClick = onRetry) { Text("Try again") }
             }
             is DeckWorkspaceState.BoardPicker -> DeckBoardPicker(
-                state = state,
+                state = visibleState,
                 onSelectBoard = onSelectBoard,
-                onCreateBoard = onCreateBoard,
-                boardActions = boardActions,
+                onCreateBoard = onCreateBoard.takeIf { presentation.mutationsEnabled },
+                boardActions = if (presentation.mutationsEnabled) {
+                    boardActions
+                } else {
+                    { _: DeckBoard -> emptyList() }
+                },
                 modifier = Modifier.weight(1f),
             )
             is DeckWorkspaceState.Board -> DeckBoardWorkspace(
-                state = state,
+                state = visibleState,
                 onOpenCard = onOpenCard,
                 onSelectCard = onSelectCard,
                 onDismissCard = onDismissCard,
-                onCreateCard = onCreateCard,
-                stackActions = stackActions,
-                cardActions = cardActions,
-                onMoveCard = onMoveCard,
+                onCreateCard = onCreateCard.takeIf { presentation.mutationsEnabled },
+                stackActions = if (presentation.mutationsEnabled) {
+                    stackActions
+                } else {
+                    { _: DeckStack -> emptyList() }
+                },
+                cardActions = if (presentation.mutationsEnabled) {
+                    cardActions
+                } else {
+                    { _: DeckCard -> emptyList() }
+                },
+                onMoveCard = onMoveCard.takeIf { presentation.mutationsEnabled },
                 modifier = Modifier.weight(1f),
             )
+        }
+    }
+}
+
+@Composable
+private fun DeckBoardRecoveryBanner(
+    recovery: DeckUiBoardRecovery,
+    onRestore: ((DeckBoard) -> Unit)?,
+    onDismiss: (() -> Unit)?,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(
+            horizontal = NextcloudSpacing.Medium,
+            vertical = NextcloudSpacing.Small,
+        ),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        shape = RoundedCornerShape(NextcloudRadii.Small),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(
+                horizontal = NextcloudSpacing.Medium,
+                vertical = NextcloudSpacing.Small,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "${recovery.board.title} was deleted",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Text(
+                    recovery.errorMessage ?: "You can restore this board.",
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            TextButton(
+                onClick = { onRestore?.invoke(recovery.board) },
+                enabled = onRestore != null && !recovery.restoring,
+            ) {
+                Text(if (recovery.restoring) "Restoring..." else "Undo")
+            }
+            if (onDismiss != null && !recovery.restoring) {
+                TextButton(onClick = onDismiss) { Text("Dismiss") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeckCachedErrorBanner(
+    error: DeckWorkspaceState.Error,
+    onRetry: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(
+            horizontal = NextcloudSpacing.Medium,
+            vertical = NextcloudSpacing.Small,
+        ),
+        color = MaterialTheme.colorScheme.errorContainer,
+        shape = RoundedCornerShape(NextcloudRadii.Small),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(
+                horizontal = NextcloudSpacing.Medium,
+                vertical = NextcloudSpacing.Small,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(error.title, style = MaterialTheme.typography.labelLarge)
+                Text(
+                    error.message,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (error.canRetry) {
+                TextButton(onClick = onRetry) { Text("Try again") }
+            }
         }
     }
 }
@@ -396,11 +535,17 @@ private fun DeckLanes(
                     DeckUiStackDropZone(
                         stack = stack,
                         bounds = bounds,
-                        cards = stack.cards.mapNotNull { candidate ->
-                            cardBounds.bounds(candidate.id)?.let { cardBounds ->
-                                DeckUiCardDropZone(candidate, cardBounds)
-                            }
-                        },
+                        cards = stack.cards
+                            .filterNot { candidate -> candidate.id == card.id }
+                            .mapIndexedNotNull { insertionIndex, candidate ->
+                                cardBounds.bounds(candidate.id)?.let { cardBounds ->
+                                    DeckUiCardDropZone(
+                                        card = candidate,
+                                        bounds = cardBounds,
+                                        insertionIndex = insertionIndex,
+                                    )
+                                }
+                            },
                     )
                 }
             },
@@ -713,7 +858,7 @@ private fun DeckCardItem(
                 }
             }
             val metadata = listOfNotNull(
-                card.dueAt?.let { "Due ${it.take(10)}" },
+                card.dueAt?.let { "Due ${deckInstantDisplayLabel(it)}" },
                 "${card.attachmentCount} files".takeIf { card.attachmentCount > 0 },
                 "${card.unreadCommentCount} unread".takeIf { card.unreadCommentCount > 0 },
                 "${card.assignees.size} assigned".takeIf { card.assignees.isNotEmpty() },
@@ -822,15 +967,15 @@ private fun DeckCardInspector(
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
                     Text("Description", style = MaterialTheme.typography.labelMedium)
-                    Text(description, style = MaterialTheme.typography.bodyMedium)
+                    Markdown(content = description)
                 }
             }
         }
         card.dueAt?.let { due ->
-            item { DeckInspectorField("Due", due) }
+            item { DeckInspectorField("Due", deckInstantDisplayLabel(due)) }
         }
         card.startAt?.let { start ->
-            item { DeckInspectorField("Starts", start) }
+            item { DeckInspectorField("Starts", deckInstantDisplayLabel(start)) }
         }
         if (card.labels.isNotEmpty()) {
             item { DeckInspectorField("Labels", card.labels.joinToString(", ") { it.title }) }
