@@ -35,7 +35,9 @@ class MediaBackupLedgerStore internal constructor(
     init {
         require(maxRecordsPerAccount in 1..MAX_MEDIA_BACKUP_LEDGER_RECORDS_PER_ACCOUNT)
         try {
-            initializeSchema(recoverInterruptedTransfers)
+            withMediaBackupLedgerInitializationLock {
+                initializeSchema(recoverInterruptedTransfers)
+            }
         } catch (failure: Throwable) {
             connection.close()
             throw if (failure is MediaBackupLedgerStoreException) {
@@ -105,6 +107,71 @@ class MediaBackupLedgerStore internal constructor(
         }
     }
 
+    suspend fun migrateSourceLocalKeys(
+        accountId: String,
+        sourceId: String,
+        migrations: Collection<MediaBackupLedgerKeyMigration>,
+    ) = mutex.withLock {
+        requireAccountId(accountId)
+        requireSourceId(sourceId)
+        require(migrations.size <= MAX_MEDIA_BACKUP_LEDGER_QUERY_KEYS)
+        require(
+            migrations.map(MediaBackupLedgerKeyMigration::legacyLocalKey).distinct().size ==
+                migrations.size,
+        )
+        migrations.forEach { migration ->
+            requireLocalKey(migration.legacyLocalKey)
+            requireLocalKey(migration.currentLocalKey)
+            requireValidSyncPath(migration.remotePath)
+        }
+        if (migrations.isEmpty()) return@withLock
+        transaction {
+            migrations.forEach { migration ->
+                val currentExists = connection.prepare(
+                    "SELECT 1 FROM media_backup_ledger WHERE account_id = ? AND local_key = ?",
+                ).use { statement ->
+                    statement.bindText(1, accountId)
+                    statement.bindText(2, migration.currentLocalKey)
+                    statement.step()
+                }
+                if (currentExists) {
+                    connection.prepare(
+                        "DELETE FROM media_backup_ledger " +
+                            "WHERE account_id = ? AND local_key = ? AND " +
+                            "(source_id = ? OR (source_id IS NULL AND " +
+                            "(remote_path = ? OR " +
+                            "(remote_path IS NULL AND transfer_state != 'Succeeded'))))",
+                    ).use { statement ->
+                        statement.bindText(1, accountId)
+                        statement.bindText(2, migration.legacyLocalKey)
+                        statement.bindText(3, sourceId)
+                        statement.bindText(4, migration.remotePath)
+                        check(!statement.step())
+                    }
+                } else {
+                    connection.prepare(
+                        """
+                        UPDATE media_backup_ledger
+                        SET local_key = ?, source_id = ?
+                        WHERE account_id = ? AND local_key = ? AND
+                            (source_id = ? OR (source_id IS NULL AND
+                            (remote_path = ? OR
+                            (remote_path IS NULL AND transfer_state != 'Succeeded'))))
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.bindText(1, migration.currentLocalKey)
+                        statement.bindText(2, sourceId)
+                        statement.bindText(3, accountId)
+                        statement.bindText(4, migration.legacyLocalKey)
+                        statement.bindText(5, sourceId)
+                        statement.bindText(6, migration.remotePath)
+                        check(!statement.step())
+                    }
+                }
+            }
+        }
+    }
+
     suspend fun page(
         accountId: String,
         transferState: MediaBackupTransferState? = null,
@@ -114,6 +181,33 @@ class MediaBackupLedgerStore internal constructor(
     ): MediaBackupLedgerPage = mutex.withLock {
         requireAccountId(accountId)
         require(limit in 1..MAX_MEDIA_BACKUP_LEDGER_PAGE_SIZE)
+        queryPage(accountId, transferState, after, limit, includeClearedCompleted)
+    }
+
+    suspend fun snapshot(
+        accountId: String,
+        transferState: MediaBackupTransferState? = null,
+        after: MediaBackupLedgerCursor? = null,
+        limit: Int = 50,
+        includeClearedCompleted: Boolean = true,
+    ): MediaBackupLedgerSnapshot = mutex.withLock {
+        requireAccountId(accountId)
+        require(limit in 1..MAX_MEDIA_BACKUP_LEDGER_PAGE_SIZE)
+        readTransaction {
+            MediaBackupLedgerSnapshot(
+                summary = querySummary(accountId, includeClearedCompleted),
+                page = queryPage(accountId, transferState, after, limit, includeClearedCompleted),
+            )
+        }
+    }
+
+    private fun queryPage(
+        accountId: String,
+        transferState: MediaBackupTransferState?,
+        after: MediaBackupLedgerCursor?,
+        limit: Int,
+        includeClearedCompleted: Boolean,
+    ): MediaBackupLedgerPage {
         val predicates = buildList {
             add("account_id = ?")
             if (transferState != null) add("transfer_state = ?")
@@ -145,7 +239,7 @@ class MediaBackupLedgerStore internal constructor(
             }
         }
         val visible = rows.take(limit)
-        MediaBackupLedgerPage(
+        return MediaBackupLedgerPage(
             records = visible,
             nextCursor = if (rows.size > limit) {
                 visible.last().let { MediaBackupLedgerCursor(it.updatedAtEpochMillis, it.localKey) }
@@ -160,6 +254,13 @@ class MediaBackupLedgerStore internal constructor(
         includeClearedCompleted: Boolean = true,
     ): MediaBackupLedgerSummary = mutex.withLock {
         requireAccountId(accountId)
+        querySummary(accountId, includeClearedCompleted)
+    }
+
+    private fun querySummary(
+        accountId: String,
+        includeClearedCompleted: Boolean,
+    ): MediaBackupLedgerSummary {
         val counts = mutableMapOf<MediaBackupTransferState, Int>()
         val visibleHistoryPredicate = if (includeClearedCompleted) {
             ""
@@ -178,7 +279,7 @@ class MediaBackupLedgerStore internal constructor(
                 counts[state] = count.toInt()
             }
         }
-        MediaBackupLedgerSummary(
+        return MediaBackupLedgerSummary(
             pending = counts[MediaBackupTransferState.Pending] ?: 0,
             uploading = counts[MediaBackupTransferState.Uploading] ?: 0,
             failed = counts[MediaBackupTransferState.Failed] ?: 0,
@@ -468,6 +569,16 @@ class MediaBackupLedgerStore internal constructor(
         }
     }
 
+    private inline fun <T> readTransaction(block: () -> T): T {
+        connection.execSQL("BEGIN TRANSACTION")
+        return try {
+            block().also { connection.execSQL("COMMIT") }
+        } catch (failure: Throwable) {
+            runCatching { connection.execSQL("ROLLBACK") }
+            throw failure
+        }
+    }
+
     private fun SQLiteStatement.bindRecord(record: MediaBackupLedgerRecord) {
         bindText(1, record.accountId)
         bindNullableText(2, record.sourceId)
@@ -656,3 +767,5 @@ class MediaBackupLedgerStore internal constructor(
             """.trimIndent()
     }
 }
+
+internal expect fun <T> withMediaBackupLedgerInitializationLock(block: () -> T): T

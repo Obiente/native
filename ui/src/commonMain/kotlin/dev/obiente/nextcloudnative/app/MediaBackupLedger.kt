@@ -115,6 +115,17 @@ data class MediaBackupLedgerSummary(
         get() = pending + uploading + failed + succeeded
 }
 
+data class MediaBackupLedgerSnapshot(
+    val summary: MediaBackupLedgerSummary,
+    val page: MediaBackupLedgerPage,
+)
+
+data class MediaBackupLedgerKeyMigration(
+    val legacyLocalKey: String,
+    val currentLocalKey: String,
+    val remotePath: String,
+)
+
 enum class MediaTransferSection {
     Pending,
     Active,

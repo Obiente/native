@@ -152,6 +152,60 @@ class MediaBackupLedgerTest {
     }
 
     @Test
+    fun snapshotReturnsSummaryAndPageFromOneLedgerRead() = runBlocking {
+        val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))
+        repeat(3) { index ->
+            store.upsert(pendingRecord(accountId, "external:$index", 1_000L + index))
+        }
+        store.upsert(succeededRecord("external:complete", 2_000))
+
+        val snapshot = store.snapshot(
+            accountId = accountId,
+            transferState = MediaBackupTransferState.Pending,
+            limit = 2,
+        )
+
+        assertEquals(3, snapshot.summary.pending)
+        assertEquals(1, snapshot.summary.succeeded)
+        assertEquals(2, snapshot.page.records.size)
+        assertEquals(
+            listOf("external:2", "external:1"),
+            snapshot.page.records.map(MediaBackupLedgerRecord::localKey),
+        )
+        store.close()
+    }
+
+    @Test
+    fun pairScopedKeyMigrationPreservesReceiptAndRemovesLegacyIdentity() = runBlocking {
+        val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))
+        val legacyKey = "legacy-pair-key"
+        val currentKey = "pair-scoped-key"
+        store.upsert(
+            succeededRecord(legacyKey, 2_000),
+        )
+        val remotePath = requireNotNull(store.load(accountId, legacyKey)?.receipt).remotePath
+
+        store.migrateSourceLocalKeys(
+            accountId = accountId,
+            sourceId = "pair-1",
+            migrations = listOf(
+                MediaBackupLedgerKeyMigration(
+                    legacyLocalKey = legacyKey,
+                    currentLocalKey = currentKey,
+                    remotePath = remotePath,
+                ),
+            ),
+        )
+
+        assertEquals(null, store.load(accountId, legacyKey))
+        val migrated = store.load(accountId, currentKey)
+        assertEquals(currentKey, migrated?.localKey)
+        assertEquals(currentKey, migrated?.receipt?.localKey)
+        assertEquals("pair-1", migrated?.sourceId)
+        store.close()
+    }
+
+    @Test
     fun remotePathStatusLookupIsBoundedAccountScopedAndUsesNewestRecord() = runBlocking {
         val otherAccount = "fedcba9876543210fedcba9876543210"
         val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))

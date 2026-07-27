@@ -582,19 +582,17 @@ internal class AndroidNextcloudServices(
         try {
             val accountId = NextcloudDocumentIds.accountKey(session)
             fileSyncEngine.reconcileMediaTransfersForDisplay(accountId, store)
+            val snapshot = store.snapshot(
+                accountId = accountId,
+                transferState = section.transferState(),
+                after = after,
+                limit = dev.obiente.nextcloudnative.app.MEDIA_TRANSFER_CENTER_PAGE_SIZE,
+                includeClearedCompleted = false,
+            )
             mediaTransferCenterState(
-                summary = store.summary(
-                    accountId = accountId,
-                    includeClearedCompleted = false,
-                ),
+                summary = snapshot.summary,
                 section = section,
-                page = store.page(
-                    accountId = accountId,
-                    transferState = section.transferState(),
-                    after = after,
-                    limit = dev.obiente.nextcloudnative.app.MEDIA_TRANSFER_CENTER_PAGE_SIZE,
-                    includeClearedCompleted = false,
-                ),
+                page = snapshot.page,
                 canLoadNewer = after != null,
             )
         } finally {

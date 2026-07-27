@@ -12,6 +12,7 @@ import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.MAX_MEDIA_BACKUP_LEDGER_QUERY_KEYS
 import dev.obiente.nextcloudnative.app.MAX_MEDIA_BACKUP_LEDGER_WRITE_BATCH
+import dev.obiente.nextcloudnative.app.MediaBackupLedgerKeyMigration
 import dev.obiente.nextcloudnative.app.MediaBackupLedgerRecord
 import dev.obiente.nextcloudnative.app.MediaBackupLedgerStore
 import dev.obiente.nextcloudnative.app.MediaBackupReceipt
@@ -47,7 +48,7 @@ internal class AndroidMediaBackupLedgerBridge(
         }
         verified.chunked(MAX_MEDIA_BACKUP_LEDGER_QUERY_KEYS).forEach { chunk ->
             val keys = chunk.associateWith { localKey(it.relativePath) }
-            val existing = store.loadMany(pair.accountId, keys.values)
+            val existing = loadExisting(chunk.map(LocalSyncEntry::relativePath), keys.values)
             val records = chunk.mapNotNull { local ->
                 val key = requireNotNull(keys[local])
                 val baseline = requireNotNull(baselineByPath[local.relativePath])
@@ -72,7 +73,7 @@ internal class AndroidMediaBackupLedgerBridge(
         }
         cloudOnly.chunked(MAX_MEDIA_BACKUP_LEDGER_QUERY_KEYS).forEach { chunk ->
             val keys = chunk.associateWith { baseline -> localKey(baseline.relativePath) }
-            val existing = store.loadMany(pair.accountId, keys.values)
+            val existing = loadExisting(chunk.map(FileSyncBaseline::relativePath), keys.values)
             val records = chunk.mapNotNull { baseline ->
                 mediaBackupCloudOnlyRecord(
                     pair = pair,
@@ -103,7 +104,7 @@ internal class AndroidMediaBackupLedgerBridge(
         }
         uploads.chunked(MAX_MEDIA_BACKUP_LEDGER_QUERY_KEYS).forEach { chunk ->
             val keys = chunk.associateWith { localKey(it.relativePath) }
-            val existing = store.loadMany(pair.accountId, keys.values)
+            val existing = loadExisting(chunk.map(FileSyncWorkItem::relativePath), keys.values)
             val records = chunk.map { work ->
                 mediaBackupLedgerRecordForWork(
                     pair = pair,
@@ -143,7 +144,25 @@ internal class AndroidMediaBackupLedgerBridge(
     }
 
     private fun localKey(relativePath: String): String =
-        mediaBackupLocalKey(pair.localRootId, relativePath)
+        mediaBackupLocalKey(pair.id, pair.localRootId, relativePath)
+
+    private suspend fun loadExisting(
+        relativePaths: Collection<String>,
+        currentKeys: Collection<String>,
+    ): Map<String, MediaBackupLedgerRecord> {
+        store.migrateSourceLocalKeys(
+            accountId = pair.accountId,
+            sourceId = pair.id,
+            migrations = relativePaths.map { relativePath ->
+                MediaBackupLedgerKeyMigration(
+                    legacyLocalKey = legacyMediaBackupLocalKey(pair.localRootId, relativePath),
+                    currentLocalKey = localKey(relativePath),
+                    remotePath = pair.mediaBackupRemotePath(relativePath),
+                )
+            },
+        )
+        return store.loadMany(pair.accountId, currentKeys)
+    }
 
     companion object {
         fun open(context: Context, pair: FileSyncPair): AndroidMediaBackupLedgerBridge? =
@@ -173,7 +192,7 @@ internal fun mediaBackupLedgerRecordForWork(
         require(work.operation is FileSyncOperation.Upload)
         val localEntry = requireNotNull(work.observedLocal)
         require(localEntry.kind == SyncEntryKind.File)
-        val key = mediaBackupLocalKey(pair.localRootId, work.relativePath)
+        val key = mediaBackupLocalKey(pair.id, pair.localRootId, work.relativePath)
         val localObject = localEntry.toMediaBackupLocalObject(key)
         val path = pair.mediaBackupRemotePath(work.relativePath)
         val baseline = work.observedBaseline
@@ -237,7 +256,7 @@ internal fun mediaBackupSucceededRecord(
     require(work.operation is FileSyncOperation.Upload)
     require(local.kind == SyncEntryKind.File && local.relativePath == work.relativePath)
     require(baseline.relativePath == work.relativePath)
-    val key = mediaBackupLocalKey(pair.localRootId, work.relativePath)
+    val key = mediaBackupLocalKey(pair.id, pair.localRootId, work.relativePath)
     val localObject = local.toMediaBackupLocalObject(key)
     return MediaBackupLedgerRecord(
         accountId = pair.accountId,
@@ -266,7 +285,7 @@ internal fun mediaBackupVerifiedRecord(
 ): MediaBackupLedgerRecord? {
     require(local.kind == SyncEntryKind.File && baseline.kind == SyncEntryKind.File)
     require(local.relativePath == baseline.relativePath && local.revision == baseline.localRevision)
-    val key = mediaBackupLocalKey(pair.localRootId, local.relativePath)
+    val key = mediaBackupLocalKey(pair.id, pair.localRootId, local.relativePath)
     val localObject = local.toMediaBackupLocalObject(key)
     val currentReceipt = existing?.receipt
     val path = pair.mediaBackupRemotePath(local.relativePath)
@@ -349,10 +368,19 @@ private fun LocalSyncEntry.toMediaBackupLocalObject(key: String): LocalMediaObje
 private fun FileSyncPair.mediaBackupRemotePath(relativePath: String): String =
     if (remoteRootPath.isBlank()) relativePath else "$remoteRootPath/$relativePath"
 
-internal fun mediaBackupLocalKey(localRootId: String, relativePath: String): String {
+internal fun mediaBackupLocalKey(pairId: String, localRootId: String, relativePath: String): String {
+    require(pairId.isNotBlank() && localRootId.isNotBlank() && relativePath.isNotBlank())
+    return mediaBackupKeyDigest("${pairId.length}:$pairId${localRootId.length}:$localRootId$relativePath")
+}
+
+internal fun legacyMediaBackupLocalKey(localRootId: String, relativePath: String): String {
     require(localRootId.isNotBlank() && relativePath.isNotBlank())
+    return mediaBackupKeyDigest("${localRootId.length}:$localRootId$relativePath")
+}
+
+private fun mediaBackupKeyDigest(identity: String): String {
     return MessageDigest.getInstance("SHA-256")
-        .digest("${localRootId.length}:$localRootId$relativePath".encodeToByteArray())
+        .digest(identity.encodeToByteArray())
         .joinToString("") { byte ->
             (byte.toInt() and 0xff).toString(16).padStart(2, '0')
         }

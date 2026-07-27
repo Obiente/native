@@ -81,21 +81,16 @@ internal class AndroidFileSyncEngine(context: Context) {
     suspend fun reconcileMediaTransfersForDisplay(
         accountId: String,
         mediaStore: MediaBackupLedgerStore,
-    ) {
-        if (!ENGINE_LOCK.tryLock()) return
-        try {
-            val activeSourceIds = runCatching {
-                val pairIds = store.load().coordinator.pairs
-                    .asSequence()
-                    .filter { pair -> pair.accountId == accountId }
-                    .map(FileSyncPair::id)
-                    .toList()
-                scheduler.runningPairIds(pairIds)
-            }.getOrNull() ?: return
-            mediaStore.reconcileInterruptedTransfers(accountId, activeSourceIds)
-        } finally {
-            ENGINE_LOCK.unlock()
-        }
+    ) = reconcileWhenFileSyncIdle(ENGINE_LOCK) {
+        val activeSourceIds = runCatching {
+            val pairIds = store.load().coordinator.pairs
+                .asSequence()
+                .filter { pair -> pair.accountId == accountId }
+                .map(FileSyncPair::id)
+                .toList()
+            scheduler.runningPairIds(pairIds)
+        }.getOrNull() ?: return@reconcileWhenFileSyncIdle
+        mediaStore.reconcileInterruptedTransfers(accountId, activeSourceIds)
     }
 
     suspend fun addPair(
@@ -171,29 +166,37 @@ internal class AndroidFileSyncEngine(context: Context) {
                 )
             }
             val remaining = removeFileSyncPair(current.coordinator, pairId)
-            scheduler.cancel(pairId)
             val mediaStore = createAndroidMediaBackupLedgerStore(
                 context = appContext,
                 recoverInterruptedTransfers = false,
             )
-            try {
-                mediaStore.deleteUnfinishedSource(
-                    accountId = pair.accountId,
-                    sourceId = pair.id,
-                    legacyLocalKeys = (pair.baselines.asSequence().map(FileSyncBaseline::relativePath) +
-                        pair.workItems.asSequence().map { work -> work.relativePath })
-                        .distinct()
-                        .map { relativePath -> mediaBackupLocalKey(pair.localRootId, relativePath) }
-                        .toList(),
-                )
-            } finally {
-                mediaStore.close()
-            }
-            store.save(
-                current.copy(
-                    coordinator = remaining,
-                    localDisplayNames = current.localDisplayNames - pairId,
-                ),
+            removeConfiguredFileSyncPair(
+                cleanLedger = {
+                    try {
+                        mediaStore.deleteUnfinishedSource(
+                            accountId = pair.accountId,
+                            sourceId = pair.id,
+                            legacyLocalKeys = (pair.baselines.asSequence().map(FileSyncBaseline::relativePath) +
+                                pair.workItems.asSequence().map { work -> work.relativePath })
+                                .distinct()
+                                .map { relativePath ->
+                                    legacyMediaBackupLocalKey(pair.localRootId, relativePath)
+                                }
+                                .toList(),
+                        )
+                    } finally {
+                        mediaStore.close()
+                    }
+                },
+                persistRemoval = {
+                    store.save(
+                        current.copy(
+                            coordinator = remaining,
+                            localDisplayNames = current.localDisplayNames - pairId,
+                        ),
+                    )
+                },
+                cancelSchedule = { scheduler.cancel(pairId) },
             )
             if (
                 pair.localRootId.startsWith("content://") &&
@@ -603,3 +606,20 @@ internal fun isAndroidFileSyncExecutionAllowed(
     operation: FileSyncOperation,
 ): Boolean =
     !localRootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX) || operation is FileSyncOperation.Upload
+
+internal suspend fun reconcileWhenFileSyncIdle(
+    lock: Mutex,
+    reconcile: suspend () -> Unit,
+) = lock.withLock {
+    reconcile()
+}
+
+internal suspend fun removeConfiguredFileSyncPair(
+    cleanLedger: suspend () -> Unit,
+    persistRemoval: suspend () -> Unit,
+    cancelSchedule: suspend () -> Unit,
+) {
+    cleanLedger()
+    persistRemoval()
+    cancelSchedule()
+}

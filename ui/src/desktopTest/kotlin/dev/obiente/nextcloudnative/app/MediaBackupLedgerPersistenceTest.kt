@@ -14,28 +14,30 @@ import kotlin.test.assertEquals
 class MediaBackupLedgerPersistenceTest {
     @Test
     fun concurrentFirstOpenSerializesSchemaMigration() = runBlocking {
-        val directory = Files.createTempDirectory("media-ledger-concurrent-")
-        val databasePath = directory.resolve("ledger.db").toString()
+        repeat(20) { iteration ->
+            val directory = Files.createTempDirectory("media-ledger-concurrent-$iteration-")
+            val databasePath = directory.resolve("ledger.db").toString()
 
-        val stores = coroutineScope {
-            List(4) {
-                async(Dispatchers.IO) {
-                    MediaBackupLedgerStore(
-                        databasePath = databasePath,
-                        recoverInterruptedTransfers = false,
-                    )
-                }
-            }.awaitAll()
+            val stores = coroutineScope {
+                List(8) {
+                    async(Dispatchers.IO) {
+                        MediaBackupLedgerStore(
+                            databasePath = databasePath,
+                            recoverInterruptedTransfers = false,
+                        )
+                    }
+                }.awaitAll()
+            }
+            stores.forEach { store -> store.close() }
+
+            val reopened = MediaBackupLedgerStore(
+                databasePath = databasePath,
+                recoverInterruptedTransfers = false,
+            )
+            assertEquals(0, reopened.summary("0123456789abcdef0123456789abcdef").total)
+            reopened.close()
+            directory.toFile().deleteRecursively()
         }
-        stores.forEach { store -> store.close() }
-
-        val reopened = MediaBackupLedgerStore(
-            databasePath = databasePath,
-            recoverInterruptedTransfers = false,
-        )
-        assertEquals(0, reopened.summary("0123456789abcdef0123456789abcdef").total)
-        reopened.close()
-        directory.toFile().deleteRecursively()
         Unit
     }
 
