@@ -79,6 +79,12 @@ class PhotoEditingTest {
             FullResolutionPhotoSource.MemoriesTranscoded,
             file(path = "Photos/source.raw").copy(mimeType = null).memoriesFullResolutionPhotoSource(),
         )
+        assertEquals(
+            FullResolutionPhotoSource.MemoriesTranscoded,
+            file(path = "Photos/source.raf")
+                .copy(mimeType = "image/jpeg")
+                .memoriesFullResolutionPhotoSource(),
+        )
     }
 
     @Test

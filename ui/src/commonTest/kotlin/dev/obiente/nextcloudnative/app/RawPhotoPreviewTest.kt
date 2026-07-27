@@ -346,6 +346,7 @@ class RawPhotoPreviewTest {
                 file = raw,
                 payloadKind = MediaDisplayPayloadKind.EmbeddedCameraPreview,
                 userId = "files-user",
+                previewSourceFile = raw,
             ),
         )
         assertEquals(
@@ -354,6 +355,7 @@ class RawPhotoPreviewTest {
                 file = raw,
                 payloadKind = MediaDisplayPayloadKind.MemoriesRawRender,
                 userId = "files-user",
+                previewSourceFile = raw,
             ),
         )
         assertEquals(
@@ -362,6 +364,7 @@ class RawPhotoPreviewTest {
                 file = raw,
                 payloadKind = MediaDisplayPayloadKind.EmbeddedCameraPreview,
                 userId = "files-user",
+                previewSourceFile = raw,
                 highDetailSourceFile = raw,
             ),
         )
@@ -371,7 +374,48 @@ class RawPhotoPreviewTest {
                 file = raw,
                 payloadKind = MediaDisplayPayloadKind.EmbeddedCameraPreview,
                 userId = "files-user",
+                previewSourceFile = raw,
                 highDetailSourceFile = raw.copy(path = "/Photos/DSCF1001.jpg"),
+            ),
+        )
+    }
+
+    @Test
+    fun siblingServerPreviewCannotAuthorizeEditingTheSelectedRaw() {
+        val raw = rawFile(hasPreview = false)
+        val jpegSibling = raw.copy(
+            path = "Photos/DSCF1000.jpg",
+            name = "DSCF1000.jpg",
+            mimeType = "image/jpeg",
+            hasPreview = true,
+        )
+
+        assertEquals(
+            false,
+            canEditMediaPreview(
+                file = raw,
+                payloadKind = MediaDisplayPayloadKind.ServerPreview,
+                userId = "files-user",
+                previewSourceFile = jpegSibling,
+            ),
+        )
+        assertEquals(
+            true,
+            canEditMediaPreview(
+                file = raw,
+                payloadKind = MediaDisplayPayloadKind.ServerPreview,
+                userId = "files-user",
+                previewSourceFile = raw,
+            ),
+        )
+        assertEquals(
+            true,
+            canEditMediaPreview(
+                file = raw,
+                payloadKind = MediaDisplayPayloadKind.ServerPreview,
+                userId = "files-user",
+                previewSourceFile = jpegSibling,
+                highDetailSourceFile = raw,
             ),
         )
     }

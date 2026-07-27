@@ -557,6 +557,7 @@ fun NextcloudMediaViewer(
                         file = selected,
                         payloadKind = readyPreview?.payloadKind,
                         userId = userId,
+                        previewSourceFile = readyPreview?.source?.file,
                         highDetailSourceFile = fullQuality?.source?.file,
                     )
                 ) {
@@ -1145,16 +1146,25 @@ internal fun canEditMediaPreview(
     file: NextcloudFile,
     payloadKind: MediaDisplayPayloadKind?,
     userId: String,
+    previewSourceFile: NextcloudFile? = null,
     highDetailSourceFile: NextcloudFile? = null,
-): Boolean =
-    payloadKind != null &&
-        (
-            payloadKind != MediaDisplayPayloadKind.EmbeddedCameraPreview ||
-                highDetailSourceFile?.path == file.path
-        ) &&
+): Boolean {
+    val previewMatchesSelected = previewSourceFile?.mediaViewerSourceGenerationIdentity() ==
+        file.mediaViewerSourceGenerationIdentity()
+    val highDetailMatchesSelected = highDetailSourceFile?.mediaViewerSourceGenerationIdentity() ==
+        file.mediaViewerSourceGenerationIdentity()
+    val displayedSourceMatchesSelected = if (highDetailSourceFile != null) {
+        highDetailMatchesSelected
+    } else {
+        previewMatchesSelected
+    }
+    return payloadKind != null &&
+        displayedSourceMatchesSelected &&
+        (payloadKind != MediaDisplayPayloadKind.EmbeddedCameraPreview || highDetailMatchesSelected) &&
         userId.isNotBlank() &&
         file.isPhotoMedia() &&
         file.originalAccessAllowed
+}
 
 internal fun NextcloudFile.hasAuthoritativeMediaDavAccess(userId: String): Boolean =
     originalAccessAllowed && davPathAuthoritative && userId.isNotBlank()

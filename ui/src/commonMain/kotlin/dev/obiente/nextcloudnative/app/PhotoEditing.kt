@@ -459,7 +459,9 @@ internal suspend fun loadFullResolutionPhotoPayload(
 internal fun NextcloudFile.memoriesFullResolutionPhotoSource(): FullResolutionPhotoSource {
     val normalizedMimeType = mimeType?.substringBefore(';')?.trim()?.lowercase().orEmpty()
     val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase()
-    return if (
+    return if (mediaAssetFormat() == MediaAssetFormat.Raw) {
+        FullResolutionPhotoSource.MemoriesTranscoded
+    } else if (
         normalizedMimeType in MEMORIES_DECODABLE_PASSTHROUGH_MIME_TYPES ||
         normalizedMimeType in MEMORIES_UNINFORMATIVE_MIME_TYPES &&
         extension in MEMORIES_DECODABLE_PASSTHROUGH_EXTENSIONS

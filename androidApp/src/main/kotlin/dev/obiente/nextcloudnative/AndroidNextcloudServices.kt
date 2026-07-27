@@ -63,6 +63,7 @@ import dev.obiente.nextcloudnative.app.createNoteRequest
 import dev.obiente.nextcloudnative.app.deleteNoteRequest
 import dev.obiente.nextcloudnative.app.NextcloudPlatformServices
 import dev.obiente.nextcloudnative.app.NextcloudPerson
+import dev.obiente.nextcloudnative.app.syntheticMemoriesPersonFile
 import dev.obiente.nextcloudnative.app.NextcloudServerInfo
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.NextcloudSystemTag
@@ -1689,15 +1690,12 @@ internal class AndroidNextcloudServices(
             val fileId = item.optLong("fileid", -1L).takeIf { it >= 0L } ?: continue
             target.putIfAbsent(
                 fileId,
-                NextcloudFile(
-                    path = "memories/people/${person.id}/$fileId",
-                    name = item.optString("basename").ifBlank { "Photo $fileId" },
-                    isDirectory = false,
-                    mimeType = item.optString("mimetype").takeIf(String::isNotBlank),
-                    size = null,
-                    lastModified = item.optLong("epoch", 0L).takeIf { it > 0L }?.toString(),
+                syntheticMemoriesPersonFile(
+                    personId = person.id.toString(),
                     fileId = fileId,
-                    hasPreview = true,
+                    name = item.optString("basename").ifBlank { "Photo $fileId" },
+                    mimeType = item.optString("mimetype").takeIf(String::isNotBlank),
+                    lastModified = item.optLong("epoch", 0L).takeIf { it > 0L }?.toString(),
                     etag = item.optString("etag").takeIf(String::isNotBlank),
                 ),
             )
