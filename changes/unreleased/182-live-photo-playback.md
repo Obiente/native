@@ -1,6 +1,6 @@
 category: feature
 issue: 182
-pull: none
+pull: 244
 platforms: android
 user-facing: yes
 
