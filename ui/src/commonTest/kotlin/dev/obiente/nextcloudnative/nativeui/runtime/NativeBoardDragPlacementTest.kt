@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import dev.obiente.nextcloudnative.app.design.resolveBoardDragVerticalLane
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -43,6 +44,29 @@ class NativeBoardDragPlacementTest {
                 position = Offset(400f, 160f),
                 laneBounds = lanes,
                 allowedLaneKeys = setOf("active", "done"),
+            ),
+        )
+    }
+
+    @Test
+    fun reusableBoardAutoScrollSelectsOnlyTheVisibleLaneAtThePointer() {
+        val boardViewport = Rect(left = 0f, top = 0f, right = 220f, bottom = 400f)
+
+        assertEquals(
+            "active",
+            resolveBoardDragVerticalLane(
+                position = Offset(180f, 380f),
+                boardViewport = boardViewport,
+                laneViewports = lanes,
+                verticalActivationHalo = 16f,
+            ),
+        )
+        assertNull(
+            resolveBoardDragVerticalLane(
+                position = Offset(280f, 380f),
+                boardViewport = boardViewport,
+                laneViewports = lanes,
+                verticalActivationHalo = 16f,
             ),
         )
     }

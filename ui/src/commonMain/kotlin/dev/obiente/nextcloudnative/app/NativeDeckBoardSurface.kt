@@ -19,8 +19,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
@@ -45,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -54,14 +57,17 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.mikepenz.markdown.m3.Markdown
+import dev.obiente.nextcloudnative.app.design.BoardDragVerticalScrollTarget
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragHandle
+import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragAutoScroll
 import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
+import dev.obiente.nextcloudnative.app.design.resolveBoardDragVerticalLane
 import kotlin.math.roundToInt
 
 internal data class DeckWorkspacePresentation(
@@ -530,60 +536,134 @@ private fun DeckLanes(
     }
     val stackBounds = remember { DeckUiBoundsRegistry<Long>() }
     val cardBounds = remember { DeckUiBoundsRegistry<Long>() }
+    val laneScrollBounds = remember { mutableMapOf<Long, Rect>() }
+    val laneScrollStates = remember { mutableMapOf<Long, LazyListState>() }
+    val boardScrollState = rememberLazyListState()
     var draggedCard by remember { mutableStateOf<DeckCard?>(null) }
     var dragPosition by remember { mutableStateOf<Offset?>(null) }
     var dragGrabOffset by remember { mutableStateOf(Offset.Zero) }
     var dropTarget by remember { mutableStateOf<DeckUiCardDropTarget?>(null) }
-    var lanesBounds by remember { mutableStateOf<DeckUiRect?>(null) }
+    var lanesBounds by remember { mutableStateOf<Rect?>(null) }
+    var terminalDropRequested by remember { mutableStateOf(false) }
 
-    fun resolveDropTarget(card: DeckCard, position: Offset): DeckUiCardDropTarget? =
-        resolveDeckUiCardDropTarget(
-            pointerX = position.x,
-            pointerY = position.y,
-            zones = stacks.mapNotNull { stack ->
-                stackBounds.bounds(stack.id)?.let { bounds ->
-                    DeckUiStackDropZone(
-                        stack = stack,
-                        bounds = bounds,
-                        cards = stack.cards
-                            .filterNot { candidate -> candidate.id == card.id }
-                            .mapIndexedNotNull { insertionIndex, candidate ->
-                                cardBounds.bounds(candidate.id)?.let { cardBounds ->
-                                    DeckUiCardDropZone(
-                                        card = candidate,
-                                        bounds = cardBounds,
-                                        insertionIndex = insertionIndex,
-                                    )
-                                }
-                            },
+    fun resolveDropTarget(card: DeckCard, position: Offset): DeckUiCardDropTarget? {
+        val destination = stacks.firstOrNull { stack ->
+            stackBounds.bounds(stack.id)?.contains(position.x, position.y) == true
+        } ?: return null
+        val destinationBounds = stackBounds.bounds(destination.id) ?: return null
+        var insertionIndex = 0
+        val visibleCardZones = buildList {
+            destination.cards.forEach { candidate ->
+                if (candidate.id == card.id) return@forEach
+                cardBounds.bounds(candidate.id)?.let { bounds ->
+                    add(
+                        DeckUiCardDropZone(
+                            card = candidate,
+                            bounds = bounds,
+                            insertionIndex = insertionIndex,
+                        ),
                     )
                 }
-            },
+                insertionIndex += 1
+            }
+        }
+        return resolveDeckUiCardDropTarget(
+            pointerX = position.x,
+            pointerY = position.y,
+            zones = listOf(
+                DeckUiStackDropZone(
+                    stack = destination,
+                    bounds = destinationBounds,
+                    cards = visibleCardZones,
+                ),
+            ),
             draggedCard = card,
         )
+    }
 
     fun clearDrag() {
         draggedCard = null
         dragPosition = null
         dragGrabOffset = Offset.Zero
         dropTarget = null
+        terminalDropRequested = false
     }
+
+    fun refreshDropTarget() {
+        val position = dragPosition
+        val activeCard = draggedCard
+        if (position != null && activeCard != null) {
+            dropTarget = resolveDropTarget(activeCard, position)
+        }
+    }
+
+    fun commitDrop() {
+        val card = draggedCard
+        val target = dropTarget
+        try {
+            if (card != null && target != null && !target.isNoOpFor(card, stacks)) {
+                onMoveCard?.invoke(
+                    card,
+                    target.stack,
+                    target.insertionIndex,
+                )
+            }
+        } finally {
+            clearDrag()
+        }
+    }
+
+    NextcloudBoardDragAutoScroll(
+        activeDragKey = draggedCard?.id,
+        position = dragPosition,
+        boardViewport = lanesBounds,
+        horizontalScrollState = boardScrollState,
+        verticalScrollTargetAt = { position, boardViewport, activationHalo ->
+            val laneId = resolveBoardDragVerticalLane(
+                position = position,
+                boardViewport = boardViewport,
+                laneViewports = laneScrollBounds,
+                verticalActivationHalo = activationHalo,
+            )
+            val viewport = laneId?.let(laneScrollBounds::get)
+            val state = laneId?.let(laneScrollStates::get)
+            if (viewport != null && state != null) {
+                BoardDragVerticalScrollTarget(state, viewport)
+            } else {
+                null
+            }
+        },
+        terminalDropRequested = terminalDropRequested,
+        onTargetRefresh = ::refreshDropTarget,
+        onTerminalDropReady = ::commitDrop,
+    )
 
     Box(
         modifier = modifier.fillMaxHeight().onGloballyPositioned { coordinates ->
-            lanesBounds = coordinates.boundsInWindow().toDeckUiRect()
+            lanesBounds = coordinates.boundsInWindow()
         },
     ) {
         LazyRow(
+            state = boardScrollState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(NextcloudSpacing.Large),
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
         ) {
             items(stacks, key = DeckStack::id) { stack ->
                 val stackBoundsOwner = remember(stack.id) { Any() }
+                val laneScrollState = rememberLazyListState()
                 DisposableEffect(stack.id, stackBoundsOwner) {
                     onDispose {
                         stackBounds.remove(stack.id, stackBoundsOwner)
+                    }
+                }
+                DisposableEffect(stack.id, laneScrollState) {
+                    laneScrollStates[stack.id] = laneScrollState
+                    onDispose {
+                        if (laneScrollStates[stack.id] === laneScrollState) {
+                            laneScrollBounds.remove(stack.id)
+                            laneScrollStates.remove(stack.id)
+                        }
                     }
                 }
                 val actions = stackActions(stack)
@@ -648,7 +728,11 @@ private fun DeckLanes(
                     )
                 }
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    state = laneScrollState,
+                    modifier = Modifier.fillMaxSize()
+                        .onGloballyPositioned { coordinates ->
+                            laneScrollBounds[stack.id] = coordinates.boundsInWindow()
+                        },
                     contentPadding = PaddingValues(
                         start = NextcloudSpacing.Small,
                         end = NextcloudSpacing.Small,
@@ -695,23 +779,14 @@ private fun DeckLanes(
                                     dragGrabOffset = localPosition
                                     dragPosition = position
                                     dropTarget = resolveDropTarget(card, position)
+                                    terminalDropRequested = false
                                 },
                                 onDrag = drag@{ amount ->
                                     val position = (dragPosition ?: return@drag) + amount
                                     dragPosition = position
                                     dropTarget = resolveDropTarget(card, position)
                                 },
-                                onDragEnd = {
-                                    val target = dropTarget
-                                    if (target != null && !target.isNoOpFor(card, stacks)) {
-                                        onMoveCard?.invoke(
-                                            card,
-                                            target.stack,
-                                            target.insertionIndex,
-                                        )
-                                    }
-                                    clearDrag()
-                                },
+                                onDragEnd = { terminalDropRequested = true },
                                 onDragCancel = ::clearDrag,
                                 onOpen = { onOpenCard(card) },
                                 onSelect = { onSelectCard(card) },
@@ -823,6 +898,7 @@ private fun DeckCardItem(
                 if (dragEnabled) {
                     NextcloudBoardDragHandle(
                         itemLabel = card.title,
+                        dragActive = dragging,
                         onDragStart = { windowPosition ->
                             val cardBounds = itemBounds ?: return@NextcloudBoardDragHandle
                             onDragStart(
