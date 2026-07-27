@@ -15,7 +15,7 @@ export function metadataFor(path) {
       published: post.date,
       modified: post.lastUpdated,
       tags: post.tags,
-      image: `${siteUrl}${post.image}`,
+      image: `${siteUrl}${post.websiteImage}`,
       imageAlt: post.imageAlt,
       imageWidth: post.imageWidth,
       imageHeight: post.imageHeight,
@@ -27,6 +27,15 @@ export function metadataFor(path) {
       description:
         "Guides to Nextcloud Native photo backup, WebDAV file sync, Obsidian notes, Talk, Photos, offline access, and adaptive native Nextcloud apps.",
       canonical: `${siteUrl}/news/`,
+      type: "website",
+    };
+  }
+  if (path === "/visual-qa/") {
+    return {
+      title: "Visual QA catalog - Nextcloud Native",
+      description:
+        "Browse synthetic desktop and mobile screenshots rendered directly from the Nextcloud Native Compose UI.",
+      canonical: `${siteUrl}/visual-qa/`,
       type: "website",
     };
   }

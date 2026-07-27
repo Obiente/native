@@ -260,12 +260,12 @@ private fun MediaTransferFilters(
     onClearCompleted: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
         LazyRow(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         ) {
             items(MediaTransferSection.entries, key = MediaTransferSection::name) { section ->
@@ -276,19 +276,26 @@ private fun MediaTransferFilters(
                 )
             }
         }
-        NextcloudCardOverflow(
-            itemLabel = "transfer history",
-            actions = listOf(
-                NextcloudCardAction(
-                    label = "Clear completed history",
-                    destructive = true,
-                    enabled = summary.succeeded > 0 && clearEnabled,
-                    onClick = onClearCompleted,
-                ),
-            ),
-            expanded = menuExpanded,
-            onExpandedChange = { menuExpanded = it },
-        )
+        if (selected == MediaTransferSection.Completed) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                NextcloudCardOverflow(
+                    itemLabel = "transfer history",
+                    actions = listOf(
+                        NextcloudCardAction(
+                            label = "Clear completed history",
+                            destructive = true,
+                            enabled = summary.succeeded > 0 && clearEnabled,
+                            onClick = onClearCompleted,
+                        ),
+                    ),
+                    expanded = menuExpanded,
+                    onExpandedChange = { menuExpanded = it },
+                )
+            }
+        }
     }
 }
 

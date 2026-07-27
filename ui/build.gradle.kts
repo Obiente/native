@@ -151,31 +151,6 @@ tasks.register<JavaExec>("captureMarketingScreenshots") {
         "dev.obiente.nextcloudnative.nativeui.preview.MarketingCaptureMainKt",
     )
     workingDir(rootProject.projectDir)
-    args(
-        listOf(
-        "desktop-home.png",
-        "mobile-home.png",
-        "obsidian-vault-sync.png",
-        "media-backup-queue.png",
-        "adaptive-dynamic-data.png",
-        "raw-preview-loading-mobile.png",
-        "raw-preview-error-mobile.png",
-        "raw-preview-memories-ready-mobile.png",
-        "raw-preview-high-detail-desktop.png",
-        "file-share-user-mobile.png",
-        "file-share-group-desktop.png",
-        "file-share-loading-mobile.png",
-        "file-share-error-mobile.png",
-        "transfer-mobile-pending.png",
-        "transfer-mobile-failed-cached.png",
-        "transfer-desktop-active.png",
-        "transfer-desktop-completed-page.png",
-        "deck-board-desktop.png",
-        "deck-board-mobile.png",
-        ).map { fileName ->
-            rootProject.file("website/public/screenshots/$fileName").absolutePath
-        },
-    )
 }
 
 tasks.register<JavaExec>("runDeckInteractionPreview") {

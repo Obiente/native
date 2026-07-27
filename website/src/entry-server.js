@@ -4,6 +4,7 @@ import { docs } from "./generated/docs.js";
 import { docsContent } from "./generated/docs-content.js";
 import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
+import { marketingCaptures } from "./generated/captures.js";
 import {
   metadataFor,
   sharingHeadFor,
@@ -12,6 +13,11 @@ import {
 } from "./server-metadata.js";
 
 const organizationUrl = "https://obiente.org";
+const captureUrl = (scenario) => {
+  const capture = marketingCaptures.find((candidate) => candidate.scenario === scenario);
+  if (!capture) throw new Error(`Missing marketing capture: ${scenario}`);
+  return `${siteUrl}${capture.websitePath}`;
+};
 
 function normalizePath(path) {
   const pathname = path.split("?")[0].split("#")[0];
@@ -80,8 +86,8 @@ export async function render(pathname) {
       "Read-only Activity timeline and adaptive typed views for installed apps",
     ],
     screenshot: [
-      `${siteUrl}/screenshots/desktop-home.png`,
-      `${siteUrl}/screenshots/mobile-home.png`,
+      captureUrl("desktop-home"),
+      captureUrl("mobile-home"),
     ],
   };
   const structuredData = [
@@ -196,6 +202,7 @@ export async function render(pathname) {
 export const routes = [
   "/",
   "/news/",
+  "/visual-qa/",
   changelog.path,
   ...news.map((post) => post.path),
   ...docs.map((doc) => doc.path),

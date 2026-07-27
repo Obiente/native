@@ -7,6 +7,12 @@ import { fileURLToPath } from "node:url";
 import { changelog } from "../src/generated/changelog.js";
 import { marketingCaptures } from "../src/generated/captures.js";
 import { news } from "../src/generated/news.js";
+import {
+  readCaptureManifest,
+  stableCapturePath,
+  verifyCaptureAssets,
+  websiteCapturePath,
+} from "./marketing-captures.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(websiteRoot, "..");
@@ -16,6 +22,8 @@ test("news stays long-form, visual, and separate from release history", async ()
   for (const post of news) {
     assert.ok(post.readingMinutes >= 4, `${post.file} is too short to be a product story`);
     assert.match(post.image, /^\/screenshots\/[a-z0-9-]+\.png$/);
+    assert.match(post.websiteImage, /^\/screenshots\/[a-z0-9-]+\.png\?v=[a-f0-9]{64}$/);
+    assert.match(post.captureScenario, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     assert.ok(post.imageAlt.length >= 40);
     assert.ok(post.imageCaption.length >= 40);
     assert.ok(post.text.split(/\s+/).filter(Boolean).length >= 700);
@@ -50,6 +58,7 @@ test("living news metadata and native feed share the canonical Markdown source",
     assert.equal(nativeArticle.lastUpdated, post.lastUpdated);
     assert.equal(nativeArticle.title, post.title);
     assert.equal(nativeArticle.description, post.description);
+    assert.equal(nativeArticle.image.url, `https://nc-native.obiente.dev${post.image}`);
   }
 });
 
@@ -101,83 +110,69 @@ test("marketing screenshots are rendered offscreen without an Android device", a
 
   assert.doesNotMatch(captureScript, /\badb\b|ANDROID_HOME|--android|assembleScreenshot/);
   assert.match(captureScript, /:ui:captureMarketingScreenshots/);
+  assert.doesNotMatch(captureScript, /desktop-home\.png|mobile-home\.png/);
   assert.match(captureMain, /ImageComposeScene/);
   assert.match(captureMain, /NextcloudNativeMarketingCapture/);
 
-  const manifest = JSON.parse(
-    await readFile(
-      path.join(websiteRoot, "public", "screenshots", "capture-manifest.json"),
-      "utf8",
-    ),
-  );
+  const manifest = await readCaptureManifest();
+  assert.equal(manifest.schemaVersion, 2);
   assert.equal(manifest.identity, "Obiente");
   assert.equal(manifest.cloudIdentity, "Nextcloud");
   assert.equal(manifest.networkAccess, false);
-  assert.deepEqual(
-    marketingCaptures.map((capture) => capture.scenario),
-    [
-      "desktop-home",
-      "mobile-home",
-      "obsidian-vault-sync",
-      "media-backup-queue",
-      "adaptive-dynamic-data",
-      "raw-preview-loading-mobile",
-      "raw-preview-error-mobile",
-      "raw-preview-memories-ready-mobile",
-      "raw-preview-high-detail-desktop",
-      "file-share-user-mobile",
-      "file-share-group-desktop",
-      "file-share-loading-mobile",
-      "file-share-error-mobile",
-      "transfer-mobile-pending",
-      "transfer-mobile-failed-cached",
-      "transfer-desktop-active",
-      "transfer-desktop-completed-page",
-      "deck-board-desktop",
-      "deck-board-mobile",
-    ],
-  );
+  const captureScenarios = new Set(marketingCaptures.map((capture) => capture.scenario));
+  for (const requiredScenario of [
+    "desktop-home",
+    "mobile-home",
+    "obsidian-vault-sync",
+    "media-backup-queue",
+    "adaptive-dynamic-data",
+  ]) {
+    assert.ok(captureScenarios.has(requiredScenario));
+  }
+  assert.equal(captureScenarios.size, marketingCaptures.length);
   assert.deepEqual(
     marketingCaptures.map((capture) => capture.path),
-    manifest.captures.map((capture) => `/screenshots/${capture.file}`),
+    manifest.captures.map(stableCapturePath),
   );
-  const expectedDimensions = new Map([
-    ["desktop-home", [1440, 900]],
-    ["mobile-home", [1080, 2400]],
-    ["obsidian-vault-sync", [1080, 1000]],
-    ["media-backup-queue", [1080, 1800]],
-    ["adaptive-dynamic-data", [960, 360]],
-    ["raw-preview-loading-mobile", [1080, 1200]],
-    ["raw-preview-error-mobile", [1080, 1200]],
-    ["raw-preview-memories-ready-mobile", [1080, 1600]],
-    ["raw-preview-high-detail-desktop", [1440, 900]],
-    ["file-share-user-mobile", [1080, 1800]],
-    ["file-share-group-desktop", [1440, 900]],
-    ["file-share-loading-mobile", [1080, 1800]],
-    ["file-share-error-mobile", [1080, 1800]],
-    ["transfer-mobile-pending", [1080, 1800]],
-    ["transfer-mobile-failed-cached", [1080, 1800]],
-    ["transfer-desktop-active", [1280, 800]],
-    ["transfer-desktop-completed-page", [1280, 800]],
-    ["deck-board-desktop", [1440, 900]],
-    ["deck-board-mobile", [1080, 1800]],
-  ]);
+  assert.deepEqual(
+    marketingCaptures.map((capture) => capture.websitePath),
+    manifest.captures.map((capture) => websiteCapturePath(manifest, capture)),
+  );
   for (const capture of manifest.captures) {
-    assert.deepEqual(
-      [capture.width, capture.height],
-      expectedDimensions.get(capture.scenario),
-    );
+    assert.ok(Number.isInteger(capture.width) && capture.width > 0);
+    assert.ok(Number.isInteger(capture.height) && capture.height > 0);
+    assert.ok(Number.isFinite(capture.density) && capture.density > 0);
   }
   const capturedImages = new Set(
     manifest.captures.map((capture) => `/screenshots/${capture.file}`),
   );
   assert.ok(news.every((post) => capturedImages.has(post.image)));
+  assert.ok(
+    news.every(
+      (post) =>
+        manifest.captures.find((capture) => capture.scenario === post.captureScenario)
+          ?.purpose === "showcase",
+    ),
+  );
+  assert.deepEqual(await verifyCaptureAssets(manifest), []);
+  assert.ok(manifest.captures.every((capture) => capture.feature.length > 0));
+  assert.ok(manifest.captures.every((capture) => capture.surface.length > 0));
+  assert.ok(manifest.captures.every((capture) => capture.state.length > 0));
+  assert.ok(
+    manifest.captures.every(
+      (capture) =>
+        capture.purpose === "showcase" || capture.purpose === "state-coverage",
+    ),
+  );
+  assert.ok(manifest.captures.every((capture) => capture.platform.length > 0));
+  assert.ok(manifest.captures.every((capture) => capture.viewport.length > 0));
   assert.ok(manifest.captureSources.length > 0);
   assert.equal(new Set(manifest.captureSources).size, manifest.captureSources.length);
   assert.ok(
     manifest.captureSources.every(
       (relative) =>
         relative === "ui/build.gradle.kts" ||
+        relative === "tools/marketing-capture-inputs.txt" ||
         relative.startsWith("ui/src/commonMain/") ||
         relative.startsWith(
           "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/",
@@ -207,4 +202,48 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   );
   const websiteAvatar = await readFile(path.join(websiteRoot, "public", "obiente-avatar.png"));
   assert.deepEqual(websiteAvatar, avatar);
+});
+
+test("visual QA and mobile navigation are driven by registered captures", async () => {
+  const appSource = await readFile(
+    path.join(websiteRoot, "src", "App.vue"),
+    "utf8",
+  );
+  const entryServer = await readFile(
+    path.join(websiteRoot, "src", "entry-server.js"),
+    "utf8",
+  );
+  const styles = await readFile(
+    path.join(websiteRoot, "src", "styles.css"),
+    "utf8",
+  );
+
+  assert.match(entryServer, /"\/visual-qa\/"/u);
+  assert.match(
+    styles,
+    /\.visual-qa-image\s*\{[^}]*overflow:\s*hidden;/su,
+  );
+  assert.match(
+    styles,
+    /\.visual-qa-card figcaption\s*\{[^}]*background:\s*var\(--surface\);/su,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width:\s*1100px\)\s*\{[\s\S]*?\.desktop-nav\s*\{[^}]*display:\s*none;/u,
+  );
+  assert.match(appSource, /aria-controls="mobile-site-navigation"/u);
+  assert.equal(
+    (appSource.match(/:aria-pressed=/gu) ?? []).length,
+    3,
+  );
+  assert.match(appSource, /class="hero-mobile-capture"/u);
+  assert.match(appSource, /:src="mobileHomeCapture\.websitePath"/u);
+  assert.match(appSource, /capture\.purpose === visualQaPurpose\.value/u);
+  assert.match(appSource, /capture\.pullRequest/u);
+  assert.match(appSource, /capture\.issue/u);
+  assert.match(appSource, /visualQaGroups/u);
+  assert.doesNotMatch(
+    appSource,
+    /class="hero-mobile-capture"[\s\S]*?src="\/screenshots\/mobile-home\.png"/u,
+  );
 });

@@ -12,7 +12,7 @@ const metadataLines = [
   "lastUpdated: 2026-07-25",
   "description: A fixture-only update.",
   "tags: native, update",
-  "image: /screenshots/mobile-home.png",
+  "captureScenario: mobile-home",
   "imageAlt: A fixture-safe app screen",
   "imageCaption: The app rendered with fixture data.",
 ];

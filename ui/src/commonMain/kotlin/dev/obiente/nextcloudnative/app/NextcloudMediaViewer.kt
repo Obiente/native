@@ -463,7 +463,9 @@ fun NextcloudMediaViewer(
                 },
                 openingExternal = externalOpening,
                 externalError = externalError,
-                modifier = Modifier.align(Alignment.Center),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 40.dp),
             )
         }
 

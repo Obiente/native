@@ -34,117 +34,234 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeScreenState
 
+enum class MarketingCapturePurpose(val manifestValue: String) {
+    Showcase("showcase"),
+    StateCoverage("state-coverage"),
+}
+
 enum class MarketingCaptureScenario(
     val id: String,
     val fileName: String,
     val presentation: NextcloudPresentation,
+    val feature: String,
+    val surface: String,
+    val state: String,
+    val purpose: MarketingCapturePurpose,
+    val platform: String,
+    val viewport: String,
+    val pullRequest: Int? = null,
+    val issue: Int? = null,
     val width: Int,
     val height: Int,
     val density: Float,
 ) {
-    DesktopHome("desktop-home", "desktop-home.png", NextcloudPresentation.Desktop, 1_440, 900, 1f),
-    MobileHome("mobile-home", "mobile-home.png", NextcloudPresentation.Adaptive, 1_080, 2_400, 2.625f),
-    ObsidianSync("obsidian-vault-sync", "obsidian-vault-sync.png", NextcloudPresentation.Adaptive, 1_080, 1_000, 2.625f),
-    MediaBackup("media-backup-queue", "media-backup-queue.png", NextcloudPresentation.Adaptive, 1_080, 1_800, 2.625f),
-    AdaptiveApp("adaptive-dynamic-data", "adaptive-dynamic-data.png", NextcloudPresentation.Desktop, 960, 360, 1f),
+    DesktopHome(
+        "desktop-home", "desktop-home.png", NextcloudPresentation.Desktop,
+        "Workspace", "Home dashboard", "Ready", MarketingCapturePurpose.Showcase,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    MobileHome(
+        "mobile-home", "mobile-home.png", NextcloudPresentation.Adaptive,
+        "Workspace", "Home dashboard", "Ready", MarketingCapturePurpose.Showcase,
+        "mobile", "phone-portrait", width = 1_080, height = 2_400, density = 2.625f,
+    ),
+    ObsidianSync(
+        "obsidian-vault-sync", "obsidian-vault-sync.png", NextcloudPresentation.Adaptive,
+        "File sync", "Folder pair", "One pending upload", MarketingCapturePurpose.Showcase,
+        "mobile", "phone-compact", width = 1_080, height = 1_000, density = 2.625f,
+    ),
+    MediaBackup(
+        "media-backup-queue", "media-backup-queue.png", NextcloudPresentation.Adaptive,
+        "Media backup", "Folder discovery", "Ready with pending uploads",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 2_200, density = 2.625f,
+    ),
+    AdaptiveApp(
+        "adaptive-dynamic-data", "adaptive-dynamic-data.png", NextcloudPresentation.Desktop,
+        "Dynamic apps", "Data table", "Ready", MarketingCapturePurpose.Showcase,
+        "desktop", "embedded-wide", width = 960, height = 360, density = 1f,
+    ),
     RawPreviewLoadingMobile(
-        "raw-preview-loading-mobile",
-        "raw-preview-loading-mobile.png",
-        NextcloudPresentation.Adaptive,
-        1_080,
-        1_200,
-        2.625f,
+        "raw-preview-loading-mobile", "raw-preview-loading-mobile.png",
+        NextcloudPresentation.Adaptive, "Photos", "RAW preview",
+        "Loading embedded preview", MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-compact", pullRequest = 218, issue = 85,
+        width = 1_080, height = 1_200, density = 2.625f,
     ),
     RawPreviewErrorMobile(
-        "raw-preview-error-mobile",
-        "raw-preview-error-mobile.png",
-        NextcloudPresentation.Adaptive,
-        1_080,
-        1_200,
-        2.625f,
+        "raw-preview-error-mobile", "raw-preview-error-mobile.png",
+        NextcloudPresentation.Adaptive, "Photos", "RAW preview",
+        "No usable preview", MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-compact", pullRequest = 218, issue = 85,
+        width = 1_080, height = 1_200, density = 2.625f,
     ),
     RawPreviewMemoriesReadyMobile(
-        "raw-preview-memories-ready-mobile",
-        "raw-preview-memories-ready-mobile.png",
-        NextcloudPresentation.Adaptive,
-        1_080,
-        1_600,
-        2.625f,
+        "raw-preview-memories-ready-mobile", "raw-preview-memories-ready-mobile.png",
+        NextcloudPresentation.Adaptive, "Photos", "RAW preview",
+        "Ready from Memories", MarketingCapturePurpose.Showcase,
+        "mobile", "phone-portrait", pullRequest = 218, issue = 85,
+        width = 1_080, height = 1_600, density = 2.625f,
     ),
     RawPreviewHighDetailDesktop(
-        "raw-preview-high-detail-desktop",
-        "raw-preview-high-detail-desktop.png",
-        NextcloudPresentation.Desktop,
-        1_440,
-        900,
-        1f,
+        "raw-preview-high-detail-desktop", "raw-preview-high-detail-desktop.png",
+        NextcloudPresentation.Desktop, "Photos", "RAW preview",
+        "Embedded high-detail preview", MarketingCapturePurpose.Showcase,
+        "desktop", "wide", pullRequest = 218, issue = 85,
+        width = 1_440, height = 900, density = 1f,
     ),
     FileShareUserMobile(
-        id = "file-share-user-mobile",
-        fileName = "file-share-user-mobile.png",
-        presentation = NextcloudPresentation.Adaptive,
-        width = 1_080,
-        height = 1_800,
-        density = 2.625f,
+        "file-share-user-mobile", "file-share-user-mobile.png", NextcloudPresentation.Adaptive,
+        "Files", "Share dialog", "User search results", MarketingCapturePurpose.Showcase,
+        "mobile", "phone-portrait", pullRequest = 219, issue = 124,
+        width = 1_080, height = 1_800, density = 2.625f,
     ),
     FileShareGroupDesktop(
-        id = "file-share-group-desktop",
-        fileName = "file-share-group-desktop.png",
-        presentation = NextcloudPresentation.Desktop,
-        width = 1_440,
-        height = 900,
-        density = 1f,
+        "file-share-group-desktop", "file-share-group-desktop.png", NextcloudPresentation.Desktop,
+        "Files", "Share dialog", "Group search results", MarketingCapturePurpose.Showcase,
+        "desktop", "wide", pullRequest = 219, issue = 124,
+        width = 1_440, height = 900, density = 1f,
     ),
     FileShareLoadingMobile(
-        id = "file-share-loading-mobile",
-        fileName = "file-share-loading-mobile.png",
-        presentation = NextcloudPresentation.Adaptive,
-        width = 1_080,
-        height = 1_800,
-        density = 2.625f,
+        "file-share-loading-mobile", "file-share-loading-mobile.png", NextcloudPresentation.Adaptive,
+        "Files", "Share dialog", "Loading recipients", MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", pullRequest = 219, issue = 124,
+        width = 1_080, height = 1_800, density = 2.625f,
     ),
     FileShareErrorMobile(
-        id = "file-share-error-mobile",
-        fileName = "file-share-error-mobile.png",
-        presentation = NextcloudPresentation.Adaptive,
-        width = 1_080,
-        height = 1_800,
-        density = 2.625f,
+        "file-share-error-mobile", "file-share-error-mobile.png", NextcloudPresentation.Adaptive,
+        "Files", "Share dialog", "Recipient search error", MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", pullRequest = 219, issue = 124,
+        width = 1_080, height = 1_800, density = 2.625f,
     ),
     TransferMobilePending(
-        "transfer-mobile-pending",
-        "transfer-mobile-pending.png",
-        NextcloudPresentation.Adaptive,
-        1_080,
-        1_800,
-        2.625f,
+        "transfer-mobile-pending", "transfer-mobile-pending.png", NextcloudPresentation.Adaptive,
+        "Files", "Transfer center", "Pending uploads", MarketingCapturePurpose.Showcase,
+        "mobile", "phone-portrait", pullRequest = 220, issue = 168,
+        width = 1_080, height = 1_800, density = 2.625f,
     ),
     TransferMobileFailed(
-        "transfer-mobile-failed-cached",
-        "transfer-mobile-failed-cached.png",
-        NextcloudPresentation.Adaptive,
-        1_080,
-        1_800,
-        2.625f,
+        "transfer-mobile-failed-cached", "transfer-mobile-failed-cached.png",
+        NextcloudPresentation.Adaptive, "Files", "Transfer center",
+        "Failed upload with cached source", MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", pullRequest = 220, issue = 168,
+        width = 1_080, height = 1_800, density = 2.625f,
     ),
     TransferDesktopActive(
-        "transfer-desktop-active",
-        "transfer-desktop-active.png",
-        NextcloudPresentation.Desktop,
-        1_280,
-        800,
-        1f,
+        "transfer-desktop-active", "transfer-desktop-active.png", NextcloudPresentation.Desktop,
+        "Files", "Transfer center", "Active transfer", MarketingCapturePurpose.Showcase,
+        "desktop", "wide", pullRequest = 220, issue = 168,
+        width = 1_280, height = 800, density = 1f,
     ),
     TransferDesktopCompleted(
-        "transfer-desktop-completed-page",
-        "transfer-desktop-completed-page.png",
-        NextcloudPresentation.Desktop,
-        1_280,
-        800,
-        1f,
+        "transfer-desktop-completed-page", "transfer-desktop-completed-page.png",
+        NextcloudPresentation.Desktop, "Files", "Transfer center",
+        "Completed transfer history", MarketingCapturePurpose.Showcase,
+        "desktop", "wide", pullRequest = 220, issue = 168,
+        width = 1_280, height = 800, density = 1f,
     ),
-    DeckBoardDesktop("deck-board-desktop", "deck-board-desktop.png", NextcloudPresentation.Desktop, 1_440, 900, 1f),
-    DeckBoardMobile("deck-board-mobile", "deck-board-mobile.png", NextcloudPresentation.Adaptive, 1_080, 1_800, 2.625f),
+    DeckBoardDesktop(
+        "deck-board-desktop", "deck-board-desktop.png", NextcloudPresentation.Desktop,
+        "Deck", "Kanban board", "Ready", MarketingCapturePurpose.Showcase,
+        "desktop", "wide", pullRequest = 221, issue = 52,
+        width = 1_440, height = 900, density = 1f,
+    ),
+    DeckBoardMobile(
+        "deck-board-mobile", "deck-board-mobile.png", NextcloudPresentation.Adaptive,
+        "Deck", "Kanban board", "Ready", MarketingCapturePurpose.Showcase,
+        "mobile", "phone-portrait", pullRequest = 221, issue = 52,
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+}
+
+internal data class MarketingCaptureRegistryEntry(
+    val id: String,
+    val fileName: String,
+    val feature: String,
+    val surface: String,
+    val state: String,
+    val purpose: String,
+    val platform: String,
+    val viewport: String,
+    val pullRequest: Int?,
+    val issue: Int?,
+    val width: Int,
+    val height: Int,
+    val density: Float,
+)
+
+private val marketingCaptureSlug = Regex("[a-z0-9-]+")
+private val marketingCapturePngFileName = Regex("[a-z0-9-]+\\.png")
+
+internal fun MarketingCaptureScenario.registryEntry(): MarketingCaptureRegistryEntry =
+    MarketingCaptureRegistryEntry(
+        id = id,
+        fileName = fileName,
+        feature = feature,
+        surface = surface,
+        state = state,
+        purpose = purpose.manifestValue,
+        platform = platform,
+        viewport = viewport,
+        pullRequest = pullRequest,
+        issue = issue,
+        width = width,
+        height = height,
+        density = density,
+    )
+
+internal fun validateMarketingCaptureRegistry(
+    entries: List<MarketingCaptureRegistryEntry>,
+) {
+    require(entries.isNotEmpty()) {
+        "The marketing capture registry must not be empty."
+    }
+    require(entries.map(MarketingCaptureRegistryEntry::id).toSet().size == entries.size) {
+        "Marketing capture scenario IDs must be unique."
+    }
+    require(entries.map(MarketingCaptureRegistryEntry::fileName).toSet().size == entries.size) {
+        "Marketing capture file names must be unique."
+    }
+    entries.forEach { entry ->
+        require(entry.id.matches(marketingCaptureSlug)) {
+            "Invalid marketing capture scenario ID: ${entry.id}"
+        }
+        require(entry.fileName.matches(marketingCapturePngFileName)) {
+            "Invalid marketing capture PNG file name: ${entry.fileName}"
+        }
+        require(entry.width > 0 && entry.height > 0) {
+            "${entry.id} must have positive pixel dimensions."
+        }
+        require(entry.density.isFinite() && entry.density > 0f) {
+            "${entry.id} must have a positive finite density."
+        }
+        listOf(
+            "feature" to entry.feature,
+            "surface" to entry.surface,
+            "state" to entry.state,
+        ).forEach { (label, value) ->
+            require(value.isNotEmpty() && value == value.trim()) {
+                "${entry.id} $label must be a non-empty trimmed label."
+            }
+        }
+        require(
+            entry.purpose == MarketingCapturePurpose.Showcase.manifestValue ||
+                entry.purpose == MarketingCapturePurpose.StateCoverage.manifestValue,
+        ) {
+            "${entry.id} has an unsupported capture purpose."
+        }
+        require(entry.platform.matches(marketingCaptureSlug)) {
+            "${entry.id} has an invalid platform slug."
+        }
+        require(entry.viewport.matches(marketingCaptureSlug)) {
+            "${entry.id} has an invalid viewport slug."
+        }
+        require(entry.pullRequest == null || entry.pullRequest > 0) {
+            "${entry.id} must use a positive pull request number."
+        }
+        require(entry.issue == null || entry.issue > 0) {
+            "${entry.id} must use a positive issue number."
+        }
+    }
 }
 
 internal val fileShareCaptureScenarios: List<MarketingCaptureScenario> = listOf(
@@ -397,6 +514,7 @@ internal fun MarketingMediaBackupScenario() {
                                 imageCount = 128,
                                 videoCount = 14,
                                 suggestedRemoteRootPath = "Photos/Phone/Camera",
+                                totalBytes = 3_487_000_000L,
                             ),
                             MediaSyncFolderSuggestion(
                                 localRootHint = "fixture-media-screenshots",
@@ -406,6 +524,7 @@ internal fun MarketingMediaBackupScenario() {
                                 imageCount = 36,
                                 videoCount = 2,
                                 suggestedRemoteRootPath = "Photos/Phone/Screenshots",
+                                totalBytes = 412_000_000L,
                             ),
                         ),
                     ),
