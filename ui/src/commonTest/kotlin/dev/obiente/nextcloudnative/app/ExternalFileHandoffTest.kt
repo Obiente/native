@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -137,6 +138,16 @@ class ExternalFileHandoffTest {
         assertEquals("application/octet-stream", sanitizeExternalMimeType("text/plain\nmalicious: value"))
         assertEquals("application/octet-stream", sanitizeExternalMimeType("file:///tmp/a"))
         assertEquals("application/octet-stream", sanitizeExternalMimeType(null))
+    }
+
+    @Test
+    fun `deck attachment download must match a declared byte count`() {
+        verifyDownloadedDeckAttachmentSize(declaredByteCount = 3L, downloadedByteCount = 3L)
+        verifyDownloadedDeckAttachmentSize(declaredByteCount = null, downloadedByteCount = 2L)
+
+        assertFailsWith<IllegalStateException> {
+            verifyDownloadedDeckAttachmentSize(declaredByteCount = 3L, downloadedByteCount = 2L)
+        }
     }
 
     private fun file(

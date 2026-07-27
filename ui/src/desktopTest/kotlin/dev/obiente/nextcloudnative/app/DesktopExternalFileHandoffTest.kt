@@ -137,6 +137,33 @@ class DesktopExternalFileHandoffTest {
     }
 
     @Test
+    fun `short streamed deck attachment is cleaned before launch`() = runBlocking {
+        val root = Files.createTempDirectory("nextcloud-desktop-attachment-").toFile()
+        var launchCalls = 0
+        try {
+            assertFailsWith<IllegalStateException> {
+                DesktopExternalFileHandoff(root) {
+                    launchCalls += 1
+                    true
+                }.launchDetached(
+                    attachment = attachment(byteCount = 5L),
+                    action = ExternalFileHandoffAction.OpenWith,
+                    capability = capability(),
+                    download = { output, _ ->
+                        output.write(byteArrayOf(1, 2, 3))
+                        DesktopDetachedDownload(3L)
+                    },
+                )
+            }
+
+            assertEquals(0, launchCalls)
+            assertTrue(root.listFiles().orEmpty().isEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `desktop cache pruning removes expired detached copies`() {
         val root = Files.createTempDirectory("nextcloud-desktop-handoff-").toFile()
         try {

@@ -18,6 +18,7 @@ import dev.obiente.nextcloudnative.app.sanitizeExternalMimeType
 import dev.obiente.nextcloudnative.app.validateDeckAttachmentHandoff
 import dev.obiente.nextcloudnative.app.validateDownloadedExternalFile
 import dev.obiente.nextcloudnative.app.validateExternalFileHandoff
+import dev.obiente.nextcloudnative.app.verifyDownloadedDeckAttachmentSize
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -66,6 +67,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
             stageStreamedCopy(
                 sourceName = attachment.name,
                 declaredMimeType = attachment.mimeType,
+                declaredByteCount = attachment.byteCount,
                 maximumBytes = capability.maximumFileBytes,
                 download = download,
             )
@@ -106,6 +108,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
     private suspend fun stageStreamedCopy(
         sourceName: String,
         declaredMimeType: String?,
+        declaredByteCount: Long?,
         maximumBytes: Long,
         download: suspend (FileOutputStream, Long) -> AndroidDetachedDownload,
     ): StagedExternalFile.Ready {
@@ -132,6 +135,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
             check(downloaded.byteCount in 0L..maximumBytes) {
                 "The downloaded attachment is larger than the external handoff limit."
             }
+            verifyDownloadedDeckAttachmentSize(declaredByteCount, downloaded.byteCount)
             check(temporary.length() == downloaded.byteCount) {
                 "The external-share cache copy is incomplete."
             }

@@ -52,6 +52,7 @@ internal class DesktopExternalFileHandoff(
         val staged = withContext(Dispatchers.IO) {
             stageStreamedCopy(
                 sourceName = attachment.name,
+                declaredByteCount = attachment.byteCount,
                 maximumBytes = capability.maximumFileBytes,
                 download = download,
             )
@@ -74,6 +75,7 @@ internal class DesktopExternalFileHandoff(
 
     private suspend fun stageStreamedCopy(
         sourceName: String,
+        declaredByteCount: Long?,
         maximumBytes: Long,
         download: suspend (FileOutputStream, Long) -> DesktopDetachedDownload,
     ): File {
@@ -100,6 +102,7 @@ internal class DesktopExternalFileHandoff(
             check(downloaded.byteCount in 0L..maximumBytes) {
                 "The downloaded attachment is larger than the external handoff limit."
             }
+            verifyDownloadedDeckAttachmentSize(declaredByteCount, downloaded.byteCount)
             check(temporary.length() == downloaded.byteCount) {
                 "The desktop attachment cache copy is incomplete."
             }
