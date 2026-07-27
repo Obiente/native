@@ -7370,6 +7370,9 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
     var installing by remember { mutableStateOf(false) }
     var checkResult by remember { mutableStateOf<AppUpdateCheckResult?>(null) }
     var installMessage by remember { mutableStateOf<String?>(null) }
+    var updateChannel by remember(services) {
+        mutableStateOf(services.loadAppUpdateChannel())
+    }
     fun beginInstall(release: AndroidDirectRelease) {
         installing = true
         installMessage = null
@@ -7421,7 +7424,7 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                             checking = true
                             installMessage = null
                             scope.launch {
-                                checkResult = services.checkForAppUpdate()
+                                checkResult = services.checkForAppUpdate(updateChannel)
                                 checking = false
                             }
                         },
@@ -7439,6 +7442,47 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (support.canCheckDirectUpdates) {
+                Text(
+                    "Update channel",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AndroidUpdateChannel.entries.forEach { channel ->
+                        FilterChip(
+                            selected = updateChannel == channel,
+                            enabled = !checking && !installing,
+                            onClick = {
+                                updateChannel = channel
+                                services.saveAppUpdateChannel(channel)
+                                checkResult = null
+                                installMessage = null
+                            },
+                            label = {
+                                Text(
+                                    when (channel) {
+                                        AndroidUpdateChannel.Alpha -> "Alpha"
+                                        AndroidUpdateChannel.Nightly -> "Nightly"
+                                    },
+                                )
+                            },
+                        )
+                    }
+                }
+                Text(
+                    when (updateChannel) {
+                        AndroidUpdateChannel.Alpha ->
+                            "Alpha follows curated prereleases."
+                        AndroidUpdateChannel.Nightly ->
+                            "Nightly follows the latest successful main build."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             when (val checked = checkResult) {
                 is AppUpdateCheckResult.Available -> {
                     val release = checked.release

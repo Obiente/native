@@ -2,6 +2,7 @@ import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 val desktopArchitecture = System.getProperty("os.arch").lowercase()
 val ncDesktopPackageVersion = providers.gradleProperty("ncDesktopPackageVersion").get()
+val ncMacosPackageVersion = providers.gradleProperty("ncMacosPackageVersion").get()
 val javafxClassifier = when {
     System.getProperty("os.name").startsWith("Mac", ignoreCase = true) &&
         desktopArchitecture in setOf("aarch64", "arm64") -> "mac-aarch64"
@@ -127,9 +128,7 @@ compose.desktop {
                 iconFile.set(project.file("src/desktopMain/resources/nextcloud-native.ico"))
             }
             macOS {
-                // Apple's package metadata requires the first numeric component
-                // to be greater than zero, independently of our prerelease name.
-                packageVersion = "1.0.1"
+                packageVersion = ncMacosPackageVersion
             }
         }
     }

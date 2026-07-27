@@ -321,7 +321,13 @@ interface NextcloudPlatformServices {
         explanation = "In-app update checks are unavailable on this platform.",
     )
 
-    suspend fun checkForAppUpdate(): AppUpdateCheckResult =
+    fun loadAppUpdateChannel(): AndroidUpdateChannel = AndroidUpdateChannel.Alpha
+
+    fun saveAppUpdateChannel(channel: AndroidUpdateChannel) = Unit
+
+    suspend fun checkForAppUpdate(
+        channel: AndroidUpdateChannel = loadAppUpdateChannel(),
+    ): AppUpdateCheckResult =
         AppUpdateCheckResult.Unavailable(appUpdateSupport())
 
     /** Observable direct-APK download, verification, cancellation, and retry state. */
