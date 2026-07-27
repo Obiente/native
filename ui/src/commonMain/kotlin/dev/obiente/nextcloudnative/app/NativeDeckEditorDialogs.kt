@@ -33,6 +33,7 @@ import androidx.compose.material3.TimeInput
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +46,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import kotlinx.coroutines.delay
 
 @Composable
 fun DeckUiBoardEditorDialog(
@@ -184,14 +186,22 @@ fun DeckUiStackEditorDialog(
 fun DeckUiCardEditorDialog(
     stack: DeckStack,
     card: DeckCard?,
+    initialDraft: DeckUiCardDraft? = null,
+    recoveredDraft: Boolean = false,
     busy: Boolean,
     errorMessage: String?,
     quickDueDates: List<DeckUiDueDateOption>,
     onDismiss: () -> Unit,
+    onDiscardRecoveredDraft: () -> Unit = {},
+    onDraftChange: (DeckUiCardDraft) -> Unit = {},
     onSubmit: (DeckUiCardDraft) -> Unit,
 ) {
-    var draft by remember(stack, card) {
-        mutableStateOf(card.toDeckUiDraft())
+    var draft by remember(stack, card, initialDraft) {
+        mutableStateOf(initialDraft ?: card.toDeckUiDraft())
+    }
+    LaunchedEffect(draft) {
+        delay(DECK_DRAFT_PERSIST_DEBOUNCE_MILLIS)
+        onDraftChange(draft)
     }
     val validationError = draft.validationError()
     DeckUiAdaptiveDialog(
@@ -213,6 +223,45 @@ fun DeckUiCardEditorDialog(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(NextcloudSpacing.Large),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
         ) {
+            if (recoveredDraft) {
+                item {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        shape = RoundedCornerShape(NextcloudRadii.Medium),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .padding(
+                                    horizontal = NextcloudSpacing.Medium,
+                                    vertical = NextcloudSpacing.Small,
+                                ),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    text = "Unsaved changes restored",
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                                Text(
+                                    text = "This draft was recovered from this device.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            TextButton(
+                                enabled = !busy,
+                                onClick = onDiscardRecoveredDraft,
+                            ) {
+                                Text("Discard")
+                            }
+                        }
+                    }
+                }
+            }
             item {
                 OutlinedTextField(
                     value = draft.title,
@@ -242,9 +291,19 @@ fun DeckUiCardEditorDialog(
                     dueTime = draft.dueTime,
                     enabled = !busy,
                     quickDueDates = quickDueDates,
-                    onDateChanged = { draft = draft.copy(dueDate = it) },
-                    onTimeChanged = { draft = draft.copy(dueTime = it) },
-                    onClear = { draft = draft.copy(dueDate = "", dueTime = "") },
+                    onDateChanged = {
+                        draft = draft.copy(dueDate = it, dueFieldsEdited = true)
+                    },
+                    onTimeChanged = {
+                        draft = draft.copy(dueTime = it, dueFieldsEdited = true)
+                    },
+                    onClear = {
+                        draft = draft.copy(
+                            dueDate = "",
+                            dueTime = "",
+                            dueFieldsEdited = true,
+                        )
+                    },
                 )
             }
             validationError?.takeIf {
@@ -575,13 +634,14 @@ private data class DeckUiColorOption(
     val color: Color,
 )
 
-private fun DeckCard?.toDeckUiDraft(): DeckUiCardDraft {
+internal fun DeckCard?.toDeckUiDraft(): DeckUiCardDraft {
     val localDueAt = this?.dueAt?.let(::deckInstantToLocalDateTime)
     return DeckUiCardDraft(
         title = this?.title.orEmpty(),
         descriptionMarkdown = this?.descriptionMarkdown.orEmpty(),
         dueDate = localDueAt?.date.orEmpty(),
         dueTime = localDueAt?.time.orEmpty(),
+        dueAtBeforeEditing = this?.dueAt,
     )
 }
 
@@ -593,3 +653,5 @@ private val DECK_UI_COLOR_OPTIONS = listOf(
     DeckUiColorOption("Amber", "f59e0b", Color(0xFFF59E0B)),
     DeckUiColorOption("Red", "ef4444", Color(0xFFEF4444)),
 )
+
+private const val DECK_DRAFT_PERSIST_DEBOUNCE_MILLIS = 300L

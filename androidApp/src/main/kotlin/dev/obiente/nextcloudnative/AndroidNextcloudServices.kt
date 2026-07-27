@@ -14,6 +14,10 @@ import dev.obiente.nextcloudnative.app.AcquiredOpenApiContractSourceKind
 import dev.obiente.nextcloudnative.app.AcquiredContractKind
 import dev.obiente.nextcloudnative.app.DeckAttachment
 import dev.obiente.nextcloudnative.app.DeckAttachmentOpenTarget
+import dev.obiente.nextcloudnative.app.DeckCardDraftKey
+import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
+import dev.obiente.nextcloudnative.app.DurableUploadScope
+import dev.obiente.nextcloudnative.app.DurableUploadStatus
 import dev.obiente.nextcloudnative.app.LoginChallenge
 import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
@@ -85,6 +89,7 @@ import dev.obiente.nextcloudnative.app.ProjectNewsImage
 import dev.obiente.nextcloudnative.app.PeopleMutationSurface
 import dev.obiente.nextcloudnative.app.PeopleTransportAuthorization
 import dev.obiente.nextcloudnative.app.PeopleTransportRequest
+import dev.obiente.nextcloudnative.app.PersistedDeckCardDraft
 import dev.obiente.nextcloudnative.app.boundedPreviewDimension
 import dev.obiente.nextcloudnative.app.boundedActivityLimit
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
@@ -194,6 +199,8 @@ internal class AndroidNextcloudServices(
     private val externalFileHandoff = AndroidExternalFileHandoff(appContext)
     private val platformCapabilities = AndroidPlatformCapabilities(appContext, context as? Activity)
     private val projectContent = AndroidProjectContentClient(appContext, context as? Activity)
+    private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext)
+    private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
 
     override val supportsFileOfflineStorage: Boolean = true
     override val supportsRecursiveFileOfflineStorage: Boolean = true
@@ -267,6 +274,27 @@ internal class AndroidNextcloudServices(
             .remove(KEY_TEST_READ_ONLY)
             .apply()
         notifyDocumentsRootsChanged()
+    }
+
+    override suspend fun loadDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ): PersistedDeckCardDraft? = withContext(Dispatchers.IO) {
+        deckCardDrafts.load(session, key)
+    }
+
+    override suspend fun saveDeckCardDraft(
+        session: NextcloudSession,
+        draft: PersistedDeckCardDraft,
+    ) = withContext(Dispatchers.IO) {
+        deckCardDrafts.save(session, draft)
+    }
+
+    override suspend fun clearDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ) = withContext(Dispatchers.IO) {
+        deckCardDrafts.clear(session, key)
     }
 
     override fun clearSession() {
@@ -1103,6 +1131,29 @@ internal class AndroidNextcloudServices(
                 runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
             }
         }
+    }
+
+    override suspend fun enqueueDurableMultipartUpload(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+        request: NextcloudMultipartUploadRequest,
+    ): DurableUploadEnqueueResult = withContext(Dispatchers.IO) {
+        durableMultipartUploads.enqueue(session, scope, request)
+    }
+
+    override suspend fun durableMultipartUploadStatuses(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+    ): List<DurableUploadStatus> = withContext(Dispatchers.IO) {
+        durableMultipartUploads.statuses(session, scope)
+    }
+
+    override suspend fun dismissDurableMultipartUpload(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+        uploadId: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        durableMultipartUploads.dismiss(session, scope, uploadId)
     }
 
     override suspend fun executeGroupwareDav(

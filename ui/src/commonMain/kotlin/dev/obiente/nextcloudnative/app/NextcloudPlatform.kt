@@ -378,6 +378,24 @@ interface NextcloudPlatformServices {
 
     fun clearSession()
 
+    /** Loads one bounded, account-scoped unsaved Deck editor draft from app-private storage. */
+    suspend fun loadDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ): PersistedDeckCardDraft? = null
+
+    /** Persists one bounded Deck editor draft without storing account credentials in its key. */
+    suspend fun saveDeckCardDraft(
+        session: NextcloudSession,
+        draft: PersistedDeckCardDraft,
+    ) = Unit
+
+    /** Clears a draft after an explicit cancel or a confirmed successful server mutation. */
+    suspend fun clearDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ) = Unit
+
     fun openExternalUrl(url: String)
 
     /** Copies bounded application text without exposing session credentials to another process. */
@@ -721,6 +739,50 @@ interface NextcloudPlatformServices {
     ): NextcloudApiResponse {
         error("Multipart upload is unavailable on this platform.")
     }
+
+    /**
+     * Takes ownership of a picker capability and schedules a lifecycle-independent upload.
+     *
+     * The default implementation completes synchronously for platforms without a background
+     * scheduler. Android overrides this with app-private durable state and WorkManager.
+     */
+    suspend fun enqueueDurableMultipartUpload(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+        request: NextcloudMultipartUploadRequest,
+    ): DurableUploadEnqueueResult {
+        val status = DurableUploadStatus(
+            id = request.file.selectionId,
+            scope = scope,
+            displayName = request.file.displayName,
+            state = DurableUploadState.Uploading,
+        )
+        return runCatching {
+            val response = executeNextcloudMultipartUpload(session, request)
+            require(response.status in 200..299) {
+                "The attachment upload failed (HTTP ${response.status})."
+            }
+            DurableUploadEnqueueResult.Completed(status.copy(state = DurableUploadState.Completed))
+        }.getOrElse { error ->
+            DurableUploadEnqueueResult.Rejected(
+                error.message?.take(MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS)
+                    ?: "The attachment upload failed.",
+            )
+        }
+    }
+
+    /** Returns bounded persisted upload state for the active account and resource. */
+    suspend fun durableMultipartUploadStatuses(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+    ): List<DurableUploadStatus> = emptyList()
+
+    /** Dismisses one terminal upload status. Active work cannot be removed through the UI. */
+    suspend fun dismissDurableMultipartUpload(
+        session: NextcloudSession,
+        scope: DurableUploadScope,
+        uploadId: String,
+    ): Boolean = false
 
     /**
      * Dedicated same-origin CalDAV/CardDAV transport.

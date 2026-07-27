@@ -10,6 +10,33 @@ import kotlin.test.assertTrue
 
 class LocalFileUploadTest {
     @Test
+    fun durableUploadMetadataRejectsUnboundedOrPathLikeScopeValues() {
+        val scope = DurableUploadScope(feature = "deck-attachment", resourceId = "42")
+        val status = DurableUploadStatus(
+            id = "12345678-1234-1234-1234-123456789012",
+            scope = scope,
+            displayName = "notes.txt",
+            state = DurableUploadState.Queued,
+        )
+
+        assertEquals(scope, status.scope)
+        assertFailsWith<IllegalArgumentException> {
+            DurableUploadScope(feature = "deck/attachment", resourceId = "42")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            status.copy(message = "x".repeat(MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS + 1))
+        }
+        assertEquals(
+            DurableUploadState.OutcomeUnknown,
+            DurableUploadState.Uploading.afterProcessRecovery(),
+        )
+        assertEquals(
+            DurableUploadState.Queued,
+            DurableUploadState.Queued.afterProcessRecovery(),
+        )
+    }
+
+    @Test
     fun `filename sanitization removes paths and header controls`() {
         assertEquals(
             "report.pdf",

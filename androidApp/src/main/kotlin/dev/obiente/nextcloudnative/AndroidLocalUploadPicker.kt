@@ -159,7 +159,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
             .put("mimeType", source.file.mimeType)
             .put("sizeBytes", source.file.sizeBytes)
             .toString()
-        preferences.edit()
+        return preferences.edit()
             .putString(preferenceKey(source.file.selectionId), cipher.encrypt(payload))
             .commit()
     }

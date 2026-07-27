@@ -37,18 +37,45 @@ data class DeckUiStackDraft(
     }
 }
 
+data class DeckUiLabelDraft(
+    val title: String,
+    val color: String,
+) {
+    fun normalized(): DeckUiLabelDraft = copy(
+        title = title.trim(),
+        color = color.trim().removePrefix("#").lowercase(),
+    )
+
+    fun validationError(): String? {
+        val value = normalized()
+        return when {
+            value.title.isBlank() -> "Enter a label name."
+            value.title.length > DECK_UI_LABEL_TITLE_LIMIT ->
+                "Label names can be up to 100 characters."
+            value.title.hasControlCharacters() ->
+                "The label name contains unsupported characters."
+            !value.color.isDeckUiColor() -> "Choose a valid label color."
+            else -> null
+        }
+    }
+}
+
 data class DeckUiCardDraft(
     val title: String,
     val descriptionMarkdown: String,
     val dueDate: String,
     val dueTime: String,
+    val dueAtBeforeEditing: String? = null,
+    val dueFieldsEdited: Boolean = false,
 ) {
     fun normalized(): DeckUiCardDraft = copy(
         title = title.trim(),
-        descriptionMarkdown = descriptionMarkdown.trim(),
         dueDate = dueDate.trim(),
         dueTime = dueTime.trim(),
     )
+
+    fun resolvedDueAt(editedDueAt: String?): String? =
+        if (dueFieldsEdited) editedDueAt else dueAtBeforeEditing
 
     fun validationError(): String? {
         val value = normalized()
@@ -89,6 +116,7 @@ sealed interface DeckUiInteraction {
     ) : DeckUiInteraction
     data class MoveCard(val card: DeckCard) : DeckUiInteraction
     data class Labels(val card: DeckCard) : DeckUiInteraction
+    data class ManageLabels(val board: DeckBoard) : DeckUiInteraction
     data class Assignees(val card: DeckCard) : DeckUiInteraction
     data class DueDate(val card: DeckCard) : DeckUiInteraction
     data class Comments(val card: DeckCard) : DeckUiInteraction
@@ -97,6 +125,26 @@ sealed interface DeckUiInteraction {
     data class DeleteStack(val stack: DeckStack) : DeckUiInteraction
     data class DeleteCard(val card: DeckCard) : DeckUiInteraction
 }
+
+internal fun DeckUiInteraction.isAvailableFor(state: DeckWorkspaceState): Boolean = when (this) {
+    is DeckUiInteraction.BoardEditor ->
+        if (board == null) {
+            state is DeckWorkspaceState.BoardPicker || state is DeckWorkspaceState.Empty
+        } else {
+            state is DeckWorkspaceState.Board
+        }
+    is DeckUiInteraction.ManageLabels ->
+        state is DeckWorkspaceState.Board &&
+            state.board.id == board.id &&
+            !state.board.archived
+    else -> state is DeckWorkspaceState.Board
+}
+
+data class DeckUiBoardRecovery(
+    val board: DeckBoard,
+    val restoring: Boolean = false,
+    val errorMessage: String? = null,
+)
 
 data class DeckUiDueDateOption(
     val label: String,
@@ -149,6 +197,7 @@ data class DeckUiAttachment(
 
 data class DeckUiAttachmentsState(
     val attachments: List<DeckUiAttachment>,
+    val uploads: List<DurableUploadStatus> = emptyList(),
     val loading: Boolean = false,
     val loadingMore: Boolean = false,
     val hasMore: Boolean = false,
@@ -244,12 +293,14 @@ private fun String.isDeckUiColor(): Boolean =
         character.isDigit() || character.lowercaseChar() in 'a'..'f'
     }
 
+private const val DECK_UI_LABEL_TITLE_LIMIT = 100
+
 private fun Int.isLeapYear(): Boolean =
     this % 4 == 0 && (this % 100 != 0 || this % 400 == 0)
 
 private const val DECK_UI_BOARD_TITLE_LIMIT = 100
 private const val DECK_UI_STACK_TITLE_LIMIT = 100
-private const val DECK_UI_CARD_TITLE_LIMIT = 255
-private const val DECK_UI_CARD_DESCRIPTION_LIMIT = 64 * 1024
+internal const val DECK_UI_CARD_TITLE_LIMIT = 255
+internal const val DECK_UI_CARD_DESCRIPTION_LIMIT = 64 * 1024
 private const val DECK_UI_COMMENT_LIMIT = 1_000
 private const val MILLIS_PER_DAY = 86_400_000L

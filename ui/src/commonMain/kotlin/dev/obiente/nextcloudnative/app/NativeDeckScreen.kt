@@ -11,6 +11,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
@@ -42,9 +44,15 @@ fun NativeDeckScreen(
     }
     var loadAttempt by remember(session) { mutableStateOf(0) }
     var interaction by remember(session) { mutableStateOf<DeckUiInteraction?>(null) }
+    var restoredCardDraft by remember(session) { mutableStateOf<PersistedDeckCardDraft?>(null) }
+    var recoveredCardDraftNotice by remember(session) { mutableStateOf(false) }
+    var draftPersistenceJob by remember(session) { mutableStateOf<Job?>(null) }
     var mutationBusy by remember(session) { mutableStateOf(false) }
     var mutationOutcomeUnknown by remember(session) { mutableStateOf(false) }
     var mutationError by remember(session) { mutableStateOf<String?>(null) }
+    var confirmedCommentComposerRevision by remember(session) { mutableStateOf(0L) }
+    var confirmedLabelEditorRevision by remember(session) { mutableStateOf(0L) }
+    var boardRecovery by remember(session) { mutableStateOf<DeckUiBoardRecovery?>(null) }
     var commentsState by remember(session) {
         mutableStateOf(DeckUiCommentsState(comments = emptyList()))
     }
@@ -82,11 +90,18 @@ fun NativeDeckScreen(
             cardId = card.id,
         )
 
+    fun cardDraftKey(editor: DeckUiInteraction.CardEditor): DeckCardDraftKey =
+        DeckCardDraftKey(
+            boardId = editor.card?.boardId ?: editor.stack.boardId,
+            stackId = editor.stack.id,
+            cardId = editor.card?.id,
+        )
+
     suspend fun fetchAuthoritativeCard(card: DeckCard): DeckCard {
         val route = selectedRoute()
         val response = services.executeNextcloudApi(
             session,
-            route.card(card.boardId, card.stackId, card.id),
+            route.authoritativeCard(card.boardId, card.stackId, card.id),
         )
         return parseDeckResponseOffUi {
             parseDeckCard(card.boardId, card.stackId, response)
@@ -95,7 +110,7 @@ fun NativeDeckScreen(
 
     suspend fun fetchAuthoritativeBoard(board: DeckBoard): DeckBoard {
         val route = selectedRoute()
-        val response = services.executeNextcloudApi(session, route.board(board.id))
+        val response = services.executeNextcloudApi(session, route.authoritativeBoard(board.id))
         return parseDeckResponseOffUi {
             parseDeckBoard(response)
         }
@@ -126,6 +141,8 @@ fun NativeDeckScreen(
     fun runMutation(
         request: () -> NextcloudApiRequest,
         returnToBoards: Boolean = false,
+        dismissInteractionOnSuccess: Boolean = true,
+        afterSuccess: suspend () -> Unit = {},
         onResponse: (NextcloudApiResponse) -> Unit = { response ->
             parseDeckMutationReceipt(response)
         },
@@ -141,7 +158,8 @@ fun NativeDeckScreen(
                     onResponse(it)
                 }
             }.onSuccess {
-                interaction = null
+                if (dismissInteractionOnSuccess) interaction = null
+                afterSuccess()
                 if (returnToBoards) {
                     requestedBoard = null
                     requestedBoardId = null
@@ -170,10 +188,54 @@ fun NativeDeckScreen(
         }
     }
 
+    fun restoreDeletedBoard(board: DeckBoard) {
+        if (mutationBusy || mutationOutcomeUnknown) return
+        scope.launch {
+            mutationBusy = true
+            mutationError = null
+            boardRecovery = DeckUiBoardRecovery(board = board, restoring = true)
+            var responseStatus: Int? = null
+            runCatching {
+                services.executeNextcloudApi(
+                    session,
+                    writePlan().restoreBoard(boardAccess(board)),
+                ).also {
+                    responseStatus = it.status
+                    parseDeckMutationReceipt(it, expectedId = board.id)
+                }
+            }.onSuccess {
+                boardRecovery = null
+                loadedBoards = emptyList()
+                refreshBoard()
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                boardRecovery = if (isAmbiguousDeckMutationFailure(responseStatus)) {
+                    mutationOutcomeUnknown = true
+                    DeckUiBoardRecovery(
+                        board = board,
+                        restoring = false,
+                        errorMessage = "Deck may have restored this board. Checking the board list.",
+                    ).also {
+                        loadedBoards = emptyList()
+                        refreshBoard()
+                    }
+                } else {
+                    DeckUiBoardRecovery(
+                        board = board,
+                        restoring = false,
+                        errorMessage = error.deckMessage(),
+                    )
+                }
+            }
+            mutationBusy = false
+        }
+    }
+
     fun runRevalidatedCardMutation(
         original: DeckCard,
         conflictInteraction: (DeckCard, DeckStack) -> DeckUiInteraction,
         update: (DeckCard) -> DeckCardUpdate,
+        afterSuccess: suspend () -> Unit = {},
     ) {
         if (mutationBusy || mutationOutcomeUnknown) return
         scope.launch {
@@ -201,6 +263,7 @@ fun NativeDeckScreen(
                             }
                         }.onSuccess {
                             interaction = null
+                            afterSuccess()
                             refreshBoard()
                         }.onFailure { error ->
                             if (error is CancellationException) throw error
@@ -428,10 +491,13 @@ fun NativeDeckScreen(
                     page
                 }
                 commentRecords = combined.associateBy { it.id.toString() }
+                val canWriteComments = boardState()?.board?.canWriteDeckComments == true
                 commentsState = DeckUiCommentsState(
-                    comments = combined.map { it.toDeckUiComment(currentUserId) },
+                    comments = combined.map {
+                        it.toDeckUiComment(currentUserId, canWriteComments)
+                    },
                     hasMore = page.size == DECK_COMMENT_PAGE_SIZE,
-                    canComment = board.permissions.canRead,
+                    canComment = canWriteComments,
                 )
             }.onFailure { error ->
                 if (error is CancellationException) throw error
@@ -451,7 +517,7 @@ fun NativeDeckScreen(
         commentsState = DeckUiCommentsState(
             comments = emptyList(),
             loading = true,
-            canComment = boardState()?.board?.permissions?.canRead == true,
+            canComment = boardState()?.board?.canWriteDeckComments == true,
         )
         commentRecords = emptyMap()
         interaction = DeckUiInteraction.Comments(card)
@@ -466,18 +532,24 @@ fun NativeDeckScreen(
                 parseDeckCommentMutationReceipt(response)
             }
         },
+        afterConfirmedSuccess: () -> Unit = {},
     ) {
         if (commentsState.submitting || mutationOutcomeUnknown) return
+        val plannedRequest = runCatching(request).getOrElse { error ->
+            commentsState = commentsState.copy(errorMessage = error.deckMessage())
+            return
+        }
         commentsState = commentsState.copy(submitting = true, errorMessage = null)
         scope.launch {
             var responseStatus: Int? = null
             runCatching {
-                services.executeNextcloudApi(session, request()).also {
+                services.executeNextcloudApi(session, plannedRequest).also {
                     responseStatus = it.status
                     onResponse(it)
                 }
             }.onSuccess {
                 if (activeCommentsCardId() == card.id) {
+                    afterConfirmedSuccess()
                     commentsState = commentsState.copy(submitting = false)
                     loadComments(card, append = false)
                 }
@@ -504,11 +576,17 @@ fun NativeDeckScreen(
         }
     }
 
+    fun attachmentUploadScope(card: DeckCard): DurableUploadScope =
+        DurableUploadScope(feature = "deck-attachment", resourceId = card.id.toString())
+
     fun loadAttachments(card: DeckCard) {
         val board = boardState()?.board ?: return
         val loadToken = attachmentsLoadGate.begin(card.id)
         attachmentsState = attachmentsState.copy(loading = true, errorMessage = null)
         scope.launch {
+            val durableUploads = runCatching {
+                services.durableMultipartUploadStatuses(session, attachmentUploadScope(card))
+            }.getOrDefault(emptyList())
             runCatching {
                 val response = services.executeNextcloudApi(
                     session,
@@ -532,6 +610,7 @@ fun NativeDeckScreen(
                             handoffCapability = handoffCapability,
                         )
                     },
+                    uploads = durableUploads,
                     canAdd = board.permissions.canEdit,
                 )
             }.onFailure { error ->
@@ -593,55 +672,66 @@ fun NativeDeckScreen(
                 }
                 is LocalUploadSelectionResult.Selected -> {
                     val file = selection.file
-                    try {
-                        runCatching {
-                            val type = if (selectedRoute().version.value == "1.1") {
-                                DeckAttachmentType.File
-                            } else {
-                                DeckAttachmentType.DeckFile
-                            }
-                            val target = writePlan().attachmentUploadTarget(
-                                access = boardAccess(board),
-                                context = cardContext(card),
-                                type = type,
-                            )
-                            val response = services.executeNextcloudMultipartUpload(
-                                session,
-                                NextcloudMultipartUploadRequest(
-                                    method = target.method,
-                                    relativePath = target.relativePath,
-                                    file = file,
-                                    fileFieldName = target.fileFieldName,
-                                    textFields = listOf(
-                                        MultipartTextField(
-                                            target.typeFieldName,
-                                            target.attachmentType.serverValue,
-                                        ),
+                    runCatching {
+                        val type = if (selectedRoute().version.value == "1.1") {
+                            DeckAttachmentType.File
+                        } else {
+                            DeckAttachmentType.DeckFile
+                        }
+                        val target = writePlan().attachmentUploadTarget(
+                            access = boardAccess(board),
+                            context = cardContext(card),
+                            type = type,
+                        )
+                        services.enqueueDurableMultipartUpload(
+                            session,
+                            attachmentUploadScope(card),
+                            NextcloudMultipartUploadRequest(
+                                method = target.method,
+                                relativePath = target.relativePath,
+                                file = file,
+                                fileFieldName = target.fileFieldName,
+                                textFields = listOf(
+                                    MultipartTextField(
+                                        target.typeFieldName,
+                                        target.attachmentType.serverValue,
                                     ),
-                                    ocsApiRequest = true,
-                                    maximumFileBytes = DEFAULT_LOCAL_UPLOAD_LIMIT_BYTES,
-                                    maximumResponseBytes = DECK_ATTACHMENT_MUTATION_RESPONSE_BYTES,
                                 ),
-                            )
-                            require(response.status in 200..299) {
-                                "The Deck attachment upload failed (HTTP ${response.status})."
-                            }
-                        }.onSuccess {
-                            if (activeAttachmentsCardId() == card.id) {
-                                attachmentsState = attachmentsState.copy(adding = false)
-                                loadAttachments(card)
-                            }
-                            refreshBoard()
-                        }.onFailure { error ->
-                            if (error is CancellationException) throw error
-                            if (activeAttachmentsCardId() == card.id) {
-                                attachmentsState = attachmentsState.copy(
-                                    adding = false,
-                                    errorMessage = error.deckMessage(),
-                                )
+                                ocsApiRequest = true,
+                                maximumFileBytes = DEFAULT_LOCAL_UPLOAD_LIMIT_BYTES,
+                                maximumResponseBytes = DECK_ATTACHMENT_MUTATION_RESPONSE_BYTES,
+                            ),
+                        ).also { result ->
+                            require(result !is DurableUploadEnqueueResult.Rejected) {
+                                (result as DurableUploadEnqueueResult.Rejected).reason
                             }
                         }
-                    } finally {
+                    }.onSuccess { result ->
+                        if (result is DurableUploadEnqueueResult.Completed) {
+                            services.releaseLocalUploadFile(file)
+                        }
+                        if (activeAttachmentsCardId() == card.id) {
+                            val uploadStatuses = runCatching {
+                                services.durableMultipartUploadStatuses(
+                                    session,
+                                    attachmentUploadScope(card),
+                                )
+                            }.getOrDefault(attachmentsState.uploads)
+                            attachmentsState = attachmentsState.copy(
+                                adding = false,
+                                uploads = uploadStatuses,
+                            )
+                            loadAttachments(card)
+                        }
+                        refreshBoard()
+                    }.onFailure { error ->
+                        if (error is CancellationException) throw error
+                        if (activeAttachmentsCardId() == card.id) {
+                            attachmentsState = attachmentsState.copy(
+                                adding = false,
+                                errorMessage = error.deckMessage(),
+                            )
+                        }
                         services.releaseLocalUploadFile(file)
                     }
                 }
@@ -683,6 +773,27 @@ fun NativeDeckScreen(
         }
     }
 
+    LaunchedEffect(interaction) {
+        val editor = interaction as? DeckUiInteraction.CardEditor
+        recoveredCardDraftNotice = false
+        restoredCardDraft = editor?.let { activeEditor ->
+            draftPersistenceJob?.join()
+            services.loadDeckCardDraft(session, cardDraftKey(activeEditor))
+                ?.let { persisted ->
+                    val reconciled = persisted.copy(
+                        draft = persisted.draft.reconcileUntouchedDueDate(
+                            activeEditor.card.toDeckUiDraft(),
+                        ),
+                    )
+                    if (reconciled != persisted) {
+                        runCatching { services.saveDeckCardDraft(session, reconciled) }
+                    }
+                    recoveredCardDraftNotice = true
+                    reconciled
+                }
+        }
+    }
+
     LaunchedEffect(session, requestedBoard?.id, loadAttempt) {
         val board = requestedBoard
         if (board == null) {
@@ -694,6 +805,16 @@ fun NativeDeckScreen(
                 loadedBoards = loaded.boards
                 capabilities = loaded.capabilities
                 activeRoute = loaded.route
+                if (reconciledUnknownMutation && boardRecovery != null) {
+                    boardRecovery = if (loaded.boards.any { it.id == boardRecovery?.board?.id }) {
+                        null
+                    } else {
+                        boardRecovery?.copy(
+                            restoring = false,
+                            errorMessage = "The restore could not be confirmed. You can try again.",
+                        )
+                    }
+                }
                 val restoredBoard = requestedBoardId?.let { boardId ->
                     loaded.boards.firstOrNull { it.id == boardId }
                 }
@@ -802,8 +923,20 @@ fun NativeDeckScreen(
         }
     }
 
+    fun dismissSelectedCard() {
+        cardSelectionLoadGate.invalidate()
+        authoritativeActionLoadGate.invalidate()
+        requestedCardId = null
+        state = boardState()?.copy(selectedCardId = null) ?: state
+    }
+
     val currentBoard = boardState()?.board
-    PlatformBackHandler(enabled = requestedBoard != null, onBack = ::backToBoards)
+    PlatformBackHandler(
+        enabled = requestedBoard != null,
+        onBack = {
+            if (requestedCardId != null) dismissSelectedCard() else backToBoards()
+        },
+    )
     NativeDeckBoardSurface(
         state = state,
         boardContext = requestedBoard,
@@ -839,12 +972,7 @@ fun NativeDeckScreen(
                     }
             }
         },
-        onDismissCard = {
-            cardSelectionLoadGate.invalidate()
-            authoritativeActionLoadGate.invalidate()
-            requestedCardId = null
-            state = boardState()?.copy(selectedCardId = null) ?: state
-        },
+        onDismissCard = ::dismissSelectedCard,
         onRetry = { refreshBoard() },
         onCreateBoard = capabilities?.takeIf(DeckCapabilities::canCreateBoards)?.let {
             { interaction = DeckUiInteraction.BoardEditor(null) }
@@ -858,6 +986,14 @@ fun NativeDeckScreen(
         boardActions = { board ->
             buildList {
                 if (board.permissions.canManage) {
+                    if (!board.archived) {
+                        add(
+                            NextcloudCardAction("Manage labels") {
+                                mutationError = null
+                                interaction = DeckUiInteraction.ManageLabels(board)
+                            },
+                        )
+                    }
                     add(
                         NextcloudCardAction("Edit board") {
                             interaction = DeckUiInteraction.BoardEditor(board)
@@ -967,10 +1103,23 @@ fun NativeDeckScreen(
                 moveCardToIndex(card, destinationStack, insertionIndex)
             }
         },
+        boardRecovery = boardRecovery.takeIf { requestedBoard == null },
+        onRestoreBoard = boardRecovery
+            ?.takeIf { requestedBoard == null }
+            ?.takeUnless(DeckUiBoardRecovery::restoring)
+            ?.let {
+            ::restoreDeletedBoard
+        },
+        onDismissBoardRecovery = boardRecovery
+            ?.takeIf { requestedBoard == null }
+            ?.takeUnless(DeckUiBoardRecovery::restoring)
+            ?.let {
+            { boardRecovery = null }
+        },
         modifier = modifier,
     )
 
-    when (val overlay = interaction) {
+    when (val overlay = interaction?.takeIf { it.isAvailableFor(state) }) {
         null -> Unit
         is DeckUiInteraction.BoardEditor -> DeckUiBoardEditorDialog(
             board = overlay.board,
@@ -1034,12 +1183,68 @@ fun NativeDeckScreen(
         is DeckUiInteraction.CardEditor -> DeckUiCardEditorDialog(
             stack = overlay.stack,
             card = overlay.card,
+            initialDraft = restoredCardDraft
+                ?.takeIf { it.key == cardDraftKey(overlay) }
+                ?.draft,
+            recoveredDraft = recoveredCardDraftNotice,
             busy = mutationBusy,
             errorMessage = mutationError,
             quickDueDates = deckQuickDueDates(),
-            onDismiss = { if (!mutationBusy) interaction = null },
+            onDismiss = {
+                if (!mutationBusy) {
+                    val key = cardDraftKey(overlay)
+                    restoredCardDraft = null
+                    recoveredCardDraftNotice = false
+                    interaction = null
+                    val pendingPersistence = draftPersistenceJob
+                    draftPersistenceJob = scope.launch {
+                        pendingPersistence?.cancelAndJoin()
+                        runCatching { services.clearDeckCardDraft(session, key) }
+                    }
+                }
+            },
+            onDiscardRecoveredDraft = {
+                if (!mutationBusy) {
+                    val key = cardDraftKey(overlay)
+                    val pendingPersistence = draftPersistenceJob
+                    draftPersistenceJob = scope.launch {
+                        pendingPersistence?.cancelAndJoin()
+                        runCatching { services.clearDeckCardDraft(session, key) }
+                            .onSuccess {
+                                restoredCardDraft = null
+                                recoveredCardDraftNotice = false
+                            }
+                            .onFailure {
+                                mutationError = "The recovered card draft could not be discarded."
+                            }
+                    }
+                }
+            },
+            onDraftChange = { draft ->
+                val key = cardDraftKey(overlay)
+                val original = overlay.card.toDeckUiDraft()
+                val pendingPersistence = draftPersistenceJob
+                draftPersistenceJob = scope.launch {
+                    pendingPersistence?.cancelAndJoin()
+                    if (draft.hasMeaningfulChangesFrom(original)) {
+                        val persisted = PersistedDeckCardDraft(key, draft)
+                        runCatching { services.saveDeckCardDraft(session, persisted) }
+                            .onSuccess { restoredCardDraft = persisted }
+                            .onFailure {
+                                mutationError = "The unsaved card draft could not be stored safely."
+                            }
+                    } else {
+                        runCatching { services.clearDeckCardDraft(session, key) }
+                            .onSuccess {
+                                restoredCardDraft = null
+                                recoveredCardDraftNotice = false
+                            }
+                        }
+                }
+            },
             onSubmit = { draft ->
                 val board = checkNotNull(boardState()?.board)
+                val draftKey = cardDraftKey(overlay)
                 if (overlay.card == null) {
                     runMutation(
                         request = {
@@ -1051,23 +1256,56 @@ fun NativeDeckScreen(
                                     order = overlay.stack.cards.maxOfOrNull(DeckCard::order)
                                         ?.plus(1L) ?: 0L,
                                     descriptionMarkdown = draft.descriptionMarkdown,
-                                    dueAt = deckUiInstant(draft.dueDate, draft.dueTime),
+                                    dueAt = draft.resolvedDueAt(
+                                        deckUiInstant(draft.dueDate, draft.dueTime),
+                                    ),
                                 ),
                             )
+                        },
+                        afterSuccess = {
+                            draftPersistenceJob?.cancelAndJoin()
+                            services.clearDeckCardDraft(session, draftKey)
+                            draftPersistenceJob = null
+                            restoredCardDraft = null
+                            recoveredCardDraftNotice = false
                         },
                     )
                 } else {
                     runRevalidatedCardMutation(
                         original = overlay.card,
                         conflictInteraction = { current, stack ->
+                            if (!draft.dueFieldsEdited) {
+                                val authoritativeDue = current.toDeckUiDraft()
+                                val reconciledDraft = draft.reconcileUntouchedDueDate(authoritativeDue)
+                                val persisted = PersistedDeckCardDraft(draftKey, reconciledDraft)
+                                restoredCardDraft = persisted
+                                val pendingPersistence = draftPersistenceJob
+                                draftPersistenceJob = scope.launch {
+                                    pendingPersistence?.cancelAndJoin()
+                                    runCatching { services.saveDeckCardDraft(session, persisted) }
+                                        .onFailure {
+                                            mutationError =
+                                                "The unsaved card draft could not be stored safely."
+                                        }
+                                }
+                            }
                             DeckUiInteraction.CardEditor(stack, current)
                         },
                         update = { current ->
                             current.toUpdate(
                                 title = draft.title,
                                 description = draft.descriptionMarkdown,
-                                dueAt = deckUiInstant(draft.dueDate, draft.dueTime),
+                                dueAt = draft.resolvedDueAt(
+                                    deckUiInstant(draft.dueDate, draft.dueTime),
+                                ),
                             )
+                        },
+                        afterSuccess = {
+                            draftPersistenceJob?.cancelAndJoin()
+                            services.clearDeckCardDraft(session, draftKey)
+                            draftPersistenceJob = null
+                            restoredCardDraft = null
+                            recoveredCardDraftNotice = false
                         },
                     )
                 }
@@ -1116,7 +1354,59 @@ fun NativeDeckScreen(
                     reconciledInteraction = DeckUiInteraction::Labels,
                 )
             },
+            onManageLabels = boardState()?.board
+                ?.takeIf { it.permissions.canManage && !it.archived }
+                ?.let { board ->
+                    {
+                        mutationError = null
+                        interaction = DeckUiInteraction.ManageLabels(board)
+                    }
+                },
         )
+        is DeckUiInteraction.ManageLabels -> {
+            val board = boardState()?.board ?: overlay.board
+            DeckUiLabelManagerDialog(
+                board = board,
+                availableLabels = board.labels,
+                busy = mutationBusy,
+                errorMessage = mutationError,
+                confirmedEditorMutationRevision = confirmedLabelEditorRevision,
+                onDismiss = { if (!mutationBusy) interaction = null },
+                onCreate = { draft ->
+                    runMutation(
+                        request = {
+                            writePlan().createLabel(
+                                boardAccess(board),
+                                DeckLabelDraft(draft.title, draft.color),
+                            )
+                        },
+                        dismissInteractionOnSuccess = false,
+                        afterSuccess = { confirmedLabelEditorRevision += 1L },
+                    )
+                },
+                onUpdate = { label, draft ->
+                    runMutation(
+                        request = {
+                            writePlan().updateLabel(
+                                boardAccess(board),
+                                label.id,
+                                DeckLabelDraft(draft.title, draft.color),
+                            )
+                        },
+                        dismissInteractionOnSuccess = false,
+                        afterSuccess = { confirmedLabelEditorRevision += 1L },
+                    )
+                },
+                onDelete = { label ->
+                    runMutation(
+                        request = {
+                            writePlan().deleteLabel(boardAccess(board), label.id)
+                        },
+                        dismissInteractionOnSuccess = false,
+                    )
+                },
+            )
+        }
         is DeckUiInteraction.Assignees -> DeckUiAssigneePickerDialog(
             card = overlay.card,
             availableUsers = boardState()?.board?.users.orEmpty(),
@@ -1169,6 +1459,7 @@ fun NativeDeckScreen(
         is DeckUiInteraction.Comments -> DeckUiCommentsDialog(
             card = overlay.card,
             state = commentsState,
+            confirmedComposerMutationRevision = confirmedCommentComposerRevision,
             onDismiss = { if (!commentsState.submitting) interaction = null },
             onRefresh = { loadComments(overlay.card, append = false) },
             onLoadMore = { loadComments(overlay.card, append = true) },
@@ -1190,6 +1481,9 @@ fun NativeDeckScreen(
                         parseDeckResponseOffUi {
                             parseDeckComment(cardContext(overlay.card), response)
                         }
+                    },
+                    afterConfirmedSuccess = {
+                        confirmedCommentComposerRevision += 1L
                     },
                 )
             },
@@ -1214,6 +1508,9 @@ fun NativeDeckScreen(
                         parseDeckResponseOffUi {
                             parseDeckComment(cardContext(overlay.card), response)
                         }
+                    },
+                    afterConfirmedSuccess = {
+                        confirmedCommentComposerRevision += 1L
                     },
                 )
             },
@@ -1243,6 +1540,23 @@ fun NativeDeckScreen(
             onRefresh = { loadAttachments(overlay.card) },
             onLoadMore = {},
             onAdd = { addAttachment(overlay.card) },
+            onDismissUpload = { upload ->
+                scope.launch {
+                    runCatching {
+                        services.dismissDurableMultipartUpload(
+                            session,
+                            attachmentUploadScope(overlay.card),
+                            upload.id,
+                        )
+                    }.onSuccess {
+                        loadAttachments(overlay.card)
+                    }.onFailure { error ->
+                        attachmentsState = attachmentsState.copy(
+                            errorMessage = error.deckMessage(),
+                        )
+                    }
+                }
+            },
             onOpen = { attachment ->
                 val board = checkNotNull(boardState()?.board)
                 val record = checkNotNull(attachmentRecords[attachment.key])
@@ -1298,6 +1612,9 @@ fun NativeDeckScreen(
                 runMutation(
                     request = { writePlan().deleteBoard(boardAccess(overlay.board)) },
                     returnToBoards = true,
+                    afterSuccess = {
+                        boardRecovery = DeckUiBoardRecovery(overlay.board)
+                    },
                 )
             },
         )
@@ -1399,7 +1716,10 @@ private suspend fun loadDeckStacks(
     val negotiation = negotiateDeckReadRoutes(null)
     var route = preferredRoute ?: negotiation.candidates.first()
     while (true) {
-        val boardResponse = services.executeNextcloudApi(session, route.board(board.id))
+        val boardResponse = services.executeNextcloudApi(
+            session,
+            route.workspaceBoardMetadata(board.id),
+        )
         if (boardResponse.status !in 200..299) {
             route = negotiation.nextAfter(route, boardResponse.status)
                 ?: return LoadedDeckStacks(
@@ -1464,15 +1784,21 @@ private fun deckQuickDueDates(): List<DeckUiDueDateOption> = listOf(
     DeckUiDueDateOption("Next week", deckLocalDatePlusDays(7)),
 )
 
-private fun DeckComment.toDeckUiComment(currentUserId: String): DeckUiComment =
+private val DeckBoard.canWriteDeckComments: Boolean
+    get() = permissions.canRead && !archived
+
+private fun DeckComment.toDeckUiComment(
+    currentUserId: String,
+    canWriteComments: Boolean,
+): DeckUiComment =
     DeckUiComment(
         key = id.toString(),
         author = authorId?.let { DeckUser(it, authorDisplayName) },
         messageMarkdown = message,
         createdLabel = createdAt ?: "Unknown time",
         edited = false,
-        canEdit = authorId == currentUserId,
-        canDelete = authorId == currentUserId,
+        canEdit = canWriteComments && authorId == currentUserId,
+        canDelete = canWriteComments && authorId == currentUserId,
         replyToLabel = replyToId?.let { "Reply to comment $it" },
     )
 

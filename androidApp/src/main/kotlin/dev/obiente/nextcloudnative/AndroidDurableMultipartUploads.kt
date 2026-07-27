@@ -7,8 +7,10 @@ import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.Operation
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.await
 import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadState
@@ -31,7 +33,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
     private val appContext = context.applicationContext
     private val store = AndroidDurableMultipartUploadStore(appContext)
 
-    fun enqueue(
+    suspend fun enqueue(
         session: NextcloudSession,
         scope: DurableUploadScope,
         request: NextcloudMultipartUploadRequest,
@@ -53,7 +55,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
             )
             store.add(job)
             storedJob = job
-            schedule(job, awaitCommit = true)
+            schedule(job).await()
             DurableUploadEnqueueResult.Queued(job.status())
         }.getOrElse { error ->
             storedJob?.let { job ->
@@ -74,7 +76,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
             .asSequence()
             .onEach { job ->
                 if (job.state == DurableUploadState.Queued) {
-                    runCatching { schedule(job, awaitCommit = false) }
+                    runCatching { schedule(job) }
                 }
             }
             .sortedByDescending(AndroidDurableMultipartUploadJob::updatedAtEpochMillis)
@@ -96,8 +98,8 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         return true
     }
 
-    private fun schedule(job: AndroidDurableMultipartUploadJob, awaitCommit: Boolean) {
-        val operation = WorkManager.getInstance(appContext).enqueueUniqueWork(
+    private fun schedule(job: AndroidDurableMultipartUploadJob): Operation =
+        WorkManager.getInstance(appContext).enqueueUniqueWork(
             "deck-attachment-${job.id}",
             ExistingWorkPolicy.KEEP,
             OneTimeWorkRequestBuilder<DeckAttachmentUploadWorker>()
@@ -109,10 +111,6 @@ internal class AndroidDurableMultipartUploads(context: Context) {
                 )
                 .build(),
         )
-        if (awaitCommit) {
-            operation.result.get()
-        }
-    }
 
     private companion object {
         const val MAX_VISIBLE_UPLOADS_PER_RESOURCE = 12
