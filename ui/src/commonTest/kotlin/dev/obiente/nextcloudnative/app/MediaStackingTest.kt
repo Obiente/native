@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -16,6 +17,9 @@ class MediaStackingTest {
         assertTrue("<d:resourcetype/>" in body)
         assertTrue("<d:href>/files/account&lt;&amp;&quot;&apos;</d:href>" in body)
         assertTrue("<d:nresults>$MAXIMUM_MEDIA_SEARCH_RESULTS</d:nresults>" in body)
+        val collectionExclusion = "<d:not><d:is-collection/></d:not>"
+        assertTrue(collectionExclusion in body)
+        assertTrue(body.indexOf(collectionExclusion) < body.indexOf("<d:limit>"))
         rawPhotoFileNameSearchPatterns().forEach { pattern ->
             assertTrue("<d:literal>$pattern</d:literal>" in body)
         }
@@ -238,6 +242,20 @@ class MediaStackingTest {
         val plan = planMediaSources(listOf(raw, jpeg), raw)
 
         assertEquals(listOf(jpeg), plan.fullQualityCandidates.map(MediaSourceChoice::file))
+    }
+
+    @Test
+    fun cancelledFullQualityLoadRecoversTheRetryGate() = runBlocking {
+        var recovered = false
+
+        assertFailsWith<CancellationException> {
+            withFullQualityCancellationRecovery(
+                onCancelled = { recovered = true },
+                load = { throw CancellationException("zoom fell below the high-detail threshold") },
+            )
+        }
+
+        assertTrue(recovered)
     }
 
     private fun file(path: String, mime: String) = NextcloudFile(

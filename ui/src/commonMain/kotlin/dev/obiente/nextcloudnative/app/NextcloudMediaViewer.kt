@@ -70,6 +70,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
@@ -288,47 +289,51 @@ fun NextcloudMediaViewer(
         val qualityCandidates = sourcePlan.fullQualityCandidatesAtZoom(zoom)
         if (qualityCandidates.isEmpty() || fullQualityState !is FullQualityState.Idle) return@LaunchedEffect
         fullQualityState = FullQualityState.Loading
-        val loaded = loadFirstUsableFullResolutionMediaSource(
-            candidates = qualityCandidates,
-            maximumPayloadBytes = MAX_PHOTO_EDIT_SOURCE_BYTES.toInt(),
-            load = { candidate ->
-                loadFullResolutionPhotoPayload(
-                    original = candidate,
-                    loadMemories = { fileId, etag ->
-                        val response = services.executeNextcloudApi(
-                            session,
-                            memoriesPhotoDecodableApiRequest(fileId, etag),
-                        )
-                        check(response.status in 200..299) {
-                            "High-detail Memories render failed (HTTP ${response.status})."
-                        }
-                        response.body
-                    },
-                    loadFilesDav = if (candidate.originalAccessAllowed && userId.isNotBlank()) {
-                        { path ->
-                            services.downloadFile(
-                                session = session,
-                                userId = userId,
-                                path = path,
-                                maxBytes = MAX_PHOTO_EDIT_SOURCE_BYTES,
-                            ).bytes
-                        }
-                    } else {
-                        null
-                    },
-                )
-            },
-            decode = { payload ->
-                decodePlatformImageSampled(
-                    payload.bytes,
-                    MAXIMUM_DISPLAY_IMAGE_DIMENSION,
-                    payload.source.orientationPolicy(),
-                )?.image
-            },
-        )
-        fullQualityState = loaded?.let {
-            FullQualityState.Ready(it.value, it.source, it.usedFallback, it.payloadSource)
-        } ?: FullQualityState.Error
+        withFullQualityCancellationRecovery(
+            onCancelled = { fullQualityState = FullQualityState.Idle },
+        ) {
+            val loaded = loadFirstUsableFullResolutionMediaSource(
+                candidates = qualityCandidates,
+                maximumPayloadBytes = MAX_PHOTO_EDIT_SOURCE_BYTES.toInt(),
+                load = { candidate ->
+                    loadFullResolutionPhotoPayload(
+                        original = candidate,
+                        loadMemories = { fileId, etag ->
+                            val response = services.executeNextcloudApi(
+                                session,
+                                memoriesPhotoDecodableApiRequest(fileId, etag),
+                            )
+                            check(response.status in 200..299) {
+                                "High-detail Memories render failed (HTTP ${response.status})."
+                            }
+                            response.body
+                        },
+                        loadFilesDav = if (candidate.originalAccessAllowed && userId.isNotBlank()) {
+                            { path ->
+                                services.downloadFile(
+                                    session = session,
+                                    userId = userId,
+                                    path = path,
+                                    maxBytes = MAX_PHOTO_EDIT_SOURCE_BYTES,
+                                ).bytes
+                            }
+                        } else {
+                            null
+                        },
+                    )
+                },
+                decode = { payload ->
+                    decodePlatformImageSampled(
+                        payload.bytes,
+                        MAXIMUM_DISPLAY_IMAGE_DIMENSION,
+                        payload.source.orientationPolicy(),
+                    )?.image
+                },
+            )
+            fullQualityState = loaded?.let {
+                FullQualityState.Ready(it.value, it.source, it.usedFallback, it.payloadSource)
+            } ?: FullQualityState.Error
+        }
     }
 
     LaunchedEffect(selected.path, previewState, fullQualityState, zoom) {
@@ -1056,6 +1061,16 @@ private sealed interface FullQualityState {
         val payloadSource: FullResolutionPhotoSource,
     ) : FullQualityState
     data object Error : FullQualityState
+}
+
+internal suspend fun <T> withFullQualityCancellationRecovery(
+    onCancelled: () -> Unit,
+    load: suspend () -> T,
+): T = try {
+    load()
+} catch (cancelled: CancellationException) {
+    onCancelled()
+    throw cancelled
 }
 
 enum class MediaViewerReadiness(val description: String) {

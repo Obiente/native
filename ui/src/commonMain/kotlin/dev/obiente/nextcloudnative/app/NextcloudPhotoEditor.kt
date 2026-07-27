@@ -110,7 +110,7 @@ fun NextcloudPhotoEditor(
                     null
                 },
             )
-            val decoded = decodePlatformImageSampled(payload.bytes, PHOTO_EDITOR_DISPLAY_MAX_DIMENSION)
+            val decoded = decodePhotoEditorSource(payload)
                 ?: error("The full-resolution image format is unsupported.")
             PhotoEditorSourceState.Ready(decoded, payload.source)
         }.fold(
@@ -758,6 +758,13 @@ private sealed interface PhotoEditorExportState {
 
 private val PhotoEditorExportState.isSaving: Boolean
     get() = this is PhotoEditorExportState.SavingRecipe || this is PhotoEditorExportState.SavingCopy
+
+internal fun decodePhotoEditorSource(payload: FullResolutionPhotoPayload): PlatformDecodedImage? =
+    decodePlatformImageSampled(
+        bytes = payload.bytes,
+        maximumDimension = PHOTO_EDITOR_DISPLAY_MAX_DIMENSION,
+        orientationPolicy = payload.source.orientationPolicy(),
+    )
 
 private sealed interface PhotoEditorSourceState {
     data object Loading : PhotoEditorSourceState

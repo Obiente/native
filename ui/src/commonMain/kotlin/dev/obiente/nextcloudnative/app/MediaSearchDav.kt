@@ -25,11 +25,14 @@ fun mediaSearchDavRequestBody(
               <oc:fileid/><oc:size/><oc:permissions/><nc:has-preview/>
             </d:prop></d:select>
             <d:from><d:scope><d:href>/files/${escapeMediaSearchXml(userId)}</d:href><d:depth>infinity</d:depth></d:scope></d:from>
-            <d:where><d:or>
-              <d:like><d:prop><d:getcontenttype/></d:prop><d:literal>image/%</d:literal></d:like>
-              <d:like><d:prop><d:getcontenttype/></d:prop><d:literal>video/%</d:literal></d:like>
-              $rawFileNameFilters
-            </d:or></d:where>
+            <d:where><d:and>
+              <d:not><d:is-collection/></d:not>
+              <d:or>
+                <d:like><d:prop><d:getcontenttype/></d:prop><d:literal>image/%</d:literal></d:like>
+                <d:like><d:prop><d:getcontenttype/></d:prop><d:literal>video/%</d:literal></d:like>
+                $rawFileNameFilters
+              </d:or>
+            </d:and></d:where>
             <d:orderby><d:order><d:prop><d:getlastmodified/></d:prop><d:descending/></d:order></d:orderby>
             <d:limit><d:nresults>$maximumResults</d:nresults></d:limit>
           </d:basicsearch>
