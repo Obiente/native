@@ -5,8 +5,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 
@@ -43,24 +41,67 @@ class AndroidFileSyncEngineInvariantTest {
     }
 
     @Test
-    fun reconciliationWaitsForAnActiveSyncInsteadOfBeingDropped() = runBlocking {
+    fun reconciliationSkipsAnActiveSyncWithoutBlockingTransferHistory() = runBlocking {
         val lock = Mutex(locked = true)
-        val started = CompletableDeferred<Unit>()
         var reconciled = false
-        val reconciliation = async {
-            started.complete(Unit)
-            reconcileWhenFileSyncIdle(lock) {
-                reconciled = true
+        val completed = runWhenFileSyncIdle(lock) {
+            reconciled = true
+        }
+
+        assertFalse(completed)
+        assertFalse(reconciled)
+        lock.unlock()
+    }
+
+    @Test
+    fun reconciliationRunsWhenFileSyncIsIdle() = runBlocking {
+        val lock = Mutex()
+        var reconciled = false
+        val completed = runWhenFileSyncIdle(lock) {
+            reconciled = true
+        }
+
+        assertTrue(completed)
+        assertTrue(reconciled)
+    }
+
+    @Test
+    fun idleGateReleasesTheEngineLockWhenItsActionFails() = runBlocking {
+        val lock = Mutex()
+
+        assertFailsWith<IllegalStateException> {
+            runWhenFileSyncIdle(lock) {
+                error("synthetic reconciliation failure")
             }
         }
 
-        started.await()
-        assertFalse(reconciliation.isCompleted)
-        assertFalse(reconciled)
+        assertFalse(lock.isLocked)
+    }
 
+    @Test
+    fun staleSnapshotReadDuringRemovalNeverReschedulesTheRemovedPair() {
+        val lock = Mutex(locked = true)
+        var persistedPairIds = listOf("pair-1")
+        val schedulingSnapshots = mutableListOf<List<String>>()
+
+        val snapshotWhileRemovalOwnsLock = loadFileSyncPresentationSnapshot(
+            lock = lock,
+            load = { persistedPairIds.toList() },
+            scheduleWhenIdle = { schedulingSnapshots += it.toList() },
+        )
+
+        assertEquals(listOf("pair-1"), snapshotWhileRemovalOwnsLock)
+        assertTrue(schedulingSnapshots.isEmpty())
+
+        persistedPairIds = emptyList()
         lock.unlock()
-        reconciliation.await()
+        val snapshotAfterRemoval = loadFileSyncPresentationSnapshot(
+            lock = lock,
+            load = { persistedPairIds.toList() },
+            scheduleWhenIdle = { schedulingSnapshots += it.toList() },
+        )
 
-        assertTrue(reconciled)
+        assertTrue(snapshotAfterRemoval.isEmpty())
+        assertEquals(listOf(emptyList()), schedulingSnapshots)
     }
 }

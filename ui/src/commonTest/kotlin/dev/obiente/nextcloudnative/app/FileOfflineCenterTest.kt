@@ -9,6 +9,38 @@ import kotlin.test.assertTrue
 
 class FileOfflineCenterTest {
     @Test
+    fun `refresh stays disabled until synchronous media discovery finishes`() {
+        assertFalse(
+            fileOfflineRefreshEnabled(
+                loading = false,
+                mediaDiscoveryLoading = true,
+                actionInProgress = false,
+            ),
+        )
+        assertTrue(
+            fileOfflineRefreshEnabled(
+                loading = false,
+                mediaDiscoveryLoading = false,
+                actionInProgress = false,
+            ),
+        )
+        assertFalse(
+            fileOfflineRefreshEnabled(
+                loading = true,
+                mediaDiscoveryLoading = false,
+                actionInProgress = false,
+            ),
+        )
+        assertFalse(
+            fileOfflineRefreshEnabled(
+                loading = false,
+                mediaDiscoveryLoading = false,
+                actionInProgress = true,
+            ),
+        )
+    }
+
+    @Test
     fun `safe defaults distinguish unsupported storage from unavailable inventory`() {
         val unsupported = defaultFileOfflineCenterSnapshot(supportsIndividualOfflineFiles = false)
         val inventoryUnavailable = defaultFileOfflineCenterSnapshot(supportsIndividualOfflineFiles = true)

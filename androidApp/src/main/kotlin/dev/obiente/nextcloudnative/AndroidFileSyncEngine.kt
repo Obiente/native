@@ -54,13 +54,18 @@ internal class AndroidFileSyncEngine(context: Context) {
     suspend fun loadCenter(
         session: NextcloudSession,
         userId: String,
-    ): FileSyncCenterSnapshot = ENGINE_LOCK.withLock {
+    ): FileSyncCenterSnapshot {
         val accountId = NextcloudDocumentIds.accountKey(session)
-        val persisted = store.load()
-        persisted.coordinator.pairs
-            .filter { it.accountId == accountId }
-            .forEach { scheduler.schedule(it.id, accountId, userId, it.configuration) }
-        FileSyncCenterSnapshot(
+        val persisted = loadFileSyncPresentationSnapshot(
+            lock = ENGINE_LOCK,
+            load = store::load,
+            scheduleWhenIdle = { snapshot ->
+                snapshot.coordinator.pairs
+                    .filter { it.accountId == accountId }
+                    .forEach { scheduler.schedule(it.id, accountId, userId, it.configuration) }
+            },
+        )
+        return FileSyncCenterSnapshot(
             support = FileSyncCenterSupport.Available,
             pairs = persisted.coordinator.pairs
                 .filter { it.accountId == accountId }
@@ -81,7 +86,7 @@ internal class AndroidFileSyncEngine(context: Context) {
     suspend fun reconcileMediaTransfersForDisplay(
         accountId: String,
         mediaStore: MediaBackupLedgerStore,
-    ) = reconcileWhenFileSyncIdle(ENGINE_LOCK) {
+    ) = runWhenFileSyncIdle(ENGINE_LOCK) {
         val activeSourceIds = runCatching {
             val pairIds = store.load().coordinator.pairs
                 .asSequence()
@@ -89,7 +94,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 .map(FileSyncPair::id)
                 .toList()
             scheduler.runningPairIds(pairIds)
-        }.getOrNull() ?: return@reconcileWhenFileSyncIdle
+        }.getOrNull() ?: return@runWhenFileSyncIdle
         mediaStore.reconcileInterruptedTransfers(accountId, activeSourceIds)
     }
 
@@ -607,11 +612,36 @@ internal fun isAndroidFileSyncExecutionAllowed(
 ): Boolean =
     !localRootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX) || operation is FileSyncOperation.Upload
 
-internal suspend fun reconcileWhenFileSyncIdle(
+internal suspend fun runWhenFileSyncIdle(
     lock: Mutex,
-    reconcile: suspend () -> Unit,
-) = lock.withLock {
-    reconcile()
+    action: suspend () -> Unit,
+): Boolean {
+    if (!lock.tryLock()) return false
+    return try {
+        action()
+        true
+    } finally {
+        lock.unlock()
+    }
+}
+
+/**
+ * Reads a complete atomic snapshot without waiting for active execution.
+ *
+ * Scheduling is allowed only from a snapshot loaded after acquiring [lock], so a concurrent pair
+ * removal cannot be followed by stale work being re-enqueued.
+ */
+internal fun <T> loadFileSyncPresentationSnapshot(
+    lock: Mutex,
+    load: () -> T,
+    scheduleWhenIdle: (T) -> Unit,
+): T {
+    if (!lock.tryLock()) return load()
+    return try {
+        load().also(scheduleWhenIdle)
+    } finally {
+        lock.unlock()
+    }
 }
 
 internal suspend fun removeConfiguredFileSyncPair(
