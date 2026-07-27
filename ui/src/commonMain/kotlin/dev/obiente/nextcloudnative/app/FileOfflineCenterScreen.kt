@@ -166,27 +166,39 @@ internal fun FileOfflineCenterScreen(
             .onFailure { failure ->
                 loadError = failure.message ?: "Could not load offline file status."
             }
-        if (services.supportsBidirectionalFileSync) {
-            syncLoading = true
-            mediaDiscoveryLoading = true
-            runCatching { services.loadFileSyncCenter(session, userId) }
-                .onSuccess { syncSnapshot = it }
-                .onFailure { failure ->
-                    actionMessage = failure.message ?: "Could not load folder sync pairs."
-                }
-            runCatching { services.discoverMediaSyncFolders() }
-                .onSuccess { mediaFolderDiscovery = it }
-                .onFailure { failure ->
-                    mediaFolderDiscovery = MediaSyncFolderDiscovery(
-                        support = MediaSyncFolderDiscoverySupport.Unsupported,
-                        suggestions = emptyList(),
-                        message = failure.message ?: "Could not inspect local media folders.",
-                    )
-                }
+        loading = false
+    }
+
+    LaunchedEffect(session, userId, refreshAttempt) {
+        if (userId.isBlank() || !services.supportsBidirectionalFileSync) return@LaunchedEffect
+        syncLoading = true
+        try {
+            syncSnapshot = services.loadFileSyncCenter(session, userId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            actionMessage = failure.message ?: "Could not load folder sync pairs."
+        } finally {
             syncLoading = false
+        }
+    }
+
+    LaunchedEffect(session, userId, refreshAttempt) {
+        if (userId.isBlank() || !services.supportsBidirectionalFileSync) return@LaunchedEffect
+        mediaDiscoveryLoading = true
+        try {
+            mediaFolderDiscovery = services.discoverMediaSyncFolders()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            mediaFolderDiscovery = MediaSyncFolderDiscovery(
+                support = MediaSyncFolderDiscoverySupport.Unsupported,
+                suggestions = emptyList(),
+                message = failure.message ?: "Could not inspect local media folders.",
+            )
+        } finally {
             mediaDiscoveryLoading = false
         }
-        loading = false
     }
 
     LaunchedEffect(pendingMediaSuggestion) {
@@ -217,7 +229,11 @@ internal fun FileOfflineCenterScreen(
             onBack = onBack,
             trailingContent = {
                 TextButton(
-                    enabled = !loading && actionKey == null,
+                    enabled = fileOfflineRefreshEnabled(
+                        loading = loading,
+                        mediaDiscoveryLoading = mediaDiscoveryLoading,
+                        actionInProgress = actionKey != null,
+                    ),
                     onClick = { refreshAttempt += 1 },
                 ) {
                     Text("Refresh")
@@ -1447,6 +1463,12 @@ private fun formatOfflineBytes(bytes: Long): String = when {
     bytes >= 1024L -> "${bytes / 1024L} KB"
     else -> "$bytes B"
 }
+
+internal fun fileOfflineRefreshEnabled(
+    loading: Boolean,
+    mediaDiscoveryLoading: Boolean,
+    actionInProgress: Boolean,
+): Boolean = !loading && !mediaDiscoveryLoading && !actionInProgress
 
 private const val ADD_PAIR_BUSY_ID = "__adding_sync_pair__"
 private const val MAX_VISIBLE_PAIR_CONFLICTS = 5
