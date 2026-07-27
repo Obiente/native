@@ -13,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,78 +29,133 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
+@Immutable
+internal data class FileShareRecipientPickerUiState(
+    val query: String = "",
+    val results: List<FileShareRecipient> = emptyList(),
+    val loading: Boolean = false,
+    val selectedRecipient: String = "",
+    val error: String? = null,
+) {
+    val visibleResults: List<FileShareRecipient>
+        get() = results.take(MAX_VISIBLE_FILE_SHARE_RECIPIENTS)
+
+    fun supportingMessage(target: FileShareTarget): String? = when {
+        selectedRecipient.isNotBlank() -> "Selected: $selectedRecipient"
+        query.trim().length < MIN_FILE_SHARE_RECIPIENT_QUERY_LENGTH ->
+            "Search your Nextcloud server and select a result."
+        !loading && error == null && results.isEmpty() -> target.presentation().emptyMessage
+        else -> null
+    }
+}
+
 @Composable
 internal fun FileShareRecipientPicker(
     session: NextcloudSession,
     services: NextcloudPlatformServices,
     target: FileShareTarget,
+    file: NextcloudFile,
     selectedRecipient: String,
     enabled: Boolean,
     onSelected: (FileShareRecipient?) -> Unit,
+    onResultsObserved: (List<FileShareRecipient>) -> Unit = {},
 ) {
-    require(target != FileShareTarget.PublicLink)
-    var query by remember(target) { mutableStateOf("") }
-    var results by remember(target) { mutableStateOf<List<FileShareRecipient>>(emptyList()) }
-    var loading by remember(target) { mutableStateOf(false) }
-    var searchError by remember(target) { mutableStateOf<String?>(null) }
+    require(target.requiresRecipient)
+    var state by remember(target, file.path) {
+        mutableStateOf(FileShareRecipientPickerUiState(selectedRecipient = selectedRecipient))
+    }
 
-    LaunchedEffect(query, target, session, selectedRecipient) {
-        val normalized = query.trim()
+    LaunchedEffect(state.query, target, file.path, session, selectedRecipient) {
+        val normalized = state.query.trim()
         if (selectedRecipient.isNotBlank()) {
-            results = emptyList()
-            loading = false
-            searchError = null
+            state = state.copy(
+                results = emptyList(),
+                loading = false,
+                selectedRecipient = selectedRecipient,
+                error = null,
+            )
             return@LaunchedEffect
         }
         if (normalized.length < MIN_FILE_SHARE_RECIPIENT_QUERY_LENGTH) {
-            results = emptyList()
-            loading = false
-            searchError = null
+            state = state.copy(
+                results = emptyList(),
+                loading = false,
+                selectedRecipient = "",
+                error = null,
+            )
             return@LaunchedEffect
         }
         delay(300)
-        loading = true
-        searchError = null
+        state = state.copy(loading = true, selectedRecipient = "", error = null)
         try {
-            results = services.searchFileShareRecipients(session, normalized, target)
+            val results = services.searchFileShareRecipients(session, normalized, target, file)
+            state = state.copy(results = results, loading = false)
+            onResultsObserved(results)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
-            results = emptyList()
-            searchError = failure.message ?: "Could not search Nextcloud recipients."
+            state = state.copy(
+                results = emptyList(),
+                loading = false,
+                error = failure.message ?: "Could not search Nextcloud recipients.",
+            )
         }
-        loading = false
     }
 
+    FileShareRecipientPickerContent(
+        target = target,
+        state = state.copy(selectedRecipient = selectedRecipient),
+        enabled = enabled,
+        onQueryChanged = { query ->
+            state = state.copy(
+                query = query,
+                results = emptyList(),
+                selectedRecipient = "",
+                error = null,
+            )
+            onSelected(null)
+        },
+        onSelected = { recipient ->
+            state = state.copy(
+                query = recipient.displayName,
+                results = emptyList(),
+                selectedRecipient = recipient.id,
+                error = null,
+            )
+            onSelected(recipient)
+        },
+    )
+}
+
+@Composable
+internal fun FileShareRecipientPickerContent(
+    target: FileShareTarget,
+    state: FileShareRecipientPickerUiState,
+    enabled: Boolean,
+    onQueryChanged: (String) -> Unit,
+    onSelected: (FileShareRecipient) -> Unit,
+) {
+    require(target.requiresRecipient)
+    val presentation = target.presentation()
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
         OutlinedTextField(
-            value = query,
+            value = state.query,
             enabled = enabled,
-            onValueChange = {
-                query = it
-                results = emptyList()
-                searchError = null
-                onSelected(null)
-            },
-            label = { Text(if (target == FileShareTarget.Group) "Search groups" else "Search people") },
+            onValueChange = onQueryChanged,
+            label = { Text(presentation.searchLabel) },
             placeholder = { Text("Enter at least two characters") },
             trailingIcon = {
-                if (loading) {
+                if (state.loading) {
                     CircularProgressIndicator(strokeWidth = 2.dp)
                 }
             },
             supportingText = {
-                when {
-                    selectedRecipient.isNotBlank() -> Text("Selected: $selectedRecipient")
-                    query.trim().length < MIN_FILE_SHARE_RECIPIENT_QUERY_LENGTH ->
-                        Text("Search your Nextcloud server and select a result.")
-                    !loading && searchError == null && results.isEmpty() -> Text("No matching recipients")
-                }
+                state.supportingMessage(target)?.let { Text(it) }
             },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        results.take(8).forEach { recipient ->
+        state.visibleResults.forEach { recipient ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -108,9 +164,6 @@ internal fun FileShareRecipientPicker(
                         RoundedCornerShape(NextcloudRadii.Medium),
                     )
                     .clickable(enabled = enabled) {
-                        query = recipient.displayName
-                        results = emptyList()
-                        searchError = null
                         onSelected(recipient)
                     }
                     .padding(horizontal = NextcloudSpacing.Medium, vertical = NextcloudSpacing.Small),
@@ -135,13 +188,13 @@ internal fun FileShareRecipientPicker(
                     }
                 }
                 Text(
-                    if (target == FileShareTarget.Group) "Group" else "User",
+                    presentation.resultLabel,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
         }
-        searchError?.let {
+        state.error?.let {
             Text(
                 it,
                 color = MaterialTheme.colorScheme.error,
@@ -150,3 +203,5 @@ internal fun FileShareRecipientPicker(
         }
     }
 }
+
+private const val MAX_VISIBLE_FILE_SHARE_RECIPIENTS = 8
