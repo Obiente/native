@@ -4,6 +4,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.PinnableContainer
 import androidx.compose.ui.unit.LayoutDirection
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
@@ -407,6 +409,38 @@ class NextcloudBoardDragAutoScrollTest {
         )
 
         assertFalse(state.beginFrame().shouldRefresh)
+    }
+
+    @Test
+    fun `child scroll mutation interruption returns zero and leaves parent active`() = runBlocking {
+        var parentContinued = false
+
+        val consumed = runBoardDragScrollMutation {
+            throw CancellationException("Competing pointer scroll interrupted this mutation.")
+        }
+        parentContinued = true
+
+        assertEquals(0f, consumed)
+        assertTrue(parentContinued)
+    }
+
+    @Test
+    fun `parent cancellation propagates through supervised scroll mutation`() = runBlocking {
+        val mutationStarted = CompletableDeferred<Unit>()
+        var parentContinued = false
+        val parent = launch(start = CoroutineStart.UNDISPATCHED) {
+            runBoardDragScrollMutation {
+                mutationStarted.complete(Unit)
+                awaitCancellation()
+            }
+            parentContinued = true
+        }
+        mutationStarted.await()
+
+        parent.cancelAndJoin()
+
+        assertTrue(parent.isCancelled)
+        assertFalse(parentContinued)
     }
 
     @Test

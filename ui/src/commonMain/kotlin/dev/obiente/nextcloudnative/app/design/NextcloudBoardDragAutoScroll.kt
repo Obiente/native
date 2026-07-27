@@ -13,6 +13,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.supervisorScope
 
 private const val NANOS_PER_SECOND = 1_000_000_000f
 private const val MAX_AUTO_SCROLL_FRAME_SECONDS = 0.05f
@@ -106,13 +112,15 @@ internal fun NextcloudBoardDragAutoScroll(
             val horizontalConsumed = if (horizontalVelocity == 0f) {
                 0f
             } else {
-                currentHorizontalScrollState.scrollBy(
-                    resolveBoardDragHorizontalScrollDelta(
-                        physicalVelocity = horizontalVelocity,
-                        elapsedSeconds = elapsedSeconds,
-                        layoutDirection = currentLayoutDirection,
-                    ),
-                )
+                runBoardDragScrollMutation {
+                    currentHorizontalScrollState.scrollBy(
+                        resolveBoardDragHorizontalScrollDelta(
+                            physicalVelocity = horizontalVelocity,
+                            elapsedSeconds = elapsedSeconds,
+                            layoutDirection = currentLayoutDirection,
+                        ),
+                    )
+                }
             }
 
             val verticalScrollTarget = currentVerticalScrollTargetAt(
@@ -132,7 +140,9 @@ internal fun NextcloudBoardDragAutoScroll(
             val verticalConsumed = if (verticalScrollTarget == null || verticalVelocity == 0f) {
                 0f
             } else {
-                verticalScrollTarget.state.scrollBy(verticalVelocity * elapsedSeconds)
+                runBoardDragScrollMutation {
+                    verticalScrollTarget.state.scrollBy(verticalVelocity * elapsedSeconds)
+                }
             }
 
             targetRefreshState = targetRefreshState.afterScroll(
@@ -149,6 +159,20 @@ internal fun NextcloudBoardDragAutoScroll(
             onTargetRefresh = currentOnTargetRefresh,
             onTerminalDropReady = currentOnTerminalDropReady,
         )
+    }
+}
+
+internal suspend fun runBoardDragScrollMutation(
+    mutation: suspend () -> Float,
+): Float = supervisorScope {
+    val childMutation = async(start = CoroutineStart.UNDISPATCHED) {
+        mutation()
+    }
+    try {
+        childMutation.await()
+    } catch (error: CancellationException) {
+        if (!currentCoroutineContext().isActive) throw error
+        0f
     }
 }
 
