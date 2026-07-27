@@ -111,6 +111,11 @@ enum class NextcloudApiMethod {
     DELETE,
 }
 
+enum class NextcloudApiCachePolicy {
+    PreferCache,
+    ForceNetwork,
+}
+
 /**
  * Restricted same-origin transport used by schema-declared dynamic app actions.
  *
@@ -126,6 +131,7 @@ data class NextcloudApiRequest(
     val body: ByteArray? = null,
     val ocsApiRequest: Boolean = false,
     val maximumResponseBytes: Long = DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES,
+    val cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
 )
 
 data class NextcloudApiResponse(

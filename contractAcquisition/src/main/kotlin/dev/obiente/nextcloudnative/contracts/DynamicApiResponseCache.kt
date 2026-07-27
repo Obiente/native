@@ -112,6 +112,14 @@ class DynamicApiResponseCache(
         accountDirectory(accountId).deleteRecursively()
     }
 
+    @Synchronized
+    fun invalidate(accountId: String, requestIdentity: String) {
+        requireAccountId(accountId)
+        requireRequestIdentity(requestIdentity)
+        entryFile(accountId, requestIdentity).delete()
+        accountDirectory(accountId).takeIf { it.list().isNullOrEmpty() }?.delete()
+    }
+
     private fun prune() {
         val files = root.listFiles().orEmpty()
             .filter(File::isDirectory)
