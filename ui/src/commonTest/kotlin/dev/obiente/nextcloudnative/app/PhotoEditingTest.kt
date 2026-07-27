@@ -37,7 +37,13 @@ class PhotoEditingTest {
 
     @Test
     fun memoriesKeepsPassthroughImageExifSemanticsSeparateFromTranscodedRaw() = runBlocking {
-        val passthroughMimeTypes = listOf("image/jpeg", "image/png", "image/webp", "image/gif")
+        val passthroughMimeTypes = listOf(
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
+            "image/webp",
+            "image/gif",
+        )
 
         passthroughMimeTypes.forEach { mimeType ->
             val payload = loadFullResolutionPhotoPayload(

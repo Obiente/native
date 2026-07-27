@@ -326,6 +326,28 @@ class RawPhotoPreviewTest {
     }
 
     @Test
+    fun embeddedOnlyRawPreviewDoesNotOfferAnEditorDeadEnd() {
+        val raw = rawFile(hasPreview = false)
+
+        assertEquals(
+            false,
+            canEditMediaPreview(
+                file = raw,
+                payloadKind = MediaDisplayPayloadKind.EmbeddedCameraPreview,
+                userId = "files-user",
+            ),
+        )
+        assertEquals(
+            true,
+            canEditMediaPreview(
+                file = raw,
+                payloadKind = MediaDisplayPayloadKind.MemoriesRawRender,
+                userId = "files-user",
+            ),
+        )
+    }
+
+    @Test
     fun fullQualityLoadRetainsTheActualPayloadSource() = runBlocking {
         val raw = rawFile(hasPreview = false)
         val candidate = planMediaSources(listOf(raw), raw).fullQualityCandidates.single()

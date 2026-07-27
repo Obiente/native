@@ -569,10 +569,7 @@ fun NextcloudMediaViewer(
                 sourceChoices = sourcePlan.choices,
                 selectedSourcePath = selected.path,
                 onSelectSource = { choice -> onSelect(choice.file) },
-                onEdit = if (
-                    readyPreview != null && userId.isNotBlank() && selected.isPhotoMedia() &&
-                    selected.originalAccessAllowed
-                ) {
+                onEdit = if (canEditMediaPreview(selected, readyPreview?.payloadKind, userId)) {
                     { editing = true }
                 } else {
                     null
@@ -1129,6 +1126,18 @@ private fun mediaViewerStateObservation(
 internal const val MEDIA_VIEWER_ROOT_TEST_TAG = "nextcloud-media-viewer"
 internal const val MINIMUM_MEDIA_ZOOM = 1f
 internal const val MAXIMUM_MEDIA_ZOOM = 5f
+
+internal fun canEditMediaPreview(
+    file: NextcloudFile,
+    payloadKind: MediaDisplayPayloadKind?,
+    userId: String,
+): Boolean =
+    payloadKind != null &&
+        payloadKind != MediaDisplayPayloadKind.EmbeddedCameraPreview &&
+        userId.isNotBlank() &&
+        file.isPhotoMedia() &&
+        file.originalAccessAllowed
+
 private const val MAXIMUM_PREVIEW_IMAGE_DIMENSION = 1_600
 private const val MAXIMUM_DISPLAY_IMAGE_DIMENSION = 4_096
 

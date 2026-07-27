@@ -816,6 +816,7 @@ private const val MAX_PHOTO_EDIT_SIDECAR_CANDIDATES = 16
 private val MEMORIES_DECODABLE_PASSTHROUGH_MIME_TYPES = setOf(
     "image/gif",
     "image/jpeg",
+    "image/jpg",
     "image/png",
     "image/webp",
 )
