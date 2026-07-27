@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInfo
+import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -23,6 +24,7 @@ import dev.obiente.nextcloudnative.app.MAX_PROJECT_NEWS_IMAGE_BYTES
 import dev.obiente.nextcloudnative.app.PROJECT_NEWS_FEED_URL
 import dev.obiente.nextcloudnative.app.ProjectNewsResult
 import dev.obiente.nextcloudnative.app.ProjectNewsImage
+import dev.obiente.nextcloudnative.app.canSelectAppUpdateChannel
 import dev.obiente.nextcloudnative.app.isNewerAndroidRelease
 import dev.obiente.nextcloudnative.app.isCanonicalAndroidUpdateManifestUrl
 import dev.obiente.nextcloudnative.app.isCanonicalProjectNewsImageUrl
@@ -80,17 +82,32 @@ internal class AndroidProjectContentClient(
     @Volatile private var updateCancellationRequested = false
 
     fun support(): AppUpdateSupport {
-        val source = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        val installSource = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             runCatching {
                 appContext.packageManager
                     .getInstallSourceInfo(appContext.packageName)
-                    .installingPackageName
             }.getOrNull()
         } else {
+            null
+        }
+        val installerPackage = installSource?.installingPackageName ?: if (
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.R
+        ) {
             @Suppress("DEPRECATION")
             appContext.packageManager.getInstallerPackageName(appContext.packageName)
+        } else {
+            null
         }
-        val channel = classifyAndroidDistribution(source, BuildConfig.DEBUG)
+        val packageSource = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            installSource?.packageSource
+        } else {
+            null
+        }
+        val channel = classifyAndroidDistribution(
+            installerPackage = installerPackage,
+            debugBuild = BuildConfig.DEBUG,
+            packageSource = packageSource,
+        )
         val directUpdatesEnabled = canCheckAndroidDirectUpdates(
             channel = channel,
             directApkBuild = BuildConfig.DIRECT_APK_UPDATES,
@@ -173,17 +190,35 @@ internal class AndroidProjectContentClient(
     fun updateChannel(): AndroidUpdateChannel =
         parseAndroidUpdateChannel(preferences.getString(KEY_UPDATE_CHANNEL, null))
 
-    fun saveUpdateChannel(channel: AndroidUpdateChannel) {
-        preferences.edit().putString(KEY_UPDATE_CHANNEL, channel.manifestChannel).apply()
+    fun saveUpdateChannel(channel: AndroidUpdateChannel): Boolean {
+        if (!canSelectAppUpdateChannel(support(), channel)) return false
+        preferences.edit().putString(KEY_UPDATE_CHANNEL, channel.storageValue).apply()
+        return true
     }
 
     fun checkForUpdate(channel: AndroidUpdateChannel): AppUpdateCheckResult {
         val support = support()
         if (!support.canCheckDirectUpdates) return AppUpdateCheckResult.Unavailable(support)
+        if (!channel.available) {
+            return AppUpdateCheckResult.Failed(
+                support,
+                "${channel.name} updates are not available yet.",
+            )
+        }
+        if (channel != updateChannel()) {
+            return AppUpdateCheckResult.Failed(
+                support,
+                "The update channel changed. Check again using the saved channel.",
+            )
+        }
         return runCatching {
             val metadataUrl = channel.manifestUrl()
-            val metadata = getBounded(metadataUrl, MAX_ANDROID_UPDATE_METADATA_BYTES.toLong())
-            val release = parseAndroidDirectRelease(metadata, metadataUrl)
+            val metadata = getBounded(
+                metadataUrl,
+                MAX_ANDROID_UPDATE_METADATA_BYTES.toLong(),
+                updateChannel = channel,
+            )
+            val release = parseAndroidDirectRelease(metadata, metadataUrl, channel)
             if (isNewerAndroidRelease(support.currentVersionCode, release)) {
                 AppUpdateCheckResult.Available(support, release)
             } else {
@@ -217,7 +252,14 @@ internal class AndroidProjectContentClient(
         if (!isNewerAndroidRelease(support.currentVersionCode, release)) {
             return AppUpdateInstallResult.Rejected("This release is not newer than the installed app.")
         }
-        validateAndroidDirectRelease(release)
+        val selectedChannel = updateChannel()
+        runCatching {
+            validateAndroidDirectRelease(release, selectedChannel)
+        }.getOrElse {
+            return AppUpdateInstallResult.Rejected(
+                "The update metadata is invalid for the selected ${selectedChannel.name} channel.",
+            )
+        }
         val foregroundActivity = activity
             ?: return AppUpdateInstallResult.Rejected("Open the app before installing an update.")
         if (!appContext.packageManager.canRequestPackageInstalls()) {
@@ -363,10 +405,17 @@ internal class AndroidProjectContentClient(
         parseProjectNewsFeed(newsCache.readBytes())
     }.getOrNull()
 
-    private fun getBounded(url: String, maximumBytes: Long): ByteArray {
+    private fun getBounded(
+        url: String,
+        maximumBytes: Long,
+        updateChannel: AndroidUpdateChannel? = null,
+    ): ByteArray {
         require(
             url == PROJECT_NEWS_FEED_URL ||
-                isCanonicalAndroidUpdateManifestUrl(url) ||
+                (
+                    updateChannel != null &&
+                        isCanonicalAndroidUpdateManifestUrl(url, updateChannel)
+                    ) ||
                 isCanonicalProjectNewsImageUrl(url),
         )
         val request = Request.Builder().url(url).get().build()
@@ -775,11 +824,19 @@ internal fun executeWithTrustedGitHubReleaseRedirect(
 internal fun classifyAndroidDistribution(
     installerPackage: String?,
     debugBuild: Boolean,
+    packageSource: Int? = null,
 ): AppDistributionChannel = when {
     debugBuild -> AppDistributionChannel.Development
     installerPackage == "com.android.vending" -> AppDistributionChannel.GooglePlay
     installerPackage in setOf("org.fdroid.fdroid", "org.fdroid.basic") ->
         AppDistributionChannel.FDroid
+    packageSource == PackageInstaller.PACKAGE_SOURCE_STORE ->
+        AppDistributionChannel.OtherStore
+    packageSource == PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE ||
+        packageSource == PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE ->
+        AppDistributionChannel.DirectApk
+    packageSource == PackageInstaller.PACKAGE_SOURCE_OTHER ->
+        AppDistributionChannel.OtherStore
     installerPackage == null ||
         installerPackage in setOf(
             "com.android.packageinstaller",

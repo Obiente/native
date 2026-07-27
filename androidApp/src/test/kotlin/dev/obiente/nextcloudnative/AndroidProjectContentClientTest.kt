@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import dev.obiente.nextcloudnative.app.AppDistributionChannel
 import java.nio.file.Files
@@ -168,6 +169,38 @@ class AndroidProjectContentClientTest {
         assertEquals(
             AppDistributionChannel.Development,
             classifyAndroidDistribution(null, debugBuild = true),
+        )
+        assertEquals(
+            AppDistributionChannel.DirectApk,
+            classifyAndroidDistribution(
+                installerPackage = "com.oneplus.packageinstaller",
+                debugBuild = false,
+                packageSource = PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE,
+            ),
+        )
+        assertEquals(
+            AppDistributionChannel.DirectApk,
+            classifyAndroidDistribution(
+                installerPackage = "com.oplus.packageinstaller",
+                debugBuild = false,
+                packageSource = PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE,
+            ),
+        )
+        assertEquals(
+            AppDistributionChannel.OtherStore,
+            classifyAndroidDistribution(
+                installerPackage = null,
+                debugBuild = false,
+                packageSource = PackageInstaller.PACKAGE_SOURCE_STORE,
+            ),
+        )
+        assertEquals(
+            AppDistributionChannel.GooglePlay,
+            classifyAndroidDistribution(
+                installerPackage = "com.android.vending",
+                debugBuild = false,
+                packageSource = PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE,
+            ),
         )
         assertTrue(
             canCheckAndroidDirectUpdates(

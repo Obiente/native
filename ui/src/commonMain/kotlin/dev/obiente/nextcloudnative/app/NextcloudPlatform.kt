@@ -320,7 +320,12 @@ interface NextcloudPlatformServices {
 
     fun loadAppUpdateChannel(): AndroidUpdateChannel = AndroidUpdateChannel.Alpha
 
-    fun saveAppUpdateChannel(channel: AndroidUpdateChannel) = Unit
+    /**
+     * Persists an available direct update channel.
+     *
+     * Store-owned and unsupported installations return false and remain unchanged.
+     */
+    fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean = false
 
     suspend fun checkForAppUpdate(
         channel: AndroidUpdateChannel = loadAppUpdateChannel(),

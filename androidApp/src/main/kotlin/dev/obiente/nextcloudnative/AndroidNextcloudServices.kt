@@ -187,9 +187,8 @@ internal class AndroidNextcloudServices(
 
     override fun loadAppUpdateChannel(): AndroidUpdateChannel = projectContent.updateChannel()
 
-    override fun saveAppUpdateChannel(channel: AndroidUpdateChannel) {
+    override fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean =
         projectContent.saveUpdateChannel(channel)
-    }
 
     override suspend fun checkForAppUpdate(channel: AndroidUpdateChannel): AppUpdateCheckResult =
         withContext(Dispatchers.IO) { projectContent.checkForUpdate(channel) }

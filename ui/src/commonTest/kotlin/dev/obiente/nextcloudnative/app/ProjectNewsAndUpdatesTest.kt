@@ -154,19 +154,27 @@ class ProjectNewsAndUpdatesTest {
             "https://github.com/Obiente/nc-native/releases/download/" +
                 "v0.1.0-alpha.1/update-manifest.json"
 
-        assertEquals(release, parseAndroidDirectRelease(encoded, metadataUrl))
-        assertEquals(release, parseAndroidDirectRelease(encoded, immutableMetadataUrl))
+        assertEquals(
+            release,
+            parseAndroidDirectRelease(encoded, metadataUrl, AndroidUpdateChannel.Alpha),
+        )
+        assertEquals(
+            release,
+            parseAndroidDirectRelease(encoded, immutableMetadataUrl, AndroidUpdateChannel.Alpha),
+        )
         assertTrue(isNewerAndroidRelease(0, release))
         assertFalse(isNewerAndroidRelease(1, release))
         assertTrue(isCanonicalAndroidPrereleaseManifestUrl(metadataUrl))
         assertFailsWith<IllegalArgumentException> {
             validateAndroidDirectRelease(
                 release.copy(apkUrl = "https://downloads.invalid/nc-native.apk"),
+                AndroidUpdateChannel.Alpha,
             )
         }
         assertFailsWith<IllegalArgumentException> {
             validateAndroidDirectRelease(
                 release.copy(signingCertificateSha256Digests = listOf("unknown")),
+                AndroidUpdateChannel.Alpha,
             )
         }
         listOf(
@@ -178,7 +186,10 @@ class ProjectNewsAndUpdatesTest {
             "https://github.com/Obiente/nc-native/releases/download/v0.1.0-alpha.1/update.zip",
         ).forEach { invalidUrl ->
             assertFailsWith<IllegalArgumentException>(invalidUrl) {
-                validateAndroidDirectRelease(release.copy(apkUrl = invalidUrl))
+                validateAndroidDirectRelease(
+                    release.copy(apkUrl = invalidUrl),
+                    AndroidUpdateChannel.Alpha,
+                )
             }
         }
         listOf(
@@ -187,7 +198,10 @@ class ProjectNewsAndUpdatesTest {
             "https://github.com/Obiente/nc-native/releases/tag/v0.1.0-alpha.1?source=app",
         ).forEach { invalidUrl ->
             assertFailsWith<IllegalArgumentException>(invalidUrl) {
-                validateAndroidDirectRelease(release.copy(releaseNotesUrl = invalidUrl))
+                validateAndroidDirectRelease(
+                    release.copy(releaseNotesUrl = invalidUrl),
+                    AndroidUpdateChannel.Alpha,
+                )
             }
         }
     }
@@ -215,18 +229,32 @@ class ProjectNewsAndUpdatesTest {
         val immutableMetadataUrl =
             "https://github.com/Obiente/nc-native/releases/download/$tag/update-manifest.json"
 
-        assertEquals(release, parseAndroidDirectRelease(encoded, metadataUrl))
-        assertEquals(release, parseAndroidDirectRelease(encoded, immutableMetadataUrl))
+        assertEquals(
+            release,
+            parseAndroidDirectRelease(encoded, metadataUrl, AndroidUpdateChannel.Nightly),
+        )
+        assertEquals(
+            release,
+            parseAndroidDirectRelease(
+                encoded,
+                immutableMetadataUrl,
+                AndroidUpdateChannel.Nightly,
+            ),
+        )
         assertTrue(isCanonicalAndroidUpdateManifestUrl(metadataUrl))
         assertTrue(isCanonicalAndroidUpdateManifestUrl(immutableMetadataUrl))
         assertFailsWith<IllegalArgumentException> {
             parseAndroidDirectRelease(
                 encoded,
                 AndroidUpdateChannel.Alpha.manifestUrl(),
+                AndroidUpdateChannel.Nightly,
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            validateAndroidDirectRelease(release.copy(channel = "stable-v1"))
+            validateAndroidDirectRelease(
+                release.copy(channel = "stable-v1"),
+                AndroidUpdateChannel.Nightly,
+            )
         }
     }
 
