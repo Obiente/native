@@ -664,6 +664,8 @@ class DesktopNextcloudServices(
                     MediaSearchDavTransportResponse(response.status, response.body)
                 },
                 parse = { body -> parseDavFiles(body, userId) },
+                shouldSearchRaw = { files -> files.any(NextcloudFile::isRawPhoto) },
+                rawCompatibilityPolicy = RawMediaSearchCompatibilityPolicy.KeepAvailableResults,
             )
             mergeMediaSearchResultPages(pages)
         }
