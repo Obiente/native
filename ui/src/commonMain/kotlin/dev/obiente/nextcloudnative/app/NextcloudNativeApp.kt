@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -7378,55 +7379,57 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                     "Update channel",
                     style = MaterialTheme.typography.titleSmall,
                 )
-                channelPresentation.options.forEach { option ->
-                    val enabled = option.enabled && !checking && !installing
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(
+                Column(modifier = Modifier.selectableGroup()) {
+                    channelPresentation.options.forEach { option ->
+                        val enabled = option.enabled && !checking && !installing
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = option.selected,
+                                    enabled = enabled,
+                                    role = Role.RadioButton,
+                                    onClick = {
+                                        if (services.saveAppUpdateChannel(option.channel)) {
+                                            checkResult = retainedAppUpdateCheckResult(
+                                                previousChannel = updateChannel,
+                                                selectedChannel = option.channel,
+                                                previousResult = checkResult,
+                                            )
+                                            updateChannel = option.channel
+                                            installMessage = null
+                                        }
+                                    },
+                                )
+                                .padding(vertical = NextcloudSpacing.Small),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
                                 selected = option.selected,
                                 enabled = enabled,
-                                role = Role.RadioButton,
-                                onClick = {
-                                    if (services.saveAppUpdateChannel(option.channel)) {
-                                        checkResult = retainedAppUpdateCheckResult(
-                                            previousChannel = updateChannel,
-                                            selectedChannel = option.channel,
-                                            previousResult = checkResult,
+                                onClick = null,
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(option.label, style = MaterialTheme.typography.titleSmall)
+                                    option.availabilityLabel?.let { label ->
+                                        Text(
+                                            label,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
-                                        updateChannel = option.channel
-                                        installMessage = null
                                     }
-                                },
-                            )
-                            .padding(vertical = NextcloudSpacing.Small),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(
-                            selected = option.selected,
-                            enabled = enabled,
-                            onClick = null,
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(option.label, style = MaterialTheme.typography.titleSmall)
-                                option.availabilityLabel?.let { label ->
-                                    Text(
-                                        label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
                                 }
+                                Text(
+                                    option.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
-                            Text(
-                                option.description,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
                         }
                     }
                 }
