@@ -13,6 +13,9 @@ enum class MediaSearchDavPartition {
 data class MediaSearchDavRequest(
     val partition: MediaSearchDavPartition,
     val body: String,
+    val userId: String,
+    val maximumResults: Int,
+    val rawFileNamePatterns: List<String> = emptyList(),
 )
 
 data class MediaSearchDavTransportResponse(
@@ -102,6 +105,8 @@ fun mediaSearchDavRequests(
                 mimeTypePatterns = listOf("image/%"),
                 excludeCollections = false,
             ),
+            userId = userId,
+            maximumResults = maximumResults,
         ),
     )
     add(
@@ -113,21 +118,15 @@ fun mediaSearchDavRequests(
                 mimeTypePatterns = listOf("video/%"),
                 excludeCollections = false,
             ),
+            userId = userId,
+            maximumResults = maximumResults,
         ),
     )
     rawPhotoFileNameSearchPatterns()
         .chunked(MAXIMUM_RAW_MEDIA_SEARCH_PATTERNS_PER_REQUEST)
         .forEach { rawPatterns ->
             add(
-                MediaSearchDavRequest(
-                    partition = MediaSearchDavPartition.Raw,
-                    body = mediaSearchDavRequestBody(
-                        userId = userId,
-                        maximumResults = maximumResults,
-                        rawFileNamePatterns = rawPatterns,
-                        mimeTypePatterns = emptyList(),
-                    ),
-                ),
+                rawMediaSearchDavRequest(userId, maximumResults, rawPatterns),
             )
         }
 }
@@ -140,13 +139,45 @@ suspend fun <T> collectMediaSearchDavPages(
     require(requests.getOrNull(0)?.partition == MediaSearchDavPartition.ImageMime)
     require(requests.getOrNull(1)?.partition == MediaSearchDavPartition.VideoMime)
     require(requests.drop(2).all { request -> request.partition == MediaSearchDavPartition.Raw })
+    require(requests.take(2).all { request -> request.rawFileNamePatterns.isEmpty() })
+    require(requests.drop(2).all { request -> request.rawFileNamePatterns.isNotEmpty() })
+    val plannedRawPatterns = requests.drop(2).flatMap(MediaSearchDavRequest::rawFileNamePatterns)
+    require(plannedRawPatterns.size == plannedRawPatterns.distinct().size)
+    val maximumExecutions = requests.sumOf { request ->
+        if (request.partition == MediaSearchDavPartition.Raw) {
+            request.rawFileNamePatterns.size * 2 - 1
+        } else {
+            1
+        }
+    }
     val pages = mutableListOf<List<T>>()
-    for (request in requests) {
+    val pending = ArrayDeque(requests)
+    var executions = 0
+    while (pending.isNotEmpty()) {
+        check(++executions <= maximumExecutions) { "WebDAV media search fallback exceeded its request bound." }
+        val request = pending.removeFirst()
         val response = execute(request.body)
         when {
             response.status == 207 -> pages += parse(response.body)
             request.partition == MediaSearchDavPartition.Raw &&
-                isMediaSearchCompatibilityRejection(response.status) -> break
+                isMediaSearchCompatibilityRejection(response.status) -> {
+                val patterns = request.rawFileNamePatterns
+                if (patterns.size > 1) {
+                    val splitIndex = (patterns.size + 1) / 2
+                    val first = rawMediaSearchDavRequest(
+                        request.userId,
+                        request.maximumResults,
+                        patterns.take(splitIndex),
+                    )
+                    val second = rawMediaSearchDavRequest(
+                        request.userId,
+                        request.maximumResults,
+                        patterns.drop(splitIndex),
+                    )
+                    pending.addFirst(second)
+                    pending.addFirst(first)
+                }
+            }
             else -> error("WebDAV media search failed (HTTP ${response.status}).")
         }
     }
@@ -154,6 +185,26 @@ suspend fun <T> collectMediaSearchDavPages(
 }
 
 fun isMediaSearchCompatibilityRejection(status: Int): Boolean = status == 400 || status == 422
+
+private fun rawMediaSearchDavRequest(
+    userId: String,
+    maximumResults: Int,
+    rawFileNamePatterns: List<String>,
+): MediaSearchDavRequest {
+    require(rawFileNamePatterns.isNotEmpty())
+    return MediaSearchDavRequest(
+        partition = MediaSearchDavPartition.Raw,
+        body = mediaSearchDavRequestBody(
+            userId = userId,
+            maximumResults = maximumResults,
+            rawFileNamePatterns = rawFileNamePatterns,
+            mimeTypePatterns = emptyList(),
+        ),
+        userId = userId,
+        maximumResults = maximumResults,
+        rawFileNamePatterns = rawFileNamePatterns.toList(),
+    )
+}
 
 fun mergeMediaSearchResultPages(
     pages: List<List<NextcloudFile>>,

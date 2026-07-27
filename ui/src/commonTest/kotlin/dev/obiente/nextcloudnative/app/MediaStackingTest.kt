@@ -80,31 +80,76 @@ class MediaStackingTest {
     }
 
     @Test
-    fun rawCompatibilityRejectionKeepsCompletedPartitionsWithoutRefetchingMime() = runBlocking {
+    fun rawCompatibilityRejectionBisectsOnlyRejectedBatchAndKeepsCompletedPages() = runBlocking {
         val requests = mediaSearchDavRequests("account")
         val executed = mutableListOf<String>()
-        var call = 0
+        val rejected = requests[3]
 
         val pages = collectMediaSearchDavPages(
             requests = requests,
             execute = { body ->
                 executed += body
-                val currentCall = call++
-                if (currentCall == 3) {
+                if (body == rejected.body) {
                     MediaSearchDavTransportResponse(status = 400, body = "rejected".encodeToByteArray())
                 } else {
                     MediaSearchDavTransportResponse(
                         status = 207,
-                        body = "page-$currentCall".encodeToByteArray(),
+                        body = body.encodeToByteArray(),
                     )
                 }
             },
             parse = { body -> listOf(body.decodeToString()) },
         )
 
-        assertEquals(listOf(listOf("page-0"), listOf("page-1"), listOf("page-2")), pages)
-        assertEquals(requests.take(4).map(MediaSearchDavRequest::body), executed)
+        val fallbackPages = pages.flatten().filterNot { body -> body in requests.map(MediaSearchDavRequest::body) }
+        assertEquals(2, fallbackPages.size)
+        rejected.rawFileNamePatterns.forEach { pattern ->
+            assertEquals(
+                1,
+                fallbackPages.count { body -> "<d:literal>$pattern</d:literal>" in body },
+                pattern,
+            )
+        }
+        requests.filterNot { request -> request == rejected }.forEach { request ->
+            assertEquals(1, executed.count(request.body::equals))
+        }
         assertEquals(1, executed.count { body -> body == requests.first().body })
+        assertEquals(1, executed.count { body -> body == requests[1].body })
+        assertEquals(requests.size + 2, executed.size)
+    }
+
+    @Test
+    fun singletonRawCompatibilityRejectionSkipsOnlyThatSuffixAndContinues() = runBlocking {
+        val requests = mediaSearchDavRequests("account")
+        val patterns = rawPhotoFileNameSearchPatterns()
+        val unsupported = "%.raf"
+        val executed = mutableListOf<String>()
+
+        val pages = collectMediaSearchDavPages(
+            requests = requests,
+            execute = { body ->
+                executed += body
+                if ("<d:literal>$unsupported</d:literal>" in body) {
+                    MediaSearchDavTransportResponse(status = 422, body = "unsupported".encodeToByteArray())
+                } else {
+                    MediaSearchDavTransportResponse(status = 207, body = body.encodeToByteArray())
+                }
+            },
+            parse = { body -> listOf(body.decodeToString()) },
+        )
+
+        val successfulBodies = pages.flatten()
+        assertEquals(0, successfulBodies.count { body -> "<d:literal>$unsupported</d:literal>" in body })
+        patterns.filterNot { pattern -> pattern == unsupported }.forEach { pattern ->
+            assertEquals(
+                1,
+                successfulBodies.count { body -> "<d:literal>$pattern</d:literal>" in body },
+                pattern,
+            )
+        }
+        assertEquals(1, executed.count { body -> body == requests.first().body })
+        assertEquals(1, executed.count { body -> body == requests[1].body })
+        assertTrue(executed.size <= patterns.size * 2 + 2)
     }
 
     @Test
@@ -180,6 +225,41 @@ class MediaStackingTest {
 
         assertEquals("Malformed DAV response.", failure.message)
         assertEquals(1, executions)
+    }
+
+    @Test
+    fun malformedSuccessfulRawFallbackStopsBeforeItsSiblingOrLaterBatches() {
+        val requests = mediaSearchDavRequests("account")
+        var executions = 0
+        val collect: suspend () -> List<List<String>> = {
+            collectMediaSearchDavPages(
+                requests = requests,
+                execute = { body ->
+                    executions += 1
+                    when {
+                        body == requests[2].body ->
+                            MediaSearchDavTransportResponse(400, "rejected".encodeToByteArray())
+                        executions <= 2 ->
+                            MediaSearchDavTransportResponse(207, "mime".encodeToByteArray())
+                        else ->
+                            MediaSearchDavTransportResponse(207, "malformed".encodeToByteArray())
+                    }
+                },
+                parse = { body ->
+                    if (body.decodeToString() == "malformed") {
+                        throw IllegalArgumentException("Malformed DAV fallback response.")
+                    }
+                    listOf(body.decodeToString())
+                },
+            )
+        }
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            runBlocking { collect() }
+        }
+
+        assertEquals("Malformed DAV fallback response.", failure.message)
+        assertEquals(4, executions)
     }
 
     @Test
