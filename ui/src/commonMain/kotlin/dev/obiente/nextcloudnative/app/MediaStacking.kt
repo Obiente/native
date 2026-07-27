@@ -251,7 +251,10 @@ fun NextcloudFile.isRawPhoto(): Boolean = mediaAssetFormat() == MediaAssetFormat
 
 fun NextcloudFile.canOpenInMediaViewer(): Boolean =
     !isDirectory && (
-        (fileId != null && (hasPreview || isRawPhoto())) ||
+        (
+            fileId != null &&
+                (hasPreview || (isRawPhoto() && originalAccessAllowed))
+        ) ||
             canUseEmbeddedRafPreview()
     )
 

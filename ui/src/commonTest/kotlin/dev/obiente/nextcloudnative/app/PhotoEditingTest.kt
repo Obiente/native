@@ -99,20 +99,29 @@ class PhotoEditingTest {
 
     @Test
     fun fullResolutionLoaderNeverSendsSyntheticOrReadOnlyPathsToFilesDav() = runBlocking {
-        var filesRead = false
-        kotlin.test.assertFails {
-            loadFullResolutionPhotoPayload(
-                original = file(path = "memories/people/recognize/1/2/7").copy(
-                    originalAccessAllowed = false,
-                ),
-                loadMemories = { _, _ -> error("Memories unavailable") },
-                loadFilesDav = {
-                    filesRead = true
-                    byteArrayOf(1)
-                },
-            )
+        val unsafeFiles = listOf(
+            file(path = "memories/people/recognize/1/2/7").copy(
+                originalAccessAllowed = false,
+            ),
+            file(path = "Talk/attachment.jpg").copy(
+                davPathAuthoritative = false,
+            ),
+        )
+
+        unsafeFiles.forEach { unsafe ->
+            var filesRead = false
+            kotlin.test.assertFails {
+                loadFullResolutionPhotoPayload(
+                    original = unsafe,
+                    loadMemories = { _, _ -> error("Memories unavailable") },
+                    loadFilesDav = {
+                        filesRead = true
+                        byteArrayOf(1)
+                    },
+                )
+            }
+            assertFalse(filesRead)
         }
-        assertFalse(filesRead)
     }
 
     @Test

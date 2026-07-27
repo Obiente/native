@@ -188,6 +188,17 @@ class RawPhotoPreviewTest {
     }
 
     @Test
+    fun rawWithoutAnyReadableRepresentationDoesNotAdvertiseTheViewer() {
+        val raw = rawFile(hasPreview = false).copy(
+            originalAccessAllowed = false,
+            davPathAuthoritative = false,
+        )
+
+        assertEquals(false, raw.canOpenInMediaViewer())
+        assertEquals(emptyList(), planMediaSources(listOf(raw), raw).previewCandidates)
+    }
+
+    @Test
     fun rawDiscoveryPatternsCoverEveryRecognizedRawExtension() {
         val patterns = rawPhotoFileNameSearchPatterns()
 
@@ -351,7 +362,16 @@ class RawPhotoPreviewTest {
                 file = raw,
                 payloadKind = MediaDisplayPayloadKind.EmbeddedCameraPreview,
                 userId = "files-user",
-                highDetailSourceReady = true,
+                highDetailSourceFile = raw,
+            ),
+        )
+        assertEquals(
+            false,
+            canEditMediaPreview(
+                file = raw,
+                payloadKind = MediaDisplayPayloadKind.EmbeddedCameraPreview,
+                userId = "files-user",
+                highDetailSourceFile = raw.copy(path = "/Photos/DSCF1001.jpg"),
             ),
         )
     }

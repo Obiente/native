@@ -271,6 +271,33 @@ class MediaStackingTest {
         assertEquals(beforeServerInfo.selectedPath, afterServerInfo.selectedPath)
     }
 
+    @Test
+    fun viewerLoadIdentityChangesWithAccountAndSourceGeneration() {
+        val original = file("Photos/Samples/SAMPLE0001.RAF", "image/x-fuji-raf")
+        val firstGeneration = original.copy(etag = "first")
+            .mediaViewerSourceGenerationIdentity()
+        val baseline = MediaViewerSourceLoadIdentity(
+            selectedPath = original.path,
+            filesUserId = "account",
+            serverUrl = "https://cloud.example.test",
+            loginName = "account",
+            candidates = listOf(firstGeneration),
+        )
+
+        assertNotEquals(
+            baseline,
+            baseline.copy(
+                candidates = listOf(
+                    firstGeneration.copy(etag = "second"),
+                ),
+            ),
+        )
+        assertNotEquals(
+            baseline,
+            baseline.copy(loginName = "another-account"),
+        )
+    }
+
     private fun file(path: String, mime: String) = NextcloudFile(
         path = path,
         name = path.substringAfterLast('/'),

@@ -101,8 +101,23 @@ fun NextcloudMediaViewer(
         if (media.any { it.path == selected.path }) media else listOf(selected)
     }
     val sourcePlan = remember(items, selected) { planMediaSources(items, selected) }
-    val sourceLoadIdentity = remember(selected.path, userId) {
-        MediaViewerSourceLoadIdentity(selected.path, userId)
+    val fullQualityGeneration = sourcePlan.fullQualityCandidates.map { choice ->
+        choice.file.mediaViewerSourceGenerationIdentity()
+    }
+    val sourceLoadIdentity = remember(
+        selected.path,
+        userId,
+        session.serverUrl,
+        session.loginName,
+        fullQualityGeneration,
+    ) {
+        MediaViewerSourceLoadIdentity(
+            selectedPath = selected.path,
+            filesUserId = userId,
+            serverUrl = session.serverUrl,
+            loginName = session.loginName,
+            candidates = fullQualityGeneration,
+        )
     }
     val selectedIndex = items.indexOfFirst { it.path == selected.path }.coerceAtLeast(0)
     val canGoPrevious = selectedIndex > 0
@@ -574,7 +589,7 @@ fun NextcloudMediaViewer(
                         file = selected,
                         payloadKind = readyPreview?.payloadKind,
                         userId = userId,
-                        highDetailSourceReady = fullQuality != null,
+                        highDetailSourceFile = fullQuality?.source?.file,
                     )
                 ) {
                     { editing = true }
@@ -1082,7 +1097,31 @@ internal suspend fun <T> withFullQualityCancellationRecovery(
 internal data class MediaViewerSourceLoadIdentity(
     val selectedPath: String,
     val filesUserId: String,
+    val serverUrl: String = "",
+    val loginName: String = "",
+    val candidates: List<MediaViewerSourceGenerationIdentity> = emptyList(),
 )
+
+internal data class MediaViewerSourceGenerationIdentity(
+    val path: String,
+    val fileId: Long?,
+    val etag: String?,
+    val size: Long?,
+    val lastModified: String?,
+    val originalAccessAllowed: Boolean,
+    val davPathAuthoritative: Boolean,
+)
+
+internal fun NextcloudFile.mediaViewerSourceGenerationIdentity(): MediaViewerSourceGenerationIdentity =
+    MediaViewerSourceGenerationIdentity(
+        path = path,
+        fileId = fileId,
+        etag = etag,
+        size = size,
+        lastModified = lastModified,
+        originalAccessAllowed = originalAccessAllowed,
+        davPathAuthoritative = davPathAuthoritative,
+    )
 
 enum class MediaViewerReadiness(val description: String) {
     Loading("Loading rendered preview"),
@@ -1138,12 +1177,12 @@ internal fun canEditMediaPreview(
     file: NextcloudFile,
     payloadKind: MediaDisplayPayloadKind?,
     userId: String,
-    highDetailSourceReady: Boolean = false,
+    highDetailSourceFile: NextcloudFile? = null,
 ): Boolean =
     payloadKind != null &&
         (
             payloadKind != MediaDisplayPayloadKind.EmbeddedCameraPreview ||
-                highDetailSourceReady
+                highDetailSourceFile?.path == file.path
         ) &&
         userId.isNotBlank() &&
         file.isPhotoMedia() &&

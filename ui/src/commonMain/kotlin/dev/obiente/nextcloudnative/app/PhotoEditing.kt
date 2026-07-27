@@ -432,6 +432,7 @@ internal suspend fun loadFullResolutionPhotoPayload(
     }
     if (
         original.originalAccessAllowed &&
+        original.davPathAuthoritative &&
         original.path.isSafeDavRelativePath() &&
         loadFilesDav != null
     ) {
