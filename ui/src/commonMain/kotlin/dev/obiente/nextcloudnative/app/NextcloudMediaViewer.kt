@@ -434,9 +434,10 @@ fun NextcloudMediaViewer(
                 onCancel = { editing = false },
                 modifier = Modifier.fillMaxSize(),
             )
-        } else if (
-            selected.mediaAssetFormat() == MediaAssetFormat.Video &&
-            platformNativeVideoPlaybackAvailable
+        } else if (selected.canUsePlatformNativeVideoPlayback(
+                userId = userId,
+                nativePlaybackAvailable = platformNativeVideoPlaybackAvailable,
+            )
         ) {
             PlatformNativeVideoPlayer(
                 session = session,
@@ -1191,6 +1192,14 @@ internal fun canEditMediaPreview(
 
 internal fun NextcloudFile.hasAuthoritativeMediaDavAccess(userId: String): Boolean =
     originalAccessAllowed && davPathAuthoritative && userId.isNotBlank()
+
+internal fun NextcloudFile.canUsePlatformNativeVideoPlayback(
+    userId: String,
+    nativePlaybackAvailable: Boolean,
+): Boolean =
+    nativePlaybackAvailable &&
+        mediaAssetFormat() == MediaAssetFormat.Video &&
+        hasAuthoritativeMediaDavAccess(userId)
 
 private const val MAXIMUM_PREVIEW_IMAGE_DIMENSION = 1_600
 private const val MAXIMUM_DISPLAY_IMAGE_DIMENSION = 4_096

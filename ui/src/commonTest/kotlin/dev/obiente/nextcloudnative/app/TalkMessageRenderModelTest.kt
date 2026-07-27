@@ -109,6 +109,26 @@ class TalkMessageRenderModelTest {
     }
 
     @Test
+    fun nativeVideoPlaybackRejectsSyntheticTalkPaths() {
+        val authoritative = parseAttachmentModel(
+            messageType = "comment",
+            mimeType = "video/mp4",
+            previewAvailable = true,
+        ).asNextcloudFile()
+        val placeholder = parseAttachmentModel(
+            messageType = "comment",
+            mimeType = "video/mp4",
+            previewAvailable = true,
+            includePath = false,
+        ).asNextcloudFile()
+
+        assertTrue(authoritative.canUsePlatformNativeVideoPlayback("alice", true))
+        assertFalse(placeholder.canUsePlatformNativeVideoPlayback("alice", true))
+        assertFalse(authoritative.canUsePlatformNativeVideoPlayback("", true))
+        assertFalse(authoritative.canUsePlatformNativeVideoPlayback("alice", false))
+    }
+
+    @Test
     fun mapsDeletedAndCallMessagesToDedicatedRenderModels() {
         val deleted = requireNotNull(
             parseTalkMessageJson(
