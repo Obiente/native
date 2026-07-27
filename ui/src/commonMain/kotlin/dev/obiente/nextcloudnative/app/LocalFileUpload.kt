@@ -3,8 +3,9 @@ package dev.obiente.nextcloudnative.app
 /**
  * Credential-free metadata for a file explicitly selected through a platform picker.
  *
- * [selectionId] is an opaque, process-local capability. It is not a filesystem path or content
- * URI, so shared UI and protocol adapters cannot inspect files outside the platform service.
+ * [selectionId] is an opaque, platform-private capability. A platform may persist it for a
+ * user-approved background transfer, but it is never a filesystem path or content URI, so shared
+ * UI and protocol adapters cannot inspect files outside the platform service.
  */
 data class LocalUploadFile(
     val selectionId: String,
@@ -33,6 +34,64 @@ sealed interface LocalUploadSelectionResult {
     data object Cancelled : LocalUploadSelectionResult
     data class Rejected(val reason: String) : LocalUploadSelectionResult
     data class Unavailable(val reason: String) : LocalUploadSelectionResult
+}
+
+/**
+ * Stable, credential-free owner for a durable multipart upload.
+ *
+ * The value is intentionally limited to opaque server resource identifiers. Platform stores add
+ * an account digest before persisting it, so uploads from different accounts can never collide.
+ */
+data class DurableUploadScope(
+    val feature: String,
+    val resourceId: String,
+) {
+    init {
+        require(feature.length in 1..32 && feature.all { it.isLetterOrDigit() || it == '-' }) {
+            "The durable upload feature is invalid."
+        }
+        require(resourceId.length in 1..96 && resourceId.all { it.isLetterOrDigit() || it == '-' }) {
+            "The durable upload resource is invalid."
+        }
+    }
+}
+
+enum class DurableUploadState {
+    Queued,
+    Uploading,
+    Completed,
+    Failed,
+    OutcomeUnknown,
+}
+
+/** In-flight multipart writes are never replayed after process recovery. */
+fun DurableUploadState.afterProcessRecovery(): DurableUploadState =
+    if (this == DurableUploadState.Uploading) DurableUploadState.OutcomeUnknown else this
+
+data class DurableUploadStatus(
+    val id: String,
+    val scope: DurableUploadScope,
+    val displayName: String,
+    val state: DurableUploadState,
+    val message: String? = null,
+) {
+    init {
+        require(id.length in 16..96 && id.all { it.isLetterOrDigit() || it == '-' }) {
+            "The durable upload id is invalid."
+        }
+        require(displayName == sanitizeUploadFilename(displayName)) {
+            "The durable upload filename is not safe."
+        }
+        require(message == null || message.length <= MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS) {
+            "The durable upload message is too long."
+        }
+    }
+}
+
+sealed interface DurableUploadEnqueueResult {
+    data class Queued(val status: DurableUploadStatus) : DurableUploadEnqueueResult
+    data class Completed(val status: DurableUploadStatus) : DurableUploadEnqueueResult
+    data class Rejected(val reason: String) : DurableUploadEnqueueResult
 }
 
 data class MultipartTextField(
@@ -315,6 +374,7 @@ private fun Long.safeAdd(other: Long): Long {
 }
 
 const val DEFAULT_LOCAL_UPLOAD_LIMIT_BYTES = 64L * 1024L * 1024L
+const val MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS = 240
 const val MAX_LOCAL_UPLOAD_LIMIT_BYTES = 512L * 1024L * 1024L
 
 private val MULTIPART_UPLOAD_METHODS = setOf(

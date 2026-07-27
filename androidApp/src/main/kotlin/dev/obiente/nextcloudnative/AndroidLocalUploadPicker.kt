@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import android.content.ContentResolver
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.result.ActivityResultLauncher
@@ -15,17 +16,21 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
+import org.json.JSONObject
 import kotlin.coroutines.resume
 
 /**
  * Single-flight bridge to Android's OpenDocument picker.
  *
  * Selected content URIs remain private to this platform class. Common code receives only an
- * opaque token and validated metadata. Grants are intentionally not persisted beyond the picker
- * result and app task.
+ * opaque token and validated metadata. Read grants and encrypted capability metadata are persisted
+ * so a user-approved background upload can survive activity and process recreation.
  */
 internal class AndroidLocalUploadPicker(context: Context) {
+    private val appContext = context.applicationContext
     private val resolver = context.applicationContext.contentResolver
+    private val preferences = appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+    private val cipher = SessionCipher()
     private val selections = ConcurrentHashMap<String, SelectedSource>()
     private var launcher: ActivityResultLauncher<Array<String>>? = null
     private var pending: PendingSelection? = null
@@ -78,7 +83,29 @@ internal class AndroidLocalUploadPicker(context: Context) {
                 mimeType = mimeType,
                 sizeBytes = metadata.sizeBytes,
             )
-            selections[token] = SelectedSource(uri, file)
+            runCatching {
+                acquireDurableUploadCapability(
+                    takePermission = {
+                        resolver.takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                        )
+                    },
+                    persistMetadata = { persist(source = SelectedSource(uri, file)) },
+                    releasePermission = {
+                        resolver.releasePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                        )
+                    },
+                )
+            }.getOrElse {
+                return@runCatching LocalUploadSelectionResult.Rejected(
+                    "The selected file provider cannot keep access for a background upload.",
+                )
+            }
+            val source = SelectedSource(uri, file)
+            selections[token] = source
             LocalUploadSelectionResult.Selected(file)
         }.getOrElse {
             LocalUploadSelectionResult.Rejected(
@@ -89,17 +116,77 @@ internal class AndroidLocalUploadPicker(context: Context) {
     }
 
     fun open(file: LocalUploadFile): InputStream {
-        val source = selections[file.selectionId]
-            ?: error("The local file selection has expired.")
-        require(source.file == file) { "The local file selection metadata changed." }
+        val source = persistedSource(file).also {
+            selections[file.selectionId] = it
+        }
         return checkNotNull(resolver.openInputStream(source.uri)) {
             "The selected file could not be opened."
         }
     }
 
-    fun release(file: LocalUploadFile) {
-        selections.remove(file.selectionId)
+    fun requirePersisted(file: LocalUploadFile) {
+        val source = load(file.selectionId)
+            ?: error("The local file selection was not durably saved.")
+        require(source.file == file) { "The persisted local file metadata changed." }
     }
+
+    fun release(file: LocalUploadFile): Boolean {
+        val source = selections[file.selectionId] ?: load(file.selectionId)
+        return releaseDurableUploadCapability(
+            releasePermission = {
+                source?.let {
+                    resolver.releasePersistableUriPermission(
+                        it.uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                    )
+                }
+            },
+            removeMetadata = {
+                preferences.edit()
+                    .remove(preferenceKey(file.selectionId))
+                    .commit()
+            },
+        ).also { released ->
+            if (released) selections.remove(file.selectionId)
+        }
+    }
+
+    private fun persist(source: SelectedSource): Boolean {
+        val payload = JSONObject()
+            .put("uri", source.uri.toString())
+            .put("selectionId", source.file.selectionId)
+            .put("displayName", source.file.displayName)
+            .put("mimeType", source.file.mimeType)
+            .put("sizeBytes", source.file.sizeBytes)
+            .toString()
+        preferences.edit()
+            .putString(preferenceKey(source.file.selectionId), cipher.encrypt(payload))
+            .commit()
+    }
+
+    private fun persistedSource(file: LocalUploadFile): SelectedSource {
+        val source = selections[file.selectionId] ?: load(file.selectionId)
+            ?: error("The local file selection has expired.")
+        require(source.file == file) { "The local file selection metadata changed." }
+        return source
+    }
+
+    private fun load(selectionId: String): SelectedSource? {
+        val encrypted = preferences.getString(preferenceKey(selectionId), null) ?: return null
+        return runCatching {
+            val payload = JSONObject(cipher.decrypt(encrypted))
+            val file = localUploadFile(
+                selectionId = payload.getString("selectionId"),
+                displayName = payload.getString("displayName"),
+                mimeType = if (payload.isNull("mimeType")) null else payload.getString("mimeType"),
+                sizeBytes = if (payload.isNull("sizeBytes")) null else payload.getLong("sizeBytes"),
+            )
+            require(file.selectionId == selectionId) { "The persisted upload capability changed." }
+            SelectedSource(Uri.parse(payload.getString("uri")), file)
+        }.getOrNull()
+    }
+
+    private fun preferenceKey(selectionId: String): String = "$PREFERENCE_PREFIX$selectionId"
 
     private data class PendingSelection(
         val continuation: CancellableContinuation<LocalUploadSelectionResult>,
@@ -111,6 +198,41 @@ internal class AndroidLocalUploadPicker(context: Context) {
         val uri: Uri,
         val file: LocalUploadFile,
     )
+
+    private companion object {
+        const val PREFERENCES = "nextcloud_native_upload_capabilities"
+        const val PREFERENCE_PREFIX = "upload_"
+    }
+}
+
+/**
+ * Acquires a durable picker capability without exposing an interval where a successful selection
+ * can be reported before its metadata reaches app-private storage.
+ */
+internal fun acquireDurableUploadCapability(
+    takePermission: () -> Unit,
+    persistMetadata: () -> Boolean,
+    releasePermission: () -> Unit,
+) {
+    takePermission()
+    val persisted = runCatching { persistMetadata() }
+    if (persisted.getOrNull() == true) return
+    runCatching(releasePermission)
+    persisted.exceptionOrNull()?.let { throw it }
+    error("The durable upload capability could not be saved.")
+}
+
+/**
+ * Revokes the URI grant before synchronously deleting capability metadata. A failed grant release
+ * is still followed by metadata deletion because Android also throws when the grant was already
+ * absent; in either case the app must not retain an indefinitely reusable picker capability.
+ */
+internal fun releaseDurableUploadCapability(
+    releasePermission: () -> Unit,
+    removeMetadata: () -> Boolean,
+): Boolean {
+    runCatching(releasePermission)
+    return runCatching(removeMetadata).getOrDefault(false)
 }
 
 private data class AndroidUploadMetadata(
