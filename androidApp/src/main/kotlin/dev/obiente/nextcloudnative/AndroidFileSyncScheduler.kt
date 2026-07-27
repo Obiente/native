@@ -13,8 +13,107 @@ import androidx.work.await
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncNetworkPolicy
 import dev.obiente.nextcloudnative.app.FileSyncPowerPolicy
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.first
+
+internal data class AndroidFileSyncSessionSchedulingToken(
+    val accountId: String,
+    val generation: Long,
+)
+
+internal class AndroidFileSyncSessionSchedulingGuard {
+    private val monitor = Any()
+    private var accountId: String? = null
+    private var generation = 0L
+
+    fun <Session> restorePersistedSession(
+        load: () -> Session?,
+        accountIdOf: (Session) -> String,
+    ): Session? = synchronized(monitor) {
+        val restored = load()
+        if (restored == null) {
+            if (accountId != null) generation += 1
+            accountId = null
+        } else {
+            val restoredAccountId = accountIdOf(restored)
+            if (accountId != null && accountId != restoredAccountId) {
+                generation += 1
+            }
+            accountId = restoredAccountId
+        }
+        restored
+    }
+
+    fun replaceSession(
+        replacementAccountId: String,
+        persist: () -> Unit,
+        cancelAll: () -> Unit,
+    ) {
+        synchronized(monitor) {
+            val accountChanged = accountId != replacementAccountId
+            generation += 1
+            accountId = null
+            try {
+                persist()
+                accountId = replacementAccountId
+            } finally {
+                if (accountChanged) cancelAll()
+            }
+        }
+    }
+
+    fun clearSession(
+        persist: () -> Unit,
+        cancelAll: () -> Unit,
+    ) {
+        synchronized(monitor) {
+            generation += 1
+            accountId = null
+            try {
+                persist()
+            } finally {
+                cancelAll()
+            }
+        }
+    }
+
+    fun capture(currentAccountId: String): AndroidFileSyncSessionSchedulingToken? =
+        synchronized(monitor) {
+            currentAccountId.takeIf { it == accountId }?.let {
+                AndroidFileSyncSessionSchedulingToken(it, generation)
+            }
+        }
+
+    fun runIfCurrent(
+        token: AndroidFileSyncSessionSchedulingToken,
+        action: () -> Unit,
+    ): Boolean = synchronized(monitor) {
+        if (token.accountId != accountId || token.generation != generation) {
+            false
+        } else {
+            action()
+            true
+        }
+    }
+}
+
+internal data class DeferredFileSyncPairScheduling(
+    val token: AndroidFileSyncSessionSchedulingToken,
+    val userId: String,
+)
+
+internal class DeferredFileSyncPairSchedulingRegistry {
+    private val scheduled = ConcurrentHashMap.newKeySet<DeferredFileSyncPairScheduling>()
+
+    fun acquire(scheduling: DeferredFileSyncPairScheduling): Boolean = scheduled.add(scheduling)
+
+    fun release(scheduling: DeferredFileSyncPairScheduling) {
+        scheduled.remove(scheduling)
+    }
+}
+
+internal val ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD = AndroidFileSyncSessionSchedulingGuard()
 
 /** Durable WorkManager schedule for one sync pair. WorkManager restores it after reboot. */
 internal class AndroidFileSyncScheduler(context: Context) {
@@ -71,6 +170,15 @@ internal class AndroidFileSyncScheduler(context: Context) {
         return pairIds.filterTo(mutableSetOf()) { pairId ->
             workManager.getWorkInfosForUniqueWorkFlow(workName(pairId)).first()
                 .any { work -> work.state == WorkInfo.State.RUNNING }
+        }
+    }
+
+    suspend fun awaitPairsNotRunning(pairIds: Collection<String>) {
+        pairIds.forEach { pairId ->
+            workManager.getWorkInfosForUniqueWorkFlow(workName(pairId))
+                .first { workInfos ->
+                    workInfos.none { work -> work.state == WorkInfo.State.RUNNING }
+                }
         }
     }
 
