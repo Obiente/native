@@ -57,6 +57,7 @@ internal fun NextcloudBoardDragAutoScroll(
 ) {
     val density = LocalDensity.current
     val edgeThresholdPx = with(density) { 56.dp.toPx() }
+    val horizontalIntentThresholdPx = with(density) { 12.dp.toPx() }
     val verticalActivationHaloPx = with(density) { 16.dp.toPx() }
     val maxVelocityPxPerSecond = with(density) { 720.dp.toPx() }
     val currentPosition by rememberUpdatedState(position)
@@ -71,6 +72,7 @@ internal fun NextcloudBoardDragAutoScroll(
         if (activeDragKey == null) return@LaunchedEffect
         var previousFrameNanos = 0L
         var targetRefreshState = BoardDragTargetRefreshState()
+        var horizontalDragOrigin = currentPosition?.x
         while (true) {
             val frameNanos = withFrameNanos { it }
             if (previousFrameNanos == 0L) {
@@ -95,11 +97,16 @@ internal fun NextcloudBoardDragAutoScroll(
 
             val currentDragPosition = currentPosition ?: continue
             val currentViewport = currentBoardViewport ?: continue
-            val horizontalVelocity = resolveBoardDragEdgeScrollVelocity(
+            val dragOrigin = horizontalDragOrigin ?: currentDragPosition.x.also {
+                horizontalDragOrigin = it
+            }
+            val horizontalVelocity = resolveBoardDragHorizontalEdgeScrollVelocity(
                 pointer = currentDragPosition.x,
+                dragOrigin = dragOrigin,
                 viewportStart = currentViewport.left,
                 viewportEnd = currentViewport.right,
                 edgeThreshold = edgeThresholdPx,
+                intentThreshold = horizontalIntentThresholdPx,
                 maxVelocity = maxVelocityPxPerSecond,
             )
             val horizontalConsumed = if (horizontalVelocity == 0f) {
@@ -133,6 +140,33 @@ internal fun NextcloudBoardDragAutoScroll(
                 verticalConsumed = verticalConsumed,
             )
         }
+    }
+}
+
+internal fun resolveBoardDragHorizontalEdgeScrollVelocity(
+    pointer: Float,
+    dragOrigin: Float,
+    viewportStart: Float,
+    viewportEnd: Float,
+    edgeThreshold: Float,
+    intentThreshold: Float,
+    maxVelocity: Float,
+): Float {
+    if (!dragOrigin.isFinite() || !intentThreshold.isFinite() || intentThreshold < 0f) {
+        return 0f
+    }
+    val edgeVelocity = resolveBoardDragEdgeScrollVelocity(
+        pointer = pointer,
+        viewportStart = viewportStart,
+        viewportEnd = viewportEnd,
+        edgeThreshold = edgeThreshold,
+        maxVelocity = maxVelocity,
+    )
+    val horizontalDisplacement = pointer - dragOrigin
+    return when {
+        edgeVelocity < 0f && horizontalDisplacement <= -intentThreshold -> edgeVelocity
+        edgeVelocity > 0f && horizontalDisplacement >= intentThreshold -> edgeVelocity
+        else -> 0f
     }
 }
 
@@ -200,6 +234,40 @@ internal fun <Key> resolveBoardDragVerticalLane(
     }?.key
 }
 
+internal fun <Key> resolveBoardDragLaneDropTarget(
+    position: Offset,
+    boardViewport: Rect,
+    laneViewports: Map<Key, Rect>,
+    allowedLaneKeys: Set<Key>,
+): Key? {
+    if (
+        !position.isFinite() ||
+        !boardViewport.isFinite() ||
+        position.x !in boardViewport.left..boardViewport.right ||
+        position.y !in boardViewport.top..boardViewport.bottom
+    ) {
+        return null
+    }
+    val visibleLanesAtPointerHeight = laneViewports.entries.filter { (_, laneViewport) ->
+        laneViewport.isFinite() &&
+            laneViewport.right >= boardViewport.left &&
+            laneViewport.left <= boardViewport.right &&
+            position.y in
+            maxOf(boardViewport.top, laneViewport.top)..minOf(boardViewport.bottom, laneViewport.bottom)
+    }
+    val directlyHitLane = visibleLanesAtPointerHeight.firstOrNull { (_, laneViewport) ->
+        position.x in laneViewport.left..laneViewport.right
+    }
+    if (directlyHitLane != null) {
+        return directlyHitLane.key.takeIf(allowedLaneKeys::contains)
+    }
+    return visibleLanesAtPointerHeight
+        .asSequence()
+        .filter { (key) -> key in allowedLaneKeys }
+        .minByOrNull { (_, laneViewport) -> laneViewport.horizontalDistanceTo(position.x) }
+        ?.key
+}
+
 internal fun shouldRefreshBoardDragTarget(
     horizontalConsumed: Float,
     verticalConsumed: Float,
@@ -212,3 +280,9 @@ private fun Offset.isFinite(): Boolean = x.isFinite() && y.isFinite()
 private fun Rect.isFinite(): Boolean =
     left.isFinite() && top.isFinite() && right.isFinite() && bottom.isFinite() &&
         right > left && bottom > top
+
+private fun Rect.horizontalDistanceTo(x: Float): Float = when {
+    x < left -> left - x
+    x > right -> x - right
+    else -> 0f
+}

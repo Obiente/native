@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import dev.obiente.nextcloudnative.app.design.resolveBoardDragLaneDropTarget
 
 internal data class NativeBoardLaneStateKey(
     val resourceId: String,
@@ -10,11 +11,15 @@ internal data class NativeBoardLaneStateKey(
 
 internal fun resolveNativeBoardLaneDropTarget(
     position: Offset,
+    boardViewport: Rect,
     laneBounds: Map<String, Rect>,
     allowedLaneKeys: Set<String>,
-): String? = laneBounds.entries.firstOrNull { (key, bounds) ->
-    key in allowedLaneKeys && bounds.contains(position)
-}?.key
+): String? = resolveBoardDragLaneDropTarget(
+    position = position,
+    boardViewport = boardViewport,
+    laneViewports = laneBounds,
+    allowedLaneKeys = allowedLaneKeys,
+)
 
 internal fun stableNativeBoardLaneOrder(
     initialLaneKeys: List<String>,

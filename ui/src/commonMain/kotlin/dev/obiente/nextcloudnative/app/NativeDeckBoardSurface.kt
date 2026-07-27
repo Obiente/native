@@ -49,6 +49,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.LocalPinnableContainer
+import androidx.compose.ui.layout.PinnableContainer
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
@@ -67,6 +69,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
+import dev.obiente.nextcloudnative.app.design.resolveBoardDragLaneDropTarget
 import dev.obiente.nextcloudnative.app.design.resolveBoardDragVerticalLane
 import kotlin.math.roundToInt
 
@@ -547,9 +550,24 @@ private fun DeckLanes(
     var terminalDropRequested by remember { mutableStateOf(false) }
 
     fun resolveDropTarget(card: DeckCard, position: Offset): DeckUiCardDropTarget? {
-        val destination = stacks.firstOrNull { stack ->
-            stackBounds.bounds(stack.id)?.contains(position.x, position.y) == true
-        } ?: return null
+        val boardViewport = lanesBounds ?: return null
+        val stackViewports = stacks.mapNotNull { stack ->
+            stackBounds.bounds(stack.id)?.let { bounds ->
+                stack.id to Rect(
+                    left = bounds.left,
+                    top = bounds.top,
+                    right = bounds.right,
+                    bottom = bounds.bottom,
+                )
+            }
+        }.toMap()
+        val destinationId = resolveBoardDragLaneDropTarget(
+            position = position,
+            boardViewport = boardViewport,
+            laneViewports = stackViewports,
+            allowedLaneKeys = stackViewports.keys,
+        ) ?: return null
+        val destination = stacks.firstOrNull { stack -> stack.id == destinationId } ?: return null
         val destinationBounds = stackBounds.bounds(destination.id) ?: return null
         var insertionIndex = 0
         val visibleCardZones = buildList {
@@ -568,7 +586,7 @@ private fun DeckLanes(
             }
         }
         return resolveDeckUiCardDropTarget(
-            pointerX = position.x,
+            pointerX = position.x.coerceIn(destinationBounds.left, destinationBounds.right),
             pointerY = position.y,
             zones = listOf(
                 DeckUiStackDropZone(
@@ -650,6 +668,7 @@ private fun DeckLanes(
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
         ) {
             items(stacks, key = DeckStack::id) { stack ->
+                val lanePinnableContainer = LocalPinnableContainer.current
                 val stackBoundsOwner = remember(stack.id) { Any() }
                 val laneScrollState = rememberLazyListState()
                 DisposableEffect(stack.id, stackBoundsOwner) {
@@ -766,6 +785,7 @@ private fun DeckLanes(
                                 selected = card.id == selectedCardId,
                                 dragging = card.id == activeCard?.id,
                                 dragEnabled = onMoveCard != null,
+                                lanePinnableContainer = lanePinnableContainer,
                                 onBoundsChanged = { bounds ->
                                     cardBounds.update(card.id, cardBoundsOwner, bounds)
                                 },
@@ -849,6 +869,7 @@ private fun DeckCardItem(
     selected: Boolean,
     dragging: Boolean,
     dragEnabled: Boolean,
+    lanePinnableContainer: PinnableContainer?,
     onBoundsChanged: (DeckUiRect) -> Unit,
     onDragStart: (Offset) -> Unit,
     onDrag: (Offset) -> Unit,
@@ -911,6 +932,7 @@ private fun DeckCardItem(
                         onDrag = onDrag,
                         onDragEnd = onDragEnd,
                         onDragCancel = onDragCancel,
+                        additionalPinnableContainer = lanePinnableContainer,
                     )
                 }
                 Text(

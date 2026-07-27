@@ -9,6 +9,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
 class NativeBoardDragPlacementTest {
+    private val boardViewport = Rect(left = 0f, top = 0f, right = 360f, bottom = 400f)
     private val lanes = linkedMapOf(
         "planned" to Rect(left = 0f, top = 0f, right = 100f, bottom = 400f),
         "active" to Rect(left = 120f, top = 0f, right = 220f, bottom = 400f),
@@ -21,6 +22,7 @@ class NativeBoardDragPlacementTest {
             "active",
             resolveNativeBoardLaneDropTarget(
                 position = Offset(180f, 160f),
+                boardViewport = boardViewport,
                 laneBounds = lanes,
                 allowedLaneKeys = setOf("active", "done"),
             ),
@@ -32,6 +34,7 @@ class NativeBoardDragPlacementTest {
         assertNull(
             resolveNativeBoardLaneDropTarget(
                 position = Offset(40f, 160f),
+                boardViewport = boardViewport,
                 laneBounds = lanes,
                 allowedLaneKeys = setOf("active", "done"),
             ),
@@ -43,6 +46,29 @@ class NativeBoardDragPlacementTest {
         assertNull(
             resolveNativeBoardLaneDropTarget(
                 position = Offset(400f, 160f),
+                boardViewport = boardViewport,
+                laneBounds = lanes,
+                allowedLaneKeys = setOf("active", "done"),
+            ),
+        )
+    }
+
+    @Test
+    fun resolvesNearestAllowedLaneAcrossBoardGapAndPadding() {
+        assertEquals(
+            "active",
+            resolveNativeBoardLaneDropTarget(
+                position = Offset(116f, 160f),
+                boardViewport = boardViewport,
+                laneBounds = lanes,
+                allowedLaneKeys = setOf("active", "done"),
+            ),
+        )
+        assertEquals(
+            "done",
+            resolveNativeBoardLaneDropTarget(
+                position = Offset(352f, 160f),
+                boardViewport = boardViewport,
                 laneBounds = lanes,
                 allowedLaneKeys = setOf("active", "done"),
             ),

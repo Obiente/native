@@ -1844,11 +1844,15 @@ private fun GenericRecordBoard(
     var terminalDropRequested by remember(resource.id) { mutableStateOf(false) }
     val fingerprint = remember(lanes) { nativeBoardFingerprint(lanes) }
 
-    fun resolveDragTarget(position: Offset): String? = resolveNativeBoardLaneDropTarget(
-        position = position,
-        laneBounds = laneBounds,
-        allowedLaneKeys = dragAllowedLaneKeys,
-    )
+    fun resolveDragTarget(position: Offset): String? {
+        val viewport = boardBounds ?: return null
+        return resolveNativeBoardLaneDropTarget(
+            position = position,
+            boardViewport = viewport,
+            laneBounds = laneBounds,
+            allowedLaneKeys = dragAllowedLaneKeys,
+        )
+    }
 
     fun updateDragPosition(position: Offset) {
         dragPosition = position

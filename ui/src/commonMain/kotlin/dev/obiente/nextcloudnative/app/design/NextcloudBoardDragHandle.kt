@@ -27,17 +27,28 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 internal class BoardDragPinOwner {
-    private var pinnedHandle: PinnableContainer.PinnedHandle? = null
+    private val pinnedHandles = mutableListOf<PinnableContainer.PinnedHandle>()
 
-    fun acquire(container: PinnableContainer?) {
+    fun acquire(vararg containers: PinnableContainer?) {
         release()
-        pinnedHandle = container?.pin()
+        val acquiredContainers = mutableListOf<PinnableContainer>()
+        try {
+            containers.filterNotNull().forEach { container ->
+                if (acquiredContainers.none { acquired -> acquired === container }) {
+                    acquiredContainers += container
+                    pinnedHandles += container.pin()
+                }
+            }
+        } catch (error: Throwable) {
+            release()
+            throw error
+        }
     }
 
     fun release() {
-        val handle = pinnedHandle ?: return
-        pinnedHandle = null
-        handle.release()
+        val handles = pinnedHandles.toList()
+        pinnedHandles.clear()
+        handles.asReversed().forEach { handle -> handle.release() }
     }
 }
 
@@ -55,12 +66,14 @@ fun NextcloudBoardDragHandle(
     onDrag: (Offset) -> Unit,
     onDragEnd: () -> Unit,
     onDragCancel: () -> Unit,
+    additionalPinnableContainer: PinnableContainer? = null,
     modifier: Modifier = Modifier,
 ) {
     var bounds by remember(itemLabel) { mutableStateOf<Rect?>(null) }
     val pinOwner = remember(itemLabel) { BoardDragPinOwner() }
     val pinnableContainer = LocalPinnableContainer.current
     val currentPinnableContainer by rememberUpdatedState(pinnableContainer)
+    val currentAdditionalPinnableContainer by rememberUpdatedState(additionalPinnableContainer)
     val currentDragActive by rememberUpdatedState(dragActive)
     val currentOnDragStart by rememberUpdatedState(onDragStart)
     val currentOnDrag by rememberUpdatedState(onDrag)
@@ -84,7 +97,10 @@ fun NextcloudBoardDragHandle(
                 detectDragGestures(
                     onDragStart = { localPosition ->
                         val handleBounds = bounds ?: return@detectDragGestures
-                        pinOwner.acquire(currentPinnableContainer)
+                        pinOwner.acquire(
+                            currentPinnableContainer,
+                            currentAdditionalPinnableContainer,
+                        )
                         try {
                             currentOnDragStart(
                                 Offset(
