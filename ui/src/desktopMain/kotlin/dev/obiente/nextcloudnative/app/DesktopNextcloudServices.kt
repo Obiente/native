@@ -654,13 +654,18 @@ class DesktopNextcloudServices(
 
     override suspend fun listMedia(session: NextcloudSession, userId: String): List<NextcloudFile> =
         withContext(Dispatchers.IO) {
-            val search = mediaSearchDavRequestBody(userId)
-            val response = request(
-                "SEARCH", session.serverUrl + "/remote.php/dav/", session, search,
-                "application/xml; charset=utf-8", headers = mapOf("Accept" to "application/xml"),
+            val pages = collectMediaSearchDavPages(
+                requests = mediaSearchDavRequests(userId),
+                execute = { body ->
+                    val response = request(
+                        "SEARCH", session.serverUrl + "/remote.php/dav/", session, body,
+                        "application/xml; charset=utf-8", headers = mapOf("Accept" to "application/xml"),
+                    )
+                    MediaSearchDavTransportResponse(response.status, response.body)
+                },
+                parse = { body -> parseDavFiles(body, userId) },
             )
-            check(response.status == 207) { "WebDAV media search failed (HTTP ${response.status})." }
-            selectMediaSearchFiles(parseDavFiles(response.body, userId))
+            mergeMediaSearchResultPages(pages)
         }
 
     override suspend fun listSystemTags(session: NextcloudSession): List<NextcloudSystemTag> =
