@@ -82,31 +82,20 @@ internal class AndroidProjectContentClient(
     @Volatile private var updateCancellationRequested = false
 
     fun support(): AppUpdateSupport {
-        val installSource = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            runCatching {
-                appContext.packageManager
-                    .getInstallSourceInfo(appContext.packageName)
-            }.getOrNull()
+        val source = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            readModernInstallSource()
         } else {
-            null
-        }
-        val installerPackage = installSource?.installingPackageName ?: if (
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.R
-        ) {
             @Suppress("DEPRECATION")
-            appContext.packageManager.getInstallerPackageName(appContext.packageName)
-        } else {
-            null
-        }
-        val packageSource = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            installSource?.packageSource
-        } else {
-            null
+            AndroidInstallSource(
+                installerPackage = appContext.packageManager
+                    .getInstallerPackageName(appContext.packageName),
+                packageSource = null,
+            )
         }
         val channel = classifyAndroidDistribution(
-            installerPackage = installerPackage,
+            installerPackage = source.installerPackage,
             debugBuild = BuildConfig.DEBUG,
-            packageSource = packageSource,
+            packageSource = source.packageSource,
         )
         val directUpdatesEnabled = canCheckAndroidDirectUpdates(
             channel = channel,
@@ -132,6 +121,21 @@ internal class AndroidProjectContentClient(
                     "Development builds are updated through the development workflow."
                 AppDistributionChannel.Unsupported ->
                     "This installation source cannot use direct in-app updates."
+            },
+        )
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.R)
+    private fun readModernInstallSource(): AndroidInstallSource {
+        val installSource = runCatching {
+            appContext.packageManager.getInstallSourceInfo(appContext.packageName)
+        }.getOrNull()
+        return AndroidInstallSource(
+            installerPackage = installSource?.installingPackageName,
+            packageSource = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                installSource?.packageSource
+            } else {
+                null
             },
         )
     }
@@ -566,6 +570,11 @@ internal class AndroidProjectContentClient(
         const val UPDATE_PROGRESS_STEP_BYTES = 256L * 1024L
     }
 }
+
+internal data class AndroidInstallSource(
+    val installerPackage: String?,
+    val packageSource: Int?,
+)
 
 internal class UpdateDownloadCancelledException : IOException("Update download cancelled.")
 
