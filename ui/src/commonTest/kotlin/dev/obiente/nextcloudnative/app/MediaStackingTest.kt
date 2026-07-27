@@ -80,16 +80,18 @@ class MediaStackingTest {
     }
 
     @Test
-    fun rawCompatibilityRejectionBisectsOnlyRejectedBatchAndKeepsCompletedPages() = runBlocking {
+    fun rawCompatibilityRejectionReducesGlobalChunkSizeWithoutRefetchingMime() = runBlocking {
         val requests = mediaSearchDavRequests("account")
         val executed = mutableListOf<String>()
-        val rejected = requests[3]
 
         val pages = collectMediaSearchDavPages(
             requests = requests,
             execute = { body ->
                 executed += body
-                if (body == rejected.body) {
+                val rawPatternCount = rawPhotoFileNameSearchPatterns().count { pattern ->
+                    "<d:literal>$pattern</d:literal>" in body
+                }
+                if (rawPatternCount > 2) {
                     MediaSearchDavTransportResponse(status = 400, body = "rejected".encodeToByteArray())
                 } else {
                     MediaSearchDavTransportResponse(
@@ -101,46 +103,8 @@ class MediaStackingTest {
             parse = { body -> listOf(body.decodeToString()) },
         )
 
-        val fallbackPages = pages.flatten().filterNot { body -> body in requests.map(MediaSearchDavRequest::body) }
-        assertEquals(2, fallbackPages.size)
-        rejected.rawFileNamePatterns.forEach { pattern ->
-            assertEquals(
-                1,
-                fallbackPages.count { body -> "<d:literal>$pattern</d:literal>" in body },
-                pattern,
-            )
-        }
-        requests.filterNot { request -> request == rejected }.forEach { request ->
-            assertEquals(1, executed.count(request.body::equals))
-        }
-        assertEquals(1, executed.count { body -> body == requests.first().body })
-        assertEquals(1, executed.count { body -> body == requests[1].body })
-        assertEquals(requests.size + 2, executed.size)
-    }
-
-    @Test
-    fun singletonRawCompatibilityRejectionSkipsOnlyThatSuffixAndContinues() = runBlocking {
-        val requests = mediaSearchDavRequests("account")
-        val patterns = rawPhotoFileNameSearchPatterns()
-        val unsupported = "%.raf"
-        val executed = mutableListOf<String>()
-
-        val pages = collectMediaSearchDavPages(
-            requests = requests,
-            execute = { body ->
-                executed += body
-                if ("<d:literal>$unsupported</d:literal>" in body) {
-                    MediaSearchDavTransportResponse(status = 422, body = "unsupported".encodeToByteArray())
-                } else {
-                    MediaSearchDavTransportResponse(status = 207, body = body.encodeToByteArray())
-                }
-            },
-            parse = { body -> listOf(body.decodeToString()) },
-        )
-
         val successfulBodies = pages.flatten()
-        assertEquals(0, successfulBodies.count { body -> "<d:literal>$unsupported</d:literal>" in body })
-        patterns.filterNot { pattern -> pattern == unsupported }.forEach { pattern ->
+        rawPhotoFileNameSearchPatterns().forEach { pattern ->
             assertEquals(
                 1,
                 successfulBodies.count { body -> "<d:literal>$pattern</d:literal>" in body },
@@ -149,7 +113,172 @@ class MediaStackingTest {
         }
         assertEquals(1, executed.count { body -> body == requests.first().body })
         assertEquals(1, executed.count { body -> body == requests[1].body })
-        assertTrue(executed.size <= patterns.size * 2 + 2)
+        assertEquals(MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS + 2, executed.size)
+        val successfulRawBodies = successfulBodies.drop(2)
+        assertEquals(13, successfulRawBodies.size)
+        assertTrue(successfulRawBodies.all { body ->
+            rawPhotoFileNameSearchPatterns().count { pattern ->
+                "<d:literal>$pattern</d:literal>" in body
+            } <= 2
+        })
+    }
+
+    @Test
+    fun singletonRawCompatibilityRejectionFailsInsteadOfReturningIncompleteResults() {
+        val requests = mediaSearchDavRequests("account")
+        val unsupported = "%.raf"
+        val executed = mutableListOf<String>()
+
+        val failure = assertFailsWith<IllegalStateException> {
+            runBlocking {
+                collectMediaSearchDavPages(
+                    requests = requests,
+                    execute = { body ->
+                        executed += body
+                        if ("<d:literal>$unsupported</d:literal>" in body) {
+                            MediaSearchDavTransportResponse(422, "unsupported".encodeToByteArray())
+                        } else {
+                            MediaSearchDavTransportResponse(207, body.encodeToByteArray())
+                        }
+                    },
+                    parse = { body -> listOf(body.decodeToString()) },
+                )
+            }
+        }
+
+        assertEquals(
+            "WebDAV RAW media search is not supported by this server (HTTP 422).",
+            failure.message,
+        )
+        assertEquals(1, executed.count { body -> body == requests.first().body })
+        assertEquals(1, executed.count { body -> body == requests[1].body })
+        assertTrue(
+            listOf(8, 4, 2, 1).all { size ->
+                executed.any { body ->
+                    "<d:literal>$unsupported</d:literal>" in body &&
+                        rawPhotoFileNameSearchPatterns().count { pattern ->
+                            "<d:literal>$pattern</d:literal>" in body
+                        } == size
+                }
+            },
+        )
+    }
+
+    @Test
+    fun rawCompatibilityRequestCapFailsInsteadOfReturningPartialSingletonResults() {
+        val requests = mediaSearchDavRequests("account")
+        var rawExecutions = 0
+
+        val failure = assertFailsWith<IllegalStateException> {
+            runBlocking {
+                collectMediaSearchDavPages(
+                    requests = requests,
+                    execute = { body ->
+                        val rawPatternCount = rawPhotoFileNameSearchPatterns().count { pattern ->
+                            "<d:literal>$pattern</d:literal>" in body
+                        }
+                        if (rawPatternCount == 0) {
+                            MediaSearchDavTransportResponse(207, body.encodeToByteArray())
+                        } else {
+                            rawExecutions += 1
+                            if (rawPatternCount > 1) {
+                                MediaSearchDavTransportResponse(400, "reduce".encodeToByteArray())
+                            } else {
+                                MediaSearchDavTransportResponse(207, body.encodeToByteArray())
+                            }
+                        }
+                    },
+                    parse = { body -> listOf(body.decodeToString()) },
+                )
+            }
+        }
+
+        assertEquals(
+            "WebDAV RAW media search exceeded the compatibility request limit.",
+            failure.message,
+        )
+        assertEquals(MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS, rawExecutions)
+    }
+
+    @Test
+    fun rawCompatibilityReductionPropagatesAuthAndServerFailures() {
+        listOf(401, 403, 500).forEach { status ->
+            var rawExecutions = 0
+            val failure = assertFailsWith<IllegalStateException> {
+                runBlocking {
+                    collectMediaSearchDavPages(
+                        requests = mediaSearchDavRequests("account"),
+                        execute = { body ->
+                            val rawPatternCount = rawPhotoFileNameSearchPatterns().count { pattern ->
+                                "<d:literal>$pattern</d:literal>" in body
+                            }
+                            when {
+                                rawPatternCount == 0 ->
+                                    MediaSearchDavTransportResponse(207, body.encodeToByteArray())
+                                rawExecutions++ == 0 ->
+                                    MediaSearchDavTransportResponse(400, "reduce".encodeToByteArray())
+                                else ->
+                                    MediaSearchDavTransportResponse(status, "failure".encodeToByteArray())
+                            }
+                        },
+                        parse = { body -> listOf(body.decodeToString()) },
+                    )
+                }
+            }
+            assertEquals("WebDAV media search failed (HTTP $status).", failure.message)
+            assertEquals(2, rawExecutions)
+        }
+    }
+
+    @Test
+    fun successfulReducedChunkSizeIsUsedForAllRemainingRawSuffixes() = runBlocking {
+        val requests = mediaSearchDavRequests("account")
+        val rawSizes = mutableListOf<Int>()
+
+        collectMediaSearchDavPages(
+            requests = requests,
+            execute = { body ->
+                val rawPatternCount = rawPhotoFileNameSearchPatterns().count { pattern ->
+                    "<d:literal>$pattern</d:literal>" in body
+                }
+                if (rawPatternCount > 0) rawSizes += rawPatternCount
+                if (rawPatternCount > 4) {
+                    MediaSearchDavTransportResponse(400, "reduce".encodeToByteArray())
+                } else {
+                    MediaSearchDavTransportResponse(207, body.encodeToByteArray())
+                }
+            },
+            parse = { body -> listOf(body.decodeToString()) },
+        )
+
+        assertEquals(8, rawSizes.first())
+        assertEquals(
+            listOf(4, 4, 4, 4, 4, 4, 2),
+            rawSizes.drop(1),
+        )
+    }
+
+    @Test
+    fun rejectedShortFinalBatchReducesFromTheBodyActuallySent() = runBlocking {
+        val rawSizes = mutableListOf<Int>()
+
+        collectMediaSearchDavPages(
+            requests = mediaSearchDavRequests("account"),
+            execute = { body ->
+                val rawPatternCount = rawPhotoFileNameSearchPatterns().count { pattern ->
+                    "<d:literal>$pattern</d:literal>" in body
+                }
+                if (rawPatternCount > 0) rawSizes += rawPatternCount
+                if (rawPatternCount == 2) {
+                    MediaSearchDavTransportResponse(400, "reduce".encodeToByteArray())
+                } else {
+                    MediaSearchDavTransportResponse(207, body.encodeToByteArray())
+                }
+            },
+            parse = { body -> listOf(body.decodeToString()) },
+        )
+
+        assertEquals(listOf(8, 8, 8, 2, 1, 1), rawSizes)
     }
 
     @Test
@@ -236,8 +365,11 @@ class MediaStackingTest {
                 requests = requests,
                 execute = { body ->
                     executions += 1
+                    val rawPatternCount = rawPhotoFileNameSearchPatterns().count { pattern ->
+                        "<d:literal>$pattern</d:literal>" in body
+                    }
                     when {
-                        body == requests[2].body ->
+                        rawPatternCount > 2 ->
                             MediaSearchDavTransportResponse(400, "rejected".encodeToByteArray())
                         executions <= 2 ->
                             MediaSearchDavTransportResponse(207, "mime".encodeToByteArray())
@@ -259,7 +391,7 @@ class MediaStackingTest {
         }
 
         assertEquals("Malformed DAV fallback response.", failure.message)
-        assertEquals(4, executions)
+        assertEquals(5, executions)
     }
 
     @Test

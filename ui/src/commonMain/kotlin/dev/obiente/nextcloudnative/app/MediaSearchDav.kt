@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 const val MAXIMUM_MEDIA_SEARCH_RESULTS = 80
 const val MAXIMUM_RAW_MEDIA_SEARCH_PATTERNS_PER_REQUEST = 8
+const val MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS = 15
 private val MEDIA_SEARCH_MIME_PATTERNS = listOf("image/%", "video/%")
 
 enum class MediaSearchDavPartition {
@@ -138,45 +139,49 @@ suspend fun <T> collectMediaSearchDavPages(
 ): List<List<T>> {
     require(requests.getOrNull(0)?.partition == MediaSearchDavPartition.ImageMime)
     require(requests.getOrNull(1)?.partition == MediaSearchDavPartition.VideoMime)
+    require(requests.size > 2)
     require(requests.drop(2).all { request -> request.partition == MediaSearchDavPartition.Raw })
     require(requests.take(2).all { request -> request.rawFileNamePatterns.isEmpty() })
     require(requests.drop(2).all { request -> request.rawFileNamePatterns.isNotEmpty() })
     val plannedRawPatterns = requests.drop(2).flatMap(MediaSearchDavRequest::rawFileNamePatterns)
-    require(plannedRawPatterns.size == plannedRawPatterns.distinct().size)
-    val maximumExecutions = requests.sumOf { request ->
-        if (request.partition == MediaSearchDavPartition.Raw) {
-            request.rawFileNamePatterns.size * 2 - 1
-        } else {
-            1
-        }
-    }
+    require(plannedRawPatterns == rawPhotoFileNameSearchPatterns())
+    val rawContext = requests[2]
+    require(requests.drop(2).all { request ->
+        request.userId == rawContext.userId && request.maximumResults == rawContext.maximumResults
+    })
     val pages = mutableListOf<List<T>>()
-    val pending = ArrayDeque(requests)
-    var executions = 0
-    while (pending.isNotEmpty()) {
-        check(++executions <= maximumExecutions) { "WebDAV media search fallback exceeded its request bound." }
-        val request = pending.removeFirst()
+    requests.take(2).forEach { request ->
+        val response = execute(request.body)
+        if (response.status != 207) {
+            error("WebDAV media search failed (HTTP ${response.status}).")
+        }
+        pages += parse(response.body)
+    }
+
+    var rawOffset = 0
+    var rawChunkSize = MAXIMUM_RAW_MEDIA_SEARCH_PATTERNS_PER_REQUEST
+    var rawRequests = 0
+    while (rawOffset < plannedRawPatterns.size) {
+        check(++rawRequests <= MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS) {
+            "WebDAV RAW media search exceeded the compatibility request limit."
+        }
+        val patterns = plannedRawPatterns.drop(rawOffset).take(rawChunkSize)
+        val request = rawMediaSearchDavRequest(
+            rawContext.userId,
+            rawContext.maximumResults,
+            patterns,
+        )
         val response = execute(request.body)
         when {
-            response.status == 207 -> pages += parse(response.body)
-            request.partition == MediaSearchDavPartition.Raw &&
-                isMediaSearchCompatibilityRejection(response.status) -> {
-                val patterns = request.rawFileNamePatterns
-                if (patterns.size > 1) {
-                    val splitIndex = (patterns.size + 1) / 2
-                    val first = rawMediaSearchDavRequest(
-                        request.userId,
-                        request.maximumResults,
-                        patterns.take(splitIndex),
-                    )
-                    val second = rawMediaSearchDavRequest(
-                        request.userId,
-                        request.maximumResults,
-                        patterns.drop(splitIndex),
-                    )
-                    pending.addFirst(second)
-                    pending.addFirst(first)
-                }
+            response.status == 207 -> {
+                pages += parse(response.body)
+                rawOffset += patterns.size
+            }
+            isMediaSearchCompatibilityRejection(response.status) && patterns.size > 1 -> {
+                rawChunkSize = (patterns.size + 1) / 2
+            }
+            isMediaSearchCompatibilityRejection(response.status) -> {
+                error("WebDAV RAW media search is not supported by this server (HTTP ${response.status}).")
             }
             else -> error("WebDAV media search failed (HTTP ${response.status}).")
         }

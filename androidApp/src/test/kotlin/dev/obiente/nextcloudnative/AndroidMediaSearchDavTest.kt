@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.MediaSearchDavPartition
+import dev.obiente.nextcloudnative.app.MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS
 import dev.obiente.nextcloudnative.app.mediaSearchDavRequests
 import dev.obiente.nextcloudnative.app.rawPhotoFileNameSearchPatterns
 import kotlin.test.Test
@@ -29,5 +30,6 @@ class AndroidMediaSearchDavTest {
             rawPhotoFileNameSearchPatterns(),
             requests.drop(2).flatMap { request -> request.rawFileNamePatterns },
         )
+        assertEquals(15, MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS)
     }
 }
