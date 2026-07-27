@@ -45,7 +45,7 @@ data class NextcloudFileSharingCapabilities(
     val defaultPermissions: Int? = null,
 ) {
     val emailShares: Boolean
-        get() = emailProviderAdvertised || emailProviderObserved
+        get() = emailProviderAdvertised
 
     val supportsAnyCreation: Boolean
         get() = apiEnabled && (publicLinks || userShares || groupShares || emailShares || remoteShares)
@@ -307,12 +307,7 @@ fun UpdateFileSharePermissionsRequest.toNextcloudApiRequest(): NextcloudApiReque
     ).toNextcloudApiRequest()
 }
 
-fun UpdateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest =
-    toNextcloudApiRequest(DeviceLocalFileShareDateSource)
-
-internal fun UpdateFileShareRequest.toNextcloudApiRequest(
-    dateSource: FileShareDateSource,
-): NextcloudApiRequest {
+fun UpdateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
     val safeId = requireSafeFileShareId(shareId)
     require(permissions == null || permissions.mask != 0) { "At least one share permission is required." }
     require(password == null || password.length <= MAX_UPDATE_FILE_SHARE_PASSWORD_LENGTH &&
@@ -324,9 +319,13 @@ internal fun UpdateFileShareRequest.toNextcloudApiRequest(
             target == FileShareTarget.Email,
     ) { "Passwords are only available for link and email shares." }
     val safeExpiration = expirationDate?.let {
-        if (it.isEmpty()) "" else requireFutureFileShareDate(it, dateSource)
+        if (it.isEmpty()) "" else requireValidFileShareDate(it)
     }
-    require(note == null || note.length <= MAX_UPDATE_FILE_SHARE_NOTE_LENGTH && note.none(Char::isISOControl)) {
+    require(
+        note == null ||
+            note.length <= MAX_UPDATE_FILE_SHARE_NOTE_LENGTH &&
+            note.hasSafeFileShareNoteCharacters(),
+    ) {
         "The share note is invalid or too long."
     }
     val fields = buildList {
@@ -472,24 +471,6 @@ fun planFileShareCreation(
     permissions: FileSharePermissions,
     capabilities: NextcloudFileSharingCapabilities,
     details: FileShareCreationDetails = FileShareCreationDetails(),
-): FileShareCreationPlan = planFileShareCreation(
-    file = file,
-    target = target,
-    recipient = recipient,
-    permissions = permissions,
-    capabilities = capabilities,
-    details = details,
-    dateSource = DeviceLocalFileShareDateSource,
-)
-
-internal fun planFileShareCreation(
-    file: NextcloudFile,
-    target: FileShareTarget,
-    recipient: String?,
-    permissions: FileSharePermissions,
-    capabilities: NextcloudFileSharingCapabilities,
-    details: FileShareCreationDetails,
-    dateSource: FileShareDateSource,
 ): FileShareCreationPlan {
     val unavailableReason = fileNativeSharingDisabledReason(file, capabilities)
     if (unavailableReason != null) return FileShareCreationPlan.Blocked(unavailableReason)
@@ -527,7 +508,7 @@ internal fun planFileShareCreation(
         permissions = permissions,
         details = details,
     )
-    val validationFailure = runCatching { request.toNextcloudApiRequest(dateSource) }.exceptionOrNull()
+    val validationFailure = runCatching { request.toNextcloudApiRequest() }.exceptionOrNull()
     return if (validationFailure == null) {
         FileShareCreationPlan.Ready(request)
     } else {
@@ -597,7 +578,7 @@ private fun parseFileShareRecord(element: JsonElement): NextcloudFileShare? {
             ?.takeIf { it.length <= MAX_LIST_FILE_SHARE_DATE_LENGTH }
             ?.take(10)
             ?.takeIf { runCatching { requireValidFileShareDate(it) }.isSuccess },
-        note = data.textAt("note")?.takeIf { it.length <= MAX_LIST_FILE_SHARE_NOTE_LENGTH },
+        note = data.primitiveTextAt("note")?.safeFileShareNote(MAX_LIST_FILE_SHARE_NOTE_LENGTH),
         passwordProtected = data.textAt("password") != null,
     )
 }
@@ -650,6 +631,9 @@ private fun JsonObject.textAt(name: String): String? = (get(name) as? JsonPrimit
     ?.contentOrNull
     ?.trim()
     ?.takeIf { it.isNotEmpty() && it.none(Char::isISOControl) }
+
+private fun JsonObject.primitiveTextAt(name: String): String? =
+    (get(name) as? JsonPrimitive)?.contentOrNull
 
 private val fileSharingJson = Json { ignoreUnknownKeys = true }
 private const val FILE_SHARES_RELATIVE_PATH = "/ocs/v2.php/apps/files_sharing/api/v1/shares"

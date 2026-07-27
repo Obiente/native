@@ -251,12 +251,7 @@ data class NextcloudFileShare(
     val passwordProtected: Boolean = false,
 )
 
-fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest =
-    toNextcloudApiRequest(DeviceLocalFileShareDateSource)
-
-internal fun CreateFileShareRequest.toNextcloudApiRequest(
-    dateSource: FileShareDateSource,
-): NextcloudApiRequest {
+fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
     val safePath = requireSafeFilePath(path, allowRoot = false)
     val recipient = shareWith?.trim()?.takeIf(String::isNotEmpty)
     require(safePath.encodeToByteArray().size <= MAX_FILE_SHARE_PATH_BYTES) {
@@ -282,10 +277,10 @@ internal fun CreateFileShareRequest.toNextcloudApiRequest(
         "Passwords are only available for link and email shares."
     }
     val note = details.note.trim()
-    require(note.length <= MAX_FILE_SHARE_NOTE_LENGTH && note.none(Char::isISOControl)) {
+    require(note.length <= MAX_FILE_SHARE_NOTE_LENGTH && note.hasSafeFileShareNoteCharacters()) {
         "The share note is invalid or too long."
     }
-    val expiration = details.expiration.toWireValue(dateSource)
+    val expiration = details.expiration.toWireValue()
     val fields = buildList {
         add("path" to "/$safePath")
         add("shareType" to target.wireValue.toString())
@@ -310,10 +305,10 @@ internal fun CreateFileShareRequest.toNextcloudApiRequest(
     )
 }
 
-private fun FileShareExpiration.toWireValue(dateSource: FileShareDateSource): String? = when (this) {
+private fun FileShareExpiration.toWireValue(): String? = when (this) {
     FileShareExpiration.ServerDefault -> null
     FileShareExpiration.NoExpiration -> ""
-    is FileShareExpiration.OnDate -> requireFutureFileShareDate(isoDate, dateSource)
+    is FileShareExpiration.OnDate -> requireValidFileShareDate(isoDate)
 }
 
 internal fun requireValidFileShareDate(value: String): String {
@@ -334,22 +329,6 @@ internal fun requireValidFileShareDate(value: String): String {
     }
     require(day in 1..daysInMonth) { "Use a valid expiration date." }
     return value
-}
-
-internal fun requireFutureFileShareDate(
-    value: String,
-    dateSource: FileShareDateSource = DeviceLocalFileShareDateSource,
-): String {
-    val valid = requireValidFileShareDate(value)
-    val selectedDate = FileShareCalendarDate(
-        year = valid.substring(0, 4).toInt(),
-        month = valid.substring(5, 7).toInt(),
-        day = valid.substring(8, 10).toInt(),
-    )
-    require(selectedDate > dateSource.currentDeviceLocalDate()) {
-        "Choose a future expiration date."
-    }
-    return valid
 }
 
 suspend fun NextcloudPlatformServices.createFileShare(
@@ -395,7 +374,7 @@ fun parseNextcloudFileShareResponse(response: NextcloudApiResponse): NextcloudFi
         expiration = data.primitive("expiration")?.contentOrNull
             ?.takeIf { it.length <= MAX_FILE_SHARE_DATE_LENGTH && isValidFileShareDate(it) }
             ?.take(10),
-        note = data.primitive("note")?.contentOrNull?.boundedFileShareText(MAX_FILE_SHARE_NOTE_LENGTH),
+        note = data.primitive("note")?.contentOrNull?.safeFileShareNote(MAX_FILE_SHARE_NOTE_LENGTH),
         passwordProtected = data.primitive("password")?.contentOrNull != null,
     )
 }
@@ -462,6 +441,18 @@ private fun String.boundedFileShareText(maxLength: Int): String? {
     }.trim()
     return text.takeIf(String::isNotBlank)
 }
+
+internal fun String.hasSafeFileShareNoteCharacters(): Boolean =
+    all { character ->
+        !character.isISOControl() || character == '\r' || character == '\n'
+    }
+
+internal fun String.safeFileShareNote(maxLength: Int): String? =
+    takeIf {
+        it.length <= maxLength &&
+            it.isNotBlank() &&
+            it.hasSafeFileShareNoteCharacters()
+    }
 
 private fun JsonObject.primitive(name: String): JsonPrimitive? = get(name) as? JsonPrimitive
 

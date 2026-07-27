@@ -265,7 +265,49 @@ class FileSharingTest {
     }
 
     @Test
-    fun emailProviderBecomesAvailableOnlyAfterAdvertisementOrObservedResults() {
+    fun syntheticRecipientFixturesCoverEveryParsedShareeType() {
+        val response = NextcloudApiResponse(
+            status = 200,
+            body = """
+                {
+                  "ocs": {
+                    "data": {
+                      "exact": {
+                        "users": [
+                          {"label":"Synthetic user","value":{"shareType":0,"shareWith":"synthetic-user"}}
+                        ],
+                        "groups": [
+                          {"label":"Synthetic group","value":{"shareType":1,"shareWith":"synthetic-group"}}
+                        ],
+                        "emails": [
+                          {"label":"Synthetic email","value":{"shareType":4,"shareWith":"person@example.test"}}
+                        ],
+                        "remotes": [
+                          {"label":"Synthetic remote","value":{"shareType":6,"shareWith":"person@cloud.example.test"}}
+                        ]
+                      }
+                    }
+                  }
+                }
+            """.trimIndent().encodeToByteArray(),
+            contentType = "application/json",
+            etag = null,
+        )
+
+        listOf(
+            FileShareTarget.User to "synthetic-user",
+            FileShareTarget.Group to "synthetic-group",
+            FileShareTarget.Email to "person@example.test",
+            FileShareTarget.Remote to "person@cloud.example.test",
+        ).forEach { (target, expectedId) ->
+            val recipients = parseFileShareRecipientsResponse(response, target)
+            assertEquals(listOf(expectedId), recipients.map(FileShareRecipient::id))
+            assertTrue(recipients.all { it.target == target && it.exact })
+        }
+    }
+
+    @Test
+    fun observedEmailRecipientsRemainDiscoveryEvidenceNotWriteAuthorization() {
         val queryOnly = NextcloudFileSharingCapabilities(
             apiEnabled = true,
             publicLinks = true,
@@ -285,7 +327,11 @@ class FileSharingTest {
             ),
         )
         assertTrue(observed.emailProviderObserved)
-        assertTrue(observed.supports(FileShareTarget.Email))
+        assertFalse(observed.supports(FileShareTarget.Email))
+        assertTrue(observed.canOffer(FileShareTarget.Email))
+
+        val advertised = observed.copy(emailProviderAdvertised = true)
+        assertTrue(advertised.supports(FileShareTarget.Email))
     }
 
     @Test
@@ -354,12 +400,13 @@ class FileSharingTest {
             permissions = FileSharePermissions(read = true),
             password = "",
             expirationDate = "2028-02-29",
-            note = "Synthetic handoff",
-        ).toNextcloudApiRequest(syntheticFileShareDateSource)
+            note = "Synthetic handoff\r\nSecond paragraph",
+        ).toNextcloudApiRequest()
 
         assertEquals(NextcloudApiMethod.PUT, request.method)
         assertEquals(
-            "permissions=1&password=&expireDate=2028-02-29&note=Synthetic%20handoff",
+            "permissions=1&password=&expireDate=2028-02-29&" +
+                "note=Synthetic%20handoff%0D%0ASecond%20paragraph",
             request.body?.decodeToString(),
         )
         assertTrue(
@@ -368,6 +415,15 @@ class FileSharingTest {
                     shareId = "share-42",
                     target = FileShareTarget.User,
                     password = "not-allowed",
+                ).toNextcloudApiRequest()
+            }.isFailure,
+        )
+        assertTrue(
+            runCatching {
+                UpdateFileShareRequest(
+                    shareId = "share-42",
+                    target = FileShareTarget.PublicLink,
+                    note = "Unsafe\u0007note",
                 ).toNextcloudApiRequest()
             }.isFailure,
         )
@@ -403,13 +459,12 @@ class FileSharingTest {
                 sourceIsDirectory = true,
                 target = FileShareTarget.User,
                 expirationPolicy = FileShareFeaturePolicy(supported = false),
-                dateSource = syntheticFileShareDateSource,
             ),
         )
         assertNull(customUpdate.permissions)
         assertEquals(
             "note=Updated%20note",
-            customUpdate.toNextcloudApiRequest(syntheticFileShareDateSource).body?.decodeToString(),
+            customUpdate.toNextcloudApiRequest().body?.decodeToString(),
         )
 
         val missingMaskShare = customMaskShare.copy(
@@ -424,7 +479,6 @@ class FileSharingTest {
                 sourceIsDirectory = false,
                 target = FileShareTarget.User,
                 expirationPolicy = FileShareFeaturePolicy(supported = false),
-                dateSource = syntheticFileShareDateSource,
             ),
         )
         assertNull(missingMaskUpdate.permissions)
@@ -446,7 +500,6 @@ class FileSharingTest {
                 sourceIsDirectory = true,
                 target = FileShareTarget.Group,
                 expirationPolicy = FileShareFeaturePolicy(supported = false),
-                dateSource = syntheticFileShareDateSource,
             ),
         )
 
@@ -457,7 +510,6 @@ class FileSharingTest {
                 sourceIsDirectory = true,
                 target = FileShareTarget.Group,
                 expirationPolicy = FileShareFeaturePolicy(supported = false),
-                dateSource = syntheticFileShareDateSource,
             ),
         )
         assertEquals(15, update.permissions?.mask)
@@ -470,7 +522,6 @@ class FileSharingTest {
                 sourceIsDirectory = true,
                 target = FileShareTarget.Group,
                 expirationPolicy = FileShareFeaturePolicy(supported = false),
-                dateSource = syntheticFileShareDateSource,
             ),
         )
         assertEquals(21, reshareEnabled.permissions?.mask)
@@ -483,7 +534,6 @@ class FileSharingTest {
                 sourceIsDirectory = true,
                 target = FileShareTarget.Group,
                 expirationPolicy = FileShareFeaturePolicy(supported = false),
-                dateSource = syntheticFileShareDateSource,
             ),
         )
         assertEquals(5, reshareDisabled.permissions?.mask)
@@ -516,16 +566,20 @@ class FileSharingTest {
     }
 
     @Test
-    fun existingShareUpdateRejectsPastExpirationBeforeTransport() {
+    fun existingShareUpdateLeavesTimezoneRelativeExpirationAuthorityToServer() {
         val update = UpdateFileShareRequest(
             shareId = "share-42",
             target = FileShareTarget.PublicLink,
-            expirationDate = "2026-07-24",
+            expirationDate = "2020-01-01",
         )
 
+        assertEquals(
+            "expireDate=2020-01-01",
+            update.toNextcloudApiRequest().body?.decodeToString(),
+        )
         assertTrue(
             runCatching {
-                update.toNextcloudApiRequest(syntheticFileShareDateSource)
+                update.copy(expirationDate = "2020-02-30").toNextcloudApiRequest()
             }.isFailure,
         )
     }
@@ -558,7 +612,7 @@ class FileSharingTest {
                             "share_with_displayname": "Ada Lovelace",
                             "permissions": 19,
                             "expiration": "2028-02-29 00:00:00",
-                            "note": "Synthetic handoff",
+                            "note": "Synthetic handoff\nSecond paragraph",
                             "password": "redacted"
                           },
                           {
@@ -566,7 +620,8 @@ class FileSharingTest {
                             "share_type": 3,
                             "token": "public-token",
                             "url": "https://cloud.test/s/public-token",
-                            "permissions": 1
+                            "permissions": 1,
+                            "note": "Unsafe\u0007note"
                           }
                         ]
                       }
@@ -582,9 +637,10 @@ class FileSharingTest {
         assertEquals("Ada Lovelace", shares[0].displayName)
         assertEquals(19, shares[0].permissions)
         assertEquals("2028-02-29", shares[0].expiration)
-        assertEquals("Synthetic handoff", shares[0].note)
+        assertEquals("Synthetic handoff\nSecond paragraph", shares[0].note)
         assertTrue(shares[0].passwordProtected)
         assertEquals("https://cloud.test/s/public-token", shares[1].url)
+        assertNull(shares[1].note)
     }
 
     @Test
@@ -704,7 +760,6 @@ class FileSharingTest {
                     expiration = FileShareExpiration.OnDate("2028-02-29"),
                     note = "Synthetic project handoff",
                 ),
-                dateSource = syntheticFileShareDateSource,
             ),
         )
     }
@@ -713,10 +768,25 @@ class FileSharingTest {
     fun emailAndRemoteSharePlansUseVerifiedProvidersAndAdvertisedCapabilities() {
         val capabilities = NextcloudFileSharingCapabilities(
             apiEnabled = true,
-            emailProviderObserved = true,
+            emailProviderAdvertised = true,
             remoteShares = true,
         )
         val file = file(path = "Notes/todo.md", permissions = null)
+
+        val observedOnly = capabilities.copy(
+            emailProviderAdvertised = false,
+            emailProviderObserved = true,
+            emailRecipientQuery = true,
+        )
+        assertIs<FileShareCreationPlan.Blocked>(
+            planFileShareCreation(
+                file,
+                FileShareTarget.Email,
+                "person@example.test",
+                FileSharePermissionPreset.View.toPermissions(sourceIsDirectory = false),
+                observedOnly,
+            ),
+        )
 
         val email = assertIs<FileShareCreationPlan.Ready>(
             planFileShareCreation(

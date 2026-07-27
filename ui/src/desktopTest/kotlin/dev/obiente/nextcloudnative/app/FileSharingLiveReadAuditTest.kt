@@ -8,8 +8,8 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 /**
- * Opt-in saved-session audit. It performs only capability, DAV listing and OCS GET requests and
- * never prints file names, recipients, tokens or share URLs.
+ * Opt-in saved-session audit. It performs only capability, DAV listing and bounded OCS GET
+ * requests. It does not decode or print recipient records, tokens or share URLs.
  */
 class FileSharingLiveReadAuditTest {
     @Test
@@ -24,33 +24,32 @@ class FileSharingLiveReadAuditTest {
         val candidate = roots.firstOrNull { file ->
             file.permissions == null || 'R' in file.permissions
         } ?: error("The root listing did not contain a shareable audit candidate.")
-        val shares = services.listFileShares(session, candidate.path)
-        assertTrue(shares.all { share ->
-            share.url == null || safeFileShareUrl(session, share) != null
-        })
+        val request = ListFileSharesRequest(candidate.path).toNextcloudApiRequest()
+        val response = services.executeNextcloudApi(session, request)
+        assertTrue(response.status in 200..299)
+        assertTrue(response.body.size.toLong() <= request.maximumResponseBytes)
         println(
             "file-sharing-audit outcome=success methods=capabilities-propfind-get-only " +
-                "api=true content=redacted",
+                "api=true response-metadata-only content=redacted",
         )
     }
 
     @Test
-    fun `live sharee discovery is item aware GET only and sanitized`() = runBlocking {
+    fun `live sharee discovery checks only bounded response metadata`() = runBlocking {
         if (System.getenv("RUN_LIVE_NEXTCLOUD_FILE_SHARING_AUDIT") != "1") return@runBlocking
         val services = DesktopNextcloudServices()
         val session = assertNotNull(services.loadSession())
         val server = services.loadServerInfo(session)
         assertTrue(server.fileSharing.apiEnabled)
-        val query = deriveLiveShareeAuditQuery(session, server)
         val searches = listOf(
             FileShareTarget.User to FileShareItemType.File,
             FileShareTarget.Group to FileShareItemType.Folder,
             FileShareTarget.Email to FileShareItemType.File,
             FileShareTarget.Remote to FileShareItemType.Folder,
         )
-        val parsed = searches.associate { (target, itemType) ->
+        searches.forEach { (target, itemType) ->
             val request = SearchFileShareRecipientsRequest(
-                query = query,
+                query = "zz",
                 target = target,
                 itemType = itemType,
                 limit = 5,
@@ -60,31 +59,14 @@ class FileSharingLiveReadAuditTest {
             assertEquals(target.wireValue.toString(), request.queryParameters["shareType"])
             assertFalse(request.queryParameters["search"].isNullOrBlank())
             assertEquals(null, request.body)
-            target to parseFileShareRecipientsResponse(
-                services.executeNextcloudApi(session, request),
-                target,
-            )
+            val response = services.executeNextcloudApi(session, request)
+            assertTrue(response.status in 200..299)
+            assertTrue(response.body.size.toLong() <= request.maximumResponseBytes)
         }
 
-        assertTrue(parsed.getValue(FileShareTarget.User).all { it.target == FileShareTarget.User })
-        assertTrue(parsed.getValue(FileShareTarget.Group).all { it.target == FileShareTarget.Group })
-        assertTrue(parsed.getValue(FileShareTarget.Email).all { it.target == FileShareTarget.Email })
-        assertTrue(parsed.getValue(FileShareTarget.Remote).all { it.target == FileShareTarget.Remote })
         println(
-            "sharee-audit outcome=success methods=get-only item-types=file-folder " +
+            "sharee-audit outcome=success methods=get-only response-metadata-only " +
                 "content=redacted",
         )
-    }
-
-    private fun deriveLiveShareeAuditQuery(
-        session: NextcloudSession,
-        server: NextcloudServerInfo,
-    ): String {
-        val candidates = listOf(session.loginName, server.userId)
-        return candidates.firstNotNullOfOrNull { value ->
-            value.filter(Char::isLetterOrDigit)
-                .take(MIN_FILE_SHARE_RECIPIENT_QUERY_LENGTH)
-                .takeIf { it.length >= MIN_FILE_SHARE_RECIPIENT_QUERY_LENGTH }
-        } ?: error("The saved account cannot provide a safe sharee audit query.")
     }
 }

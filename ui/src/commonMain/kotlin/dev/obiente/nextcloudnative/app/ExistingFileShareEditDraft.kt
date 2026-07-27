@@ -27,7 +27,6 @@ internal fun planExistingFileShareUpdate(
     sourceIsDirectory: Boolean,
     target: FileShareTarget?,
     expirationPolicy: FileShareFeaturePolicy,
-    dateSource: FileShareDateSource = DeviceLocalFileShareDateSource,
 ): UpdateFileShareRequest? {
     val originalDraft = existingFileShareEditDraft(share)
     val permissions = if (
@@ -66,7 +65,7 @@ internal fun planExistingFileShareUpdate(
         normalizedExpiration.isEmpty() && expirationPolicy.enforced ->
             error("This server requires an expiration date.")
         normalizedExpiration.isEmpty() -> ""
-        else -> requireFutureFileShareDate(normalizedExpiration, dateSource)
+        else -> requireValidFileShareDate(normalizedExpiration)
     }
     val note = draft.note.takeIf { it != share.note.orEmpty() }
     if (permissions == null && password == null && expirationDate == null && note == null) return null

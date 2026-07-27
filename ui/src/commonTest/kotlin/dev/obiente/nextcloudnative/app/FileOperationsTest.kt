@@ -92,7 +92,7 @@ class FileOperationsTest {
             path = "Photos/Summer trip.jpg",
             target = FileShareTarget.PublicLink,
             permissions = FileSharePermissions(read = true),
-        ).toNextcloudApiRequest(syntheticFileShareDateSource)
+        ).toNextcloudApiRequest()
 
         assertEquals(NextcloudApiMethod.POST, request.method)
         assertEquals("/ocs/v2.php/apps/files_sharing/api/v1/shares", request.relativePath)
@@ -115,40 +115,43 @@ class FileOperationsTest {
             details = FileShareCreationDetails(
                 password = "synthetic secret",
                 expiration = FileShareExpiration.OnDate("2028-02-29"),
-                note = "For the project team",
+                note = "For the project team\r\nSecond paragraph",
             ),
-        ).toNextcloudApiRequest(syntheticFileShareDateSource)
+        ).toNextcloudApiRequest()
 
         assertEquals(
             "path=%2FDocuments%2FGuide.pdf&shareType=3&permissions=1&" +
-                "password=synthetic%20secret&expireDate=2028-02-29&note=For%20the%20project%20team",
+                "password=synthetic%20secret&expireDate=2028-02-29&" +
+                "note=For%20the%20project%20team%0D%0ASecond%20paragraph",
             request.body?.decodeToString(),
         )
         assertEquals("2028-02-29", requireValidFileShareDate("2028-02-29"))
         assertFailsWith<IllegalArgumentException> { requireValidFileShareDate("2027-02-29") }
-    }
-
-    @Test
-    fun expirationDatesMustBeFutureInTheInjectedDeviceLocalCalendar() {
-        assertEquals(
-            "2026-07-26",
-            requireFutureFileShareDate("2026-07-26", syntheticFileShareDateSource),
-        )
-        assertFailsWith<IllegalArgumentException> {
-            requireFutureFileShareDate("2026-07-25", syntheticFileShareDateSource)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            requireFutureFileShareDate("2026-07-24", syntheticFileShareDateSource)
-        }
         assertFailsWith<IllegalArgumentException> {
             CreateFileShareRequest(
                 path = "Documents/Guide.pdf",
                 target = FileShareTarget.PublicLink,
-                details = FileShareCreationDetails(
-                    expiration = FileShareExpiration.OnDate("2026-07-24"),
-                ),
-            ).toNextcloudApiRequest(syntheticFileShareDateSource)
+                details = FileShareCreationDetails(note = "Unsafe\u0007note"),
+            ).toNextcloudApiRequest()
         }
+    }
+
+    @Test
+    fun expirationDatesAreCalendarValidatedWithoutDeviceTimezoneAuthority() {
+        assertEquals(
+            "2020-01-01",
+            requireValidFileShareDate("2020-01-01"),
+        )
+        val request = CreateFileShareRequest(
+            path = "Documents/Guide.pdf",
+            target = FileShareTarget.PublicLink,
+            details = FileShareCreationDetails(
+                expiration = FileShareExpiration.OnDate("2020-01-01"),
+            ),
+        ).toNextcloudApiRequest()
+        assertTrue(request.body!!.decodeToString().contains("expireDate=2020-01-01"))
+        assertFailsWith<IllegalArgumentException> { requireValidFileShareDate("2020-02-30") }
+        assertFailsWith<IllegalArgumentException> { requireValidFileShareDate("2020-1-01") }
     }
 
     @Test

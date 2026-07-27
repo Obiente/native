@@ -39,7 +39,6 @@ internal fun ExistingFileShareManager(
     capabilities: NextcloudFileSharingCapabilities,
     onChanged: (NextcloudFileShare) -> Unit,
     onRevoked: (NextcloudFileShare) -> Unit,
-    dateSource: FileShareDateSource = DeviceLocalFileShareDateSource,
 ) {
     var editing by remember(share.id) { mutableStateOf(false) }
     var confirmRevoke by remember(share.id) { mutableStateOf(false) }
@@ -179,7 +178,6 @@ internal fun ExistingFileShareManager(
                                 sourceIsDirectory = sourceIsDirectory,
                                 target = target,
                                 expirationPolicy = expirationPolicy,
-                                dateSource = dateSource,
                             )
                         }.getOrElse { failure ->
                             error = failure.message ?: "The share settings are invalid."
