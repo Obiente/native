@@ -134,6 +134,9 @@ fun GenericNativeAppScreen(
     mediaArtworkResolver: NativeMediaArtworkResolver? = null,
 ) {
     val resource = schema.resource(view.resourceId)
+    val boardMoveReconciliation = remember(schema.app.id, view.id, resource?.id) {
+        NativeBoardMoveReconciliation()
+    }
     val readyRecords = (state as? NativeScreenState.Ready)?.records.orEmpty()
     val displayResource = remember(resource, readyRecords) {
         resource?.withEphemeralDisplayFields(readyRecords)
@@ -209,6 +212,7 @@ fun GenericNativeAppScreen(
                     onSelectRecord = onSelectRecord,
                     actionExecutor = actionExecutor,
                     onActionSucceeded = onInlineActionSucceeded ?: onActionSucceeded,
+                    reconciliation = boardMoveReconciliation,
                 )
                 GenericNativeSurface.Mailbox -> GenericMailboxCollection(presentedResource, presentedRecords, onSelectRecord)
                 GenericNativeSurface.MediaLibrary -> GenericMediaLibraryCollection(
@@ -1655,6 +1659,7 @@ private fun GenericRecordBoard(
     onSelectRecord: ((NativeRecord) -> Unit)?,
     actionExecutor: NativeActionExecutor,
     onActionSucceeded: (() -> Unit)?,
+    reconciliation: NativeBoardMoveReconciliation,
 ) {
     val discoveredLanes = remember(resource, records, declaredLanes) {
         declaredLanes ?: nativeBoardLanes(resource, records)
@@ -1673,7 +1678,6 @@ private fun GenericRecordBoard(
     var busyRecordId by remember(resource.id) { mutableStateOf<String?>(null) }
     var actionMessage by remember(resource.id) { mutableStateOf<String?>(null) }
     var actionError by remember(resource.id) { mutableStateOf<String?>(null) }
-    var pendingMove by remember(resource.id) { mutableStateOf<PendingNativeBoardMove?>(null) }
     val laneBounds = remember(resource.id) { mutableStateMapOf<String, Rect>() }
     var boardBounds by remember(resource.id) { mutableStateOf<Rect?>(null) }
     var draggedRecord by remember(resource.id) { mutableStateOf<NativeRecord?>(null) }
@@ -1700,6 +1704,7 @@ private fun GenericRecordBoard(
         dragAllowedLaneKeys = emptySet()
     }
 
+    val pendingMove = reconciliation.pendingMove
     LaunchedEffect(fingerprint, pendingMove) {
         val pending = pendingMove ?: return@LaunchedEffect
         if (fingerprint == pending.beforeFingerprint) return@LaunchedEffect
@@ -1723,12 +1728,12 @@ private fun GenericRecordBoard(
             }
             NativeBoardMoveVerification.WaitingForRefresh -> return@LaunchedEffect
         }
-        pendingMove = null
+        reconciliation.clear(pending)
     }
     LaunchedEffect(pendingMove) {
         val pending = pendingMove ?: return@LaunchedEffect
         delay(BOARD_MOVE_VERIFICATION_TIMEOUT_MILLIS)
-        if (pendingMove != pending) return@LaunchedEffect
+        if (reconciliation.pendingMove != pending) return@LaunchedEffect
         when (
             verifyNativeBoardMove(
                 lanes = lanes,
@@ -1750,7 +1755,7 @@ private fun GenericRecordBoard(
                     "unchanged in this view."
             }
         }
-        pendingMove = null
+        reconciliation.clear(pending)
     }
 
     fun executeEdit(target: NativeBoardEditTarget, values: Map<String, String>) {
@@ -1778,7 +1783,7 @@ private fun GenericRecordBoard(
             when (val result = actionExecutor.execute(target.plan.request(destination.key))) {
                 is NativeActionExecutionResult.Success -> {
                     moveTarget = null
-                    pendingMove = PendingNativeBoardMove(
+                    reconciliation.begin(
                         recordId = target.record.id,
                         targetLaneKey = destination.key,
                         targetLaneTitle = destination.title,
@@ -2081,12 +2086,35 @@ private data class NativeBoardDirectActionTarget(
     val plan: NativeBoardDirectActionPlan,
 )
 
-private data class PendingNativeBoardMove(
+internal data class PendingNativeBoardMove(
     val recordId: String,
     val targetLaneKey: String,
     val targetLaneTitle: String,
     val beforeFingerprint: String,
 )
+
+internal class NativeBoardMoveReconciliation {
+    var pendingMove by mutableStateOf<PendingNativeBoardMove?>(null)
+        private set
+
+    fun begin(
+        recordId: String,
+        targetLaneKey: String,
+        targetLaneTitle: String,
+        beforeFingerprint: String,
+    ) {
+        pendingMove = PendingNativeBoardMove(
+            recordId = recordId,
+            targetLaneKey = targetLaneKey,
+            targetLaneTitle = targetLaneTitle,
+            beforeFingerprint = beforeFingerprint,
+        )
+    }
+
+    fun clear(expected: PendingNativeBoardMove) {
+        if (pendingMove == expected) pendingMove = null
+    }
+}
 
 @Composable
 private fun GenericBoardCard(
