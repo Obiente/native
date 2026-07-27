@@ -144,6 +144,10 @@ fun NextcloudMediaViewer(
     var externalOpening by remember(selected.path) { mutableStateOf(false) }
     var externalError by remember(selected.path) { mutableStateOf<String?>(null) }
     var nativeVideoError by remember(selected.path) { mutableStateOf<String?>(null) }
+    var livePhotoSource by remember(selected.path, selected.etag) {
+        mutableStateOf<MemoriesLivePhotoSource?>(null)
+    }
+    var motionPlaying by remember(selected.path, selected.etag) { mutableStateOf(false) }
     var viewerAction by remember(selected.path) { mutableStateOf<MediaViewerAction?>(null) }
     val scope = rememberCoroutineScope()
     val viewerActions = remember(
@@ -202,6 +206,19 @@ fun NextcloudMediaViewer(
     }
 
     fun openInMediaApp() = handoffToExternalApp(ExternalFileHandoffAction.OpenWith)
+
+    LaunchedEffect(selected, taggingAvailable, session) {
+        livePhotoSource = null
+        motionPlaying = false
+        if (!taggingAvailable || !selected.canResolveMemoriesLivePhoto()) return@LaunchedEffect
+        livePhotoSource = runCatching {
+            resolveMemoriesLivePhotoSource(
+                services = services,
+                session = session,
+                file = selected,
+            )
+        }.getOrNull()
+    }
 
     LaunchedEffect(sourceLoadIdentity, selected.fileId, session, retryKey, sourcePlan.previewCandidates) {
         previewState = MediaPreviewState.Loading
@@ -387,6 +404,20 @@ fun NextcloudMediaViewer(
         val viewerLayout = remember(sourcePlan.choices.size) {
             resolveMediaViewerLayout(sourcePlan.choices.size)
         }
+        val playbackSource = remember(
+            selected,
+            userId,
+            livePhotoSource,
+            motionPlaying,
+            platformNativeVideoPlaybackAvailable,
+        ) {
+            selected.nativeVideoPlaybackSource(
+                userId = userId,
+                nativePlaybackAvailable = platformNativeVideoPlaybackAvailable,
+                livePhotoSource = livePhotoSource,
+                motionPlaying = motionPlaying,
+            )
+        }
         val mediaCanvasModifier = when (viewerLayout.contentLayout) {
             MediaViewerContentLayout.FullCanvasBehindChrome -> Modifier.fillMaxSize()
         }
@@ -400,16 +431,17 @@ fun NextcloudMediaViewer(
                 onCancel = { editing = false },
                 modifier = Modifier.fillMaxSize(),
             )
-        } else if (selected.canUsePlatformNativeVideoPlayback(
-                userId = userId,
-                nativePlaybackAvailable = platformNativeVideoPlaybackAvailable,
-            )
-        ) {
+        } else if (playbackSource != null) {
             PlatformNativeVideoPlayer(
                 session = session,
                 userId = userId,
-                file = selected,
-                onError = { message -> nativeVideoError = message },
+                source = playbackSource,
+                onError = { message ->
+                    nativeVideoError = message
+                    if (playbackSource is NativeVideoPlaybackSource.MemoriesLivePhoto) {
+                        motionPlaying = false
+                    }
+                },
                 modifier = mediaCanvasModifier,
             )
         } else when (val state = previewState) {
@@ -470,6 +502,23 @@ fun NextcloudMediaViewer(
         }
 
         if (!editing) {
+            if (
+                livePhotoSource != null &&
+                !motionPlaying &&
+                previewState is MediaPreviewState.Ready &&
+                platformNativeVideoPlaybackAvailable
+            ) {
+                Button(
+                    onClick = {
+                        nativeVideoError = null
+                        motionPlaying = true
+                    },
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp),
+                ) {
+                    Icon(NextcloudIcons.Play, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Text("Play motion", modifier = Modifier.padding(start = 8.dp))
+                }
+            }
             if (
                 selected.mediaAssetFormat() == MediaAssetFormat.Video &&
                 !platformNativeVideoPlaybackAvailable &&
@@ -1178,6 +1227,20 @@ internal fun NextcloudFile.canUsePlatformNativeVideoPlayback(
     nativePlaybackAvailable &&
         mediaAssetFormat() == MediaAssetFormat.Video &&
         hasAuthoritativeMediaDavAccess(userId)
+
+internal fun NextcloudFile.nativeVideoPlaybackSource(
+    userId: String,
+    nativePlaybackAvailable: Boolean,
+    livePhotoSource: MemoriesLivePhotoSource?,
+    motionPlaying: Boolean,
+): NativeVideoPlaybackSource? {
+    if (!nativePlaybackAvailable) return null
+    if (motionPlaying && livePhotoSource != null && livePhotoSource.fileId == fileId) {
+        return NativeVideoPlaybackSource.MemoriesLivePhoto(livePhotoSource)
+    }
+    return takeIf { canUsePlatformNativeVideoPlayback(userId, nativePlaybackAvailable) }
+        ?.let { NativeVideoPlaybackSource.DavFile(it) }
+}
 
 private const val MAXIMUM_PREVIEW_IMAGE_DIMENSION = 1_600
 private const val MAXIMUM_DISPLAY_IMAGE_DIMENSION = 4_096

@@ -25,12 +25,12 @@ internal actual val platformNativeVideoPlaybackAvailable: Boolean = true
 internal actual fun PlatformNativeVideoPlayer(
     session: NextcloudSession,
     userId: String,
-    file: NextcloudFile,
+    source: NativeVideoPlaybackSource,
     onError: (String) -> Unit,
     modifier: Modifier,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val player = remember(session.serverUrl, session.loginName, userId, file.path, file.etag) {
+    val player = remember(session.serverUrl, session.loginName, userId, source) {
         val authorization = Base64.encodeToString(
             "${session.loginName}:${session.appPassword}".toByteArray(Charsets.UTF_8),
             Base64.NO_WRAP,
@@ -42,15 +42,31 @@ internal actual fun PlatformNativeVideoPlayer(
         val sourceFactory = OkHttpDataSource.Factory(client)
             .setUserAgent("Nextcloud Native")
             .setDefaultRequestProperties(mapOf("Authorization" to "Basic $authorization"))
+        val mediaId = when (source) {
+            is NativeVideoPlaybackSource.DavFile ->
+                source.file.fileId?.toString() ?: source.file.path
+            is NativeVideoPlaybackSource.MemoriesLivePhoto ->
+                "live-photo:${source.source.fileId}"
+        }
+        val uri = when (source) {
+            is NativeVideoPlaybackSource.DavFile ->
+                buildNextcloudFileUrl(session.serverUrl, userId, source.file.path)
+            is NativeVideoPlaybackSource.MemoriesLivePhoto ->
+                buildNextcloudApiUrl(session.serverUrl, memoriesLivePhotoVideoRequest(source.source))
+        }
         val item = MediaItem.Builder()
-            .setMediaId(file.fileId?.toString() ?: file.path)
-            .setUri(buildNextcloudFileUrl(session.serverUrl, userId, file.path))
-            .setMimeType(file.mimeType)
+            .setMediaId(mediaId)
+            .setUri(uri)
+            .apply {
+                if (source is NativeVideoPlaybackSource.DavFile) {
+                    setMimeType(source.file.mimeType)
+                }
+            }
             .build()
         ExoPlayer.Builder(context.applicationContext).build().apply {
             setMediaSource(ProgressiveMediaSource.Factory(sourceFactory).createMediaSource(item))
             prepare()
-            playWhenReady = false
+            playWhenReady = source is NativeVideoPlaybackSource.MemoriesLivePhoto
         }
     }
     val currentOnError = rememberUpdatedState(onError)

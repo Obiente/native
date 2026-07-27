@@ -45,6 +45,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -323,7 +325,11 @@ fun NativeMediaCollectionContent(
     modifier: Modifier = Modifier,
 ) {
     val files = remember(collection.key, items, resolvedFiles) {
-        items.map { media -> resolvedFiles[media.fileId] ?: media.toNextcloudFile(collection.key) }
+        items.map { media ->
+            resolvedFiles[media.fileId]
+                ?.copy(livePhoto = media.livePhoto)
+                ?: media.toNextcloudFile(collection.key)
+        }
     }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(112.dp),
@@ -335,7 +341,9 @@ fun NativeMediaCollectionContent(
     ) {
         items(items, key = NativeMediaItem::fileId) { media ->
             val file = remember(collection.key, media, resolvedFiles) {
-                resolvedFiles[media.fileId] ?: media.toNextcloudFile(collection.key)
+                resolvedFiles[media.fileId]
+                    ?.copy(livePhoto = media.livePhoto)
+                    ?: media.toNextcloudFile(collection.key)
             }
             NativeMediaItemTile(
                 media = media,
@@ -373,6 +381,9 @@ private fun NativeMediaItemTile(
     Box(
         modifier = Modifier.fillMaxWidth().aspectRatio(1f)
             .background(NextcloudTheme.colors.appIconContainer)
+            .semantics {
+                if (media.livePhoto != null) stateDescription = "Motion Photo"
+            }
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick,
@@ -426,17 +437,43 @@ private fun NativeMediaItemTile(
                 }
             }
         }
-        if (media.rawStackFileIds.isNotEmpty()) {
-            Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                shape = RoundedCornerShape(NextcloudRadii.Pill),
+        if (media.livePhoto != null || media.rawStackFileIds.isNotEmpty()) {
+            Column(
                 modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp),
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text(
-                    "+${media.rawStackFileIds.size} RAW",
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                )
+                if (media.livePhoto != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                        shape = RoundedCornerShape(NextcloudRadii.Pill),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                NextcloudIcons.Play,
+                                contentDescription = null,
+                                modifier = Modifier.size(12.dp),
+                            )
+                            Text("Motion", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+                if (media.rawStackFileIds.isNotEmpty()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                        shape = RoundedCornerShape(NextcloudRadii.Pill),
+                    ) {
+                        Text(
+                            "+${media.rawStackFileIds.size} RAW",
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                        )
+                    }
+                }
             }
         }
         backupStatus?.let { status ->

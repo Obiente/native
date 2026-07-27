@@ -69,6 +69,16 @@ data class NextcloudServerInfo(
 )
 
 @Serializable
+data class NextcloudLivePhotoReference(
+    /** Opaque server token returned by Memories. It must never be parsed or reconstructed. */
+    val serverToken: String,
+) {
+    init {
+        require(serverToken.isSafeLivePhotoToken()) { "The Live Photo reference is invalid." }
+    }
+}
+
+@Serializable
 data class NextcloudFile(
     val path: String,
     val name: String,
@@ -97,6 +107,8 @@ data class NextcloudFile(
     val permissions: String? = null,
     /** Strong content identities supplied by DAV clients, for example `SHA256:<hex>`. */
     val checksums: List<String> = emptyList(),
+    /** Optional Memories relationship for the motion component of this still image. */
+    val livePhoto: NextcloudLivePhotoReference? = null,
 )
 
 data class NextcloudFileContent(
