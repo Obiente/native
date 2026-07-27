@@ -463,6 +463,7 @@ class PhotoEditingTest {
         assertEquals("Photos/DCIM/Camera/20250906_020658.jpg", resolved?.path)
         assertEquals("20250906_020658.jpg", resolved?.name)
         assertEquals(2169263, resolved?.fileId)
+        assertTrue(resolved?.davPathAuthoritative == true)
     }
 
     @Test
@@ -476,6 +477,23 @@ class PhotoEditingTest {
         }
 
         assertEquals(original, resolved)
+        assertEquals(0, identityRequests)
+    }
+
+    @Test
+    fun nonAuthoritativeOrdinaryPathCannotBecomeSidecarSource() = runBlocking {
+        val placeholder = file(path = "Talk/44321").copy(
+            fileId = 44321,
+            davPathAuthoritative = false,
+        )
+        var identityRequests = 0
+
+        val resolved = resolvePhotoEditDavSource(placeholder) {
+            identityRequests += 1
+            error("Non-Memories placeholders must not be looked up through Memories.")
+        }
+
+        assertEquals(null, resolved)
         assertEquals(0, identityRequests)
     }
 

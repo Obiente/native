@@ -535,7 +535,11 @@ internal suspend fun resolvePhotoEditDavSource(
     original: NextcloudFile,
     loadIdentity: suspend (Long) -> MemoriesPhotoFileIdentity,
 ): NextcloudFile? {
-    if (!original.path.isSyntheticMemoriesMediaPath()) return original
+    if (!original.path.isSyntheticMemoriesMediaPath()) {
+        return original.takeIf {
+            it.davPathAuthoritative && it.path.isSafeDavRelativePath()
+        }
+    }
     val fileId = original.fileId ?: return null
     val identity = loadIdentity(fileId)
     require(identity.fileId == fileId)
@@ -544,6 +548,7 @@ internal suspend fun resolvePhotoEditDavSource(
         name = identity.name,
         mimeType = identity.mimeType ?: original.mimeType,
         etag = identity.etag ?: original.etag,
+        davPathAuthoritative = true,
     )
 }
 
