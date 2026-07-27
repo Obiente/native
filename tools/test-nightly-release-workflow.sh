@@ -42,6 +42,8 @@ require_text "$nightly" '-PncDesktopPackageVersion="${NIGHTLY_DESKTOP_VERSION}"'
 require_text "$nightly" '-PncMacosPackageVersion="${NIGHTLY_DESKTOP_VERSION}"'
 require_text "$nightly" 'name: nextcloud-native-${{ matrix.platform }}'
 require_text "$nightly" 'name: nextcloud-native-android'
+require_text "$nightly" 'tools/stage-nightly-assets.sh artifacts dist'
+require_text "$nightly" 'tools/count-nightly-platforms.sh'
 require_text "$nightly" '-PncVersionName="${NIGHTLY_VERSION}"'
 require_text "$nightly" '-PncVersionCode="${NIGHTLY_VERSION_CODE}"'
 require_text "$nightly" ':androidApp:verifyReleaseLintGate'
@@ -56,14 +58,14 @@ require_text "$nightly" 'echo "successful=${successful}" >>"${GITHUB_OUTPUT}"'
 require_text "$nightly" 'test "${SUCCESSFUL_PLATFORMS}" -ge 3'
 require_text "$nightly" 'test "${#assets[@]}" -gt 0'
 require_text "$nightly" 'already-published: ${{ steps.release.outputs.already-published }}'
-require_text "$nightly" 'available-platforms: ${{ steps.platforms.outputs.available }}'
+require_text "$nightly" 'successful-platforms: ${{ steps.release.outputs.successful }}'
+require_text "$nightly" 'available-platforms: ${{ steps.release.outputs.available }}'
 require_text "$nightly" 'Published nightly ${NIGHTLY_TAG} is immutable; no assets or metadata were changed.'
 require_text "$nightly" 'tag_ref_response="${RUNNER_TEMP}/nightly-tag-ref.json"'
 require_text "$nightly" 'elif jq -e '\''.status == 404 or .status == "404"'\'''
 require_text "$nightly" 'cat "${tag_ref_error}" >&2'
-require_text "$nightly" 'Retaining immutable staged asset ${name}.'
 require_text "$nightly" 'canonical-release-assets'
-require_text "$nightly" 'if [[ "${SUCCESSFUL_PLATFORMS}" -ge 3 ]]; then'
+require_text "$nightly" 'if [[ "${canonical_successful}" -ge 3 ]]; then'
 require_text "$nightly" 'if: needs.stage-assets.outputs.already-published != '\''true'\'''
 require_text "$nightly" 'tools/promote-android-update-channel.sh'
 require_text "$nightly" 'tools/verify-android-update-manifest-assets.sh'
@@ -115,6 +117,39 @@ if grep -Fq -- '--jq '\''.object.sha'\'' 2>/dev/null || true' "$nightly"; then
     echo "Missing tag references must not turn GitHub 404 JSON into a commit SHA." >&2
     exit 1
 fi
+if grep -Fq 'find artifacts -mindepth 2 -maxdepth 2 -type f' "$nightly"; then
+    echo "Nightly staging must not assume that every package is exactly one directory deep." >&2
+    exit 1
+fi
+
+stage_assets="$(
+    sed -n '/^  stage-assets:/,/^  release-quorum:/p' "$nightly"
+)"
+if ! grep -Fq 'uses: actions/checkout@' <<<"$stage_assets" ||
+    ! grep -Fq 'ref: ${{ needs.source.outputs.sha }}' <<<"$stage_assets" ||
+    ! grep -Fq 'persist-credentials: false' <<<"$stage_assets"; then
+    echo "Nightly asset verification requires the exact tested repository source." >&2
+    exit 1
+fi
+checkout_line="$(
+    grep -n -m1 'uses: actions/checkout@' <<<"$stage_assets" | cut -d: -f1
+)"
+download_line="$(
+    grep -n -m1 'uses: actions/download-artifact@' <<<"$stage_assets" | cut -d: -f1
+)"
+verify_line="$(
+    grep -n -m1 'tools/verify-android-update-manifest-assets.sh' <<<"$stage_assets" |
+        cut -d: -f1
+)"
+if [[ "$checkout_line" -ge "$download_line" || "$checkout_line" -ge "$verify_line" ]]; then
+    echo "The exact-source checkout must precede downloads and repository tools." >&2
+    exit 1
+fi
+if grep -Fq 'successful-platforms: ${{ steps.platforms.outputs.successful }}' \
+    <<<"$stage_assets"; then
+    echo "Nightly quorum must use the canonical release inventory." >&2
+    exit 1
+fi
 
 tag="nightly-20260726-1430-run42-abcdef12"
 version_code="$("$project_root/tools/derive-android-version-code.sh" 42 nightly)"
@@ -147,5 +182,6 @@ jq -e --arg tag "$tag" --argjson code "$version_code" '
 "$project_root/tools/test-desktop-package-version.sh"
 "$project_root/tools/test-android-artifact-metadata.sh"
 "$project_root/tools/test-android-update-manifest-assets.sh"
+"$project_root/tools/test-nightly-asset-staging.sh"
 
 printf 'Nightly publisher and immutable update-manifest checks passed.\n'
