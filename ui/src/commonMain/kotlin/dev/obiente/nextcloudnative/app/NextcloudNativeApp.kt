@@ -4699,7 +4699,12 @@ private fun MediaScreen(
             timelineGridState.scrollToItem(0)
         }
         try {
-            val page = services.listMediaTimelinePage(session, userId, token.cursor)
+            val page = services.listMediaTimelinePage(
+                session = session,
+                userId = userId,
+                cursor = token.cursor,
+                rawPreviouslyObserved = timeline.rawEverObserved,
+            )
             val files = page.entries.map(PhotoTimelineEntry::file)
             timeline = timeline.accept(token, page)
             if (kind != PhotoTimelineLoadKind.NextPage) timelineInitialLoadCompleted = true

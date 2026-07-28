@@ -674,6 +674,7 @@ class DesktopNextcloudServices(
         session: NextcloudSession,
         userId: String,
         cursor: PhotoTimelineCursor?,
+        rawPreviouslyObserved: Boolean,
     ): PhotoTimelinePage = withContext(Dispatchers.IO) {
         val page = collectMediaTimelineDavPage(
             userId = userId,
@@ -686,12 +687,15 @@ class DesktopNextcloudServices(
                 MediaSearchDavTransportResponse(response.status, response.body)
             },
             parse = { body -> parseDavFiles(body, userId) },
-            shouldSearchRaw = { files -> files.any(NextcloudFile::isRawPhoto) },
+            shouldSearchRaw = { files ->
+                rawPreviouslyObserved || files.any(NextcloudFile::isRawPhoto)
+            },
         )
         PhotoTimelinePage(
             entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),
             nextCursor = page.nextCursor,
             optionalRawRemovalAuthoritative = page.optionalRawRemovalAuthoritative,
+            rawObserved = page.rawObserved,
         )
     }
 

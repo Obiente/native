@@ -35,6 +35,7 @@ data class MediaTimelineDavPage(
     val files: List<NextcloudFile>,
     val nextCursor: PhotoTimelineCursor?,
     val optionalRawRemovalAuthoritative: Boolean,
+    val rawObserved: Boolean,
 )
 
 fun mediaSearchDavRequestBody(
@@ -124,9 +125,10 @@ fun mediaSearchDavRequestBody(
 /**
  * Loads one bounded timeline window.
  *
- * The first page retains RAW-aware discovery. When MIME results prove that the library contains
- * RAW media, each successful filename partition receives its own cursor and can advance on later
- * pages. Libraries without observed RAW media never issue those optional filename searches.
+ * The first page retains RAW-aware discovery. When MIME results or account-scoped cached state
+ * prove that the library contains RAW media, each successful filename partition receives its own
+ * cursor and can advance on later pages. Libraries without observed RAW media never issue those
+ * optional filename searches.
  */
 suspend fun collectMediaTimelineDavPage(
     userId: String,
@@ -165,9 +167,11 @@ suspend fun collectMediaTimelineDavPage(
     loadMime(MediaSearchDavPartition.ImageMime, decodedCursor?.image)
     loadMime(MediaSearchDavPartition.VideoMime, decodedCursor?.video)
 
+    var rawObserved = decodedCursor?.raw?.isNotEmpty() == true
     if (decodedCursor == null) {
         val mimeFiles = partitionPages.flatMap(MediaTimelinePartitionPage::files)
         if (shouldSearchRaw(mimeFiles)) {
+            rawObserved = true
             partitionPages += collectInitialRawTimelinePartitions(
                 userId = userId,
                 execute = execute,
@@ -205,6 +209,7 @@ suspend fun collectMediaTimelineDavPage(
             ?.encode(),
         optionalRawRemovalAuthoritative =
             coveredRawPatternIndexes.size == rawPhotoFileNameSearchPatterns().size,
+        rawObserved = rawObserved,
     )
 }
 

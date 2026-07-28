@@ -621,6 +621,7 @@ interface NextcloudPlatformServices {
         session: NextcloudSession,
         userId: String,
         cursor: PhotoTimelineCursor?,
+        rawPreviouslyObserved: Boolean = false,
     ): PhotoTimelinePage {
         if (cursor != null) return PhotoTimelinePage(emptyList(), null)
         return PhotoTimelinePage(

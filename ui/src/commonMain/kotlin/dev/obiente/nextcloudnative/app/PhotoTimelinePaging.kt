@@ -40,6 +40,7 @@ data class PhotoTimelinePage(
     val entries: List<PhotoTimelineEntry>,
     val nextCursor: PhotoTimelineCursor?,
     val optionalRawRemovalAuthoritative: Boolean = true,
+    val rawObserved: Boolean = entries.any { entry -> entry.file.isRawPhoto() },
 ) {
     init {
         require(entries.size <= MAX_PHOTO_TIMELINE_PAGE_SIZE) {
@@ -74,8 +75,8 @@ data class PhotoTimelineLoadStart(
  * The retained limit is an in-memory safety boundary. When the window is full, accepting an older
  * page evicts the same number of newest entries while preserving the opaque cursor. Paging can
  * therefore reach the complete server history with bounded memory, and refresh returns to newest.
- * If newest-page revalidation evicts the cached tail, paging temporarily replays from the new
- * first-page cursor with a strict request bound until it reaches the missing tail.
+ * If newest-page revalidation changes paging identities or timestamps, paging temporarily replays
+ * from the new first-page cursor with a strict request bound until it reaches the cached tail.
  */
 data class PhotoTimelineState(
     val entries: List<PhotoTimelineEntry> = emptyList(),
@@ -88,6 +89,8 @@ data class PhotoTimelineState(
     val discardedNewerEntries: Int = 0,
     val loadedOlderPages: Boolean = false,
     val revalidationCursorCatchUpPagesRemaining: Int = 0,
+    val revalidationCursorCatchUpTailIdentity: String? = null,
+    val rawEverObserved: Boolean = entries.any { entry -> entry.file.isRawPhoto() },
 ) {
     init {
         require(pageSize in 1..MAX_PHOTO_TIMELINE_PAGE_SIZE) {
@@ -107,6 +110,12 @@ data class PhotoTimelineState(
                 0..MAX_PHOTO_TIMELINE_REVALIDATION_CATCH_UP_PAGES,
         ) {
             "The photo timeline revalidation catch-up count is invalid."
+        }
+        require(
+            (revalidationCursorCatchUpPagesRemaining > 0) ==
+                (revalidationCursorCatchUpTailIdentity != null),
+        ) {
+            "The photo timeline revalidation catch-up target is invalid."
         }
         require(entries.map(PhotoTimelineEntry::identity).distinct().size == entries.size) {
             "The photo timeline contains duplicate media identities."
@@ -142,6 +151,7 @@ data class PhotoTimelineState(
                 generation = nextGeneration,
                 discardedNewerEntries = 0,
                 revalidationCursorCatchUpPagesRemaining = 0,
+                revalidationCursorCatchUpTailIdentity = null,
             ),
             token = token,
         )
@@ -203,15 +213,21 @@ data class PhotoTimelineState(
             token.kind == PhotoTimelineLoadKind.NextPage -> merged.drop(overflow)
             else -> merged.take(retentionLimit)
         }
-        val retainedSameIdentities = retained.size == entries.size &&
+        val retainedSamePagingKeys = retained.size == entries.size &&
             retained.zip(entries).all { (next, current) ->
-                next.identity == current.identity
+                next.identity == current.identity &&
+                    next.capturedAtEpochSeconds == current.capturedAtEpochSeconds
             }
         val cursorRepeated = page.nextCursor != null && page.nextCursor == token.cursor
+        val catchUpTailReached =
+            token.kind == PhotoTimelineLoadKind.NextPage &&
+                revalidationCursorCatchUpTailIdentity?.let { tailIdentity ->
+                    page.entries.any { entry -> entry.identity == tailIdentity }
+                } == true
         val catchUpRequestLimitReached =
             token.kind == PhotoTimelineLoadKind.NextPage &&
                 revalidationCursorCatchUp &&
-                retainedSameIdentities &&
+                !catchUpTailReached &&
                 page.nextCursor != null &&
                 revalidationCursorCatchUpPagesRemaining == 1
         val stalled = token.kind == PhotoTimelineLoadKind.NextPage &&
@@ -224,21 +240,22 @@ data class PhotoTimelineState(
                                 page.entries.none { incoming ->
                                     entries.none { existing -> existing.identity == incoming.identity }
                                 } ||
-                                    retainedSameIdentities
+                                    retainedSamePagingKeys
                                 )
                         )
                 )
-        val revalidationEvictedCachedTail =
+        val cachedTailIdentity = entries.lastOrNull()?.identity
+        val revalidationRestartsFromFreshCursor =
             token.kind == PhotoTimelineLoadKind.RevalidateNewest &&
                 loadedOlderPages &&
-                overflow > 0 &&
                 page.nextCursor != null
+        val revalidationNeedsCursorCatchUp =
+            revalidationRestartsFromFreshCursor &&
+                cachedTailIdentity != null &&
+                page.entries.none { entry -> entry.identity == cachedTailIdentity }
         val acceptedCursor = when {
             stalled -> null
-            revalidationEvictedCachedTail -> page.nextCursor
-            token.kind == PhotoTimelineLoadKind.RevalidateNewest &&
-                loadedOlderPages &&
-                page.nextCursor != null -> nextCursor
+            revalidationRestartsFromFreshCursor -> page.nextCursor
             else -> page.nextCursor
         }
         return copy(
@@ -268,7 +285,7 @@ data class PhotoTimelineState(
             revalidationCursorCatchUpPagesRemaining = when (token.kind) {
                 PhotoTimelineLoadKind.Refresh -> 0
                 PhotoTimelineLoadKind.RevalidateNewest ->
-                    if (revalidationEvictedCachedTail) {
+                    if (revalidationNeedsCursorCatchUp) {
                         MAX_PHOTO_TIMELINE_REVALIDATION_CATCH_UP_PAGES
                     } else {
                         0
@@ -276,8 +293,8 @@ data class PhotoTimelineState(
                 PhotoTimelineLoadKind.NextPage ->
                     if (
                         revalidationCursorCatchUp &&
-                        retainedSameIdentities &&
                         !stalled &&
+                        !catchUpTailReached &&
                         page.nextCursor != null
                     ) {
                         revalidationCursorCatchUpPagesRemaining - 1
@@ -285,6 +302,23 @@ data class PhotoTimelineState(
                         0
                     }
             },
+            revalidationCursorCatchUpTailIdentity = when (token.kind) {
+                PhotoTimelineLoadKind.Refresh -> null
+                PhotoTimelineLoadKind.RevalidateNewest ->
+                    if (revalidationNeedsCursorCatchUp) cachedTailIdentity else null
+                PhotoTimelineLoadKind.NextPage ->
+                    if (
+                        revalidationCursorCatchUp &&
+                        !stalled &&
+                        !catchUpTailReached &&
+                        page.nextCursor != null
+                    ) {
+                        revalidationCursorCatchUpTailIdentity
+                    } else {
+                        null
+                    }
+            },
+            rawEverObserved = rawEverObserved || page.rawObserved,
         )
     }
 
