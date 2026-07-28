@@ -83,6 +83,7 @@ data class PhotoTimelineState(
     val nextCursor: PhotoTimelineCursor? = null,
     val loading: PhotoTimelineLoadToken? = null,
     val error: String? = null,
+    val failedLoadKind: PhotoTimelineLoadKind? = null,
     val generation: Long = 0L,
     val pageSize: Int = DEFAULT_PHOTO_TIMELINE_PAGE_SIZE,
     val retentionLimit: Int = DEFAULT_PHOTO_TIMELINE_RETAINED_ITEMS,
@@ -130,6 +131,9 @@ data class PhotoTimelineState(
     val canLoadNextPage: Boolean
         get() = loading == null && nextCursor != null
 
+    val canPrefetchNextPage: Boolean
+        get() = canLoadNextPage && error == null
+
     val hasDiscardedNewerEntries: Boolean
         get() = discardedNewerEntries > 0
 
@@ -148,10 +152,8 @@ data class PhotoTimelineState(
             state = copy(
                 loading = token,
                 error = null,
+                failedLoadKind = null,
                 generation = nextGeneration,
-                discardedNewerEntries = 0,
-                revalidationCursorCatchUpPagesRemaining = 0,
-                revalidationCursorCatchUpTailIdentity = null,
             ),
             token = token,
         )
@@ -165,7 +167,10 @@ data class PhotoTimelineState(
             cursor = nextCursor,
             pageSize = pageSize,
         )
-        return PhotoTimelineLoadStart(copy(loading = token, error = null), token)
+        return PhotoTimelineLoadStart(
+            copy(loading = token, error = null, failedLoadKind = null),
+            token,
+        )
     }
 
     fun beginNewestRevalidation(): PhotoTimelineLoadStart {
@@ -183,6 +188,7 @@ data class PhotoTimelineState(
             state = copy(
                 loading = token,
                 error = null,
+                failedLoadKind = null,
                 generation = nextGeneration,
             ),
             token = token,
@@ -268,6 +274,10 @@ data class PhotoTimelineState(
                 stalled -> "The server repeated the same photo timeline page."
                 else -> null
             },
+            failedLoadKind = when {
+                catchUpRequestLimitReached || stalled -> token.kind
+                else -> null
+            },
             discardedNewerEntries = when {
                 token.kind == PhotoTimelineLoadKind.Refresh -> 0
                 stalled || token.kind == PhotoTimelineLoadKind.RevalidateNewest ->
@@ -330,6 +340,7 @@ data class PhotoTimelineState(
         return copy(
             loading = null,
             error = message.trim().take(512).ifBlank { "Could not load the photo timeline." },
+            failedLoadKind = token.kind,
         )
     }
 
@@ -339,6 +350,7 @@ data class PhotoTimelineState(
         copy(
             loading = null,
             error = null,
+            failedLoadKind = null,
             generation = generation + 1L,
         )
     }
@@ -476,6 +488,36 @@ data class PhotoTimelineDateIndex(
         if (index < 0) return null
         return if (sections.size == 1) 0f else index.toFloat() / (sections.size - 1)
     }
+}
+
+/**
+ * Maps Compose grid positions back to bounded timeline stack positions.
+ *
+ * Each month contributes one full-width header before its media items, so grid and timeline
+ * indices are not interchangeable. Backup-status refreshes use this mapping to query only media
+ * that is actually visible instead of re-reading the complete retained timeline.
+ */
+fun photoTimelineStackIndicesForGridItems(
+    dateIndex: PhotoTimelineDateIndex,
+    gridItemIndices: Collection<Int>,
+): List<Int> {
+    if (gridItemIndices.isEmpty() || dateIndex.sections.isEmpty()) return emptyList()
+    return gridItemIndices.asSequence()
+        .mapNotNull { gridIndex ->
+            if (gridIndex < 0) return@mapNotNull null
+            dateIndex.sections.withIndex().firstNotNullOfOrNull { (sectionIndex, section) ->
+                val firstGridItem = section.firstItemIndex + sectionIndex + 1
+                val offset = gridIndex - firstGridItem
+                if (offset in 0 until section.itemCount) {
+                    section.firstItemIndex + offset
+                } else {
+                    null
+                }
+            }
+        }
+        .distinct()
+        .sorted()
+        .toList()
 }
 
 fun interface PhotoTimelineMonthResolver {

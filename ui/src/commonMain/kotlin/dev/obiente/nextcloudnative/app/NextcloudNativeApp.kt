@@ -71,6 +71,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.Saver
@@ -388,6 +389,9 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.AdaptiveApp,
                     MarketingCaptureScenario.AdaptiveAppMobile,
                     -> MarketingAdaptiveAppScenario(scenario)
+                    MarketingCaptureScenario.PhotoTimelineRevalidationErrorMobile,
+                    MarketingCaptureScenario.PhotoTimelineReturnToNewestErrorMobile,
+                    -> MarketingPhotoTimelineFailureScenario(scenario)
                     MarketingCaptureScenario.ObsidianSync -> MarketingObsidianSyncScenario()
                     MarketingCaptureScenario.MediaBackup -> MarketingMediaBackupScenario()
                     MarketingCaptureScenario.RawPreviewLoadingMobile,
@@ -4629,6 +4633,38 @@ private fun fileActionIcon(action: FileMenuAction): ImageVector = when (action) 
 private const val PHOTO_TIMELINE_PREFETCH_GRID_ITEMS = 18
 
 @Composable
+internal fun PhotoTimelineFailureNotice(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+        modifier = modifier,
+    ) {
+        Row(
+            modifier = Modifier.padding(
+                horizontal = NextcloudSpacing.Medium,
+                vertical = NextcloudSpacing.Small,
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            Text(
+                text = message,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onRetry) {
+                Text("Retry")
+            }
+        }
+    }
+}
+
+@Composable
 private fun MediaScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
@@ -4694,10 +4730,6 @@ private fun MediaScreen(
         }
         val token = start.token ?: return
         timeline = start.state
-        if (kind == PhotoTimelineLoadKind.Refresh) {
-            mediaBackupStatuses = emptyMap()
-            timelineGridState.scrollToItem(0)
-        }
         try {
             val page = services.listMediaTimelinePage(
                 session = session,
@@ -4707,6 +4739,9 @@ private fun MediaScreen(
             )
             val files = page.entries.map(PhotoTimelineEntry::file)
             timeline = timeline.accept(token, page)
+            if (kind == PhotoTimelineLoadKind.Refresh) {
+                timelineGridState.scrollToItem(0)
+            }
             if (kind != PhotoTimelineLoadKind.NextPage) timelineInitialLoadCompleted = true
             val statuses = runCatching {
                 services.loadMediaBackupStatuses(session, userId, files)
@@ -4731,9 +4766,6 @@ private fun MediaScreen(
                 token = token,
                 message = failure.message ?: "Could not load the photo timeline.",
             )
-            if (kind == PhotoTimelineLoadKind.RevalidateNewest) {
-                timeline = timeline.copy(error = null)
-            }
             if (kind != PhotoTimelineLoadKind.NextPage) timelineInitialLoadCompleted = true
         }
     }
@@ -4759,7 +4791,7 @@ private fun MediaScreen(
             val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
             val totalItems = layout.totalItemsCount
             (
-                timeline.canLoadNextPage &&
+                timeline.canPrefetchNextPage &&
                     totalItems > 0 &&
                     lastVisible >= totalItems - PHOTO_TIMELINE_PREFETCH_GRID_ITEMS
                 ) to timeline.nextCursor?.value
@@ -4767,17 +4799,70 @@ private fun MediaScreen(
             if (shouldLoad) loadTimelinePage(PhotoTimelineLoadKind.NextPage)
         }
     }
+    val currentMediaMode by rememberUpdatedState(mode)
+    val currentTimeline by rememberUpdatedState(timeline)
+    val currentTimelineDateIndex by rememberUpdatedState(timelineDateIndex)
+    val currentIndexedTimelineStacks by rememberUpdatedState(indexedTimelineStacks)
+    val currentSelectedCollection by rememberUpdatedState(selectedCollection)
+    val currentCollectionItems by rememberUpdatedState(collectionItems)
+    val currentResolvedFiles by rememberUpdatedState(resolvedFiles)
     LaunchedEffect(userId, services) {
         if (userId == null) return@LaunchedEffect
         services.observeMediaBackupStatusChanges(session).collectLatest {
-            val visibleFiles = (timeline.entries.map(PhotoTimelineEntry::file) + resolvedFiles.values)
-                .distinctBy { file -> file.path.trim('/') }
+            val modeAtRequest = currentMediaMode
+            val timelineGenerationAtRequest = currentTimeline.generation
+            val collectionKeyAtRequest = currentSelectedCollection?.key
+            fun visibleTimelineFiles(): List<NextcloudFile> =
+                photoTimelineStackIndicesForGridItems(
+                    dateIndex = currentTimelineDateIndex,
+                    gridItemIndices = timelineGridState.layoutInfo.visibleItemsInfo.map { item ->
+                        item.index
+                    },
+                ).mapNotNull { index ->
+                    currentIndexedTimelineStacks.getOrNull(index)?.stack?.cover
+                }
+
+            fun visibleCollectionFiles(): List<NextcloudFile> =
+                collectionGridState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
+                    currentCollectionItems
+                        .getOrNull(item.index)
+                        ?.fileId
+                        ?.let(currentResolvedFiles::get)
+                }
+
+            val visibleFiles = when {
+                modeAtRequest == MediaMode.Timeline -> visibleTimelineFiles()
+                modeAtRequest == MediaMode.Collections && collectionKeyAtRequest != null ->
+                    visibleCollectionFiles()
+                else -> emptyList()
+            }
             if (visibleFiles.isNotEmpty()) {
+                val requestedPaths = visibleFiles
+                    .mapTo(mutableSetOf()) { file -> file.path.trim('/') }
                 val statuses = runCatching {
                     services.loadMediaBackupStatuses(session, userId, visibleFiles)
                 }.getOrDefault(emptyMap())
-                mediaBackupStatuses = mediaBackupStatuses + statuses
-                backupStatuses = backupStatuses + statuses
+                val requestStillCurrent =
+                    currentMediaMode == modeAtRequest &&
+                        currentSelectedCollection?.key == collectionKeyAtRequest &&
+                        (
+                            modeAtRequest != MediaMode.Timeline ||
+                                currentTimeline.generation == timelineGenerationAtRequest
+                            )
+                if (requestStillCurrent) {
+                    val currentlyVisiblePaths = when {
+                        modeAtRequest == MediaMode.Timeline -> visibleTimelineFiles()
+                        collectionKeyAtRequest != null -> visibleCollectionFiles()
+                        else -> emptyList()
+                    }.mapTo(mutableSetOf()) { file -> file.path.trim('/') }
+                    val acceptedPaths = requestedPaths.intersect(currentlyVisiblePaths)
+                    val acceptedStatuses = statuses.filterKeys(acceptedPaths::contains)
+                    if (modeAtRequest == MediaMode.Timeline) {
+                        mediaBackupStatuses = mediaBackupStatuses + acceptedStatuses
+                    } else {
+                        backupStatuses = backupStatuses + acceptedStatuses
+                    }
+                }
             }
         }
     }
@@ -5273,139 +5358,171 @@ private fun MediaScreen(
                         timelineDateIndex,
                         timelineGridState.firstVisibleItemIndex,
                     )
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        LazyVerticalGrid(
-                            columns = GridCells.Adaptive(120.dp),
-                            state = timelineGridState,
-                            contentPadding = PaddingValues(
-                                start = 4.dp,
-                                top = 4.dp,
-                                end = 72.dp,
-                                bottom = NextcloudSpacing.XLarge,
-                            ),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        if (
+                            timeline.error != null &&
+                            timeline.failedLoadKind != PhotoTimelineLoadKind.NextPage
                         ) {
-                            timelineDateIndex.sections.forEach { section ->
-                                item(
-                                    key = "month:${section.month.year}:${section.month.month}",
-                                    span = { GridItemSpan(maxLineSpan) },
-                                ) {
-                                    Text(
-                                        text = section.month.label,
-                                        modifier = Modifier.padding(
-                                            horizontal = NextcloudSpacing.Medium,
-                                            vertical = NextcloudSpacing.Large,
-                                        ),
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                }
-                                items(
-                                    count = section.itemCount,
-                                    key = { offset ->
-                                        indexedTimelineStacks[
-                                            section.firstItemIndex + offset
-                                        ].stack.id
-                                    },
-                                ) { offset ->
-                                    val stack = indexedTimelineStacks[
-                                        section.firstItemIndex + offset
-                                    ].stack
-                                    MediaTile(
-                                        services = services,
-                                        session = session,
-                                        file = stack.cover,
-                                        badge = stack.badge,
-                                        backupStatus = mediaBackupStatuses[stack.cover.path.trim('/')],
-                                        onClick = {
-                                            onOpenMedia(stack.cover, timelineViewerSequence)
-                                        },
-                                        onLongClick = {
-                                            mediaToAdd = stack.cover
-                                            mutationError = null
-                                            if (catalog == null) {
-                                                scope.launch {
-                                                    runCatching {
-                                                        collectionService.loadCatalog(session)
-                                                    }.onSuccess { catalog = it }
-                                                        .onFailure {
-                                                            mutationError = it.message
-                                                                ?: "Could not load albums."
-                                                        }
-                                                }
-                                            }
-                                        },
-                                    )
-                                }
-                            }
-                            if (timeline.loading?.kind == PhotoTimelineLoadKind.NextPage) {
-                                item(
-                                    key = "timeline-loading",
-                                    span = { GridItemSpan(maxLineSpan) },
-                                ) {
-                                    LoadingMessage("Loading older photos...")
-                                }
-                            } else if (timeline.error != null) {
-                                item(
-                                    key = "timeline-error",
-                                    span = { GridItemSpan(maxLineSpan) },
-                                ) {
-                                    ErrorMessage(requireNotNull(timeline.error)) {
-                                        scope.launch {
-                                            loadTimelinePage(PhotoTimelineLoadKind.NextPage)
-                                        }
-                                    }
-                                }
-                            } else if (timeline.canLoadNextPage) {
-                                item(
-                                    key = "timeline-load-older",
-                                    span = { GridItemSpan(maxLineSpan) },
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(NextcloudSpacing.Large),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        OutlinedButton(
-                                            onClick = {
-                                                scope.launch {
-                                                    loadTimelinePage(PhotoTimelineLoadKind.NextPage)
-                                                }
-                                            },
-                                        ) {
-                                            Text("Load older photos")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        PhotoTimelineDateScrubber(
-                            dateIndex = timelineDateIndex,
-                            activeSectionIndex = activeSectionIndex,
-                            onJumpToGridItem = { index ->
-                                timelineGridState.scrollToItem(index)
-                            },
-                            modifier = Modifier
-                                .align(Alignment.CenterEnd)
-                                .padding(end = NextcloudSpacing.Small),
-                        )
-                        if (timeline.hasDiscardedNewerEntries) {
-                            OutlinedButton(
-                                onClick = {
+                            PhotoTimelineFailureNotice(
+                                message = requireNotNull(timeline.error),
+                                onRetry = {
                                     scope.launch {
-                                        loadTimelinePage(PhotoTimelineLoadKind.Refresh)
+                                        loadTimelinePage(
+                                            timeline.failedLoadKind
+                                                ?: PhotoTimelineLoadKind.Refresh,
+                                        )
                                     }
                                 },
                                 modifier = Modifier
-                                    .align(Alignment.TopEnd)
+                                    .fillMaxWidth()
                                     .padding(
-                                        top = NextcloudSpacing.Small,
-                                        end = NextcloudSpacing.Small,
+                                        horizontal = NextcloudSpacing.Medium,
+                                        vertical = NextcloudSpacing.Small,
                                     ),
+                            )
+                        }
+                        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                            LazyVerticalGrid(
+                                columns = GridCells.Adaptive(120.dp),
+                                state = timelineGridState,
+                                contentPadding = PaddingValues(
+                                    start = 4.dp,
+                                    top = 4.dp,
+                                    end = 72.dp,
+                                    bottom = NextcloudSpacing.XLarge,
+                                ),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                Text("Back to newest")
+                                timelineDateIndex.sections.forEach { section ->
+                                    item(
+                                        key = "month:${section.month.year}:${section.month.month}",
+                                        span = { GridItemSpan(maxLineSpan) },
+                                    ) {
+                                        Text(
+                                            text = section.month.label,
+                                            modifier = Modifier.padding(
+                                                horizontal = NextcloudSpacing.Medium,
+                                                vertical = NextcloudSpacing.Large,
+                                            ),
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                    }
+                                    items(
+                                        count = section.itemCount,
+                                        key = { offset ->
+                                            indexedTimelineStacks[
+                                                section.firstItemIndex + offset
+                                            ].stack.id
+                                        },
+                                    ) { offset ->
+                                        val stack = indexedTimelineStacks[
+                                            section.firstItemIndex + offset
+                                        ].stack
+                                        MediaTile(
+                                            services = services,
+                                            session = session,
+                                            file = stack.cover,
+                                            badge = stack.badge,
+                                            backupStatus = mediaBackupStatuses[
+                                                stack.cover.path.trim('/')
+                                            ],
+                                            onClick = {
+                                                onOpenMedia(stack.cover, timelineViewerSequence)
+                                            },
+                                            onLongClick = {
+                                                mediaToAdd = stack.cover
+                                                mutationError = null
+                                                if (catalog == null) {
+                                                    scope.launch {
+                                                        runCatching {
+                                                            collectionService.loadCatalog(session)
+                                                        }.onSuccess { catalog = it }
+                                                            .onFailure {
+                                                                mutationError = it.message
+                                                                    ?: "Could not load albums."
+                                                            }
+                                                    }
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
+                                if (timeline.loading?.kind == PhotoTimelineLoadKind.NextPage) {
+                                    item(
+                                        key = "timeline-loading",
+                                        span = { GridItemSpan(maxLineSpan) },
+                                    ) {
+                                        LoadingMessage("Loading older photos...")
+                                    }
+                                } else if (
+                                    timeline.error != null &&
+                                    timeline.failedLoadKind == PhotoTimelineLoadKind.NextPage
+                                ) {
+                                    item(
+                                        key = "timeline-error",
+                                        span = { GridItemSpan(maxLineSpan) },
+                                    ) {
+                                        ErrorMessage(requireNotNull(timeline.error)) {
+                                            scope.launch {
+                                                loadTimelinePage(PhotoTimelineLoadKind.NextPage)
+                                            }
+                                        }
+                                    }
+                                } else if (timeline.canPrefetchNextPage) {
+                                    item(
+                                        key = "timeline-load-older",
+                                        span = { GridItemSpan(maxLineSpan) },
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(NextcloudSpacing.Large),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    scope.launch {
+                                                        loadTimelinePage(
+                                                            PhotoTimelineLoadKind.NextPage,
+                                                        )
+                                                    }
+                                                },
+                                            ) {
+                                                Text("Load older photos")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            PhotoTimelineDateScrubber(
+                                dateIndex = timelineDateIndex,
+                                activeSectionIndex = activeSectionIndex,
+                                onJumpToGridItem = { index ->
+                                    timelineGridState.scrollToItem(index)
+                                },
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .padding(end = NextcloudSpacing.Small),
+                            )
+                            if (timeline.hasDiscardedNewerEntries) {
+                                OutlinedButton(
+                                    enabled = timeline.loading == null,
+                                    onClick = {
+                                        scope.launch {
+                                            loadTimelinePage(PhotoTimelineLoadKind.Refresh)
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(
+                                            top = NextcloudSpacing.Small,
+                                            end = NextcloudSpacing.Small,
+                                        ),
+                                ) {
+                                    Text("Back to newest")
+                                }
                             }
                         }
                     }

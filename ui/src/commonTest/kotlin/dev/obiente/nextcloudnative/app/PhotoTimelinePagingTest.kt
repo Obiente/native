@@ -478,6 +478,53 @@ class PhotoTimelinePagingTest {
     }
 
     @Test
+    fun failedReturnToNewestKeepsTheDisplacedWindowAndRetryMarker() {
+        val displaced = PhotoTimelineState(
+            entries = listOf(entry(3L, 50L)),
+            nextCursor = PhotoTimelineCursor("still-older"),
+            discardedNewerEntries = 2,
+            loadedOlderPages = true,
+        )
+        val refresh = displaced.beginRefresh()
+
+        assertEquals(2, refresh.state.discardedNewerEntries)
+        assertEquals(displaced.entries, refresh.state.entries)
+        assertEquals(displaced.nextCursor, refresh.state.nextCursor)
+
+        val failed = refresh.state.fail(
+            requireNotNull(refresh.token),
+            "Server unavailable",
+        )
+
+        assertEquals(displaced.entries, failed.entries)
+        assertEquals(displaced.nextCursor, failed.nextCursor)
+        assertEquals(2, failed.discardedNewerEntries)
+        assertTrue(failed.hasDiscardedNewerEntries)
+        assertFalse(failed.canPrefetchNextPage)
+        assertTrue(failed.canLoadNextPage)
+        assertEquals(PhotoTimelineLoadKind.Refresh, failed.failedLoadKind)
+        assertEquals("Server unavailable", failed.error)
+    }
+
+    @Test
+    fun failedNewestRevalidationKeepsCachedEntriesAndExposesItsRetryKind() {
+        val cached = PhotoTimelineState(
+            entries = listOf(entry(1L, 100L)),
+            nextCursor = PhotoTimelineCursor("older"),
+        )
+        val revalidation = cached.beginNewestRevalidation()
+        val failed = revalidation.state.fail(
+            requireNotNull(revalidation.token),
+            "Could not check for newer photos.",
+        )
+
+        assertEquals(cached.entries, failed.entries)
+        assertEquals(cached.nextCursor, failed.nextCursor)
+        assertEquals(PhotoTimelineLoadKind.RevalidateNewest, failed.failedLoadKind)
+        assertEquals("Could not check for newer photos.", failed.error)
+    }
+
+    @Test
     fun repeatedServerPageStopsAutomaticPagingWithoutGrowingTheTimeline() {
         val cursor = PhotoTimelineCursor("same")
         val loaded = PhotoTimelineState(
@@ -537,6 +584,42 @@ class PhotoTimelinePagingTest {
         assertEquals(1, stopped.discardedNewerEntries)
         assertNull(stopped.nextCursor)
         assertFalse(stopped.canLoadNextPage)
+    }
+
+    @Test
+    fun visibleGridItemsMapAroundMonthHeadersWithoutRefreshingOffscreenMedia() {
+        val dateIndex = PhotoTimelineDateIndex(
+            sections = listOf(
+                PhotoTimelineMonthSection(
+                    month = PhotoTimelineMonth(2026, 7),
+                    firstItemIndex = 0,
+                    itemCount = 3,
+                ),
+                PhotoTimelineMonthSection(
+                    month = PhotoTimelineMonth(2026, 6),
+                    firstItemIndex = 3,
+                    itemCount = 2,
+                ),
+            ),
+            totalItemCount = 5,
+        )
+
+        assertEquals(
+            listOf(0, 1, 3, 4),
+            photoTimelineStackIndicesForGridItems(
+                dateIndex = dateIndex,
+                gridItemIndices = listOf(
+                    0, // July header.
+                    1,
+                    2,
+                    4, // June header.
+                    5,
+                    6,
+                    99,
+                    -1,
+                ),
+            ),
+        )
     }
 
     @Test

@@ -69,6 +69,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingPhotoTimelineCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingTransferCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaBackupLedger.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaBackupLedgerStore.kt",
@@ -180,7 +181,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "b793f3650d8d459cbf32627e8e5be3c21680b8310c853188ecf199537f09f296",
+    "captureSourceSha256": "55f33e7a5c95f50752f426c49e3ab6214da31722832186d572b17ea9f3030822",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {
@@ -266,6 +267,38 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "sha256": "f1290c89723184800c127401de7fea4256294049828d014beed5ce11c8e35ea5"
+        },
+        {
+            "scenario": "photo-timeline-revalidation-error-mobile",
+            "file": "photo-timeline-revalidation-error-mobile.png",
+            "width": 1080,
+            "height": 1800,
+            "density": 2.625,
+            "feature": "Photos",
+            "surface": "Photo timeline",
+            "state": "Cached photos with revalidation error",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "pullRequest": 246,
+            "issue": 242,
+            "sha256": "40551f96d10ecf86791a9d57c161ef222eb8dbe0b5b9c292a37d88f710286a3f"
+        },
+        {
+            "scenario": "photo-timeline-return-to-newest-error-mobile",
+            "file": "photo-timeline-return-to-newest-error-mobile.png",
+            "width": 1080,
+            "height": 1800,
+            "density": 2.625,
+            "feature": "Photos",
+            "surface": "Photo timeline",
+            "state": "Older window with failed return to newest",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "pullRequest": 246,
+            "issue": 242,
+            "sha256": "2a1d456ccdc8f4f6eb16ced6d19af92b87667879e9f6f37a5c884a2a47b6e709"
         },
         {
             "scenario": "raw-preview-loading-mobile",
