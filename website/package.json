@@ -9,7 +9,8 @@
   "scripts": {
     "content": "node scripts/generate-content.mjs",
     "test": "node --test ../tools/changelog-fragments.test.mjs && node scripts/run-tests.mjs",
-    "verify:captures": "node scripts/verify-marketing-captures.mjs",
+    "verify:captures": "node scripts/verify-marketing-capture-assets.mjs",
+    "verify:captures:fresh": "node scripts/verify-marketing-captures.mjs",
     "predev": "npm run content",
     "dev": "vite",
     "build": "npm run content && npm run test && npm run verify:captures && vite build && vite build --ssr src/entry-server.js --outDir dist-ssr && node scripts/prerender.mjs",
@@ -23,5 +24,8 @@
     "markdown-it-anchor": "9.2.1",
     "vite": "8.1.5",
     "vue": "3.5.40"
+  },
+  "devDependencies": {
+    "pngjs": "7.0.0"
   }
 }

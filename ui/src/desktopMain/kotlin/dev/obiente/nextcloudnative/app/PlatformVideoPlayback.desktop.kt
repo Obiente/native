@@ -10,7 +10,8 @@ internal actual val platformNativeVideoPlaybackAvailable: Boolean = false
 internal actual fun PlatformNativeVideoPlayer(
     session: NextcloudSession,
     userId: String,
-    file: NextcloudFile,
+    source: NativeVideoPlaybackSource,
+    onPlaybackEnded: () -> Unit,
     onError: (String) -> Unit,
     modifier: Modifier,
 ) {

@@ -152,7 +152,7 @@ class NativeMediaCollectionsTest {
                 200,
                 """[
                     {"fileid":41,"dayid":20260723,"basename":"clip.mp4","mimetype":"video/mp4","etag":"a","w":1920,"h":1080,"epoch":1720000000,"isvideo":1,"video_duration":12,"isfavorite":true},
-                    {"fileid":42,"dayid":20260723,"basename":"photo.jpg","mimetype":"image/jpeg","etag":"b","w":6240,"h":4160,"isvideo":false,"facerect":{"x":-0.1,"y":0.8,"w":0.4,"h":0.5},"stackraw":[{"fileid":43},{"fileid":44}]}
+                    {"fileid":42,"dayid":20260723,"basename":"photo.jpg","mimetype":"image/jpeg","etag":"b","w":6240,"h":4160,"isvideo":false,"liveid":"self__trailer","facerect":{"x":-0.1,"y":0.8,"w":0.4,"h":0.5},"stackraw":[{"fileid":43},{"fileid":44}]}
                 ]""",
             ),
             collection,
@@ -164,6 +164,7 @@ class NativeMediaCollectionsTest {
         assertEquals(12, media.first().videoDurationSeconds)
         assertTrue(media.first().isFavorite)
         assertEquals(listOf(43L, 44L), media.last().rawStackFileIds)
+        assertEquals("self__trailer", media.last().livePhoto?.serverToken)
         assertEquals(
             NativeFaceRectangle(x = 0f, y = 0.8f, width = 0.3f, height = 0.2f),
             media.last().faceRectangle,
@@ -172,6 +173,7 @@ class NativeMediaCollectionsTest {
         val previewOnlyFile = media.last().toNextcloudFile(collection.key)
         assertEquals("memories/collections/album:ada/Summer/20260723/42", previewOnlyFile.path)
         assertFalse(previewOnlyFile.originalAccessAllowed)
+        assertEquals("self__trailer", previewOnlyFile.livePhoto?.serverToken)
     }
 
     @Test

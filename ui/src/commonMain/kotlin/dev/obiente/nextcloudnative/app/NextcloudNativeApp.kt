@@ -515,6 +515,9 @@ private fun AuthenticatedApp(
         stateSaver = enumSaver<NextcloudDestination>(),
     ) { mutableStateOf(NextcloudDestination.Home) }
     var serverInfo by remember(session) { mutableStateOf<NextcloudServerInfo?>(null) }
+    var memoriesLivePhotoCapability by remember(session) {
+        mutableStateOf<MemoriesLivePhotoCapability>(MemoriesLivePhotoCapability.NotAdvertised)
+    }
     val cachedAppDiscoveries = remember(session) { mutableStateMapOf<String, DynamicDescriptorDiscovery>() }
     var discoveryError by remember(session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(session) { mutableStateOf(0) }
@@ -533,6 +536,13 @@ private fun AuthenticatedApp(
         runCatching { services.loadServerInfo(session) }
             .onSuccess { serverInfo = it }
             .onFailure { discoveryError = it.message ?: "Could not load server details." }
+    }
+
+    LaunchedEffect(session, serverInfo?.apps) {
+        memoriesLivePhotoCapability = MemoriesLivePhotoCapability.NotAdvertised
+        if (serverInfo?.apps?.any { app -> app.id == "memories" } == true) {
+            memoriesLivePhotoCapability = discoverMemoriesLivePhotoCapability(services, session)
+        }
     }
 
     fun openApp(app: NextcloudAppEntry, from: NextcloudDestination) {
@@ -940,6 +950,7 @@ private fun AuthenticatedApp(
                     userId = serverInfo?.userId.orEmpty(),
                     services = services,
                     taggingAvailable = serverInfo?.apps?.any { it.id == "memories" } == true,
+                    memoriesLivePhotoCapability = memoriesLivePhotoCapability,
                     sharingCapabilities = serverInfo?.fileSharing
                         ?: NextcloudFileSharingCapabilities.Unavailable,
                     onSelect = { selected ->
@@ -5650,7 +5661,7 @@ private fun PersonMediaScreen(
     val mediaGridState = rememberLazyGridState()
     val mediaFiles = remember(personReference, mediaItems, resolvedMediaFiles) {
         mediaItems?.map { item ->
-            resolvedMediaFiles[item.fileId] ?: item.toPersonMediaFile(personReference)
+            item.toPersonMediaFile(personReference, resolvedMediaFiles[item.fileId])
         }
     }
     val actionSupport = remember(currentUserId, person.id, person.backend, recognizeBridge) {
@@ -6081,7 +6092,7 @@ private fun PersonMediaScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     items(loadedItems, key = NativeMediaItem::fileId) { item ->
-                        val file = resolvedMediaFiles[item.fileId] ?: item.toPersonMediaFile(personReference)
+                        val file = item.toPersonMediaFile(personReference, resolvedMediaFiles[item.fileId])
                         val selectable = !file.isDirectory && file.fileId != null
                         MediaTile(
                             services = services,
