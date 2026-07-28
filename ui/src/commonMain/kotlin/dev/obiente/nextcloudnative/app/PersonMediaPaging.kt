@@ -93,19 +93,24 @@ class NextcloudPersonMediaReadService internal constructor(
     }
 }
 
-fun NativeMediaItem.toPersonMediaFile(person: PersonMediaReference): NextcloudFile = NextcloudFile(
-    path = "memories/people/${person.backend.apiValue}/${person.clusterId}/$dayId/$fileId",
-    name = name,
-    isDirectory = false,
-    mimeType = mimeType,
-    size = null,
-    lastModified = takenAtEpochSeconds?.toString(),
-    fileId = fileId,
-    hasPreview = true,
-    etag = etag,
-    originalAccessAllowed = false,
-    davPathAuthoritative = false,
-)
+fun NativeMediaItem.toPersonMediaFile(
+    person: PersonMediaReference,
+    resolvedFile: NextcloudFile? = null,
+): NextcloudFile =
+    resolvedFile?.copy(livePhoto = livePhoto ?: resolvedFile.livePhoto) ?: NextcloudFile(
+        path = "memories/people/${person.backend.apiValue}/${person.clusterId}/$dayId/$fileId",
+        name = name,
+        isDirectory = false,
+        mimeType = mimeType,
+        size = null,
+        lastModified = takenAtEpochSeconds?.toString(),
+        fileId = fileId,
+        hasPreview = true,
+        etag = etag,
+        originalAccessAllowed = false,
+        davPathAuthoritative = false,
+        livePhoto = livePhoto,
+    )
 
 /**
  * Builds a preview-only file for the legacy platform person-media readers.

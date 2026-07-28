@@ -180,6 +180,7 @@ data class NativeMediaItem(
     val videoDurationSeconds: Int?,
     val isFavorite: Boolean,
     val rawStackFileIds: List<Long> = emptyList(),
+    val livePhoto: NextcloudLivePhotoReference? = null,
     /** Normalized recognized-face geometry when the active Memories filter supplied one. */
     val faceRectangle: NativeFaceRectangle? = null,
 ) {
@@ -214,6 +215,7 @@ data class NativeMediaItem(
             hasPreview = true,
             etag = etag,
             originalAccessAllowed = false,
+            livePhoto = livePhoto,
         )
     }
 }
@@ -528,6 +530,8 @@ private fun parseMemoriesMediaItem(
         videoDurationSeconds = item.optionalNonNegativeInt("video_duration"),
         isFavorite = item.optionalBoolean("isfavorite") ?: false,
         rawStackFileIds = rawStackIds,
+        livePhoto = item.optionalText("liveid", MAX_LIVE_PHOTO_TOKEN_LENGTH)
+            ?.let(::NextcloudLivePhotoReference),
         faceRectangle = item.faceRectangleOrNull(),
     )
 }
