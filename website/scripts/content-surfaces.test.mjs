@@ -245,6 +245,13 @@ test("deploy builds verify committed captures while review CI checks freshness",
   assert.match(ciWorkflow, /- "ui\/src\/commonMain\/\*\*"/u);
   assert.match(ciWorkflow, /- "gradle\/libs\.versions\.toml"/u);
   assert.match(ciWorkflow, /- "website\/public\/screenshots\/\*\*"/u);
+  assert.match(ciWorkflow, /- "website\/scripts\/marketing-captures\.mjs"/u);
+  assert.match(ciWorkflow, /- "website\/scripts\/verify-marketing-captures\.mjs"/u);
+  assert.match(ciWorkflow, /\bnpm ci --prefix website\b/u);
+  assert.ok(
+    ciWorkflow.indexOf("npm ci --prefix website") <
+      ciWorkflow.indexOf("node website/scripts/verify-marketing-captures.mjs"),
+  );
 });
 
 test("capture freshness tracks renderer build configuration", async () => {
