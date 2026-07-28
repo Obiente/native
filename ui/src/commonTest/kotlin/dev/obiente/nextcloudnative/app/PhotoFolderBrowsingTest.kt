@@ -11,6 +11,26 @@ import kotlin.test.assertTrue
 
 class PhotoFolderBrowsingTest {
     @Test
+    fun `folder refresh readiness keeps cached content visible after a failure`() {
+        assertEquals(
+            PhotoFolderInventoryReadiness.Loading,
+            photoFolderInventoryReadiness(hasInventory = false, refreshError = null),
+        )
+        assertEquals(
+            PhotoFolderInventoryReadiness.InitialFailure,
+            photoFolderInventoryReadiness(hasInventory = false, refreshError = "Offline"),
+        )
+        assertEquals(
+            PhotoFolderInventoryReadiness.Ready,
+            photoFolderInventoryReadiness(hasInventory = true, refreshError = null),
+        )
+        assertEquals(
+            PhotoFolderInventoryReadiness.Stale,
+            photoFolderInventoryReadiness(hasInventory = true, refreshError = "Offline"),
+        )
+    }
+
+    @Test
     fun `folder scopes infer hierarchy and count logical media once`() {
         val inventory = photoInventory()
 
@@ -276,28 +296,23 @@ class PhotoFolderBrowsingTest {
             selectedFolderPath = "Photos",
             scope = PhotoFolderBrowseScope.RecursiveMedia,
         )
-        val accumulator = PhotoFolderSummaryAccumulator(
-            selectedFolderPath = state.selectedFolderPath,
-            selectedScope = state.scope,
+        val inventory = buildPhotoFolderPagedInventory(
+            pages = listOf(
+                listOf(
+                    file(path = "Photos/Camera/shot.jpg", mimeType = "image/jpeg"),
+                ),
+                listOf(
+                    file(path = "Photos/Camera/shot.RAF", mimeType = "image/x-fuji-raf"),
+                    file(path = "Photos/Trips/older.jpg", mimeType = "image/jpeg"),
+                    file(path = "Photos/Trips/Archive/oldest.jpg", mimeType = "image/jpeg"),
+                ),
+            ),
+            state = state,
             maximumMediaRecords = 8,
             maximumFolders = 8,
             maximumSelectedMediaRecords = 8,
         )
 
-        accumulator.addPage(
-            listOf(
-                file(path = "Photos/Camera/shot.jpg", mimeType = "image/jpeg"),
-            ),
-        )
-        accumulator.addPage(
-            listOf(
-                file(path = "Photos/Camera/shot.RAF", mimeType = "image/x-fuji-raf"),
-                file(path = "Photos/Trips/older.jpg", mimeType = "image/jpeg"),
-                file(path = "Photos/Trips/Archive/oldest.jpg", mimeType = "image/jpeg"),
-            ),
-        )
-
-        val inventory = accumulator.snapshot()
         assertEquals(4, inventory.summary.indexedMediaRecordCount)
         assertEquals(3, inventory.summary.rootRecursiveMediaCount)
         assertEquals(1, inventory.summary.folder("Photos/Camera")?.directMediaCount)
@@ -411,6 +426,64 @@ class PhotoFolderBrowsingTest {
             )
         }
         assertEquals(listOf("Photos"), folderBound.snapshot().summary.folders.map { it.path })
+    }
+
+    @Test
+    fun `paged inventory can retarget folder navigation without losing page summaries`() {
+        val pages = listOf(
+            listOf(
+                file(path = "Photos/Camera/current.jpg", mimeType = "image/jpeg"),
+            ),
+            listOf(
+                file(path = "Photos/Trips/older.jpg", mimeType = "image/jpeg"),
+                file(path = "Photos/Trips/Nested/oldest.jpg", mimeType = "image/jpeg"),
+            ),
+        )
+        val rootState = PhotoFolderBrowseState(
+            selectedFolderPath = "Photos",
+            scope = PhotoFolderBrowseScope.RecursiveMedia,
+        )
+        val nestedState = PhotoFolderBrowseState(
+            selectedFolderPath = "Photos/Trips",
+            scope = PhotoFolderBrowseScope.DirectMediaOnly,
+        )
+
+        val rootInventory = buildPhotoFolderPagedInventory(pages, rootState)
+        val nestedInventory = buildPhotoFolderPagedInventory(pages, nestedState)
+
+        assertEquals(rootInventory.summary, nestedInventory.summary)
+        assertEquals(3, rootInventory.selectedMediaFiles.size)
+        assertEquals(
+            listOf("Photos/Trips/older.jpg"),
+            nestedInventory.selectedMediaFiles.map(NextcloudFile::path),
+        )
+        assertEquals(
+            listOf("older.jpg"),
+            buildPhotoFolderBrowseResult(nestedInventory, nestedState).media.map { it.cover.name },
+        )
+    }
+
+    @Test
+    fun `folder summary includes accepted records beyond the timeline display limit`() {
+        val recentPage = List(MAXIMUM_MEDIA_SEARCH_RESULTS) { index ->
+            file(
+                path = "Photos/Camera/recent-$index.jpg",
+                mimeType = "image/jpeg",
+            )
+        }
+        val olderPage = listOf(
+            file(path = "Photos/Archive/older.jpg", mimeType = "image/jpeg"),
+        )
+
+        val inventory = buildPhotoFolderPagedInventory(
+            pages = listOf(recentPage, olderPage),
+            state = PhotoFolderBrowseState(scope = PhotoFolderBrowseScope.FoldersOnly),
+        )
+
+        assertEquals(MAXIMUM_MEDIA_SEARCH_RESULTS + 1, inventory.summary.indexedMediaRecordCount)
+        assertEquals(MAXIMUM_MEDIA_SEARCH_RESULTS + 1, inventory.summary.rootRecursiveMediaCount)
+        assertEquals(1, inventory.summary.folder("Photos/Archive")?.directMediaCount)
+        assertTrue(inventory.selectedMediaFiles.isEmpty())
     }
 
     private fun photoInventory(): List<NextcloudFile> = listOf(

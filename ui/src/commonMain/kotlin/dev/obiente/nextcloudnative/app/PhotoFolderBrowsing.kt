@@ -144,6 +144,42 @@ data class PhotoFolderPagedInventory(
     }
 }
 
+enum class PhotoFolderInventoryReadiness {
+    Loading,
+    InitialFailure,
+    Ready,
+    Stale,
+}
+
+fun photoFolderInventoryReadiness(
+    hasInventory: Boolean,
+    refreshError: String?,
+): PhotoFolderInventoryReadiness = when {
+    hasInventory && refreshError != null -> PhotoFolderInventoryReadiness.Stale
+    hasInventory -> PhotoFolderInventoryReadiness.Ready
+    refreshError != null -> PhotoFolderInventoryReadiness.InitialFailure
+    else -> PhotoFolderInventoryReadiness.Loading
+}
+
+enum class PhotoFolderInventoryTruncationReason {
+    MediaRecordLimit,
+    FolderLimit,
+}
+
+sealed interface PhotoFolderPageAcceptance {
+    data class Accepted(
+        val novelMediaRecords: Int,
+    ) : PhotoFolderPageAcceptance {
+        init {
+            require(novelMediaRecords >= 0) { "The accepted photo record count is invalid." }
+        }
+    }
+
+    data class Truncated(
+        val reason: PhotoFolderInventoryTruncationReason,
+    ) : PhotoFolderPageAcceptance
+}
+
 /**
  * Bounded accumulator for paged, unstacked timeline records.
  *
@@ -184,22 +220,26 @@ class PhotoFolderSummaryAccumulator(
      * Adds one timeline page atomically. A page that would exceed a configured bound is rejected
      * before any accumulator state changes.
      */
-    fun addPage(records: List<NextcloudFile>) {
+    fun tryAddPage(records: List<NextcloudFile>): PhotoFolderPageAcceptance {
         val pageMedia = reconcilePhotoFolderInventory(records)
             .asSequence()
             .filter { file -> !file.isDirectory && file.mediaAssetFormat() != MediaAssetFormat.Other }
             .toList()
         val novelMedia = pageMedia.filterNot { file -> file.path in mediaByPath }
-        require(mediaByPath.size + novelMedia.size <= maximumMediaRecords) {
-            "The paged photo folder summary exceeds its media bound."
+        if (mediaByPath.size + novelMedia.size > maximumMediaRecords) {
+            return PhotoFolderPageAcceptance.Truncated(
+                PhotoFolderInventoryTruncationReason.MediaRecordLimit,
+            )
         }
         val novelFolders = novelMedia
             .asSequence()
             .flatMap { file -> file.path.parentFolderPath().ancestorsIncludingSelf().asSequence() }
             .filterNot(folderPaths::contains)
             .toSet()
-        require(folderPaths.size + novelFolders.size <= maximumFolders + 1) {
-            "The paged photo folder summary exceeds its folder bound."
+        if (folderPaths.size + novelFolders.size > maximumFolders + 1) {
+            return PhotoFolderPageAcceptance.Truncated(
+                PhotoFolderInventoryTruncationReason.FolderLimit,
+            )
         }
 
         pageMedia.forEach { file ->
@@ -220,9 +260,24 @@ class PhotoFolderSummaryAccumulator(
                 }
             }
         }
+        return PhotoFolderPageAcceptance.Accepted(novelMedia.size)
     }
 
-    fun snapshot(): PhotoFolderPagedInventory {
+    fun addPage(records: List<NextcloudFile>) {
+        when (val acceptance = tryAddPage(records)) {
+            is PhotoFolderPageAcceptance.Accepted -> Unit
+            is PhotoFolderPageAcceptance.Truncated -> throw IllegalArgumentException(
+                when (acceptance.reason) {
+                    PhotoFolderInventoryTruncationReason.MediaRecordLimit ->
+                        "The paged photo folder summary exceeds its media bound."
+                    PhotoFolderInventoryTruncationReason.FolderLimit ->
+                        "The paged photo folder summary exceeds its folder bound."
+                },
+            )
+        }
+    }
+
+    fun summarySnapshot(): PhotoFolderInventorySummary {
         val renderedKeysByFolder = mediaByPath.values
             .asSequence()
             .filter { record ->
@@ -265,17 +320,113 @@ class PhotoFolderSummaryAccumulator(
             }
             .toList()
 
-        return PhotoFolderPagedInventory(
-            selectedFolderPath = selectedFolderPath,
-            selectedScope = selectedScope,
-            summary = PhotoFolderInventorySummary(
-                folders = folders,
-                rootRecursiveMediaCount = recursiveMediaCounts[""] ?: 0,
-                indexedMediaRecordCount = mediaByPath.size,
-            ),
-            selectedMediaFiles = selectedMediaByPath.values.toList(),
+        return PhotoFolderInventorySummary(
+            folders = folders,
+            rootRecursiveMediaCount = recursiveMediaCounts[""] ?: 0,
+            indexedMediaRecordCount = mediaByPath.size,
         )
     }
+
+    fun snapshot(): PhotoFolderPagedInventory = PhotoFolderPagedInventory(
+        selectedFolderPath = selectedFolderPath,
+        selectedScope = selectedScope,
+        summary = summarySnapshot(),
+        selectedMediaFiles = selectedMediaByPath.values.toList(),
+    )
+}
+
+data class PhotoFolderInventoryPublication(
+    val revision: Long,
+    val summary: PhotoFolderInventorySummary,
+) {
+    init {
+        require(revision > 0) { "The photo folder inventory revision is invalid." }
+    }
+}
+
+/**
+ * Account-local owner of the complete bounded media index.
+ *
+ * Full records never enter [PhotoFolderInventoryPublication]. Presentation can observe the compact
+ * summary and revision, then call [browse] only when its local selection changes.
+ */
+class PhotoFolderInventoryRepository(
+    maximumMediaRecords: Int = MAX_PHOTO_FOLDER_INVENTORY_PAGING_RECORDS,
+    maximumFolders: Int = MAX_PHOTO_FOLDER_SUMMARY_FOLDERS,
+    private val maximumSelectionRecords: Int = MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS,
+) {
+    private val summaryAccumulator = PhotoFolderSummaryAccumulator(
+        selectedFolderPath = "",
+        selectedScope = PhotoFolderBrowseScope.RecursiveMedia,
+        maximumMediaRecords = maximumMediaRecords,
+        maximumFolders = maximumFolders,
+        maximumSelectedMediaRecords = 1,
+    )
+    private val mediaByPath = linkedMapOf<String, NextcloudFile>()
+    private var revision = 0L
+
+    init {
+        require(maximumMediaRecords in 1..MAX_PHOTO_FOLDER_INVENTORY_PAGING_RECORDS) {
+            "The photo folder inventory media limit is invalid."
+        }
+        require(maximumSelectionRecords in 1..MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS) {
+            "The photo folder inventory selection limit is invalid."
+        }
+    }
+
+    fun tryAddPage(records: List<NextcloudFile>): PhotoFolderPageAcceptance {
+        val normalizedMedia = reconcilePhotoFolderInventory(records)
+            .filter { file -> !file.isDirectory && file.mediaAssetFormat() != MediaAssetFormat.Other }
+        return when (val acceptance = summaryAccumulator.tryAddPage(normalizedMedia)) {
+            is PhotoFolderPageAcceptance.Truncated -> acceptance
+            is PhotoFolderPageAcceptance.Accepted -> {
+                normalizedMedia.forEach { file ->
+                    val existing = mediaByPath[file.path]
+                    mediaByPath[file.path] = if (existing == null) {
+                        file
+                    } else {
+                        listOf(existing, file).maxWith(photoInventoryPreference)
+                    }
+                }
+                revision += 1
+                acceptance
+            }
+        }
+    }
+
+    fun publication(): PhotoFolderInventoryPublication? =
+        revision.takeIf { it > 0 }?.let { currentRevision ->
+            PhotoFolderInventoryPublication(
+                revision = currentRevision,
+                summary = summaryAccumulator.summarySnapshot(),
+            )
+        }
+
+    fun selectionSnapshot(state: PhotoFolderBrowseState): PhotoFolderPagedInventory {
+        val query = state.query.trim()
+        val selectedFiles = if (state.scope == PhotoFolderBrowseScope.FoldersOnly) {
+            emptyList()
+        } else {
+            mediaByPath.values
+                .asSequence()
+                .filter { file ->
+                    val folderPath = file.path.parentFolderPath()
+                    folderPath.isInPhotoFolderScope(state.selectedFolderPath, state.scope) &&
+                        (query.isEmpty() || folderPath.matchesFolderQuery(query))
+                }
+                .take(maximumSelectionRecords)
+                .toList()
+        }
+        return PhotoFolderPagedInventory(
+            selectedFolderPath = state.selectedFolderPath,
+            selectedScope = state.scope,
+            summary = summaryAccumulator.summarySnapshot(),
+            selectedMediaFiles = selectedFiles,
+        )
+    }
+
+    fun browse(state: PhotoFolderBrowseState): PhotoFolderBrowseResult =
+        buildPhotoFolderBrowseResult(selectionSnapshot(state), state)
 }
 
 private data class CompactPhotoFolderMedia(
@@ -376,15 +527,36 @@ fun buildPhotoFolderBrowseResult(
         "The photo folder inventory exceeds the bounded browse window."
     }
 
+    return buildPhotoFolderBrowseResult(
+        inventory = buildPhotoFolderPagedInventory(
+            pages = listOf(inventory),
+            state = state,
+            maximumMediaRecords = maximumRecords,
+            maximumSelectedMediaRecords = minOf(MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS, maximumRecords),
+        ),
+        state = state,
+    )
+}
+
+/**
+ * Feeds accepted unstacked timeline pages into one bounded folder accumulator in fetch order.
+ */
+fun buildPhotoFolderPagedInventory(
+    pages: Iterable<List<NextcloudFile>>,
+    state: PhotoFolderBrowseState,
+    maximumMediaRecords: Int = MAX_PHOTO_FOLDER_SUMMARY_MEDIA_RECORDS,
+    maximumFolders: Int = MAX_PHOTO_FOLDER_SUMMARY_FOLDERS,
+    maximumSelectedMediaRecords: Int = MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS,
+): PhotoFolderPagedInventory {
     val accumulator = PhotoFolderSummaryAccumulator(
         selectedFolderPath = state.selectedFolderPath,
         selectedScope = state.scope,
-        maximumMediaRecords = maximumRecords,
-        maximumFolders = MAX_PHOTO_FOLDER_SUMMARY_FOLDERS,
-        maximumSelectedMediaRecords = minOf(MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS, maximumRecords),
+        maximumMediaRecords = maximumMediaRecords,
+        maximumFolders = maximumFolders,
+        maximumSelectedMediaRecords = maximumSelectedMediaRecords,
     )
-    accumulator.addPage(inventory)
-    return buildPhotoFolderBrowseResult(accumulator.snapshot(), state)
+    pages.forEach(accumulator::addPage)
+    return accumulator.snapshot()
 }
 
 fun buildPhotoFolderBrowseResult(

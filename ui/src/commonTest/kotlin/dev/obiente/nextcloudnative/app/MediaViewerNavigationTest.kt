@@ -36,6 +36,36 @@ class MediaViewerNavigationTest {
         assertNull(repository.resolve(second))
     }
 
+    @Test
+    fun routeRetainsStackSourcesWithoutMakingRawSiblingsNavigable() {
+        val repository = MediaViewerNavigationRepository(maximumRoutes = 1, maximumItemsPerRoute = 1)
+        val rendered = file(2L)
+        val rawSibling = rendered.copy(
+            path = "Photos/2.dng",
+            name = "2.dng",
+            mimeType = "image/x-adobe-dng",
+            fileId = 22L,
+        )
+        val unrelatedRaw = rendered.copy(
+            path = "Photos/99.dng",
+            name = "99.dng",
+            mimeType = "image/x-adobe-dng",
+            fileId = 99L,
+        )
+
+        val route = repository.register(
+            media = listOf(rendered),
+            selected = rendered,
+            sourceMembers = listOf(rendered, rawSibling, unrelatedRaw),
+        )
+        val snapshot = assertNotNull(repository.resolve(route))
+
+        assertEquals(listOf(rendered), snapshot.media)
+        assertEquals(listOf(rendered, rawSibling), snapshot.sourceMembers)
+        assertEquals(rendered, snapshot.selected)
+        assertNull(repository.select(route, rawSibling))
+    }
+
     private fun file(id: Long) = NextcloudFile(
         path = "Photos/$id.jpg",
         name = "$id.jpg",

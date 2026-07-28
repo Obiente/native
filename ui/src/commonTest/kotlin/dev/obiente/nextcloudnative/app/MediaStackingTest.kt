@@ -620,13 +620,17 @@ class MediaStackingTest {
     }
 
     @Test
-    fun clickingAStackCanUseASequenceContainingBothRepresentationsAndFollowingMedia() {
+    fun stackedRepresentationsRemainSourcesWithoutBecomingDuplicateNavigationPages() {
         val raw = file("Photos/DSCF0001.RAF", "image/x-fuji-raf")
         val jpeg = file("Photos/DSCF0001.JPG", "image/jpeg")
         val next = file("Photos/DSCF0002.JPG", "image/jpeg")
-        val sequence = stackMediaFiles(listOf(raw, jpeg, next)).flatMap(MediaStack::members)
+        val sequence = mediaStackViewerSequence(stackMediaFiles(listOf(raw, jpeg, next)))
 
-        assertEquals(listOf(jpeg, raw, next), sequence)
+        assertEquals(listOf(jpeg, next), sequence.navigationItems)
+        assertEquals(listOf(jpeg, raw, next), sequence.sourceMembers)
+        assertEquals(0, mediaViewerNavigationIndex(sequence.navigationItems, jpeg))
+        assertEquals(0, mediaViewerNavigationIndex(sequence.navigationItems, raw))
+        assertEquals(1, mediaViewerNavigationIndex(sequence.navigationItems, next))
     }
 
     @Test

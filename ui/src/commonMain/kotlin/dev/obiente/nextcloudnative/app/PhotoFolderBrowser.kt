@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -61,7 +62,8 @@ import kotlinx.coroutines.withContext
 
 @Composable
 internal fun PhotoFolderBrowser(
-    inventory: List<NextcloudFile>,
+    inventory: PhotoFolderPagedInventory,
+    initialResult: Result<PhotoFolderBrowseResult>? = null,
     selectedFolderPath: String,
     query: String,
     scope: PhotoFolderBrowseScope,
@@ -75,7 +77,7 @@ internal fun PhotoFolderBrowser(
     onQueryChanged: (String) -> Unit,
     onScopeChanged: (PhotoFolderBrowseScope) -> Unit,
     onViewModeChanged: (PhotoFolderViewMode) -> Unit,
-    onOpenMedia: (NextcloudFile, List<NextcloudFile>) -> Unit,
+    onOpenMedia: (NextcloudFile, MediaStackViewerSequence) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state = remember(selectedFolderPath, query, scope, viewMode) {
@@ -87,10 +89,15 @@ internal fun PhotoFolderBrowser(
         )
     }
     val resultState by produceState<Result<PhotoFolderBrowseResult>?>(
-        initialValue = null,
+        initialValue = initialResult,
         inventory,
         state,
+        initialResult,
     ) {
+        if (initialResult != null) {
+            value = initialResult
+            return@produceState
+        }
         value = withContext(Dispatchers.Default) {
             if (state.query.isNotEmpty()) {
                 delay(PHOTO_FOLDER_SEARCH_DEBOUNCE_MILLIS)
@@ -100,7 +107,7 @@ internal fun PhotoFolderBrowser(
     }
     val result = resultState?.getOrNull()
     val viewerSequence = remember(result) {
-        result?.media.orEmpty().flatMap(MediaStack::members)
+        mediaStackViewerSequence(result?.media.orEmpty())
     }
 
     Column(modifier = modifier) {
@@ -319,7 +326,7 @@ private fun PhotoFolderToolbar(
                     horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                 ) {
                     search(Modifier.weight(1f))
-                    scopeControl(Modifier)
+                    scopeControl(Modifier.width(220.dp))
                 }
             }
         }

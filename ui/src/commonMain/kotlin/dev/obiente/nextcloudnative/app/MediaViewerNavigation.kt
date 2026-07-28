@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
+private const val MAX_MEDIA_VIEWER_SOURCE_MEMBERS_PER_ITEM = 8
+
 data class MediaViewerNavigationRoute(
     val key: String,
     val selectedIndex: Int,
@@ -8,10 +10,19 @@ data class MediaViewerNavigationRoute(
 data class MediaViewerNavigationSnapshot(
     val media: List<NextcloudFile>,
     val selectedIndex: Int,
+    val sourceMembers: List<NextcloudFile> = media,
 ) {
     init {
         require(media.isNotEmpty())
         require(selectedIndex in media.indices)
+        require(sourceMembers.isNotEmpty())
+        require(
+            media.all { navigationItem ->
+                sourceMembers.any { source ->
+                    mediaViewerFileIdentity(source) == mediaViewerFileIdentity(navigationItem)
+                }
+            },
+        ) { "Every media viewer navigation item must remain available as a source." }
     }
 
     val selected: NextcloudFile
@@ -29,7 +40,12 @@ class MediaViewerNavigationRepository(
     private val maximumRoutes: Int = 8,
     private val maximumItemsPerRoute: Int = MAX_PHOTO_TIMELINE_RETAINED_ITEMS,
 ) {
-    private val routes = linkedMapOf<String, List<NextcloudFile>>()
+    private data class RouteContent(
+        val media: List<NextcloudFile>,
+        val sourceMembers: List<NextcloudFile>,
+    )
+
+    private val routes = linkedMapOf<String, RouteContent>()
     private var nextRouteId = 1L
 
     init {
@@ -40,6 +56,7 @@ class MediaViewerNavigationRepository(
     fun register(
         media: List<NextcloudFile>,
         selected: NextcloudFile,
+        sourceMembers: List<NextcloudFile> = media,
     ): MediaViewerNavigationRoute {
         require(!selected.isDirectory) { "A media viewer route cannot select a directory." }
         val unique = media
@@ -64,7 +81,20 @@ class MediaViewerNavigationRepository(
         }
         check(selectedIndex >= 0) { "The selected media item is missing from its viewer route." }
         val key = "media-${nextRouteId++}"
-        routes[key] = bounded
+        val retainedIdentities = bounded
+            .mapTo(mutableSetOf(), ::mediaViewerFileIdentity)
+        val boundedSources = (bounded + sourceMembers)
+            .filterNot(NextcloudFile::isDirectory)
+            .distinctBy(::mediaViewerFileIdentity)
+            .filter { source ->
+                mediaViewerFileIdentity(source) in retainedIdentities ||
+                    bounded.any { navigationItem -> navigationItem.sharesMediaStackWith(source) }
+            }
+            .take(maximumItemsPerRoute * MAX_MEDIA_VIEWER_SOURCE_MEMBERS_PER_ITEM)
+        routes[key] = RouteContent(
+            media = bounded,
+            sourceMembers = boundedSources,
+        )
         while (routes.size > maximumRoutes) {
             routes.remove(routes.keys.first())
         }
@@ -72,17 +102,21 @@ class MediaViewerNavigationRepository(
     }
 
     fun resolve(route: MediaViewerNavigationRoute): MediaViewerNavigationSnapshot? {
-        val media = routes[route.key] ?: return null
-        if (route.selectedIndex !in media.indices) return null
-        return MediaViewerNavigationSnapshot(media, route.selectedIndex)
+        val content = routes[route.key] ?: return null
+        if (route.selectedIndex !in content.media.indices) return null
+        return MediaViewerNavigationSnapshot(
+            media = content.media,
+            selectedIndex = route.selectedIndex,
+            sourceMembers = content.sourceMembers,
+        )
     }
 
     fun select(
         route: MediaViewerNavigationRoute,
         selected: NextcloudFile,
     ): MediaViewerNavigationRoute? {
-        val media = routes[route.key] ?: return null
-        val index = media.indexOfFirst { candidate ->
+        val content = routes[route.key] ?: return null
+        val index = content.media.indexOfFirst { candidate ->
             mediaViewerFileIdentity(candidate) == mediaViewerFileIdentity(selected)
         }
         return index.takeIf { it >= 0 }?.let { route.copy(selectedIndex = it) }

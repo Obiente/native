@@ -21,6 +21,23 @@ data class MediaStack(
     }
 }
 
+data class MediaStackViewerSequence(
+    val navigationItems: List<NextcloudFile>,
+    val sourceMembers: List<NextcloudFile>,
+) {
+    init {
+        require(navigationItems.map(NextcloudFile::path).distinct().size == navigationItems.size) {
+            "The media viewer navigation contains duplicate items."
+        }
+        require(sourceMembers.map(NextcloudFile::path).distinct().size == sourceMembers.size) {
+            "The media viewer source list contains duplicate items."
+        }
+        require(navigationItems.all { item -> sourceMembers.any { source -> source.path == item.path } }) {
+            "Every media viewer navigation item must remain available as a source."
+        }
+    }
+}
+
 data class MediaSourceChoice(
     val file: NextcloudFile,
     val label: String,
@@ -136,6 +153,25 @@ fun stackMediaFiles(files: List<NextcloudFile>): List<MediaStack> {
                 }
             }
         }
+}
+
+fun mediaStackViewerSequence(stacks: List<MediaStack>): MediaStackViewerSequence =
+    MediaStackViewerSequence(
+        navigationItems = stacks.map(MediaStack::cover),
+        sourceMembers = stacks
+            .asSequence()
+            .flatMap { stack -> stack.members.asSequence() }
+            .distinctBy(NextcloudFile::path)
+            .toList(),
+    )
+
+fun mediaViewerNavigationIndex(
+    navigationItems: List<NextcloudFile>,
+    selected: NextcloudFile,
+): Int {
+    val exact = navigationItems.indexOfFirst { item -> item.path == selected.path }
+    if (exact >= 0) return exact
+    return navigationItems.indexOfFirst { item -> item.sharesMediaStackWith(selected) }
 }
 
 /**
@@ -331,7 +367,7 @@ private fun MediaAssetFormat.sourceLabel(): String = when (this) {
     MediaAssetFormat.Other -> "File"
 }
 
-private fun NextcloudFile.sharesMediaStackWith(other: NextcloudFile): Boolean {
+internal fun NextcloudFile.sharesMediaStackWith(other: NextcloudFile): Boolean {
     if (path == other.path) return true
     if (mediaDirectoryKey() != other.mediaDirectoryKey()) return false
     val thisFormat = mediaAssetFormat()
