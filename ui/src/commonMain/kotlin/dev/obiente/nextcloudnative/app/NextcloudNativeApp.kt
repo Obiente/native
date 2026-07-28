@@ -4722,12 +4722,19 @@ private fun MediaScreen(
         }
     }
 
-    suspend fun loadTimelinePage(kind: PhotoTimelineLoadKind) {
+    suspend fun loadTimelinePage(
+        kind: PhotoTimelineLoadKind,
+        replacePendingLoad: Boolean = false,
+    ) {
         if (userId == null) return
-        val start = when (kind) {
-            PhotoTimelineLoadKind.Refresh -> timeline.beginRefresh()
-            PhotoTimelineLoadKind.RevalidateNewest -> timeline.beginNewestRevalidation()
-            PhotoTimelineLoadKind.NextPage -> timeline.beginNextPage()
+        val start = if (replacePendingLoad) {
+            timeline.beginReplacingPendingLoad(kind)
+        } else {
+            when (kind) {
+                PhotoTimelineLoadKind.Refresh -> timeline.beginRefresh()
+                PhotoTimelineLoadKind.RevalidateNewest -> timeline.beginNewestRevalidation()
+                PhotoTimelineLoadKind.NextPage -> timeline.beginNextPage()
+            }
         }
         val token = start.token ?: return
         timeline = start.state
@@ -4773,12 +4780,14 @@ private fun MediaScreen(
 
     LaunchedEffect(userId, mediaLoadAttempt) {
         if (userId == null) return@LaunchedEffect
+        val inheritedLoadKind = timeline.loading?.kind
         loadTimelinePage(
-            when {
+            kind = inheritedLoadKind ?: when {
                 mediaLoadAttempt > 0 -> PhotoTimelineLoadKind.Refresh
                 timelineInitialLoadCompleted -> PhotoTimelineLoadKind.RevalidateNewest
                 else -> PhotoTimelineLoadKind.Refresh
             },
+            replacePendingLoad = inheritedLoadKind != null,
         )
     }
     LaunchedEffect(

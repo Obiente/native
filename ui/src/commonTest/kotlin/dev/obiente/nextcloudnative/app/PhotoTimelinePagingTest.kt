@@ -167,6 +167,28 @@ class PhotoTimelinePagingTest {
     }
 
     @Test
+    fun replacementOwnerResumesInheritedLoadAndIgnoresOldOwnerCancellation() {
+        val cached = PhotoTimelineState(entries = listOf(entry(1L, 100L)))
+        val firstOwner = cached.beginNewestRevalidation()
+        val firstToken = requireNotNull(firstOwner.token)
+
+        val replacementOwner = firstOwner.state.beginReplacingPendingLoad(firstToken.kind)
+        val replacementToken = requireNotNull(replacementOwner.token)
+        val afterOldOwnerCancellation = replacementOwner.state.cancel(firstToken)
+
+        assertEquals(PhotoTimelineLoadKind.RevalidateNewest, replacementToken.kind)
+        assertTrue(replacementToken.generation > firstToken.generation)
+        assertSame(replacementOwner.state, afterOldOwnerCancellation)
+
+        val accepted = afterOldOwnerCancellation.accept(
+            replacementToken,
+            PhotoTimelinePage(listOf(entry(2L, 110L), entry(1L, 100L)), null),
+        )
+        assertEquals(listOf(2L, 1L), accepted.entries.map { it.file.fileId })
+        assertNull(accepted.loading)
+    }
+
+    @Test
     fun failureBelongsOnlyToTheActiveGenerationAndKeepsLoadedItems() {
         val loaded = PhotoTimelineState(
             entries = listOf(entry(1L, 1L)),
@@ -179,6 +201,63 @@ class PhotoTimelinePagingTest {
         assertEquals(loaded.entries, failed.entries)
         assertTrue(failed.canLoadNextPage)
         assertEquals(PhotoTimelineLoadKind.NextPage, failed.recoveryLoadKind)
+    }
+
+    @Test
+    fun firstPageRevalidationRemovesMissingFileTiedAtCachedBoundaryTimestamp() {
+        val cached = PhotoTimelineState(
+            entries = listOf(
+                entry(4L, 100L),
+                entry(3L, 100L),
+                entry(2L, 100L),
+            ),
+            nextCursor = PhotoTimelineCursor("after-first-page"),
+        )
+        val revalidation = cached.beginNewestRevalidation()
+        val accepted = revalidation.state.accept(
+            requireNotNull(revalidation.token),
+            PhotoTimelinePage(
+                entries = listOf(
+                    entry(4L, 100L),
+                    entry(2L, 100L),
+                ),
+                nextCursor = PhotoTimelineCursor("after-revalidated-first-page"),
+            ),
+        )
+
+        assertEquals(setOf(4L, 2L), accepted.entries.mapNotNull { it.file.fileId }.toSet())
+        assertFalse(accepted.entries.any { entry -> entry.file.fileId == 3L })
+        assertFalse(accepted.revalidationCursorCatchUp)
+        assertTrue(accepted.revalidationPendingRemovalIdentities.isEmpty())
+    }
+
+    @Test
+    fun revalidationCrossesDeletedCachedTailUsingExactFileIdTieBreaker() {
+        val cached = PhotoTimelineState(
+            entries = listOf(
+                entry(4L, 100L),
+                entry(3L, 100L),
+                entry(2L, 100L),
+            ),
+            nextCursor = PhotoTimelineCursor("after-first-page"),
+        )
+        val revalidation = cached.beginNewestRevalidation()
+        val accepted = revalidation.state.accept(
+            requireNotNull(revalidation.token),
+            PhotoTimelinePage(
+                entries = listOf(
+                    entry(4L, 100L),
+                    entry(3L, 100L),
+                    entry(1L, 100L),
+                ),
+                nextCursor = PhotoTimelineCursor("after-crossed-boundary"),
+            ),
+        )
+
+        assertEquals(setOf(4L, 3L, 1L), accepted.entries.mapNotNull { it.file.fileId }.toSet())
+        assertFalse(accepted.entries.any { entry -> entry.file.fileId == 2L })
+        assertFalse(accepted.revalidationCursorCatchUp)
+        assertTrue(accepted.revalidationPendingRemovalIdentities.isEmpty())
     }
 
     @Test
@@ -226,10 +305,10 @@ class PhotoTimelinePagingTest {
     fun sameTimestampDeletionRestartsFromFreshCursorAndCatchesUpToCachedTail() {
         val cached = PhotoTimelineState(
             entries = listOf(
-                entry(1L, 100L),
-                entry(2L, 100L),
-                entry(3L, 100L),
                 entry(4L, 100L),
+                entry(3L, 100L),
+                entry(2L, 100L),
+                entry(1L, 100L),
             ),
             nextCursor = PhotoTimelineCursor("same-time-offset-4"),
             loadedOlderPages = true,
@@ -238,20 +317,20 @@ class PhotoTimelinePagingTest {
         var accepted = revalidation.state.accept(
             requireNotNull(revalidation.token),
             PhotoTimelinePage(
-                entries = listOf(entry(1L, 100L), entry(3L, 100L)),
+                entries = listOf(entry(4L, 100L), entry(2L, 100L)),
                 nextCursor = PhotoTimelineCursor("same-time-offset-2"),
             ),
         )
 
         assertEquals(PhotoTimelineCursor("same-time-offset-2"), accepted.nextCursor)
         assertTrue(accepted.revalidationCursorCatchUp)
-        assertEquals("file:4", accepted.revalidationCursorCatchUpTailIdentity)
+        assertEquals("file:1", accepted.revalidationCursorCatchUpTailIdentity)
         assertEquals(
             listOf(1L, 2L, 3L, 4L),
             accepted.entries.map { it.file.fileId },
         )
         assertEquals(
-            setOf("file:2", "file:4"),
+            setOf("file:1", "file:3"),
             accepted.revalidationPendingRemovalIdentities,
         )
 
@@ -259,7 +338,7 @@ class PhotoTimelinePagingTest {
         accepted = replay.state.accept(
             requireNotNull(replay.token),
             PhotoTimelinePage(
-                entries = listOf(entry(3L, 100L), entry(4L, 100L)),
+                entries = listOf(entry(2L, 100L), entry(1L, 100L)),
                 nextCursor = PhotoTimelineCursor("same-time-offset-4-corrected"),
             ),
         )
@@ -271,7 +350,7 @@ class PhotoTimelinePagingTest {
         assertFalse(accepted.revalidationCursorCatchUp)
         assertNull(accepted.revalidationCursorCatchUpTailIdentity)
         assertEquals(
-            listOf(1L, 3L, 4L),
+            listOf(1L, 2L, 4L),
             accepted.entries.map { it.file.fileId },
         )
         assertTrue(accepted.revalidationPendingRemovalIdentities.isEmpty())
