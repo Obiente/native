@@ -121,6 +121,7 @@ import dev.obiente.nextcloudnative.app.collectMediaSearchDavPages
 import dev.obiente.nextcloudnative.app.collectMediaTimelineDavPage
 import dev.obiente.nextcloudnative.app.mediaSearchDavRequests
 import dev.obiente.nextcloudnative.app.MediaSearchDavTransportResponse
+import dev.obiente.nextcloudnative.app.MediaTimelineDavCarryoverStore
 import dev.obiente.nextcloudnative.app.PhotoTimelineCursor
 import dev.obiente.nextcloudnative.app.PhotoTimelinePage
 import dev.obiente.nextcloudnative.app.RawMediaSearchCompatibilityPolicy
@@ -213,6 +214,7 @@ internal class AndroidNextcloudServices(
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
     private val dynamicApiReadCache = DynamicApiResponseCache(File(appContext.cacheDir, "dynamic-api-v1"))
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
+    private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
     private val fileSyncEngine = AndroidFileSyncEngine(appContext)
     private val mediaSyncFolderDetector = AndroidMediaSyncFolderDetector(appContext)
     private val externalFileHandoff = AndroidExternalFileHandoff(appContext)
@@ -688,6 +690,8 @@ internal class AndroidNextcloudServices(
             shouldSearchRaw = { files ->
                 rawPreviouslyObserved || files.any(NextcloudFile::isRawPhoto)
             },
+            carryoverStore = mediaTimelineCarryoverStore,
+            carryoverAccountScope = NextcloudDocumentIds.cacheAccountId(session),
         )
         PhotoTimelinePage(
             entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),

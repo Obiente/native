@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
@@ -25,6 +27,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -59,6 +66,43 @@ internal fun activePhotoTimelineSectionIndex(
     return activeIndex
 }
 
+internal fun photoTimelineSectionIndexForRailPosition(
+    positionY: Float,
+    railHeight: Float,
+    thumbHeight: Float,
+    sectionCount: Int,
+): Int? {
+    if (
+        sectionCount <= 0 ||
+        !positionY.isFinite() ||
+        !railHeight.isFinite() ||
+        !thumbHeight.isFinite() ||
+        railHeight <= 0f ||
+        thumbHeight < 0f ||
+        thumbHeight >= railHeight
+    ) {
+        return null
+    }
+    if (sectionCount == 1) return 0
+    val thumbTravel = railHeight - thumbHeight
+    val fraction = ((positionY - thumbHeight / 2f) / thumbTravel).coerceIn(0f, 1f)
+    return (fraction * (sectionCount - 1)).roundToInt()
+}
+
+internal fun photoTimelineSectionIndexAfterStep(
+    activeSectionIndex: Int,
+    sectionCount: Int,
+    step: Int,
+): Int? {
+    if (sectionCount <= 0) return null
+    val boundedActiveIndex = activeSectionIndex.coerceIn(0, sectionCount - 1)
+    return when {
+        step < 0 -> (boundedActiveIndex - 1).coerceAtLeast(0)
+        step > 0 -> (boundedActiveIndex + 1).coerceAtMost(sectionCount - 1)
+        else -> boundedActiveIndex
+    }
+}
+
 @Composable
 internal fun PhotoTimelineDateScrubber(
     dateIndex: PhotoTimelineDateIndex,
@@ -74,20 +118,20 @@ internal fun PhotoTimelineDateScrubber(
         16.dp.toPx().roundToInt()
     }
 
-    fun jumpToFraction(fraction: Float) {
-        val targetIndex = if (dateIndex.sections.size == 1) {
-            0
-        } else {
-            (fraction.coerceIn(0f, 1f) * dateIndex.sections.lastIndex).roundToInt()
-        }
+    fun jumpToSection(targetIndex: Int) {
         val target = dateIndex.sections[targetIndex]
         scope.launch {
             onJumpToGridItem(photoTimelineGridIndex(target, targetIndex))
         }
     }
 
-    fun jumpFromPointer(position: Offset, height: Int) {
-        if (height > 0) jumpToFraction(position.y / height.toFloat())
+    fun jumpFromRailPointer(position: Offset, railHeight: Int) {
+        photoTimelineSectionIndexForRailPosition(
+            positionY = position.y,
+            railHeight = railHeight.toFloat(),
+            thumbHeight = scrubberThumbPixels.toFloat(),
+            sectionCount = dateIndex.sections.size,
+        )?.let(::jumpToSection)
     }
 
     Surface(
@@ -105,26 +149,35 @@ internal fun PhotoTimelineDateScrubber(
                     val target = requested
                         .roundToInt()
                         .coerceIn(dateIndex.sections.indices)
-                    val section = dateIndex.sections[target]
-                    scope.launch {
-                        onJumpToGridItem(photoTimelineGridIndex(section, target))
+                    jumpToSection(target)
+                    true
+                }
+            }
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) {
+                    false
+                } else {
+                    val step = when (event.key) {
+                        Key.DirectionUp,
+                        Key.DirectionLeft,
+                        -> -1
+                        Key.DirectionDown,
+                        Key.DirectionRight,
+                        -> 1
+                        else -> return@onPreviewKeyEvent false
+                    }
+                    val target = photoTimelineSectionIndexAfterStep(
+                        activeSectionIndex = boundedActiveIndex,
+                        sectionCount = dateIndex.sections.size,
+                        step = step,
+                    )
+                    if (target != null && target != boundedActiveIndex) {
+                        jumpToSection(target)
                     }
                     true
                 }
             }
-            .pointerInput(dateIndex.sections) {
-                detectTapGestures { position ->
-                    jumpFromPointer(position, size.height)
-                }
-            }
-            .pointerInput(dateIndex.sections) {
-                detectDragGestures(
-                    onDragStart = { position -> jumpFromPointer(position, size.height) },
-                ) { change, _ ->
-                    jumpFromPointer(change.position, size.height)
-                    change.consume()
-                }
-            },
+            .focusable(),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
         contentColor = MaterialTheme.colorScheme.onSurface,
         tonalElevation = 6.dp,
@@ -150,7 +203,24 @@ internal fun PhotoTimelineDateScrubber(
             )
             Spacer(Modifier.size(NextcloudSpacing.Small))
             BoxWithConstraints(
-                modifier = Modifier.height(112.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(112.dp)
+                    .pointerInput(dateIndex.sections) {
+                        detectTapGestures { position ->
+                            jumpFromRailPointer(position, size.height)
+                        }
+                    }
+                    .pointerInput(dateIndex.sections) {
+                        detectDragGestures(
+                            onDragStart = { position ->
+                                jumpFromRailPointer(position, size.height)
+                            },
+                        ) { change, _ ->
+                            jumpFromRailPointer(change.position, size.height)
+                            change.consume()
+                        }
+                    },
                 contentAlignment = Alignment.TopCenter,
             ) {
                 Box(

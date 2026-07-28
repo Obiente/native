@@ -343,6 +343,7 @@ class DesktopNextcloudServices(
         desktopContractCacheDirectory("responses"),
     )
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
+    private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
     private val externalFileHandoff = DesktopExternalFileHandoff()
     private val localUploadPicker = DesktopLocalUploadPicker()
     private val deckCardDrafts = DesktopDeckCardDraftStore()
@@ -690,6 +691,8 @@ class DesktopNextcloudServices(
             shouldSearchRaw = { files ->
                 rawPreviouslyObserved || files.any(NextcloudFile::isRawPhoto)
             },
+            carryoverStore = mediaTimelineCarryoverStore,
+            carryoverAccountScope = desktopFileCacheAccountId(session),
         )
         PhotoTimelinePage(
             entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),

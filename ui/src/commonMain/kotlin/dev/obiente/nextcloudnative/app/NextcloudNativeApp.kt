@@ -4637,6 +4637,7 @@ internal fun PhotoTimelineFailureNotice(
     message: String,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    actionLabel: String = "Retry",
 ) {
     Surface(
         color = MaterialTheme.colorScheme.errorContainer,
@@ -4658,7 +4659,7 @@ internal fun PhotoTimelineFailureNotice(
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = onRetry) {
-                Text("Retry")
+                Text(actionLabel)
             }
         }
     }
@@ -5346,6 +5347,7 @@ private fun MediaScreen(
             }
         }
         if (mode == MediaMode.Timeline) {
+            val recoveryLoadKind = timeline.recoveryLoadKind
             when {
                 timeline.error != null && timeline.entries.isEmpty() -> ErrorMessage(
                     requireNotNull(timeline.error),
@@ -5361,15 +5363,14 @@ private fun MediaScreen(
                     Column(modifier = Modifier.fillMaxSize()) {
                         if (
                             timeline.error != null &&
-                            timeline.failedLoadKind != PhotoTimelineLoadKind.NextPage
+                            recoveryLoadKind != PhotoTimelineLoadKind.NextPage
                         ) {
                             PhotoTimelineFailureNotice(
                                 message = requireNotNull(timeline.error),
                                 onRetry = {
                                     scope.launch {
                                         loadTimelinePage(
-                                            timeline.failedLoadKind
-                                                ?: PhotoTimelineLoadKind.Refresh,
+                                            recoveryLoadKind ?: PhotoTimelineLoadKind.Refresh,
                                         )
                                     }
                                 },
@@ -5379,6 +5380,13 @@ private fun MediaScreen(
                                         horizontal = NextcloudSpacing.Medium,
                                         vertical = NextcloudSpacing.Small,
                                     ),
+                                actionLabel = if (
+                                    recoveryLoadKind == PhotoTimelineLoadKind.Refresh
+                                ) {
+                                    "Refresh"
+                                } else {
+                                    "Retry"
+                                },
                             )
                         }
                         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
@@ -5458,7 +5466,7 @@ private fun MediaScreen(
                                     }
                                 } else if (
                                     timeline.error != null &&
-                                    timeline.failedLoadKind == PhotoTimelineLoadKind.NextPage
+                                    recoveryLoadKind == PhotoTimelineLoadKind.NextPage
                                 ) {
                                     item(
                                         key = "timeline-error",

@@ -77,6 +77,8 @@ data class PhotoTimelineLoadStart(
  * therefore reach the complete server history with bounded memory, and refresh returns to newest.
  * If newest-page revalidation changes paging identities or timestamps, paging temporarily replays
  * from the new first-page cursor with a strict request bound until it reaches the cached tail.
+ * Cached identities missing during that replay remain visible until tail coverage or exhaustion
+ * makes their removal authoritative.
  */
 data class PhotoTimelineState(
     val entries: List<PhotoTimelineEntry> = emptyList(),
@@ -91,6 +93,8 @@ data class PhotoTimelineState(
     val loadedOlderPages: Boolean = false,
     val revalidationCursorCatchUpPagesRemaining: Int = 0,
     val revalidationCursorCatchUpTailIdentity: String? = null,
+    val revalidationPendingRemovalIdentities: Set<String> = emptySet(),
+    val revalidationPendingRawRemovalAuthoritative: Boolean = true,
     val rawEverObserved: Boolean = entries.any { entry -> entry.file.isRawPhoto() },
 ) {
     init {
@@ -118,6 +122,18 @@ data class PhotoTimelineState(
         ) {
             "The photo timeline revalidation catch-up target is invalid."
         }
+        require(revalidationPendingRemovalIdentities.size <= retentionLimit) {
+            "The photo timeline revalidation removal set is too large."
+        }
+        require(
+            revalidationCursorCatchUp ||
+                (
+                    revalidationPendingRemovalIdentities.isEmpty() &&
+                        revalidationPendingRawRemovalAuthoritative
+                    ),
+        ) {
+            "The photo timeline revalidation removal transaction is invalid."
+        }
         require(entries.map(PhotoTimelineEntry::identity).distinct().size == entries.size) {
             "The photo timeline contains duplicate media identities."
         }
@@ -133,6 +149,14 @@ data class PhotoTimelineState(
 
     val canPrefetchNextPage: Boolean
         get() = canLoadNextPage && error == null
+
+    val recoveryLoadKind: PhotoTimelineLoadKind?
+        get() = when {
+            error == null -> null
+            failedLoadKind == PhotoTimelineLoadKind.NextPage && nextCursor == null ->
+                PhotoTimelineLoadKind.Refresh
+            else -> failedLoadKind
+        }
 
     val hasDiscardedNewerEntries: Boolean
         get() = discardedNewerEntries > 0
@@ -154,6 +178,10 @@ data class PhotoTimelineState(
                 error = null,
                 failedLoadKind = null,
                 generation = nextGeneration,
+                revalidationCursorCatchUpPagesRemaining = 0,
+                revalidationCursorCatchUpTailIdentity = null,
+                revalidationPendingRemovalIdentities = emptySet(),
+                revalidationPendingRawRemovalAuthoritative = true,
             ),
             token = token,
         )
@@ -203,24 +231,58 @@ data class PhotoTimelineState(
         require(page.entries.size <= token.pageSize) {
             "The photo timeline response exceeded the requested page size."
         }
+        val incomingIdentities = page.entries
+            .mapTo(mutableSetOf(), PhotoTimelineEntry::identity)
+        val cachedTailIdentity = entries.lastOrNull()?.identity
+        val revalidationCoversCachedHistory =
+            token.kind == PhotoTimelineLoadKind.RevalidateNewest &&
+                loadedOlderPages
+        val revalidationTailReachedOnNewestPage =
+            revalidationCoversCachedHistory &&
+                cachedTailIdentity != null &&
+                cachedTailIdentity in incomingIdentities
+        val revalidationRestartsFromFreshCursor =
+            revalidationCoversCachedHistory &&
+                page.nextCursor != null
+        val revalidationNeedsCursorCatchUp =
+            revalidationRestartsFromFreshCursor &&
+                cachedTailIdentity != null &&
+                !revalidationTailReachedOnNewestPage
+        val unseenCachedIdentities = when {
+            revalidationCoversCachedHistory ->
+                entries.mapTo(mutableSetOf(), PhotoTimelineEntry::identity)
+                    .apply { removeAll(incomingIdentities) }
+            token.kind == PhotoTimelineLoadKind.NextPage && revalidationCursorCatchUp ->
+                revalidationPendingRemovalIdentities - incomingIdentities
+            else -> emptySet()
+        }
+        val pendingRawRemovalAuthoritative = when {
+            revalidationCoversCachedHistory -> page.optionalRawRemovalAuthoritative
+            token.kind == PhotoTimelineLoadKind.NextPage && revalidationCursorCatchUp ->
+                revalidationPendingRawRemovalAuthoritative &&
+                    page.optionalRawRemovalAuthoritative
+            else -> true
+        }
         val source = when (token.kind) {
             PhotoTimelineLoadKind.Refresh -> emptyList()
-            PhotoTimelineLoadKind.RevalidateNewest ->
+            PhotoTimelineLoadKind.RevalidateNewest -> if (revalidationCoversCachedHistory) {
+                entries
+            } else {
                 reconcileNewestPhotoTimelinePage(entries, page)
+            }
             PhotoTimelineLoadKind.NextPage -> entries
         }
-        val merged = when (token.kind) {
-            PhotoTimelineLoadKind.RevalidateNewest -> source
-            else -> mergePhotoTimelineEntries(source, page.entries)
+        val mergedBeforeRevalidationRemoval = mergePhotoTimelineEntries(source, page.entries)
+        val provisionalOverflow =
+            (mergedBeforeRevalidationRemoval.size - retentionLimit).coerceAtLeast(0)
+        val provisionallyRetained = when {
+            provisionalOverflow == 0 -> mergedBeforeRevalidationRemoval
+            token.kind == PhotoTimelineLoadKind.NextPage ->
+                mergedBeforeRevalidationRemoval.drop(provisionalOverflow)
+            else -> mergedBeforeRevalidationRemoval.take(retentionLimit)
         }
-        val overflow = (merged.size - retentionLimit).coerceAtLeast(0)
-        val retained = when {
-            overflow == 0 -> merged
-            token.kind == PhotoTimelineLoadKind.NextPage -> merged.drop(overflow)
-            else -> merged.take(retentionLimit)
-        }
-        val retainedSamePagingKeys = retained.size == entries.size &&
-            retained.zip(entries).all { (next, current) ->
+        val retainedSamePagingKeys = provisionallyRetained.size == entries.size &&
+            provisionallyRetained.zip(entries).all { (next, current) ->
                 next.identity == current.identity &&
                     next.capturedAtEpochSeconds == current.capturedAtEpochSeconds
             }
@@ -250,19 +312,41 @@ data class PhotoTimelineState(
                                 )
                         )
                 )
-        val cachedTailIdentity = entries.lastOrNull()?.identity
-        val revalidationRestartsFromFreshCursor =
-            token.kind == PhotoTimelineLoadKind.RevalidateNewest &&
-                loadedOlderPages &&
-                page.nextCursor != null
-        val revalidationNeedsCursorCatchUp =
-            revalidationRestartsFromFreshCursor &&
-                cachedTailIdentity != null &&
-                page.entries.none { entry -> entry.identity == cachedTailIdentity }
-        val acceptedCursor = when {
-            stalled -> null
-            revalidationRestartsFromFreshCursor -> page.nextCursor
-            else -> page.nextCursor
+        val revalidationRemovalCanCommit = when {
+            revalidationCoversCachedHistory && !revalidationNeedsCursorCatchUp -> true
+            token.kind == PhotoTimelineLoadKind.NextPage &&
+                revalidationCursorCatchUp &&
+                !stalled &&
+                (catchUpTailReached || page.nextCursor == null) -> true
+            else -> false
+        }
+        val merged = when {
+            stalled && revalidationCursorCatchUp -> entries
+            revalidationRemovalCanCommit ->
+                mergedBeforeRevalidationRemoval.filter { entry ->
+                    entry.identity !in unseenCachedIdentities ||
+                        (
+                            !pendingRawRemovalAuthoritative &&
+                                entry.file.isRawPhoto()
+                            )
+                }
+            else -> mergedBeforeRevalidationRemoval
+        }
+        val overflow = (merged.size - retentionLimit).coerceAtLeast(0)
+        val retained = when {
+            overflow == 0 -> merged
+            token.kind == PhotoTimelineLoadKind.NextPage -> merged.drop(overflow)
+            else -> merged.take(retentionLimit)
+        }
+        val acceptedCursor = if (stalled) null else page.nextCursor
+        val continuesRevalidationCatchUp = when (token.kind) {
+            PhotoTimelineLoadKind.Refresh -> false
+            PhotoTimelineLoadKind.RevalidateNewest -> revalidationNeedsCursorCatchUp
+            PhotoTimelineLoadKind.NextPage ->
+                revalidationCursorCatchUp &&
+                    !stalled &&
+                    !catchUpTailReached &&
+                    page.nextCursor != null
         }
         return copy(
             entries = retained,
@@ -295,18 +379,13 @@ data class PhotoTimelineState(
             revalidationCursorCatchUpPagesRemaining = when (token.kind) {
                 PhotoTimelineLoadKind.Refresh -> 0
                 PhotoTimelineLoadKind.RevalidateNewest ->
-                    if (revalidationNeedsCursorCatchUp) {
+                    if (continuesRevalidationCatchUp) {
                         MAX_PHOTO_TIMELINE_REVALIDATION_CATCH_UP_PAGES
                     } else {
                         0
                     }
                 PhotoTimelineLoadKind.NextPage ->
-                    if (
-                        revalidationCursorCatchUp &&
-                        !stalled &&
-                        !catchUpTailReached &&
-                        page.nextCursor != null
-                    ) {
+                    if (continuesRevalidationCatchUp) {
                         revalidationCursorCatchUpPagesRemaining - 1
                     } else {
                         0
@@ -315,19 +394,22 @@ data class PhotoTimelineState(
             revalidationCursorCatchUpTailIdentity = when (token.kind) {
                 PhotoTimelineLoadKind.Refresh -> null
                 PhotoTimelineLoadKind.RevalidateNewest ->
-                    if (revalidationNeedsCursorCatchUp) cachedTailIdentity else null
+                    if (continuesRevalidationCatchUp) cachedTailIdentity else null
                 PhotoTimelineLoadKind.NextPage ->
-                    if (
-                        revalidationCursorCatchUp &&
-                        !stalled &&
-                        !catchUpTailReached &&
-                        page.nextCursor != null
-                    ) {
+                    if (continuesRevalidationCatchUp) {
                         revalidationCursorCatchUpTailIdentity
                     } else {
                         null
                     }
             },
+            revalidationPendingRemovalIdentities =
+                if (continuesRevalidationCatchUp) unseenCachedIdentities else emptySet(),
+            revalidationPendingRawRemovalAuthoritative =
+                if (continuesRevalidationCatchUp) {
+                    pendingRawRemovalAuthoritative
+                } else {
+                    true
+                },
             rawEverObserved = rawEverObserved || page.rawObserved,
         )
     }

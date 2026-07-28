@@ -1,11 +1,16 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
 const val MAXIMUM_MEDIA_SEARCH_RESULTS = DEFAULT_PHOTO_TIMELINE_PAGE_SIZE
 const val PHOTO_TIMELINE_PARTITION_PAGE_SIZE = DEFAULT_PHOTO_TIMELINE_PAGE_SIZE
 const val MAXIMUM_RAW_MEDIA_SEARCH_PATTERNS_PER_REQUEST = 8
 const val MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS = 15
 const val MAXIMUM_MEDIA_SEARCH_RESULT_PAGES = 2 + MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS
 private val MEDIA_SEARCH_MIME_PATTERNS = listOf("image/%", "video/%")
+private const val DEFAULT_MEDIA_TIMELINE_CARRYOVER_ACCOUNT_LIMIT = 4
+private const val DEFAULT_MEDIA_TIMELINE_CARRYOVER_CURSOR_LIMIT = 4
 
 enum class MediaSearchDavPartition {
     ImageMime,
@@ -38,6 +43,87 @@ data class MediaTimelineDavPage(
     val rawObserved: Boolean,
 )
 
+/**
+ * Retains at most one already-fetched server page per active SearchDAV partition.
+ *
+ * The store is deliberately runtime-only. Its compact cursor remains sufficient for a stateless
+ * retry when the process, account LRU, or refresh generation has discarded buffered records.
+ */
+class MediaTimelineDavCarryoverStore(
+    private val maximumAccountScopes: Int = DEFAULT_MEDIA_TIMELINE_CARRYOVER_ACCOUNT_LIMIT,
+    private val maximumCursorsPerAccount: Int = DEFAULT_MEDIA_TIMELINE_CARRYOVER_CURSOR_LIMIT,
+) {
+    private data class AccountState(
+        val generation: Long,
+        val continuations: LinkedHashMap<String, MediaTimelineDavCarryover>,
+    )
+
+    private val mutex = Mutex()
+    private val accounts = linkedMapOf<String, AccountState>()
+    private var nextGeneration = 0L
+
+    init {
+        require(maximumAccountScopes > 0)
+        require(maximumCursorsPerAccount > 0)
+    }
+
+    internal suspend fun beginAccountGeneration(accountScope: String): Long =
+        mutex.withLock {
+            requireMediaTimelineAccountScope(accountScope)
+            nextGeneration = if (nextGeneration == Long.MAX_VALUE) 1L else nextGeneration + 1L
+            accounts.remove(accountScope)
+            accounts[accountScope] = AccountState(nextGeneration, linkedMapOf())
+            while (accounts.size > maximumAccountScopes) {
+                accounts.remove(accounts.keys.first())
+            }
+            nextGeneration
+        }
+
+    internal suspend fun take(
+        accountScope: String,
+        generation: Long,
+        cursor: PhotoTimelineCursor,
+    ): MediaTimelineDavCarryover? = mutex.withLock {
+        requireMediaTimelineAccountScope(accountScope)
+        val account = accounts[accountScope]?.takeIf { it.generation == generation }
+            ?: return@withLock null
+        val continuation = account.continuations.remove(cursor.value)
+        accounts.remove(accountScope)
+        accounts[accountScope] = account
+        continuation
+    }
+
+    internal suspend fun put(
+        accountScope: String,
+        generation: Long,
+        cursor: PhotoTimelineCursor,
+        carryover: MediaTimelineDavCarryover,
+    ) {
+        mutex.withLock {
+            requireMediaTimelineAccountScope(accountScope)
+            val account = accounts[accountScope]?.takeIf { it.generation == generation }
+                ?: return@withLock
+            account.continuations.remove(cursor.value)
+            account.continuations[cursor.value] = carryover
+            while (account.continuations.size > maximumCursorsPerAccount) {
+                account.continuations.remove(account.continuations.keys.first())
+            }
+            accounts.remove(accountScope)
+            accounts[accountScope] = account
+        }
+    }
+}
+
+private fun requireMediaTimelineAccountScope(accountScope: String) {
+    require(
+        accountScope.isNotBlank() &&
+            accountScope.length <= 256 &&
+            accountScope.none(Char::isISOControl),
+    ) {
+        "The photo timeline carryover scope is invalid."
+    }
+}
+
 fun mediaSearchDavRequestBody(
     userId: String,
     maximumResults: Int = MAXIMUM_MEDIA_SEARCH_RESULTS,
@@ -46,10 +132,16 @@ fun mediaSearchDavRequestBody(
     excludeCollections: Boolean = true,
     atOrBeforeEpochSeconds: Long? = null,
     firstResult: Int = 0,
+    strictlyBeforeEpochSeconds: Long? = null,
+    strictlyBeforeFileId: Long? = null,
 ): String {
     require(userId.isNotBlank())
     require(maximumResults in 1..MAXIMUM_MEDIA_SEARCH_RESULTS)
     require(firstResult >= 0)
+    require((strictlyBeforeEpochSeconds == null) == (strictlyBeforeFileId == null))
+    require(strictlyBeforeEpochSeconds == null || atOrBeforeEpochSeconds == null)
+    require(strictlyBeforeEpochSeconds == null || firstResult == 0)
+    require(strictlyBeforeFileId == null || strictlyBeforeFileId >= 0L)
     require(rawFileNamePatterns.size <= MAXIMUM_RAW_MEDIA_SEARCH_PATTERNS_PER_REQUEST)
     require(rawFileNamePatterns.all(::isSafeRawMediaSearchPattern))
     require(mimeTypePatterns.isNotEmpty() || rawFileNamePatterns.isNotEmpty())
@@ -88,6 +180,20 @@ fun mediaSearchDavRequestBody(
             add(
                 "<d:lte><d:prop><d:getlastmodified/></d:prop>" +
                     "<d:literal>${formatDavMediaSearchTimestamp(boundary)}</d:literal></d:lte>",
+            )
+        }
+        if (strictlyBeforeEpochSeconds != null && strictlyBeforeFileId != null) {
+            val timestamp = formatDavMediaSearchTimestamp(strictlyBeforeEpochSeconds)
+            add(
+                """
+                    <d:or>
+                      <d:lt><d:prop><d:getlastmodified/></d:prop><d:literal>$timestamp</d:literal></d:lt>
+                      <d:and>
+                        <d:eq><d:prop><d:getlastmodified/></d:prop><d:literal>$timestamp</d:literal></d:eq>
+                        <d:lt><d:prop><oc:fileid/></d:prop><d:literal>$strictlyBeforeFileId</d:literal></d:lt>
+                      </d:and>
+                    </d:or>
+                """.trimIndent(),
             )
         }
     }
@@ -136,31 +242,87 @@ suspend fun collectMediaTimelineDavPage(
     execute: suspend (body: String) -> MediaSearchDavTransportResponse,
     parse: (body: ByteArray) -> List<NextcloudFile>,
     shouldSearchRaw: (List<NextcloudFile>) -> Boolean,
+    carryoverStore: MediaTimelineDavCarryoverStore? = null,
+    carryoverAccountScope: String? = null,
 ): MediaTimelineDavPage {
+    require((carryoverStore == null) == (carryoverAccountScope == null)) {
+        "The photo timeline carryover scope is invalid."
+    }
+    carryoverAccountScope?.let(::requireMediaTimelineAccountScope)
     val decodedCursor = cursor?.let(::decodeMediaTimelineDavCursor)
+    val runtimeGeneration = when {
+        carryoverStore == null -> null
+        cursor == null -> carryoverStore.beginAccountGeneration(requireNotNull(carryoverAccountScope))
+        else -> decodedCursor?.runtimeGeneration
+    }
+    val runtimeCarryover = if (
+        carryoverStore != null &&
+        cursor != null &&
+        runtimeGeneration != null
+    ) {
+        carryoverStore.take(
+            accountScope = requireNotNull(carryoverAccountScope),
+            generation = runtimeGeneration,
+            cursor = cursor,
+        )
+    } else {
+        null
+    }
     val partitionPages = mutableListOf<MediaTimelinePartitionPage>()
 
     suspend fun loadMime(
         partition: MediaSearchDavPartition,
-        previous: MediaTimelineDavCursorPart?,
+        logicalPrevious: MediaTimelineDavCursorPart?,
     ) {
-        if (decodedCursor != null && previous == null) return
+        if (decodedCursor != null && logicalPrevious == null) return
+        val key = MediaTimelinePartitionKey.Mime(partition)
+        val retained = runtimeCarryover?.partitions?.get(key)
+        if (retained != null) {
+            partitionPages += MediaTimelinePartitionPage(
+                key = key,
+                files = retained.files,
+                logicalPrevious = requireNotNull(logicalPrevious),
+                remoteCursorAfterFetched = retained.remoteCursorAfterFetched,
+            )
+            return
+        }
+        val queryCursor = logicalPrevious
         val request = if (decodedCursor == null) {
             mediaSearchDavRequests(
                 userId = userId,
                 maximumResults = PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
             ).first { candidate -> candidate.partition == partition }
         } else {
-            mediaTimelineDavRequest(userId, partition, requireNotNull(previous))
+            mediaTimelineDavRequest(userId, partition, requireNotNull(queryCursor))
         }
-        val response = execute(request.body)
+        var effectivePrevious = queryCursor
+        var response = execute(request.body)
+        if (
+            queryCursor?.keysetBoundary != null &&
+            isMediaSearchCompatibilityRejection(response.status)
+        ) {
+            effectivePrevious = queryCursor.asLegacyFallback()
+            response = execute(
+                mediaTimelineDavRequest(
+                    userId = userId,
+                    partition = partition,
+                    cursor = effectivePrevious,
+                ).body,
+            )
+        }
         if (response.status != 207) {
             error("WebDAV media search failed (HTTP ${response.status}).")
         }
+        val files = orderedTimelinePartition(parse(response.body))
         partitionPages += MediaTimelinePartitionPage(
-            key = MediaTimelinePartitionKey.Mime(partition),
-            files = orderedTimelinePartition(parse(response.body)),
-            previous = previous,
+            key = key,
+            files = files,
+            logicalPrevious = effectivePrevious,
+            remoteCursorAfterFetched = advancedPartitionCursor(
+                consumedFiles = files,
+                previous = effectivePrevious,
+                hasMore = files.size >= PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
+            ),
         )
     }
 
@@ -180,33 +342,80 @@ suspend fun collectMediaTimelineDavPage(
         }
     } else {
         decodedCursor.raw.forEach { raw ->
+            val key = MediaTimelinePartitionKey.Raw(raw.patternIndexes)
+            val retained = runtimeCarryover?.partitions?.get(key)
+            if (retained != null) {
+                partitionPages += MediaTimelinePartitionPage(
+                    key = key,
+                    files = retained.files,
+                    logicalPrevious = raw.cursor,
+                    remoteCursorAfterFetched = retained.remoteCursorAfterFetched,
+                )
+                return@forEach
+            }
             val patterns = raw.patternIndexes.map { index ->
                 rawPhotoFileNameSearchPatterns()[index]
             }
-            val request = mediaTimelineRawDavRequest(userId, patterns, raw.cursor)
-            val response = execute(request.body)
-            when {
-                response.status == 207 -> partitionPages += MediaTimelinePartitionPage(
-                    key = MediaTimelinePartitionKey.Raw(raw.patternIndexes),
-                    files = orderedTimelinePartition(parse(response.body)),
-                    previous = raw.cursor,
+            var effectivePrevious = raw.cursor
+            var response = execute(
+                mediaTimelineRawDavRequest(userId, patterns, effectivePrevious).body,
+            )
+            if (
+                effectivePrevious.keysetBoundary != null &&
+                isMediaSearchCompatibilityRejection(response.status)
+            ) {
+                effectivePrevious = effectivePrevious.asLegacyFallback()
+                response = execute(
+                    mediaTimelineRawDavRequest(userId, patterns, effectivePrevious).body,
                 )
+            }
+            when {
+                response.status == 207 -> {
+                    val files = orderedTimelinePartition(parse(response.body))
+                    partitionPages += MediaTimelinePartitionPage(
+                        key = key,
+                        files = files,
+                        logicalPrevious = effectivePrevious,
+                        remoteCursorAfterFetched = advancedPartitionCursor(
+                            consumedFiles = files,
+                            previous = effectivePrevious,
+                            hasMore = files.size >= PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
+                        ),
+                    )
+                }
                 isMediaSearchCompatibilityRejection(response.status) -> Unit
                 else -> error("WebDAV media search failed (HTTP ${response.status}).")
             }
         }
     }
 
-    val merged = mergeMediaTimelinePartitionPages(partitionPages)
+    val merged = mergeMediaTimelinePartitionPages(
+        pages = partitionPages,
+        runtimeGeneration = runtimeGeneration,
+    )
     val coveredRawPatternIndexes = partitionPages
         .mapNotNull { page -> page.key as? MediaTimelinePartitionKey.Raw }
         .flatMap { raw -> raw.patternIndexes }
         .toSet()
+    val nextCursor = merged.nextCursor
+        .takeUnless(MediaTimelineDavCursor::isExhausted)
+        ?.encode()
+    if (
+        carryoverStore != null &&
+        runtimeGeneration != null &&
+        nextCursor != null &&
+        merged.carryover.partitions.isNotEmpty()
+    ) {
+        carryoverStore.put(
+            accountScope = requireNotNull(carryoverAccountScope),
+            generation = runtimeGeneration,
+            cursor = nextCursor,
+            carryover = merged.carryover,
+        )
+    }
     return MediaTimelineDavPage(
         files = merged.files,
-        nextCursor = merged.nextCursor
-            .takeUnless(MediaTimelineDavCursor::isExhausted)
-            ?.encode(),
+        nextCursor = nextCursor,
         optionalRawRemovalAuthoritative =
             coveredRawPatternIndexes.size == rawPhotoFileNameSearchPatterns().size,
         rawObserved = rawObserved,
@@ -217,35 +426,63 @@ private data class MediaTimelineDavCursor(
     val image: MediaTimelineDavCursorPart?,
     val video: MediaTimelineDavCursorPart?,
     val raw: List<MediaTimelineDavRawCursor> = emptyList(),
+    val runtimeGeneration: Long? = null,
 ) {
     val isExhausted: Boolean
         get() = image == null && video == null && raw.isEmpty()
 
-    fun encode(): PhotoTimelineCursor = PhotoTimelineCursor(
-        "v3|i:${image?.encode() ?: "end"}|v:${video?.encode() ?: "end"}|r:" +
+    fun encode(): PhotoTimelineCursor {
+        val partitions = "i:${image?.encodeV4() ?: "end"}|v:${video?.encodeV4() ?: "end"}|r:" +
             raw.joinToString(";") { cursor ->
-                "${cursor.patternMask.toString(16)}@${cursor.cursor.encode()}"
-            },
-    )
+                "${cursor.patternMask.toString(16)}@${cursor.cursor.encodeV4()}"
+            }
+        return PhotoTimelineCursor(
+            runtimeGeneration?.let { generation ->
+                "v4c|g:${generation.toString(16)}|$partitions"
+            } ?: "v4|$partitions",
+        )
+    }
 }
 
-private data class MediaTimelineDavCursorPart(
+internal data class MediaTimelineDavKeysetBoundary(
+    val epochSeconds: Long,
+    val fileId: Long,
+) {
+    init {
+        require(fileId >= 0L)
+    }
+}
+
+internal data class MediaTimelineDavCursorPart(
     val boundaryEpochSeconds: Long?,
     val firstResult: Int,
+    private val keyset: MediaTimelineDavKeysetBoundary? = null,
 ) {
     init {
         require(firstResult >= 0)
         require(boundaryEpochSeconds != null || firstResult == 0)
     }
 
-    fun encode(): String = "${boundaryEpochSeconds ?: "start"},$firstResult"
+    internal val keysetBoundary: Pair<Long, Long>?
+        get() = keyset?.let { boundary -> boundary.epochSeconds to boundary.fileId }
+
+    fun encodeV4(): String = keyset?.let { boundary ->
+        "k,${boundary.epochSeconds},${boundary.fileId}," +
+            "${boundaryEpochSeconds ?: "start"},$firstResult"
+    } ?: "o,${boundaryEpochSeconds ?: "start"},$firstResult"
+
+    fun asLegacyFallback(): MediaTimelineDavCursorPart = copy(keyset = null)
 }
 
 private fun decodeMediaTimelineDavCursor(cursor: PhotoTimelineCursor): MediaTimelineDavCursor {
     val parts = cursor.value.split('|')
+    val version = parts.firstOrNull()
     require(
-        (parts[0] == "v2" && parts.size == 3) ||
-            (parts[0] == "v3" && parts.size == 4),
+        (version == "v2" && parts.size == 3) ||
+            (version == "v3" && parts.size == 4) ||
+            (version == "v3c" && parts.size == 5) ||
+            (version == "v4" && parts.size == 4) ||
+            (version == "v4c" && parts.size == 5),
     ) {
         "The photo timeline cursor is invalid."
     }
@@ -253,20 +490,61 @@ private fun decodeMediaTimelineDavCursor(cursor: PhotoTimelineCursor): MediaTime
         require(value.startsWith(prefix)) { "The photo timeline cursor is invalid." }
         val token = value.removePrefix(prefix)
         if (token == "end") return null
+        if (version == "v4" || version == "v4c") {
+            val cursorPart = token.split(',')
+            return when (cursorPart.firstOrNull()) {
+                "o" -> {
+                    require(cursorPart.size == 3) { "The photo timeline cursor is invalid." }
+                    MediaTimelineDavCursorPart(
+                        boundaryEpochSeconds = parseMediaTimelineCursorEpoch(cursorPart[1]),
+                        firstResult = cursorPart[2].toIntOrNull()
+                            ?: error("The photo timeline cursor is invalid."),
+                    )
+                }
+                "k" -> {
+                    require(cursorPart.size == 5) { "The photo timeline cursor is invalid." }
+                    val keysetEpoch = cursorPart[1].toLongOrNull()
+                        ?: error("The photo timeline cursor is invalid.")
+                    val keysetFileId = cursorPart[2].toLongOrNull()
+                        ?: error("The photo timeline cursor is invalid.")
+                    val fallbackEpoch = parseMediaTimelineCursorEpoch(cursorPart[3])
+                    require(fallbackEpoch == keysetEpoch) {
+                        "The photo timeline cursor is invalid."
+                    }
+                    MediaTimelineDavCursorPart(
+                        boundaryEpochSeconds = fallbackEpoch,
+                        firstResult = cursorPart[4].toIntOrNull()
+                            ?: error("The photo timeline cursor is invalid."),
+                        keyset = MediaTimelineDavKeysetBoundary(keysetEpoch, keysetFileId),
+                    )
+                }
+                else -> error("The photo timeline cursor is invalid.")
+            }
+        }
         val cursorPart = token.split(',')
         require(cursorPart.size == 2) { "The photo timeline cursor is invalid." }
         return MediaTimelineDavCursorPart(
-            boundaryEpochSeconds = cursorPart[0].takeUnless { it == "start" }?.toLongOrNull()
-                ?: if (cursorPart[0] == "start") null else error("The photo timeline cursor is invalid."),
+            boundaryEpochSeconds = parseMediaTimelineCursorEpoch(cursorPart[0]),
             firstResult = cursorPart[1].toIntOrNull()
                 ?: error("The photo timeline cursor is invalid."),
         )
     }
-    val raw = if (parts[0] == "v3") {
-        require(parts.size == 4 && parts[3].startsWith("r:")) {
+    val hasRuntimeGeneration = version == "v3c" || version == "v4c"
+    val partitionOffset = if (hasRuntimeGeneration) 1 else 0
+    val runtimeGeneration = if (hasRuntimeGeneration) {
+        require(parts[1].startsWith("g:")) { "The photo timeline cursor is invalid." }
+        parts[1].removePrefix("g:").toLongOrNull(16)
+            ?.takeIf { it > 0L }
+            ?: error("The photo timeline cursor is invalid.")
+    } else {
+        null
+    }
+    val raw = if (version != "v2") {
+        val rawPart = parts[3 + partitionOffset]
+        require(rawPart.startsWith("r:")) {
             "The photo timeline cursor is invalid."
         }
-        parts[3].removePrefix("r:").takeIf(String::isNotBlank)
+        rawPart.removePrefix("r:").takeIf(String::isNotBlank)
             ?.split(';')
             .orEmpty()
             .map { encoded ->
@@ -283,11 +561,16 @@ private fun decodeMediaTimelineDavCursor(cursor: PhotoTimelineCursor): MediaTime
         emptyList()
     }
     return MediaTimelineDavCursor(
-        image = parsePart(parts[1], "i:"),
-        video = parsePart(parts[2], "v:"),
+        image = parsePart(parts[1 + partitionOffset], "i:"),
+        video = parsePart(parts[2 + partitionOffset], "v:"),
         raw = raw,
+        runtimeGeneration = runtimeGeneration,
     )
 }
+
+private fun parseMediaTimelineCursorEpoch(value: String): Long? =
+    value.takeUnless { it == "start" }?.toLongOrNull()
+        ?: if (value == "start") null else error("The photo timeline cursor is invalid.")
 
 private fun mediaTimelineDavRequest(
     userId: String,
@@ -306,8 +589,11 @@ private fun mediaTimelineDavRequest(
             userId = userId,
             mimeTypePatterns = listOf(pattern),
             excludeCollections = false,
-            atOrBeforeEpochSeconds = cursor.boundaryEpochSeconds,
-            firstResult = cursor.firstResult,
+            atOrBeforeEpochSeconds =
+                if (cursor.keysetBoundary == null) cursor.boundaryEpochSeconds else null,
+            firstResult = if (cursor.keysetBoundary == null) cursor.firstResult else 0,
+            strictlyBeforeEpochSeconds = cursor.keysetBoundary?.first,
+            strictlyBeforeFileId = cursor.keysetBoundary?.second,
             maximumResults = PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
         ),
         userId = userId,
@@ -326,8 +612,11 @@ private fun mediaTimelineRawDavRequest(
         maximumResults = PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
         rawFileNamePatterns = patterns,
         mimeTypePatterns = emptyList(),
-        atOrBeforeEpochSeconds = cursor.boundaryEpochSeconds,
-        firstResult = cursor.firstResult,
+        atOrBeforeEpochSeconds =
+            if (cursor.keysetBoundary == null) cursor.boundaryEpochSeconds else null,
+        firstResult = if (cursor.keysetBoundary == null) cursor.firstResult else 0,
+        strictlyBeforeEpochSeconds = cursor.keysetBoundary?.first,
+        strictlyBeforeFileId = cursor.keysetBoundary?.second,
     ),
     userId = userId,
     maximumResults = PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
@@ -347,8 +636,8 @@ private fun advancedPartitionCursor(
     val filesAtBoundary = consumedFiles.count { file ->
         file.lastModified?.let(::parseDavMediaSearchTimestamp) == boundary
     }
-    // The next query includes the boundary timestamp, then skips only the rows already consumed
-    // at that boundary. This prevents a full page of equal timestamps from hiding older rows.
+    // Keep the timestamp offset as a compatibility fallback even when the next request can use
+    // the stable timestamp and file-ID keyset.
     val alreadySkipped = previous
         ?.takeIf { cursorPart -> cursorPart.boundaryEpochSeconds == boundary }
         ?.firstResult
@@ -356,13 +645,24 @@ private fun advancedPartitionCursor(
     require(alreadySkipped <= Int.MAX_VALUE - filesAtBoundary) {
         "The photo timeline cursor is outside the supported range."
     }
+    val keysetBoundary = consumedFiles.lastOrNull()?.let { file ->
+        val epochSeconds = file.lastModified?.let(::parseDavMediaSearchTimestamp)
+        val fileId = file.fileId
+        val mayUseKeyset = previous == null || previous.keysetBoundary != null
+        if (!mayUseKeyset || epochSeconds == null || fileId == null || fileId < 0L) {
+            null
+        } else {
+            MediaTimelineDavKeysetBoundary(epochSeconds, fileId)
+        }
+    }
     return MediaTimelineDavCursorPart(
         boundaryEpochSeconds = boundary,
         firstResult = alreadySkipped + filesAtBoundary,
+        keyset = keysetBoundary,
     )
 }
 
-private sealed interface MediaTimelinePartitionKey {
+internal sealed interface MediaTimelinePartitionKey {
     data class Mime(val partition: MediaSearchDavPartition) : MediaTimelinePartitionKey
     data class Raw(val patternIndexes: List<Int>) : MediaTimelinePartitionKey
 }
@@ -370,8 +670,31 @@ private sealed interface MediaTimelinePartitionKey {
 private data class MediaTimelinePartitionPage(
     val key: MediaTimelinePartitionKey,
     val files: List<NextcloudFile>,
-    val previous: MediaTimelineDavCursorPart?,
+    val logicalPrevious: MediaTimelineDavCursorPart?,
+    val remoteCursorAfterFetched: MediaTimelineDavCursorPart?,
 )
+
+internal data class MediaTimelinePartitionCarryover(
+    val files: List<NextcloudFile>,
+    val remoteCursorAfterFetched: MediaTimelineDavCursorPart?,
+) {
+    init {
+        require(files.isNotEmpty())
+        require(files.size <= PHOTO_TIMELINE_PARTITION_PAGE_SIZE)
+    }
+}
+
+internal data class MediaTimelineDavCarryover(
+    val partitions: Map<MediaTimelinePartitionKey, MediaTimelinePartitionCarryover>,
+) {
+    init {
+        require(partitions.size <= MAXIMUM_MEDIA_SEARCH_RESULT_PAGES)
+        require(
+            partitions.values.sumOf { it.files.size } <=
+                MAXIMUM_MEDIA_SEARCH_RESULT_PAGES * PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
+        )
+    }
+}
 
 private data class MediaTimelineDavRawCursor(
     val patternIndexes: List<Int>,
@@ -391,10 +714,12 @@ private data class MediaTimelineDavRawCursor(
 private data class MergedMediaTimelinePartitions(
     val files: List<NextcloudFile>,
     val nextCursor: MediaTimelineDavCursor,
+    val carryover: MediaTimelineDavCarryover,
 )
 
 private fun mergeMediaTimelinePartitionPages(
     pages: List<MediaTimelinePartitionPage>,
+    runtimeGeneration: Long?,
 ): MergedMediaTimelinePartitions {
     val candidates = pages.flatMapIndexed { partitionIndex, page ->
         page.files.mapIndexed { fileIndex, file ->
@@ -414,16 +739,27 @@ private fun mergeMediaTimelinePartitionPages(
         consumed[partitionIndex] = maxOf(consumed[partitionIndex], fileIndex + 1)
         if (selectedPaths.add(file.path.trim('/'))) selected += file
     }
+    val carryover = linkedMapOf<MediaTimelinePartitionKey, MediaTimelinePartitionCarryover>()
     val nextParts = pages.mapIndexedNotNull { index, page ->
         val consumedCount = consumed[index]
-        val hasUnconsumedFetchedFiles = consumedCount < page.files.size
+        val unconsumedFiles = page.files.drop(consumedCount)
         val mayHaveAnotherServerPage =
-            hasUnconsumedFetchedFiles || page.files.size >= PHOTO_TIMELINE_PARTITION_PAGE_SIZE
-        val cursor = advancedPartitionCursor(
-            consumedFiles = page.files.take(consumedCount),
-            previous = page.previous,
-            hasMore = mayHaveAnotherServerPage,
-        ) ?: return@mapIndexedNotNull null
+            unconsumedFiles.isNotEmpty() || page.remoteCursorAfterFetched != null
+        val cursor = if (unconsumedFiles.isEmpty()) {
+            page.remoteCursorAfterFetched
+        } else {
+            advancedPartitionCursor(
+                consumedFiles = page.files.take(consumedCount),
+                previous = page.logicalPrevious,
+                hasMore = mayHaveAnotherServerPage,
+            )
+        } ?: return@mapIndexedNotNull null
+        if (unconsumedFiles.isNotEmpty()) {
+            carryover[page.key] = MediaTimelinePartitionCarryover(
+                files = unconsumedFiles,
+                remoteCursorAfterFetched = page.remoteCursorAfterFetched,
+            )
+        }
         page.key to cursor
     }
     return MergedMediaTimelinePartitions(
@@ -440,7 +776,9 @@ private fun mergeMediaTimelinePartitionPages(
                     MediaTimelineDavRawCursor(raw.patternIndexes, cursor)
                 }
             },
+            runtimeGeneration = runtimeGeneration,
         ),
+        carryover = MediaTimelineDavCarryover(carryover),
     )
 }
 
@@ -466,10 +804,16 @@ private suspend fun collectInitialRawTimelinePartitions(
         val response = execute(request.body)
         when {
             response.status == 207 -> {
+                val files = orderedTimelinePartition(parse(response.body))
                 pages += MediaTimelinePartitionPage(
                     key = MediaTimelinePartitionKey.Raw(indexes),
-                    files = orderedTimelinePartition(parse(response.body)),
-                    previous = null,
+                    files = files,
+                    logicalPrevious = null,
+                    remoteCursorAfterFetched = advancedPartitionCursor(
+                        consumedFiles = files,
+                        previous = null,
+                        hasMore = files.size >= PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
+                    ),
                 )
                 offset += indexes.size
             }
