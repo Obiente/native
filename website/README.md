@@ -74,17 +74,25 @@ filename list. Each scenario uses production Compose components and
 deterministic synthetic models. The workflow does not use adb, an emulator, a
 phone, a Nextcloud account, or network-backed application services.
 
-The website validates the manifest, PNG dimensions, and image hashes. Check
-whether the committed catalog represents the current capture inputs with:
+Production and pull request deployments validate the committed manifest, fully
+decode each PNG, and check its dimensions and hash without requiring unrelated
+UI source changes to regenerate the catalog:
 
 ```bash
 npm run --prefix website verify:captures
 ```
 
-If the command reports stale inputs, run the capture wrapper with JDK 21 and
-review the updated synthetic images. The `/visual-qa/` route lists scenario,
-feature, surface, state, platform, viewport, and pixel metadata. Future
-scenario entries may also identify the pull request they review.
+Review CI separately checks whether the catalog represents the current capture
+inputs. Run the same freshness gate locally with:
+
+```bash
+npm run --prefix website verify:captures:fresh
+```
+
+If the freshness command reports stale inputs, run the capture wrapper with
+JDK 21 and review the updated synthetic images. The `/visual-qa/` route lists
+scenario, feature, surface, state, platform, viewport, and pixel metadata.
+Future scenario entries may also identify the pull request they review.
 
 The canonical Obiente organization avatar lives with the desktop capture
 resources. Content generation copies it into `public/` for static hosting, so
