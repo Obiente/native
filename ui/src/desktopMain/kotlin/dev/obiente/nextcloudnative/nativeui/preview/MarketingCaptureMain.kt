@@ -64,6 +64,7 @@ fun main(arguments: Array<String>) {
         }
         val assets = MarketingCaptureAssets(
             avatar = loadObienteAvatar(),
+            services = networkInertMarketingServices(loadRawCaptureFixture()),
         )
         marketingCaptureScenarios.zip(outputs).forEach { (scenario, output) ->
             capture(

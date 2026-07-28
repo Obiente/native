@@ -120,6 +120,38 @@ enum class MarketingCaptureScenario(
         height = 1_800,
         density = 2.625f,
     ),
+    PhotoFolderBrowserMobile(
+        "photo-folder-browser-mobile",
+        "photo-folder-browser-mobile.png",
+        NextcloudPresentation.Adaptive,
+        "Photos",
+        "Folder browser",
+        "Trip folder in grid view",
+        MarketingCapturePurpose.Showcase,
+        "mobile",
+        "phone-portrait",
+        pullRequest = 245,
+        issue = 243,
+        width = 1_080,
+        height = 1_800,
+        density = 2.625f,
+    ),
+    PhotoFolderBrowserDesktop(
+        "photo-folder-browser-desktop",
+        "photo-folder-browser-desktop.png",
+        NextcloudPresentation.Desktop,
+        "Photos",
+        "Folder browser",
+        "Photo library in list view",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        pullRequest = 245,
+        issue = 243,
+        width = 1_440,
+        height = 900,
+        density = 1f,
+    ),
     RawPreviewLoadingMobile(
         "raw-preview-loading-mobile", "raw-preview-loading-mobile.png",
         NextcloudPresentation.Adaptive, "Photos", "RAW preview",
@@ -322,6 +354,7 @@ val rawPreviewCaptureScenarios: List<MarketingCaptureScenario> = listOf(
 
 data class MarketingCaptureAssets(
     val avatar: ImageBitmap,
+    val services: NextcloudPlatformServices,
 )
 
 @Composable

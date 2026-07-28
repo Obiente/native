@@ -94,14 +94,17 @@ fun NextcloudMediaViewer(
     onSelect: (NextcloudFile) -> Unit,
     onSourceRemoved: (NextcloudFile) -> Unit,
     onClose: () -> Unit,
+    sourceMembers: List<NextcloudFile> = media,
     initialZoom: Float = 1f,
     onStateObserved: (MediaViewerStateObservation) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val items = remember(media, selected) {
-        if (media.any { it.path == selected.path }) media else listOf(selected)
+        if (mediaViewerNavigationIndex(media, selected) >= 0) media else listOf(selected)
     }
-    val sourcePlan = remember(items, selected) { planMediaSources(items, selected) }
+    val sourcePlan = remember(sourceMembers, selected) {
+        planMediaSources(sourceMembers, selected)
+    }
     val fullQualityGeneration = sourcePlan.fullQualityCandidates.map { choice ->
         choice.file.mediaViewerSourceGenerationIdentity()
     }
@@ -123,7 +126,7 @@ fun NextcloudMediaViewer(
     val livePhotoDiscoveryIdentity = remember(selected) {
         selected.livePhotoDiscoveryIdentity()
     }
-    val selectedIndex = items.indexOfFirst { it.path == selected.path }.coerceAtLeast(0)
+    val selectedIndex = mediaViewerNavigationIndex(items, selected).coerceAtLeast(0)
     val canGoPrevious = selectedIndex > 0
     val canGoNext = selectedIndex < items.lastIndex
     val focusRequester = remember { FocusRequester() }
