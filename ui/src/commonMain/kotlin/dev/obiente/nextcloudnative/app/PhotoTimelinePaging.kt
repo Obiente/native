@@ -4,6 +4,7 @@ const val DEFAULT_PHOTO_TIMELINE_PAGE_SIZE = 200
 const val MAX_PHOTO_TIMELINE_PAGE_SIZE = 500
 const val DEFAULT_PHOTO_TIMELINE_RETAINED_ITEMS = 20_000
 const val MAX_PHOTO_TIMELINE_RETAINED_ITEMS = 50_000
+private const val MAX_PHOTO_TIMELINE_REVALIDATION_CATCH_UP_PAGES = 256
 
 data class PhotoTimelineCursor(
     val value: String,
@@ -38,6 +39,7 @@ fun NextcloudFile.toPhotoTimelineEntryOrNull(): PhotoTimelineEntry? {
 data class PhotoTimelinePage(
     val entries: List<PhotoTimelineEntry>,
     val nextCursor: PhotoTimelineCursor?,
+    val optionalRawRemovalAuthoritative: Boolean = true,
 ) {
     init {
         require(entries.size <= MAX_PHOTO_TIMELINE_PAGE_SIZE) {
@@ -48,6 +50,7 @@ data class PhotoTimelinePage(
 
 enum class PhotoTimelineLoadKind {
     Refresh,
+    RevalidateNewest,
     NextPage,
 }
 
@@ -71,6 +74,8 @@ data class PhotoTimelineLoadStart(
  * The retained limit is an in-memory safety boundary. When the window is full, accepting an older
  * page evicts the same number of newest entries while preserving the opaque cursor. Paging can
  * therefore reach the complete server history with bounded memory, and refresh returns to newest.
+ * If newest-page revalidation evicts the cached tail, paging temporarily replays from the new
+ * first-page cursor with a strict request bound until it reaches the missing tail.
  */
 data class PhotoTimelineState(
     val entries: List<PhotoTimelineEntry> = emptyList(),
@@ -81,6 +86,8 @@ data class PhotoTimelineState(
     val pageSize: Int = DEFAULT_PHOTO_TIMELINE_PAGE_SIZE,
     val retentionLimit: Int = DEFAULT_PHOTO_TIMELINE_RETAINED_ITEMS,
     val discardedNewerEntries: Int = 0,
+    val loadedOlderPages: Boolean = false,
+    val revalidationCursorCatchUpPagesRemaining: Int = 0,
 ) {
     init {
         require(pageSize in 1..MAX_PHOTO_TIMELINE_PAGE_SIZE) {
@@ -94,6 +101,12 @@ data class PhotoTimelineState(
         }
         require(discardedNewerEntries >= 0) {
             "The discarded photo timeline count is invalid."
+        }
+        require(
+            revalidationCursorCatchUpPagesRemaining in
+                0..MAX_PHOTO_TIMELINE_REVALIDATION_CATCH_UP_PAGES,
+        ) {
+            "The photo timeline revalidation catch-up count is invalid."
         }
         require(entries.map(PhotoTimelineEntry::identity).distinct().size == entries.size) {
             "The photo timeline contains duplicate media identities."
@@ -111,6 +124,9 @@ data class PhotoTimelineState(
     val hasDiscardedNewerEntries: Boolean
         get() = discardedNewerEntries > 0
 
+    val revalidationCursorCatchUp: Boolean
+        get() = revalidationCursorCatchUpPagesRemaining > 0
+
     fun beginRefresh(): PhotoTimelineLoadStart {
         val nextGeneration = generation + 1L
         val token = PhotoTimelineLoadToken(
@@ -125,6 +141,7 @@ data class PhotoTimelineState(
                 error = null,
                 generation = nextGeneration,
                 discardedNewerEntries = 0,
+                revalidationCursorCatchUpPagesRemaining = 0,
             ),
             token = token,
         )
@@ -141,6 +158,27 @@ data class PhotoTimelineState(
         return PhotoTimelineLoadStart(copy(loading = token, error = null), token)
     }
 
+    fun beginNewestRevalidation(): PhotoTimelineLoadStart {
+        if (loading != null || hasDiscardedNewerEntries || revalidationCursorCatchUp) {
+            return PhotoTimelineLoadStart(this, null)
+        }
+        val nextGeneration = generation + 1L
+        val token = PhotoTimelineLoadToken(
+            generation = nextGeneration,
+            kind = PhotoTimelineLoadKind.RevalidateNewest,
+            cursor = null,
+            pageSize = pageSize,
+        )
+        return PhotoTimelineLoadStart(
+            state = copy(
+                loading = token,
+                error = null,
+                generation = nextGeneration,
+            ),
+            token = token,
+        )
+    }
+
     fun accept(
         token: PhotoTimelineLoadToken,
         page: PhotoTimelinePage,
@@ -151,40 +189,101 @@ data class PhotoTimelineState(
         }
         val source = when (token.kind) {
             PhotoTimelineLoadKind.Refresh -> emptyList()
+            PhotoTimelineLoadKind.RevalidateNewest ->
+                reconcileNewestPhotoTimelinePage(entries, page)
             PhotoTimelineLoadKind.NextPage -> entries
         }
-        val merged = mergePhotoTimelineEntries(source, page.entries)
+        val merged = when (token.kind) {
+            PhotoTimelineLoadKind.RevalidateNewest -> source
+            else -> mergePhotoTimelineEntries(source, page.entries)
+        }
         val overflow = (merged.size - retentionLimit).coerceAtLeast(0)
-        val retained = if (overflow == 0) merged else merged.drop(overflow)
+        val retained = when {
+            overflow == 0 -> merged
+            token.kind == PhotoTimelineLoadKind.NextPage -> merged.drop(overflow)
+            else -> merged.take(retentionLimit)
+        }
         val retainedSameIdentities = retained.size == entries.size &&
             retained.zip(entries).all { (next, current) ->
                 next.identity == current.identity
             }
+        val cursorRepeated = page.nextCursor != null && page.nextCursor == token.cursor
+        val catchUpRequestLimitReached =
+            token.kind == PhotoTimelineLoadKind.NextPage &&
+                revalidationCursorCatchUp &&
+                retainedSameIdentities &&
+                page.nextCursor != null &&
+                revalidationCursorCatchUpPagesRemaining == 1
         val stalled = token.kind == PhotoTimelineLoadKind.NextPage &&
             (
-                page.entries.none { incoming ->
-                    entries.none { existing -> existing.identity == incoming.identity }
-                } ||
-                    retainedSameIdentities
+                cursorRepeated ||
+                    catchUpRequestLimitReached ||
+                    (
+                        !revalidationCursorCatchUp &&
+                            (
+                                page.entries.none { incoming ->
+                                    entries.none { existing -> existing.identity == incoming.identity }
+                                } ||
+                                    retainedSameIdentities
+                                )
+                        )
                 )
-        val acceptedCursor = page.nextCursor.takeUnless { stalled }
+        val revalidationEvictedCachedTail =
+            token.kind == PhotoTimelineLoadKind.RevalidateNewest &&
+                loadedOlderPages &&
+                overflow > 0 &&
+                page.nextCursor != null
+        val acceptedCursor = when {
+            stalled -> null
+            revalidationEvictedCachedTail -> page.nextCursor
+            token.kind == PhotoTimelineLoadKind.RevalidateNewest &&
+                loadedOlderPages &&
+                page.nextCursor != null -> nextCursor
+            else -> page.nextCursor
+        }
         return copy(
             entries = retained,
             nextCursor = acceptedCursor,
             loading = null,
-            error = if (stalled) {
-                "The server repeated the same photo timeline page."
-            } else {
-                null
+            error = when {
+                catchUpRequestLimitReached ->
+                    "The photo timeline revalidation exceeded its paging limit."
+                stalled -> "The server repeated the same photo timeline page."
+                else -> null
             },
-            discardedNewerEntries = if (token.kind == PhotoTimelineLoadKind.Refresh) {
-                0
-            } else if (stalled) {
-                discardedNewerEntries
-            } else {
-                (discardedNewerEntries.toLong() + overflow)
+            discardedNewerEntries = when {
+                token.kind == PhotoTimelineLoadKind.Refresh -> 0
+                stalled || token.kind == PhotoTimelineLoadKind.RevalidateNewest ->
+                    discardedNewerEntries
+                else -> (discardedNewerEntries.toLong() + overflow)
                     .coerceAtMost(Int.MAX_VALUE.toLong())
                     .toInt()
+            },
+            loadedOlderPages = when (token.kind) {
+                PhotoTimelineLoadKind.Refresh -> false
+                PhotoTimelineLoadKind.RevalidateNewest ->
+                    loadedOlderPages && page.nextCursor != null
+                PhotoTimelineLoadKind.NextPage -> loadedOlderPages || !stalled
+            },
+            revalidationCursorCatchUpPagesRemaining = when (token.kind) {
+                PhotoTimelineLoadKind.Refresh -> 0
+                PhotoTimelineLoadKind.RevalidateNewest ->
+                    if (revalidationEvictedCachedTail) {
+                        MAX_PHOTO_TIMELINE_REVALIDATION_CATCH_UP_PAGES
+                    } else {
+                        0
+                    }
+                PhotoTimelineLoadKind.NextPage ->
+                    if (
+                        revalidationCursorCatchUp &&
+                        retainedSameIdentities &&
+                        !stalled &&
+                        page.nextCursor != null
+                    ) {
+                        revalidationCursorCatchUpPagesRemaining - 1
+                    } else {
+                        0
+                    }
             },
         )
     }
@@ -216,6 +315,32 @@ data class PhotoTimelineState(
         } else {
             cancelPendingLoad()
         }
+}
+
+private fun reconcileNewestPhotoTimelinePage(
+    existing: List<PhotoTimelineEntry>,
+    newestPage: PhotoTimelinePage,
+): List<PhotoTimelineEntry> {
+    val retainWithoutAuthoritativeRawRemoval: (PhotoTimelineEntry) -> Boolean = { entry ->
+        !newestPage.optionalRawRemovalAuthoritative && entry.file.isRawPhoto()
+    }
+    if (newestPage.nextCursor == null) {
+        return mergePhotoTimelineEntries(
+            existing = existing.filter(retainWithoutAuthoritativeRawRemoval),
+            incoming = newestPage.entries,
+        )
+    }
+    val incomingIdentities = newestPage.entries
+        .mapTo(mutableSetOf(), PhotoTimelineEntry::identity)
+    val oldestIncomingTimestamp = newestPage.entries
+        .minOfOrNull(PhotoTimelineEntry::capturedAtEpochSeconds)
+        ?: return existing
+    val retainedCached = existing.filter { entry ->
+        entry.identity in incomingIdentities ||
+            entry.capturedAtEpochSeconds <= oldestIncomingTimestamp ||
+            retainWithoutAuthoritativeRawRemoval(entry)
+    }
+    return mergePhotoTimelineEntries(retainedCached, newestPage.entries)
 }
 
 fun mergePhotoTimelineEntries(

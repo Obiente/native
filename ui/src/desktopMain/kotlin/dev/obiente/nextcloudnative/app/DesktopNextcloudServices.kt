@@ -691,6 +691,7 @@ class DesktopNextcloudServices(
         PhotoTimelinePage(
             entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),
             nextCursor = page.nextCursor,
+            optionalRawRemovalAuthoritative = page.optionalRawRemovalAuthoritative,
         )
     }
 

@@ -1,7 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 const val MAXIMUM_MEDIA_SEARCH_RESULTS = DEFAULT_PHOTO_TIMELINE_PAGE_SIZE
-const val PHOTO_TIMELINE_PARTITION_PAGE_SIZE = DEFAULT_PHOTO_TIMELINE_PAGE_SIZE / 2
+const val PHOTO_TIMELINE_PARTITION_PAGE_SIZE = DEFAULT_PHOTO_TIMELINE_PAGE_SIZE
 const val MAXIMUM_RAW_MEDIA_SEARCH_PATTERNS_PER_REQUEST = 8
 const val MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS = 15
 const val MAXIMUM_MEDIA_SEARCH_RESULT_PAGES = 2 + MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS
@@ -34,6 +34,7 @@ data class MediaSearchDavTransportResponse(
 data class MediaTimelineDavPage(
     val files: List<NextcloudFile>,
     val nextCursor: PhotoTimelineCursor?,
+    val optionalRawRemovalAuthoritative: Boolean,
 )
 
 fun mediaSearchDavRequestBody(
@@ -193,11 +194,17 @@ suspend fun collectMediaTimelineDavPage(
     }
 
     val merged = mergeMediaTimelinePartitionPages(partitionPages)
+    val coveredRawPatternIndexes = partitionPages
+        .mapNotNull { page -> page.key as? MediaTimelinePartitionKey.Raw }
+        .flatMap { raw -> raw.patternIndexes }
+        .toSet()
     return MediaTimelineDavPage(
         files = merged.files,
         nextCursor = merged.nextCursor
             .takeUnless(MediaTimelineDavCursor::isExhausted)
             ?.encode(),
+        optionalRawRemovalAuthoritative =
+            coveredRawPatternIndexes.size == rawPhotoFileNameSearchPatterns().size,
     )
 }
 

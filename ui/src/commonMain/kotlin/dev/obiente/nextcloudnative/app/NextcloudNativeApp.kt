@@ -4674,12 +4674,16 @@ private fun MediaScreen(
         }
     }
 
-    suspend fun loadTimelinePage(refresh: Boolean) {
+    suspend fun loadTimelinePage(kind: PhotoTimelineLoadKind) {
         if (userId == null) return
-        val start = if (refresh) timeline.beginRefresh() else timeline.beginNextPage()
+        val start = when (kind) {
+            PhotoTimelineLoadKind.Refresh -> timeline.beginRefresh()
+            PhotoTimelineLoadKind.RevalidateNewest -> timeline.beginNewestRevalidation()
+            PhotoTimelineLoadKind.NextPage -> timeline.beginNextPage()
+        }
         val token = start.token ?: return
         timeline = start.state
-        if (refresh) {
+        if (kind == PhotoTimelineLoadKind.Refresh) {
             mediaBackupStatuses = emptyMap()
             timelineGridState.scrollToItem(0)
         }
@@ -4687,14 +4691,20 @@ private fun MediaScreen(
             val page = services.listMediaTimelinePage(session, userId, token.cursor)
             val files = page.entries.map(PhotoTimelineEntry::file)
             timeline = timeline.accept(token, page)
-            if (refresh) timelineInitialLoadCompleted = true
+            if (kind != PhotoTimelineLoadKind.NextPage) timelineInitialLoadCompleted = true
             val statuses = runCatching {
                 services.loadMediaBackupStatuses(session, userId, files)
             }.getOrDefault(emptyMap())
             if (timeline.generation == token.generation) {
                 val retainedPaths = timeline.entries
                     .mapTo(mutableSetOf()) { entry -> entry.file.path.trim('/') }
-                mediaBackupStatuses = (if (refresh) statuses else mediaBackupStatuses + statuses)
+                mediaBackupStatuses = (
+                    if (kind == PhotoTimelineLoadKind.Refresh) {
+                        statuses
+                    } else {
+                        mediaBackupStatuses + statuses
+                    }
+                    )
                     .filterKeys(retainedPaths::contains)
             }
         } catch (cancellation: CancellationException) {
@@ -4702,17 +4712,25 @@ private fun MediaScreen(
             throw cancellation
         } catch (failure: Throwable) {
             timeline = timeline.fail(
-                token,
-                failure.message ?: "Could not load the photo timeline.",
+                token = token,
+                message = failure.message ?: "Could not load the photo timeline.",
             )
-            if (refresh) timelineInitialLoadCompleted = true
+            if (kind == PhotoTimelineLoadKind.RevalidateNewest) {
+                timeline = timeline.copy(error = null)
+            }
+            if (kind != PhotoTimelineLoadKind.NextPage) timelineInitialLoadCompleted = true
         }
     }
 
     LaunchedEffect(userId, mediaLoadAttempt) {
         if (userId == null) return@LaunchedEffect
-        if (timelineInitialLoadCompleted && mediaLoadAttempt == 0) return@LaunchedEffect
-        loadTimelinePage(refresh = true)
+        loadTimelinePage(
+            when {
+                mediaLoadAttempt > 0 -> PhotoTimelineLoadKind.Refresh
+                timelineInitialLoadCompleted -> PhotoTimelineLoadKind.RevalidateNewest
+                else -> PhotoTimelineLoadKind.Refresh
+            },
+        )
     }
     LaunchedEffect(
         mode,
@@ -4730,7 +4748,7 @@ private fun MediaScreen(
                     lastVisible >= totalItems - PHOTO_TIMELINE_PREFETCH_GRID_ITEMS
                 ) to timeline.nextCursor?.value
         }.distinctUntilChanged().collect { (shouldLoad, _) ->
-            if (shouldLoad) loadTimelinePage(refresh = false)
+            if (shouldLoad) loadTimelinePage(PhotoTimelineLoadKind.NextPage)
         }
     }
     LaunchedEffect(userId, services) {
@@ -5318,7 +5336,9 @@ private fun MediaScreen(
                                     span = { GridItemSpan(maxLineSpan) },
                                 ) {
                                     ErrorMessage(requireNotNull(timeline.error)) {
-                                        scope.launch { loadTimelinePage(refresh = false) }
+                                        scope.launch {
+                                            loadTimelinePage(PhotoTimelineLoadKind.NextPage)
+                                        }
                                     }
                                 }
                             } else if (timeline.canLoadNextPage) {
@@ -5335,7 +5355,7 @@ private fun MediaScreen(
                                         OutlinedButton(
                                             onClick = {
                                                 scope.launch {
-                                                    loadTimelinePage(refresh = false)
+                                                    loadTimelinePage(PhotoTimelineLoadKind.NextPage)
                                                 }
                                             },
                                         ) {
@@ -5359,7 +5379,7 @@ private fun MediaScreen(
                             OutlinedButton(
                                 onClick = {
                                     scope.launch {
-                                        loadTimelinePage(refresh = true)
+                                        loadTimelinePage(PhotoTimelineLoadKind.Refresh)
                                     }
                                 },
                                 modifier = Modifier

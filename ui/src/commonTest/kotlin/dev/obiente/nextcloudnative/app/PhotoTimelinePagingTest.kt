@@ -181,6 +181,210 @@ class PhotoTimelinePagingTest {
     }
 
     @Test
+    fun newestPageRevalidationKeepsCachedHistoryAndItsDeepCursor() {
+        val cached = PhotoTimelineState(
+            entries = listOf(
+                entry(1L, 100L),
+                entry(2L, 98L),
+                entry(3L, 50L),
+            ),
+            nextCursor = PhotoTimelineCursor("after-cached-history"),
+            loadedOlderPages = true,
+        )
+        val revalidation = cached.beginNewestRevalidation()
+
+        assertEquals(cached.entries, revalidation.state.entries)
+        assertEquals(
+            PhotoTimelineLoadKind.RevalidateNewest,
+            requireNotNull(revalidation.token).kind,
+        )
+
+        val accepted = revalidation.state.accept(
+            requireNotNull(revalidation.token),
+            PhotoTimelinePage(
+                entries = listOf(
+                    entry(4L, 110L),
+                    entry(1L, 95L),
+                ),
+                nextCursor = PhotoTimelineCursor("after-new-first-page"),
+            ),
+        )
+
+        assertEquals(
+            listOf(4L, 1L, 3L),
+            accepted.entries.map { it.file.fileId },
+        )
+        assertEquals(PhotoTimelineCursor("after-cached-history"), accepted.nextCursor)
+        assertTrue(accepted.loadedOlderPages)
+        assertFalse(accepted.revalidationCursorCatchUp)
+    }
+
+    @Test
+    fun newestPageRevalidationReplaysFromItsCursorWhenItEvictsTheCachedTail() {
+        val cached = PhotoTimelineState(
+            entries = listOf(entry(1L, 100L), entry(2L, 90L), entry(3L, 80L)),
+            nextCursor = PhotoTimelineCursor("after-cached-tail"),
+            retentionLimit = 3,
+            loadedOlderPages = true,
+        )
+        val revalidation = cached.beginNewestRevalidation()
+        var accepted = revalidation.state.accept(
+            requireNotNull(revalidation.token),
+            PhotoTimelinePage(
+                entries = listOf(entry(4L, 110L), entry(1L, 100L)),
+                nextCursor = PhotoTimelineCursor("after-newest-page"),
+            ),
+        )
+
+        assertEquals(listOf(4L, 1L, 2L), accepted.entries.map { it.file.fileId })
+        assertEquals(PhotoTimelineCursor("after-newest-page"), accepted.nextCursor)
+        assertTrue(accepted.revalidationCursorCatchUp)
+
+        val duplicateReplay = accepted.beginNextPage()
+        accepted = duplicateReplay.state.accept(
+            requireNotNull(duplicateReplay.token),
+            PhotoTimelinePage(
+                entries = listOf(entry(2L, 90L)),
+                nextCursor = PhotoTimelineCursor("after-replayed-cache"),
+            ),
+        )
+
+        assertEquals(listOf(4L, 1L, 2L), accepted.entries.map { it.file.fileId })
+        assertEquals(PhotoTimelineCursor("after-replayed-cache"), accepted.nextCursor)
+        assertNull(accepted.error)
+        assertTrue(accepted.revalidationCursorCatchUp)
+
+        val missingTail = accepted.beginNextPage()
+        accepted = missingTail.state.accept(
+            requireNotNull(missingTail.token),
+            PhotoTimelinePage(
+                entries = listOf(entry(3L, 80L)),
+                nextCursor = null,
+            ),
+        )
+
+        assertEquals(listOf(1L, 2L, 3L), accepted.entries.map { it.file.fileId })
+        assertEquals(1, accepted.discardedNewerEntries)
+        assertNull(accepted.nextCursor)
+        assertFalse(accepted.revalidationCursorCatchUp)
+    }
+
+    @Test
+    fun revalidationCursorCatchUpStopsAtItsRequestBound() {
+        val catchingUp = PhotoTimelineState(
+            entries = listOf(entry(1L, 100L)),
+            nextCursor = PhotoTimelineCursor("catch-up"),
+            loadedOlderPages = true,
+            revalidationCursorCatchUpPagesRemaining = 1,
+        )
+        val next = catchingUp.beginNextPage()
+        val stopped = next.state.accept(
+            requireNotNull(next.token),
+            PhotoTimelinePage(
+                entries = listOf(entry(1L, 100L)),
+                nextCursor = PhotoTimelineCursor("still-replaying"),
+            ),
+        )
+
+        assertNull(stopped.nextCursor)
+        assertFalse(stopped.revalidationCursorCatchUp)
+        assertEquals(
+            "The photo timeline revalidation exceeded its paging limit.",
+            stopped.error,
+        )
+    }
+
+    @Test
+    fun incompleteOptionalRawCoverageDoesNotAuthorizeCachedRawRemoval() {
+        val cachedRaw = entry(1L, 100L, "Photos/cached.raf")
+        val cachedNormal = entry(2L, 90L)
+        val cachedOlder = entry(3L, 50L)
+        val cached = PhotoTimelineState(
+            entries = listOf(cachedRaw, cachedNormal, cachedOlder),
+            nextCursor = PhotoTimelineCursor("after-cache"),
+            loadedOlderPages = true,
+        )
+        val revalidation = cached.beginNewestRevalidation()
+        val accepted = revalidation.state.accept(
+            requireNotNull(revalidation.token),
+            PhotoTimelinePage(
+                entries = listOf(entry(4L, 110L), entry(5L, 80L)),
+                nextCursor = PhotoTimelineCursor("after-newest-page"),
+                optionalRawRemovalAuthoritative = false,
+            ),
+        )
+
+        assertEquals(
+            listOf(4L, 1L, 5L, 3L),
+            accepted.entries.map { it.file.fileId },
+        )
+        assertFalse(accepted.entries.any { it.file.fileId == 2L })
+    }
+
+    @Test
+    fun terminalRevalidationRetainsRawWhenOptionalCoverageWasIncomplete() {
+        val cached = PhotoTimelineState(
+            entries = listOf(
+                entry(1L, 100L, "Photos/cached.raf"),
+                entry(2L, 90L),
+            ),
+            nextCursor = null,
+            loadedOlderPages = true,
+        )
+        val revalidation = cached.beginNewestRevalidation()
+        val accepted = revalidation.state.accept(
+            requireNotNull(revalidation.token),
+            PhotoTimelinePage(
+                entries = listOf(entry(3L, 110L)),
+                nextCursor = null,
+                optionalRawRemovalAuthoritative = false,
+            ),
+        )
+
+        assertEquals(listOf(3L, 1L), accepted.entries.map { it.file.fileId })
+        assertFalse(accepted.entries.any { it.file.fileId == 2L })
+    }
+
+    @Test
+    fun terminalNewestPageRevalidationRemovesAllAbsentCachedEntries() {
+        val cached = PhotoTimelineState(
+            entries = listOf(
+                entry(1L, 100L),
+                entry(2L, 90L, "Photos/removed.raf"),
+                entry(3L, 50L),
+            ),
+            nextCursor = PhotoTimelineCursor("after-cached-history"),
+            loadedOlderPages = true,
+        )
+        val revalidation = cached.beginNewestRevalidation()
+        val accepted = revalidation.state.accept(
+            requireNotNull(revalidation.token),
+            PhotoTimelinePage(
+                entries = listOf(entry(1L, 105L)),
+                nextCursor = null,
+            ),
+        )
+
+        assertEquals(listOf(1L), accepted.entries.map { it.file.fileId })
+        assertNull(accepted.nextCursor)
+        assertFalse(accepted.loadedOlderPages)
+    }
+
+    @Test
+    fun displacedOlderWindowRequiresExplicitReturnToNewestBeforeRevalidation() {
+        val displaced = PhotoTimelineState(
+            entries = listOf(entry(3L, 50L)),
+            nextCursor = PhotoTimelineCursor("still-older"),
+            discardedNewerEntries = 2,
+        )
+
+        val revalidation = displaced.beginNewestRevalidation()
+
+        assertSame(displaced, revalidation.state)
+        assertNull(revalidation.token)
+    }
+
+    @Test
     fun repeatedServerPageStopsAutomaticPagingWithoutGrowingTheTimeline() {
         val cursor = PhotoTimelineCursor("same")
         val loaded = PhotoTimelineState(
@@ -364,69 +568,95 @@ class PhotoTimelinePagingTest {
     }
 
     @Test
-    fun davTimelineAdvancesOnlyThePartitionWithMoreResults() = kotlinx.coroutines.runBlocking {
-        val firstImages = (1L..PHOTO_TIMELINE_PARTITION_PAGE_SIZE.toLong()).map { id ->
-            file(
-                id = id,
-                path = "Photos/image-$id.jpg",
-                lastModified = (10_000L - id).toString(),
-            )
-        }
-        val firstVideos = listOf(
-            file(10_001L, "Photos/video.mp4", "9_500").copy(mimeType = "video/mp4"),
-        )
-        val requestBodies = mutableListOf<String>()
-
-        val firstPage = collectMediaTimelineDavPage(
-            userId = "account",
-            cursor = null,
-            execute = { body ->
-                requestBodies += body
-                MediaSearchDavTransportResponse(
-                    status = 207,
-                    body = (if ("image/%" in body) "images" else "videos").encodeToByteArray(),
+    fun davTimelineFetchesTheCombinedPageSizeFromEveryActivePartition() =
+        kotlinx.coroutines.runBlocking {
+            val firstImages = (1L..PHOTO_TIMELINE_PARTITION_PAGE_SIZE.toLong()).map { id ->
+                file(
+                    id = id,
+                    path = "Photos/image-$id.jpg",
+                    lastModified = formatDavMediaSearchTimestamp(10_000L - id),
                 )
-            },
-            parse = { body ->
-                when (body.decodeToString()) {
-                    "images" -> firstImages
-                    "videos" -> firstVideos
-                    else -> emptyList()
-                }
-            },
-            shouldSearchRaw = { false },
-        )
+            }
+            val firstVideos = listOf(
+                file(
+                    10_001L,
+                    "Photos/video.mp4",
+                    formatDavMediaSearchTimestamp(9_500L),
+                ).copy(mimeType = "video/mp4"),
+            )
+            val requestBodies = mutableListOf<String>()
 
-        assertEquals(2, requestBodies.size)
-        assertEquals(PHOTO_TIMELINE_PARTITION_PAGE_SIZE + 1, firstPage.files.size)
-        val cursor = requireNotNull(firstPage.nextCursor)
-        requestBodies.clear()
+            val firstPage = collectMediaTimelineDavPage(
+                userId = "account",
+                cursor = null,
+                execute = { body ->
+                    requestBodies += body
+                    MediaSearchDavTransportResponse(
+                        status = 207,
+                        body = (if ("image/%" in body) "images" else "videos").encodeToByteArray(),
+                    )
+                },
+                parse = { body ->
+                    when (body.decodeToString()) {
+                        "images" -> firstImages
+                        "videos" -> firstVideos
+                        else -> emptyList()
+                    }
+                },
+                shouldSearchRaw = { false },
+            )
 
-        val secondPage = collectMediaTimelineDavPage(
-            userId = "account",
-            cursor = cursor,
-            execute = { body ->
-                requestBodies += body
-                MediaSearchDavTransportResponse(207, "older-image".encodeToByteArray())
-            },
-            parse = {
-                listOf(file(999L, "Photos/older.jpg", "1"))
-            },
-            shouldSearchRaw = { error("RAW discovery must not repeat on cursor pages.") },
-        )
+            assertEquals(2, requestBodies.size)
+            assertTrue(requestBodies.all { "<d:nresults>200</d:nresults>" in it })
+            assertEquals(DEFAULT_PHOTO_TIMELINE_PAGE_SIZE, firstPage.files.size)
+            assertTrue(firstPage.files.all { it.mimeType != "video/mp4" })
+            assertFalse(firstPage.optionalRawRemovalAuthoritative)
+            val cursor = requireNotNull(firstPage.nextCursor)
+            requestBodies.clear()
 
-        assertEquals(1, requestBodies.size)
-        assertTrue("image/%" in requestBodies.single())
-        assertFalse("video/%" in requestBodies.single())
-        assertTrue("<d:lte>" in requestBodies.single())
-        assertTrue("GMT</d:literal>" in requestBodies.single())
-        assertTrue(
-            """xmlns:sd="https://github.com/icewind1991/SearchDAV/ns"""" in
-                requestBodies.single(),
-        )
-        assertTrue("<sd:firstresult>1</sd:firstresult>" in requestBodies.single())
-        assertNull(secondPage.nextCursor)
-    }
+            val secondPage = collectMediaTimelineDavPage(
+                userId = "account",
+                cursor = cursor,
+                execute = { body ->
+                    requestBodies += body
+                    MediaSearchDavTransportResponse(
+                        207,
+                        (if ("image/%" in body) "older-image" else "video").encodeToByteArray(),
+                    )
+                },
+                parse = { body ->
+                    when (body.decodeToString()) {
+                        "older-image" -> listOf(
+                            file(
+                                999L,
+                                "Photos/older.jpg",
+                                formatDavMediaSearchTimestamp(1L),
+                            ),
+                        )
+                        "video" -> firstVideos
+                        else -> emptyList()
+                    }
+                },
+                shouldSearchRaw = { error("RAW discovery must not repeat on cursor pages.") },
+            )
+
+            assertEquals(2, requestBodies.size)
+            val imageRequest = requestBodies.single { "image/%" in it }
+            val videoRequest = requestBodies.single { "video/%" in it }
+            assertTrue("<d:lte>" in imageRequest)
+            assertTrue("GMT</d:literal>" in imageRequest)
+            assertFalse("<d:lte>" in videoRequest)
+            assertTrue(
+                """xmlns:sd="https://github.com/icewind1991/SearchDAV/ns"""" in
+                    imageRequest,
+            )
+            assertTrue("<sd:firstresult>1</sd:firstresult>" in imageRequest)
+            assertEquals(
+                listOf("Photos/video.mp4", "Photos/older.jpg"),
+                secondPage.files.map(NextcloudFile::path),
+            )
+            assertNull(secondPage.nextCursor)
+        }
 
     @Test
     fun davTimelineDoesNotSkipMoreThanOnePageWithTheSameTimestamp() =
@@ -484,11 +714,11 @@ class PhotoTimelinePagingTest {
             }
             val loaded = pages.flatMap(MediaTimelineDavPage::files)
 
-            assertEquals(listOf(0, 100, 200, 300, 400), requestedOffsets)
+            assertEquals(listOf(0, 200, 400), requestedOffsets)
             assertEquals(450, loaded.size)
             assertEquals(450, loaded.map(NextcloudFile::path).distinct().size)
             assertTrue("<d:lte>" in requestedBodies[2])
-            assertTrue("<sd:firstresult>100</sd:firstresult>" in requestedBodies[2])
+            assertTrue("<sd:firstresult>200</sd:firstresult>" in requestedBodies[2])
             assertTrue("<sd:firstresult>400</sd:firstresult>" in requestedBodies.last())
             assertNull(pages.last().nextCursor)
         }
@@ -552,7 +782,13 @@ class PhotoTimelinePagingTest {
                 )
 
             val first = load(null)
-            assertEquals(PHOTO_TIMELINE_PARTITION_PAGE_SIZE + 1, first.files.size)
+            assertEquals(DEFAULT_PHOTO_TIMELINE_PAGE_SIZE, first.files.size)
+            assertFalse(first.optionalRawRemovalAuthoritative)
+            assertTrue(
+                executed
+                    .filter { body -> rawPhotoFileNameSearchPatterns().any(body::contains) }
+                    .all { body -> "<d:nresults>200</d:nresults>" in body },
+            )
             val next = requireNotNull(first.nextCursor)
             assertTrue(next.value.startsWith("v3|"))
             assertTrue("|r:" in next.value)
@@ -566,6 +802,41 @@ class PhotoTimelinePagingTest {
             assertTrue(executed.isNotEmpty())
             assertTrue(executed.all { body -> rawPhotoFileNameSearchPatterns().any(body::contains) })
             assertTrue(executed.any { body -> "<sd:firstresult>1</sd:firstresult>" in body })
+        }
+
+    @Test
+    fun davTimelineReportsAuthoritativeOptionalRawCoverageOnlyWhenEveryPatternWasQueried() =
+        kotlinx.coroutines.runBlocking {
+            suspend fun load(searchRaw: Boolean): MediaTimelineDavPage =
+                collectMediaTimelineDavPage(
+                    userId = "account",
+                    cursor = null,
+                    execute = { body ->
+                        val marker = when {
+                            "<d:literal>image/%</d:literal>" in body -> "image"
+                            "<d:literal>video/%</d:literal>" in body -> "video"
+                            else -> "raw"
+                        }
+                        MediaSearchDavTransportResponse(207, marker.encodeToByteArray())
+                    },
+                    parse = { body ->
+                        when (body.decodeToString()) {
+                            "image" -> listOf(
+                                file(
+                                    1L,
+                                    "Photos/detected.raf",
+                                    "30000",
+                                ).copy(mimeType = "image/x-fuji-raf"),
+                            )
+                            "video", "raw" -> emptyList()
+                            else -> error("Unexpected timeline response.")
+                        }
+                    },
+                    shouldSearchRaw = { searchRaw },
+                )
+
+            assertFalse(load(searchRaw = false).optionalRawRemovalAuthoritative)
+            assertTrue(load(searchRaw = true).optionalRawRemovalAuthoritative)
         }
 
     private fun entry(
