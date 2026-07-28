@@ -89,6 +89,7 @@ fun NextcloudMediaViewer(
     userId: String,
     services: NextcloudPlatformServices,
     taggingAvailable: Boolean,
+    memoriesLivePhotoCapability: MemoriesLivePhotoCapability,
     sharingCapabilities: NextcloudFileSharingCapabilities,
     onSelect: (NextcloudFile) -> Unit,
     onSourceRemoved: (NextcloudFile) -> Unit,
@@ -222,7 +223,7 @@ fun NextcloudMediaViewer(
 
     LaunchedEffect(
         livePhotoDiscoveryIdentity,
-        taggingAvailable,
+        memoriesLivePhotoCapability,
         platformNativeVideoPlaybackAvailable,
         session,
     ) {
@@ -230,19 +231,19 @@ fun NextcloudMediaViewer(
         motionPlaying = false
         if (
             !selected.shouldDiscoverMemoriesLivePhoto(
-                memoriesAvailable = taggingAvailable,
+                capability = selected.effectiveLivePhotoCapability(memoriesLivePhotoCapability),
                 nativePlaybackAvailable = platformNativeVideoPlaybackAvailable,
             )
         ) {
             return@LaunchedEffect
         }
-        livePhotoSource = runCatching {
+        livePhotoSource = livePhotoLookupOrNull {
             resolveMemoriesLivePhotoSource(
                 services = services,
                 session = session,
                 file = selected,
             )
-        }.getOrNull()
+        }
     }
 
     LaunchedEffect(sourceLoadIdentity, selected.fileId, session, retryKey, sourcePlan.previewCandidates) {

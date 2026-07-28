@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -14,6 +15,43 @@ private const val MAX_LIVE_PHOTO_LOOKUP_BYTES = 256L * 1_024L
 private const val MAX_LIVE_PHOTO_DAY_BYTES = 16L * 1_024L * 1_024L
 private const val MAX_LIVE_PHOTO_DAY_ITEMS = 10_000
 private const val MAX_LIVE_PHOTO_ETAG_LENGTH = 1_024
+private const val MAX_MEMORIES_DESCRIBE_BYTES = 64L * 1_024L
+
+/**
+ * Evidence that the connected Memories app exposes the Live Photo route family used here.
+ *
+ * The public describe endpoint first shipped in Memories 5.2.0. The route family is verified
+ * against upstream Memories source through 8.1.0. Versions outside that audited range remain
+ * disabled until their route contract is reviewed.
+ */
+sealed interface MemoriesLivePhotoCapability {
+    data object NotAdvertised : MemoriesLivePhotoCapability
+
+    data object Unverified : MemoriesLivePhotoCapability
+
+    data class UnsupportedVersion(
+        val installedVersion: String,
+    ) : MemoriesLivePhotoCapability
+
+    data class CompatibleVersion(
+        val installedVersion: String,
+    ) : MemoriesLivePhotoCapability
+
+    /** A validated `liveid` returned by a Memories media response. */
+    data object ObservedReference : MemoriesLivePhotoCapability
+}
+
+private data class MemoriesVersion(
+    val major: Int,
+    val minor: Int,
+    val patch: Int,
+) : Comparable<MemoriesVersion> {
+    override fun compareTo(other: MemoriesVersion): Int =
+        compareValuesBy(this, other, MemoriesVersion::major, MemoriesVersion::minor, MemoriesVersion::patch)
+}
+
+private val minimumDescribedLivePhotoVersion = MemoriesVersion(5, 2, 0)
+private val maximumAuditedLivePhotoVersion = MemoriesVersion(8, 1, 0)
 
 internal fun String.isSafeLivePhotoToken(): Boolean =
     isNotEmpty() &&
@@ -53,12 +91,70 @@ internal fun NextcloudFile.livePhotoDiscoveryIdentity(): LivePhotoDiscoveryIdent
     )
 
 internal fun NextcloudFile.shouldDiscoverMemoriesLivePhoto(
-    memoriesAvailable: Boolean,
+    capability: MemoriesLivePhotoCapability,
     nativePlaybackAvailable: Boolean,
 ): Boolean =
-    memoriesAvailable &&
+    capability.supportsLivePhotoRoutes() &&
         nativePlaybackAvailable &&
         canResolveMemoriesLivePhoto()
+
+internal fun NextcloudFile.effectiveLivePhotoCapability(
+    describedCapability: MemoriesLivePhotoCapability,
+): MemoriesLivePhotoCapability =
+    if (livePhoto != null) MemoriesLivePhotoCapability.ObservedReference else describedCapability
+
+internal fun memoriesDescribeRequest(): NextcloudApiRequest =
+    NextcloudApiRequest(
+        method = NextcloudApiMethod.GET,
+        relativePath = "/index.php/apps/memories/api/describe",
+        maximumResponseBytes = MAX_MEMORIES_DESCRIBE_BYTES,
+        cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+    ).requireSafe()
+
+internal fun parseMemoriesLivePhotoCapability(
+    response: NextcloudApiResponse,
+): MemoriesLivePhotoCapability {
+    if (response.status !in 200..299) return MemoriesLivePhotoCapability.Unverified
+    val root = runCatching {
+        livePhotoJson.parseToJsonElement(response.body.decodeToString()) as? JsonObject
+    }.getOrNull() ?: return MemoriesLivePhotoCapability.Unverified
+    val installedVersion = (root["version"] as? JsonPrimitive)
+        ?.contentOrNull
+        ?.takeIf(String::isSafeMemoriesVersionText)
+        ?: return MemoriesLivePhotoCapability.Unverified
+    val parsed = installedVersion.parseMemoriesVersion()
+        ?: return MemoriesLivePhotoCapability.Unverified
+    return if (parsed in minimumDescribedLivePhotoVersion..maximumAuditedLivePhotoVersion) {
+        MemoriesLivePhotoCapability.CompatibleVersion(installedVersion)
+    } else {
+        MemoriesLivePhotoCapability.UnsupportedVersion(installedVersion)
+    }
+}
+
+suspend fun discoverMemoriesLivePhotoCapability(
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+): MemoriesLivePhotoCapability =
+    try {
+        parseMemoriesLivePhotoCapability(
+            services.executeNextcloudApi(session, memoriesDescribeRequest()),
+        )
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        MemoriesLivePhotoCapability.Unverified
+    }
+
+internal suspend fun <T> livePhotoLookupOrNull(
+    lookup: suspend () -> T,
+): T? =
+    try {
+        lookup()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
 
 fun memoriesLivePhotoInfoRequest(fileId: Long): NextcloudApiRequest {
     require(fileId > 0L) { "The Live Photo file ID is invalid." }
@@ -190,6 +286,24 @@ private fun String.isSafeLivePhotoEtag(): Boolean =
         none { character -> character.isISOControl() || character == '\u007f' }
 
 private val livePhotoJson = Json { ignoreUnknownKeys = true }
+
+private fun MemoriesLivePhotoCapability.supportsLivePhotoRoutes(): Boolean =
+    this is MemoriesLivePhotoCapability.CompatibleVersion ||
+        this is MemoriesLivePhotoCapability.ObservedReference
+
+private fun String.isSafeMemoriesVersionText(): Boolean =
+    isNotBlank() &&
+        length <= 64 &&
+        none { character -> character.isISOControl() || character == '\u007f' }
+
+private fun String.parseMemoriesVersion(): MemoriesVersion? {
+    val match = Regex("""^([0-9]+)\.([0-9]+)\.([0-9]+)$""").matchEntire(this) ?: return null
+    return MemoriesVersion(
+        major = match.groupValues[1].toIntOrNull() ?: return null,
+        minor = match.groupValues[2].toIntOrNull() ?: return null,
+        patch = match.groupValues[3].toIntOrNull() ?: return null,
+    )
+}
 
 private fun NextcloudApiResponse.livePhotoJsonObject(label: String): JsonObject =
     runCatching { livePhotoJson.parseToJsonElement(body.decodeToString()) as? JsonObject }

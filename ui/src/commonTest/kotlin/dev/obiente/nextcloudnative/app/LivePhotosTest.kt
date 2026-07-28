@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -74,33 +76,100 @@ class LivePhotosTest {
     }
 
     @Test
-    fun discoveryRequiresMemoriesAndNativePlayback() {
+    fun discoveryRequiresVerifiedMemoriesRoutesAndNativePlayback() {
         val candidate = photo("ordinary.jpg", "image/jpeg")
+        val compatible = MemoriesLivePhotoCapability.CompatibleVersion("8.1.0")
 
         assertTrue(
             candidate.shouldDiscoverMemoriesLivePhoto(
-                memoriesAvailable = true,
+                capability = compatible,
                 nativePlaybackAvailable = true,
             ),
         )
         assertFalse(
             candidate.shouldDiscoverMemoriesLivePhoto(
-                memoriesAvailable = false,
+                capability = MemoriesLivePhotoCapability.NotAdvertised,
                 nativePlaybackAvailable = true,
             ),
         )
         assertFalse(
             candidate.shouldDiscoverMemoriesLivePhoto(
-                memoriesAvailable = true,
+                capability = MemoriesLivePhotoCapability.UnsupportedVersion("9.0.0"),
+                nativePlaybackAvailable = true,
+            ),
+        )
+        assertFalse(
+            candidate.shouldDiscoverMemoriesLivePhoto(
+                capability = compatible,
                 nativePlaybackAvailable = false,
             ),
         )
         assertFalse(
             photo("capture.png", "image/png").shouldDiscoverMemoriesLivePhoto(
-                memoriesAvailable = true,
+                capability = compatible,
                 nativePlaybackAvailable = true,
             ),
         )
+    }
+
+    @Test
+    fun describeCapabilityAcceptsOnlyTheAuditedMemoriesVersionRange() {
+        val request = memoriesDescribeRequest()
+
+        assertEquals(NextcloudApiMethod.GET, request.method)
+        assertEquals("/index.php/apps/memories/api/describe", request.relativePath)
+        assertTrue(request.maximumResponseBytes <= 64L * 1_024L)
+        assertEquals(NextcloudApiCachePolicy.ForceNetwork, request.cachePolicy)
+        assertIs<MemoriesLivePhotoCapability.CompatibleVersion>(
+            parseMemoriesLivePhotoCapability(apiResponse(200, """{"version":"5.2.0"}""")),
+        )
+        assertIs<MemoriesLivePhotoCapability.CompatibleVersion>(
+            parseMemoriesLivePhotoCapability(apiResponse(200, """{"version":"8.1.0"}""")),
+        )
+        assertIs<MemoriesLivePhotoCapability.UnsupportedVersion>(
+            parseMemoriesLivePhotoCapability(apiResponse(200, """{"version":"5.1.0"}""")),
+        )
+        assertIs<MemoriesLivePhotoCapability.UnsupportedVersion>(
+            parseMemoriesLivePhotoCapability(apiResponse(200, """{"version":"8.1.1"}""")),
+        )
+        assertIs<MemoriesLivePhotoCapability.Unverified>(
+            parseMemoriesLivePhotoCapability(apiResponse(404, """{"version":"8.1.0"}""")),
+        )
+        assertIs<MemoriesLivePhotoCapability.Unverified>(
+            parseMemoriesLivePhotoCapability(apiResponse(200, """{"version":"next"}""")),
+        )
+    }
+
+    @Test
+    fun validatedMediaReferenceIsDirectCapabilityEvidence() {
+        val candidate = photo("motion.jpg", "image/jpeg").copy(
+            livePhoto = NextcloudLivePhotoReference("self__trailer"),
+        )
+
+        assertIs<MemoriesLivePhotoCapability.ObservedReference>(
+            candidate.effectiveLivePhotoCapability(MemoriesLivePhotoCapability.Unverified),
+        )
+        assertTrue(
+            candidate.shouldDiscoverMemoriesLivePhoto(
+                capability = candidate.effectiveLivePhotoCapability(
+                    MemoriesLivePhotoCapability.Unverified,
+                ),
+                nativePlaybackAvailable = true,
+            ),
+        )
+    }
+
+    @Test
+    fun lookupFailuresNeverConsumeCancellation() = runBlocking {
+        assertEquals("motion", livePhotoLookupOrNull { "motion" })
+        assertNull(livePhotoLookupOrNull<String> { error("lookup failed") })
+
+        val cancellation = CancellationException("selected photo changed")
+        val thrown = assertFailsWith<CancellationException> {
+            livePhotoLookupOrNull<String> { throw cancellation }
+        }
+
+        assertTrue(thrown === cancellation)
     }
 
     @Test

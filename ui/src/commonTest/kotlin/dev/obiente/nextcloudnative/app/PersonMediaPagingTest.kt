@@ -39,6 +39,7 @@ class PersonMediaPagingTest {
                           "basename":"photo-$dayId.jpg",
                           "mimetype":"image/jpeg",
                           "etag":"etag-$dayId",
+                          "liveid":"motion-$dayId",
                           "epoch":1784800000,
                           "w":6240,
                           "h":4160,
@@ -72,6 +73,14 @@ class PersonMediaPagingTest {
         val personFile = first.items.first().toPersonMediaFile(person)
         assertFalse(personFile.originalAccessAllowed)
         assertFalse(personFile.davPathAuthoritative)
+        assertEquals("motion-${dayIds.first()}", personFile.livePhoto?.serverToken)
+        val resolvedFile = personFile.copy(
+            path = "Photos/resolved.jpg",
+            livePhoto = null,
+        )
+        val resolvedPersonFile = first.items.first().toPersonMediaFile(person, resolvedFile)
+        assertEquals("Photos/resolved.jpg", resolvedPersonFile.path)
+        assertEquals("motion-${dayIds.first()}", resolvedPersonFile.livePhoto?.serverToken)
         assertEquals(3, observed.size)
         assertTrue(observed.all { it.method == NextcloudApiMethod.GET && it.body == null })
         assertTrue(observed.drop(1).all {
