@@ -259,14 +259,22 @@ fun NativeMediaCollectionCover(
 ) {
     val coverFile = remember(collection.key, collection.cover) { collection.asNextcloudCoverFileOrNull() }
     var image by remember(collection.key, collection.cover) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(session, coverFile?.fileId, coverFile?.etag) {
+    LaunchedEffect(
+        session,
+        coverFile?.fileId,
+        coverFile?.etag,
+        coverFile?.hasPreview,
+        coverFile?.memoriesRenderAllowed,
+    ) {
         image = coverFile?.let { file ->
-            runCatching {
-                decodePlatformImage(
-                    services.loadPreviewCached(session, file, width = 480, height = 480),
-                    EncodedImageOrientationPolicy.PixelsAlreadyUpright,
-                )
-            }.getOrNull()
+            services.loadMediaThumbnailDecoded(
+                session = session,
+                file = file,
+                width = 480,
+                height = 480,
+            ) { payload ->
+                decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
+            }
         }
     }
     Box(
@@ -369,14 +377,29 @@ private fun NativeMediaItemTile(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
 ) {
-    var image by remember(file.fileId, file.etag) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(session, file.fileId, file.etag) {
-        image = runCatching {
-            decodePlatformImage(
-                services.loadPreviewCached(session, file, width = 384, height = 384),
-                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
-            )
-        }.getOrNull()
+    var image by remember(
+        file.fileId,
+        file.etag,
+        file.hasPreview,
+        file.memoriesRenderAllowed,
+    ) {
+        mutableStateOf<ImageBitmap?>(null)
+    }
+    LaunchedEffect(
+        session,
+        file.fileId,
+        file.etag,
+        file.hasPreview,
+        file.memoriesRenderAllowed,
+    ) {
+        image = services.loadMediaThumbnailDecoded(
+            session = session,
+            file = file,
+            width = 384,
+            height = 384,
+        ) { payload ->
+            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
+        }
     }
     Box(
         modifier = Modifier.fillMaxWidth().aspectRatio(1f)

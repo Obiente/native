@@ -386,10 +386,13 @@ enum class FullResolutionPhotoSource(val label: String) {
     MemoriesPassthrough("Original via Memories"),
     MemoriesTranscoded("Memories optimized source"),
     FilesDav("Original from Files"),
+    NativeGenerated("Native optimized source"),
 }
 
 fun FullResolutionPhotoSource.orientationPolicy(): EncodedImageOrientationPolicy = when (this) {
-    FullResolutionPhotoSource.MemoriesTranscoded -> EncodedImageOrientationPolicy.PixelsAlreadyUpright
+    FullResolutionPhotoSource.MemoriesTranscoded,
+    FullResolutionPhotoSource.NativeGenerated,
+    -> EncodedImageOrientationPolicy.PixelsAlreadyUpright
     FullResolutionPhotoSource.MemoriesPassthrough,
     FullResolutionPhotoSource.FilesDav,
     -> EncodedImageOrientationPolicy.ApplyExif

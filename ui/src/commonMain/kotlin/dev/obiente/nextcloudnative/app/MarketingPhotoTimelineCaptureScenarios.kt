@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -107,7 +108,7 @@ internal fun MarketingPhotoTimelineFailureScenario(
                 contentPadding = PaddingValues(
                     start = 4.dp,
                     top = 4.dp,
-                    end = 72.dp,
+                    end = PhotoTimelineScrubberTouchLaneWidth,
                     bottom = NextcloudSpacing.XLarge,
                 ),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -155,14 +156,11 @@ internal fun MarketingPhotoTimelineFailureScenario(
             }
             PhotoTimelineDateScrubber(
                 dateIndex = dateIndex,
-                activeSectionIndex = activePhotoTimelineSectionIndex(
-                    dateIndex,
-                    gridState.firstVisibleItemIndex,
-                ),
+                activeGridItemIndex = gridState.firstVisibleItemIndex,
                 onJumpToGridItem = {},
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = NextcloudSpacing.Small),
+                    .fillMaxHeight(),
             )
             if (scenario == MarketingCaptureScenario.PhotoTimelineReturnToNewestErrorMobile) {
                 OutlinedButton(
@@ -171,7 +169,10 @@ internal fun MarketingPhotoTimelineFailureScenario(
                         .align(Alignment.TopEnd)
                         .padding(
                             top = NextcloudSpacing.Small,
-                            end = NextcloudSpacing.Small,
+                            end = (
+                                PhotoTimelineScrubberTouchLaneWidth +
+                                    NextcloudSpacing.Small
+                                ),
                         ),
                 ) {
                     Text("Back to newest")

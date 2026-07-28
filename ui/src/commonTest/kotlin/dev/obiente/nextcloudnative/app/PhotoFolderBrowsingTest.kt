@@ -84,6 +84,59 @@ class PhotoFolderBrowsingTest {
     }
 
     @Test
+    fun `explicit Memories child folders remain visible without invented counts`() {
+        val result = buildPhotoFolderBrowseResult(
+            inventory = listOf(
+                directory("Photos/Empty album").copy(
+                    originalAccessAllowed = false,
+                    davPathAuthoritative = false,
+                ),
+                file(
+                    path = "Photos/photo.jpg",
+                    mimeType = "image/jpeg",
+                ),
+            ),
+            state = PhotoFolderBrowseState(
+                selectedFolderPath = "Photos",
+                scope = PhotoFolderBrowseScope.DirectMediaAndSubfolders,
+            ),
+        )
+
+        val folder = result.folders.single()
+        assertEquals("Photos/Empty album", folder.path)
+        assertFalse(folder.countsAuthoritative)
+        assertEquals(0, folder.directMediaCount)
+        assertEquals(listOf("photo.jpg"), result.media.map { it.cover.name })
+    }
+
+    @Test
+    fun `paged repository preserves explicit root child folders`() {
+        val repository = PhotoFolderInventoryRepository()
+
+        repository.tryAddPage(
+            listOf(
+                directory("Camera").copy(
+                    originalAccessAllowed = false,
+                    davPathAuthoritative = false,
+                ),
+                directory("Pictures").copy(
+                    originalAccessAllowed = false,
+                    davPathAuthoritative = false,
+                ),
+            ),
+        )
+
+        val result = repository.browse(
+            PhotoFolderBrowseState(
+                selectedFolderPath = "",
+                scope = PhotoFolderBrowseScope.DirectMediaAndSubfolders,
+            ),
+        )
+        assertEquals(listOf("Camera", "Pictures"), result.folders.map(PhotoFolderSummary::path))
+        assertTrue(result.folders.none(PhotoFolderSummary::countsAuthoritative))
+    }
+
+    @Test
     fun `search matches folder names and paths without becoming filename search`() {
         val inventory = photoInventory() + file(
             path = "Photos/Screenshots/camera-manual.jpg",

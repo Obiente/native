@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 enum class MediaDisplayPayloadKind {
     ServerPreview,
     MemoriesRawRender,
+    NativeGeneratedPreview,
     EmbeddedCameraPreview,
 }
 
@@ -33,9 +34,38 @@ data class FujiRafEmbeddedPreview(
     val length: Int,
 )
 
+/**
+ * Accepts the documented response contract of Memories' full-resolution decodable-image route.
+ *
+ * Memories returns PNG, WebP, JPEG, or GIF unchanged and converts other supported image formats,
+ * including camera RAW files, to JPEG. Requiring that contract prevents an HTML login/error page
+ * from reaching the image decoder even when a proxy incorrectly returns it with a successful
+ * status.
+ */
+fun memoriesDecodableImageResponseBytes(response: NextcloudApiResponse): ByteArray {
+    require(response.status in 200..299) {
+        "The Memories image render failed (HTTP ${response.status})."
+    }
+    val contentType = response.contentType
+        ?.substringBefore(';')
+        ?.trim()
+        ?.lowercase()
+    require(contentType in MEMORIES_DECODABLE_IMAGE_CONTENT_TYPES) {
+        "The Memories image render returned an unsupported content type."
+    }
+    require(isBoundedDisplayImagePayload(response.body, MAX_RAW_DISPLAY_PREVIEW_BYTES)) {
+        "The Memories image render returned an invalid or oversized image."
+    }
+    return response.body
+}
+
+fun memoriesRawDisplayResponseBytes(response: NextcloudApiResponse): ByteArray =
+    memoriesDecodableImageResponseBytes(response)
+
 fun MediaDisplayPayloadKind.orientationPolicy(): EncodedImageOrientationPolicy = when (this) {
     MediaDisplayPayloadKind.ServerPreview,
     MediaDisplayPayloadKind.MemoriesRawRender,
+    MediaDisplayPayloadKind.NativeGeneratedPreview,
     -> EncodedImageOrientationPolicy.PixelsAlreadyUpright
     MediaDisplayPayloadKind.EmbeddedCameraPreview -> EncodedImageOrientationPolicy.ApplyExif
 }
@@ -51,8 +81,10 @@ fun isExactHttpByteContentRange(
     value: String?,
     expectedStart: Long,
     expectedEndInclusive: Long,
+    expectedCompleteLength: Long? = null,
 ): Boolean {
     if (expectedStart < 0L || expectedEndInclusive < expectedStart) return false
+    if (expectedCompleteLength != null && expectedCompleteLength <= expectedEndInclusive) return false
     val contentRange = value?.trim() ?: return false
     if (
         !contentRange.regionMatches(
@@ -75,6 +107,9 @@ fun isExactHttpByteContentRange(
     val endInclusive = range.substring(dash + 1).toLongOrNull() ?: return false
     if (start != expectedStart || endInclusive != expectedEndInclusive) return false
     val completeLength = rangeAndLength.substring(slash + 1)
+    if (expectedCompleteLength != null) {
+        return completeLength.toLongOrNull() == expectedCompleteLength
+    }
     return completeLength == "*" ||
         completeLength.toLongOrNull()?.let { it > expectedEndInclusive } == true
 }
@@ -108,15 +143,17 @@ fun parseFujiRafEmbeddedPreview(
 /**
  * Loads a displayable image for one file while preserving the original RAW as the action target.
  *
- * Core preview is cheapest. RAW files then use Memories' decodable endpoint, which can produce a
- * full RAW render. Fuji RAF finally falls back to its own embedded camera JPEG through two bounded
- * WebDAV range reads. This does not require or invent a sibling JPEG file.
+ * Core preview is cheapest. Images that Nextcloud cannot preview then use Memories' decodable
+ * endpoint, which converts uncommon formats such as TIFF and camera RAW to a browser-decodable
+ * image. Fuji RAF finally falls back to its own embedded camera JPEG through two bounded WebDAV
+ * range reads. This does not require or invent a sibling JPEG file.
  */
 suspend fun <T> loadMediaDisplayPayload(
     file: NextcloudFile,
     loadCorePreview: suspend () -> ByteArray,
     loadMemoriesRawRender: suspend () -> ByteArray,
     loadFileRange: suspend (offset: Long, length: Int, expectedEtag: String) -> ByteArray,
+    loadNativeRender: suspend () -> ByteArray? = { null },
     decode: (MediaDisplayPayload) -> T?,
 ): DecodedMediaDisplayPayload<T> {
     if (file.hasPreview) {
@@ -128,11 +165,7 @@ suspend fun <T> loadMediaDisplayPayload(
         )?.let { return it }
     }
 
-    if (!file.isRawPhoto()) {
-        error("No displayable server preview is available.")
-    }
-
-    if (file.originalAccessAllowed) {
+    if (file.isPhotoMedia() && file.canUseMemoriesDecodableRender()) {
         attemptDecodedDisplayPayload(
             kind = MediaDisplayPayloadKind.MemoriesRawRender,
             maximumPayloadBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES,
@@ -141,7 +174,20 @@ suspend fun <T> loadMediaDisplayPayload(
         )?.let { return it }
     }
 
-    if (file.canUseEmbeddedRafPreview()) {
+    if (file.isPhotoMedia()) {
+        attemptDecodedDisplayPayload(
+            kind = MediaDisplayPayloadKind.NativeGeneratedPreview,
+            maximumPayloadBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES,
+            load = {
+                requireNotNull(loadNativeRender()) {
+                    "This platform has no native decoder for the media format."
+                }
+            },
+            decode = decode,
+        )?.let { return it }
+    }
+
+    if (file.canUseEmbeddedRafPreview() || file.canUseEmbeddedRafPreviewFromMemories()) {
         val expectedEtag = requireNotNull(file.etag)
         val header = loadFileRange(0L, FUJI_RAF_DIRECTORY_END, expectedEtag)
         val location = parseFujiRafEmbeddedPreview(header, file.size)
@@ -155,7 +201,13 @@ suspend fun <T> loadMediaDisplayPayload(
         )?.let { return it }
     }
 
-    error("No displayable RAW render or embedded preview is available.")
+    error(
+        if (file.isRawPhoto()) {
+            "No displayable RAW render or embedded preview is available."
+        } else {
+            "No displayable server image is available."
+        },
+    )
 }
 
 internal suspend fun <T> loadFirstUsableMediaPreviewSource(
@@ -218,11 +270,17 @@ private fun ByteArray.startsWithAscii(expected: String): Boolean =
         this[index].toInt() and 0xFF == expected[index].code
     }
 
-const val MAX_RAW_DISPLAY_PREVIEW_BYTES = 32 * 1024 * 1024
-const val MAX_RAW_EMBEDDED_PREVIEW_BYTES = MAX_RAW_DISPLAY_PREVIEW_BYTES
+const val MAX_RAW_DISPLAY_PREVIEW_BYTES = 64 * 1024 * 1024
+const val MAX_RAW_EMBEDDED_PREVIEW_BYTES = 32 * 1024 * 1024
 private const val MIN_RAW_EMBEDDED_PREVIEW_BYTES = 8
 private const val FUJI_RAF_SIGNATURE = "FUJIFILMCCD-RAW "
 private const val FUJI_RAF_JPEG_OFFSET_POSITION = 0x54
 private const val FUJI_RAF_JPEG_LENGTH_POSITION = 0x58
 private const val FUJI_RAF_DIRECTORY_END = 0x5C
 private const val HTTP_BYTES_RANGE_PREFIX = "bytes "
+private val MEMORIES_DECODABLE_IMAGE_CONTENT_TYPES = setOf(
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+)

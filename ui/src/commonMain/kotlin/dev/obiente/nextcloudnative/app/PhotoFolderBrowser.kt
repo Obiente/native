@@ -163,6 +163,8 @@ internal fun PhotoFolderBrowser(
                 items(result.folders, key = { "folder:${it.path}" }) { folder ->
                     PhotoFolderGridItem(
                         folder = folder,
+                        services = services,
+                        session = session,
                         onClick = { onSelectedFolderPathChanged(folder.path) },
                     )
                 }
@@ -336,6 +338,8 @@ private fun PhotoFolderToolbar(
 @Composable
 private fun PhotoFolderGridItem(
     folder: PhotoFolderSummary,
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
     onClick: () -> Unit,
 ) {
     Card(
@@ -344,32 +348,135 @@ private fun PhotoFolderGridItem(
         shape = RoundedCornerShape(NextcloudRadii.Card),
         colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Icon(
-                NextcloudIcons.Folder,
-                contentDescription = null,
-                modifier = Modifier.size(34.dp),
-                tint = MaterialTheme.colorScheme.primary,
+        Column(modifier = Modifier.fillMaxSize()) {
+            PhotoFolderPreviewMosaic(
+                folder = folder,
+                services = services,
+                session = session,
+                modifier = Modifier.fillMaxWidth().weight(1f),
             )
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                Icon(
+                    NextcloudIcons.Folder,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     folder.name,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     photoFolderSummary(folder),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun PhotoFolderPreviewMosaic(
+    folder: PhotoFolderSummary,
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+    modifier: Modifier = Modifier,
+) {
+    if (folder.previewFileIds.isEmpty()) {
+        Box(
+            modifier = modifier.background(NextcloudTheme.colors.appIconContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                NextcloudIcons.Folder,
+                contentDescription = null,
+                modifier = Modifier.size(40.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+        return
+    }
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        repeat(2) { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                repeat(2) { column ->
+                    val previewFileId = folder.previewFileIds.getOrNull(row * 2 + column)
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxSize()
+                            .background(NextcloudTheme.colors.appIconContainer),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (previewFileId != null) {
+                            PhotoFolderPreviewImage(
+                                fileId = previewFileId,
+                                services = services,
+                                session = session,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhotoFolderPreviewImage(
+    fileId: Long,
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+) {
+    val file = remember(fileId) {
+        NextcloudFile(
+            path = "memories/folder-preview/$fileId",
+            name = "$fileId.jpg",
+            isDirectory = false,
+            mimeType = "image/jpeg",
+            size = null,
+            lastModified = null,
+            fileId = fileId,
+            hasPreview = true,
+            etag = null,
+            originalAccessAllowed = false,
+            davPathAuthoritative = false,
+            memoriesRenderAllowed = true,
+        )
+    }
+    var image by remember(fileId) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(session, fileId) {
+        image = services.loadMediaThumbnailDecoded(
+            session = session,
+            file = file,
+            width = 320,
+            height = 320,
+        ) { payload ->
+            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
+        }
+    }
+    image?.let { bitmap ->
+        Image(
+            bitmap = bitmap,
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+        )
     }
 }
 
@@ -420,19 +527,24 @@ private fun PhotoFolderMediaListItem(
     session: NextcloudSession,
     onClick: () -> Unit,
 ) {
-    var image by remember(stack.cover.fileId, stack.cover.etag) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(stack.cover.fileId, stack.cover.etag) {
-        if (stack.cover.fileId == null || !stack.cover.hasPreview) return@LaunchedEffect
-        val encoded = runCatching {
-            services.loadPreviewCached(session, stack.cover)
-        }.getOrNull() ?: return@LaunchedEffect
-        image = withContext(Dispatchers.Default) {
-            runCatching {
-                decodePlatformImage(
-                    encoded,
-                    EncodedImageOrientationPolicy.PixelsAlreadyUpright,
-                )
-            }.getOrNull()
+    var image by remember(
+        stack.cover.fileId,
+        stack.cover.etag,
+        stack.cover.hasPreview,
+        stack.cover.memoriesRenderAllowed,
+    ) {
+        mutableStateOf<ImageBitmap?>(null)
+    }
+    LaunchedEffect(
+        session,
+        stack.cover.fileId,
+        stack.cover.etag,
+        stack.cover.hasPreview,
+        stack.cover.memoriesRenderAllowed,
+    ) {
+        if (stack.cover.fileId == null) return@LaunchedEffect
+        image = services.loadMediaThumbnailDecoded(session, stack.cover) { payload ->
+            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
         }
     }
     Surface(
@@ -498,6 +610,10 @@ internal fun photoFolderViewModeLabel(viewMode: PhotoFolderViewMode): String = w
 }
 
 private fun photoFolderSummary(folder: PhotoFolderSummary): String = buildList {
+    if (!folder.countsAuthoritative) {
+        add("Browse folder")
+        return@buildList
+    }
     if (folder.directChildFolderCount > 0) {
         add("${folder.directChildFolderCount} ${if (folder.directChildFolderCount == 1) "folder" else "folders"}")
     }

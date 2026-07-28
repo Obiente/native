@@ -121,7 +121,13 @@ internal fun MediaViewerActionDialog(
             capabilities = sharingCapabilities,
             onDismiss = onDismiss,
         )
-        MediaViewerAction.Info -> MediaInformationDialog(file, onDismiss)
+        MediaViewerAction.Info -> MediaInformationDialog(
+            file = file,
+            session = session,
+            userId = userId,
+            services = services,
+            onDismiss = onDismiss,
+        )
         MediaViewerAction.SendCopy, MediaViewerAction.OpenWith -> Unit
     }
 }
@@ -535,7 +541,31 @@ private fun MediaShareDialog(
 }
 
 @Composable
-private fun MediaInformationDialog(file: NextcloudFile, onDismiss: () -> Unit) {
+private fun MediaInformationDialog(
+    file: NextcloudFile,
+    session: NextcloudSession,
+    userId: String,
+    services: NextcloudPlatformServices,
+    onDismiss: () -> Unit,
+) {
+    var information by remember(file) { mutableStateOf(file.basicMediaInformation()) }
+    var loading by remember(file) { mutableStateOf(true) }
+    var embeddedInformationUnavailable by remember(file) { mutableStateOf(false) }
+    var showTechnical by remember(file) { mutableStateOf(false) }
+
+    LaunchedEffect(session, userId, file) {
+        loading = true
+        embeddedInformationUnavailable = false
+        runCatching {
+            services.loadMediaInformation(session, userId, file)
+        }.onSuccess {
+            information = file.basicMediaInformation().mergedWith(it)
+        }.onFailure {
+            embeddedInformationUnavailable = true
+        }
+        loading = false
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(file.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
@@ -544,15 +574,58 @@ private fun MediaInformationDialog(file: NextcloudFile, onDismiss: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp),
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
-                item { MediaInfoLine("Path", file.path) }
-                item { MediaInfoLine("Type", file.mimeType ?: "Unknown") }
-                item { MediaInfoLine("Size", formatMediaBytes(file.size)) }
-                file.lastModified?.takeIf(String::isNotBlank)?.let { item { MediaInfoLine("Modified", it) } }
-                file.fileId?.let { item { MediaInfoLine("File ID", it.toString()) } }
-                file.etag?.takeIf(String::isNotBlank)?.let { item { MediaInfoLine("Version", it) } }
-                file.permissions?.takeIf(String::isNotBlank)?.let { item { MediaInfoLine("Permissions", it) } }
-                if (file.checksums.isNotEmpty()) {
-                    item { MediaInfoLine("Checksums", file.checksums.joinToString("\n")) }
+                if (loading) {
+                    item {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Text(
+                                "Reading available media information...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                if (embeddedInformationUnavailable) {
+                    item {
+                        Text(
+                            "Embedded camera and format information could not be read. File details remain available.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                information.sections.forEach { section ->
+                    val visibleFields = section.fields.filter { field ->
+                        showTechnical || field.importance != MediaInformationImportance.Technical
+                    }
+                    if (visibleFields.isNotEmpty()) {
+                        item(section.key) {
+                            Text(
+                                section.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        visibleFields.forEach { field ->
+                            item("${section.key}:${field.key}") {
+                                MediaInfoLine(field.label, field.value)
+                            }
+                        }
+                    }
+                }
+                if (information.sections.any { section ->
+                        section.fields.any { it.importance == MediaInformationImportance.Technical }
+                    }
+                ) {
+                    item {
+                        TextButton(onClick = { showTechnical = !showTechnical }) {
+                            Text(if (showTechnical) "Hide technical details" else "Show technical details")
+                        }
+                    }
                 }
             }
         },
@@ -568,12 +641,4 @@ private fun MediaInfoLine(label: String, value: String) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.bodyMedium)
     }
-}
-
-private fun formatMediaBytes(bytes: Long?): String = when {
-    bytes == null -> "Unknown"
-    bytes >= 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L * 1024L)} GiB"
-    bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MiB"
-    bytes >= 1024L -> "${bytes / 1024L} KiB"
-    else -> "$bytes B"
 }

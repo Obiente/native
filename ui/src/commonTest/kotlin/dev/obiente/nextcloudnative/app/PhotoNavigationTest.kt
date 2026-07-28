@@ -86,6 +86,7 @@ class PhotoNavigationTest {
                 scope = PhotoFolderBrowseScope.RecursiveMedia,
                 preference = PhotoFolderBrowsePreference(PhotoFolderViewMode.List),
             ),
+            timelineViewMode = PhotoTimelineViewMode.List,
         )
 
         val restored = restorePhotoBrowserState(encodePhotoBrowserState(state))

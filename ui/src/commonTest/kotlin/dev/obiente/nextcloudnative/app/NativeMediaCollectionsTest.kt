@@ -1,10 +1,17 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class NativeMediaCollectionsTest {
@@ -125,6 +132,93 @@ class NativeMediaCollectionsTest {
     }
 
     @Test
+    fun catalogAggregationPreservesOrdinaryPartialFailureWarnings() = runBlocking {
+        val catalog = loadNativeMediaCollectionCatalog(
+            loadAlbums = { listOf(album()) },
+            loadMemoriesTags = { throw IllegalStateException("Index unavailable") },
+            loadDavTags = { listOf(systemTag(10L, "Shared")) },
+        )
+
+        assertEquals(listOf(album()), catalog.albums)
+        assertEquals(listOf("Shared"), catalog.tags.map(NativeMediaCollection::name))
+        assertFalse(catalog.tags.single().canBrowse)
+        assertEquals(listOf("Indexed tag counts: Index unavailable"), catalog.warnings)
+    }
+
+    @Test
+    fun catalogAggregationRethrowsCancellationWithoutCallingLaterFeatures() = runBlocking {
+        val cancellation = CancellationException("Catalog load superseded")
+        var davTagsCalled = false
+
+        val thrown = try {
+            loadNativeMediaCollectionCatalog(
+                loadAlbums = { listOf(album()) },
+                loadMemoriesTags = { throw cancellation },
+                loadDavTags = {
+                    davTagsCalled = true
+                    emptyList()
+                },
+            )
+            null
+        } catch (caught: CancellationException) {
+            caught
+        }
+
+        assertSame(cancellation, thrown)
+        assertFalse(davTagsCalled)
+    }
+
+    @Test
+    fun catalogAggregationRethrowsDavCancellationAfterEarlierSuccesses() = runBlocking {
+        val cancellation = CancellationException("Catalog load superseded")
+
+        val thrown = try {
+            loadNativeMediaCollectionCatalog(
+                loadAlbums = { listOf(album()) },
+                loadMemoriesTags = { emptyList() },
+                loadDavTags = { throw cancellation },
+            )
+            null
+        } catch (caught: CancellationException) {
+            caught
+        }
+
+        assertSame(cancellation, thrown)
+    }
+
+    @Test
+    fun cancelledCatalogPublicationRejectsNonCooperativeLoaderResult() = runBlocking {
+        val loadStarted = CompletableDeferred<Unit>()
+        val releaseLoad = CompletableDeferred<Unit>()
+        var published = false
+        var cancellationObserved = false
+        val catalog = NativeMediaCollectionCatalog(albums = listOf(album()), tags = emptyList())
+
+        val publication = launch {
+            try {
+                loadActiveNativeMediaCollectionCatalog {
+                    withContext(NonCancellable) {
+                        loadStarted.complete(Unit)
+                        releaseLoad.await()
+                        catalog
+                    }
+                }
+                published = true
+            } catch (_: CancellationException) {
+                cancellationObserved = true
+            }
+        }
+
+        loadStarted.await()
+        publication.cancel()
+        releaseLoad.complete(Unit)
+        publication.join()
+
+        assertFalse(published)
+        assertTrue(cancellationObserved)
+    }
+
+    @Test
     fun cursorSurvivesNewDaysInsertedAheadOfIt() {
         val firstIndex = NativeMediaDayIndex(
             collectionKey = "album:ada/Summer",
@@ -173,6 +267,8 @@ class NativeMediaCollectionsTest {
         val previewOnlyFile = media.last().toNextcloudFile(collection.key)
         assertEquals("memories/collections/album:ada/Summer/20260723/42", previewOnlyFile.path)
         assertFalse(previewOnlyFile.originalAccessAllowed)
+        assertTrue(previewOnlyFile.memoriesRenderAllowed)
+        assertFalse(previewOnlyFile.davPathAuthoritative)
         assertEquals("self__trailer", previewOnlyFile.livePhoto?.serverToken)
     }
 

@@ -109,6 +109,28 @@ data class NextcloudFile(
     val checksums: List<String> = emptyList(),
     /** Optional Memories relationship for the motion component of this still image. */
     val livePhoto: NextcloudLivePhotoReference? = null,
+    /**
+     * Stable file IDs supplied for a directory's visual preview.
+     *
+     * These IDs authorize preview rendering only. They do not identify child DAV paths and must
+     * never be used to invent original file locations or mutation targets.
+     */
+    val directoryPreviewFileIds: List<Long> = emptyList(),
+    /**
+     * Whether the authenticated Memories app may render this stable [fileId] server-side.
+     *
+     * This is deliberately separate from [originalAccessAllowed] and [davPathAuthoritative]:
+     * timeline records can authorize the file-ID route without authorizing an original download
+     * or claiming that their UI-only [path] exists in Files DAV.
+     */
+    val memoriesRenderAllowed: Boolean = false,
+    /** Pixel dimensions supplied by a trusted media listing or a bounded local metadata reader. */
+    val mediaWidth: Int? = null,
+    val mediaHeight: Int? = null,
+    /** Capture time supplied by Memories or embedded media metadata. */
+    val capturedAtEpochSeconds: Long? = null,
+    /** Whole-second duration supplied for video or audio media. */
+    val mediaDurationSeconds: Int? = null,
 )
 
 data class NextcloudFileContent(
@@ -622,6 +644,7 @@ interface NextcloudPlatformServices {
         userId: String,
         cursor: PhotoTimelineCursor?,
         rawPreviouslyObserved: Boolean = false,
+        queryOwner: PhotoMediaQueryOwner = PhotoMediaQueryOwner.Timeline,
     ): PhotoTimelinePage {
         if (cursor != null) return PhotoTimelinePage(emptyList(), null)
         return PhotoTimelinePage(
@@ -692,6 +715,32 @@ interface NextcloudPlatformServices {
         height: Int = DEFAULT_PREVIEW_DIMENSION,
     ): ByteArray
 
+    /**
+     * Produces one bounded, display-oriented preview with a platform decoder when server preview
+     * providers cannot decode the original format.
+     *
+     * Implementations must pin reads to the remote generation, keep original bytes out of memory,
+     * cache only bounded generated output, and return null for unsupported formats.
+     */
+    suspend fun loadNativeMediaPreview(
+        session: NextcloudSession,
+        file: NextcloudFile,
+        maximumDimension: Int = DEFAULT_PREVIEW_DIMENSION,
+    ): ByteArray? = null
+
+    /**
+     * Loads bounded, read-only media information for display.
+     *
+     * Implementations may inspect generation-pinned byte ranges, but must not download an
+     * unbounded original, persist embedded metadata outside an account-scoped cache, or mutate the
+     * remote object.
+     */
+    suspend fun loadMediaInformation(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+    ): MediaInformation = file.basicMediaInformation()
+
     suspend fun downloadFile(
         session: NextcloudSession,
         userId: String,
@@ -715,6 +764,49 @@ interface NextcloudPlatformServices {
         length: Int,
         expectedEtag: String,
     ): ByteArray = error("Bounded file range reads are not supported on this platform.")
+
+    /**
+     * Opens one cancellable generation-pinned range-reading session.
+     *
+     * A platform implementation should cancel an active transport request when the returned
+     * session is closed. The default keeps existing platforms functional but cannot interrupt a
+     * request that is already inside [downloadFileRange].
+     */
+    fun openFileRangeSession(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        size: Long,
+        expectedEtag: String,
+    ): NextcloudFileRangeSession = NextcloudFileRangeSession(
+        size = size,
+        readBlock = { offset, length ->
+            downloadFileRange(
+                session = session,
+                userId = userId,
+                path = path,
+                offset = offset,
+                length = length,
+                expectedEtag = expectedEtag,
+            )
+        },
+    )
+
+    /**
+     * Reads one exact byte range from the official Memories file-ID stream.
+     *
+     * Timeline and album records can provide a stable file ID without an authoritative DAV path.
+     * This route permits read-only decoder access without inventing a path. Implementations must
+     * pin the request to [expectedEtag], require HTTP 206, and validate Content-Range exactly.
+     */
+    suspend fun downloadMemoriesFileRange(
+        session: NextcloudSession,
+        fileId: Long,
+        offset: Long,
+        length: Int,
+        expectedEtag: String,
+        expectedSourceSize: Long,
+    ): ByteArray = error("Bounded Memories range reads are not supported on this platform.")
 
     /**
      * Lists immutable historical generations for the exact Files record.
@@ -1081,6 +1173,26 @@ interface NextcloudPlatformServices {
     suspend fun sendTalkMessage(session: NextcloudSession, token: String, message: String)
 
     suspend fun revokeSession(session: NextcloudSession)
+}
+
+/**
+ * Read-only handle for one immutable remote file generation.
+ *
+ * Closing the handle is idempotent from the caller's perspective. Platform implementations own
+ * the synchronization needed to reject new reads and cancel an active request.
+ */
+class NextcloudFileRangeSession(
+    val size: Long,
+    private val readBlock: suspend (offset: Long, length: Int) -> ByteArray,
+    private val closeBlock: () -> Unit = {},
+) : AutoCloseable {
+    init {
+        require(size > 0L) { "A file range session must have a positive size." }
+    }
+
+    suspend fun read(offset: Long, length: Int): ByteArray = readBlock(offset, length)
+
+    override fun close() = closeBlock()
 }
 
 const val DEFAULT_PREVIEW_DIMENSION = 512

@@ -344,6 +344,9 @@ class DesktopNextcloudServices(
     )
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
     private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
+    private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
+        executeNextcloudApi(session, request)
+    }
     private val externalFileHandoff = DesktopExternalFileHandoff()
     private val localUploadPicker = DesktopLocalUploadPicker()
     private val deckCardDrafts = DesktopDeckCardDraftStore()
@@ -676,30 +679,47 @@ class DesktopNextcloudServices(
         userId: String,
         cursor: PhotoTimelineCursor?,
         rawPreviouslyObserved: Boolean,
+        queryOwner: PhotoMediaQueryOwner,
     ): PhotoTimelinePage = withContext(Dispatchers.IO) {
-        val page = collectMediaTimelineDavPage(
-            userId = userId,
-            cursor = cursor,
-            execute = { body ->
-                val response = request(
-                    "SEARCH", session.serverUrl + "/remote.php/dav/", session, body,
-                    "application/xml; charset=utf-8", headers = mapOf("Accept" to "application/xml"),
-                )
-                MediaSearchDavTransportResponse(response.status, response.body)
-            },
-            parse = { body -> parseDavFiles(body, userId) },
-            shouldSearchRaw = { files ->
-                rawPreviouslyObserved || files.any(NextcloudFile::isRawPhoto)
-            },
-            carryoverStore = mediaTimelineCarryoverStore,
-            carryoverAccountScope = desktopFileCacheAccountId(session),
-        )
-        PhotoTimelinePage(
-            entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),
-            nextCursor = page.nextCursor,
-            optionalRawRemovalAuthoritative = page.optionalRawRemovalAuthoritative,
-            rawObserved = page.rawObserved,
-        )
+        suspend fun loadDavPage(davCursor: PhotoTimelineCursor?): PhotoTimelinePage {
+            val page = collectMediaTimelineDavPage(
+                userId = userId,
+                cursor = davCursor,
+                execute = { body ->
+                    val response = request(
+                        "SEARCH", session.serverUrl + "/remote.php/dav/", session, body,
+                        "application/xml; charset=utf-8", headers = mapOf("Accept" to "application/xml"),
+                    )
+                    MediaSearchDavTransportResponse(response.status, response.body)
+                },
+                parse = { body -> parseDavFiles(body, userId) },
+                shouldSearchRaw = { files ->
+                    rawPreviouslyObserved || files.any(NextcloudFile::isRawPhoto)
+                },
+                carryoverStore = mediaTimelineCarryoverStore,
+                carryoverAccountScope = photoMediaCarryoverScope(
+                    accountScope = desktopFileCacheAccountId(session),
+                    owner = queryOwner,
+                ),
+            )
+            return PhotoTimelinePage(
+                entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),
+                nextCursor = page.nextCursor,
+                optionalRawRemovalAuthoritative = page.optionalRawRemovalAuthoritative,
+                rawObserved = page.rawObserved,
+            )
+        }
+
+        if (queryOwner == PhotoMediaQueryOwner.Timeline) {
+            memoriesTimeline.loadPage(
+                session = session,
+                accountScope = desktopFileCacheAccountId(session),
+                cursor = cursor,
+                fallback = ::loadDavPage,
+            )
+        } else {
+            loadDavPage(cursor)
+        }
     }
 
     override suspend fun listSystemTags(session: NextcloudSession): List<NextcloudSystemTag> =
@@ -844,6 +864,56 @@ class DesktopNextcloudServices(
         }
         check(response.body.size == length) {
             "The server returned an incomplete file range."
+        }
+        response.body
+    }
+
+    override suspend fun downloadMemoriesFileRange(
+        session: NextcloudSession,
+        fileId: Long,
+        offset: Long,
+        length: Int,
+        expectedEtag: String,
+        expectedSourceSize: Long,
+    ): ByteArray = withContext(Dispatchers.IO) {
+        require(fileId > 0L) { "The Memories file ID must be positive." }
+        require(offset >= 0L) { "The file range offset must not be negative." }
+        require(length > 0) { "The file range length must be greater than zero." }
+        require(expectedSourceSize > 0L) { "The source size must be positive." }
+        val safeEtag = requireSafeFileRangeEtag(expectedEtag)
+        val endInclusive = Math.addExact(offset, length.toLong() - 1L)
+        val response = request(
+            "GET",
+            session.serverUrl.trimEnd('/') + "/index.php/apps/memories/api/stream/$fileId",
+            session,
+            headers = mapOf(
+                "Accept" to "application/octet-stream",
+                "Range" to "bytes=$offset-$endInclusive",
+                "If-Match" to safeEtag,
+            ),
+            maxResponseBytes = length.toLong(),
+            client = noRedirectHttpClient,
+        )
+        check(response.status == 206) {
+            "The Memories stream did not honor the bounded range request (HTTP ${response.status})."
+        }
+        check(
+            isExactHttpByteContentRange(
+                response.contentRange,
+                offset,
+                endInclusive,
+                expectedSourceSize,
+            ),
+        ) {
+            "The Memories stream returned a different file range than requested."
+        }
+        response.etag?.let { returnedEtag ->
+            check(requireSafeFileRangeEtag(returnedEtag) == safeEtag) {
+                "The Memories stream returned a different file generation."
+            }
+        }
+        check(response.body.size == length) {
+            "The Memories stream returned an incomplete file range."
         }
         response.body
     }

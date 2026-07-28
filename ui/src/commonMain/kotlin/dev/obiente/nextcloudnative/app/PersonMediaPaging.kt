@@ -110,6 +110,7 @@ fun NativeMediaItem.toPersonMediaFile(
         originalAccessAllowed = false,
         davPathAuthoritative = false,
         livePhoto = livePhoto,
+        memoriesRenderAllowed = true,
     )
 
 /**
@@ -137,4 +138,5 @@ fun syntheticMemoriesPersonFile(
     etag = etag,
     originalAccessAllowed = false,
     davPathAuthoritative = false,
+    memoriesRenderAllowed = true,
 )

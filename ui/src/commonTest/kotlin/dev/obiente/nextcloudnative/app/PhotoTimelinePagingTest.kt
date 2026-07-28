@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -1216,12 +1217,177 @@ class PhotoTimelinePagingTest {
             val third = load(requireNotNull(second.nextCursor))
 
             assertEquals(4, imageRequests.size)
+            assertEquals(2, imageRequests[1].countDavOrderClauses())
             assertTrue("<d:lt><d:prop><oc:fileid/></d:prop>" in imageRequests[1])
+            assertEquals(1, imageRequests[2].countDavOrderClauses())
             assertTrue("<sd:firstresult>200</sd:firstresult>" in imageRequests[2])
+            assertEquals(1, imageRequests[3].countDavOrderClauses())
             assertFalse("<d:lt><d:prop><oc:fileid/></d:prop>" in imageRequests[3])
             assertTrue("<sd:firstresult>400</sd:firstresult>" in imageRequests[3])
             assertEquals(50, third.files.size)
             assertNull(third.nextCursor)
+        }
+
+    @Test
+    fun davTimelineRetriesRejectedInitialOrderingAndKeepsLaterPagesCompatible() =
+        kotlinx.coroutines.runBlocking {
+            val firstImages = (1L..PHOTO_TIMELINE_PARTITION_PAGE_SIZE.toLong()).map { id ->
+                file(
+                    id = id,
+                    path = "Photos/image-$id.jpg",
+                    lastModified = (30_000L - id).toString(),
+                )
+            }
+            val requests = mutableListOf<String>()
+
+            suspend fun load(cursor: PhotoTimelineCursor?): MediaTimelineDavPage =
+                collectMediaTimelineDavPage(
+                    userId = "account",
+                    cursor = cursor,
+                    execute = { body ->
+                        requests += body
+                        when {
+                            body.countDavOrderClauses() == 2 ->
+                                MediaSearchDavTransportResponse(400, "unsupported-order".encodeToByteArray())
+                            "<d:literal>image/%</d:literal>" in body &&
+                                "<d:lte>" !in body ->
+                                MediaSearchDavTransportResponse(207, "images".encodeToByteArray())
+                            "<d:literal>image/%</d:literal>" in body ->
+                                MediaSearchDavTransportResponse(207, "older-images".encodeToByteArray())
+                            else ->
+                                MediaSearchDavTransportResponse(207, "videos".encodeToByteArray())
+                        }
+                    },
+                    parse = { body ->
+                        when (body.decodeToString()) {
+                            "images" -> firstImages
+                            "older-images", "videos" -> emptyList()
+                            else -> error("Unexpected timeline response.")
+                        }
+                    },
+                    shouldSearchRaw = { false },
+                )
+
+            val first = load(null)
+            val second = load(requireNotNull(first.nextCursor))
+
+            assertEquals(listOf(2, 1, 1, 1), requests.map { body -> body.countDavOrderClauses() })
+            assertTrue(requireNotNull(first.nextCursor).value.contains("|i:o,"))
+            assertTrue("<sd:firstresult>1</sd:firstresult>" in requests.last())
+            assertNull(second.nextCursor)
+        }
+
+    @Test
+    fun davTimelineUsesCompatibleOrderingForRawAfterMimeFallback() =
+        kotlinx.coroutines.runBlocking {
+            val requests = mutableListOf<String>()
+            val detectedRaw = file(
+                id = 1L,
+                path = "Photos/detected.raf",
+                lastModified = "30000",
+            ).copy(mimeType = "image/x-fuji-raf")
+
+            val page = collectMediaTimelineDavPage(
+                userId = "account",
+                cursor = null,
+                execute = { body ->
+                    requests += body
+                    when {
+                        body.countDavOrderClauses() == 2 ->
+                            MediaSearchDavTransportResponse(422, "unsupported-order".encodeToByteArray())
+                        "<d:literal>image/%</d:literal>" in body ->
+                            MediaSearchDavTransportResponse(207, "image".encodeToByteArray())
+                        "<d:literal>video/%</d:literal>" in body ->
+                            MediaSearchDavTransportResponse(207, "video".encodeToByteArray())
+                        else ->
+                            MediaSearchDavTransportResponse(207, "raw".encodeToByteArray())
+                    }
+                },
+                parse = { body ->
+                    when (body.decodeToString()) {
+                        "image" -> listOf(detectedRaw)
+                        "video", "raw" -> emptyList()
+                        else -> error("Unexpected timeline response.")
+                    }
+                },
+                shouldSearchRaw = { files -> files.any(NextcloudFile::isRawPhoto) },
+            )
+
+            val rawRequests = requests.filter { body ->
+                rawPhotoFileNameSearchPatterns().any(body::contains)
+            }
+            assertEquals(listOf(detectedRaw), page.files)
+            assertTrue(rawRequests.isNotEmpty())
+            assertTrue(rawRequests.all { body -> body.countDavOrderClauses() == 1 })
+            assertTrue(page.optionalRawRemovalAuthoritative)
+        }
+
+    @Test
+    fun davTimelineRawKeysetFallbackUsesSingleOrderOffsetMode() =
+        kotlinx.coroutines.runBlocking {
+            val firstRawPattern = rawPhotoFileNameSearchPatterns().first()
+            val initialRaw = (1L..PHOTO_TIMELINE_PARTITION_PAGE_SIZE.toLong()).map { id ->
+                file(
+                    id = 10_000L + id,
+                    path = "Photos/raw-$id.raf",
+                    lastModified = (20_000L - id).toString(),
+                ).copy(mimeType = "application/octet-stream")
+            }
+            val rawCursorRequests = mutableListOf<String>()
+            var cursorPage = false
+
+            suspend fun load(cursor: PhotoTimelineCursor?): MediaTimelineDavPage =
+                collectMediaTimelineDavPage(
+                    userId = "account",
+                    cursor = cursor,
+                    execute = { body ->
+                        when {
+                            "<d:literal>image/%</d:literal>" in body ->
+                                MediaSearchDavTransportResponse(207, "image".encodeToByteArray())
+                            "<d:literal>video/%</d:literal>" in body ->
+                                MediaSearchDavTransportResponse(207, "video".encodeToByteArray())
+                            "<d:literal>$firstRawPattern</d:literal>" in body -> {
+                                if (cursorPage) rawCursorRequests += body
+                                if (
+                                    cursorPage &&
+                                    "<d:lt><d:prop><oc:fileid/></d:prop>" in body
+                                ) {
+                                    MediaSearchDavTransportResponse(422, "unsupported-keyset".encodeToByteArray())
+                                } else {
+                                    MediaSearchDavTransportResponse(
+                                        207,
+                                        (if (cursorPage) "raw-older" else "raw-initial").encodeToByteArray(),
+                                    )
+                                }
+                            }
+                            else ->
+                                MediaSearchDavTransportResponse(207, "raw-empty".encodeToByteArray())
+                        }
+                    },
+                    parse = { body ->
+                        when (body.decodeToString()) {
+                            "image" -> listOf(
+                                file(
+                                    id = 1L,
+                                    path = "Photos/detected.raf",
+                                    lastModified = "30000",
+                                ).copy(mimeType = "image/x-fuji-raf"),
+                            )
+                            "raw-initial" -> initialRaw
+                            "video", "raw-empty", "raw-older" -> emptyList()
+                            else -> error("Unexpected timeline response.")
+                        }
+                    },
+                    shouldSearchRaw = { files -> files.any(NextcloudFile::isRawPhoto) },
+                )
+
+            val first = load(null)
+            cursorPage = true
+            val second = load(requireNotNull(first.nextCursor))
+
+            assertEquals(listOf(2, 1), rawCursorRequests.map { body -> body.countDavOrderClauses() })
+            assertTrue("<sd:firstresult>1</sd:firstresult>" in rawCursorRequests.last())
+            assertNull(second.nextCursor)
         }
 
     @Test
@@ -1437,6 +1603,233 @@ class PhotoTimelinePagingTest {
         }
 
     @Test
+    fun davTimelineKeepsMimeMediaWhenOptionalInitialRawSearchReturnsServerError() =
+        kotlinx.coroutines.runBlocking {
+            val ordinary = file(
+                id = 1L,
+                path = "Photos/ordinary.jpg",
+                lastModified = "30000",
+            )
+
+            val page = collectMediaTimelineDavPage(
+                userId = "account",
+                cursor = null,
+                execute = { body ->
+                    when {
+                        "<d:literal>image/%</d:literal>" in body ->
+                            MediaSearchDavTransportResponse(207, "image".encodeToByteArray())
+                        "<d:literal>video/%</d:literal>" in body ->
+                            MediaSearchDavTransportResponse(207, "video".encodeToByteArray())
+                        else ->
+                            MediaSearchDavTransportResponse(500, "raw-error".encodeToByteArray())
+                    }
+                },
+                parse = { body ->
+                    when (body.decodeToString()) {
+                        "image" -> listOf(ordinary)
+                        "video" -> emptyList()
+                        else -> error("The failed optional RAW response must not be parsed.")
+                    }
+                },
+                shouldSearchRaw = { true },
+            )
+
+            assertEquals(listOf(ordinary), page.files)
+            assertFalse(page.optionalRawRemovalAuthoritative)
+        }
+
+    @Test
+    fun davTimelineKeepsMimeMediaWhenOptionalInitialRawTransportThrows() =
+        kotlinx.coroutines.runBlocking {
+            val ordinary = file(
+                id = 1L,
+                path = "Photos/ordinary.jpg",
+                lastModified = "30000",
+            )
+
+            val page = collectMediaTimelineDavPage(
+                userId = "account",
+                cursor = null,
+                execute = { body ->
+                    when {
+                        "<d:literal>image/%</d:literal>" in body ->
+                            MediaSearchDavTransportResponse(207, "image".encodeToByteArray())
+                        "<d:literal>video/%</d:literal>" in body ->
+                            MediaSearchDavTransportResponse(207, "video".encodeToByteArray())
+                        else -> error("Synthetic optional RAW transport failure.")
+                    }
+                },
+                parse = { body ->
+                    when (body.decodeToString()) {
+                        "image" -> listOf(ordinary)
+                        "video" -> emptyList()
+                        else -> error("Unexpected timeline response.")
+                    }
+                },
+                shouldSearchRaw = { true },
+            )
+
+            assertEquals(listOf(ordinary), page.files)
+            assertFalse(page.optionalRawRemovalAuthoritative)
+        }
+
+    @Test
+    fun davTimelineKeepsMimeMediaWhenOptionalInitialRawResponseIsMalformed() =
+        kotlinx.coroutines.runBlocking {
+            val ordinary = file(
+                id = 1L,
+                path = "Photos/ordinary.jpg",
+                lastModified = "30000",
+            )
+
+            val page = collectMediaTimelineDavPage(
+                userId = "account",
+                cursor = null,
+                execute = { body ->
+                    val marker = when {
+                        "<d:literal>image/%</d:literal>" in body -> "image"
+                        "<d:literal>video/%</d:literal>" in body -> "video"
+                        else -> "malformed-raw"
+                    }
+                    MediaSearchDavTransportResponse(207, marker.encodeToByteArray())
+                },
+                parse = { body ->
+                    when (body.decodeToString()) {
+                        "image" -> listOf(ordinary)
+                        "video" -> emptyList()
+                        else -> error("Synthetic malformed optional RAW response.")
+                    }
+                },
+                shouldSearchRaw = { true },
+            )
+
+            assertEquals(listOf(ordinary), page.files)
+            assertFalse(page.optionalRawRemovalAuthoritative)
+        }
+
+    @Test
+    fun davTimelineDoesNotSwallowOptionalRawCancellation() =
+        kotlinx.coroutines.runBlocking {
+            assertFailsWith<CancellationException> {
+                collectMediaTimelineDavPage(
+                    userId = "account",
+                    cursor = null,
+                    execute = { body ->
+                        when {
+                            "<d:literal>image/%</d:literal>" in body ->
+                                MediaSearchDavTransportResponse(207, "image".encodeToByteArray())
+                            "<d:literal>video/%</d:literal>" in body ->
+                                MediaSearchDavTransportResponse(207, "video".encodeToByteArray())
+                            else -> throw CancellationException("Synthetic cancellation.")
+                        }
+                    },
+                    parse = { emptyList() },
+                    shouldSearchRaw = { true },
+                )
+            }
+            Unit
+        }
+
+    @Test
+    fun davTimelineKeepsMimeCursorPageWhenOptionalRawSearchReturnsServerError() =
+        kotlinx.coroutines.runBlocking {
+            val initialImages = (1L..PHOTO_TIMELINE_PARTITION_PAGE_SIZE.toLong()).map { id ->
+                file(
+                    id = id,
+                    path = "Photos/image-$id.jpg",
+                    lastModified = (30_000L - id).toString(),
+                )
+            }
+            val initialRaw = (1L..PHOTO_TIMELINE_PARTITION_PAGE_SIZE.toLong()).map { id ->
+                file(
+                    id = 10_000L + id,
+                    path = "Photos/raw-$id.raf",
+                    lastModified = (20_000L - id).toString(),
+                ).copy(mimeType = "application/octet-stream")
+            }
+            val ordinaryOlder = file(
+                id = 20_001L,
+                path = "Photos/ordinary-older.jpg",
+                lastModified = "10000",
+            )
+            var cursorPage = false
+
+            suspend fun load(cursor: PhotoTimelineCursor?): MediaTimelineDavPage =
+                collectMediaTimelineDavPage(
+                    userId = "account",
+                    cursor = cursor,
+                    execute = { body ->
+                        when {
+                            "<d:literal>image/%</d:literal>" in body ->
+                                MediaSearchDavTransportResponse(
+                                    207,
+                                    (if (cursorPage) "image-older" else "images").encodeToByteArray(),
+                                )
+                            "<d:literal>video/%</d:literal>" in body ->
+                                MediaSearchDavTransportResponse(207, "video".encodeToByteArray())
+                            cursorPage ->
+                                MediaSearchDavTransportResponse(500, "raw-error".encodeToByteArray())
+                            else ->
+                                MediaSearchDavTransportResponse(207, "raw".encodeToByteArray())
+                        }
+                    },
+                    parse = { body ->
+                        when (body.decodeToString()) {
+                            "images" -> initialImages
+                            "image-older" -> listOf(ordinaryOlder)
+                            "video" -> emptyList()
+                            "raw" -> initialRaw
+                            else -> error("The failed optional RAW response must not be parsed.")
+                        }
+                    },
+                    shouldSearchRaw = { true },
+                )
+
+            val first = load(null)
+            cursorPage = true
+            val second = load(requireNotNull(first.nextCursor))
+
+            assertEquals(listOf(ordinaryOlder), second.files)
+            assertFalse(second.optionalRawRemovalAuthoritative)
+        }
+
+    @Test
+    fun davTimelineTreatsInitialMimeServerErrorAsFatal() =
+        kotlinx.coroutines.runBlocking {
+            val failure = assertFailsWith<IllegalStateException> {
+                collectMediaTimelineDavPage(
+                    userId = "account",
+                    cursor = null,
+                    execute = {
+                        MediaSearchDavTransportResponse(500, "mime-error".encodeToByteArray())
+                    },
+                    parse = { emptyList() },
+                    shouldSearchRaw = { true },
+                )
+            }
+
+            assertEquals("WebDAV media search failed (HTTP 500).", failure.message)
+        }
+
+    @Test
+    fun davTimelineTreatsInitialMimeParseFailureAsFatal() =
+        kotlinx.coroutines.runBlocking {
+            val failure = assertFailsWith<IllegalStateException> {
+                collectMediaTimelineDavPage(
+                    userId = "account",
+                    cursor = null,
+                    execute = {
+                        MediaSearchDavTransportResponse(207, "malformed-mime".encodeToByteArray())
+                    },
+                    parse = { error("Synthetic malformed MIME response.") },
+                    shouldSearchRaw = { true },
+                )
+            }
+
+            assertEquals("Synthetic malformed MIME response.", failure.message)
+        }
+
+    @Test
     fun davTimelineReportsAuthoritativeOptionalRawCoverageOnlyWhenEveryPatternWasQueried() =
         kotlinx.coroutines.runBlocking {
             suspend fun load(searchRaw: Boolean): MediaTimelineDavPage =
@@ -1496,4 +1889,7 @@ class PhotoTimelinePagingTest {
     )
 
     private fun timestamp(value: String): Long = requireNotNull(parseDavMediaSearchTimestamp(value))
+
+    private fun String.countDavOrderClauses(): Int =
+        Regex("<d:order>").findAll(this).count()
 }

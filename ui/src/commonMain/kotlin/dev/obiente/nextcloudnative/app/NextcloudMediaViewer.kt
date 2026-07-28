@@ -41,6 +41,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -150,7 +151,10 @@ fun NextcloudMediaViewer(
     var tagReloadKey by remember(selected.path) { mutableIntStateOf(0) }
     var externalOpening by remember(selected.path) { mutableStateOf(false) }
     var externalError by remember(selected.path) { mutableStateOf<String?>(null) }
-    var nativeVideoError by remember(selected.path) { mutableStateOf<String?>(null) }
+    var nativeVideoFailure by remember(selected.path) {
+        mutableStateOf<NativeVideoPlaybackFailure?>(null)
+    }
+    var compatibilityPlaybackRequested by remember(selected.path) { mutableStateOf(false) }
     var livePhotoSource by remember(
         session.serverUrl,
         session.loginName,
@@ -260,34 +264,44 @@ fun NextcloudMediaViewer(
                         services.loadPreviewCached(session, candidate, width = 1_600, height = 1_600)
                     },
                     loadMemoriesRawRender = {
-                        val fileId = requireNotNull(candidate.fileId) {
-                            "The RAW file has no stable server file ID."
-                        }
-                        val response = services.executeNextcloudApi(
-                            session,
-                            memoriesPhotoDecodableApiRequest(
-                                fileId = fileId,
-                                etag = candidate.etag,
-                                maximumResponseBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES.toLong(),
-                            ),
+                        services.loadMemoriesDecodableImageCached(
+                            session = session,
+                            file = candidate,
                         )
-                        check(response.status in 200..299) {
-                            "The Memories RAW render failed (HTTP ${response.status})."
-                        }
-                        response.body
+                    },
+                    loadNativeRender = {
+                        services.loadNativeMediaPreview(
+                            session = session,
+                            file = candidate,
+                            maximumDimension = MAXIMUM_PREVIEW_IMAGE_DIMENSION,
+                        )
                     },
                     loadFileRange = { offset, length, expectedEtag ->
-                        check(userId.isNotBlank()) {
-                            "The authenticated Files user ID is unavailable."
+                        when {
+                            candidate.canUseEmbeddedRafPreview() -> {
+                                check(userId.isNotBlank()) {
+                                    "The authenticated Files user ID is unavailable."
+                                }
+                                services.downloadFileRange(
+                                    session = session,
+                                    userId = userId,
+                                    path = candidate.path,
+                                    offset = offset,
+                                    length = length,
+                                    expectedEtag = expectedEtag,
+                                )
+                            }
+                            candidate.canUseEmbeddedRafPreviewFromMemories() ->
+                                services.downloadMemoriesFileRange(
+                                    session = session,
+                                    fileId = requireNotNull(candidate.fileId),
+                                    offset = offset,
+                                    length = length,
+                                    expectedEtag = expectedEtag,
+                                    expectedSourceSize = requireNotNull(candidate.size),
+                                )
+                            else -> error("This media item has no bounded original stream.")
                         }
-                        services.downloadFileRange(
-                            session = session,
-                            userId = userId,
-                            path = candidate.path,
-                            offset = offset,
-                            length = length,
-                            expectedEtag = expectedEtag,
-                        )
                     },
                     decode = { payload ->
                         decodePlatformImageSampled(
@@ -313,10 +327,12 @@ fun NextcloudMediaViewer(
 
     LaunchedEffect(
         sourceLoadIdentity,
-        zoom >= FULL_QUALITY_MEDIA_ZOOM_THRESHOLD,
+        previewState is MediaPreviewState.Ready,
         sourcePlan.fullQualityCandidates,
     ) {
-        val qualityCandidates = sourcePlan.fullQualityCandidatesAtZoom(zoom)
+        val qualityCandidates = sourcePlan.fullQualityCandidatesAfterPreview(
+            previewReady = previewState is MediaPreviewState.Ready,
+        )
         if (qualityCandidates.isEmpty() || fullQualityState !is FullQualityState.Idle) return@LaunchedEffect
         fullQualityState = FullQualityState.Loading
         withFullQualityCancellationRecovery(
@@ -326,31 +342,44 @@ fun NextcloudMediaViewer(
                 candidates = qualityCandidates,
                 maximumPayloadBytes = MAX_PHOTO_EDIT_SOURCE_BYTES.toInt(),
                 load = { candidate ->
-                    loadFullResolutionPhotoPayload(
-                        original = candidate,
-                        loadMemories = { fileId, etag ->
-                            val response = services.executeNextcloudApi(
-                                session,
-                                memoriesPhotoDecodableApiRequest(fileId, etag),
-                            )
-                            check(response.status in 200..299) {
-                                "High-detail Memories render failed (HTTP ${response.status})."
-                            }
-                            response.body
-                        },
-                        loadFilesDav = if (candidate.originalAccessAllowed && userId.isNotBlank()) {
-                            { path ->
-                                services.downloadFile(
-                                    session = session,
-                                    userId = userId,
-                                    path = path,
-                                    maxBytes = MAX_PHOTO_EDIT_SOURCE_BYTES,
-                                ).bytes
-                            }
-                        } else {
-                            null
-                        },
-                    )
+                    try {
+                        loadFullResolutionPhotoPayload(
+                            original = candidate,
+                            loadMemories = { fileId, etag ->
+                                val response = services.executeNextcloudApi(
+                                    session,
+                                    memoriesPhotoDecodableApiRequest(fileId, etag),
+                                )
+                                check(response.status in 200..299) {
+                                    "High-detail Memories render failed (HTTP ${response.status})."
+                                }
+                                response.body
+                            },
+                            loadFilesDav = if (candidate.originalAccessAllowed && userId.isNotBlank()) {
+                                { path ->
+                                    services.downloadFile(
+                                        session = session,
+                                        userId = userId,
+                                        path = path,
+                                        maxBytes = MAX_PHOTO_EDIT_SOURCE_BYTES,
+                                    ).bytes
+                                }
+                            } else {
+                                null
+                            },
+                        )
+                    } catch (failure: Exception) {
+                        if (failure is CancellationException) throw failure
+                        val nativeBytes = services.loadNativeMediaPreview(
+                            session = session,
+                            file = candidate,
+                            maximumDimension = MAXIMUM_DISPLAY_IMAGE_DIMENSION,
+                        ) ?: throw failure
+                        FullResolutionPhotoPayload(
+                            bytes = nativeBytes,
+                            source = FullResolutionPhotoSource.NativeGenerated,
+                        )
+                    }
                 },
                 decode = { payload ->
                     decodePlatformImageSampled(
@@ -450,6 +479,18 @@ fun NextcloudMediaViewer(
         val mediaCanvasModifier = when (viewerLayout.contentLayout) {
             MediaViewerContentLayout.FullCanvasBehindChrome -> Modifier.fillMaxSize()
         }
+        val playbackRangeSource = remember(selected, session, userId, services) {
+            selected.nativeVideoRangeSourceOrNull(
+                session = session,
+                userId = userId,
+                services = services,
+            )
+        }
+        DisposableEffect(playbackRangeSource) {
+            onDispose {
+                playbackRangeSource?.close()
+            }
+        }
         if (editing && displayImage != null) {
             NextcloudPhotoEditor(
                 image = displayImage,
@@ -460,18 +501,20 @@ fun NextcloudMediaViewer(
                 onCancel = { editing = false },
                 modifier = Modifier.fillMaxSize(),
             )
-        } else if (playbackSource != null) {
+        } else if (playbackSource != null && nativeVideoFailure == null) {
             PlatformNativeVideoPlayer(
                 session = session,
                 userId = userId,
                 source = playbackSource,
+                rangeSource = playbackRangeSource,
+                compatibilityPlaybackRequested = compatibilityPlaybackRequested,
                 onPlaybackEnded = {
                     if (playbackSource.restoresStillAfterPlaybackEnds()) {
                         motionPlaying = false
                     }
                 },
-                onError = { message ->
-                    nativeVideoError = message
+                onFailure = { failure ->
+                    nativeVideoFailure = failure
                     if (playbackSource is NativeVideoPlaybackSource.MemoriesLivePhoto) {
                         motionPlaying = false
                     }
@@ -544,7 +587,7 @@ fun NextcloudMediaViewer(
             ) {
                 Button(
                     onClick = {
-                        nativeVideoError = null
+                        nativeVideoFailure = null
                         motionPlaying = true
                     },
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp),
@@ -582,17 +625,42 @@ fun NextcloudMediaViewer(
                     )
                 }
             }
-            nativeVideoError?.let { message ->
+            nativeVideoFailure?.let { failure ->
                 Column(
-                    modifier = Modifier.align(Alignment.Center).padding(horizontal = 32.dp),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = 32.dp)
+                        .background(
+                            color = ViewerBackground.copy(alpha = 0.94f),
+                            shape = MaterialTheme.shapes.large,
+                        )
+                        .padding(horizontal = 24.dp, vertical = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        text = message,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium,
+                        text = failure.userTitle(),
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
                     )
+                    Text(
+                        text = failure.userDetail(),
+                        color = Color.White.copy(alpha = 0.78f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    if (
+                        playbackRangeSource != null &&
+                        failure.canUseSoftwareFallback()
+                    ) {
+                        Button(
+                            onClick = {
+                                compatibilityPlaybackRequested = true
+                                nativeVideoFailure = null
+                            },
+                        ) {
+                            Text("Try compatibility playback")
+                        }
+                    }
                     TextButton(
                         onClick = ::openInMediaApp,
                         enabled = !externalOpening && selected.hasAuthoritativeMediaDavAccess(userId),
@@ -607,8 +675,7 @@ fun NextcloudMediaViewer(
                     append("${selectedIndex + 1} of ${items.size}")
                     append(
                         when (fullQualityState) {
-                            FullQualityState.Idle ->
-                                if (zoom < FULL_QUALITY_MEDIA_ZOOM_THRESHOLD) " - Preview" else ""
+                            FullQualityState.Idle -> " - Preview"
                             FullQualityState.Loading -> " - Loading high-detail render..."
                             is FullQualityState.Ready -> " - High-detail render"
                             FullQualityState.Error -> " - Preview (high-detail render unavailable)"
@@ -1163,6 +1230,7 @@ internal data class MediaViewerSourceGenerationIdentity(
     val size: Long?,
     val lastModified: String?,
     val originalAccessAllowed: Boolean,
+    val memoriesRenderAllowed: Boolean,
     val davPathAuthoritative: Boolean,
 )
 
@@ -1174,6 +1242,7 @@ internal fun NextcloudFile.mediaViewerSourceGenerationIdentity(): MediaViewerSou
         size = size,
         lastModified = lastModified,
         originalAccessAllowed = originalAccessAllowed,
+        memoriesRenderAllowed = memoriesRenderAllowed,
         davPathAuthoritative = davPathAuthoritative,
     )
 
@@ -1274,6 +1343,30 @@ internal fun NextcloudFile.nativeVideoPlaybackSource(
     }
     return takeIf { canUsePlatformNativeVideoPlayback(userId, nativePlaybackAvailable) }
         ?.let { NativeVideoPlaybackSource.DavFile(it) }
+}
+
+private fun NextcloudFile.nativeVideoRangeSourceOrNull(
+    session: NextcloudSession,
+    userId: String,
+    services: NextcloudPlatformServices,
+): NativeVideoRangeSource? {
+    if (!canUsePlatformNativeVideoPlayback(userId, nativePlaybackAvailable = true)) return null
+    val sourceSize = size?.takeIf { it > 0L } ?: return null
+    val expectedEtag = etag
+        ?.takeIf { runCatching { requireSafeFileRangeEtag(it) }.isSuccess }
+        ?: return null
+    val rangeSession = services.openFileRangeSession(
+        session = session,
+        userId = userId,
+        path = path,
+        size = sourceSize,
+        expectedEtag = expectedEtag,
+    )
+    return NativeVideoRangeSource(
+        size = rangeSession.size,
+        readBlock = rangeSession::read,
+        closeBlock = rangeSession::close,
+    )
 }
 
 private const val MAXIMUM_PREVIEW_IMAGE_DIMENSION = 1_600

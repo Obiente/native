@@ -306,16 +306,35 @@ private class MediaCollectionsUiState {
 }
 
 private class PhotoFolderInventoryUiState(
-    accountKey: String,
+    private val accountKey: String,
 ) {
-    val pager = PhotoFolderInventoryPager(
-        owner = PhotoFolderInventoryPagingOwner(
-            accountKey = accountKey,
-            generation = 0L,
-        ),
-    )
+    private var generation = 0L
+    private var selectionKey = ""
+    var pager by mutableStateOf(newPager())
+        private set
     var pagingState by mutableStateOf(pager.state)
     var backupStatuses by mutableStateOf<Map<String, MediaBackupStatus>>(emptyMap())
+
+    fun selectFolder(key: String): PhotoFolderInventoryPager {
+        require(key.isNotBlank() && key.none(Char::isISOControl)) {
+            "The photo folder inventory selection is invalid."
+        }
+        if (selectionKey != key) {
+            selectionKey = key
+            generation += 1
+            pager = newPager()
+            pagingState = pager.state
+            backupStatuses = emptyMap()
+        }
+        return pager
+    }
+
+    private fun newPager(): PhotoFolderInventoryPager = PhotoFolderInventoryPager(
+        owner = PhotoFolderInventoryPagingOwner(
+            accountKey = accountKey,
+            generation = generation,
+        ),
+    )
 }
 
 private class PhotoFolderViewportUiState(
@@ -4552,16 +4571,31 @@ private fun FileGridTile(
     onAction: (FileMenuAction) -> Unit,
 ) {
     var menuExpanded by remember(file.path) { mutableStateOf(false) }
-    var preview by remember(file.fileId, file.etag) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(file.fileId, file.etag, file.hasPreview) {
+    var preview by remember(
+        file.fileId,
+        file.etag,
+        file.hasPreview,
+        file.memoriesRenderAllowed,
+    ) {
+        mutableStateOf<ImageBitmap?>(null)
+    }
+    LaunchedEffect(
+        session,
+        file.fileId,
+        file.etag,
+        file.hasPreview,
+        file.memoriesRenderAllowed,
+    ) {
         file.fileId ?: return@LaunchedEffect
-        if (!file.hasPreview || file.isDirectory) return@LaunchedEffect
-        preview = runCatching {
-            decodePlatformImage(
-                services.loadPreviewCached(session, file, width = 320, height = 320),
-                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
-            )
-        }.getOrNull()
+        if (file.isDirectory || !file.isPhotoMedia()) return@LaunchedEffect
+        preview = services.loadMediaThumbnailDecoded(
+            session = session,
+            file = file,
+            width = 320,
+            height = 320,
+        ) { payload ->
+            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
+        }
     }
     Card(
         modifier = Modifier.fillMaxWidth().combinedClickable(
@@ -4732,6 +4766,45 @@ internal fun PhotoTimelineFailureNotice(
 }
 
 @Composable
+private fun PhotoTimelineViewModeControl(
+    viewMode: PhotoTimelineViewMode,
+    onViewModeChanged: (PhotoTimelineViewMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(NextcloudRadii.Medium),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Row {
+            PhotoTimelineViewMode.entries.forEach { mode ->
+                Surface(
+                    shape = RoundedCornerShape(NextcloudRadii.Medium),
+                    color = if (viewMode == mode) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        Color.Transparent
+                    },
+                ) {
+                    IconButton(onClick = { onViewModeChanged(mode) }) {
+                        Icon(
+                            imageVector = when (mode) {
+                                PhotoTimelineViewMode.Grid -> NextcloudIcons.Apps
+                                PhotoTimelineViewMode.List -> NextcloudIcons.ListView
+                            },
+                            contentDescription = when (mode) {
+                                PhotoTimelineViewMode.Grid -> "Photo grid"
+                                PhotoTimelineViewMode.List -> "Full-width photo list"
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun PhotoFolderStaleNotice(
     message: String,
     onRetry: () -> Unit,
@@ -4850,6 +4923,9 @@ private fun MediaScreen(
     var peopleSearch by rememberSaveable(userId) { mutableStateOf("") }
     var mediaLoadAttempt by remember(session, userId) { mutableStateOf(0) }
     var peopleLoadAttempt by remember(userId) { mutableStateOf(0) }
+    val folderInventoryService = remember(services) {
+        MemoriesPreferredFolderInventoryReadService(services)
+    }
     val collectionService = remember(services) { NativeMediaCollectionReadService(services) }
     val collectionMutationService = remember(services) { NativeMediaCollectionMutationService(services) }
     PlatformBackHandler(
@@ -4898,6 +4974,7 @@ private fun MediaScreen(
                 userId = userId,
                 cursor = token.cursor,
                 rawPreviouslyObserved = timeline.rawEverObserved,
+                queryOwner = PhotoMediaQueryOwner.Timeline,
             )
             val files = page.entries.map(PhotoTimelineEntry::file)
             timeline = timeline.accept(token, page)
@@ -4938,28 +5015,49 @@ private fun MediaScreen(
         userId,
         mediaLoadAttempt,
         destination,
+        photoFolderState.selectedFolderPath,
+        photoFolderState.scope,
     ) {
-        if (userId == null || destination != PhotoDestination.Folders) {
+        if (
+            userId == null ||
+            PhotoMediaQueryOwner.FolderInventory !in photoMediaQueryOwners(destination)
+        ) {
             return@LaunchedEffect
         }
-        folderInventoryState.pagingState = folderInventoryState.pager.load(
+        val activePager = folderInventoryState.selectFolder(
+            "${photoFolderState.selectedFolderPath}|${photoFolderState.scope.name}",
+        )
+        folderInventoryState.pagingState = activePager.load(
             onPublish = { published ->
-                folderInventoryState.pagingState = published
+                if (folderInventoryState.pager === activePager) {
+                    folderInventoryState.pagingState = published
+                }
             },
             loadPage = { cursor, rawPreviouslyObserved ->
-                val page = services.listMediaTimelinePage(
+                folderInventoryService.loadPage(
                     session = session,
-                    userId = userId,
-                    cursor = cursor?.value?.let(::PhotoTimelineCursor),
-                    rawPreviouslyObserved = rawPreviouslyObserved,
-                )
-                PhotoFolderInventoryPage(
-                    records = page.entries.map(PhotoTimelineEntry::file),
-                    nextCursor = page.nextCursor?.value?.let(::PhotoFolderInventoryCursor),
-                    rawObserved = page.rawObserved,
+                    accountScope = folderInventoryState.pager.owner.accountKey,
+                    selectedFolderPath = photoFolderState.selectedFolderPath,
+                    scope = photoFolderState.scope,
+                    cursor = cursor,
+                    fallback = { fallbackCursor ->
+                        val page = services.listMediaTimelinePage(
+                            session = session,
+                            userId = userId,
+                            cursor = fallbackCursor?.value?.let(::PhotoTimelineCursor),
+                            rawPreviouslyObserved = rawPreviouslyObserved,
+                            queryOwner = PhotoMediaQueryOwner.FolderInventory,
+                        )
+                        PhotoFolderInventoryPage(
+                            records = page.entries.map(PhotoTimelineEntry::file),
+                            nextCursor = page.nextCursor?.value?.let(::PhotoFolderInventoryCursor),
+                            rawObserved = page.rawObserved,
+                        )
+                    },
                 )
             },
         )
+        if (folderInventoryState.pager !== activePager) return@LaunchedEffect
         val retainedPaths = folderInventoryState.pager
             .selectionSnapshot(photoFolderState)
             .selectedMediaFiles
@@ -4967,8 +5065,13 @@ private fun MediaScreen(
         folderInventoryState.backupStatuses =
             folderInventoryState.backupStatuses.filterKeys(retainedPaths::contains)
     }
-    LaunchedEffect(userId, mediaLoadAttempt) {
-        if (userId == null) return@LaunchedEffect
+    LaunchedEffect(userId, mediaLoadAttempt, destination) {
+        if (
+            userId == null ||
+            PhotoMediaQueryOwner.Timeline !in photoMediaQueryOwners(destination)
+        ) {
+            return@LaunchedEffect
+        }
         val inheritedLoadKind = timeline.loading?.kind
         loadTimelinePage(
             kind = inheritedLoadKind ?: when {
@@ -5175,9 +5278,15 @@ private fun MediaScreen(
     LaunchedEffect(destination, loadAttempt) {
         if (destination != PhotoDestination.Albums || catalog != null) return@LaunchedEffect
         error = null
-        runCatching { collectionService.loadCatalog(session) }
-            .onSuccess { catalog = it }
-            .onFailure { error = it.message ?: "Could not load albums and tags." }
+        try {
+            catalog = loadActiveNativeMediaCollectionCatalog {
+                collectionService.loadCatalog(session)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            error = failure.message ?: "Could not load albums and tags."
+        }
     }
 
     suspend fun loadCollectionPage(collection: NativeMediaCollection, reset: Boolean) {
@@ -5647,10 +5756,6 @@ private fun MediaScreen(
                     timeline.entries.isEmpty() -> LoadingMessage("Building your photo timeline...")
                 timeline.entries.isEmpty() -> EmptyMessage("No previewable media was found.")
                 else -> {
-                    val activeSectionIndex = activePhotoTimelineSectionIndex(
-                        timelineDateIndex,
-                        timelineGridState.firstVisibleItemIndex,
-                    )
                     Column(modifier = Modifier.fillMaxSize()) {
                         if (
                             timeline.error != null &&
@@ -5680,14 +5785,35 @@ private fun MediaScreen(
                                 },
                             )
                         }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(
+                                    horizontal = NextcloudSpacing.Medium,
+                                    vertical = NextcloudSpacing.XSmall,
+                                ),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            PhotoTimelineViewModeControl(
+                                viewMode = photoBrowserState.timelineViewMode,
+                                onViewModeChanged = { mode ->
+                                    onPhotoBrowserStateChanged(
+                                        photoBrowserState.copy(timelineViewMode = mode),
+                                    )
+                                },
+                            )
+                        }
                         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                             LazyVerticalGrid(
-                                columns = GridCells.Adaptive(120.dp),
+                                columns = when (photoBrowserState.timelineViewMode) {
+                                    PhotoTimelineViewMode.Grid -> GridCells.Adaptive(120.dp)
+                                    PhotoTimelineViewMode.List -> GridCells.Fixed(1)
+                                },
                                 state = timelineGridState,
                                 contentPadding = PaddingValues(
                                     start = 4.dp,
                                     top = 4.dp,
-                                    end = 72.dp,
+                                    end = PhotoTimelineScrubberTouchLaneWidth,
                                     bottom = NextcloudSpacing.XLarge,
                                 ),
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -5727,6 +5853,10 @@ private fun MediaScreen(
                                             backupStatus = timelineBackupStatuses[
                                                 stack.cover.path.trim('/')
                                             ],
+                                            layout = when (photoBrowserState.timelineViewMode) {
+                                                PhotoTimelineViewMode.Grid -> MediaTileLayout.SquareCrop
+                                                PhotoTimelineViewMode.List -> MediaTileLayout.FullWidthFit
+                                            },
                                             onClick = {
                                                 onOpenMedia(stack.cover, timelineViewerSequence)
                                             },
@@ -5797,13 +5927,13 @@ private fun MediaScreen(
                             }
                             PhotoTimelineDateScrubber(
                                 dateIndex = timelineDateIndex,
-                                activeSectionIndex = activeSectionIndex,
+                                activeGridItemIndex = timelineGridState.firstVisibleItemIndex,
                                 onJumpToGridItem = { index ->
                                     timelineGridState.scrollToItem(index)
                                 },
                                 modifier = Modifier
                                     .align(Alignment.CenterEnd)
-                                    .padding(end = NextcloudSpacing.Small),
+                                    .fillMaxHeight(),
                             )
                             if (timeline.hasDiscardedNewerEntries) {
                                 OutlinedButton(
@@ -5817,7 +5947,10 @@ private fun MediaScreen(
                                         .align(Alignment.TopEnd)
                                         .padding(
                                             top = NextcloudSpacing.Small,
-                                            end = NextcloudSpacing.Small,
+                                            end = (
+                                                PhotoTimelineScrubberTouchLaneWidth +
+                                                    NextcloudSpacing.Small
+                                                ),
                                         ),
                                 ) {
                                     Text("Back to newest")
@@ -7114,26 +7247,44 @@ internal fun MediaTile(
     faceRectangle: NativeFaceRectangle? = null,
     sourceWidth: Int? = null,
     sourceHeight: Int? = null,
+    layout: MediaTileLayout = MediaTileLayout.SquareCrop,
     enabled: Boolean = true,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
-    var image by remember(file.fileId) { mutableStateOf<ImageBitmap?>(null) }
+    var image by remember(
+        file.fileId,
+        file.etag,
+        file.hasPreview,
+        file.memoriesRenderAllowed,
+    ) {
+        mutableStateOf<ImageBitmap?>(null)
+    }
     val faceOutlineGeometry = remember(faceRectangle, sourceWidth, sourceHeight) {
         nativeFaceOutlineGeometryOrNull(faceRectangle, sourceWidth, sourceHeight)
     }
-    LaunchedEffect(file.fileId) {
+    LaunchedEffect(
+        session,
+        file.fileId,
+        file.etag,
+        file.hasPreview,
+        file.memoriesRenderAllowed,
+    ) {
         file.fileId ?: return@LaunchedEffect
-        if (!file.hasPreview) return@LaunchedEffect
-        image = runCatching {
-            decodePlatformImage(
-                services.loadPreviewCached(session, file),
-                EncodedImageOrientationPolicy.PixelsAlreadyUpright,
-            )
-        }.getOrNull()
+        image = services.loadMediaThumbnailDecoded(session, file) { payload ->
+            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
+        }
+    }
+    val tileAspectRatio = when (layout) {
+        MediaTileLayout.SquareCrop -> 1f
+        MediaTileLayout.FullWidthFit -> image
+            ?.takeIf { bitmap -> bitmap.width > 0 && bitmap.height > 0 }
+            ?.let { bitmap -> bitmap.width.toFloat() / bitmap.height.toFloat() }
+            ?.coerceIn(0.5f, 2.4f)
+            ?: (4f / 3f)
     }
     Surface(
-        modifier = Modifier.fillMaxWidth().aspectRatio(1f).then(
+        modifier = Modifier.fillMaxWidth().aspectRatio(tileAspectRatio).then(
             if (onLongClick == null) {
                 Modifier.clickable(enabled = enabled, onClick = onClick)
             } else {
@@ -7154,7 +7305,13 @@ internal fun MediaTile(
                     modifier = Modifier.fillMaxSize(),
                     // A face outline must map to the complete source image. Switching to Fit while
                     // it is visible avoids drawing a plausible-looking box over a cropped preview.
-                    contentScale = if (faceOutlineGeometry == null) ContentScale.Crop else ContentScale.Fit,
+                    contentScale = if (
+                        layout == MediaTileLayout.FullWidthFit || faceOutlineGeometry != null
+                    ) {
+                        ContentScale.Fit
+                    } else {
+                        ContentScale.Crop
+                    },
                 )
                 FaceRectangleOverlay(
                     geometry = faceOutlineGeometry,
@@ -7188,6 +7345,11 @@ internal fun MediaTile(
             }
         }
     }
+}
+
+internal enum class MediaTileLayout {
+    SquareCrop,
+    FullWidthFit,
 }
 
 @Composable

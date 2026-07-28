@@ -53,10 +53,8 @@ data class MediaSourcePlan(
     val previewCandidates: List<MediaSourceChoice>,
     val fullQualityCandidates: List<MediaSourceChoice>,
 ) {
-    fun fullQualityCandidatesAtZoom(zoom: Float): List<MediaSourceChoice> {
-        require(zoom.isFinite() && zoom >= 1f) { "The media zoom is invalid." }
-        return if (zoom >= FULL_QUALITY_MEDIA_ZOOM_THRESHOLD) fullQualityCandidates else emptyList()
-    }
+    fun fullQualityCandidatesAfterPreview(previewReady: Boolean): List<MediaSourceChoice> =
+        if (previewReady) fullQualityCandidates else emptyList()
 }
 
 data class LoadedMediaSource<T>(
@@ -76,13 +74,13 @@ fun fullQualityMediaPayloadKind(
     displayed: MediaSourceChoice,
     payloadSource: FullResolutionPhotoSource,
 ): MediaDisplayPayloadKind =
-    if (
+    when {
+        payloadSource == FullResolutionPhotoSource.NativeGenerated ->
+            MediaDisplayPayloadKind.NativeGeneratedPreview
         payloadSource == FullResolutionPhotoSource.MemoriesTranscoded &&
-        displayed.format == MediaAssetFormat.Raw
-    ) {
-        MediaDisplayPayloadKind.MemoriesRawRender
-    } else {
-        MediaDisplayPayloadKind.ServerPreview
+            displayed.format == MediaAssetFormat.Raw ->
+            MediaDisplayPayloadKind.MemoriesRawRender
+        else -> MediaDisplayPayloadKind.ServerPreview
     }
 
 /**
@@ -98,6 +96,8 @@ fun describeMediaDisplaySource(
     val source = when {
         payloadKind == MediaDisplayPayloadKind.MemoriesRawRender ->
             if (highDetail) "Generated high-detail RAW render" else "Generated RAW render"
+        payloadKind == MediaDisplayPayloadKind.NativeGeneratedPreview ->
+            if (highDetail) "Native high-detail image render" else "Native image render"
         payloadKind == MediaDisplayPayloadKind.EmbeddedCameraPreview -> "RAW embedded camera preview"
         else -> when (displayed.format) {
             MediaAssetFormat.Raw ->
@@ -195,10 +195,11 @@ fun planMediaSources(files: List<NextcloudFile>, selected: NextcloudFile): Media
         }
     val previewCandidates = ordered.filter {
         (it.file.fileId != null && it.file.hasPreview) ||
-            (it.file.isRawPhoto() && it.file.originalAccessAllowed)
+            (it.file.isRawPhoto() && it.file.canUseMemoriesDecodableRender()) ||
+            it.file.canUseEmbeddedRafPreview()
     }
     val fullQualityCandidates = ordered.filter {
-        it.file.fileId != null && it.file.originalAccessAllowed && it.format != MediaAssetFormat.Video
+        it.file.canUseMemoriesDecodableRender() && it.format != MediaAssetFormat.Video
     }
     return MediaSourcePlan(
         selected = ordered.first(),
@@ -289,10 +290,15 @@ fun NextcloudFile.canOpenInMediaViewer(): Boolean =
     !isDirectory && (
         (
             fileId != null &&
-                (hasPreview || (isRawPhoto() && originalAccessAllowed))
+                (hasPreview || (isRawPhoto() && canUseMemoriesDecodableRender()))
         ) ||
             canUseEmbeddedRafPreview()
     )
+
+internal fun NextcloudFile.canUseMemoriesDecodableRender(): Boolean =
+    !isDirectory &&
+        fileId != null &&
+        (originalAccessAllowed || memoriesRenderAllowed)
 
 internal fun NextcloudFile.canUseEmbeddedRafPreview(): Boolean =
     !isDirectory &&
@@ -301,6 +307,14 @@ internal fun NextcloudFile.canUseEmbeddedRafPreview(): Boolean =
         originalAccessAllowed &&
         davPathAuthoritative &&
         runCatching { requireSafeFilePath(path, allowRoot = false) }.isSuccess &&
+        etag?.let { runCatching { requireSafeFileRangeEtag(it) }.isSuccess } == true
+
+internal fun NextcloudFile.canUseEmbeddedRafPreviewFromMemories(): Boolean =
+    !isDirectory &&
+        isRawPhoto() &&
+        name.substringAfterLast('.', missingDelimiterValue = "").equals("raf", ignoreCase = true) &&
+        memoriesRenderAllowed &&
+        fileId?.let { it > 0L } == true &&
         etag?.let { runCatching { requireSafeFileRangeEtag(it) }.isSuccess } == true
 
 fun NextcloudFile.isPhotoMedia(): Boolean = mediaAssetFormat() in setOf(
@@ -414,7 +428,6 @@ private fun ByteArray.startsWithAscii(expected: String): Boolean =
     size >= expected.length && copyOfRange(0, expected.length).decodeToString() == expected
 
 const val MAX_MEDIA_PREVIEW_BYTES = 16 * 1024 * 1024
-const val FULL_QUALITY_MEDIA_ZOOM_THRESHOLD = 1.35f
 private const val MIN_MEDIA_IMAGE_PAYLOAD_BYTES = 8
 
 private val rawPhotoExtensions = setOf(

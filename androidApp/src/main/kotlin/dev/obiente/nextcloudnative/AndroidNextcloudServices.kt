@@ -34,6 +34,7 @@ import dev.obiente.nextcloudnative.app.NextcloudAppEntry
 import dev.obiente.nextcloudnative.app.NextcloudActivity
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileContent
+import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import dev.obiente.nextcloudnative.app.NextcloudFileListing
 import dev.obiente.nextcloudnative.app.NextcloudFileListingHttpException
 import dev.obiente.nextcloudnative.app.NextcloudFileListingSource
@@ -52,10 +53,12 @@ import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
 import dev.obiente.nextcloudnative.app.MediaSyncFolderDiscovery
 import dev.obiente.nextcloudnative.app.MAX_MEDIA_BACKUP_STATUS_PATHS
 import dev.obiente.nextcloudnative.app.MediaBackupStatus
+import dev.obiente.nextcloudnative.app.MediaInformation
 import dev.obiente.nextcloudnative.app.MediaBackupLedgerCursor
 import dev.obiente.nextcloudnative.app.MediaTransferCenterState
 import dev.obiente.nextcloudnative.app.MediaTransferSection
 import dev.obiente.nextcloudnative.app.mediaTransferCenterState
+import dev.obiente.nextcloudnative.app.basicMediaInformation
 import dev.obiente.nextcloudnative.app.transferState
 import dev.obiente.nextcloudnative.app.MediaSyncFolderPreview
 import dev.obiente.nextcloudnative.app.MediaSyncFolderSuggestion
@@ -122,11 +125,14 @@ import dev.obiente.nextcloudnative.app.collectMediaTimelineDavPage
 import dev.obiente.nextcloudnative.app.mediaSearchDavRequests
 import dev.obiente.nextcloudnative.app.MediaSearchDavTransportResponse
 import dev.obiente.nextcloudnative.app.MediaTimelineDavCarryoverStore
+import dev.obiente.nextcloudnative.app.MemoriesPreferredTimelineReadService
+import dev.obiente.nextcloudnative.app.PhotoMediaQueryOwner
 import dev.obiente.nextcloudnative.app.PhotoTimelineCursor
 import dev.obiente.nextcloudnative.app.PhotoTimelinePage
 import dev.obiente.nextcloudnative.app.RawMediaSearchCompatibilityPolicy
 import dev.obiente.nextcloudnative.app.isRawPhoto
 import dev.obiente.nextcloudnative.app.mergeMediaSearchResultPages
+import dev.obiente.nextcloudnative.app.photoMediaCarryoverScope
 import dev.obiente.nextcloudnative.app.toPhotoTimelineEntryOrNull
 import dev.obiente.nextcloudnative.app.normalizeSystemTagsDavResponse
 import dev.obiente.nextcloudnative.app.parseNextcloudFileSharingCapabilities
@@ -150,16 +156,26 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -213,8 +229,15 @@ internal class AndroidNextcloudServices(
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
     private val dynamicApiReadCache = DynamicApiResponseCache(File(appContext.cacheDir, "dynamic-api-v1"))
+    private val nativeMediaPreviewCache = AndroidNativeMediaPreviewCache(
+        File(appContext.cacheDir, "native-media-previews-v1"),
+    )
+    private val nativeMediaPreviewDecodeMutex = Mutex()
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
     private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
+    private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
+        executeNextcloudApi(session, request)
+    }
     private val fileSyncEngine = AndroidFileSyncEngine(appContext)
     private val mediaSyncFolderDetector = AndroidMediaSyncFolderDetector(appContext)
     private val externalFileHandoff = AndroidExternalFileHandoff(appContext)
@@ -296,6 +319,8 @@ internal class AndroidNextcloudServices(
     }
 
     override fun saveSession(session: NextcloudSession) {
+        val previousAccountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
+        val replacementAccountId = NextcloudDocumentIds.cacheAccountId(session)
         val json = JSONObject()
             .put("serverUrl", session.serverUrl)
             .put("loginName", session.loginName)
@@ -313,6 +338,9 @@ internal class AndroidNextcloudServices(
             },
             cancelAll = scheduler::cancelAll,
         )
+        if (previousAccountId != null && previousAccountId != replacementAccountId) {
+            nativeMediaPreviewCache.clearAccount(previousAccountId)
+        }
         notifyDocumentsRootsChanged()
     }
 
@@ -338,6 +366,7 @@ internal class AndroidNextcloudServices(
     }
 
     override fun clearSession() {
+        val accountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
         val scheduler = AndroidFileSyncScheduler(appContext)
         ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.clearSession(
             persist = {
@@ -348,6 +377,7 @@ internal class AndroidNextcloudServices(
             },
             cancelAll = scheduler::cancelAll,
         )
+        accountId?.let(nativeMediaPreviewCache::clearAccount)
         notifyDocumentsRootsChanged()
     }
 
@@ -671,34 +701,51 @@ internal class AndroidNextcloudServices(
         userId: String,
         cursor: PhotoTimelineCursor?,
         rawPreviouslyObserved: Boolean,
+        queryOwner: PhotoMediaQueryOwner,
     ): PhotoTimelinePage = withContext(Dispatchers.IO) {
-        val page = collectMediaTimelineDavPage(
-            userId = userId,
-            cursor = cursor,
-            execute = { body ->
-                val response = request(
-                    method = "SEARCH",
-                    url = session.serverUrl + "/remote.php/dav/",
-                    session = session,
-                    body = body,
-                    contentType = "application/xml; charset=utf-8",
-                    headers = mapOf("Accept" to "application/xml"),
-                )
-                MediaSearchDavTransportResponse(response.status, response.body)
-            },
-            parse = { body -> parseDavFiles(body, userId) },
-            shouldSearchRaw = { files ->
-                rawPreviouslyObserved || files.any(NextcloudFile::isRawPhoto)
-            },
-            carryoverStore = mediaTimelineCarryoverStore,
-            carryoverAccountScope = NextcloudDocumentIds.cacheAccountId(session),
-        )
-        PhotoTimelinePage(
-            entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),
-            nextCursor = page.nextCursor,
-            optionalRawRemovalAuthoritative = page.optionalRawRemovalAuthoritative,
-            rawObserved = page.rawObserved,
-        )
+        suspend fun loadDavPage(davCursor: PhotoTimelineCursor?): PhotoTimelinePage {
+            val page = collectMediaTimelineDavPage(
+                userId = userId,
+                cursor = davCursor,
+                execute = { body ->
+                    val response = request(
+                        method = "SEARCH",
+                        url = session.serverUrl + "/remote.php/dav/",
+                        session = session,
+                        body = body,
+                        contentType = "application/xml; charset=utf-8",
+                        headers = mapOf("Accept" to "application/xml"),
+                    )
+                    MediaSearchDavTransportResponse(response.status, response.body)
+                },
+                parse = { body -> parseDavFiles(body, userId) },
+                shouldSearchRaw = { files ->
+                    rawPreviouslyObserved || files.any(NextcloudFile::isRawPhoto)
+                },
+                carryoverStore = mediaTimelineCarryoverStore,
+                carryoverAccountScope = photoMediaCarryoverScope(
+                    accountScope = NextcloudDocumentIds.cacheAccountId(session),
+                    owner = queryOwner,
+                ),
+            )
+            return PhotoTimelinePage(
+                entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),
+                nextCursor = page.nextCursor,
+                optionalRawRemovalAuthoritative = page.optionalRawRemovalAuthoritative,
+                rawObserved = page.rawObserved,
+            )
+        }
+
+        if (queryOwner == PhotoMediaQueryOwner.Timeline) {
+            memoriesTimeline.loadPage(
+                session = session,
+                accountScope = NextcloudDocumentIds.cacheAccountId(session),
+                cursor = cursor,
+                fallback = ::loadDavPage,
+            )
+        } else {
+            loadDavPage(cursor)
+        }
     }
 
     override suspend fun loadMediaBackupStatuses(
@@ -846,6 +893,137 @@ internal class AndroidNextcloudServices(
             response.body
         }
 
+    override suspend fun loadNativeMediaPreview(
+        session: NextcloudSession,
+        file: NextcloudFile,
+        maximumDimension: Int,
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        if (!file.isNativeTiffPreviewCandidate()) return@withContext null
+        val safeDimension = maximumDimension.coerceIn(
+            MINIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION,
+            MAXIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION,
+        )
+        val fileId = file.fileId?.takeIf { it > 0L } ?: return@withContext null
+        val sourceSize = file.size?.takeIf { it > 0L } ?: return@withContext null
+        val etag = file.etag
+            ?.takeIf { runCatching { requireSafeFileRangeEtag(it) }.isSuccess }
+            ?: return@withContext null
+        val key = NativeMediaPreviewCacheKey(
+            accountId = NextcloudDocumentIds.cacheAccountId(session),
+            fileId = fileId,
+            etag = etag,
+            maximumDimension = safeDimension,
+            decoderVersion = NATIVE_TIFF_DECODER_VERSION,
+        )
+        nativeMediaPreviewCache.load(key)?.let { return@withContext it }
+        val accountGeneration = nativeMediaPreviewCache.accountGeneration(key.accountId)
+
+        nativeMediaPreviewDecodeMutex.withLock {
+            nativeMediaPreviewCache.load(key)?.let { return@withLock it }
+            val decoder = AndroidTiffPreviewDecoder(
+                sourceSize = sourceSize,
+                readRange = { offset, length ->
+                    downloadMemoriesFileRange(
+                        session = session,
+                        fileId = fileId,
+                        offset = offset,
+                        length = length,
+                        expectedEtag = etag,
+                        expectedSourceSize = sourceSize,
+                    )
+                },
+            )
+            val encoded = decoder.decodeFirstPage(maximumDimension = safeDimension)
+                ?.also { currentCoroutineContext().ensureActive() }
+                ?.encodeJpeg()
+                ?: return@withLock null
+            currentCoroutineContext().ensureActive()
+            if (
+                !nativeMediaPreviewCache.store(
+                    key = key,
+                    bytes = encoded,
+                    expectedAccountGeneration = accountGeneration,
+                )
+            ) {
+                return@withLock null
+            }
+            encoded
+        }
+    }
+
+    override suspend fun loadMediaInformation(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+    ): MediaInformation = withContext(Dispatchers.IO) {
+        val resolvedFile = file.fileId
+            ?.takeIf { file.size == null || file.etag.isNullOrBlank() || !file.davPathAuthoritative }
+            ?.let { fileId ->
+                runCatching {
+                    resolveFilesById(session, userId, listOf(fileId))[fileId]
+                }.getOrNull()
+            }
+        val sourceFile = resolvedFile
+            ?.copy(
+                memoriesRenderAllowed = file.memoriesRenderAllowed || resolvedFile.memoriesRenderAllowed,
+                mediaWidth = file.mediaWidth ?: resolvedFile.mediaWidth,
+                mediaHeight = file.mediaHeight ?: resolvedFile.mediaHeight,
+                capturedAtEpochSeconds = file.capturedAtEpochSeconds
+                    ?: resolvedFile.capturedAtEpochSeconds,
+                mediaDurationSeconds = file.mediaDurationSeconds
+                    ?: resolvedFile.mediaDurationSeconds,
+            )
+            ?: file
+        var information = sourceFile.basicMediaInformation()
+        if (!sourceFile.isEmbeddedMediaInformationCandidate()) return@withContext information
+        val sourceSize = sourceFile.size?.takeIf { it > 0L } ?: return@withContext information
+        val etag = sourceFile.etag
+            ?.takeIf { runCatching { requireSafeFileRangeEtag(it) }.isSuccess }
+            ?: return@withContext information
+        val fileId = sourceFile.fileId?.takeIf { it > 0L }
+        val rangeReader: suspend (Long, Int) -> ByteArray = { offset, length ->
+            if (sourceFile.memoriesRenderAllowed && fileId != null) {
+                downloadMemoriesFileRange(
+                    session = session,
+                    fileId = fileId,
+                    offset = offset,
+                    length = length,
+                    expectedEtag = etag,
+                    expectedSourceSize = sourceSize,
+                )
+            } else {
+                check(sourceFile.davPathAuthoritative && sourceFile.originalAccessAllowed) {
+                    "Embedded media information requires authoritative original access."
+                }
+                downloadFileRange(
+                    session = session,
+                    userId = userId,
+                    path = sourceFile.path,
+                    offset = offset,
+                    length = length,
+                    expectedEtag = etag,
+                )
+            }
+        }
+
+        val prefixLength = minOf(sourceSize, MAXIMUM_EMBEDDED_INFORMATION_PREFIX_BYTES.toLong())
+            .toInt()
+        runCatching {
+            rangeReader(0L, prefixLength)
+        }.getOrNull()
+            ?.let(::extractAndroidEmbeddedMediaInformation)
+            ?.let { information = information.mergedWith(it) }
+
+        if (sourceFile.isNativeTiffPreviewCandidate()) {
+            runCatching {
+                AndroidTiffPreviewDecoder(sourceSize, rangeReader).inspectFirstPage()
+            }.getOrNull()
+                ?.toMediaInformation()
+                ?.let { information = information.mergedWith(it) }
+        }
+        information
+    }
+
     override suspend fun downloadFile(
         session: NextcloudSession,
         userId: String,
@@ -932,6 +1110,161 @@ internal class AndroidNextcloudServices(
             "The server returned an incomplete file range."
         }
         response.body
+    }
+
+    override fun openFileRangeSession(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        size: Long,
+        expectedEtag: String,
+    ): NextcloudFileRangeSession {
+        require(size > 0L) { "The file range session size must be positive." }
+        val safeEtag = requireSafeFileRangeEtag(expectedEtag)
+        val url = buildNextcloudFileUrl(session.serverUrl, userId, path)
+        val authorization = Base64.encodeToString(
+            "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
+            Base64.NO_WRAP,
+        )
+        val closed = AtomicBoolean(false)
+        val activeCalls = ConcurrentHashMap.newKeySet<okhttp3.Call>()
+        return NextcloudFileRangeSession(
+            size = size,
+            readBlock = { offset, length ->
+                withContext(Dispatchers.IO) {
+                    require(offset >= 0L) { "The file range offset must not be negative." }
+                    require(length > 0) { "The file range length must be greater than zero." }
+                    val endInclusive = Math.addExact(offset, length.toLong() - 1L)
+                    require(endInclusive < size) { "The file range exceeds the source size." }
+                    check(!closed.get()) { "The file range session is closed." }
+                    val request = Request.Builder()
+                        .url(url)
+                        .get()
+                        .header("Accept", "application/octet-stream")
+                        .header("User-Agent", USER_AGENT)
+                        .header("Authorization", "Basic $authorization")
+                        .header("Range", "bytes=$offset-$endInclusive")
+                        .header("If-Match", safeEtag)
+                        .build()
+                    val call = noRedirectHttpClient.newCall(request)
+                    activeCalls += call
+                    if (closed.get()) {
+                        call.cancel()
+                    }
+                    try {
+                        call.execute().use { response ->
+                            check(response.code == 206) {
+                                "The server did not honor the bounded file range request " +
+                                    "(HTTP ${response.code})."
+                            }
+                            check(
+                                isExactHttpByteContentRange(
+                                    response.header("Content-Range"),
+                                    offset,
+                                    endInclusive,
+                                ),
+                            ) {
+                                "The server returned a different file range than requested."
+                            }
+                            val responseBody = response.body
+                            val contentLength = responseBody.contentLength()
+                            check(contentLength == length.toLong() || contentLength == -1L) {
+                                "The server returned an incomplete file range."
+                            }
+                            responseBody.byteStream().readBounded(length.toLong()).also { bytes ->
+                                check(bytes.size == length) {
+                                    "The server returned an incomplete file range."
+                                }
+                            }
+                        }
+                    } finally {
+                        activeCalls -= call
+                    }
+                }
+            },
+            closeBlock = {
+                if (closed.compareAndSet(false, true)) {
+                    activeCalls.forEach { call -> call.cancel() }
+                    activeCalls.clear()
+                }
+            },
+        )
+    }
+
+    override suspend fun downloadMemoriesFileRange(
+        session: NextcloudSession,
+        fileId: Long,
+        offset: Long,
+        length: Int,
+        expectedEtag: String,
+        expectedSourceSize: Long,
+    ): ByteArray {
+        require(fileId > 0L) { "The Memories file ID must be positive." }
+        require(offset >= 0L) { "The file range offset must not be negative." }
+        require(length > 0) { "The file range length must be greater than zero." }
+        require(expectedSourceSize > 0L) { "The source size must be positive." }
+        val safeEtag = requireSafeFileRangeEtag(expectedEtag)
+        val endInclusive = Math.addExact(offset, length.toLong() - 1L)
+        val authorization = Base64.encodeToString(
+            "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
+            Base64.NO_WRAP,
+        )
+        val rangeRequest = Request.Builder()
+            .url(session.serverUrl.trimEnd('/') + "/index.php/apps/memories/api/stream/$fileId")
+            .get()
+            .header("Accept", "application/octet-stream")
+            .header("User-Agent", USER_AGENT)
+            .header("Authorization", "Basic $authorization")
+            .header("Range", "bytes=$offset-$endInclusive")
+            .header("If-Match", safeEtag)
+            .build()
+        return suspendCancellableCoroutine { continuation ->
+            val call = noRedirectHttpClient.newCall(rangeRequest)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    continuation.resumeWith(Result.failure(e))
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val result = runCatching {
+                        response.use {
+                            check(response.code == 206) {
+                                "The Memories stream did not honor the bounded range request " +
+                                    "(HTTP ${response.code})."
+                            }
+                            check(
+                                isExactHttpByteContentRange(
+                                    response.header("Content-Range"),
+                                    offset,
+                                    endInclusive,
+                                    expectedSourceSize,
+                                ),
+                            ) {
+                                "The Memories stream returned a different file range than requested."
+                            }
+                            (response.header("ETag") ?: response.header("OC-Etag"))
+                                ?.let { returnedEtag ->
+                                    check(requireSafeFileRangeEtag(returnedEtag) == safeEtag) {
+                                        "The Memories stream returned a different file generation."
+                                    }
+                                }
+                            val responseBody = response.body
+                            val contentLength = responseBody.contentLength()
+                            check(contentLength == length.toLong() || contentLength == -1L) {
+                                "The Memories stream returned an incomplete file range."
+                            }
+                            responseBody.byteStream().readBounded(length.toLong()).also { bytes ->
+                                check(bytes.size == length) {
+                                    "The Memories stream returned an incomplete file range."
+                                }
+                            }
+                        }
+                    }
+                    continuation.resumeWith(result)
+                }
+            })
+        }
     }
 
     override suspend fun listFileVersions(
@@ -2032,6 +2365,52 @@ internal class AndroidNextcloudServices(
     }
 }
 
+private fun NextcloudFile.isNativeTiffPreviewCandidate(): Boolean {
+    if (isDirectory || fileId == null || size == null || etag.isNullOrBlank()) return false
+    val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.ROOT)
+    val mime = mimeType?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT).orEmpty()
+    return extension in setOf("tif", "tiff") || mime in setOf("image/tif", "image/tiff")
+}
+
+private fun NextcloudFile.isEmbeddedMediaInformationCandidate(): Boolean {
+    val sourceSize = size
+    if (
+        isDirectory ||
+        sourceSize == null ||
+        sourceSize <= 0L ||
+        etag.isNullOrBlank() ||
+        (!memoriesRenderAllowed && (!davPathAuthoritative || !originalAccessAllowed))
+    ) {
+        return false
+    }
+    val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.ROOT)
+    val mime = mimeType?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT).orEmpty()
+    return mime.startsWith("image/") || extension in EMBEDDED_MEDIA_INFORMATION_EXTENSIONS
+}
+
+private val EMBEDDED_MEDIA_INFORMATION_EXTENSIONS = setOf(
+    "arw",
+    "avif",
+    "cr2",
+    "cr3",
+    "dng",
+    "heic",
+    "heif",
+    "jpeg",
+    "jpg",
+    "nef",
+    "nrw",
+    "orf",
+    "pef",
+    "raf",
+    "raw",
+    "rw2",
+    "srw",
+    "tif",
+    "tiff",
+    "webp",
+)
+
 private val READ_ONLY_TEST_REQUEST_METHODS =
     setOf("GET", "HEAD", "OPTIONS", "PROPFIND", "REPORT", "SEARCH")
 
@@ -2127,3 +2506,7 @@ private fun org.w3c.dom.Node.systemTagFirstText(namespace: String, localName: St
 private const val SYSTEM_TAG_DAV_NAMESPACE = "DAV:"
 private const val SYSTEM_TAG_OC_NAMESPACE = "http://owncloud.org/ns"
 private const val SYSTEM_TAG_NC_NAMESPACE = "http://nextcloud.org/ns"
+private const val MINIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION = 64
+private const val MAXIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION = 4_096
+private const val NATIVE_TIFF_DECODER_VERSION = "tiff-stream-v3"
+private const val MAXIMUM_EMBEDDED_INFORMATION_PREFIX_BYTES = 4 * 1024 * 1024

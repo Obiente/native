@@ -55,6 +55,8 @@ data class PhotoFolderSummary(
     val directMediaCount: Int,
     val recursiveMediaCount: Int,
     val directChildFolderCount: Int,
+    val countsAuthoritative: Boolean = true,
+    val previewFileIds: List<Long> = emptyList(),
 ) {
     init {
         require(path.isNotEmpty()) { "The account root is not a photo folder row." }
@@ -64,6 +66,12 @@ data class PhotoFolderSummary(
             "The photo folder media counts are invalid."
         }
         require(directChildFolderCount >= 0) { "The photo folder child count is invalid." }
+        require(previewFileIds.size <= MAX_PHOTO_FOLDER_PREVIEW_ITEMS) {
+            "The photo folder has too many preview items."
+        }
+        require(previewFileIds.all { fileId -> fileId > 0L } && previewFileIds.distinct().size == previewFileIds.size) {
+            "The photo folder preview file IDs are invalid."
+        }
     }
 }
 
@@ -197,6 +205,8 @@ class PhotoFolderSummaryAccumulator(
 ) {
     private val mediaByPath = linkedMapOf<String, CompactPhotoFolderMedia>()
     private val folderPaths = linkedSetOf("")
+    private val foldersWithUnknownCounts = linkedSetOf<String>()
+    private val previewFileIdsByFolder = linkedMapOf<String, List<Long>>()
     private val selectedMediaByPath = linkedMapOf<String, NextcloudFile>()
 
     init {
@@ -221,7 +231,12 @@ class PhotoFolderSummaryAccumulator(
      * before any accumulator state changes.
      */
     fun tryAddPage(records: List<NextcloudFile>): PhotoFolderPageAcceptance {
-        val pageMedia = reconcilePhotoFolderInventory(records)
+        val reconciled = reconcilePhotoFolderInventory(records)
+        val pageFolders = reconciled
+            .asSequence()
+            .filter(NextcloudFile::isDirectory)
+            .toList()
+        val pageMedia = reconciled
             .asSequence()
             .filter { file -> !file.isDirectory && file.mediaAssetFormat() != MediaAssetFormat.Other }
             .toList()
@@ -231,9 +246,14 @@ class PhotoFolderSummaryAccumulator(
                 PhotoFolderInventoryTruncationReason.MediaRecordLimit,
             )
         }
-        val novelFolders = novelMedia
-            .asSequence()
-            .flatMap { file -> file.path.parentFolderPath().ancestorsIncludingSelf().asSequence() }
+        val novelFolders = sequence {
+            pageFolders.forEach { folder ->
+                yieldAll(folder.path.ancestorsIncludingSelf().asSequence())
+            }
+            novelMedia.forEach { file ->
+                yieldAll(file.path.parentFolderPath().ancestorsIncludingSelf().asSequence())
+            }
+        }
             .filterNot(folderPaths::contains)
             .toSet()
         if (folderPaths.size + novelFolders.size > maximumFolders + 1) {
@@ -242,6 +262,14 @@ class PhotoFolderSummaryAccumulator(
             )
         }
 
+        pageFolders.forEach { folder ->
+            folder.path.ancestorsIncludingSelf().forEach(folderPaths::add)
+            foldersWithUnknownCounts += folder.path
+            if (folder.directoryPreviewFileIds.isNotEmpty()) {
+                previewFileIdsByFolder[folder.path] =
+                    folder.directoryPreviewFileIds.take(MAX_PHOTO_FOLDER_PREVIEW_ITEMS)
+            }
+        }
         pageMedia.forEach { file ->
             if (file.path !in mediaByPath) {
                 mediaByPath[file.path] = file.toCompactPhotoFolderMedia()
@@ -316,6 +344,8 @@ class PhotoFolderSummaryAccumulator(
                     directMediaCount = directMediaCounts[path] ?: 0,
                     recursiveMediaCount = recursiveMediaCounts[path] ?: 0,
                     directChildFolderCount = directFolderCounts[path] ?: 0,
+                    countsAuthoritative = path !in foldersWithUnknownCounts,
+                    previewFileIds = previewFileIdsByFolder[path].orEmpty(),
                 )
             }
             .toList()
@@ -375,9 +405,10 @@ class PhotoFolderInventoryRepository(
     }
 
     fun tryAddPage(records: List<NextcloudFile>): PhotoFolderPageAcceptance {
-        val normalizedMedia = reconcilePhotoFolderInventory(records)
+        val normalizedRecords = reconcilePhotoFolderInventory(records)
+        val normalizedMedia = normalizedRecords
             .filter { file -> !file.isDirectory && file.mediaAssetFormat() != MediaAssetFormat.Other }
-        return when (val acceptance = summaryAccumulator.tryAddPage(normalizedMedia)) {
+        return when (val acceptance = summaryAccumulator.tryAddPage(normalizedRecords)) {
             is PhotoFolderPageAcceptance.Truncated -> acceptance
             is PhotoFolderPageAcceptance.Accepted -> {
                 normalizedMedia.forEach { file ->
@@ -713,6 +744,7 @@ const val MAX_PHOTO_FOLDER_BROWSE_RECORDS = 50_000
 const val MAX_PHOTO_FOLDER_SUMMARY_MEDIA_RECORDS = 250_000
 const val MAX_PHOTO_FOLDER_SUMMARY_FOLDERS = 25_000
 const val MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS = 2_000
+internal const val MAX_PHOTO_FOLDER_PREVIEW_ITEMS = 4
 private const val MAX_PHOTO_FOLDER_PATH_LENGTH = 4_096
 internal const val MAX_PHOTO_FOLDER_QUERY_LENGTH = 256
 private const val MAX_PHOTO_FOLDER_DEPTH = 128
