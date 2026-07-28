@@ -87,6 +87,59 @@ data class PhotoFolderBrowseResult(
 }
 
 /**
+ * A bounded, account-local snapshot used to paint the folder browser immediately while its
+ * inventory is revalidated in the background.
+ */
+data class PhotoFolderInventorySnapshot(
+    val files: List<NextcloudFile>,
+    val backupStatuses: Map<String, MediaBackupStatus>,
+) {
+    init {
+        require(files.size <= MAX_PHOTO_FOLDER_BROWSE_RECORDS) {
+            "The cached photo folder inventory exceeds the bounded browse window."
+        }
+        val paths = files.mapTo(mutableSetOf()) { file -> file.path.trim('/') }
+        require(backupStatuses.keys.all(paths::contains)) {
+            "The cached photo backup statuses include files outside the inventory."
+        }
+    }
+
+    fun withUpdatedBackupStatuses(
+        updates: Map<String, MediaBackupStatus>,
+    ): PhotoFolderInventorySnapshot {
+        if (updates.isEmpty()) return this
+        val paths = files.mapTo(mutableSetOf()) { file -> file.path.trim('/') }
+        val normalizedUpdates = updates
+            .asSequence()
+            .map { (path, status) -> path.trim('/') to status }
+            .filter { (path, _) -> path in paths }
+            .toMap()
+        return copy(backupStatuses = backupStatuses + normalizedUpdates)
+    }
+}
+
+fun buildPhotoFolderInventorySnapshot(
+    inventory: List<NextcloudFile>,
+    backupStatuses: Map<String, MediaBackupStatus>,
+    maximumRecords: Int = MAX_PHOTO_FOLDER_BROWSE_RECORDS,
+): PhotoFolderInventorySnapshot {
+    require(maximumRecords in 1..MAX_PHOTO_FOLDER_BROWSE_RECORDS) {
+        "The photo folder inventory cache limit is invalid."
+    }
+    require(inventory.size <= maximumRecords) {
+        "The photo folder inventory exceeds the bounded cache window."
+    }
+    val files = reconcilePhotoFolderInventory(inventory)
+    val paths = files.mapTo(mutableSetOf()) { file -> file.path.trim('/') }
+    val statuses = backupStatuses
+        .asSequence()
+        .map { (path, status) -> path.trim('/') to status }
+        .filter { (path, _) -> path in paths }
+        .toMap()
+    return PhotoFolderInventorySnapshot(files = files, backupStatuses = statuses)
+}
+
+/**
  * Creates a presentation-neutral folder browser from a bounded Files DAV or media search window.
  *
  * Directory records are optional. Missing ancestors are inferred from authoritative media paths so

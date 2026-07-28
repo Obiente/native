@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -65,6 +66,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -240,6 +242,11 @@ private inline fun <reified T : Enum<T>> enumSaver() = Saver<T, String>(
     restore = { saved -> enumValues<T>().firstOrNull { it.name == saved } ?: enumValues<T>().first() },
 )
 
+private val photoBrowserStateSaver = Saver<PhotoBrowserState, String>(
+    save = { state -> encodePhotoBrowserState(state) },
+    restore = { encoded -> restorePhotoBrowserState(encoded) },
+)
+
 private enum class FileLayout { List, Grid }
 private enum class PersonPhotoSelectionMode { Cover, RemoveFace }
 
@@ -262,6 +269,17 @@ private class MediaCollectionsUiState {
     var mutationError by mutableStateOf<String?>(null)
     var loadAttempt by mutableStateOf(0)
     var requestGeneration: Long = 0L
+}
+
+private class PhotoFolderInventoryUiState {
+    var snapshot by mutableStateOf<PhotoFolderInventorySnapshot?>(null)
+    var requestGeneration: Long = 0L
+}
+
+private class PhotoFolderViewportUiState(
+    initialBrowseState: PhotoFolderBrowseState,
+) {
+    var browseState by mutableStateOf(initialBrowseState)
 }
 
 private val nativeAppIds = setOf(
@@ -487,15 +505,26 @@ private fun AuthenticatedApp(
     var discoveryError by remember(session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(session) { mutableStateOf(0) }
     var fileLayout by rememberSaveable(stateSaver = enumSaver<FileLayout>()) { mutableStateOf(FileLayout.List) }
-    var photoDestination by rememberSaveable(
+    var photoBrowserState by rememberSaveable(
         session.serverUrl,
         session.loginName,
-        stateSaver = enumSaver<PhotoDestination>(),
+        stateSaver = photoBrowserStateSaver,
     ) {
-        mutableStateOf(PhotoDestination.Timeline)
+        mutableStateOf(PhotoBrowserState())
     }
     val mediaCollectionsState = remember(session) { MediaCollectionsUiState() }
     val mediaCollectionGridState = rememberLazyGridState()
+    val photoAccountScope = remember(session) { previewCacheDigest(session) }
+    val photoFolderInventoryState = remember(session) { PhotoFolderInventoryUiState() }
+    val photoFolderViewportState = remember(session) {
+        PhotoFolderViewportUiState(photoBrowserState.folder)
+    }
+    val photoFolderGridState = key(photoAccountScope, "photo-folder-grid") {
+        rememberLazyGridState()
+    }
+    val photoFolderListState = key(photoAccountScope, "photo-folder-list") {
+        rememberLazyListState()
+    }
 
     LaunchedEffect(session, discoveryAttempt) {
         serverInfo = null
@@ -792,10 +821,14 @@ private fun AuthenticatedApp(
             services = services,
             session = session,
             userId = serverInfo?.userId,
-            destination = photoDestination,
+            photoBrowserState = photoBrowserState,
             collectionState = mediaCollectionsState,
             collectionGridState = mediaCollectionGridState,
-            onDestinationChanged = { photoDestination = it },
+            folderInventoryState = photoFolderInventoryState,
+            folderViewportState = photoFolderViewportState,
+            folderGridState = photoFolderGridState,
+            folderListState = photoFolderListState,
+            onPhotoBrowserStateChanged = { photoBrowserState = it },
             onBack = ::navigateBack,
             onOpenMedia = { file, media ->
                 screen = Screen.MediaViewer(media = media, selected = file, returnTo = Screen.Media)
@@ -4543,18 +4576,23 @@ private fun MediaScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     userId: String?,
-    destination: PhotoDestination,
+    photoBrowserState: PhotoBrowserState,
     collectionState: MediaCollectionsUiState,
     collectionGridState: LazyGridState,
-    onDestinationChanged: (PhotoDestination) -> Unit,
+    folderInventoryState: PhotoFolderInventoryUiState,
+    folderViewportState: PhotoFolderViewportUiState,
+    folderGridState: LazyGridState,
+    folderListState: LazyListState,
+    onPhotoBrowserStateChanged: (PhotoBrowserState) -> Unit,
     onBack: () -> Unit,
     onOpenMedia: (NextcloudFile, List<NextcloudFile>) -> Unit,
     onOpenPerson: (NextcloudPerson) -> Unit,
 ) {
-    var media by remember(userId) { mutableStateOf<List<NextcloudFile>?>(null) }
-    var mediaBackupStatuses by remember(userId) {
-        mutableStateOf<Map<String, MediaBackupStatus>>(emptyMap())
-    }
+    val destination = photoBrowserState.destination
+    val photoFolderState = photoBrowserState.folder
+    val mediaSnapshot = folderInventoryState.snapshot
+    val media = mediaSnapshot?.files
+    val mediaBackupStatuses = mediaSnapshot?.backupStatuses.orEmpty()
     val peopleByBackend = remember(userId) {
         mutableStateMapOf<NextcloudPeopleBackend, List<NextcloudPerson>>()
     }
@@ -4567,27 +4605,25 @@ private fun MediaScreen(
     var mediaError by remember(userId) { mutableStateOf<String?>(null) }
     var peopleError by remember(userId) { mutableStateOf<String?>(null) }
     var peopleSearch by rememberSaveable(userId) { mutableStateOf("") }
-    var photoFolderPath by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
-    var photoFolderQuery by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
-    var photoFolderScope by rememberSaveable(
-        session.serverUrl,
-        session.loginName,
-        stateSaver = enumSaver<PhotoFolderBrowseScope>(),
-    ) { mutableStateOf(PhotoFolderBrowseScope.DirectMediaAndSubfolders) }
-    var photoFolderViewMode by rememberSaveable(
-        session.serverUrl,
-        session.loginName,
-        stateSaver = enumSaver<PhotoFolderViewMode>(),
-    ) { mutableStateOf(PhotoFolderViewMode.Grid) }
     var mediaLoadAttempt by remember(userId) { mutableStateOf(0) }
     var peopleLoadAttempt by remember(userId) { mutableStateOf(0) }
     val collectionService = remember(services) { NativeMediaCollectionReadService(services) }
     val collectionMutationService = remember(services) { NativeMediaCollectionMutationService(services) }
     PlatformBackHandler(
-        enabled = destination == PhotoDestination.Folders && photoFolderPath.isNotEmpty(),
+        enabled = destination == PhotoDestination.Folders &&
+            photoFolderState.selectedFolderPath.isNotEmpty(),
         onBack = {
-            photoFolderPath = photoFolderPath.substringBeforeLast('/', missingDelimiterValue = "")
-            photoFolderQuery = ""
+            onPhotoBrowserStateChanged(
+                photoBrowserState.copy(
+                    folder = photoFolderState.copy(
+                        selectedFolderPath = photoFolderState.selectedFolderPath.substringBeforeLast(
+                            '/',
+                            missingDelimiterValue = "",
+                        ),
+                        query = "",
+                    ),
+                ),
+            )
         },
     )
     with(collectionState) {
@@ -4599,33 +4635,51 @@ private fun MediaScreen(
     }
     LaunchedEffect(userId, mediaLoadAttempt) {
         if (userId == null) return@LaunchedEffect
-        media = null
-        mediaBackupStatuses = emptyMap()
+        val generation = ++folderInventoryState.requestGeneration
         mediaError = null
-        runCatching {
+        try {
             val loaded = services.listMedia(session, userId)
             val statuses = runCatching {
                 services.loadMediaBackupStatuses(session, userId, loaded)
-            }.getOrDefault(emptyMap())
-            loaded to statuses
-        }
-            .onSuccess { (loaded, statuses) ->
-                media = loaded
-                mediaBackupStatuses = statuses
+            }.getOrElse {
+                folderInventoryState.snapshot?.backupStatuses.orEmpty()
             }
-            .onFailure { mediaError = it.message ?: "Could not load media." }
+            val refreshed = buildPhotoFolderInventorySnapshot(loaded, statuses)
+            if (generation == folderInventoryState.requestGeneration) {
+                folderInventoryState.snapshot = refreshed
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            if (
+                generation == folderInventoryState.requestGeneration &&
+                folderInventoryState.snapshot == null
+            ) {
+                mediaError = failure.message ?: "Could not load media."
+            }
+        }
     }
     LaunchedEffect(userId, services) {
         if (userId == null) return@LaunchedEffect
         services.observeMediaBackupStatusChanges(session).collectLatest {
-            val visibleFiles = (media.orEmpty() + resolvedFiles.values)
+            val visibleFiles = (folderInventoryState.snapshot?.files.orEmpty() + resolvedFiles.values)
                 .distinctBy { file -> file.path.trim('/') }
             if (visibleFiles.isNotEmpty()) {
                 val statuses = runCatching {
                     services.loadMediaBackupStatuses(session, userId, visibleFiles)
                 }.getOrDefault(emptyMap())
-                mediaBackupStatuses = mediaBackupStatuses + statuses
+                folderInventoryState.snapshot = folderInventoryState.snapshot
+                    ?.withUpdatedBackupStatuses(statuses)
                 backupStatuses = backupStatuses + statuses
+            }
+        }
+    }
+    LaunchedEffect(photoFolderState) {
+        if (photoFolderState != folderViewportState.browseState) {
+            folderViewportState.browseState = photoFolderState
+            when (photoFolderState.preference.viewMode) {
+                PhotoFolderViewMode.Grid -> folderGridState.scrollToItem(0)
+                PhotoFolderViewMode.List -> folderListState.scrollToItem(0)
             }
         }
     }
@@ -5093,7 +5147,9 @@ private fun MediaScreen(
             )
             PhotoAdaptiveNavigationLayout(
                 intent = navigationIntent,
-                onDestinationSelected = onDestinationChanged,
+                onDestinationSelected = { selected ->
+                    onPhotoBrowserStateChanged(photoBrowserState.copy(destination = selected))
+                },
                 modifier = Modifier.weight(1f),
             ) {
                 when (navigationIntent.activeDestination) {
@@ -5101,7 +5157,7 @@ private fun MediaScreen(
             when {
                 mediaError != null -> ErrorMessage(requireNotNull(mediaError)) { mediaLoadAttempt += 1 }
                 media == null -> LoadingMessage("Finding photos and RAW previews...")
-                media?.isEmpty() == true -> EmptyMessage("No previewable media was found.")
+                media.isEmpty() -> EmptyMessage("No previewable media was found.")
                 else -> LazyVerticalGrid(
                     columns = GridCells.Adaptive(120.dp),
                     contentPadding = PaddingValues(4.dp),
@@ -5143,23 +5199,53 @@ private fun MediaScreen(
                                 mediaLoadAttempt += 1
                             }
                             media == null -> LoadingMessage("Loading photo folders...")
-                            media?.isEmpty() == true -> EmptyMessage("No photo folders were found.")
+                            media.isEmpty() -> EmptyMessage("No photo folders were found.")
                             else -> PhotoFolderBrowser(
                                 inventory = requireNotNull(media),
-                                selectedFolderPath = photoFolderPath,
-                                query = photoFolderQuery,
-                                scope = photoFolderScope,
-                                viewMode = photoFolderViewMode,
+                                selectedFolderPath = photoFolderState.selectedFolderPath,
+                                query = photoFolderState.query,
+                                scope = photoFolderState.scope,
+                                viewMode = photoFolderState.preference.viewMode,
                                 backupStatuses = mediaBackupStatuses,
+                                gridState = folderGridState,
+                                listState = folderListState,
                                 services = services,
                                 session = session,
-                                onSelectedFolderPathChanged = {
-                                    photoFolderPath = it
-                                    photoFolderQuery = ""
+                                onSelectedFolderPathChanged = { selectedPath ->
+                                    onPhotoBrowserStateChanged(
+                                        photoBrowserState.copy(
+                                            folder = photoFolderState.copy(
+                                                selectedFolderPath = selectedPath,
+                                                query = "",
+                                            ),
+                                        ),
+                                    )
                                 },
-                                onQueryChanged = { photoFolderQuery = it },
-                                onScopeChanged = { photoFolderScope = it },
-                                onViewModeChanged = { photoFolderViewMode = it },
+                                onQueryChanged = { query ->
+                                    onPhotoBrowserStateChanged(
+                                        photoBrowserState.copy(
+                                            folder = photoFolderState.copy(query = query),
+                                        ),
+                                    )
+                                },
+                                onScopeChanged = { scope ->
+                                    onPhotoBrowserStateChanged(
+                                        photoBrowserState.copy(
+                                            folder = photoFolderState.copy(scope = scope),
+                                        ),
+                                    )
+                                },
+                                onViewModeChanged = { viewMode ->
+                                    onPhotoBrowserStateChanged(
+                                        photoBrowserState.copy(
+                                            folder = photoFolderState.copy(
+                                                preference = photoFolderState.preference.copy(
+                                                    viewMode = viewMode,
+                                                ),
+                                            ),
+                                        ),
+                                    )
+                                },
                                 onOpenMedia = onOpenMedia,
                                 modifier = Modifier.fillMaxSize(),
                             )

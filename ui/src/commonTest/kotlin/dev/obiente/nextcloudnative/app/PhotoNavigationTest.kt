@@ -77,6 +77,28 @@ class PhotoNavigationTest {
     }
 
     @Test
+    fun `photo browser context restores after a media viewer round trip`() {
+        val state = PhotoBrowserState(
+            destination = PhotoDestination.Folders,
+            folder = PhotoFolderBrowseState(
+                selectedFolderPath = "Photos/Trips/2026",
+                query = "summer",
+                scope = PhotoFolderBrowseScope.RecursiveMedia,
+                preference = PhotoFolderBrowsePreference(PhotoFolderViewMode.List),
+            ),
+        )
+
+        val restored = restorePhotoBrowserState(encodePhotoBrowserState(state))
+
+        assertEquals(state, restored)
+    }
+
+    @Test
+    fun `invalid saved photo browser context falls back safely`() {
+        assertEquals(PhotoBrowserState(), restorePhotoBrowserState("{invalid"))
+    }
+
+    @Test
     fun `destination copy distinguishes folder albums and people surfaces`() {
         assertEquals("Browse media by server folder", photoDestinationSubtitle(PhotoDestination.Folders))
         assertEquals("Albums and tags", photoDestinationSubtitle(PhotoDestination.Albums))

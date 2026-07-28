@@ -223,6 +223,53 @@ class PhotoFolderBrowsingTest {
         }
     }
 
+    @Test
+    fun `cached inventory is bounded normalized and excludes stale statuses`() {
+        val first = file(path = "Photos/Camera/one.jpg", mimeType = "image/jpeg")
+        val second = file(path = "Photos/Camera/two.jpg", mimeType = "image/jpeg")
+
+        val snapshot = buildPhotoFolderInventorySnapshot(
+            inventory = listOf(first, second),
+            backupStatuses = mapOf(
+                "/Photos/Camera/one.jpg/" to MediaBackupStatus.BackedUp,
+                "Photos/removed.jpg" to MediaBackupStatus.Failed,
+            ),
+            maximumRecords = 2,
+        )
+
+        assertEquals(listOf(first.path, second.path), snapshot.files.map(NextcloudFile::path))
+        assertEquals(
+            mapOf(first.path to MediaBackupStatus.BackedUp),
+            snapshot.backupStatuses,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            buildPhotoFolderInventorySnapshot(
+                inventory = listOf(first, second),
+                backupStatuses = emptyMap(),
+                maximumRecords = 1,
+            )
+        }
+    }
+
+    @Test
+    fun `cached status refresh only changes files in the retained inventory`() {
+        val file = file(path = "Photos/Camera/one.jpg", mimeType = "image/jpeg")
+        val snapshot = buildPhotoFolderInventorySnapshot(
+            inventory = listOf(file),
+            backupStatuses = mapOf(file.path to MediaBackupStatus.Pending),
+        )
+
+        val refreshed = snapshot.withUpdatedBackupStatuses(
+            mapOf(
+                "/${file.path}/" to MediaBackupStatus.BackedUp,
+                "Photos/not-cached.jpg" to MediaBackupStatus.Failed,
+            ),
+        )
+
+        assertEquals(mapOf(file.path to MediaBackupStatus.BackedUp), refreshed.backupStatuses)
+        assertEquals(snapshot.files, refreshed.files)
+    }
+
     private fun photoInventory(): List<NextcloudFile> = listOf(
         directory("Photos"),
         directory("Photos/Camera"),

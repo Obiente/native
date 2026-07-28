@@ -1,6 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /**
  * Stable product destinations. Folder scope and view-mode controls intentionally do not appear
@@ -26,6 +29,29 @@ data class PhotoNavigationCapabilities(
 data class PhotoNavigationState(
     val activeDestination: PhotoDestination = PhotoDestination.Timeline,
 )
+
+/**
+ * Account-scoped Photos navigation context that must survive temporary child screens such as the
+ * media viewer, as well as platform recreation.
+ */
+@Serializable
+data class PhotoBrowserState(
+    val destination: PhotoDestination = PhotoDestination.Timeline,
+    val folder: PhotoFolderBrowseState = PhotoFolderBrowseState(),
+)
+
+private val photoBrowserStateJson = Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+}
+
+internal fun encodePhotoBrowserState(state: PhotoBrowserState): String =
+    photoBrowserStateJson.encodeToString(state)
+
+internal fun restorePhotoBrowserState(encoded: String): PhotoBrowserState =
+    runCatching {
+        photoBrowserStateJson.decodeFromString<PhotoBrowserState>(encoded)
+    }.getOrDefault(PhotoBrowserState())
 
 enum class PhotoNavigationWidthClass {
     Compact,

@@ -15,7 +15,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items as listItems
@@ -65,6 +67,8 @@ internal fun PhotoFolderBrowser(
     scope: PhotoFolderBrowseScope,
     viewMode: PhotoFolderViewMode,
     backupStatuses: Map<String, MediaBackupStatus>,
+    gridState: LazyGridState,
+    listState: LazyListState,
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     onSelectedFolderPathChanged: (String) -> Unit,
@@ -143,6 +147,7 @@ internal fun PhotoFolderBrowser(
         } else if (viewMode == PhotoFolderViewMode.Grid) {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(128.dp),
+                state = gridState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(NextcloudSpacing.Medium),
                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
@@ -167,6 +172,7 @@ internal fun PhotoFolderBrowser(
             }
         } else {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
                     horizontal = NextcloudSpacing.Medium,
