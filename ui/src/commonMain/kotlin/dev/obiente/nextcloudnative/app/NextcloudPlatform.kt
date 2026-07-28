@@ -612,6 +612,27 @@ interface NextcloudPlatformServices {
     suspend fun listMedia(session: NextcloudSession, userId: String): List<NextcloudFile>
 
     /**
+     * Loads one bounded, newest-first Photos timeline page.
+     *
+     * Implementations should use an opaque cursor and retain independent server-side partitions
+     * when one media type has more results than another.
+     */
+    suspend fun listMediaTimelinePage(
+        session: NextcloudSession,
+        userId: String,
+        cursor: PhotoTimelineCursor?,
+        rawPreviouslyObserved: Boolean = false,
+    ): PhotoTimelinePage {
+        if (cursor != null) return PhotoTimelinePage(emptyList(), null)
+        return PhotoTimelinePage(
+            entries = listMedia(session, userId)
+                .mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull)
+                .take(MAX_PHOTO_TIMELINE_PAGE_SIZE),
+            nextCursor = null,
+        )
+    }
+
+    /**
      * Returns locally known backup state for authoritative server paths.
      *
      * Missing paths mean this platform has no device-local backup evidence. Callers must not infer
