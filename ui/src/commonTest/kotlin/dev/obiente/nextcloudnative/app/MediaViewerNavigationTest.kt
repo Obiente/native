@@ -37,9 +37,10 @@ class MediaViewerNavigationTest {
     }
 
     @Test
-    fun routeRetainsStackSourcesWithoutMakingRawSiblingsNavigable() {
-        val repository = MediaViewerNavigationRepository(maximumRoutes = 1, maximumItemsPerRoute = 1)
+    fun routeSelectsRawStackSourcesWithoutMakingThemSeparateNavigationItems() {
+        val repository = MediaViewerNavigationRepository(maximumRoutes = 1, maximumItemsPerRoute = 2)
         val rendered = file(2L)
+        val nextRendered = file(3L)
         val rawSibling = rendered.copy(
             path = "Photos/2.dng",
             name = "2.dng",
@@ -54,16 +55,34 @@ class MediaViewerNavigationTest {
         )
 
         val route = repository.register(
-            media = listOf(rendered),
+            media = listOf(rendered, nextRendered),
             selected = rendered,
-            sourceMembers = listOf(rendered, rawSibling, unrelatedRaw),
+            sourceMembers = listOf(rendered, rawSibling, nextRendered, unrelatedRaw),
+            navigationIdentityBySourceIdentity = mapOf(
+                mediaViewerFileIdentity(rawSibling) to mediaViewerFileIdentity(rendered),
+            ),
         )
         val snapshot = assertNotNull(repository.resolve(route))
 
-        assertEquals(listOf(rendered), snapshot.media)
-        assertEquals(listOf(rendered, rawSibling), snapshot.sourceMembers)
+        assertEquals(listOf(rendered, nextRendered), snapshot.media)
+        assertEquals(listOf(rendered, nextRendered, rawSibling), snapshot.sourceMembers)
         assertEquals(rendered, snapshot.selected)
-        assertNull(repository.select(route, rawSibling))
+
+        val rawRoute = assertNotNull(repository.select(route, rawSibling))
+        val rawSnapshot = assertNotNull(repository.resolve(rawRoute))
+        assertEquals(0, rawSnapshot.selectedIndex)
+        assertEquals(rawSibling, rawSnapshot.selected)
+        assertEquals(listOf(rendered, nextRendered), rawSnapshot.media)
+
+        val nextRoute = assertNotNull(repository.select(rawRoute, nextRendered))
+        val nextSnapshot = assertNotNull(repository.resolve(nextRoute))
+        assertEquals(1, nextSnapshot.selectedIndex)
+        assertEquals(nextRendered, nextSnapshot.selected)
+
+        val renderedRoute = assertNotNull(repository.select(nextRoute, rendered))
+        assertEquals(0, renderedRoute.selectedIndex)
+        assertEquals(rendered, assertNotNull(repository.resolve(renderedRoute)).selected)
+        assertNull(repository.select(route, unrelatedRaw))
     }
 
     private fun file(id: Long) = NextcloudFile(

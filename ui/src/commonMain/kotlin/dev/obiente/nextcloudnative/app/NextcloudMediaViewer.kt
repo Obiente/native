@@ -162,6 +162,13 @@ fun NextcloudMediaViewer(
     ) {
         mutableStateOf<MemoriesLivePhotoSource?>(null)
     }
+    var livePhotoCompatibilityRangePlan by remember(
+        session.serverUrl,
+        session.loginName,
+        livePhotoDiscoveryIdentity,
+    ) {
+        mutableStateOf<NativeVideoCompatibilityRangePlan?>(null)
+    }
     var motionPlaying by remember(
         session.serverUrl,
         session.loginName,
@@ -233,8 +240,11 @@ fun NextcloudMediaViewer(
         memoriesLivePhotoCapability,
         platformNativeVideoPlaybackAvailable,
         session,
+        services,
+        userId,
     ) {
         livePhotoSource = null
+        livePhotoCompatibilityRangePlan = null
         motionPlaying = false
         if (
             !selected.shouldDiscoverMemoriesLivePhoto(
@@ -244,12 +254,24 @@ fun NextcloudMediaViewer(
         ) {
             return@LaunchedEffect
         }
-        livePhotoSource = livePhotoLookupOrNull {
+        val resolvedLivePhotoSource = livePhotoLookupOrNull {
             resolveMemoriesLivePhotoSource(
                 services = services,
                 session = session,
                 file = selected,
             )
+        }
+        livePhotoSource = resolvedLivePhotoSource
+        livePhotoCompatibilityRangePlan = resolvedLivePhotoSource?.let { source ->
+            livePhotoLookupOrNull {
+                resolveMemoriesLivePhotoCompatibilityRangePlan(
+                    services = services,
+                    session = session,
+                    userId = userId,
+                    selected = selected,
+                    source = source,
+                )
+            }
         }
     }
 
@@ -479,12 +501,35 @@ fun NextcloudMediaViewer(
         val mediaCanvasModifier = when (viewerLayout.contentLayout) {
             MediaViewerContentLayout.FullCanvasBehindChrome -> Modifier.fillMaxSize()
         }
-        val playbackRangeSource = remember(selected, session, userId, services) {
-            selected.nativeVideoRangeSourceOrNull(
-                session = session,
-                userId = userId,
-                services = services,
-            )
+        val playbackCompatibilityRangePlan = remember(
+            playbackSource,
+            selected,
+            userId,
+            livePhotoCompatibilityRangePlan,
+        ) {
+            when (playbackSource) {
+                is NativeVideoPlaybackSource.MemoriesLivePhoto ->
+                    livePhotoCompatibilityRangePlan
+                is NativeVideoPlaybackSource.DavFile ->
+                    selected.wholeFileVideoCompatibilityPlanOrNull(userId)
+                null -> null
+            }
+        }
+        val playbackRangeSource = remember(
+            playbackCompatibilityRangePlan,
+            session,
+            userId,
+            services,
+        ) {
+            playbackCompatibilityRangePlan?.let { plan ->
+                runCatching {
+                    plan.openRangeSource(
+                        services = services,
+                        session = session,
+                        userId = userId,
+                    )
+                }.getOrNull()
+            }
         }
         DisposableEffect(playbackRangeSource) {
             onDispose {
@@ -515,9 +560,6 @@ fun NextcloudMediaViewer(
                 },
                 onFailure = { failure ->
                     nativeVideoFailure = failure
-                    if (playbackSource is NativeVideoPlaybackSource.MemoriesLivePhoto) {
-                        motionPlaying = false
-                    }
                 },
                 modifier = mediaCanvasModifier,
             )
@@ -655,17 +697,22 @@ fun NextcloudMediaViewer(
                         Button(
                             onClick = {
                                 compatibilityPlaybackRequested = true
+                                if (playbackSource is NativeVideoPlaybackSource.MemoriesLivePhoto) {
+                                    motionPlaying = true
+                                }
                                 nativeVideoFailure = null
                             },
                         ) {
                             Text("Try compatibility playback")
                         }
                     }
-                    TextButton(
-                        onClick = ::openInMediaApp,
-                        enabled = !externalOpening && selected.hasAuthoritativeMediaDavAccess(userId),
-                    ) {
-                        Text(if (externalOpening) "Preparing..." else "Open in another app")
+                    if (playbackSource !is NativeVideoPlaybackSource.MemoriesLivePhoto) {
+                        TextButton(
+                            onClick = ::openInMediaApp,
+                            enabled = !externalOpening && selected.hasAuthoritativeMediaDavAccess(userId),
+                        ) {
+                            Text(if (externalOpening) "Preparing..." else "Open in another app")
+                        }
                     }
                 }
             }
@@ -1343,30 +1390,6 @@ internal fun NextcloudFile.nativeVideoPlaybackSource(
     }
     return takeIf { canUsePlatformNativeVideoPlayback(userId, nativePlaybackAvailable) }
         ?.let { NativeVideoPlaybackSource.DavFile(it) }
-}
-
-private fun NextcloudFile.nativeVideoRangeSourceOrNull(
-    session: NextcloudSession,
-    userId: String,
-    services: NextcloudPlatformServices,
-): NativeVideoRangeSource? {
-    if (!canUsePlatformNativeVideoPlayback(userId, nativePlaybackAvailable = true)) return null
-    val sourceSize = size?.takeIf { it > 0L } ?: return null
-    val expectedEtag = etag
-        ?.takeIf { runCatching { requireSafeFileRangeEtag(it) }.isSuccess }
-        ?: return null
-    val rangeSession = services.openFileRangeSession(
-        session = session,
-        userId = userId,
-        path = path,
-        size = sourceSize,
-        expectedEtag = expectedEtag,
-    )
-    return NativeVideoRangeSource(
-        size = rangeSession.size,
-        readBlock = rangeSession::read,
-        closeBlock = rangeSession::close,
-    )
 }
 
 private const val MAXIMUM_PREVIEW_IMAGE_DIMENSION = 1_600

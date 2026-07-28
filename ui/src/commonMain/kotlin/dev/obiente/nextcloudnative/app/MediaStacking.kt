@@ -24,6 +24,7 @@ data class MediaStack(
 data class MediaStackViewerSequence(
     val navigationItems: List<NextcloudFile>,
     val sourceMembers: List<NextcloudFile>,
+    val navigationIdentityBySourceIdentity: Map<String, String> = emptyMap(),
 ) {
     init {
         require(navigationItems.map(NextcloudFile::path).distinct().size == navigationItems.size) {
@@ -34,6 +35,14 @@ data class MediaStackViewerSequence(
         }
         require(navigationItems.all { item -> sourceMembers.any { source -> source.path == item.path } }) {
             "Every media viewer navigation item must remain available as a source."
+        }
+        val navigationIdentities = navigationItems.mapTo(mutableSetOf(), ::mediaViewerFileIdentity)
+        val sourceIdentities = sourceMembers.mapTo(mutableSetOf(), ::mediaViewerFileIdentity)
+        require(navigationIdentityBySourceIdentity.keys.all(sourceIdentities::contains)) {
+            "The media viewer source mapping contains an unknown source."
+        }
+        require(navigationIdentityBySourceIdentity.values.all(navigationIdentities::contains)) {
+            "The media viewer source mapping contains an unknown navigation item."
         }
     }
 }
@@ -163,6 +172,14 @@ fun mediaStackViewerSequence(stacks: List<MediaStack>): MediaStackViewerSequence
             .flatMap { stack -> stack.members.asSequence() }
             .distinctBy(NextcloudFile::path)
             .toList(),
+        navigationIdentityBySourceIdentity = buildMap {
+            stacks.forEach { stack ->
+                val navigationIdentity = mediaViewerFileIdentity(stack.cover)
+                stack.members.forEach { source ->
+                    put(mediaViewerFileIdentity(source), navigationIdentity)
+                }
+            }
+        },
     )
 
 fun mediaViewerNavigationIndex(
@@ -360,6 +377,18 @@ private fun createMediaStack(files: List<NextcloudFile>): MediaStack {
         hasRenderedImage = ordered.any {
             it.mediaAssetFormat() in setOf(MediaAssetFormat.Jpeg, MediaAssetFormat.Image)
         },
+    )
+}
+
+internal fun MediaStack.withAdditionalMediaStackMembers(
+    additionalMembers: List<NextcloudFile>,
+): MediaStack = if (additionalMembers.isEmpty()) {
+    this
+} else {
+    createMediaStack(
+        (members + additionalMembers)
+            .filterNot(NextcloudFile::isDirectory)
+            .distinctBy(::mediaViewerFileIdentity),
     )
 }
 

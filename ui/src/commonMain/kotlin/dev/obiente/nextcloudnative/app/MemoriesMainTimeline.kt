@@ -177,6 +177,8 @@ data class MemoriesMainTimelinePage(
         rawObserved = media.any { item ->
             item.rawStackFileIds.isNotEmpty() || item.timelineEntry.file.isRawPhoto()
         },
+        rawStackFileIdsByEntryIdentity = rawStackFileIdsByEntryIdentity,
+        rawStackRelationshipsAuthoritative = true,
     )
 }
 

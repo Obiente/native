@@ -25,6 +25,106 @@ internal class NativeVideoRangeSource(
     override fun close() = closeBlock()
 }
 
+internal sealed interface NativeVideoCompatibilityRangePlan {
+    val file: NextcloudFile
+
+    data class WholeFile(
+        override val file: NextcloudFile,
+    ) : NativeVideoCompatibilityRangePlan
+
+    data class EmbeddedTrailer(
+        override val file: NextcloudFile,
+        val offset: Long,
+    ) : NativeVideoCompatibilityRangePlan {
+        init {
+            require(offset > 0L) { "A Live Photo trailer offset must be positive." }
+            require(file.size?.let { offset < it } == true) {
+                "A Live Photo trailer offset must be inside the source file."
+            }
+        }
+    }
+}
+
+internal fun NextcloudFile.wholeFileVideoCompatibilityPlanOrNull(
+    userId: String,
+): NativeVideoCompatibilityRangePlan.WholeFile? =
+    takeIf {
+        canUsePlatformNativeVideoPlayback(userId, nativePlaybackAvailable = true) &&
+            hasSafeSeekableVideoGeneration()
+    }?.let { file -> NativeVideoCompatibilityRangePlan.WholeFile(file) }
+
+internal fun NextcloudFile.embeddedLivePhotoCompatibilityPlanOrNull(
+    source: MemoriesLivePhotoSource,
+    userId: String,
+): NativeVideoCompatibilityRangePlan.EmbeddedTrailer? {
+    if (source.fileId != fileId || !hasAuthoritativeMediaDavAccess(userId)) return null
+    if (!hasSafeSeekableVideoGeneration()) return null
+    val match = LIVE_PHOTO_TRAILER_OFFSET_PATTERN.matchEntire(source.reference.serverToken)
+        ?: return null
+    val offset = match.groupValues[1].toLongOrNull()?.takeIf { it > 0L } ?: return null
+    val sourceSize = size?.takeIf { it > 0L } ?: return null
+    if (offset >= sourceSize) return null
+    return NativeVideoCompatibilityRangePlan.EmbeddedTrailer(this, offset)
+}
+
+internal fun NativeVideoCompatibilityRangePlan.openRangeSource(
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+    userId: String,
+): NativeVideoRangeSource {
+    val sourceSize = requireNotNull(file.size?.takeIf { it > 0L }) {
+        "A seekable video source must have a positive size."
+    }
+    val expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag))
+    require(file.hasAuthoritativeMediaDavAccess(userId)) {
+        "A seekable video source requires authoritative file access."
+    }
+    requireSafeFilePath(file.path, allowRoot = false)
+    val rangeSession = services.openFileRangeSession(
+        session = session,
+        userId = userId,
+        path = file.path,
+        size = sourceSize,
+        expectedEtag = expectedEtag,
+    )
+    val sourceOffset = when (this) {
+        is NativeVideoCompatibilityRangePlan.WholeFile -> 0L
+        is NativeVideoCompatibilityRangePlan.EmbeddedTrailer -> offset
+    }
+    val exposedSize = sourceSize - sourceOffset
+    return NativeVideoRangeSource(
+        size = exposedSize,
+        readBlock = { offset, length ->
+            rangeSession.read(sourceReadOffset(offset, length), length)
+        },
+        closeBlock = rangeSession::close,
+    )
+}
+
+internal fun NativeVideoCompatibilityRangePlan.sourceReadOffset(
+    exposedOffset: Long,
+    length: Int,
+): Long {
+    require(exposedOffset >= 0L && length > 0) { "The video range is invalid." }
+    val sourceSize = requireNotNull(file.size?.takeIf { it > 0L })
+    val sourceOffset = when (this) {
+        is NativeVideoCompatibilityRangePlan.WholeFile -> 0L
+        is NativeVideoCompatibilityRangePlan.EmbeddedTrailer -> offset
+    }
+    val exposedSize = sourceSize - sourceOffset
+    val endExclusive = Math.addExact(exposedOffset, length.toLong())
+    require(endExclusive <= exposedSize) { "The video range exceeds the source size." }
+    return Math.addExact(sourceOffset, exposedOffset)
+}
+
+private fun NextcloudFile.hasSafeSeekableVideoGeneration(): Boolean =
+    size?.let { it > 0L } == true &&
+        etag?.let { runCatching { requireSafeFileRangeEtag(it) }.isSuccess } == true &&
+        runCatching { requireSafeFilePath(path, allowRoot = false) }.isSuccess
+
+private val LIVE_PHOTO_TRAILER_OFFSET_PATTERN =
+    Regex("""self__traileroffset=([0-9]+)""")
+
 internal class NativeVideoRangeCache(
     private val source: NativeVideoRangeSource,
     private val readAheadBytes: Int = DEFAULT_VIDEO_READ_AHEAD_BYTES,

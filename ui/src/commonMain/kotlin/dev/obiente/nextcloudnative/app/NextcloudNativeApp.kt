@@ -202,6 +202,7 @@ private sealed interface Screen {
     data class MediaViewer(
         val navigationKey: String,
         val selectedIndex: Int,
+        val selectedSourceIndex: Int,
         val returnTo: Screen,
     ) : Screen
     @Serializable
@@ -651,15 +652,18 @@ private fun AuthenticatedApp(
         selected: NextcloudFile,
         returnTo: Screen,
         sourceMembers: List<NextcloudFile> = media,
+        navigationIdentityBySourceIdentity: Map<String, String> = emptyMap(),
     ): Screen.MediaViewer {
         val route = mediaViewerNavigationRepository.register(
             media = media,
             selected = selected,
             sourceMembers = sourceMembers,
+            navigationIdentityBySourceIdentity = navigationIdentityBySourceIdentity,
         )
         return Screen.MediaViewer(
             navigationKey = route.key,
             selectedIndex = route.selectedIndex,
+            selectedSourceIndex = route.selectedSourceIndex,
             returnTo = returnTo,
         )
     }
@@ -669,8 +673,15 @@ private fun AuthenticatedApp(
         selected: NextcloudFile,
         returnTo: Screen,
         sourceMembers: List<NextcloudFile> = media,
+        navigationIdentityBySourceIdentity: Map<String, String> = emptyMap(),
     ) {
-        screen = mediaViewerScreen(media, selected, returnTo, sourceMembers)
+        screen = mediaViewerScreen(
+            media,
+            selected,
+            returnTo,
+            sourceMembers,
+            navigationIdentityBySourceIdentity,
+        )
     }
 
     fun navigateBack() {
@@ -951,6 +962,8 @@ private fun AuthenticatedApp(
                     selected = file,
                     returnTo = Screen.Media,
                     sourceMembers = sequence.sourceMembers,
+                    navigationIdentityBySourceIdentity =
+                        sequence.navigationIdentityBySourceIdentity,
                 )
             },
             onOpenPerson = { screen = Screen.PersonMedia(it) },
@@ -1022,6 +1035,7 @@ private fun AuthenticatedApp(
             val route = MediaViewerNavigationRoute(
                 key = current.navigationKey,
                 selectedIndex = current.selectedIndex,
+                selectedSourceIndex = current.selectedSourceIndex,
             )
             val snapshot = mediaViewerNavigationRepository.resolve(route)
             if (snapshot == null) {
@@ -1042,7 +1056,10 @@ private fun AuthenticatedApp(
                         ?: NextcloudFileSharingCapabilities.Unavailable,
                     onSelect = { selected ->
                         mediaViewerNavigationRepository.select(route, selected)?.let { next ->
-                            screen = current.copy(selectedIndex = next.selectedIndex)
+                            screen = current.copy(
+                                selectedIndex = next.selectedIndex,
+                                selectedSourceIndex = next.selectedSourceIndex,
+                            )
                         }
                     },
                     onSourceRemoved = {
@@ -4895,8 +4912,49 @@ private fun MediaScreen(
     var timelineBackupStatuses by timelineState.backupStatuses
     var timelineInitialLoadCompleted by timelineState.initialLoadCompleted
     val timelineMonthResolver = remember { platformLocalPhotoTimelineMonthResolver() }
-    val indexedTimelineStacks = remember(timeline.entries) {
-        buildPhotoTimelineStackEntries(timeline.entries)
+    var resolvedTimelineRawFilesById by remember(session, userId) {
+        mutableStateOf<Map<Long, NextcloudFile>>(emptyMap())
+    }
+    val timelineRawFileIds = remember(timeline.rawStackFileIdsByEntryIdentity) {
+        timeline.rawStackFileIdsByEntryIdentity.values
+            .asSequence()
+            .flatten()
+            .distinct()
+            .sorted()
+            .toList()
+    }
+    LaunchedEffect(session, services, userId, timelineRawFileIds) {
+        if (userId == null || timelineRawFileIds.isEmpty()) {
+            resolvedTimelineRawFilesById = emptyMap()
+            return@LaunchedEffect
+        }
+        resolvedTimelineRawFilesById = try {
+            services.resolveFilesById(session, userId, timelineRawFileIds)
+                .filter { (fileId, file) ->
+                    fileId in timelineRawFileIds && file.fileId == fileId && file.isRawPhoto()
+                }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+    val timelineRawStackFilesByEntryIdentity = remember(
+        timeline.rawStackFileIdsByEntryIdentity,
+        resolvedTimelineRawFilesById,
+    ) {
+        timeline.rawStackFileIdsByEntryIdentity.mapValues { (_, fileIds) ->
+            fileIds.mapNotNull(resolvedTimelineRawFilesById::get)
+        }
+    }
+    val indexedTimelineStacks = remember(
+        timeline.entries,
+        timelineRawStackFilesByEntryIdentity,
+    ) {
+        buildPhotoTimelineStackEntries(
+            entries = timeline.entries,
+            rawStackFilesByEntryIdentity = timelineRawStackFilesByEntryIdentity,
+        )
     }
     val timelineStacks = remember(indexedTimelineStacks) {
         indexedTimelineStacks.map(PhotoTimelineStackEntry::stack)

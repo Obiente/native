@@ -157,7 +157,10 @@ class MemoriesMainTimelineTest {
             mapOf(media.timelineEntry.identity to listOf(42L, 43L)),
             page.rawStackFileIdsByEntryIdentity,
         )
-        assertTrue(page.asPhotoTimelinePage().rawObserved)
+        val timelinePage = page.asPhotoTimelinePage()
+        assertTrue(timelinePage.rawObserved)
+        assertTrue(timelinePage.rawStackRelationshipsAuthoritative)
+        assertEquals(page.rawStackFileIdsByEntryIdentity, timelinePage.rawStackFileIdsByEntryIdentity)
     }
 
     @Test

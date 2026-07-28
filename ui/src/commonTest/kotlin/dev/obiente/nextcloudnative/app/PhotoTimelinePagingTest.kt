@@ -888,6 +888,81 @@ class PhotoTimelinePagingTest {
     }
 
     @Test
+    fun authoritativeRawStackRelationshipsSurvivePagingAndFollowRetainedCovers() {
+        val firstCover = entry(1L, 3L, "Photos/first.jpg")
+        val secondCover = entry(2L, 2L, "Photos/second.jpg")
+        val refresh = PhotoTimelineState(retentionLimit = 2).beginRefresh()
+        var state = refresh.state.accept(
+            requireNotNull(refresh.token),
+            PhotoTimelinePage(
+                entries = listOf(firstCover),
+                nextCursor = PhotoTimelineCursor("older"),
+                rawStackFileIdsByEntryIdentity = mapOf(firstCover.identity to listOf(11L)),
+                rawStackRelationshipsAuthoritative = true,
+            ),
+        )
+
+        val append = state.beginNextPage()
+        state = append.state.accept(
+            requireNotNull(append.token),
+            PhotoTimelinePage(
+                entries = listOf(secondCover),
+                nextCursor = PhotoTimelineCursor("oldest"),
+                rawStackFileIdsByEntryIdentity = mapOf(secondCover.identity to listOf(22L)),
+                rawStackRelationshipsAuthoritative = true,
+            ),
+        )
+
+        assertEquals(
+            mapOf(
+                firstCover.identity to listOf(11L),
+                secondCover.identity to listOf(22L),
+            ),
+            state.rawStackFileIdsByEntryIdentity,
+        )
+
+        val oldest = state.beginNextPage()
+        state = oldest.state.accept(
+            requireNotNull(oldest.token),
+            PhotoTimelinePage(
+                entries = listOf(entry(3L, 1L, "Photos/third.jpg")),
+                nextCursor = null,
+                rawStackRelationshipsAuthoritative = true,
+            ),
+        )
+
+        assertEquals(listOf(2L, 3L), state.entries.map { it.file.fileId })
+        assertEquals(
+            mapOf(secondCover.identity to listOf(22L)),
+            state.rawStackFileIdsByEntryIdentity,
+        )
+    }
+
+    @Test
+    fun authoritativeRawMembersJoinTheirCoverWithoutBecomingTimelinePages() {
+        val cover = entry(1L, 3L, "Photos/rendered-name.jpg")
+        val next = entry(2L, 2L, "Photos/next.jpg")
+        val raw = file(11L, "Photos/camera-original.raf", "3").copy(
+            mimeType = "image/x-fuji-raf",
+        )
+
+        val indexedStacks = buildPhotoTimelineStackEntries(
+            entries = listOf(cover, next),
+            rawStackFilesByEntryIdentity = mapOf(cover.identity to listOf(raw)),
+        )
+        val sequence = mediaStackViewerSequence(
+            indexedStacks.map(PhotoTimelineStackEntry::stack),
+        )
+
+        assertEquals(listOf(cover.file, next.file), sequence.navigationItems)
+        assertEquals(listOf(cover.file, raw, next.file), sequence.sourceMembers)
+        assertEquals(
+            mediaViewerFileIdentity(cover.file),
+            sequence.navigationIdentityBySourceIdentity[mediaViewerFileIdentity(raw)],
+        )
+    }
+
+    @Test
     fun dateIndexBuildsMonthAndYearStopsWithJumpFractions() {
         val entries = listOf(
             entry(1L, timestamp("Fri, 01 Mar 2024 12:00:00 GMT")),
