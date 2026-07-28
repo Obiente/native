@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import { PNG } from "pngjs";
 import { fileURLToPath } from "node:url";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -156,7 +157,7 @@ export async function verifyCaptureAssets(manifest) {
     const imagePath = path.join(websiteRoot, "public", "screenshots", capture.file);
     try {
       const bytes = await readFile(imagePath);
-      const dimensions = pngDimensions(bytes);
+      const dimensions = decodePngDimensions(bytes);
       if (dimensions.width !== capture.width || dimensions.height !== capture.height) {
         failures.push(
           `${capture.file} is ${dimensions.width}x${dimensions.height}; manifest expects ` +
@@ -277,15 +278,17 @@ async function digestCaptureSources(sources) {
   return digest.digest("hex");
 }
 
-function pngDimensions(bytes) {
-  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+export function decodePngDimensions(bytes) {
+  const decoded = PNG.sync.read(bytes, {
+    checkCRC: true,
+  });
   requireValue(
-    bytes.length >= 24 && signature.every((value, index) => bytes[index] === value),
-    "file is not a PNG image",
+    decoded.data.length === decoded.width * decoded.height * 4,
+    "decoded PNG pixel data has an unexpected length",
   );
   return {
-    width: bytes.readUInt32BE(16),
-    height: bytes.readUInt32BE(20),
+    width: decoded.width,
+    height: decoded.height,
   };
 }
 

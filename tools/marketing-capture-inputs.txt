@@ -1,4 +1,9 @@
 # Capture source inventory shared by the Compose renderer and freshness verifier.
+build.gradle.kts
+settings.gradle.kts
+gradle.properties
+gradle/libs.versions.toml
+gradle/wrapper/gradle-wrapper.properties
 ui/build.gradle.kts
 ui/src/commonMain/kotlin
 ?ui/src/commonMain/resources

@@ -153,6 +153,20 @@ tasks.register<JavaExec>("captureMarketingScreenshots") {
     workingDir(rootProject.projectDir)
 }
 
+tasks.register<JavaExec>("capturePhotoTimelinePreview") {
+    group = "verification"
+    description = "Renders the phone Photos timeline from isolated synthetic fixtures."
+    dependsOn(desktopCaptureCompilation.compileTaskProvider)
+    classpath(
+        desktopCaptureCompilation.output.allOutputs,
+        desktopCaptureCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set(
+        "dev.obiente.nextcloudnative.nativeui.preview.PhotoTimelinePreviewMainKt",
+    )
+    workingDir(rootProject.projectDir)
+}
+
 tasks.register<JavaExec>("runDeckInteractionPreview") {
     group = "verification"
     description = "Opens a network-free synthetic Deck workspace for pointer and layout QA."

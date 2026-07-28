@@ -69,6 +69,16 @@ data class NextcloudServerInfo(
 )
 
 @Serializable
+data class NextcloudLivePhotoReference(
+    /** Opaque server token returned by Memories. It must never be parsed or reconstructed. */
+    val serverToken: String,
+) {
+    init {
+        require(serverToken.isSafeLivePhotoToken()) { "The Live Photo reference is invalid." }
+    }
+}
+
+@Serializable
 data class NextcloudFile(
     val path: String,
     val name: String,
@@ -97,6 +107,8 @@ data class NextcloudFile(
     val permissions: String? = null,
     /** Strong content identities supplied by DAV clients, for example `SHA256:<hex>`. */
     val checksums: List<String> = emptyList(),
+    /** Optional Memories relationship for the motion component of this still image. */
+    val livePhoto: NextcloudLivePhotoReference? = null,
 )
 
 data class NextcloudFileContent(
@@ -598,6 +610,27 @@ interface NextcloudPlatformServices {
     )
 
     suspend fun listMedia(session: NextcloudSession, userId: String): List<NextcloudFile>
+
+    /**
+     * Loads one bounded, newest-first Photos timeline page.
+     *
+     * Implementations should use an opaque cursor and retain independent server-side partitions
+     * when one media type has more results than another.
+     */
+    suspend fun listMediaTimelinePage(
+        session: NextcloudSession,
+        userId: String,
+        cursor: PhotoTimelineCursor?,
+        rawPreviouslyObserved: Boolean = false,
+    ): PhotoTimelinePage {
+        if (cursor != null) return PhotoTimelinePage(emptyList(), null)
+        return PhotoTimelinePage(
+            entries = listMedia(session, userId)
+                .mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull)
+                .take(MAX_PHOTO_TIMELINE_PAGE_SIZE),
+            nextCursor = null,
+        )
+    }
 
     /**
      * Returns locally known backup state for authoritative server paths.

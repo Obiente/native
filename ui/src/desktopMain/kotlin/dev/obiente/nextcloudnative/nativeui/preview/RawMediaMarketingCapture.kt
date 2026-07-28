@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.app.MAX_RAW_DISPLAY_PREVIEW_BYTES
 import dev.obiente.nextcloudnative.app.MediaDisplayPayloadKind
 import dev.obiente.nextcloudnative.app.MediaViewerReadiness
 import dev.obiente.nextcloudnative.app.MediaViewerStateObservation
+import dev.obiente.nextcloudnative.app.MemoriesLivePhotoCapability
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudApiRequest
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
@@ -53,6 +54,7 @@ internal class RawMediaMarketingCapture private constructor(
                     userId = FIXTURE_USER_ID,
                     services = services,
                     taggingAvailable = false,
+                    memoriesLivePhotoCapability = MemoriesLivePhotoCapability.NotAdvertised,
                     sharingCapabilities = NextcloudFileSharingCapabilities.Unavailable,
                     onSelect = { selected ->
                         check(selected.path == RAW_PATH) {
