@@ -270,6 +270,149 @@ class PhotoFolderBrowsingTest {
         assertEquals(snapshot.files, refreshed.files)
     }
 
+    @Test
+    fun `paged summary preserves hierarchy and logical counts across timeline pages`() {
+        val state = PhotoFolderBrowseState(
+            selectedFolderPath = "Photos",
+            scope = PhotoFolderBrowseScope.RecursiveMedia,
+        )
+        val accumulator = PhotoFolderSummaryAccumulator(
+            selectedFolderPath = state.selectedFolderPath,
+            selectedScope = state.scope,
+            maximumMediaRecords = 8,
+            maximumFolders = 8,
+            maximumSelectedMediaRecords = 8,
+        )
+
+        accumulator.addPage(
+            listOf(
+                file(path = "Photos/Camera/shot.jpg", mimeType = "image/jpeg"),
+            ),
+        )
+        accumulator.addPage(
+            listOf(
+                file(path = "Photos/Camera/shot.RAF", mimeType = "image/x-fuji-raf"),
+                file(path = "Photos/Trips/older.jpg", mimeType = "image/jpeg"),
+                file(path = "Photos/Trips/Archive/oldest.jpg", mimeType = "image/jpeg"),
+            ),
+        )
+
+        val inventory = accumulator.snapshot()
+        assertEquals(4, inventory.summary.indexedMediaRecordCount)
+        assertEquals(3, inventory.summary.rootRecursiveMediaCount)
+        assertEquals(1, inventory.summary.folder("Photos/Camera")?.directMediaCount)
+        assertEquals(2, inventory.summary.folder("Photos/Trips")?.recursiveMediaCount)
+        assertEquals(1, inventory.summary.folder("Photos/Trips")?.directChildFolderCount)
+
+        val result = buildPhotoFolderBrowseResult(inventory, state)
+        assertTrue(result.folders.isEmpty())
+        assertEquals(3, result.recursiveMediaCount)
+        assertEquals(3, result.media.size)
+        assertEquals(2, result.media.single { it.cover.name == "shot.jpg" }.members.size)
+    }
+
+    @Test
+    fun `paged summary normalizes paths and deduplicates records across pages`() {
+        val sparse = file(
+            path = "/Photos/Camera/shot.jpg/",
+            mimeType = null,
+            fileId = null,
+            hasPreview = false,
+            etag = null,
+        )
+        val rich = sparse.copy(
+            path = "Photos/Camera/shot.jpg",
+            mimeType = "image/jpeg",
+            fileId = 42L,
+            hasPreview = true,
+            etag = "rich",
+        )
+        val accumulator = PhotoFolderSummaryAccumulator(
+            selectedFolderPath = "Photos/Camera",
+            selectedScope = PhotoFolderBrowseScope.DirectMediaOnly,
+            maximumMediaRecords = 4,
+            maximumFolders = 4,
+            maximumSelectedMediaRecords = 4,
+        )
+
+        accumulator.addPage(listOf(sparse))
+        accumulator.addPage(
+            listOf(
+                rich,
+                file(
+                    path = "/Photos/Camera/shot.RAF/",
+                    mimeType = "image/x-fuji-raf",
+                ),
+            ),
+        )
+
+        val inventory = accumulator.snapshot()
+        assertEquals(2, inventory.summary.indexedMediaRecordCount)
+        assertEquals(1, inventory.summary.rootRecursiveMediaCount)
+        assertEquals(
+            listOf("Photos/Camera/shot.RAF", "Photos/Camera/shot.jpg"),
+            inventory.selectedMediaFiles.map(NextcloudFile::path).sorted(),
+        )
+        assertEquals(42L, inventory.selectedMediaFiles.single { it.path.endsWith(".jpg") }.fileId)
+        assertEquals(
+            1,
+            buildPhotoFolderBrowseResult(
+                inventory,
+                PhotoFolderBrowseState(
+                    selectedFolderPath = "Photos/Camera",
+                    scope = PhotoFolderBrowseScope.DirectMediaOnly,
+                ),
+            ).media.size,
+        )
+    }
+
+    @Test
+    fun `paged summary and selected media windows enforce independent bounds`() {
+        val selectedWindow = PhotoFolderSummaryAccumulator(
+            selectedFolderPath = "Photos",
+            selectedScope = PhotoFolderBrowseScope.RecursiveMedia,
+            maximumMediaRecords = 3,
+            maximumFolders = 3,
+            maximumSelectedMediaRecords = 1,
+        )
+        selectedWindow.addPage(
+            listOf(
+                file(path = "Photos/one.jpg", mimeType = "image/jpeg"),
+                file(path = "Photos/two.jpg", mimeType = "image/jpeg"),
+            ),
+        )
+        assertEquals(2, selectedWindow.snapshot().summary.rootRecursiveMediaCount)
+        assertEquals(1, selectedWindow.snapshot().selectedMediaFiles.size)
+
+        val mediaBound = PhotoFolderSummaryAccumulator(
+            selectedFolderPath = "",
+            selectedScope = PhotoFolderBrowseScope.RecursiveMedia,
+            maximumMediaRecords = 1,
+            maximumFolders = 3,
+            maximumSelectedMediaRecords = 1,
+        )
+        mediaBound.addPage(listOf(file(path = "Photos/one.jpg", mimeType = "image/jpeg")))
+        assertFailsWith<IllegalArgumentException> {
+            mediaBound.addPage(listOf(file(path = "Photos/two.jpg", mimeType = "image/jpeg")))
+        }
+        assertEquals(1, mediaBound.snapshot().summary.indexedMediaRecordCount)
+
+        val folderBound = PhotoFolderSummaryAccumulator(
+            selectedFolderPath = "",
+            selectedScope = PhotoFolderBrowseScope.RecursiveMedia,
+            maximumMediaRecords = 3,
+            maximumFolders = 1,
+            maximumSelectedMediaRecords = 1,
+        )
+        folderBound.addPage(listOf(file(path = "Photos/one.jpg", mimeType = "image/jpeg")))
+        assertFailsWith<IllegalArgumentException> {
+            folderBound.addPage(
+                listOf(file(path = "Photos/Nested/two.jpg", mimeType = "image/jpeg")),
+            )
+        }
+        assertEquals(listOf("Photos"), folderBound.snapshot().summary.folders.map { it.path })
+    }
+
     private fun photoInventory(): List<NextcloudFile> = listOf(
         directory("Photos"),
         directory("Photos/Camera"),

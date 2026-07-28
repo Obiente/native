@@ -87,6 +87,224 @@ data class PhotoFolderBrowseResult(
 }
 
 /**
+ * Compact folder inventory derived from every unstacked timeline page.
+ *
+ * Full [NextcloudFile] records are deliberately absent. The summary retains only normalized path
+ * and stack identities while pages are accumulated, then exposes folder counts for presentation.
+ */
+data class PhotoFolderInventorySummary(
+    val folders: List<PhotoFolderSummary>,
+    val rootRecursiveMediaCount: Int,
+    val indexedMediaRecordCount: Int,
+) {
+    init {
+        require(rootRecursiveMediaCount >= 0) { "The root photo count is invalid." }
+        require(indexedMediaRecordCount >= rootRecursiveMediaCount) {
+            "The indexed photo record count is invalid."
+        }
+        require(folders.map(PhotoFolderSummary::path).distinct().size == folders.size) {
+            "The photo folder summary contains duplicate folders."
+        }
+        require(folders == folders.sortedBy(PhotoFolderSummary::path)) {
+            "The photo folder summary is not ordered by path."
+        }
+    }
+
+    fun folder(path: String): PhotoFolderSummary? =
+        folders.binarySearchBy(path) { folder -> folder.path }.takeIf { it >= 0 }?.let(folders::get)
+
+    fun recursiveMediaCount(path: String): Int =
+        if (path.isEmpty()) rootRecursiveMediaCount else folder(path)?.recursiveMediaCount ?: 0
+}
+
+/**
+ * One immutable result from a paged folder inventory pass.
+ *
+ * [selectedMediaFiles] is a bounded display window. Folder counts remain independent from that
+ * window and therefore persist when older timeline pages are accumulated.
+ */
+data class PhotoFolderPagedInventory(
+    val selectedFolderPath: String,
+    val selectedScope: PhotoFolderBrowseScope,
+    val summary: PhotoFolderInventorySummary,
+    val selectedMediaFiles: List<NextcloudFile>,
+) {
+    init {
+        requirePhotoFolderPath(selectedFolderPath, allowRoot = true)
+        require(selectedMediaFiles.size <= MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS) {
+            "The selected photo folder media window is too large."
+        }
+        require(
+            selectedMediaFiles.all { file ->
+                file.path.parentFolderPath().isInPhotoFolderScope(selectedFolderPath, selectedScope)
+            },
+        ) {
+            "The retained media does not belong to the selected photo folder."
+        }
+    }
+}
+
+/**
+ * Bounded accumulator for paged, unstacked timeline records.
+ *
+ * Each logical media path is retained only as compact folder/stack metadata. Exact normalized-path
+ * deduplication and RAW/rendered sibling matching therefore continue across page boundaries without
+ * retaining the complete media list. Only the selected folder keeps bounded full records for its
+ * viewer and grid.
+ */
+class PhotoFolderSummaryAccumulator(
+    private val selectedFolderPath: String,
+    private val selectedScope: PhotoFolderBrowseScope,
+    private val maximumMediaRecords: Int = MAX_PHOTO_FOLDER_SUMMARY_MEDIA_RECORDS,
+    private val maximumFolders: Int = MAX_PHOTO_FOLDER_SUMMARY_FOLDERS,
+    private val maximumSelectedMediaRecords: Int = MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS,
+) {
+    private val mediaByPath = linkedMapOf<String, CompactPhotoFolderMedia>()
+    private val folderPaths = linkedSetOf("")
+    private val selectedMediaByPath = linkedMapOf<String, NextcloudFile>()
+
+    init {
+        requirePhotoFolderPath(selectedFolderPath, allowRoot = true)
+        require(maximumMediaRecords in 1..MAX_PHOTO_FOLDER_SUMMARY_MEDIA_RECORDS) {
+            "The photo folder summary media limit is invalid."
+        }
+        require(maximumFolders in 1..MAX_PHOTO_FOLDER_SUMMARY_FOLDERS) {
+            "The photo folder summary folder limit is invalid."
+        }
+        require(maximumSelectedMediaRecords in 1..MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS) {
+            "The selected photo folder media limit is invalid."
+        }
+        selectedFolderPath.ancestorsIncludingSelf().forEach(folderPaths::add)
+        require(folderPaths.size <= maximumFolders + 1) {
+            "The selected photo folder exceeds the summary folder bound."
+        }
+    }
+
+    /**
+     * Adds one timeline page atomically. A page that would exceed a configured bound is rejected
+     * before any accumulator state changes.
+     */
+    fun addPage(records: List<NextcloudFile>) {
+        val pageMedia = reconcilePhotoFolderInventory(records)
+            .asSequence()
+            .filter { file -> !file.isDirectory && file.mediaAssetFormat() != MediaAssetFormat.Other }
+            .toList()
+        val novelMedia = pageMedia.filterNot { file -> file.path in mediaByPath }
+        require(mediaByPath.size + novelMedia.size <= maximumMediaRecords) {
+            "The paged photo folder summary exceeds its media bound."
+        }
+        val novelFolders = novelMedia
+            .asSequence()
+            .flatMap { file -> file.path.parentFolderPath().ancestorsIncludingSelf().asSequence() }
+            .filterNot(folderPaths::contains)
+            .toSet()
+        require(folderPaths.size + novelFolders.size <= maximumFolders + 1) {
+            "The paged photo folder summary exceeds its folder bound."
+        }
+
+        pageMedia.forEach { file ->
+            if (file.path !in mediaByPath) {
+                mediaByPath[file.path] = file.toCompactPhotoFolderMedia()
+            }
+            file.path.parentFolderPath().ancestorsIncludingSelf().forEach(folderPaths::add)
+
+            if (file.path.parentFolderPath().isInPhotoFolderScope(selectedFolderPath, selectedScope)) {
+                when {
+                    file.path in selectedMediaByPath ->
+                        selectedMediaByPath[file.path] = listOf(
+                            selectedMediaByPath.getValue(file.path),
+                            file,
+                        ).maxWith(photoInventoryPreference)
+                    selectedMediaByPath.size < maximumSelectedMediaRecords ->
+                        selectedMediaByPath[file.path] = file
+                }
+            }
+        }
+    }
+
+    fun snapshot(): PhotoFolderPagedInventory {
+        val renderedKeysByFolder = mediaByPath.values
+            .asSequence()
+            .filter { record ->
+                record.format == MediaAssetFormat.Jpeg || record.format == MediaAssetFormat.Image
+            }
+            .groupBy(CompactPhotoFolderMedia::folderPath)
+            .mapValues { (_, records) -> records.flatMapTo(mutableSetOf(), CompactPhotoFolderMedia::stackKeys) }
+        val directMediaCounts = mediaByPath.values
+            .asSequence()
+            .filterNot { record ->
+                record.format == MediaAssetFormat.Raw &&
+                    record.stackKeys.single() in renderedKeysByFolder[record.folderPath].orEmpty()
+            }
+            .groupingBy(CompactPhotoFolderMedia::folderPath)
+            .eachCount()
+        val recursiveMediaCounts = buildMap<String, Int> {
+            directMediaCounts.forEach { (folderPath, count) ->
+                folderPath.ancestorsIncludingSelf().forEach { ancestor ->
+                    put(ancestor, getOrElse(ancestor) { 0 } + count)
+                }
+            }
+        }
+        val directFolderCounts = folderPaths
+            .asSequence()
+            .filter(String::isNotEmpty)
+            .groupingBy(String::parentFolderPath)
+            .eachCount()
+        val folders = folderPaths
+            .asSequence()
+            .filter(String::isNotEmpty)
+            .sorted()
+            .map { path ->
+                PhotoFolderSummary(
+                    path = path,
+                    name = path.substringAfterLast('/'),
+                    directMediaCount = directMediaCounts[path] ?: 0,
+                    recursiveMediaCount = recursiveMediaCounts[path] ?: 0,
+                    directChildFolderCount = directFolderCounts[path] ?: 0,
+                )
+            }
+            .toList()
+
+        return PhotoFolderPagedInventory(
+            selectedFolderPath = selectedFolderPath,
+            selectedScope = selectedScope,
+            summary = PhotoFolderInventorySummary(
+                folders = folders,
+                rootRecursiveMediaCount = recursiveMediaCounts[""] ?: 0,
+                indexedMediaRecordCount = mediaByPath.size,
+            ),
+            selectedMediaFiles = selectedMediaByPath.values.toList(),
+        )
+    }
+}
+
+private data class CompactPhotoFolderMedia(
+    val folderPath: String,
+    val format: MediaAssetFormat,
+    val stackKeys: Set<String>,
+)
+
+private fun NextcloudFile.toCompactPhotoFolderMedia(): CompactPhotoFolderMedia {
+    val stem = name.substringBeforeLast('.', missingDelimiterValue = name).lowercase()
+    val keys = when (mediaAssetFormat()) {
+        MediaAssetFormat.Raw -> setOf(if (".original" in stem) stem.substringBefore('.') else stem)
+        MediaAssetFormat.Jpeg,
+        MediaAssetFormat.Image,
+        -> buildSet {
+            add(stem)
+            if ('.' in stem) add(stem.substringBefore('.'))
+        }
+        MediaAssetFormat.Video -> emptySet()
+        MediaAssetFormat.Other -> error("Non-media files cannot enter a photo folder summary.")
+    }
+    return CompactPhotoFolderMedia(
+        folderPath = path.parentFolderPath(),
+        format = mediaAssetFormat(),
+        stackKeys = keys,
+    )
+}
+
+/**
  * A bounded, account-local snapshot used to paint the folder browser immediately while its
  * inventory is revalidated in the background.
  */
@@ -158,50 +376,37 @@ fun buildPhotoFolderBrowseResult(
         "The photo folder inventory exceeds the bounded browse window."
     }
 
-    val files = reconcilePhotoFolderInventory(inventory)
-    val mediaFiles = files.filter { file ->
-        !file.isDirectory && file.mediaAssetFormat() != MediaAssetFormat.Other
-    }
-    val folderPaths = inferPhotoFolderPaths(mediaFiles, state.selectedFolderPath)
-    val logicalMedia = stackMediaFiles(
-        mediaFiles,
-    ).sortedWith(photoFolderMediaOrder)
-    val directMediaCounts = logicalMedia
-        .groupingBy(MediaStack::folderPath)
-        .eachCount()
-    val recursiveMediaCounts = buildMap<String, Int> {
-        directMediaCounts.forEach { (folderPath, count) ->
-            folderPath.ancestorsIncludingSelf().forEach { ancestor ->
-                put(ancestor, getOrElse(ancestor) { 0 } + count)
-            }
-        }
-    }
-    val directFolderCounts = folderPaths
-        .asSequence()
-        .filter(String::isNotEmpty)
-        .groupingBy(String::parentFolderPath)
-        .eachCount()
+    val accumulator = PhotoFolderSummaryAccumulator(
+        selectedFolderPath = state.selectedFolderPath,
+        selectedScope = state.scope,
+        maximumMediaRecords = maximumRecords,
+        maximumFolders = MAX_PHOTO_FOLDER_SUMMARY_FOLDERS,
+        maximumSelectedMediaRecords = minOf(MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS, maximumRecords),
+    )
+    accumulator.addPage(inventory)
+    return buildPhotoFolderBrowseResult(accumulator.snapshot(), state)
+}
 
+fun buildPhotoFolderBrowseResult(
+    inventory: PhotoFolderPagedInventory,
+    state: PhotoFolderBrowseState,
+): PhotoFolderBrowseResult {
+    require(inventory.selectedFolderPath == state.selectedFolderPath) {
+        "The paged photo inventory belongs to another selected folder."
+    }
+    require(inventory.selectedScope == state.scope) {
+        "The paged photo inventory belongs to another folder scope."
+    }
     val query = state.query.trim()
     val folders = if (state.scope.showsFolders()) {
-        folderPaths.asSequence()
-            .filter(String::isNotEmpty)
-            .filter { it.isStrictDescendantOf(state.selectedFolderPath) }
-            .filter { path ->
+        inventory.summary.folders.asSequence()
+            .filter { folder -> folder.path.isStrictDescendantOf(state.selectedFolderPath) }
+            .filter { folder ->
                 if (query.isEmpty()) {
-                    path.parentFolderPath() == state.selectedFolderPath
+                    folder.path.parentFolderPath() == state.selectedFolderPath
                 } else {
-                    path.matchesFolderQuery(query)
+                    folder.path.matchesFolderQuery(query)
                 }
-            }
-            .map { path ->
-                PhotoFolderSummary(
-                    path = path,
-                    name = path.substringAfterLast('/'),
-                    directMediaCount = directMediaCounts[path] ?: 0,
-                    recursiveMediaCount = recursiveMediaCounts[path] ?: 0,
-                    directChildFolderCount = directFolderCounts[path] ?: 0,
-                )
             }
             .sortedWith(
                 compareBy<PhotoFolderSummary> { it.name.lowercase() }
@@ -213,30 +418,25 @@ fun buildPhotoFolderBrowseResult(
         emptyList()
     }
 
-    val media = logicalMedia.filter { stack ->
-        val folderPath = stack.folderPath()
-        val inScope = when (state.scope) {
-            PhotoFolderBrowseScope.FoldersOnly -> false
-            PhotoFolderBrowseScope.DirectMediaAndSubfolders,
-            PhotoFolderBrowseScope.DirectMediaOnly,
-            -> folderPath == state.selectedFolderPath
-            PhotoFolderBrowseScope.RecursiveMedia ->
-                folderPath == state.selectedFolderPath ||
-                    folderPath.isStrictDescendantOf(state.selectedFolderPath)
+    val media = stackMediaFiles(inventory.selectedMediaFiles)
+        .sortedWith(photoFolderMediaOrder)
+        .filter { stack ->
+            val folderPath = stack.folderPath()
+            folderPath.isInPhotoFolderScope(state.selectedFolderPath, state.scope) &&
+                (query.isEmpty() || folderPath.matchesFolderQuery(query))
         }
-        inScope && (query.isEmpty() || folderPath.matchesFolderQuery(query))
-    }
 
     return PhotoFolderBrowseResult(
         state = state,
         folders = folders,
         media = media,
-        recursiveMediaCount = recursiveMediaCounts[state.selectedFolderPath] ?: 0,
+        recursiveMediaCount = inventory.summary.recursiveMediaCount(state.selectedFolderPath),
     )
 }
 
 private fun reconcilePhotoFolderInventory(inventory: List<NextcloudFile>): List<NextcloudFile> =
     inventory
+        .map(NextcloudFile::normalizedPhotoFolderRecord)
         .onEach { file ->
             require(file.path.length <= MAX_PHOTO_FOLDER_PATH_LENGTH) {
                 "A photo inventory path is too long."
@@ -247,6 +447,11 @@ private fun reconcilePhotoFolderInventory(inventory: List<NextcloudFile>): List<
         .toSortedMap()
         .values
         .map { duplicates -> duplicates.maxWith(photoInventoryPreference) }
+
+private fun NextcloudFile.normalizedPhotoFolderRecord(): NextcloudFile {
+    val normalizedPath = path.trim('/')
+    return if (normalizedPath == path) this else copy(path = normalizedPath)
+}
 
 private val photoInventoryPreference = compareBy<NextcloudFile>(
     { if (it.isDirectory) 1 else 0 },
@@ -263,23 +468,23 @@ private val photoInventoryPreference = compareBy<NextcloudFile>(
     { it.etag.orEmpty() },
 )
 
-private fun inferPhotoFolderPaths(
-    inventory: List<NextcloudFile>,
-    selectedFolderPath: String,
-): Set<String> = buildSet {
-    add("")
-    selectedFolderPath.ancestorsIncludingSelf().forEach(::add)
-    inventory.forEach { file ->
-        val folderPath = if (file.isDirectory) file.path else file.path.parentFolderPath()
-        folderPath.ancestorsIncludingSelf().forEach(::add)
-    }
-}
-
 private fun PhotoFolderBrowseScope.showsFolders(): Boolean =
     this == PhotoFolderBrowseScope.FoldersOnly ||
         this == PhotoFolderBrowseScope.DirectMediaAndSubfolders
 
 private fun MediaStack.folderPath(): String = cover.path.parentFolderPath()
+
+private fun String.isInPhotoFolderScope(
+    selectedFolderPath: String,
+    scope: PhotoFolderBrowseScope,
+): Boolean = when (scope) {
+    PhotoFolderBrowseScope.FoldersOnly -> false
+    PhotoFolderBrowseScope.DirectMediaAndSubfolders,
+    PhotoFolderBrowseScope.DirectMediaOnly,
+    -> this == selectedFolderPath
+    PhotoFolderBrowseScope.RecursiveMedia ->
+        this == selectedFolderPath || isStrictDescendantOf(selectedFolderPath)
+}
 
 private val photoFolderMediaOrder = compareByDescending<MediaStack> { stack ->
     stack.members
@@ -333,6 +538,9 @@ private fun requirePhotoFolderPath(path: String, allowRoot: Boolean): String {
 }
 
 const val MAX_PHOTO_FOLDER_BROWSE_RECORDS = 50_000
+const val MAX_PHOTO_FOLDER_SUMMARY_MEDIA_RECORDS = 250_000
+const val MAX_PHOTO_FOLDER_SUMMARY_FOLDERS = 25_000
+const val MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS = 2_000
 private const val MAX_PHOTO_FOLDER_PATH_LENGTH = 4_096
 internal const val MAX_PHOTO_FOLDER_QUERY_LENGTH = 256
 private const val MAX_PHOTO_FOLDER_DEPTH = 128
