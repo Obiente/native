@@ -626,6 +626,20 @@ enum class MarketingCaptureScenario(
         "mobile", "phone-portrait", pullRequest = 221, issue = 52,
         width = 1_080, height = 1_800, density = 2.625f,
     ),
+    MusicLibraryAlbumTracksMobile(
+        "music-library-album-tracks-mobile", "music-library-album-tracks-mobile.png",
+        NextcloudPresentation.Adaptive, "Music", "Album track collection",
+        "Ready", MarketingCapturePurpose.Showcase,
+        "mobile", "phone-portrait", issue = 56,
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    MusicLibraryPlaybackErrorDesktop(
+        "music-library-playback-error-desktop", "music-library-playback-error-desktop.png",
+        NextcloudPresentation.Desktop, "Music", "Playback queue",
+        "Playback error with queue retained", MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", issue = 56,
+        width = 1_440, height = 900, density = 1f,
+    ),
 }
 
 data class MarketingCaptureVariant(

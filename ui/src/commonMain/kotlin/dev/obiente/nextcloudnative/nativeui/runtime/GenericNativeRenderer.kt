@@ -866,10 +866,7 @@ fun GenericNativeAppScreen(
                 GenericNativeSurface.MediaLibrary -> GenericMediaLibraryCollection(
                     presentedResource,
                     presentedRecords,
-                    nativeAudioCollectionContext(
-                        datasetContext.parentResourceId,
-                        datasetContext.parentRecord,
-                    ),
+                    nativeAudioCollectionContext(schema, datasetContext),
                     onSelectRecord,
                     imageLoader,
                     audioPlayer,
@@ -4749,10 +4746,22 @@ private fun GenericMediaLibraryCollection(
                 bottom = NextcloudSpacing.XXLarge,
             ),
         ) {
+            if (audioCollectionContext != null) {
+                item(key = "media-collection-context") {
+                    NativeMediaCollectionHeader(
+                        resource = resource,
+                        records = records,
+                        collectionContext = audioCollectionContext,
+                        imageLoader = imageLoader,
+                        audioPlayer = audioPlayer,
+                        mediaArtworkResolver = mediaArtworkResolver,
+                    )
+                }
+            }
             items(mediaItems, key = { (record, _) -> record.id }) { (record, presentation) ->
                 val artwork = remember(resource, record, mediaArtworkResolver) {
                     mediaArtworkResolver?.resolve(resource, record)
-                        ?: presentation.fallbackArtworkReference(record.id)
+                        ?: presentation.nativeFallbackArtworkReference(record.id)
                 }
                 val playable = remember(resource, record, audioCollectionContext) {
                     nativeAudioTrack(resource, record, audioCollectionContext) != null
@@ -4859,7 +4868,7 @@ private fun GenericMediaLibraryCollection(
             items(mediaItems, key = { (record, _) -> record.id }) { (record, presentation) ->
                 val artwork = remember(resource, record, mediaArtworkResolver) {
                     mediaArtworkResolver?.resolve(resource, record)
-                        ?: presentation.fallbackArtworkReference(record.id)
+                        ?: presentation.nativeFallbackArtworkReference(record.id)
                 }
                 val interaction = onSelectRecord?.let { callback -> Modifier.clickable { callback(record) } } ?: Modifier
                 Card(
@@ -4918,20 +4927,111 @@ private fun GenericMediaLibraryCollection(
     }
 }
 
-private fun NativeMediaPresentation.fallbackArtworkReference(
-    recordId: String,
-): NativeMediaArtworkReference {
-    val fallback = when (kind) {
-        NativeMediaItemKind.Artist -> NativeMediaArtworkFallback.Artist
-        NativeMediaItemKind.Album -> NativeMediaArtworkFallback.Album
-        NativeMediaItemKind.Track -> NativeMediaArtworkFallback.Track
-        else -> NativeMediaArtworkFallback.Media
+@Composable
+private fun NativeMediaCollectionHeader(
+    resource: ResourceSpec,
+    records: List<NativeRecord>,
+    collectionContext: NativeAudioCollectionContext,
+    imageLoader: NativeImageLoader?,
+    audioPlayer: NativeAudioRecordPlayer?,
+    mediaArtworkResolver: NativeMediaArtworkResolver?,
+) {
+    val firstPlayableRecord = remember(resource, records, collectionContext) {
+        nativeAudioCollectionFirstPlayableRecord(resource, records, collectionContext)
     }
-    return NativeMediaArtworkReference(
-        relativePath = coverUrl,
-        cacheKey = "${fallback.name.lowercase()}:${recordId.take(128)}:${coverUrl ?: "fallback"}",
-        fallback = fallback,
-    )
+    val artworkReference = remember(
+        resource,
+        firstPlayableRecord,
+        collectionContext,
+        mediaArtworkResolver,
+    ) {
+        nativeAudioCollectionArtworkReference(
+            collectionContext = collectionContext,
+            childResource = resource,
+            firstPlayableRecord = firstPlayableRecord,
+            resolver = mediaArtworkResolver,
+        )
+    }
+    val playableCount = remember(resource, records, collectionContext) {
+        records.count { record -> nativeAudioTrack(resource, record, collectionContext) != null }
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(bottom = NextcloudSpacing.Large),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val compact = maxWidth < 520.dp
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(
+                    if (compact) NextcloudSpacing.Medium else NextcloudSpacing.Large,
+                ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(
+                    if (compact) NextcloudSpacing.Medium else NextcloudSpacing.Large,
+                ),
+            ) {
+                NativeMediaArtworkThumbnail(
+                    reference = artworkReference,
+                    title = collectionContext.title,
+                    imageLoader = imageLoader,
+                    modifier = Modifier.size(if (compact) 80.dp else 112.dp),
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                ) {
+                    Text(
+                        when (collectionContext.kind) {
+                            NativeAudioCollectionKind.Album -> "Album"
+                            NativeAudioCollectionKind.Artist -> "Artist"
+                        },
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        collectionContext.title,
+                        style = if (compact) {
+                            MaterialTheme.typography.titleLarge
+                        } else {
+                            MaterialTheme.typography.headlineSmall
+                        },
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        when (playableCount) {
+                            0 -> "No playable tracks"
+                            1 -> "1 track"
+                            else -> "$playableCount tracks"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (firstPlayableRecord != null && audioPlayer != null) {
+                        Button(
+                            onClick = {
+                                audioPlayer.playCollectionIfPossible(
+                                    resource,
+                                    records,
+                                    collectionContext,
+                                )
+                            },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) {
+                            Icon(
+                                NextcloudIcons.Play,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Text("Play", modifier = Modifier.padding(start = NextcloudSpacing.Small))
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
