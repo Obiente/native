@@ -153,6 +153,13 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelatio
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoadResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRelatedRecordPaging
+import dev.obiente.nextcloudnative.nativeui.runtime.isNativeMailWorkspaceContext
+import dev.obiente.nextcloudnative.nativeui.runtime.isNativeMailContainerRecord
+import dev.obiente.nextcloudnative.nativeui.runtime.hasNativeMailWorkspaceSemantics
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailInboxLandingRecord
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailSoleAccountLandingRecord
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailScreenCacheScopeIsSafe
+import dev.obiente.nextcloudnative.nativeui.runtime.preferredNativeMailComposeAction
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeImageLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecordImageLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecordImagePreview
@@ -856,6 +863,12 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.AdaptiveAppCollectionMobile,
                     MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
                     -> MarketingAdaptiveAppScenario(scenario)
+                    MarketingCaptureScenario.MailWorkspaceDesktop,
+                    MarketingCaptureScenario.MailWorkspaceMobile,
+                    MarketingCaptureScenario.MailWorkspaceLoadingMobile,
+                    MarketingCaptureScenario.MailWorkspaceEmptyMobile,
+                    MarketingCaptureScenario.MailWorkspaceErrorDesktop,
+                    -> MarketingMailWorkspaceScenario(scenario)
                     MarketingCaptureScenario.PhotoTimelineRevalidationErrorMobile,
                     MarketingCaptureScenario.PhotoTimelineReturnToNewestErrorMobile,
                     MarketingCaptureScenario.PhotoTimelineRawRetryMobile,
@@ -2266,6 +2279,14 @@ private fun DynamicDiscoveredAppScreen(
     var paginationState by remember(descriptor) { mutableStateOf<DynamicPaginationState?>(null) }
     var loadingMore by remember(descriptor) { mutableStateOf(false) }
     var loadMoreError by remember(descriptor) { mutableStateOf<String?>(null) }
+    val hasRestoredMailLocation = restoredNavigation.selectedViewId != null ||
+        restoredNavigation.selectedRecord != null ||
+        restoredNavigation.history.isNotEmpty()
+    var automaticMailLandingStage by remember(descriptor) {
+        mutableStateOf(
+            if (hasRestoredMailLocation || !descriptor.hasNativeMailWorkspaceSemantics()) 2 else 0,
+        )
+    }
     val dynamicRecoveryScope = rememberCoroutineScope()
     val dynamicPaginationScope = rememberCoroutineScope()
     val formRelationPageScope = rememberCoroutineScope()
@@ -2426,11 +2447,21 @@ private fun DynamicDiscoveredAppScreen(
         )
     }
 
+    val selectedRecordCacheScope = selectedRecord?.dynamicScreenCacheScope().orEmpty()
+    val selectedScreenIdentity = dynamicScreenSelectionIdentity(
+        resourceId = selectedRecordResourceId,
+        recordId = selectedRecord?.id,
+        recordScope = selectedRecordCacheScope,
+    )
+    val screenCacheAllowed = !descriptor.hasNativeMailWorkspaceSemantics() ||
+        nativeMailScreenCacheScopeIsSafe(schema, selectedRecordResourceId, selectedRecord)
+
     LaunchedEffect(
         descriptor,
         selectedView?.id,
-        selectedRecord?.id,
+        selectedScreenIdentity,
         selectedPathParameterValues,
+        screenCacheAllowed,
         formRelationRequests,
         formRelationLoadAttempt,
         loadAttempt,
@@ -2443,12 +2474,16 @@ private fun DynamicDiscoveredAppScreen(
             delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
             currentCoroutineContext().ensureActive()
         }
+        if (!screenCacheAllowed) recordsByResourceId = emptyMap()
         val cacheKey = dynamicScreenCacheKey(
             session = session,
             appId = descriptor.app.id,
             viewId = view.id,
             selectedRecordId = selectedRecord?.id,
             parameterValues = selectedPathParameterValues,
+            selectedRecordResourceId = selectedRecordResourceId,
+            selectedRecordScope = selectedRecordCacheScope,
+            cacheable = screenCacheAllowed,
         )
         paginationState = null
         loadingMore = false
@@ -3088,47 +3123,61 @@ private fun DynamicDiscoveredAppScreen(
         dynamicCollectionState(schema.action(selectedView.sourceActionId))
     }
     val actionViews = remember(
+        descriptor,
         navigationPlan,
         schema,
         selectedRecord,
         selectedView.resourceId,
         selectedCollectionState,
     ) {
-        val planned = if (selectedRecord == null) {
-            navigationPlan.rootFormActions.filter { action ->
-                action.resourceId == selectedView.resourceId &&
-                    selectedCollectionState == null
-            }
-        } else {
-            val currentResourceId = selectedRecordResourceId.orEmpty()
-            navigationPlan.contextualFormActions.filter { action ->
-                val spec = schema.action(action.actionId)
-                    ?: return@filter false
-                val formView = schema.views.singleOrNull { candidate ->
-                    candidate.id == action.formId &&
-                        candidate.resourceId.sameDynamicResourceAs(spec.resourceId)
-                } ?: return@filter false
-                val activeReadAction = schema.actions.singleOrNull { candidate ->
-                    candidate.id == selectedView.sourceActionId
+        val planned = buildList {
+            addAll(if (selectedRecord == null) {
+                navigationPlan.rootFormActions.filter { action ->
+                    action.resourceId == selectedView.resourceId &&
+                        selectedCollectionState == null
                 }
-                val actionResource = schema.resources.singleOrNull { candidate ->
-                    candidate.id.sameDynamicResourceAs(spec.resourceId)
+            } else {
+                val currentResourceId = selectedRecordResourceId.orEmpty()
+                navigationPlan.contextualFormActions.filter { action ->
+                    val spec = schema.action(action.actionId)
+                        ?: return@filter false
+                    val formView = schema.views.singleOrNull { candidate ->
+                        candidate.id == action.formId &&
+                            candidate.resourceId.sameDynamicResourceAs(spec.resourceId)
+                    } ?: return@filter false
+                    val activeReadAction = schema.actions.singleOrNull { candidate ->
+                        candidate.id == selectedView.sourceActionId
+                    }
+                    val actionResource = schema.resources.singleOrNull { candidate ->
+                        candidate.id.sameDynamicResourceAs(spec.resourceId)
+                    }
+                    val editsMailContainer = descriptor.hasNativeMailWorkspaceSemantics() &&
+                        spec.intent in setOf(ActionIntent.update, ActionIntent.delete) &&
+                        action.resourceId.sameDynamicResourceAs(currentResourceId) &&
+                        selectedRecord?.let { record ->
+                            isNativeMailContainerRecord(schema, currentResourceId, record)
+                        } == true
+                    dynamicContextualFormTargetsActiveSurface(
+                        action = spec,
+                        formView = formView,
+                        activeView = selectedView,
+                        activeReadAction = activeReadAction,
+                        plannedBindingValues = action.pathParameterValues,
+                        selectedRecordResourceId = currentResourceId,
+                        selectedCollectionState = selectedCollectionState,
+                        hasEditableFileField = actionResource
+                            ?.let { resource -> editableNativeFields(resource, spec) }
+                            ?.any { field -> field.kind == FieldKind.file }
+                            ?: false,
+                        uniqueTargetResource = actionResource != null,
+                    ) || editsMailContainer
                 }
-                dynamicContextualFormTargetsActiveSurface(
-                    action = spec,
-                    formView = formView,
-                    activeView = selectedView,
-                    activeReadAction = activeReadAction,
-                    plannedBindingValues = action.pathParameterValues,
-                    selectedRecordResourceId = currentResourceId,
-                    selectedCollectionState = selectedCollectionState,
-                    hasEditableFileField = actionResource
-                        ?.let { resource -> editableNativeFields(resource, spec) }
-                        ?.any { field -> field.kind == FieldKind.file }
-                        ?: false,
-                    uniqueTargetResource = actionResource != null,
-                )
+            })
+            if (selectedRecord != null) {
+                descriptor.preferredNativeMailComposeAction(schema)?.let(::add)
             }
+        }.distinctBy { action ->
+            "${action.formId}:${action.actionId}:${action.pathParameterValues}"
         }
         planned.mapNotNull { action ->
             schema.views.firstOrNull { it.id == action.formId }?.let { view -> action to view }
@@ -3173,9 +3222,48 @@ private fun DynamicDiscoveredAppScreen(
                 loadMoreError = null
                 val pagingView = selectedView
                 val existingRecords = (viewState as? NativeScreenState.Ready)?.records.orEmpty()
-                val values = selectedRecord?.toDynamicRuntimeValues().orEmpty() +
-                    selectedPathParameterValues +
+                val pagingSelection = selectedScreenIdentity
+                val pagingPathParameters = selectedPathParameterValues.toMap()
+                val pagingCacheable = screenCacheAllowed
+                val pagingRequestIdentity = dynamicPaginationRequestIdentity(
+                    session = session,
+                    appId = descriptor.app.id,
+                    viewId = pagingView.id,
+                    resourceId = pagingView.resourceId,
+                    selection = pagingSelection,
+                    pathParameters = pagingPathParameters,
+                    cacheable = pagingCacheable,
+                )
+                val pagingRuntimeValues = selectedRecord?.toDynamicRuntimeValues().orEmpty().toMap()
+                val values = pagingRuntimeValues +
+                    pagingPathParameters +
                     (pagination.spec.parameterName to pagination.nextRequestValue)
+                fun isPagingRequestCurrent(): Boolean {
+                    val activeView = schema.views.firstOrNull { view -> view.id == selectedViewId }
+                        ?: return false
+                    val activeRecord = selectedRecord
+                    val activeSelection = dynamicScreenSelectionIdentity(
+                        resourceId = selectedRecordResourceId,
+                        recordId = activeRecord?.id,
+                        recordScope = activeRecord?.dynamicScreenCacheScope().orEmpty(),
+                    )
+                    val activeCacheable = !descriptor.hasNativeMailWorkspaceSemantics() ||
+                        nativeMailScreenCacheScopeIsSafe(
+                            schema,
+                            selectedRecordResourceId,
+                            activeRecord,
+                        )
+                    val activeIdentity = dynamicPaginationRequestIdentity(
+                        session = session,
+                        appId = descriptor.app.id,
+                        viewId = activeView.id,
+                        resourceId = activeView.resourceId,
+                        selection = activeSelection,
+                        pathParameters = selectedPathParameterValues,
+                        cacheable = activeCacheable,
+                    )
+                    return pagingRequestIdentity.isCurrentDynamicPaginationRequest(activeIdentity)
+                }
                 dynamicPaginationScope.launch {
                     runCatching {
                         loadDynamicRecords(
@@ -3188,37 +3276,38 @@ private fun DynamicDiscoveredAppScreen(
                             cachePolicy = dynamicReadCachePolicy,
                         )
                     }.onSuccess { pageRecords ->
-                        if (selectedViewId != pagingView.id) return@onSuccess
-                        val existingIds = existingRecords.mapTo(hashSetOf(), NativeRecord::id)
-                        val novelRecords = pageRecords.distinctBy(NativeRecord::id)
-                            .filterNot { record -> record.id in existingIds }
+                        if (!isPagingRequestCurrent()) return@onSuccess
+                        val existingIdentities = existingRecords.mapTo(hashSetOf()) { record ->
+                            record.dynamicPaginationRecordIdentity(pagingView.resourceId)
+                        }
+                        val novelRecords = pageRecords
+                            .distinctBy { record -> record.dynamicPaginationRecordIdentity(pagingView.resourceId) }
+                            .filterNot { record ->
+                                record.dynamicPaginationRecordIdentity(pagingView.resourceId) in existingIdentities
+                            }
                         val mergedRecords = existingRecords + novelRecords
-                        recordsByResourceId = recordsByResourceId + (pagingView.resourceId to mergedRecords)
+                        val updatedRecords = recordsByResourceId + (pagingView.resourceId to mergedRecords)
                         viewState = NativeScreenState.Ready(mergedRecords)
-                        paginationState = pagination.spec.toDynamicPaginationState(
+                        val nextPagination = pagination.spec.toDynamicPaginationState(
                             viewId = pagingView.id,
                             lastPage = pageRecords,
                             loadedRecordCount = mergedRecords.size,
                             novelRecordCount = novelRecords.size,
                             nextPageNumber = pagination.nextPageNumber + 1,
                         )
+                        recordsByResourceId = updatedRecords
+                        paginationState = nextPagination
                         sharedDynamicNativeMemoryCache.storeScreen(
-                            dynamicScreenCacheKey(
-                                session = session,
-                                appId = descriptor.app.id,
-                                viewId = pagingView.id,
-                                selectedRecordId = selectedRecord?.id,
-                                parameterValues = selectedPathParameterValues,
-                            ),
+                            pagingRequestIdentity.cacheKey,
                             DynamicScreenSnapshot(
                                 records = mergedRecords,
-                                relatedRecords = recordsByResourceId,
-                                pagination = paginationState?.toCheckpoint(),
+                                relatedRecords = updatedRecords,
+                                pagination = nextPagination?.toCheckpoint(),
                             ),
                         )
                         loadingMore = false
                     }.onFailure { failure ->
-                        if (selectedViewId != pagingView.id) return@onFailure
+                        if (!isPagingRequestCurrent()) return@onFailure
                         loadMoreError = failure.message ?: "Could not load the next page."
                         loadingMore = false
                     }
@@ -3249,6 +3338,113 @@ private fun DynamicDiscoveredAppScreen(
         selectedPathParameterValues = previous.pathParameterValues
         contextualMenuOpen = false
         return true
+    }
+
+    fun selectDynamicRecord(record: NativeRecord) {
+        rememberCurrentLocation()
+        val selectedParentResourceId = record.effectiveNativeResourceId(selectedView.resourceId)
+        val inheritedParameters = inheritDynamicParentParameters(
+            selectedPathParameterValues = selectedPathParameterValues,
+            runtimeValues = runtimeValues,
+        )
+        val nextContext = DynamicResourceRecordContext(
+            resourceId = selectedParentResourceId,
+            recordId = record.id,
+            fieldValues = record.values,
+            parameterValues = inheritedParameters,
+            actionSafeIdentity = record.actionSafeIdentity,
+            actionBindingProvenanceValid = record.actionBindingProvenanceValid,
+            currentLayoutId = selectedView.id,
+        )
+        val nextPlan = descriptor.planDynamicNavigation(nextContext)
+        val compositeTarget = schema.views.firstOrNull { candidate ->
+            candidate.compositeDataGrid?.parentResourceId == selectedParentResourceId
+        }
+        val compositeActionIds = compositeTarget?.compositeDataGrid?.let { grid ->
+            setOf(grid.columnSourceActionId, grid.rowSourceActionId)
+        }.orEmpty()
+        val detailResolution = schema.bestDynamicDetailView(selectedParentResourceId)
+            ?.takeIf { target -> target.id != selectedView.id }
+            ?.let { target ->
+                descriptor.resolveDynamicRecordReadParameters(target.sourceActionId, nextContext)
+                    ?.let { parameters -> target to parameters }
+            }
+        val detailTarget = detailResolution?.first
+        val directChild = descriptor.singleSafeContextualChild(
+            context = nextContext,
+            hasDedicatedSurface = compositeTarget != null || detailTarget != null,
+        )
+        val preferredCollectionChild = descriptor.preferredSemanticContextualChild(nextContext)
+        val primaryContentTarget = primaryDynamicContentDestination(
+            parentResourceId = selectedParentResourceId,
+            destinations = nextPlan.contextualChildDestinations,
+        )
+        val showDestinationMenu = shouldShowDynamicContextDestinationMenu(
+            nextPlan.contextualChildDestinations,
+        )
+        val nextViewId = if (showDestinationMenu) {
+            selectedViewId
+        } else {
+            compositeTarget?.id
+                ?: primaryContentTarget?.layoutId
+                ?: preferredCollectionChild?.layoutId
+                ?: detailTarget?.id
+                ?: directChild?.layoutId
+                ?: selectedViewId
+        }
+        val explicitTargetParameters = primaryContentTarget?.pathParameterValues
+            ?: preferredCollectionChild?.pathParameterValues
+            ?: directChild?.pathParameterValues
+            ?: detailResolution?.second
+        val fallbackTargetParameters = inheritedParameters +
+            nextPlan.contextualChildDestinations
+                .filter { destination -> destination.actionId in compositeActionIds }
+                .flatMap { destination -> destination.pathParameterValues.entries }
+                .associate(Map.Entry<String, String>::toPair)
+        selectedRecord = record
+        selectedRecordResourceId = selectedParentResourceId
+        contextualMenuRecordToken = if (showDestinationMenu) {
+            record.dynamicContextNavigationToken(selectedParentResourceId)
+        } else {
+            null
+        }
+        contextualMenuOpen = showDestinationMenu
+        selectedPathParameterValues = if (showDestinationMenu) {
+            inheritedParameters
+        } else {
+            resolveDynamicRecordSelectionParameters(
+                currentViewId = selectedViewId.orEmpty(),
+                nextViewId = nextViewId.orEmpty(),
+                currentParameters = selectedPathParameterValues,
+                explicitTargetParameters = explicitTargetParameters,
+                fallbackTargetParameters = fallbackTargetParameters,
+            )
+        }
+        selectedViewId = nextViewId
+    }
+
+    LaunchedEffect(
+        descriptor,
+        selectedView.id,
+        viewState,
+        automaticMailLandingStage,
+    ) {
+        val records = (viewState as? NativeScreenState.Ready)?.records ?: return@LaunchedEffect
+        if (records.isEmpty()) return@LaunchedEffect
+        val resource = schema.resource(selectedView.resourceId) ?: return@LaunchedEffect
+        when (automaticMailLandingStage) {
+            0 -> {
+                val account = nativeMailSoleAccountLandingRecord(resource, records)
+                automaticMailLandingStage = if (account == null) 2 else 1
+                account?.let(::selectDynamicRecord)
+            }
+
+            1 -> {
+                val inbox = nativeMailInboxLandingRecord(resource, records)
+                automaticMailLandingStage = 2
+                inbox?.let(::selectDynamicRecord)
+            }
+        }
     }
 
     fun navigateWithinDynamicApp() {
@@ -3646,109 +3842,42 @@ private fun DynamicDiscoveredAppScreen(
                     }
                 }
             }
+            val rendererDatasetContext = NativeDatasetContext(
+                parentResourceId = selectedRecordResourceId,
+                parentRecord = selectedRecord,
+                bindingValues = datasetBindingValues,
+                relatedRecords = datasetRelatedRecords,
+                relatedRecordPaging = relatedRecordPaging,
+            )
+            val mailWorkspaceSupportsSelection = schema.resource(selectedView.resourceId)?.let { resource ->
+                val records = (viewState as? NativeScreenState.Ready)?.records.orEmpty()
+                isNativeMailWorkspaceContext(
+                    schema = schema,
+                    resource = resource,
+                    records = records,
+                    context = rendererDatasetContext,
+                )
+            } == true
             GenericNativeAppScreen(
                 schema = schema,
                 view = selectedView,
                 state = viewState,
                 actionExecutor = executor,
                 selectedRecordId = selectedRecord?.id,
+                selectedRecordResourceId = selectedRecordResourceId,
                 showSelectedRecordDetail = showFallbackRecordDetail,
-                datasetContext = NativeDatasetContext(
-                    parentResourceId = selectedRecordResourceId,
-                    parentRecord = selectedRecord,
-                    bindingValues = datasetBindingValues,
-                    relatedRecords = datasetRelatedRecords,
-                    relatedRecordPaging = relatedRecordPaging,
-                ),
+                datasetContext = rendererDatasetContext,
                 mutationReconciliationGeneration = mutationReconciliationGeneration,
                 collectionBatchRelationLoader = collectionBatchRelationLoader,
                 filePicker = dynamicFilePicker,
                 recordImageLoader = recordImageLoader,
-                onSelectRecord = selectedView.takeIf {
-                    it.component != NativeComponent.detail && it.component != NativeComponent.form
-                }?.let {
-                    { record ->
-                    rememberCurrentLocation()
-                    val selectedParentResourceId = record.effectiveNativeResourceId(selectedView.resourceId)
-                    val inheritedParameters = inheritDynamicParentParameters(
-                        selectedPathParameterValues = selectedPathParameterValues,
-                        runtimeValues = runtimeValues,
-                    )
-                    val nextContext = DynamicResourceRecordContext(
-                        resourceId = selectedParentResourceId,
-                        recordId = record.id,
-                        fieldValues = record.values,
-                        parameterValues = inheritedParameters,
-                        actionSafeIdentity = record.actionSafeIdentity,
-                        actionBindingProvenanceValid = record.actionBindingProvenanceValid,
-                        currentLayoutId = selectedView.id,
-                    )
-                    val nextPlan = descriptor.planDynamicNavigation(nextContext)
-                    val compositeTarget = schema.views.firstOrNull { candidate ->
-                        candidate.compositeDataGrid?.parentResourceId == selectedParentResourceId
-                    }
-                    val compositeActionIds = compositeTarget?.compositeDataGrid?.let { grid ->
-                        setOf(grid.columnSourceActionId, grid.rowSourceActionId)
-                    }.orEmpty()
-                    val detailResolution = schema.bestDynamicDetailView(selectedParentResourceId)
-                        ?.takeIf { target -> target.id != selectedView.id }
-                        ?.let { target ->
-                            descriptor.resolveDynamicRecordReadParameters(target.sourceActionId, nextContext)
-                                ?.let { parameters -> target to parameters }
-                    }
-                    val detailTarget = detailResolution?.first
-                    val directChild = descriptor.singleSafeContextualChild(
-                        context = nextContext,
-                        hasDedicatedSurface = compositeTarget != null || detailTarget != null,
-                    )
-                    val preferredCollectionChild = descriptor.preferredSemanticContextualChild(nextContext)
-                    val primaryContentTarget = primaryDynamicContentDestination(
-                        parentResourceId = selectedParentResourceId,
-                        destinations = nextPlan.contextualChildDestinations,
-                    )
-                    val showDestinationMenu = shouldShowDynamicContextDestinationMenu(
-                        nextPlan.contextualChildDestinations,
-                    )
-                    val nextViewId = if (showDestinationMenu) {
-                        selectedViewId
-                    } else {
-                        compositeTarget?.id
-                            ?: primaryContentTarget?.layoutId
-                            ?: preferredCollectionChild?.layoutId
-                            ?: detailTarget?.id
-                            ?: directChild?.layoutId
-                            ?: selectedViewId
-                    }
-                    val explicitTargetParameters = primaryContentTarget?.pathParameterValues
-                        ?: preferredCollectionChild?.pathParameterValues
-                        ?: directChild?.pathParameterValues
-                        ?: detailResolution?.second
-                    val fallbackTargetParameters = inheritedParameters +
-                        nextPlan.contextualChildDestinations
-                            .filter { destination -> destination.actionId in compositeActionIds }
-                            .flatMap { destination -> destination.pathParameterValues.entries }
-                            .associate(Map.Entry<String, String>::toPair)
-                    selectedRecord = record
-                    selectedRecordResourceId = selectedParentResourceId
-                    contextualMenuRecordToken = if (showDestinationMenu) {
-                        record.dynamicContextNavigationToken(selectedParentResourceId)
-                    } else {
-                        null
-                    }
-                    contextualMenuOpen = showDestinationMenu
-                    selectedPathParameterValues = if (showDestinationMenu) {
-                        inheritedParameters
-                    } else {
-                        resolveDynamicRecordSelectionParameters(
-                            currentViewId = selectedViewId.orEmpty(),
-                            nextViewId = nextViewId.orEmpty(),
-                            currentParameters = selectedPathParameterValues,
-                            explicitTargetParameters = explicitTargetParameters,
-                            fallbackTargetParameters = fallbackTargetParameters,
-                        )
-                    }
-                    selectedViewId = nextViewId
-                }
+                onSelectRecord = if (
+                    selectedView.component != NativeComponent.form &&
+                    (selectedView.component != NativeComponent.detail || mailWorkspaceSupportsSelection)
+                ) {
+                    ::selectDynamicRecord
+                } else {
+                    null
                 },
                 onActionSucceeded = { action ->
                     reconcileSuccessfulMutation(
