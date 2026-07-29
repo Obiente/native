@@ -2629,6 +2629,33 @@ private fun GenericTableCollection(
         nativeTableProjection(resource, records, columnResource, columnRecords, composite)
     }
     val insights = remember(projection) { nativeDatasetInsights(projection.resource, projection.records) }
+    val facets = remember(projection) { inferNativeDatasetFacets(projection.resource, projection.records) }
+    val browseStateKey = remember(schema, view, projection.resource, datasetContext) {
+        nativeDatasetBrowseStateKey(schema, view, projection.resource, datasetContext)
+    }
+    var facetSelections by remember(browseStateKey) { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
+    var searchQuery by remember(browseStateKey) { mutableStateOf("") }
+    var sortMode by remember(browseStateKey) { mutableStateOf(NativeDatasetSortMode.Server) }
+    var filtersExpanded by remember(browseStateKey) { mutableStateOf(false) }
+    val filteredRecords = remember(projection.records, facetSelections, searchQuery, sortMode) {
+        browseNativeDatasetRecords(
+            resource = projection.resource,
+            records = projection.records,
+            selections = facetSelections,
+            searchQuery = searchQuery,
+            sortMode = sortMode,
+        )
+    }
+
+    fun toggleFacet(fieldId: String, value: String) {
+        val nextValues = facetSelections[fieldId].orEmpty().toMutableSet().apply {
+            if (!add(value)) remove(value)
+        }
+        facetSelections = facetSelections.toMutableMap().apply {
+            if (nextValues.isEmpty()) remove(fieldId) else put(fieldId, nextValues)
+        }
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val compactRecordList = shouldUseCompactTableRecordList(maxWidth.value)
         val expandInsights = datasetInsightsDefaultExpanded(maxWidth.value, maxHeight.value)
@@ -2638,15 +2665,36 @@ private fun GenericTableCollection(
                     insights = it,
                     compact = !expandInsights,
                     initiallyExpanded = expandInsights,
-                    stateKey = "table:${resource.id}",
+                    stateKey = "table-insights:$browseStateKey",
                 )
             }
-            if (compactRecordList) {
+            NativeTableBrowseControls(
+                searchQuery = searchQuery,
+                onSearchQueryChanged = { searchQuery = it },
+                facets = facets,
+                selections = facetSelections,
+                filtersExpanded = filtersExpanded,
+                onFiltersExpandedChange = { filtersExpanded = it },
+                onToggleFacet = ::toggleFacet,
+                onClearFilters = { facetSelections = emptyMap() },
+                sortMode = sortMode,
+                onSortModeChanged = { sortMode = it },
+            )
+            if (filteredRecords.isEmpty()) {
+                GenericCenteredState {
+                    Text("No matching records", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Clear or adjust the current search and filters to see more records.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            } else if (compactRecordList) {
                 GenericEditableTableRecordList(
                     schema = schema,
                     sourceResource = resource,
                     projection = projection,
-                    records = projection.records,
+                    records = filteredRecords,
                     onSelectRecord = onSelectRecord,
                     actionExecutor = actionExecutor,
                     onInlineActionSucceeded = onInlineActionSucceeded,
@@ -2657,13 +2705,118 @@ private fun GenericTableCollection(
                     schema,
                     view,
                     resource,
-                    records,
+                    filteredRecords,
                     datasetContext,
                     actionExecutor,
                     onSelectRecord,
                     onInlineActionSucceeded,
                     Modifier.weight(1f),
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NativeTableBrowseControls(
+    searchQuery: String,
+    onSearchQueryChanged: (String) -> Unit,
+    facets: List<NativeDatasetFacet>,
+    selections: Map<String, Set<String>>,
+    filtersExpanded: Boolean,
+    onFiltersExpandedChange: (Boolean) -> Unit,
+    onToggleFacet: (fieldId: String, value: String) -> Unit,
+    onClearFilters: () -> Unit,
+    sortMode: NativeDatasetSortMode,
+    onSortModeChanged: (NativeDatasetSortMode) -> Unit,
+) {
+    val activeFilterCount = selections.values.sumOf(Set<String>::size)
+    val sortModes = NativeDatasetSortMode.entries
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(
+            horizontal = NextcloudSpacing.Large,
+            vertical = NextcloudSpacing.Small,
+        ),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+    ) {
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = onSearchQueryChanged,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            label = { Text("Search records") },
+            leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box {
+                OutlinedButton(
+                    enabled = facets.isNotEmpty(),
+                    onClick = { onFiltersExpandedChange(!filtersExpanded) },
+                ) {
+                    Icon(NextcloudIcons.Filter, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text(
+                        if (activeFilterCount == 0) "Filter" else "Filter ($activeFilterCount)",
+                        modifier = Modifier.padding(start = NextcloudSpacing.XSmall),
+                    )
+                }
+                DropdownMenu(
+                    expanded = filtersExpanded,
+                    onDismissRequest = { onFiltersExpandedChange(false) },
+                ) {
+                    facets.forEachIndexed { index, facet ->
+                        Text(
+                            facet.field.label,
+                            modifier = Modifier.padding(
+                                start = NextcloudSpacing.Large,
+                                top = if (index == 0) NextcloudSpacing.Small else NextcloudSpacing.Medium,
+                                end = NextcloudSpacing.Large,
+                                bottom = NextcloudSpacing.XSmall,
+                            ),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        facet.options.forEach { option ->
+                            val selected = option.value in selections[facet.field.id].orEmpty()
+                            DropdownMenuItem(
+                                text = { Text("${option.label} (${option.count})") },
+                                trailingIcon = if (selected) {
+                                    {
+                                        Icon(
+                                            NextcloudIcons.CheckCircle,
+                                            contentDescription = "Selected",
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                } else {
+                                    null
+                                },
+                                onClick = { onToggleFacet(facet.field.id, option.value) },
+                            )
+                        }
+                    }
+                    if (activeFilterCount > 0) {
+                        DropdownMenuItem(
+                            text = { Text("Clear filters") },
+                            onClick = {
+                                onClearFilters()
+                                onFiltersExpandedChange(false)
+                            },
+                        )
+                    }
+                }
+            }
+            OutlinedButton(
+                onClick = {
+                    val next = (sortModes.indexOf(sortMode) + 1) % sortModes.size
+                    onSortModeChanged(sortModes[next])
+                },
+            ) {
+                Text(sortMode.label)
             }
         }
     }
