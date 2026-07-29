@@ -106,6 +106,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudBottomNavigation
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestination
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestinationSection
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationHost
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationMode
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationModel
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionWorkspaceScaffold
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
@@ -165,7 +166,13 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecordImageLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecordImagePreview
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeFileFieldPicker
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeAudioRecordPlayer
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeMusicAdaptiveNavigationLayout
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeAudioTrack
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeMusicActiveNavigationViewId
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeMusicWorkspaceWidthClass
+import dev.obiente.nextcloudnative.nativeui.runtime.planNativeMusicWorkspace
+import dev.obiente.nextcloudnative.nativeui.runtime.preferredNativeMusicLandingViewId
+import dev.obiente.nextcloudnative.nativeui.runtime.selectNativeMusicRoot
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.effectiveNativeResourceId
 import dev.obiente.nextcloudnative.nativeui.runtime.actionBindingValues
@@ -910,6 +917,9 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.TransferDesktopActive,
                     MarketingCaptureScenario.TransferDesktopCompleted,
                     -> MarketingMediaTransferScenario(scenario)
+                    MarketingCaptureScenario.MusicLibraryAlbumTracksMobile,
+                    MarketingCaptureScenario.MusicLibraryPlaybackErrorDesktop,
+                    -> MarketingMusicWorkspaceScenario(scenario, assets)
                     MarketingCaptureScenario.DeckBoardDesktop,
                     MarketingCaptureScenario.DeckBoardMobile,
                     MarketingCaptureScenario.HomepagePlanningDesktopDark,
@@ -2188,7 +2198,9 @@ private fun DynamicDiscoveredAppScreen(
         descriptor.toNativeAppSchema().forDynamicContractVersion(discovery.versionStatus)
     }
     val initialViewId = remember(descriptor, schema) {
-        descriptor.planDynamicNavigation().rootDestinations.firstOrNull()?.layoutId
+        val rootDestinations = descriptor.planDynamicNavigation().rootDestinations
+        preferredNativeMusicLandingViewId(rootDestinations, schema)
+            ?: rootDestinations.firstOrNull()?.layoutId
             ?: schema.views.firstOrNull { it.component != NativeComponent.form }?.id
             ?: schema.views.firstOrNull()?.id
     }
@@ -3578,6 +3590,29 @@ private fun DynamicDiscoveredAppScreen(
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val compactLandscape = shouldUseCompactDynamicAppChrome(maxWidth.value, maxHeight.value)
+        val activeMusicNavigationViewId = remember(
+            primaryNavigationDestinations,
+            selectedView.id,
+            navigationHistory,
+        ) {
+            nativeMusicActiveNavigationViewId(
+                destinations = primaryNavigationDestinations,
+                selectedViewId = selectedView.id,
+                navigationHistoryViewIds = navigationHistory.map { snapshot -> snapshot.viewId },
+            )
+        }
+        val musicWorkspaceIntent = remember(
+            primaryNavigationDestinations,
+            activeMusicNavigationViewId,
+            maxWidth,
+            maxHeight,
+        ) {
+            planNativeMusicWorkspace(
+                destinations = primaryNavigationDestinations,
+                selectedViewId = activeMusicNavigationViewId,
+                widthClass = nativeMusicWorkspaceWidthClass(maxWidth.value, maxHeight.value),
+            )
+        }
         val collectionDestinationEntries = remember(
             primaryNavigationDestinations,
             descriptor.app.name,
@@ -3678,7 +3713,11 @@ private fun DynamicDiscoveredAppScreen(
 
         NextcloudCollectionWorkspaceScaffold(
             model = collectionNavigationModel,
-            mode = collectionNavigationMode,
+            mode = if (musicWorkspaceIntent == null) {
+                collectionNavigationMode
+            } else {
+                NextcloudCollectionNavigationMode.Hidden
+            },
             workspaceLabel = ancestorWorkspaceLabel
                 ?: selectedRecord?.dynamicContextLabel()
                 ?.takeIf(String::isNotBlank)
@@ -3858,59 +3897,84 @@ private fun DynamicDiscoveredAppScreen(
                     context = rendererDatasetContext,
                 )
             } == true
-            GenericNativeAppScreen(
-                schema = schema,
-                view = selectedView,
-                state = viewState,
-                actionExecutor = executor,
-                selectedRecordId = selectedRecord?.id,
-                selectedRecordResourceId = selectedRecordResourceId,
-                showSelectedRecordDetail = showFallbackRecordDetail,
-                datasetContext = rendererDatasetContext,
-                mutationReconciliationGeneration = mutationReconciliationGeneration,
-                collectionBatchRelationLoader = collectionBatchRelationLoader,
-                filePicker = dynamicFilePicker,
-                recordImageLoader = recordImageLoader,
-                onSelectRecord = if (
-                    selectedView.component != NativeComponent.form &&
-                    (selectedView.component != NativeComponent.detail || mailWorkspaceSupportsSelection)
-                ) {
-                    ::selectDynamicRecord
-                } else {
-                    null
-                },
-                onActionSucceeded = { action ->
-                    reconcileSuccessfulMutation(
-                        action = action,
-                        leaveMutatedSurface = true,
-                    )
-                },
-                onInlineActionSucceeded = { action ->
-                    reconcileSuccessfulMutation(
-                        action = action,
-                        leaveMutatedSurface = false,
-                    )
-                },
-                showCollectionCreateAction = selectedCollectionState == null,
-                onOpenLink = services::openExternalUrl,
-                imageLoader = imageLoader,
-                audioPlayer = audioSourceCapability?.let {
-                    NativeAudioRecordPlayer { resource, records, selected, collectionContext ->
-                        val queue = startNativeAudioQueue(
-                            tracks = records.mapNotNull { record ->
-                                nativeAudioTrack(resource, record, collectionContext)
-                            },
-                            selectedRecordId = selected.id,
+            val dynamicScreenContent: @Composable () -> Unit = {
+                GenericNativeAppScreen(
+                    schema = schema,
+                    view = selectedView,
+                    state = viewState,
+                    actionExecutor = executor,
+                    selectedRecordId = selectedRecord?.id,
+                    selectedRecordResourceId = selectedRecordResourceId,
+                    showSelectedRecordDetail = showFallbackRecordDetail,
+                    datasetContext = rendererDatasetContext,
+                    mutationReconciliationGeneration = mutationReconciliationGeneration,
+                    collectionBatchRelationLoader = collectionBatchRelationLoader,
+                    filePicker = dynamicFilePicker,
+                    recordImageLoader = recordImageLoader,
+                    onSelectRecord = if (
+                        selectedView.component != NativeComponent.form &&
+                        (selectedView.component != NativeComponent.detail || mailWorkspaceSupportsSelection)
+                    ) {
+                        ::selectDynamicRecord
+                    } else {
+                        null
+                    },
+                    onActionSucceeded = { action ->
+                        reconcileSuccessfulMutation(
+                            action = action,
+                            leaveMutatedSurface = true,
                         )
-                        playCurrentAudioTrack(queue)
-                    }
-                },
-                mediaArtworkResolver = mediaArtworkResolver,
-                onLoadMore = onLoadMore.takeUnless { showFallbackRecordDetail },
-                loadingMore = loadingMore,
-                loadMoreError = loadMoreError,
-                modifier = Modifier.weight(1f),
-            )
+                    },
+                    onInlineActionSucceeded = { action ->
+                        reconcileSuccessfulMutation(
+                            action = action,
+                            leaveMutatedSurface = false,
+                        )
+                    },
+                    showCollectionCreateAction = selectedCollectionState == null,
+                    onOpenLink = services::openExternalUrl,
+                    imageLoader = imageLoader,
+                    audioPlayer = audioSourceCapability?.let {
+                        NativeAudioRecordPlayer { resource, records, selected, collectionContext ->
+                            val queue = startNativeAudioQueue(
+                                tracks = records.mapNotNull { record ->
+                                    nativeAudioTrack(resource, record, collectionContext)
+                                },
+                                selectedRecordId = selected.id,
+                            )
+                            playCurrentAudioTrack(queue)
+                        }
+                    },
+                    mediaArtworkResolver = mediaArtworkResolver,
+                    onLoadMore = onLoadMore.takeUnless { showFallbackRecordDetail },
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            Box(modifier = Modifier.weight(1f)) {
+                if (musicWorkspaceIntent == null) {
+                    dynamicScreenContent()
+                } else {
+                    NativeMusicAdaptiveNavigationLayout(
+                        intent = musicWorkspaceIntent,
+                        onDestinationSelected = { destination ->
+                            val selection = selectNativeMusicRoot(destination)
+                            navigationHistory = emptyList()
+                            selectedRecord = selection.selectedRecord
+                            selectedRecordResourceId = selection.selectedRecordResourceId
+                            selectedPathParameterValues = selection.pathParameterValues
+                            selectedViewId = selection.viewId
+                            contextualMenuOpen = false
+                            paginationState = null
+                            loadingMore = false
+                            loadMoreError = null
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                        content = dynamicScreenContent,
+                    )
+                }
+            }
             if (audioSourceCapability != null && audioQueue.currentTrack != null) {
                 NativeAudioMiniPlayer(
                     queue = audioQueue,
@@ -4104,7 +4168,7 @@ internal fun DynamicAppChromeHeader(
 }
 
 @Composable
-private fun NativeAudioMiniPlayer(
+internal fun NativeAudioMiniPlayer(
     queue: NativeAudioQueueState,
     engineState: NativeAudioEngineState,
     artworkRelativePath: String?,
