@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -215,7 +218,13 @@ data class NativeMediaItem(
             hasPreview = true,
             etag = etag,
             originalAccessAllowed = false,
+            davPathAuthoritative = false,
             livePhoto = livePhoto,
+            memoriesRenderAllowed = true,
+            mediaWidth = width,
+            mediaHeight = height,
+            capturedAtEpochSeconds = takenAtEpochSeconds,
+            mediaDurationSeconds = videoDurationSeconds,
         )
     }
 }
@@ -387,43 +396,22 @@ fun mergeSystemTagCollections(
 class NativeMediaCollectionReadService(
     private val services: NextcloudPlatformServices,
 ) {
-    suspend fun loadCatalog(session: NextcloudSession): NativeMediaCollectionCatalog {
-        val albumResult = runCatching {
-            services.executeNextcloudApi(session, memoriesCollectionListRequest(NativeMediaCollectionType.Album))
-                .let { parseMemoriesCollectionListResponse(it, NativeMediaCollectionType.Album) }
-        }
-        val memoriesTagResult = runCatching {
-            services.executeNextcloudApi(session, memoriesCollectionListRequest(NativeMediaCollectionType.SystemTag))
-                .let { parseMemoriesCollectionListResponse(it, NativeMediaCollectionType.SystemTag) }
-        }
-        val davTagResult = runCatching { services.listSystemTags(session) }
-
-        if (albumResult.isFailure && memoriesTagResult.isFailure && davTagResult.isFailure) {
-            error("Neither Photos/Memories collections nor system tags could be loaded.")
-        }
-
-        val memoriesTags = memoriesTagResult.getOrDefault(emptyList())
-        val tags = davTagResult.fold(
-            onSuccess = { davTags ->
-                mergeSystemTagCollections(
-                    systemTags = davTags,
-                    memoriesTags = memoriesTags,
-                    memoriesTagBrowseAvailable = memoriesTagResult.isSuccess,
-                )
+    suspend fun loadCatalog(session: NextcloudSession): NativeMediaCollectionCatalog =
+        loadNativeMediaCollectionCatalog(
+            loadAlbums = {
+                services.executeNextcloudApi(
+                    session,
+                    memoriesCollectionListRequest(NativeMediaCollectionType.Album),
+                ).let { parseMemoriesCollectionListResponse(it, NativeMediaCollectionType.Album) }
             },
-            onFailure = { memoriesTags },
+            loadMemoriesTags = {
+                services.executeNextcloudApi(
+                    session,
+                    memoriesCollectionListRequest(NativeMediaCollectionType.SystemTag),
+                ).let { parseMemoriesCollectionListResponse(it, NativeMediaCollectionType.SystemTag) }
+            },
+            loadDavTags = { services.listSystemTags(session) },
         )
-        val warnings = buildList {
-            albumResult.exceptionOrNull()?.let { add(it.safeCatalogWarning("Albums")) }
-            memoriesTagResult.exceptionOrNull()?.let { add(it.safeCatalogWarning("Indexed tag counts")) }
-            davTagResult.exceptionOrNull()?.let { add(it.safeCatalogWarning("Tag permissions")) }
-        }
-        return NativeMediaCollectionCatalog(
-            albums = albumResult.getOrDefault(emptyList()),
-            tags = tags,
-            warnings = warnings,
-        )
-    }
 
     suspend fun loadDayIndex(
         session: NextcloudSession,
@@ -450,6 +438,60 @@ class NativeMediaCollectionReadService(
             nextCursor = window.nextCursor,
         )
     }
+}
+
+internal suspend fun loadNativeMediaCollectionCatalog(
+    loadAlbums: suspend () -> List<NativeMediaCollection>,
+    loadMemoriesTags: suspend () -> List<NativeMediaCollection>,
+    loadDavTags: suspend () -> List<NextcloudSystemTag>,
+): NativeMediaCollectionCatalog {
+    val albumResult = captureCatalogFeature(loadAlbums)
+    val memoriesTagResult = captureCatalogFeature(loadMemoriesTags)
+    val davTagResult = captureCatalogFeature(loadDavTags)
+
+    if (albumResult.isFailure && memoriesTagResult.isFailure && davTagResult.isFailure) {
+        error("Neither Photos/Memories collections nor system tags could be loaded.")
+    }
+
+    val memoriesTags = memoriesTagResult.getOrDefault(emptyList())
+    val tags = davTagResult.fold(
+        onSuccess = { davTags ->
+            mergeSystemTagCollections(
+                systemTags = davTags,
+                memoriesTags = memoriesTags,
+                memoriesTagBrowseAvailable = memoriesTagResult.isSuccess,
+            )
+        },
+        onFailure = { memoriesTags },
+    )
+    val warnings = buildList {
+        albumResult.exceptionOrNull()?.let { add(it.safeCatalogWarning("Albums")) }
+        memoriesTagResult.exceptionOrNull()?.let { add(it.safeCatalogWarning("Indexed tag counts")) }
+        davTagResult.exceptionOrNull()?.let { add(it.safeCatalogWarning("Tag permissions")) }
+    }
+    return NativeMediaCollectionCatalog(
+        albums = albumResult.getOrDefault(emptyList()),
+        tags = tags,
+        warnings = warnings,
+    )
+}
+
+internal suspend fun loadActiveNativeMediaCollectionCatalog(
+    loadCatalog: suspend () -> NativeMediaCollectionCatalog,
+): NativeMediaCollectionCatalog {
+    val loaded = loadCatalog()
+    currentCoroutineContext().ensureActive()
+    return loaded
+}
+
+private suspend fun <T> captureCatalogFeature(
+    load: suspend () -> T,
+): Result<T> = try {
+    Result.success(load())
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (failure: Exception) {
+    Result.failure(failure)
 }
 
 private fun parseMemoriesCollection(

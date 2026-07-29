@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -56,6 +57,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -73,6 +75,7 @@ internal fun PhotoFolderBrowser(
     listState: LazyListState,
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    userId: String? = null,
     onSelectedFolderPathChanged: (String) -> Unit,
     onQueryChanged: (String) -> Unit,
     onScopeChanged: (PhotoFolderBrowseScope) -> Unit,
@@ -88,13 +91,50 @@ internal fun PhotoFolderBrowser(
             preference = PhotoFolderBrowsePreference(viewMode),
         )
     }
+    val rawFileIds = remember(inventory.rawStackFileIdsByRecordPath) {
+        inventory.rawStackFileIdsByRecordPath.values
+            .asSequence()
+            .flatten()
+            .distinct()
+            .sorted()
+            .toList()
+    }
+    var resolvedRawFilesById by remember(session, userId) {
+        mutableStateOf<Map<Long, NextcloudFile>>(emptyMap())
+    }
+    LaunchedEffect(session, services, userId, rawFileIds) {
+        val safeUserId = userId
+        if (safeUserId == null || rawFileIds.isEmpty()) {
+            resolvedRawFilesById = emptyMap()
+            return@LaunchedEffect
+        }
+        resolvedRawFilesById = try {
+            services.resolveFilesById(session, safeUserId, rawFileIds)
+                .filter { (fileId, file) ->
+                    fileId in rawFileIds && file.fileId == fileId && file.isRawPhoto()
+                }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+    val rawStackFilesByRecordPath = remember(
+        inventory.rawStackFileIdsByRecordPath,
+        resolvedRawFilesById,
+    ) {
+        inventory.rawStackFileIdsByRecordPath.mapValues { (_, fileIds) ->
+            fileIds.mapNotNull(resolvedRawFilesById::get)
+        }
+    }
     val resultState by produceState<Result<PhotoFolderBrowseResult>?>(
         initialValue = initialResult,
         inventory,
         state,
         initialResult,
+        rawStackFilesByRecordPath,
     ) {
-        if (initialResult != null) {
+        if (initialResult != null && inventory.rawStackFileIdsByRecordPath.isEmpty()) {
             value = initialResult
             return@produceState
         }
@@ -102,7 +142,13 @@ internal fun PhotoFolderBrowser(
             if (state.query.isNotEmpty()) {
                 delay(PHOTO_FOLDER_SEARCH_DEBOUNCE_MILLIS)
             }
-            runCatching { buildPhotoFolderBrowseResult(inventory, state) }
+            runCatching {
+                buildPhotoFolderBrowseResult(
+                    inventory = inventory,
+                    state = state,
+                    rawStackFilesByRecordPath = rawStackFilesByRecordPath,
+                )
+            }
         }
     }
     val result = resultState?.getOrNull()
@@ -163,6 +209,8 @@ internal fun PhotoFolderBrowser(
                 items(result.folders, key = { "folder:${it.path}" }) { folder ->
                     PhotoFolderGridItem(
                         folder = folder,
+                        services = services,
+                        session = session,
                         onClick = { onSelectedFolderPathChanged(folder.path) },
                     )
                 }
@@ -170,6 +218,7 @@ internal fun PhotoFolderBrowser(
                     MediaTile(
                         services = services,
                         session = session,
+                        userId = userId,
                         file = stack.cover,
                         badge = stack.badge,
                         backupStatus = backupStatuses[stack.cover.path.trim('/')],
@@ -199,6 +248,7 @@ internal fun PhotoFolderBrowser(
                         backupStatus = backupStatuses[stack.cover.path.trim('/')],
                         services = services,
                         session = session,
+                        userId = userId,
                         onClick = { onOpenMedia(stack.cover, viewerSequence) },
                     )
                 }
@@ -252,7 +302,10 @@ private fun PhotoFolderToolbar(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "${result.recursiveMediaCount} media items in this folder tree",
+                    photoFolderMediaCountLabel(
+                        count = result.recursiveMediaCount,
+                        scope = state.scope,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -336,6 +389,8 @@ private fun PhotoFolderToolbar(
 @Composable
 private fun PhotoFolderGridItem(
     folder: PhotoFolderSummary,
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
     onClick: () -> Unit,
 ) {
     Card(
@@ -344,32 +399,192 @@ private fun PhotoFolderGridItem(
         shape = RoundedCornerShape(NextcloudRadii.Card),
         colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Icon(
-                NextcloudIcons.Folder,
-                contentDescription = null,
-                modifier = Modifier.size(34.dp),
-                tint = MaterialTheme.colorScheme.primary,
+        Column(modifier = Modifier.fillMaxSize()) {
+            PhotoFolderPreviewMosaic(
+                folder = folder,
+                services = services,
+                session = session,
+                modifier = Modifier.fillMaxWidth().weight(1f),
             )
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                Icon(
+                    NextcloudIcons.Folder,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     folder.name,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     photoFolderSummary(folder),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhotoFolderPreviewMosaic(
+    folder: PhotoFolderSummary,
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+    modifier: Modifier = Modifier,
+) {
+    if (folder.previewFileIds.isEmpty()) {
+        Box(
+            modifier = modifier.background(NextcloudTheme.colors.appIconContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                NextcloudIcons.Folder,
+                contentDescription = null,
+                modifier = Modifier.size(40.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+        return
+    }
+    val previewFileIds = folder.previewFileIds.take(4)
+    when (previewFileIds.size) {
+        1 -> PhotoFolderPreviewCell(
+            fileId = previewFileIds.single(),
+            services = services,
+            session = session,
+            modifier = modifier,
+        )
+        2 -> Row(
+            modifier = modifier,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            previewFileIds.forEach { fileId ->
+                PhotoFolderPreviewCell(
+                    fileId = fileId,
+                    services = services,
+                    session = session,
+                    modifier = Modifier.fillMaxHeight().weight(1f),
                 )
             }
         }
+        3 -> Row(
+            modifier = modifier,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            PhotoFolderPreviewCell(
+                fileId = previewFileIds.first(),
+                services = services,
+                session = session,
+                modifier = Modifier.fillMaxHeight().weight(1f),
+            )
+            Column(
+                modifier = Modifier.fillMaxHeight().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                previewFileIds.drop(1).forEach { fileId ->
+                    PhotoFolderPreviewCell(
+                        fileId = fileId,
+                        services = services,
+                        session = session,
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                    )
+                }
+            }
+        }
+        else -> Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            repeat(2) { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    repeat(2) { column ->
+                        PhotoFolderPreviewCell(
+                            fileId = previewFileIds[row * 2 + column],
+                            services = services,
+                            session = session,
+                            modifier = Modifier.fillMaxSize().weight(1f),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhotoFolderPreviewCell(
+    fileId: Long,
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.background(NextcloudTheme.colors.appIconContainer),
+        contentAlignment = Alignment.Center,
+    ) {
+        PhotoFolderPreviewImage(
+            fileId = fileId,
+            services = services,
+            session = session,
+        )
+    }
+}
+
+@Composable
+private fun PhotoFolderPreviewImage(
+    fileId: Long,
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+) {
+    val file = remember(fileId) {
+        NextcloudFile(
+            path = "memories/folder-preview/$fileId",
+            name = "$fileId.jpg",
+            isDirectory = false,
+            mimeType = "image/jpeg",
+            size = null,
+            lastModified = null,
+            fileId = fileId,
+            hasPreview = true,
+            etag = null,
+            originalAccessAllowed = false,
+            davPathAuthoritative = false,
+            memoriesRenderAllowed = true,
+        )
+    }
+    var image by remember(fileId) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(session, fileId) {
+        image = services.loadMediaThumbnailDecoded(
+            session = session,
+            file = file,
+            width = 320,
+            height = 320,
+        ) { payload ->
+            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
+        }
+    }
+    image?.let { bitmap ->
+        Image(
+            bitmap = bitmap,
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+        )
     }
 }
 
@@ -418,21 +633,32 @@ private fun PhotoFolderMediaListItem(
     backupStatus: MediaBackupStatus?,
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    userId: String?,
     onClick: () -> Unit,
 ) {
-    var image by remember(stack.cover.fileId, stack.cover.etag) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(stack.cover.fileId, stack.cover.etag) {
-        if (stack.cover.fileId == null || !stack.cover.hasPreview) return@LaunchedEffect
-        val encoded = runCatching {
-            services.loadPreviewCached(session, stack.cover)
-        }.getOrNull() ?: return@LaunchedEffect
-        image = withContext(Dispatchers.Default) {
-            runCatching {
-                decodePlatformImage(
-                    encoded,
-                    EncodedImageOrientationPolicy.PixelsAlreadyUpright,
-                )
-            }.getOrNull()
+    var image by remember(
+        stack.cover.fileId,
+        stack.cover.etag,
+        stack.cover.hasPreview,
+        stack.cover.memoriesRenderAllowed,
+    ) {
+        mutableStateOf<ImageBitmap?>(null)
+    }
+    LaunchedEffect(
+        session,
+        userId,
+        stack.cover.fileId,
+        stack.cover.etag,
+        stack.cover.hasPreview,
+        stack.cover.memoriesRenderAllowed,
+    ) {
+        if (stack.cover.fileId == null) return@LaunchedEffect
+        image = services.loadMediaThumbnailDecoded(
+            session = session,
+            file = stack.cover,
+            userId = userId,
+        ) { payload ->
+            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
         }
     }
     Surface(
@@ -497,7 +723,27 @@ internal fun photoFolderViewModeLabel(viewMode: PhotoFolderViewMode): String = w
     PhotoFolderViewMode.List -> "List view"
 }
 
+internal fun photoFolderMediaCountLabel(
+    count: Int,
+    scope: PhotoFolderBrowseScope,
+): String {
+    require(count >= 0) { "The photo folder media count is invalid." }
+    val item = if (count == 1) "media item" else "media items"
+    val location = when (scope) {
+        PhotoFolderBrowseScope.FoldersOnly -> "indexed below this folder"
+        PhotoFolderBrowseScope.DirectMediaAndSubfolders,
+        PhotoFolderBrowseScope.DirectMediaOnly,
+        -> "in this folder"
+        PhotoFolderBrowseScope.RecursiveMedia -> "in this folder tree"
+    }
+    return "$count $item $location"
+}
+
 private fun photoFolderSummary(folder: PhotoFolderSummary): String = buildList {
+    if (!folder.countsAuthoritative) {
+        add("Browse folder")
+        return@buildList
+    }
     if (folder.directChildFolderCount > 0) {
         add("${folder.directChildFolderCount} ${if (folder.directChildFolderCount == 1) "folder" else "folders"}")
     }

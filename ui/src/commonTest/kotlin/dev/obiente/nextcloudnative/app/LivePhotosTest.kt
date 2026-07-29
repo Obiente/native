@@ -31,6 +31,92 @@ class LivePhotosTest {
                 "?etag=generation-1&liveid=motion%20id%2Fwith%2Bsymbols",
             buildNextcloudApiUrl("https://cloud.invalid", playback),
         )
+        val companionInfo = memoriesLivePhotoCompanionInfoRequest(source)
+        assertEquals(
+            mapOf(
+                "liveid" to "motion id/with+symbols",
+                "format" to "json",
+                "etag" to "generation-1",
+            ),
+            companionInfo.queryParameters,
+        )
+        assertTrue(companionInfo.ocsApiRequest)
+        assertTrue(companionInfo.maximumResponseBytes <= 64L * 1_024L)
+    }
+
+    @Test
+    fun companionInfoRequiresASeekableVideoIdentity() {
+        val info = parseMemoriesLivePhotoCompanionInfo(
+            apiResponse(
+                200,
+                """
+                    {
+                      "fileid": 84,
+                      "etag": "motion-generation",
+                      "basename": "motion.mov",
+                      "mimetype": "video/quicktime"
+                    }
+                """,
+            ),
+        )
+
+        assertEquals(84L, info.fileId)
+        assertEquals("motion-generation", info.etag)
+        assertEquals("motion.mov", info.basename)
+        assertEquals("video/quicktime", info.mimeType)
+        assertFailsWith<IllegalArgumentException> {
+            parseMemoriesLivePhotoCompanionInfo(
+                apiResponse(
+                    200,
+                    """{"fileid":84,"etag":"motion","basename":"still.jpg","mimetype":"image/jpeg"}""",
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            memoriesLivePhotoCompanionInfoRequest(
+                MemoriesLivePhotoSource(
+                    fileId = 42L,
+                    reference = NextcloudLivePhotoReference("self__trailer"),
+                    etag = "generation-1",
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun trailerOffsetCompatibilityUsesOnlyTheBoundedAuthoritativeTail() {
+        val still = photo("motion.jpg", "image/jpeg")
+        val source = MemoriesLivePhotoSource(
+            fileId = 42L,
+            reference = NextcloudLivePhotoReference("self__traileroffset=128"),
+            etag = "generation-1",
+        )
+        val plan = requireNotNull(
+            still.embeddedLivePhotoCompatibilityPlanOrNull(source, userId = "user"),
+        )
+
+        assertEquals(128L, plan.offset)
+        assertEquals(128L, plan.sourceReadOffset(exposedOffset = 0L, length = 64))
+        assertEquals(256L, plan.sourceReadOffset(exposedOffset = 128L, length = 64))
+        assertFailsWith<IllegalArgumentException> {
+            plan.sourceReadOffset(exposedOffset = 896L, length = 1)
+        }
+        assertNull(
+            still.embeddedLivePhotoCompatibilityPlanOrNull(
+                source.copy(reference = NextcloudLivePhotoReference("self__trailer")),
+                userId = "user",
+            ),
+        )
+        assertNull(
+            still.embeddedLivePhotoCompatibilityPlanOrNull(
+                source.copy(reference = NextcloudLivePhotoReference("self__traileroffset=1024")),
+                userId = "user",
+            ),
+        )
+        assertNull(
+            still.copy(davPathAuthoritative = false)
+                .embeddedLivePhotoCompatibilityPlanOrNull(source, userId = "user"),
+        )
     }
 
     @Test

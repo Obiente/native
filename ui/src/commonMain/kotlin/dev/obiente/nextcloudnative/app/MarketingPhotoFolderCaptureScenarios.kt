@@ -93,7 +93,7 @@ private fun MarketingPhotoFolderContent(
             capabilities = PhotoNavigationCapabilities(
                 albumsAvailable = true,
                 peopleAvailable = true,
-                favoritesAvailable = true,
+                favoritesAvailable = false,
             ),
             widthClass = widthClass,
         )

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -25,7 +26,7 @@ import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.PhotoTimelineDateScrubber
 import dev.obiente.nextcloudnative.app.PhotoTimelineEntry
-import dev.obiente.nextcloudnative.app.activePhotoTimelineSectionIndex
+import dev.obiente.nextcloudnative.app.PhotoTimelineScrubberTouchLaneWidth
 import dev.obiente.nextcloudnative.app.buildPhotoTimelineDateIndex
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -67,10 +68,6 @@ private fun PhotoTimelineSyntheticPreview() {
     val entries = syntheticPhotoTimelineEntries()
     val dateIndex = buildPhotoTimelineDateIndex(entries)
     val gridState = rememberLazyGridState()
-    val activeSection = activePhotoTimelineSectionIndex(
-        dateIndex,
-        gridState.firstVisibleItemIndex,
-    )
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -87,7 +84,7 @@ private fun PhotoTimelineSyntheticPreview() {
                 contentPadding = PaddingValues(
                     start = NextcloudSpacing.Small,
                     top = NextcloudSpacing.Large,
-                    end = 72.dp,
+                    end = PhotoTimelineScrubberTouchLaneWidth,
                     bottom = NextcloudSpacing.XLarge,
                 ),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -130,11 +127,11 @@ private fun PhotoTimelineSyntheticPreview() {
             }
             PhotoTimelineDateScrubber(
                 dateIndex = dateIndex,
-                activeSectionIndex = activeSection,
+                activeGridItemIndex = gridState.firstVisibleItemIndex,
                 onJumpToGridItem = { _ -> },
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = NextcloudSpacing.Small),
+                    .fillMaxHeight(),
             )
         }
     }

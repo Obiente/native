@@ -5,7 +5,9 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class RawPhotoPreviewTest {
     @Test
@@ -25,6 +27,91 @@ class RawPhotoPreviewTest {
         )
 
         assertEquals(MediaDisplayPayloadKind.MemoriesRawRender, payload.kind)
+        assertEquals(0, rangeReads)
+    }
+
+    @Test
+    fun memoriesRenderIsUsedWhenCoreCannotPreviewTiff() = runBlocking {
+        val tiff = rawFile(hasPreview = true).copy(
+            path = "Photos/Samples/SCAN0001.tif",
+            name = "SCAN0001.tif",
+            mimeType = "image/tiff",
+            size = 12L * 1024L * 1024L,
+            etag = "tiff-etag",
+            memoriesRenderAllowed = true,
+            originalAccessAllowed = false,
+            davPathAuthoritative = false,
+        )
+        var memoriesCalls = 0
+        var rangeReads = 0
+
+        val payload = loadMediaDisplayPayload(
+            file = tiff,
+            loadCorePreview = { "<html>preview failed</html>".encodeToByteArray() },
+            loadMemoriesRawRender = {
+                memoriesCalls += 1
+                jpegFixture()
+            },
+            loadFileRange = { _, _, _ ->
+                rangeReads += 1
+                error("TIFF rendering must not read a synthetic DAV path.")
+            },
+            decode = { it },
+        )
+
+        assertEquals(MediaDisplayPayloadKind.MemoriesRawRender, payload.kind)
+        assertEquals(1, memoriesCalls)
+        assertEquals(0, rangeReads)
+    }
+
+    @Test
+    fun nativeTiffRenderIsUsedWhenCoreAndMemoriesCannotDecodeIt() = runBlocking {
+        val tiff = rawFile(hasPreview = true).copy(
+            path = "Photos/Samples/SCAN0002.tif",
+            name = "SCAN0002.tif",
+            mimeType = "image/tiff",
+            size = 456L * 1024L * 1024L,
+            etag = "tiff-generation",
+            memoriesRenderAllowed = true,
+            originalAccessAllowed = true,
+            davPathAuthoritative = true,
+        )
+        var nativeCalls = 0
+
+        val payload = loadMediaDisplayPayload(
+            file = tiff,
+            loadCorePreview = { error("Core cannot preview this TIFF.") },
+            loadMemoriesRawRender = { error("Memories cannot decode this TIFF.") },
+            loadFileRange = { _, _, _ -> error("TIFF must not use the RAF fallback.") },
+            loadNativeRender = {
+                nativeCalls += 1
+                jpegFixture()
+            },
+            decode = { it },
+        )
+
+        assertEquals(MediaDisplayPayloadKind.NativeGeneratedPreview, payload.kind)
+        assertEquals(1, nativeCalls)
+    }
+
+    @Test
+    fun nativeRenderCancellationIsNeverConvertedIntoAnEmbeddedFallback() = runBlocking {
+        val raw = rawFile(hasPreview = false)
+        var rangeReads = 0
+
+        assertFailsWith<CancellationException> {
+            loadMediaDisplayPayload(
+                file = raw,
+                loadCorePreview = { error("Core preview is unavailable.") },
+                loadMemoriesRawRender = { error("Memories preview is unavailable.") },
+                loadFileRange = { _, _, _ ->
+                    rangeReads += 1
+                    error("Embedded fallback must not run after cancellation.")
+                },
+                loadNativeRender = { throw CancellationException("viewer closed") },
+                decode = { it },
+            )
+        }
         assertEquals(0, rangeReads)
     }
 
@@ -52,6 +139,49 @@ class RawPhotoPreviewTest {
 
         assertEquals(0, memoriesCalls)
         assertEquals(0, rangeReads)
+    }
+
+    @Test
+    fun syntheticMemoriesRawFallsBackToItsEmbeddedPreviewThroughTheFileIdStream() = runBlocking {
+        val embedded = jpegFixture()
+        val embeddedOffset = 8_192L
+        val raw = rawFile(hasPreview = true).copy(
+            path = "memories/timeline/20260727/1001",
+            originalAccessAllowed = false,
+            davPathAuthoritative = false,
+            memoriesRenderAllowed = true,
+            size = embeddedOffset + embedded.size,
+        )
+        var memoriesCalls = 0
+        val rangeReads = mutableListOf<Pair<Long, Int>>()
+
+        val payload = loadMediaDisplayPayload(
+            file = raw,
+            loadCorePreview = { "<html>preview failed</html>".encodeToByteArray() },
+            loadMemoriesRawRender = {
+                memoriesCalls += 1
+                error("Memories cannot decode this RAW file.")
+            },
+            loadFileRange = { offset, length, _ ->
+                rangeReads += offset to length
+                when (offset) {
+                    0L -> rafHeader(embeddedOffset, embedded.size)
+                    embeddedOffset -> embedded
+                    else -> error("Unexpected Memories stream range.")
+                }
+            },
+            decode = { it },
+        )
+
+        assertEquals(MediaDisplayPayloadKind.EmbeddedCameraPreview, payload.kind)
+        assertEquals(true, raw.canUseMemoriesDecodableRender())
+        assertEquals(false, raw.canUseEmbeddedRafPreview())
+        assertEquals(true, raw.canUseEmbeddedRafPreviewFromMemories())
+        assertEquals(1, memoriesCalls)
+        assertEquals(
+            listOf(0L to 0x5C, embeddedOffset to embedded.size),
+            rangeReads,
+        )
     }
 
     @Test
@@ -199,6 +329,41 @@ class RawPhotoPreviewTest {
     }
 
     @Test
+    fun authoritativeTiffWithoutServerPreviewAdvertisesNativeViewer() {
+        val tiff = nativeTiffFile().copy(size = null, etag = null)
+        val sourcePlan = planMediaSources(listOf(tiff), tiff)
+
+        assertTrue(tiff.canUseNativeTiffPreview())
+        assertTrue(tiff.canOpenInMediaViewer())
+        assertEquals(listOf(tiff), sourcePlan.previewCandidates.map(MediaSourceChoice::file))
+    }
+
+    @Test
+    fun memoriesTiffWithoutDavPathAdvertisesNativeViewer() {
+        val tiff = nativeTiffFile().copy(
+            path = "memories/timeline/2101",
+            originalAccessAllowed = false,
+            davPathAuthoritative = false,
+            memoriesRenderAllowed = true,
+        )
+
+        assertTrue(tiff.canUseNativeTiffPreview())
+        assertTrue(tiff.canOpenInMediaViewer())
+    }
+
+    @Test
+    fun tiffWithoutAnAuthorizedRangeSourceDoesNotAdvertiseNativeViewer() {
+        val tiff = nativeTiffFile().copy(
+            originalAccessAllowed = false,
+            davPathAuthoritative = false,
+            memoriesRenderAllowed = false,
+        )
+
+        assertFalse(tiff.canUseNativeTiffPreview())
+        assertFalse(tiff.canOpenInMediaViewer())
+    }
+
+    @Test
     fun rawDiscoveryPatternsCoverEveryRecognizedRawExtension() {
         val patterns = rawPhotoFileNameSearchPatterns()
 
@@ -243,6 +408,10 @@ class RawPhotoPreviewTest {
             EncodedImageOrientationPolicy.ApplyExif,
             FullResolutionPhotoSource.FilesDav.orientationPolicy(),
         )
+        assertEquals(
+            EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+            FullResolutionPhotoSource.NativeGenerated.orientationPolicy(),
+        )
     }
 
     @Test
@@ -254,6 +423,33 @@ class RawPhotoPreviewTest {
         assertEquals(false, isExactHttpByteContentRange("bytes 4096-8191/8191", 4_096L, 8_191L))
         assertEquals(false, isExactHttpByteContentRange("bytes */64000000", 4_096L, 8_191L))
         assertEquals(false, isExactHttpByteContentRange(null, 4_096L, 8_191L))
+        assertEquals(
+            true,
+            isExactHttpByteContentRange(
+                "bytes 4096-8191/64000000",
+                4_096L,
+                8_191L,
+                64_000_000L,
+            ),
+        )
+        assertEquals(
+            false,
+            isExactHttpByteContentRange(
+                "bytes 4096-8191/32000000",
+                4_096L,
+                8_191L,
+                64_000_000L,
+            ),
+        )
+        assertEquals(
+            false,
+            isExactHttpByteContentRange(
+                "bytes 4096-8191/*",
+                4_096L,
+                8_191L,
+                64_000_000L,
+            ),
+        )
     }
 
     @Test
@@ -299,7 +495,58 @@ class RawPhotoPreviewTest {
             maximumResponseBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES.toLong(),
         )
 
+        assertEquals(NextcloudApiMethod.GET, request.method)
+        assertEquals("/index.php/apps/memories/api/image/decodable/1001", request.relativePath)
+        assertEquals(mapOf("etag" to "raw-etag"), request.queryParameters)
+        assertEquals(false, request.ocsApiRequest)
         assertEquals(MAX_RAW_DISPLAY_PREVIEW_BYTES.toLong(), request.maximumResponseBytes)
+        assertEquals(64L * 1024L * 1024L, request.maximumResponseBytes)
+        assertEquals(32 * 1024 * 1024, MAX_RAW_EMBEDDED_PREVIEW_BYTES)
+    }
+
+    @Test
+    fun memoriesRawDisplayAcceptsAValidRenderLargerThanTheEmbeddedPreviewLimit() {
+        val render = ByteArray(MAX_RAW_EMBEDDED_PREVIEW_BYTES + 1).also {
+            it[0] = 0xFF.toByte()
+            it[1] = 0xD8.toByte()
+            it[2] = 0xFF.toByte()
+        }
+
+        val loaded = memoriesRawDisplayResponseBytes(
+            NextcloudApiResponse(
+                status = 200,
+                body = render,
+                contentType = "image/jpeg; charset=binary",
+                etag = "render-etag",
+            ),
+        )
+
+        assertEquals(render.size, loaded.size)
+        assertEquals(true, loaded === render)
+    }
+
+    @Test
+    fun memoriesRawDisplayRejectsErrorPagesAndUndocumentedResponseTypes() {
+        assertFailsWith<IllegalArgumentException> {
+            memoriesRawDisplayResponseBytes(
+                NextcloudApiResponse(
+                    status = 200,
+                    body = "<html>Sign in</html>".encodeToByteArray(),
+                    contentType = "text/html",
+                    etag = null,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            memoriesRawDisplayResponseBytes(
+                NextcloudApiResponse(
+                    status = 404,
+                    body = jpegFixture(),
+                    contentType = "image/jpeg",
+                    etag = null,
+                ),
+            )
+        }
     }
 
     @Test
@@ -328,6 +575,15 @@ class RawPhotoPreviewTest {
         assertEquals(
             "Generated high-detail RAW render",
             describeMediaDisplaySource(
+                selected = source,
+                displayed = source,
+                highDetail = true,
+                payloadKind = MediaDisplayPayloadKind.MemoriesRawRender,
+            ),
+        )
+        assertEquals(
+            "Generated RAW high detail",
+            conciseMediaDisplaySourceLabel(
                 selected = source,
                 displayed = source,
                 highDetail = true,
@@ -443,6 +699,10 @@ class RawPhotoPreviewTest {
             MediaDisplayPayloadKind.MemoriesRawRender,
             fullQualityMediaPayloadKind(candidate, requireNotNull(loaded).payloadSource),
         )
+        assertEquals(
+            MediaDisplayPayloadKind.NativeGeneratedPreview,
+            fullQualityMediaPayloadKind(candidate, FullResolutionPhotoSource.NativeGenerated),
+        )
     }
 
     private fun rawFile(
@@ -458,6 +718,18 @@ class RawPhotoPreviewTest {
         fileId = 1_001L,
         hasPreview = hasPreview,
         etag = "raf-etag",
+    )
+
+    private fun nativeTiffFile() = NextcloudFile(
+        path = "Photos/Scans/example.tiff",
+        name = "example.tiff",
+        isDirectory = false,
+        mimeType = "image/tiff",
+        size = 16L * 1024L * 1024L,
+        lastModified = null,
+        fileId = 2_101L,
+        hasPreview = false,
+        etag = "\"tiff-etag\"",
     )
 
     private fun jpegFixture(): ByteArray = byteArrayOf(

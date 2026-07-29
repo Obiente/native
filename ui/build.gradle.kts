@@ -78,11 +78,13 @@ kotlin {
         val androidMain by getting
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
-            implementation("androidx.exifinterface:exifinterface:1.4.2")
+            implementation(libs.androidx.lifecycle.runtime.compose)
+            implementation(libs.androidx.exifinterface)
             implementation(libs.androidx.media3.exoplayer)
             implementation(libs.androidx.media3.datasource.okhttp)
             implementation(libs.androidx.media3.ui)
             implementation(libs.androidx.media3.session)
+            implementation(libs.videolan.libvlc)
             implementation(libs.okhttp)
         }
         val desktopMain by getting

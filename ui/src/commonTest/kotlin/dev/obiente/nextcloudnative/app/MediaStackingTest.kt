@@ -80,6 +80,42 @@ class MediaStackingTest {
     }
 
     @Test
+    fun mediaSearchRetriesRejectedOrderingOnceAndReusesCompatibilityForMimeAndRaw() = runBlocking {
+        val requests = mediaSearchDavRequests("account")
+        val executed = mutableListOf<String>()
+        val detectedRaw = file("Photos/detected.raf", "image/x-fuji-raf")
+
+        val pages = collectMediaSearchDavPages(
+            requests = requests,
+            execute = { body ->
+                executed += body
+                when {
+                    body.countDavOrderClauses() == 2 ->
+                        MediaSearchDavTransportResponse(400, "unsupported-order".encodeToByteArray())
+                    "<d:literal>image/%</d:literal>" in body ->
+                        MediaSearchDavTransportResponse(207, "image".encodeToByteArray())
+                    "<d:literal>video/%</d:literal>" in body ->
+                        MediaSearchDavTransportResponse(207, "video".encodeToByteArray())
+                    else ->
+                        MediaSearchDavTransportResponse(207, "raw".encodeToByteArray())
+                }
+            },
+            parse = { body ->
+                when (body.decodeToString()) {
+                    "image" -> listOf(detectedRaw)
+                    "video", "raw" -> emptyList()
+                    else -> error("Unexpected media search response.")
+                }
+            },
+            shouldSearchRaw = { files -> files.any(NextcloudFile::isRawPhoto) },
+        )
+
+        assertEquals(listOf(detectedRaw), pages.flatten())
+        assertEquals(2, executed.first().countDavOrderClauses())
+        assertTrue(executed.drop(1).all { body -> body.countDavOrderClauses() == 1 })
+    }
+
+    @Test
     fun mediaSearchDoesNotProbeRawWhenMimeResultsContainNoRawFiles() = runBlocking {
         val requests = mediaSearchDavRequests("account")
         val executed = mutableListOf<String>()
@@ -645,10 +681,10 @@ class MediaStackingTest {
         assertEquals(listOf("JPEG", "RAW"), plan.choices.map(MediaSourceChoice::label))
         assertEquals(listOf(raw, jpeg), plan.previewCandidates.map(MediaSourceChoice::file))
         assertEquals("RAW · DSCF0001.RAF", plan.selected.pickerLabel)
-        assertEquals(emptyList(), plan.fullQualityCandidatesAtZoom(1f))
+        assertEquals(emptyList(), plan.fullQualityCandidatesAfterPreview(previewReady = false))
         assertEquals(
             listOf(raw, jpeg),
-            plan.fullQualityCandidatesAtZoom(FULL_QUALITY_MEDIA_ZOOM_THRESHOLD)
+            plan.fullQualityCandidatesAfterPreview(previewReady = true)
                 .map(MediaSourceChoice::file),
         )
     }
@@ -815,6 +851,11 @@ class MediaStackingTest {
             baseline,
             baseline.copy(loginName = "another-account"),
         )
+        assertNotEquals(
+            firstGeneration,
+            original.copy(memoriesRenderAllowed = true)
+                .mediaViewerSourceGenerationIdentity(),
+        )
     }
 
     private fun file(path: String, mime: String) = NextcloudFile(
@@ -828,4 +869,7 @@ class MediaStackingTest {
         hasPreview = true,
         etag = "etag-$path",
     )
+
+    private fun String.countDavOrderClauses(): Int =
+        Regex("<d:order>").findAll(this).count()
 }

@@ -30,6 +30,12 @@ data class PhotoNavigationState(
     val activeDestination: PhotoDestination = PhotoDestination.Timeline,
 )
 
+@Serializable
+enum class PhotoTimelineViewMode {
+    Grid,
+    List,
+}
+
 /**
  * Account-scoped Photos navigation context that must survive temporary child screens such as the
  * media viewer, as well as platform recreation.
@@ -38,6 +44,7 @@ data class PhotoNavigationState(
 data class PhotoBrowserState(
     val destination: PhotoDestination = PhotoDestination.Timeline,
     val folder: PhotoFolderBrowseState = PhotoFolderBrowseState(),
+    val timelineViewMode: PhotoTimelineViewMode = PhotoTimelineViewMode.Grid,
 )
 
 private val photoBrowserStateJson = Json {

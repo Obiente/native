@@ -11,8 +11,10 @@ internal actual fun PlatformNativeVideoPlayer(
     session: NextcloudSession,
     userId: String,
     source: NativeVideoPlaybackSource,
+    rangeSource: NativeVideoRangeSource?,
+    compatibilityPlaybackRequested: Boolean,
     onPlaybackEnded: () -> Unit,
-    onError: (String) -> Unit,
+    onFailure: (NativeVideoPlaybackFailure) -> Unit,
     modifier: Modifier,
 ) {
     Box(modifier)

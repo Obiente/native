@@ -24,6 +24,7 @@ data class MediaStack(
 data class MediaStackViewerSequence(
     val navigationItems: List<NextcloudFile>,
     val sourceMembers: List<NextcloudFile>,
+    val navigationIdentityBySourceIdentity: Map<String, String> = emptyMap(),
 ) {
     init {
         require(navigationItems.map(NextcloudFile::path).distinct().size == navigationItems.size) {
@@ -34,6 +35,14 @@ data class MediaStackViewerSequence(
         }
         require(navigationItems.all { item -> sourceMembers.any { source -> source.path == item.path } }) {
             "Every media viewer navigation item must remain available as a source."
+        }
+        val navigationIdentities = navigationItems.mapTo(mutableSetOf(), ::mediaViewerFileIdentity)
+        val sourceIdentities = sourceMembers.mapTo(mutableSetOf(), ::mediaViewerFileIdentity)
+        require(navigationIdentityBySourceIdentity.keys.all(sourceIdentities::contains)) {
+            "The media viewer source mapping contains an unknown source."
+        }
+        require(navigationIdentityBySourceIdentity.values.all(navigationIdentities::contains)) {
+            "The media viewer source mapping contains an unknown navigation item."
         }
     }
 }
@@ -53,10 +62,8 @@ data class MediaSourcePlan(
     val previewCandidates: List<MediaSourceChoice>,
     val fullQualityCandidates: List<MediaSourceChoice>,
 ) {
-    fun fullQualityCandidatesAtZoom(zoom: Float): List<MediaSourceChoice> {
-        require(zoom.isFinite() && zoom >= 1f) { "The media zoom is invalid." }
-        return if (zoom >= FULL_QUALITY_MEDIA_ZOOM_THRESHOLD) fullQualityCandidates else emptyList()
-    }
+    fun fullQualityCandidatesAfterPreview(previewReady: Boolean): List<MediaSourceChoice> =
+        if (previewReady) fullQualityCandidates else emptyList()
 }
 
 data class LoadedMediaSource<T>(
@@ -76,13 +83,13 @@ fun fullQualityMediaPayloadKind(
     displayed: MediaSourceChoice,
     payloadSource: FullResolutionPhotoSource,
 ): MediaDisplayPayloadKind =
-    if (
+    when {
+        payloadSource == FullResolutionPhotoSource.NativeGenerated ->
+            MediaDisplayPayloadKind.NativeGeneratedPreview
         payloadSource == FullResolutionPhotoSource.MemoriesTranscoded &&
-        displayed.format == MediaAssetFormat.Raw
-    ) {
-        MediaDisplayPayloadKind.MemoriesRawRender
-    } else {
-        MediaDisplayPayloadKind.ServerPreview
+            displayed.format == MediaAssetFormat.Raw ->
+            MediaDisplayPayloadKind.MemoriesRawRender
+        else -> MediaDisplayPayloadKind.ServerPreview
     }
 
 /**
@@ -98,6 +105,8 @@ fun describeMediaDisplaySource(
     val source = when {
         payloadKind == MediaDisplayPayloadKind.MemoriesRawRender ->
             if (highDetail) "Generated high-detail RAW render" else "Generated RAW render"
+        payloadKind == MediaDisplayPayloadKind.NativeGeneratedPreview ->
+            if (highDetail) "Native high-detail image render" else "Native image render"
         payloadKind == MediaDisplayPayloadKind.EmbeddedCameraPreview -> "RAW embedded camera preview"
         else -> when (displayed.format) {
             MediaAssetFormat.Raw ->
@@ -115,6 +124,29 @@ fun describeMediaDisplaySource(
     } else {
         "$source fallback - actions target ${selected.file.name}"
     }
+}
+
+internal fun conciseMediaDisplaySourceLabel(
+    selected: MediaSourceChoice,
+    displayed: MediaSourceChoice,
+    highDetail: Boolean,
+    payloadKind: MediaDisplayPayloadKind = MediaDisplayPayloadKind.ServerPreview,
+): String {
+    val source = when {
+        payloadKind == MediaDisplayPayloadKind.MemoriesRawRender ->
+            if (highDetail) "Generated RAW high detail" else "Generated RAW"
+        payloadKind == MediaDisplayPayloadKind.NativeGeneratedPreview ->
+            if (highDetail) "Native high detail" else "Native preview"
+        payloadKind == MediaDisplayPayloadKind.EmbeddedCameraPreview -> "Embedded RAW preview"
+        else -> when (displayed.format) {
+            MediaAssetFormat.Raw -> if (highDetail) "RAW high detail" else "RAW preview"
+            MediaAssetFormat.Jpeg -> if (highDetail) "JPEG high detail" else "JPEG preview"
+            MediaAssetFormat.Image -> if (highDetail) "High detail" else "Image preview"
+            MediaAssetFormat.Video -> "Video preview"
+            MediaAssetFormat.Other -> "File preview"
+        }
+    }
+    return if (displayed.file.path == selected.file.path) source else "$source fallback"
 }
 
 fun stackMediaFiles(files: List<NextcloudFile>): List<MediaStack> {
@@ -163,6 +195,14 @@ fun mediaStackViewerSequence(stacks: List<MediaStack>): MediaStackViewerSequence
             .flatMap { stack -> stack.members.asSequence() }
             .distinctBy(NextcloudFile::path)
             .toList(),
+        navigationIdentityBySourceIdentity = buildMap {
+            stacks.forEach { stack ->
+                val navigationIdentity = mediaViewerFileIdentity(stack.cover)
+                stack.members.forEach { source ->
+                    put(mediaViewerFileIdentity(source), navigationIdentity)
+                }
+            }
+        },
     )
 
 fun mediaViewerNavigationIndex(
@@ -195,10 +235,12 @@ fun planMediaSources(files: List<NextcloudFile>, selected: NextcloudFile): Media
         }
     val previewCandidates = ordered.filter {
         (it.file.fileId != null && it.file.hasPreview) ||
-            (it.file.isRawPhoto() && it.file.originalAccessAllowed)
+            (it.file.isRawPhoto() && it.file.canUseMemoriesDecodableRender()) ||
+            it.file.canUseNativeTiffPreview() ||
+            it.file.canUseEmbeddedRafPreview()
     }
     val fullQualityCandidates = ordered.filter {
-        it.file.fileId != null && it.file.originalAccessAllowed && it.format != MediaAssetFormat.Video
+        it.file.canUseMemoriesDecodableRender() && it.format != MediaAssetFormat.Video
     }
     return MediaSourcePlan(
         selected = ordered.first(),
@@ -289,10 +331,32 @@ fun NextcloudFile.canOpenInMediaViewer(): Boolean =
     !isDirectory && (
         (
             fileId != null &&
-                (hasPreview || (isRawPhoto() && originalAccessAllowed))
+                (
+                    hasPreview ||
+                        (isRawPhoto() && canUseMemoriesDecodableRender()) ||
+                        canUseNativeTiffPreview()
+                )
         ) ||
             canUseEmbeddedRafPreview()
     )
+
+internal fun NextcloudFile.canUseNativeTiffPreview(): Boolean {
+    if (isDirectory || fileId?.let { it > 0L } != true) return false
+    val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase()
+    val mime = mimeType?.substringBefore(';')?.trim()?.lowercase().orEmpty()
+    if (extension !in nativeTiffExtensions && mime !in nativeTiffMimeTypes) return false
+    return memoriesRenderAllowed ||
+        (
+            originalAccessAllowed &&
+                davPathAuthoritative &&
+                runCatching { requireSafeFilePath(path, allowRoot = false) }.isSuccess
+        )
+}
+
+internal fun NextcloudFile.canUseMemoriesDecodableRender(): Boolean =
+    !isDirectory &&
+        fileId != null &&
+        (originalAccessAllowed || memoriesRenderAllowed)
 
 internal fun NextcloudFile.canUseEmbeddedRafPreview(): Boolean =
     !isDirectory &&
@@ -301,6 +365,14 @@ internal fun NextcloudFile.canUseEmbeddedRafPreview(): Boolean =
         originalAccessAllowed &&
         davPathAuthoritative &&
         runCatching { requireSafeFilePath(path, allowRoot = false) }.isSuccess &&
+        etag?.let { runCatching { requireSafeFileRangeEtag(it) }.isSuccess } == true
+
+internal fun NextcloudFile.canUseEmbeddedRafPreviewFromMemories(): Boolean =
+    !isDirectory &&
+        isRawPhoto() &&
+        name.substringAfterLast('.', missingDelimiterValue = "").equals("raf", ignoreCase = true) &&
+        memoriesRenderAllowed &&
+        fileId?.let { it > 0L } == true &&
         etag?.let { runCatching { requireSafeFileRangeEtag(it) }.isSuccess } == true
 
 fun NextcloudFile.isPhotoMedia(): Boolean = mediaAssetFormat() in setOf(
@@ -346,6 +418,18 @@ private fun createMediaStack(files: List<NextcloudFile>): MediaStack {
         hasRenderedImage = ordered.any {
             it.mediaAssetFormat() in setOf(MediaAssetFormat.Jpeg, MediaAssetFormat.Image)
         },
+    )
+}
+
+internal fun MediaStack.withAdditionalMediaStackMembers(
+    additionalMembers: List<NextcloudFile>,
+): MediaStack = if (additionalMembers.isEmpty()) {
+    this
+} else {
+    createMediaStack(
+        (members + additionalMembers)
+            .filterNot(NextcloudFile::isDirectory)
+            .distinctBy(::mediaViewerFileIdentity),
     )
 }
 
@@ -414,7 +498,6 @@ private fun ByteArray.startsWithAscii(expected: String): Boolean =
     size >= expected.length && copyOfRange(0, expected.length).decodeToString() == expected
 
 const val MAX_MEDIA_PREVIEW_BYTES = 16 * 1024 * 1024
-const val FULL_QUALITY_MEDIA_ZOOM_THRESHOLD = 1.35f
 private const val MIN_MEDIA_IMAGE_PAYLOAD_BYTES = 8
 
 private val rawPhotoExtensions = setOf(
@@ -429,4 +512,6 @@ private val rawPhotoMimeTypes = setOf(
 )
 private val jpegExtensions = setOf("jpg", "jpeg", "jpe")
 private val renderedImageExtensions = setOf("avif", "bmp", "gif", "heic", "heif", "png", "tif", "tiff", "webp")
+private val nativeTiffExtensions = setOf("tif", "tiff")
+private val nativeTiffMimeTypes = setOf("image/tif", "image/tiff")
 private val videoExtensions = setOf("3gp", "avi", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "webm")

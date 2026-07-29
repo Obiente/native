@@ -41,11 +41,18 @@ data class PhotoTimelinePage(
     val nextCursor: PhotoTimelineCursor?,
     val optionalRawRemovalAuthoritative: Boolean = true,
     val rawObserved: Boolean = entries.any { entry -> entry.file.isRawPhoto() },
+    val optionalRawSearchRetryPending: Boolean = false,
+    val rawStackFileIdsByEntryIdentity: Map<String, List<Long>> = emptyMap(),
+    val rawStackRelationshipsAuthoritative: Boolean = false,
 ) {
     init {
         require(entries.size <= MAX_PHOTO_TIMELINE_PAGE_SIZE) {
             "The photo timeline page is too large."
         }
+        validatePhotoTimelineRawStackRelationships(
+            entries = entries,
+            relationships = rawStackFileIdsByEntryIdentity,
+        )
     }
 }
 
@@ -98,6 +105,8 @@ data class PhotoTimelineState(
     val revalidationPendingRemovalIdentities: Set<String> = emptySet(),
     val revalidationPendingRawRemovalAuthoritative: Boolean = true,
     val rawEverObserved: Boolean = entries.any { entry -> entry.file.isRawPhoto() },
+    val optionalRawSearchRetryPending: Boolean = false,
+    val rawStackFileIdsByEntryIdentity: Map<String, List<Long>> = emptyMap(),
 ) {
     init {
         require(pageSize in 1..MAX_PHOTO_TIMELINE_PAGE_SIZE) {
@@ -159,6 +168,10 @@ data class PhotoTimelineState(
         }) {
             "The photo timeline entries are not ordered newest first."
         }
+        validatePhotoTimelineRawStackRelationships(
+            entries = entries,
+            relationships = rawStackFileIdsByEntryIdentity,
+        )
     }
 
     val canLoadNextPage: Boolean
@@ -387,6 +400,20 @@ data class PhotoTimelineState(
                     !catchUpTailReached &&
                     page.nextCursor != null
         }
+        val rawStackRelationshipSource = when {
+            token.kind == PhotoTimelineLoadKind.Refresh -> emptyMap()
+            stalled && revalidationCursorCatchUp -> rawStackFileIdsByEntryIdentity
+            else -> rawStackFileIdsByEntryIdentity
+        }
+        val updatedRawStackRelationships = when {
+            stalled && revalidationCursorCatchUp -> rawStackRelationshipSource
+            page.rawStackRelationshipsAuthoritative ->
+                rawStackRelationshipSource
+                    .filterKeys { identity -> identity !in incomingIdentities } +
+                    page.rawStackFileIdsByEntryIdentity
+            else -> rawStackRelationshipSource + page.rawStackFileIdsByEntryIdentity
+        }
+        val retainedIdentities = retained.mapTo(mutableSetOf(), PhotoTimelineEntry::identity)
         return copy(
             entries = retained,
             nextCursor = acceptedCursor,
@@ -476,6 +503,9 @@ data class PhotoTimelineState(
                     true
                 },
             rawEverObserved = rawEverObserved || page.rawObserved,
+            optionalRawSearchRetryPending = page.optionalRawSearchRetryPending,
+            rawStackFileIdsByEntryIdentity =
+                updatedRawStackRelationships.filterKeys(retainedIdentities::contains),
         )
     }
 
@@ -508,6 +538,30 @@ data class PhotoTimelineState(
         } else {
             cancelPendingLoad()
         }
+}
+
+private fun validatePhotoTimelineRawStackRelationships(
+    entries: List<PhotoTimelineEntry>,
+    relationships: Map<String, List<Long>>,
+) {
+    val entriesByIdentity = entries.associateBy(PhotoTimelineEntry::identity)
+    require(relationships.size <= entries.size) {
+        "The photo timeline contains too many RAW stack relationships."
+    }
+    relationships.forEach { (identity, fileIds) ->
+        val entry = requireNotNull(entriesByIdentity[identity]) {
+            "A photo timeline RAW stack has no matching cover."
+        }
+        require(fileIds.size <= MAX_RAW_STACK_ITEMS && fileIds.all { it > 0L }) {
+            "A photo timeline RAW stack is invalid."
+        }
+        require(fileIds.distinct().size == fileIds.size) {
+            "A photo timeline RAW stack has duplicate files."
+        }
+        require(entry.file.fileId !in fileIds) {
+            "A photo timeline RAW stack contains its cover."
+        }
+    }
 }
 
 private data class PhotoTimelineRevalidationBoundary(
@@ -586,11 +640,23 @@ data class PhotoTimelineStackEntry(
 
 fun buildPhotoTimelineStackEntries(
     entries: List<PhotoTimelineEntry>,
+    rawStackFilesByEntryIdentity: Map<String, List<NextcloudFile>> = emptyMap(),
 ): List<PhotoTimelineStackEntry> {
     val timestamps = entries.associate { entry ->
         entry.identity to entry.capturedAtEpochSeconds
     }
     return stackMediaFiles(entries.map(PhotoTimelineEntry::file))
+        .map { stack ->
+            val authoritativeRawMembers = stack.members
+                .asSequence()
+                .flatMap { member ->
+                    rawStackFilesByEntryIdentity[
+                        member.toPhotoTimelineEntryIdentity()
+                    ].orEmpty().asSequence()
+                }
+                .toList()
+            stack.withAdditionalMediaStackMembers(authoritativeRawMembers)
+        }
         .mapNotNull { stack ->
             stack.members
                 .mapNotNull { member -> timestamps[member.toPhotoTimelineEntryIdentity()] }

@@ -108,6 +108,48 @@ class PhotoTimelineScrubberTest {
     }
 
     @Test
+    fun continuousRailFractionClampsEdgesAndRejectsInvalidGeometry() {
+        assertEquals(
+            0f,
+            photoTimelineRailFraction(
+                positionY = -20f,
+                railHeight = 100f,
+                thumbHeight = 20f,
+            ),
+        )
+        assertEquals(
+            0.5f,
+            photoTimelineRailFraction(
+                positionY = 50f,
+                railHeight = 100f,
+                thumbHeight = 20f,
+            ),
+        )
+        assertEquals(
+            1f,
+            photoTimelineRailFraction(
+                positionY = 120f,
+                railHeight = 100f,
+                thumbHeight = 20f,
+            ),
+        )
+        assertNull(
+            photoTimelineRailFraction(
+                positionY = Float.NaN,
+                railHeight = 100f,
+                thumbHeight = 20f,
+            ),
+        )
+        assertNull(
+            photoTimelineRailFraction(
+                positionY = 20f,
+                railHeight = 20f,
+                thumbHeight = 20f,
+            ),
+        )
+    }
+
+    @Test
     fun arrowStepsMoveOneMonthAndStayWithinBounds() {
         assertEquals(0, photoTimelineSectionIndexAfterStep(0, sectionCount = 4, step = -1))
         assertEquals(0, photoTimelineSectionIndexAfterStep(1, sectionCount = 4, step = -1))
@@ -115,5 +157,269 @@ class PhotoTimelineScrubberTest {
         assertEquals(3, photoTimelineSectionIndexAfterStep(3, sectionCount = 4, step = 1))
         assertEquals(3, photoTimelineSectionIndexAfterStep(99, sectionCount = 4, step = 0))
         assertNull(photoTimelineSectionIndexAfterStep(0, sectionCount = 0, step = 1))
+    }
+
+    @Test
+    fun fullHeightRailMapsManyMonthsDeterministically() {
+        assertEquals(
+            0,
+            photoTimelineSectionIndexForRailPosition(
+                positionY = 16f,
+                railHeight = 720f,
+                thumbHeight = 32f,
+                sectionCount = 25,
+            ),
+        )
+        assertEquals(
+            12,
+            photoTimelineSectionIndexForRailPosition(
+                positionY = 360f,
+                railHeight = 720f,
+                thumbHeight = 32f,
+                sectionCount = 25,
+            ),
+        )
+        assertEquals(
+            24,
+            photoTimelineSectionIndexForRailPosition(
+                positionY = 704f,
+                railHeight = 720f,
+                thumbHeight = 32f,
+                sectionCount = 25,
+            ),
+        )
+    }
+
+    @Test
+    fun railDragMapsAcrossEveryGridItemInsteadOfSnappingToMonths() {
+        val index = PhotoTimelineDateIndex(
+            sections = listOf(
+                PhotoTimelineMonthSection(PhotoTimelineMonth(2026, 7), 0, 5),
+                PhotoTimelineMonthSection(PhotoTimelineMonth(2026, 6), 5, 4),
+            ),
+            totalItemCount = 9,
+        )
+
+        assertEquals(11, photoTimelineGridItemCount(index))
+        assertEquals(
+            5,
+            photoTimelineGridItemForRailPosition(
+                positionY = 50f,
+                railHeight = 100f,
+                thumbHeight = 20f,
+                index = index,
+            ),
+        )
+        assertEquals(
+            0,
+            photoTimelineGridItemForRailPosition(
+                positionY = -20f,
+                railHeight = 100f,
+                thumbHeight = 20f,
+                index = index,
+            ),
+        )
+        assertEquals(
+            10,
+            photoTimelineGridItemForRailPosition(
+                positionY = 120f,
+                railHeight = 100f,
+                thumbHeight = 20f,
+                index = index,
+            ),
+        )
+    }
+
+    @Test
+    fun releaseSnapIsLimitedToItemsAdjacentToAMonthHeader() {
+        val index = PhotoTimelineDateIndex(
+            sections = listOf(
+                PhotoTimelineMonthSection(PhotoTimelineMonth(2026, 7), 0, 5),
+                PhotoTimelineMonthSection(PhotoTimelineMonth(2026, 6), 5, 4),
+            ),
+            totalItemCount = 9,
+        )
+
+        assertEquals(0, lightlySnappedPhotoTimelineGridItem(index, 1))
+        assertEquals(6, lightlySnappedPhotoTimelineGridItem(index, 5))
+        assertEquals(3, lightlySnappedPhotoTimelineGridItem(index, 3))
+        assertEquals(10, lightlySnappedPhotoTimelineGridItem(index, 99))
+    }
+
+    @Test
+    fun fullIndexReleaseSnapUsesWeightedDaysAndOnlyLightlySnapsToMonths() {
+        val geometry = requireNotNull(
+            buildMemoriesTimelinePlaceholderGeometry(
+                MemoriesMainTimelineDayIndex(
+                    listOf(
+                        NativeMediaDay(60L, 2),
+                        NativeMediaDay(59L, 3),
+                        NativeMediaDay(31L, 4),
+                        NativeMediaDay(30L, 1),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(
+            59L,
+            lightlySnappedMemoriesTimelineDayId(
+                geometry = geometry,
+                fraction = 0.2f,
+            ),
+        )
+        assertEquals(
+            31L,
+            lightlySnappedMemoriesTimelineDayId(
+                geometry = geometry,
+                fraction = 0.5f,
+            ),
+        )
+        assertEquals(
+            30L,
+            lightlySnappedMemoriesTimelineDayId(
+                geometry = geometry,
+                fraction = 0.9f,
+            ),
+        )
+        assertNull(
+            lightlySnappedMemoriesTimelineDayId(
+                geometry = geometry,
+                fraction = Float.NaN,
+            ),
+        )
+    }
+
+    @Test
+    fun fullIndexReleaseSelectsOneFinalSnappedOrRawDay() {
+        val geometry = requireNotNull(
+            buildMemoriesTimelinePlaceholderGeometry(
+                MemoriesMainTimelineDayIndex(
+                    listOf(
+                        NativeMediaDay(60L, 2),
+                        NativeMediaDay(59L, 3),
+                        NativeMediaDay(31L, 4),
+                        NativeMediaDay(30L, 1),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(
+            31L,
+            memoriesTimelineDayIdForScrubberRelease(
+                geometry = geometry,
+                interactionFraction = 0.5f,
+                interactionDayId = 59L,
+            ),
+        )
+        assertEquals(
+            59L,
+            memoriesTimelineDayIdForScrubberRelease(
+                geometry = geometry,
+                interactionFraction = 0.2f,
+                interactionDayId = 59L,
+            ),
+        )
+        assertEquals(
+            30L,
+            memoriesTimelineDayIdForScrubberRelease(
+                geometry = geometry,
+                interactionFraction = Float.NaN,
+                interactionDayId = 30L,
+            ),
+        )
+        assertNull(
+            memoriesTimelineDayIdForScrubberRelease(
+                geometry = geometry,
+                interactionFraction = null,
+                interactionDayId = null,
+            ),
+        )
+    }
+
+    @Test
+    fun dragLabelTracksTheMonthContainingTheTargetGridItem() {
+        val index = PhotoTimelineDateIndex(
+            sections = listOf(
+                PhotoTimelineMonthSection(PhotoTimelineMonth(2026, 7), 0, 5),
+                PhotoTimelineMonthSection(PhotoTimelineMonth(2026, 6), 5, 4),
+            ),
+            totalItemCount = 9,
+        )
+
+        assertEquals(0, photoTimelineSectionIndexForGridItem(index, 0))
+        assertEquals(0, photoTimelineSectionIndexForGridItem(index, 5))
+        assertEquals(1, photoTimelineSectionIndexForGridItem(index, 6))
+        assertEquals(1, photoTimelineSectionIndexForGridItem(index, 10))
+    }
+
+    @Test
+    fun interactionTargetTemporarilyOwnsTheDisplayedMonth() {
+        assertEquals(
+            2,
+            photoTimelineScrubberDisplaySectionIndex(
+                activeSectionIndex = 2,
+                interactionSectionIndex = null,
+                sectionCount = 8,
+            ),
+        )
+        assertEquals(
+            6,
+            photoTimelineScrubberDisplaySectionIndex(
+                activeSectionIndex = 2,
+                interactionSectionIndex = 6,
+                sectionCount = 8,
+            ),
+        )
+        assertEquals(
+            7,
+            photoTimelineScrubberDisplaySectionIndex(
+                activeSectionIndex = 99,
+                interactionSectionIndex = null,
+                sectionCount = 8,
+            ),
+        )
+        assertNull(
+            photoTimelineScrubberDisplaySectionIndex(
+                activeSectionIndex = 0,
+                interactionSectionIndex = null,
+                sectionCount = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun duplicateDragTargetsDoNotScheduleAnotherJump() {
+        assertNull(
+            distinctPhotoTimelineScrubberJumpTarget(
+                currentSectionIndex = 4,
+                requestedSectionIndex = 4,
+                sectionCount = 12,
+            ),
+        )
+        assertEquals(
+            5,
+            distinctPhotoTimelineScrubberJumpTarget(
+                currentSectionIndex = 4,
+                requestedSectionIndex = 5,
+                sectionCount = 12,
+            ),
+        )
+        assertEquals(
+            11,
+            distinctPhotoTimelineScrubberJumpTarget(
+                currentSectionIndex = 4,
+                requestedSectionIndex = 99,
+                sectionCount = 12,
+            ),
+        )
+        assertNull(
+            distinctPhotoTimelineScrubberJumpTarget(
+                currentSectionIndex = 0,
+                requestedSectionIndex = 1,
+                sectionCount = 0,
+            ),
+        )
     }
 }

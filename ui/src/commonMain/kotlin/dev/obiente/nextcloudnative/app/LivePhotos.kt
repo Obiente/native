@@ -16,6 +16,9 @@ private const val MAX_LIVE_PHOTO_DAY_BYTES = 16L * 1_024L * 1_024L
 private const val MAX_LIVE_PHOTO_DAY_ITEMS = 10_000
 private const val MAX_LIVE_PHOTO_ETAG_LENGTH = 1_024
 private const val MAX_MEMORIES_DESCRIBE_BYTES = 64L * 1_024L
+private const val MAX_LIVE_PHOTO_COMPANION_INFO_BYTES = 64L * 1_024L
+private const val MAX_LIVE_PHOTO_COMPANION_NAME_LENGTH = 1_024
+private const val MAX_LIVE_PHOTO_COMPANION_MIME_LENGTH = 256
 
 /**
  * Evidence that the connected Memories app exposes the Live Photo route family used here.
@@ -66,6 +69,27 @@ data class MemoriesLivePhotoSource(
     init {
         require(fileId > 0L) { "The Live Photo file ID is invalid." }
         require(etag == null || etag.isSafeLivePhotoEtag()) { "The Live Photo ETag is invalid." }
+    }
+}
+
+internal data class MemoriesLivePhotoCompanionInfo(
+    val fileId: Long,
+    val etag: String,
+    val basename: String,
+    val mimeType: String,
+) {
+    init {
+        require(fileId > 0L) { "The Live Photo companion file ID is invalid." }
+        requireSafeFileRangeEtag(etag)
+        require(basename.isSafeLivePhotoCompanionText(MAX_LIVE_PHOTO_COMPANION_NAME_LENGTH)) {
+            "The Live Photo companion name is invalid."
+        }
+        require(
+            mimeType.isSafeLivePhotoCompanionText(MAX_LIVE_PHOTO_COMPANION_MIME_LENGTH) &&
+                mimeType.substringBefore(';').startsWith("video/", ignoreCase = true),
+        ) {
+            "The Live Photo companion MIME type is invalid."
+        }
     }
 }
 
@@ -268,6 +292,94 @@ fun memoriesLivePhotoVideoRequest(source: MemoriesLivePhotoSource): NextcloudApi
         maximumResponseBytes = 1L,
     ).requireSafe()
 
+internal fun memoriesLivePhotoCompanionInfoRequest(
+    source: MemoriesLivePhotoSource,
+): NextcloudApiRequest {
+    require(!source.reference.serverToken.startsWith("self__")) {
+        "Embedded Live Photos do not expose a companion file record."
+    }
+    return NextcloudApiRequest(
+        method = NextcloudApiMethod.GET,
+        relativePath = "/index.php/apps/memories/api/video/livephoto/${source.fileId}",
+        queryParameters = buildMap {
+            put("liveid", source.reference.serverToken)
+            put("format", "json")
+            source.etag?.let { put("etag", it) }
+        },
+        ocsApiRequest = true,
+        maximumResponseBytes = MAX_LIVE_PHOTO_COMPANION_INFO_BYTES,
+        cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+    ).requireSafe()
+}
+
+internal fun parseMemoriesLivePhotoCompanionInfo(
+    response: NextcloudApiResponse,
+): MemoriesLivePhotoCompanionInfo {
+    require(response.status in 200..299) {
+        "Memories could not inspect this Live Photo companion (HTTP ${response.status})."
+    }
+    val root = response.livePhotoJsonObject("Memories Live Photo companion")
+    return MemoriesLivePhotoCompanionInfo(
+        fileId = root.positiveLong("fileid"),
+        etag = requireNotNull(root.optionalText("etag")) {
+            "Memories returned a Live Photo companion without an ETag."
+        },
+        basename = requireNotNull(root.optionalText("basename")) {
+            "Memories returned a Live Photo companion without a name."
+        },
+        mimeType = requireNotNull(root.optionalText("mimetype")) {
+            "Memories returned a Live Photo companion without a MIME type."
+        },
+    )
+}
+
+internal suspend fun resolveMemoriesLivePhotoCompatibilityRangePlan(
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+    userId: String,
+    selected: NextcloudFile,
+    source: MemoriesLivePhotoSource,
+): NativeVideoCompatibilityRangePlan? {
+    if (userId.isBlank() || source.fileId != selected.fileId) return null
+    val token = source.reference.serverToken
+    if (token.startsWith("self__")) {
+        val authoritativeStill = services.resolveFilesById(
+            session = session,
+            userId = userId,
+            fileIds = listOf(source.fileId),
+        )[source.fileId] ?: return null
+        if (
+            source.etag != null &&
+            !source.etag.matchesLivePhotoFileEtag(authoritativeStill.etag)
+        ) {
+            return null
+        }
+        return authoritativeStill.embeddedLivePhotoCompatibilityPlanOrNull(source, userId)
+    }
+
+    val companionInfo = parseMemoriesLivePhotoCompanionInfo(
+        services.executeNextcloudApi(
+            session,
+            memoriesLivePhotoCompanionInfoRequest(source),
+        ),
+    )
+    val companion = services.resolveFilesById(
+        session = session,
+        userId = userId,
+        fileIds = listOf(companionInfo.fileId),
+    )[companionInfo.fileId] ?: return null
+    if (companion.fileId != companionInfo.fileId) return null
+    if (!companionInfo.etag.matchesLivePhotoFileEtag(companion.etag)) return null
+    if (companion.name != companionInfo.basename) return null
+    if (
+        companion.mimeType?.substringBefore(';')?.lowercase() !=
+        companionInfo.mimeType.substringBefore(';').lowercase()
+    ) {
+        return null
+    }
+    return companion.wholeFileVideoCompatibilityPlanOrNull(userId)
+}
+
 internal fun NextcloudFile.canResolveMemoriesLivePhoto(): Boolean {
     if (
         isDirectory ||
@@ -284,6 +396,19 @@ private fun String.isSafeLivePhotoEtag(): Boolean =
     isNotBlank() &&
         length <= MAX_LIVE_PHOTO_ETAG_LENGTH &&
         none { character -> character.isISOControl() || character == '\u007f' }
+
+private fun String.isSafeLivePhotoCompanionText(maximumLength: Int): Boolean =
+    isNotBlank() &&
+        length <= maximumLength &&
+        none { character -> character.isISOControl() || character == '\u007f' }
+
+private fun String.matchesLivePhotoFileEtag(candidate: String?): Boolean {
+    val expected = runCatching { requireSafeFileRangeEtag(this) }.getOrNull() ?: return false
+    val actual = candidate
+        ?.let { runCatching { requireSafeFileRangeEtag(it) }.getOrNull() }
+        ?: return false
+    return expected == actual
+}
 
 private val livePhotoJson = Json { ignoreUnknownKeys = true }
 

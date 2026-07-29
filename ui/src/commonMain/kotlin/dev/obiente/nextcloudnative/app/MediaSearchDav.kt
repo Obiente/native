@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -41,6 +42,7 @@ data class MediaTimelineDavPage(
     val nextCursor: PhotoTimelineCursor?,
     val optionalRawRemovalAuthoritative: Boolean,
     val rawObserved: Boolean,
+    val optionalRawSearchRetryPending: Boolean = false,
 )
 
 /**
@@ -130,6 +132,7 @@ fun mediaSearchDavRequestBody(
     rawFileNamePatterns: List<String> = emptyList(),
     mimeTypePatterns: List<String> = MEDIA_SEARCH_MIME_PATTERNS,
     excludeCollections: Boolean = true,
+    includeFileIdOrdering: Boolean = true,
     atOrBeforeEpochSeconds: Long? = null,
     firstResult: Int = 0,
     strictlyBeforeEpochSeconds: Long? = null,
@@ -220,7 +223,7 @@ fun mediaSearchDavRequestBody(
             </d:where>
             <d:orderby>
               <d:order><d:prop><d:getlastmodified/></d:prop><d:descending/></d:order>
-              <d:order><d:prop><oc:fileid/></d:prop><d:descending/></d:order>
+              ${if (includeFileIdOrdering) "<d:order><d:prop><oc:fileid/></d:prop><d:descending/></d:order>" else ""}
             </d:orderby>
             <d:limit><d:nresults>$maximumResults</d:nresults>${if (firstResult > 0) "<sd:firstresult>$firstResult</sd:firstresult>" else ""}</d:limit>
           </d:basicsearch>
@@ -269,6 +272,9 @@ suspend fun collectMediaTimelineDavPage(
         null
     }
     val partitionPages = mutableListOf<MediaTimelinePartitionPage>()
+    var legacyOrderingRequired = false
+    var optionalRawSearchRetryPending = false
+    val failedRawPatternIndexes = mutableSetOf<Int>()
 
     suspend fun loadMime(
         partition: MediaSearchDavPartition,
@@ -295,8 +301,41 @@ suspend fun collectMediaTimelineDavPage(
         } else {
             mediaTimelineDavRequest(userId, partition, requireNotNull(queryCursor))
         }
-        var effectivePrevious = queryCursor
-        var response = execute(request.body)
+        val startInLegacyMode = queryCursor == null && legacyOrderingRequired
+        var effectivePrevious = if (startInLegacyMode) {
+            MediaTimelineDavCursorPart(boundaryEpochSeconds = null, firstResult = 0)
+        } else {
+            queryCursor
+        }
+        var response = execute(
+            if (startInLegacyMode) {
+                mediaSearchDavRequests(
+                    userId = userId,
+                    maximumResults = PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
+                    includeFileIdOrdering = false,
+                ).first { candidate -> candidate.partition == partition }.body
+            } else {
+                request.body
+            },
+        )
+        if (
+            queryCursor == null &&
+            !startInLegacyMode &&
+            isMediaSearchCompatibilityRejection(response.status)
+        ) {
+            legacyOrderingRequired = true
+            effectivePrevious = MediaTimelineDavCursorPart(
+                boundaryEpochSeconds = null,
+                firstResult = 0,
+            )
+            response = execute(
+                mediaSearchDavRequests(
+                    userId = userId,
+                    maximumResults = PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
+                    includeFileIdOrdering = false,
+                ).first { candidate -> candidate.partition == partition }.body,
+            )
+        }
         if (
             queryCursor?.keysetBoundary != null &&
             isMediaSearchCompatibilityRejection(response.status)
@@ -338,11 +377,22 @@ suspend fun collectMediaTimelineDavPage(
                 userId = userId,
                 execute = execute,
                 parse = parse,
+                includeFileIdOrdering = !legacyOrderingRequired,
             )
         }
     } else {
         decodedCursor.raw.forEach { raw ->
             val key = MediaTimelinePartitionKey.Raw(raw.patternIndexes)
+            fun retainRetryCursor() {
+                optionalRawSearchRetryPending = true
+                failedRawPatternIndexes += raw.patternIndexes
+                partitionPages += MediaTimelinePartitionPage(
+                    key = key,
+                    files = emptyList(),
+                    logicalPrevious = raw.cursor,
+                    remoteCursorAfterFetched = raw.cursor,
+                )
+            }
             val retained = runtimeCarryover?.partitions?.get(key)
             if (retained != null) {
                 partitionPages += MediaTimelinePartitionPage(
@@ -357,35 +407,48 @@ suspend fun collectMediaTimelineDavPage(
                 rawPhotoFileNameSearchPatterns()[index]
             }
             var effectivePrevious = raw.cursor
-            var response = execute(
-                mediaTimelineRawDavRequest(userId, patterns, effectivePrevious).body,
-            )
-            if (
-                effectivePrevious.keysetBoundary != null &&
-                isMediaSearchCompatibilityRejection(response.status)
-            ) {
-                effectivePrevious = effectivePrevious.asLegacyFallback()
-                response = execute(
+            val response = try {
+                var loaded = execute(
                     mediaTimelineRawDavRequest(userId, patterns, effectivePrevious).body,
                 )
-            }
-            when {
-                response.status == 207 -> {
-                    val files = orderedTimelinePartition(parse(response.body))
-                    partitionPages += MediaTimelinePartitionPage(
-                        key = key,
-                        files = files,
-                        logicalPrevious = effectivePrevious,
-                        remoteCursorAfterFetched = advancedPartitionCursor(
-                            consumedFiles = files,
-                            previous = effectivePrevious,
-                            hasMore = files.size >= PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
-                        ),
+                if (
+                    effectivePrevious.keysetBoundary != null &&
+                    isMediaSearchCompatibilityRejection(loaded.status)
+                ) {
+                    effectivePrevious = effectivePrevious.asLegacyFallback()
+                    loaded = execute(
+                        mediaTimelineRawDavRequest(userId, patterns, effectivePrevious).body,
                     )
                 }
-                isMediaSearchCompatibilityRejection(response.status) -> Unit
-                else -> error("WebDAV media search failed (HTTP ${response.status}).")
+                loaded
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (_: Exception) {
+                retainRetryCursor()
+                return@forEach
             }
+            if (response.status != 207) {
+                retainRetryCursor()
+                return@forEach
+            }
+            val files = try {
+                orderedTimelinePartition(parse(response.body))
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (_: Exception) {
+                retainRetryCursor()
+                return@forEach
+            }
+            partitionPages += MediaTimelinePartitionPage(
+                key = key,
+                files = files,
+                logicalPrevious = effectivePrevious,
+                remoteCursorAfterFetched = advancedPartitionCursor(
+                    consumedFiles = files,
+                    previous = effectivePrevious,
+                    hasMore = files.size >= PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
+                ),
+            )
         }
     }
 
@@ -396,6 +459,7 @@ suspend fun collectMediaTimelineDavPage(
     val coveredRawPatternIndexes = partitionPages
         .mapNotNull { page -> page.key as? MediaTimelinePartitionKey.Raw }
         .flatMap { raw -> raw.patternIndexes }
+        .filterNot(failedRawPatternIndexes::contains)
         .toSet()
     val nextCursor = merged.nextCursor
         .takeUnless(MediaTimelineDavCursor::isExhausted)
@@ -419,6 +483,7 @@ suspend fun collectMediaTimelineDavPage(
         optionalRawRemovalAuthoritative =
             coveredRawPatternIndexes.size == rawPhotoFileNameSearchPatterns().size,
         rawObserved = rawObserved,
+        optionalRawSearchRetryPending = optionalRawSearchRetryPending,
     )
 }
 
@@ -594,6 +659,7 @@ private fun mediaTimelineDavRequest(
             firstResult = if (cursor.keysetBoundary == null) cursor.firstResult else 0,
             strictlyBeforeEpochSeconds = cursor.keysetBoundary?.first,
             strictlyBeforeFileId = cursor.keysetBoundary?.second,
+            includeFileIdOrdering = cursor.keysetBoundary != null,
             maximumResults = PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
         ),
         userId = userId,
@@ -617,6 +683,7 @@ private fun mediaTimelineRawDavRequest(
         firstResult = if (cursor.keysetBoundary == null) cursor.firstResult else 0,
         strictlyBeforeEpochSeconds = cursor.keysetBoundary?.first,
         strictlyBeforeFileId = cursor.keysetBoundary?.second,
+        includeFileIdOrdering = cursor.keysetBoundary != null,
     ),
     userId = userId,
     maximumResults = PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
@@ -786,6 +853,7 @@ private suspend fun collectInitialRawTimelinePartitions(
     userId: String,
     execute: suspend (body: String) -> MediaSearchDavTransportResponse,
     parse: (body: ByteArray) -> List<NextcloudFile>,
+    includeFileIdOrdering: Boolean,
 ): List<MediaTimelinePartitionPage> {
     val patterns = rawPhotoFileNameSearchPatterns()
     val pages = mutableListOf<MediaTimelinePartitionPage>()
@@ -800,18 +868,26 @@ private suspend fun collectInitialRawTimelinePartitions(
             userId = userId,
             maximumResults = PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
             rawFileNamePatterns = selectedPatterns,
+            includeFileIdOrdering = includeFileIdOrdering,
         )
-        val response = execute(request.body)
+        val effectivePrevious = if (includeFileIdOrdering) {
+            null
+        } else {
+            MediaTimelineDavCursorPart(boundaryEpochSeconds = null, firstResult = 0)
+        }
+        val response = executeOptionalRawSearch(execute, request.body) ?: return pages
         when {
             response.status == 207 -> {
-                val files = orderedTimelinePartition(parse(response.body))
+                val files = parseOptionalRawSearch(parse, response.body)
+                    ?.let(::orderedTimelinePartition)
+                    ?: return pages
                 pages += MediaTimelinePartitionPage(
                     key = MediaTimelinePartitionKey.Raw(indexes),
                     files = files,
-                    logicalPrevious = null,
+                    logicalPrevious = effectivePrevious,
                     remoteCursorAfterFetched = advancedPartitionCursor(
                         consumedFiles = files,
-                        previous = null,
+                        previous = effectivePrevious,
                         hasMore = files.size >= PHOTO_TIMELINE_PARTITION_PAGE_SIZE,
                     ),
                 )
@@ -821,10 +897,32 @@ private suspend fun collectInitialRawTimelinePartitions(
                 chunkSize = (indexes.size + 1) / 2
             }
             isMediaSearchCompatibilityRejection(response.status) -> return pages
-            else -> error("WebDAV media search failed (HTTP ${response.status}).")
+            else -> return pages
         }
     }
     return pages
+}
+
+private suspend fun executeOptionalRawSearch(
+    execute: suspend (body: String) -> MediaSearchDavTransportResponse,
+    body: String,
+): MediaSearchDavTransportResponse? = try {
+    execute(body)
+} catch (cancellation: CancellationException) {
+    throw cancellation
+} catch (_: Exception) {
+    null
+}
+
+private fun parseOptionalRawSearch(
+    parse: (body: ByteArray) -> List<NextcloudFile>,
+    body: ByteArray,
+): List<NextcloudFile>? = try {
+    parse(body)
+} catch (cancellation: CancellationException) {
+    throw cancellation
+} catch (_: Exception) {
+    null
 }
 
 private fun orderedTimelinePartition(files: List<NextcloudFile>): List<NextcloudFile> =
@@ -850,6 +948,7 @@ private fun rawPatternIndexes(mask: Int): List<Int> {
 fun mediaSearchDavRequests(
     userId: String,
     maximumResults: Int = MAXIMUM_MEDIA_SEARCH_RESULTS,
+    includeFileIdOrdering: Boolean = true,
 ): List<MediaSearchDavRequest> = buildList {
     add(
         MediaSearchDavRequest(
@@ -859,6 +958,7 @@ fun mediaSearchDavRequests(
                 maximumResults = maximumResults,
                 mimeTypePatterns = listOf("image/%"),
                 excludeCollections = false,
+                includeFileIdOrdering = includeFileIdOrdering,
             ),
             userId = userId,
             maximumResults = maximumResults,
@@ -872,6 +972,7 @@ fun mediaSearchDavRequests(
                 maximumResults = maximumResults,
                 mimeTypePatterns = listOf("video/%"),
                 excludeCollections = false,
+                includeFileIdOrdering = includeFileIdOrdering,
             ),
             userId = userId,
             maximumResults = maximumResults,
@@ -915,8 +1016,25 @@ suspend fun <T> collectMediaSearchDavPages(
         request.userId == rawContext.userId && request.maximumResults == rawContext.maximumResults
     })
     val pages = mutableListOf<List<T>>()
+    var legacyOrderingRequired = false
     requests.take(2).forEach { request ->
-        val response = execute(request.body)
+        val mimePattern = when (request.partition) {
+            MediaSearchDavPartition.ImageMime -> "image/%"
+            MediaSearchDavPartition.VideoMime -> "video/%"
+            MediaSearchDavPartition.Raw -> error("Required media partitions must use MIME filters.")
+        }
+        val legacyBody = mediaSearchDavRequestBody(
+            userId = request.userId,
+            maximumResults = request.maximumResults,
+            mimeTypePatterns = listOf(mimePattern),
+            excludeCollections = false,
+            includeFileIdOrdering = false,
+        )
+        var response = execute(if (legacyOrderingRequired) legacyBody else request.body)
+        if (!legacyOrderingRequired && isMediaSearchCompatibilityRejection(response.status)) {
+            legacyOrderingRequired = true
+            response = execute(legacyBody)
+        }
         if (response.status != 207) {
             error("WebDAV media search failed (HTTP ${response.status}).")
         }
@@ -927,6 +1045,7 @@ suspend fun <T> collectMediaSearchDavPages(
     var rawOffset = 0
     var rawChunkSize = MAXIMUM_RAW_MEDIA_SEARCH_PATTERNS_PER_REQUEST
     var rawRequests = 0
+    val includeFileIdOrdering = !legacyOrderingRequired
     while (rawOffset < plannedRawPatterns.size) {
         if (rawRequests == MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS) {
             if (rawCompatibilityPolicy == RawMediaSearchCompatibilityPolicy.KeepAvailableResults) {
@@ -940,6 +1059,7 @@ suspend fun <T> collectMediaSearchDavPages(
             rawContext.userId,
             rawContext.maximumResults,
             patterns,
+            includeFileIdOrdering = includeFileIdOrdering,
         )
         val response = execute(request.body)
         when {
@@ -968,6 +1088,7 @@ private fun rawMediaSearchDavRequest(
     userId: String,
     maximumResults: Int,
     rawFileNamePatterns: List<String>,
+    includeFileIdOrdering: Boolean = true,
 ): MediaSearchDavRequest {
     require(rawFileNamePatterns.isNotEmpty())
     return MediaSearchDavRequest(
@@ -977,6 +1098,7 @@ private fun rawMediaSearchDavRequest(
             maximumResults = maximumResults,
             rawFileNamePatterns = rawFileNamePatterns,
             mimeTypePatterns = emptyList(),
+            includeFileIdOrdering = includeFileIdOrdering,
         ),
         userId = userId,
         maximumResults = maximumResults,

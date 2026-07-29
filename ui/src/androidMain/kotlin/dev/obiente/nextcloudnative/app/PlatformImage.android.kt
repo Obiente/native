@@ -11,15 +11,11 @@ import java.io.ByteArrayInputStream
 actual fun decodePlatformImage(
     bytes: ByteArray,
     orientationPolicy: EncodedImageOrientationPolicy,
-): ImageBitmap? {
-    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
-    val orientation = bytes.orientationFor(orientationPolicy)
-    val oriented = bitmap.applyEncodedOrientation(orientation) ?: run {
-        bitmap.recycle()
-        return null
-    }
-    return oriented.asImageBitmap()
-}
+): ImageBitmap? = decodePlatformImageSampled(
+    bytes = bytes,
+    maximumDimension = DEFAULT_PLATFORM_IMAGE_DIMENSION,
+    orientationPolicy = orientationPolicy,
+)?.image
 
 actual fun decodePlatformImageSampled(
     bytes: ByteArray,
@@ -30,18 +26,27 @@ actual fun decodePlatformImageSampled(
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-    var sampleSize = 1
-    while (bounds.outWidth / sampleSize > maximumDimension || bounds.outHeight / sampleSize > maximumDimension) {
-        sampleSize *= 2
-    }
+    val plan = boundedImageDecodePlan(
+        sourceWidth = bounds.outWidth,
+        sourceHeight = bounds.outHeight,
+        maximumDimension = maximumDimension,
+        maximumPixels = minOf(
+            DEFAULT_MAXIMUM_DECODED_IMAGE_PIXELS,
+            maximumDimension.toLong() * maximumDimension.toLong(),
+        ),
+    )
     val options = BitmapFactory.Options().apply {
-        inSampleSize = sampleSize
+        inSampleSize = plan.sampleSize
         inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
     }
     val orientation = bytes.orientationFor(orientationPolicy)
     val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
-    val bitmap = decoded.applyEncodedOrientation(orientation) ?: run {
+    val bounded = decoded.scaleTo(plan.targetWidth, plan.targetHeight) ?: run {
         decoded.recycle()
+        return null
+    }
+    val bitmap = bounded.applyEncodedOrientation(orientation) ?: run {
+        bounded.recycle()
         return null
     }
     return PlatformDecodedImage(
@@ -49,6 +54,15 @@ actual fun decodePlatformImageSampled(
         sourceWidth = if (orientationSwapsDimensions(orientation)) bounds.outHeight else bounds.outWidth,
         sourceHeight = if (orientationSwapsDimensions(orientation)) bounds.outWidth else bounds.outHeight,
     )
+}
+
+private fun Bitmap.scaleTo(targetWidth: Int, targetHeight: Int): Bitmap? {
+    if (width == targetWidth && height == targetHeight) return this
+    return runCatching {
+        Bitmap.createScaledBitmap(this, targetWidth, targetHeight, true).also { scaled ->
+            if (scaled !== this) recycle()
+        }
+    }.getOrNull()
 }
 
 private fun Bitmap.applyEncodedOrientation(orientation: Int): Bitmap? {
@@ -81,3 +95,5 @@ private fun ByteArray.orientationFor(policy: EncodedImageOrientationPolicy): Int
     }
     EncodedImageOrientationPolicy.PixelsAlreadyUpright -> 1
 }
+
+private const val DEFAULT_PLATFORM_IMAGE_DIMENSION = 2_048

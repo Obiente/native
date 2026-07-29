@@ -199,6 +199,34 @@ class PhotoFolderInventoryPagingTest {
     }
 
     @Test
+    fun `typed raw relationships survive paging into the selected folder snapshot`() =
+        runBlocking {
+            val pager = pager()
+            val cover = file("Photos/edited-cover.jpg")
+
+            pager.load { _, _ ->
+                PhotoFolderInventoryPage(
+                    records = listOf(cover),
+                    nextCursor = null,
+                    rawObserved = true,
+                    rawStackFileIdsByRecordPath = mapOf(cover.path to listOf(901L)),
+                    rawStackRelationshipsAuthoritative = true,
+                )
+            }
+
+            val snapshot = pager.selectionSnapshot(
+                PhotoFolderBrowseState(
+                    selectedFolderPath = "Photos",
+                    scope = PhotoFolderBrowseScope.DirectMediaOnly,
+                ),
+            )
+            assertEquals(
+                mapOf(cover.path to listOf(901L)),
+                snapshot.rawStackFileIdsByRecordPath,
+            )
+        }
+
+    @Test
     fun `account and refresh generation pagers cannot share accumulated state`() = runBlocking {
         val first = pager(accountKey = "cloud-a:user", generation = 1)
         val refreshed = pager(accountKey = "cloud-a:user", generation = 2)
@@ -229,6 +257,85 @@ class PhotoFolderInventoryPagingTest {
             ).selectedMediaFiles.map { it.path },
         )
     }
+
+    @Test
+    fun `completed inventory revalidates while its cached publication remains painted`() =
+        runBlocking {
+            val pager = pager()
+            pager.load { _, _ -> page("Photos/cached.jpg") }
+            val cachedPublication = requireNotNull(pager.state.publication)
+            val cachedGeneration = pager.state.contentGeneration
+            val publications = mutableListOf<PhotoFolderInventoryPagingState>()
+
+            val refreshed = pager.revalidate(
+                onPublish = publications::add,
+                loadPage = { cursor, rawPreviouslyObserved ->
+                    assertNull(cursor)
+                    assertFalse(rawPreviouslyObserved)
+                    assertEquals(cachedPublication, publications.single().publication)
+                    assertTrue(publications.single().complete)
+                    assertTrue(publications.single().loading)
+                    page("Photos/current.jpg")
+                },
+            )
+
+            assertEquals(2, publications.size)
+            assertTrue(refreshed.complete)
+            assertFalse(refreshed.loading)
+            assertNull(refreshed.error)
+            assertEquals(cachedGeneration + 1L, refreshed.contentGeneration)
+            assertEquals(
+                listOf("Photos/current.jpg"),
+                pager.selectionSnapshot(
+                    PhotoFolderBrowseState(scope = PhotoFolderBrowseScope.RecursiveMedia),
+                ).selectedMediaFiles.map(NextcloudFile::path),
+            )
+        }
+
+    @Test
+    fun `failed completed inventory revalidation retains cached data as stale paint`() =
+        runBlocking {
+            val pager = pager()
+            pager.load { _, _ -> page("Photos/cached.jpg") }
+            val cachedPublication = requireNotNull(pager.state.publication)
+
+            val failed = pager.revalidate { _, _ ->
+                error("Network unavailable")
+            }
+
+            assertTrue(failed.complete)
+            assertFalse(failed.loading)
+            assertEquals("Network unavailable", failed.error)
+            assertEquals(cachedPublication, failed.publication)
+            assertEquals(
+                listOf("Photos/cached.jpg"),
+                pager.selectionSnapshot(
+                    PhotoFolderBrowseState(scope = PhotoFolderBrowseScope.RecursiveMedia),
+                ).selectedMediaFiles.map(NextcloudFile::path),
+            )
+        }
+
+    @Test
+    fun `cancelled completed inventory revalidation preserves the prior complete generation`() =
+        runBlocking {
+            val pager = pager()
+            pager.load { _, _ -> page("Photos/cached.jpg") }
+            val cachedState = pager.state
+
+            assertFailsWith<CancellationException> {
+                pager.revalidate { _, _ ->
+                    throw CancellationException("Folder screen left composition.")
+                }
+            }
+
+            assertEquals(cachedState, pager.state)
+            assertEquals(
+                listOf("Photos/cached.jpg"),
+                pager.selectionSnapshot(
+                    PhotoFolderBrowseState(scope = PhotoFolderBrowseScope.RecursiveMedia),
+                ).selectedMediaFiles.map(NextcloudFile::path),
+            )
+        }
 
     @Test
     fun `fifty thousand record ceiling rejects a crossing page atomically`() =
