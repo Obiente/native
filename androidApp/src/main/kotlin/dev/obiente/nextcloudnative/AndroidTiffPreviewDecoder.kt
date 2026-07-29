@@ -113,6 +113,7 @@ internal class AndroidTiffPreviewDecoder(
             sourceWidth = orientedWidth(directory.orientation, directory.width, directory.height),
             sourceHeight = orientedHeight(directory.orientation, directory.width, directory.height),
             pageCount = directory.pageCount,
+            hasAlphaChannel = directory.samplesPerPixel in setOf(2, 4),
         )
     }
 
@@ -238,6 +239,7 @@ internal data class DecodedTiffPreview(
     val sourceWidth: Int,
     val sourceHeight: Int,
     val pageCount: Int,
+    val hasAlphaChannel: Boolean,
 ) {
     init {
         require(width > 0 && height > 0)
@@ -245,7 +247,17 @@ internal data class DecodedTiffPreview(
     }
 }
 
-internal fun DecodedTiffPreview.encodeJpeg(quality: Int = TIFF_PREVIEW_JPEG_QUALITY): ByteArray? {
+internal enum class TiffPreviewEncoding {
+    Jpeg,
+    Png,
+}
+
+internal fun DecodedTiffPreview.previewEncoding(): TiffPreviewEncoding =
+    if (hasAlphaChannel) TiffPreviewEncoding.Png else TiffPreviewEncoding.Jpeg
+
+internal fun DecodedTiffPreview.encodeDisplayImage(
+    quality: Int = TIFF_PREVIEW_JPEG_QUALITY,
+): ByteArray? {
     require(quality in 1..100)
     val bitmap = runCatching {
         Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
@@ -253,7 +265,11 @@ internal fun DecodedTiffPreview.encodeJpeg(quality: Int = TIFF_PREVIEW_JPEG_QUAL
     return try {
         try {
             BoundedByteArrayOutputStream(MAXIMUM_GENERATED_PREVIEW_BYTES).use { output ->
-                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output)) {
+                val format = when (previewEncoding()) {
+                    TiffPreviewEncoding.Jpeg -> Bitmap.CompressFormat.JPEG
+                    TiffPreviewEncoding.Png -> Bitmap.CompressFormat.PNG
+                }
+                if (!bitmap.compress(format, quality, output)) {
                     null
                 } else {
                     output.toByteArray().takeIf(ByteArray::isNotEmpty)

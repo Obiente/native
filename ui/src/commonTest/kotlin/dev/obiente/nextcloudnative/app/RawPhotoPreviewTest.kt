@@ -5,7 +5,9 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class RawPhotoPreviewTest {
     @Test
@@ -327,6 +329,41 @@ class RawPhotoPreviewTest {
     }
 
     @Test
+    fun authoritativeTiffWithoutServerPreviewAdvertisesNativeViewer() {
+        val tiff = nativeTiffFile().copy(size = null, etag = null)
+        val sourcePlan = planMediaSources(listOf(tiff), tiff)
+
+        assertTrue(tiff.canUseNativeTiffPreview())
+        assertTrue(tiff.canOpenInMediaViewer())
+        assertEquals(listOf(tiff), sourcePlan.previewCandidates.map(MediaSourceChoice::file))
+    }
+
+    @Test
+    fun memoriesTiffWithoutDavPathAdvertisesNativeViewer() {
+        val tiff = nativeTiffFile().copy(
+            path = "memories/timeline/2101",
+            originalAccessAllowed = false,
+            davPathAuthoritative = false,
+            memoriesRenderAllowed = true,
+        )
+
+        assertTrue(tiff.canUseNativeTiffPreview())
+        assertTrue(tiff.canOpenInMediaViewer())
+    }
+
+    @Test
+    fun tiffWithoutAnAuthorizedRangeSourceDoesNotAdvertiseNativeViewer() {
+        val tiff = nativeTiffFile().copy(
+            originalAccessAllowed = false,
+            davPathAuthoritative = false,
+            memoriesRenderAllowed = false,
+        )
+
+        assertFalse(tiff.canUseNativeTiffPreview())
+        assertFalse(tiff.canOpenInMediaViewer())
+    }
+
+    @Test
     fun rawDiscoveryPatternsCoverEveryRecognizedRawExtension() {
         val patterns = rawPhotoFileNameSearchPatterns()
 
@@ -544,6 +581,15 @@ class RawPhotoPreviewTest {
                 payloadKind = MediaDisplayPayloadKind.MemoriesRawRender,
             ),
         )
+        assertEquals(
+            "Generated RAW high detail",
+            conciseMediaDisplaySourceLabel(
+                selected = source,
+                displayed = source,
+                highDetail = true,
+                payloadKind = MediaDisplayPayloadKind.MemoriesRawRender,
+            ),
+        )
     }
 
     @Test
@@ -672,6 +718,18 @@ class RawPhotoPreviewTest {
         fileId = 1_001L,
         hasPreview = hasPreview,
         etag = "raf-etag",
+    )
+
+    private fun nativeTiffFile() = NextcloudFile(
+        path = "Photos/Scans/example.tiff",
+        name = "example.tiff",
+        isDirectory = false,
+        mimeType = "image/tiff",
+        size = 16L * 1024L * 1024L,
+        lastModified = null,
+        fileId = 2_101L,
+        hasPreview = false,
+        etag = "\"tiff-etag\"",
     )
 
     private fun jpegFixture(): ByteArray = byteArrayOf(

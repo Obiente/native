@@ -386,11 +386,14 @@ class MemoriesPreferredFolderInventoryReadService(
                 }
             }
         }
+        val mediaRecords = media.map { item ->
+            item to item.toFolderInventoryRecord(folder, recursive)
+        }
         val records = buildList {
             if (cursor == null) {
                 addAll(cached.folders.folders.map(MemoriesDirectChildFolder::toInventoryRecord))
             }
-            addAll(media.map { item -> item.toFolderInventoryRecord(folder, recursive) })
+            addAll(mediaRecords.map { (_, record) -> record })
         }
         return PhotoFolderInventoryPage(
             records = records,
@@ -398,6 +401,12 @@ class MemoriesPreferredFolderInventoryReadService(
             rawObserved = media.any { item ->
                 item.rawStackFileIds.isNotEmpty() || item.mimeType == "image/x-dcraw"
             },
+            rawStackFileIdsByRecordPath = mediaRecords
+                .filter { (item, _) -> item.rawStackFileIds.isNotEmpty() }
+                .associate { (item, record) ->
+                    record.path.trim('/') to item.rawStackFileIds
+                },
+            rawStackRelationshipsAuthoritative = true,
         )
     }
 }
@@ -447,9 +456,15 @@ private fun MemoriesFolderDayIndex.dayWindowAfter(
         index + 1
     }
     if (start >= days.size) return MemoriesFolderDayWindow(emptyList(), null)
+    val remainingContentDays = days
+        .drop(start)
+        .filter { day -> day.itemCount > 0 }
+    if (remainingContentDays.isEmpty()) {
+        return MemoriesFolderDayWindow(emptyList(), null)
+    }
     val selected = mutableListOf<NativeMediaDay>()
     var itemCount = 0
-    for (day in days.drop(start)) {
+    for (day in remainingContentDays) {
         if (selected.size == MAX_MEMORIES_DAY_BATCH) break
         require(day.itemCount <= MAX_MEDIA_ITEMS_PER_RESPONSE) {
             "A single Memories folder day exceeds the safe media response limit."
@@ -459,7 +474,7 @@ private fun MemoriesFolderDayIndex.dayWindowAfter(
         itemCount += day.itemCount
     }
     require(selected.isNotEmpty()) { "The Memories folder day window is empty." }
-    val hasMore = start + selected.size < days.size
+    val hasMore = selected.size < remainingContentDays.size
     return MemoriesFolderDayWindow(
         days = selected,
         nextDayId = selected.last().id.takeIf { hasMore },

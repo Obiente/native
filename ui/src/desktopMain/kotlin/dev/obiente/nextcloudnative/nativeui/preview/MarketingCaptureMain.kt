@@ -64,6 +64,7 @@ fun main(arguments: Array<String>) {
         }
         val assets = MarketingCaptureAssets(
             avatar = loadObienteAvatar(),
+            mediaPreview = loadMarketingMediaPreview(),
             services = networkInertMarketingServices(loadRawCaptureFixture()),
         )
         marketingCaptureScenarios.zip(outputs).forEach { (scenario, output) ->
@@ -127,23 +128,31 @@ private fun capture(
 ) {
     Files.createDirectories(output.parent)
     val rawMediaCapture = RawMediaMarketingCapture.forScenarioOrNull(scenario)
+    val nativeTiffCapture = NativeTiffMarketingCapture.forScenarioOrNull(scenario)
+    check(rawMediaCapture == null || nativeTiffCapture == null) {
+        "${scenario.id} cannot use multiple isolated media renderers."
+    }
     val scene = ImageComposeScene(
         width = width,
         height = height,
         density = density,
         coroutineContext = Dispatchers.Unconfined,
     ) {
-        if (rawMediaCapture == null) {
-            NextcloudNativeMarketingCapture(scenario, assets)
-        } else {
-            rawMediaCapture.Content()
+        when {
+            rawMediaCapture != null -> rawMediaCapture.Content()
+            nativeTiffCapture != null -> nativeTiffCapture.Content()
+            else -> NextcloudNativeMarketingCapture(scenario, assets)
         }
     }
     try {
+        scene.render().close()
         val rendered = scene.render()
         rawMediaCapture?.verify()
-        val encoded = requireNotNull(rendered.encodeToData(EncodedImageFormat.PNG)) {
-            "Compose could not encode ${output.fileName}."
+        nativeTiffCapture?.verify()
+        val encoded = rendered.use {
+            requireNotNull(it.encodeToData(EncodedImageFormat.PNG)) {
+                "Compose could not encode ${output.fileName}."
+            }
         }
         Files.write(output, encoded.bytes)
     } finally {
@@ -157,6 +166,9 @@ private fun loadObienteAvatar(): ImageBitmap {
     ) { "The repository-owned Obiente avatar is missing." }.use { it.readBytes() }
     return Image.makeFromEncoded(bytes).toComposeImageBitmap()
 }
+
+private fun loadMarketingMediaPreview(): ImageBitmap =
+    Image.makeFromEncoded(loadRawCaptureFixture()).toComposeImageBitmap()
 
 private fun writeCaptureManifest(
     captureDirectory: Path,

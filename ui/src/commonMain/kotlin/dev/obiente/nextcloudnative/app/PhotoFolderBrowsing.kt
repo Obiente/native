@@ -136,6 +136,7 @@ data class PhotoFolderPagedInventory(
     val selectedScope: PhotoFolderBrowseScope,
     val summary: PhotoFolderInventorySummary,
     val selectedMediaFiles: List<NextcloudFile>,
+    val rawStackFileIdsByRecordPath: Map<String, List<Long>> = emptyMap(),
 ) {
     init {
         requirePhotoFolderPath(selectedFolderPath, allowRoot = true)
@@ -149,6 +150,10 @@ data class PhotoFolderPagedInventory(
         ) {
             "The retained media does not belong to the selected photo folder."
         }
+        validatePhotoFolderRawStackRelationships(
+            records = selectedMediaFiles,
+            relationships = rawStackFileIdsByRecordPath,
+        )
     }
 }
 
@@ -207,6 +212,8 @@ class PhotoFolderSummaryAccumulator(
     private val folderPaths = linkedSetOf("")
     private val foldersWithUnknownCounts = linkedSetOf<String>()
     private val previewFileIdsByFolder = linkedMapOf<String, List<Long>>()
+    private val derivedPreviewCandidatesByFolder =
+        linkedMapOf<String, List<PhotoFolderPreviewCandidate>>()
     private val selectedMediaByPath = linkedMapOf<String, NextcloudFile>()
 
     init {
@@ -273,6 +280,7 @@ class PhotoFolderSummaryAccumulator(
         pageMedia.forEach { file ->
             if (file.path !in mediaByPath) {
                 mediaByPath[file.path] = file.toCompactPhotoFolderMedia()
+                file.toPhotoFolderPreviewCandidateOrNull()?.let(::offerDerivedPreviewCandidate)
             }
             file.path.parentFolderPath().ancestorsIncludingSelf().forEach(folderPaths::add)
 
@@ -345,7 +353,11 @@ class PhotoFolderSummaryAccumulator(
                     recursiveMediaCount = recursiveMediaCounts[path] ?: 0,
                     directChildFolderCount = directFolderCounts[path] ?: 0,
                     countsAuthoritative = path !in foldersWithUnknownCounts,
-                    previewFileIds = previewFileIdsByFolder[path].orEmpty(),
+                    previewFileIds = previewFileIdsByFolder[path].orEmpty().ifEmpty {
+                        derivedPreviewCandidatesByFolder[path]
+                            .orEmpty()
+                            .map(PhotoFolderPreviewCandidate::fileId)
+                    },
                 )
             }
             .toList()
@@ -363,6 +375,24 @@ class PhotoFolderSummaryAccumulator(
         summary = summarySnapshot(),
         selectedMediaFiles = selectedMediaByPath.values.toList(),
     )
+
+    private fun offerDerivedPreviewCandidate(candidate: PhotoFolderPreviewCandidate) {
+        candidate.sourceFolderPath
+            .ancestorsIncludingSelf()
+            .asSequence()
+            .filter(String::isNotEmpty)
+            .forEach { folderPath ->
+                val retained = (
+                    derivedPreviewCandidatesByFolder[folderPath].orEmpty() + candidate
+                    )
+                    .groupBy(PhotoFolderPreviewCandidate::stackIdentity)
+                    .values
+                    .map { sameStack -> sameStack.maxWith(photoFolderPreviewPreference) }
+                    .sortedWith(photoFolderPreviewOrder)
+                    .take(MAX_PHOTO_FOLDER_PREVIEW_ITEMS)
+                derivedPreviewCandidatesByFolder[folderPath] = retained
+            }
+    }
 }
 
 data class PhotoFolderInventoryPublication(
@@ -393,6 +423,7 @@ class PhotoFolderInventoryRepository(
         maximumSelectedMediaRecords = 1,
     )
     private val mediaByPath = linkedMapOf<String, NextcloudFile>()
+    private val rawStackFileIdsByRecordPath = linkedMapOf<String, List<Long>>()
     private var revision = 0L
 
     init {
@@ -404,7 +435,15 @@ class PhotoFolderInventoryRepository(
         }
     }
 
-    fun tryAddPage(records: List<NextcloudFile>): PhotoFolderPageAcceptance {
+    fun tryAddPage(
+        records: List<NextcloudFile>,
+        rawStackFileIdsByRecordPath: Map<String, List<Long>> = emptyMap(),
+        rawStackRelationshipsAuthoritative: Boolean = false,
+    ): PhotoFolderPageAcceptance {
+        val normalizedRawRelationships = validatePhotoFolderRawStackRelationships(
+            records = records,
+            relationships = rawStackFileIdsByRecordPath,
+        )
         val normalizedRecords = reconcilePhotoFolderInventory(records)
         val normalizedMedia = normalizedRecords
             .filter { file -> !file.isDirectory && file.mediaAssetFormat() != MediaAssetFormat.Other }
@@ -419,6 +458,12 @@ class PhotoFolderInventoryRepository(
                         listOf(existing, file).maxWith(photoInventoryPreference)
                     }
                 }
+                if (rawStackRelationshipsAuthoritative) {
+                    normalizedMedia.forEach { file ->
+                        this.rawStackFileIdsByRecordPath.remove(file.path)
+                    }
+                }
+                this.rawStackFileIdsByRecordPath.putAll(normalizedRawRelationships)
                 revision += 1
                 acceptance
             }
@@ -448,11 +493,14 @@ class PhotoFolderInventoryRepository(
                 .take(maximumSelectionRecords)
                 .toList()
         }
+        val selectedPaths = selectedFiles.mapTo(mutableSetOf(), NextcloudFile::path)
         return PhotoFolderPagedInventory(
             selectedFolderPath = state.selectedFolderPath,
             selectedScope = state.scope,
             summary = summaryAccumulator.summarySnapshot(),
             selectedMediaFiles = selectedFiles,
+            rawStackFileIdsByRecordPath = rawStackFileIdsByRecordPath
+                .filterKeys(selectedPaths::contains),
         )
     }
 
@@ -464,6 +512,15 @@ private data class CompactPhotoFolderMedia(
     val folderPath: String,
     val format: MediaAssetFormat,
     val stackKeys: Set<String>,
+)
+
+private data class PhotoFolderPreviewCandidate(
+    val fileId: Long,
+    val sourceFolderPath: String,
+    val stackIdentity: String,
+    val capturedAtEpochSeconds: Long,
+    val format: MediaAssetFormat,
+    val path: String,
 )
 
 private fun NextcloudFile.toCompactPhotoFolderMedia(): CompactPhotoFolderMedia {
@@ -485,6 +542,38 @@ private fun NextcloudFile.toCompactPhotoFolderMedia(): CompactPhotoFolderMedia {
         stackKeys = keys,
     )
 }
+
+private fun NextcloudFile.toPhotoFolderPreviewCandidateOrNull(): PhotoFolderPreviewCandidate? {
+    val id = fileId?.takeIf { it > 0L } ?: return null
+    val format = mediaAssetFormat()
+    if (format == MediaAssetFormat.Video || format == MediaAssetFormat.Other) return null
+    val compact = toCompactPhotoFolderMedia()
+    val stackKey = compact.stackKeys.minOrNull() ?: path.lowercase()
+    return PhotoFolderPreviewCandidate(
+        fileId = id,
+        sourceFolderPath = compact.folderPath,
+        stackIdentity = "${compact.folderPath}/$stackKey",
+        capturedAtEpochSeconds = capturedAtEpochSeconds
+            ?: lastModified?.let(::parsePhotoFolderTimestamp)
+            ?: Long.MIN_VALUE,
+        format = format,
+        path = path,
+    )
+}
+
+private val photoFolderPreviewPreference =
+    compareBy<PhotoFolderPreviewCandidate>(
+        { it.format == MediaAssetFormat.Jpeg || it.format == MediaAssetFormat.Image },
+        PhotoFolderPreviewCandidate::capturedAtEpochSeconds,
+        PhotoFolderPreviewCandidate::path,
+    )
+
+private val photoFolderPreviewOrder =
+    compareByDescending<PhotoFolderPreviewCandidate>(
+        PhotoFolderPreviewCandidate::capturedAtEpochSeconds,
+    ).thenByDescending {
+        it.format == MediaAssetFormat.Jpeg || it.format == MediaAssetFormat.Image
+    }.thenBy(PhotoFolderPreviewCandidate::path)
 
 /**
  * A bounded, account-local snapshot used to paint the folder browser immediately while its
@@ -593,6 +682,7 @@ fun buildPhotoFolderPagedInventory(
 fun buildPhotoFolderBrowseResult(
     inventory: PhotoFolderPagedInventory,
     state: PhotoFolderBrowseState,
+    rawStackFilesByRecordPath: Map<String, List<NextcloudFile>> = emptyMap(),
 ): PhotoFolderBrowseResult {
     require(inventory.selectedFolderPath == state.selectedFolderPath) {
         "The paged photo inventory belongs to another selected folder."
@@ -621,7 +711,33 @@ fun buildPhotoFolderBrowseResult(
         emptyList()
     }
 
+    val selectedPaths = inventory.selectedMediaFiles
+        .mapTo(mutableSetOf(), NextcloudFile::path)
+    require(rawStackFilesByRecordPath.keys.all(selectedPaths::contains)) {
+        "A resolved folder RAW stack does not belong to the selected media."
+    }
+    require(
+        rawStackFilesByRecordPath.all { (recordPath, files) ->
+            val expectedFileIds = inventory.rawStackFileIdsByRecordPath[recordPath].orEmpty()
+            files.all { file ->
+                !file.isDirectory &&
+                    file.isRawPhoto() &&
+                    file.fileId != null &&
+                    file.fileId in expectedFileIds
+            }
+        },
+    ) {
+        "A resolved folder RAW stack contains an unexpected file."
+    }
+
     val media = stackMediaFiles(inventory.selectedMediaFiles)
+        .map { stack ->
+            stack.withAdditionalMediaStackMembers(
+                stack.members.flatMap { member ->
+                    rawStackFilesByRecordPath[member.path].orEmpty()
+                },
+            )
+        }
         .sortedWith(photoFolderMediaOrder)
         .filter { stack ->
             val folderPath = stack.folderPath()
@@ -635,6 +751,35 @@ fun buildPhotoFolderBrowseResult(
         media = media,
         recursiveMediaCount = inventory.summary.recursiveMediaCount(state.selectedFolderPath),
     )
+}
+
+internal fun validatePhotoFolderRawStackRelationships(
+    records: List<NextcloudFile>,
+    relationships: Map<String, List<Long>>,
+): Map<String, List<Long>> {
+    val mediaByPath = reconcilePhotoFolderInventory(records)
+        .asSequence()
+        .filter { file -> !file.isDirectory && file.mediaAssetFormat() != MediaAssetFormat.Other }
+        .associateBy(NextcloudFile::path)
+    val normalized = relationships.mapKeys { (path, _) -> path.trim('/') }
+    require(normalized.size == relationships.size) {
+        "The folder RAW stack contains duplicate normalized paths."
+    }
+    require(normalized.keys.all(mediaByPath::containsKey)) {
+        "The folder RAW stack references a record outside its page."
+    }
+    normalized.forEach { (path, fileIds) ->
+        require(fileIds.isNotEmpty() && fileIds.size <= MAX_RAW_STACK_ITEMS) {
+            "The folder RAW stack has an invalid size."
+        }
+        require(fileIds.all { fileId -> fileId > 0L } && fileIds.distinct().size == fileIds.size) {
+            "The folder RAW stack has invalid file IDs."
+        }
+        require(mediaByPath[path]?.fileId !in fileIds) {
+            "The folder RAW stack contains its cover."
+        }
+    }
+    return normalized
 }
 
 private fun reconcilePhotoFolderInventory(inventory: List<NextcloudFile>): List<NextcloudFile> =

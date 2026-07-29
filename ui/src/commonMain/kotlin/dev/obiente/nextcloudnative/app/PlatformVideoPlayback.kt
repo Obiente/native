@@ -254,6 +254,21 @@ internal fun NativeVideoPlaybackFailure.canUseSoftwareFallback(): Boolean = when
     -> false
 }
 
+internal data class NativeVideoFailureActionPolicy(
+    val showCompatibilityAction: Boolean,
+    val showExternalAction: Boolean,
+)
+
+internal fun nativeVideoFailureActionPolicy(
+    failure: NativeVideoPlaybackFailure,
+    compatibilityAvailable: Boolean,
+    motionOnly: Boolean,
+): NativeVideoFailureActionPolicy = NativeVideoFailureActionPolicy(
+    showCompatibilityAction = compatibilityAvailable && failure.canUseSoftwareFallback(),
+    // A Live Photo motion failure does not make its already-visible still an external handoff.
+    showExternalAction = !motionOnly,
+)
+
 internal fun nativeVideoPlaybackFailureForHttpStatus(status: Int): NativeVideoPlaybackFailure =
     when (status) {
         401, 403 -> NativeVideoPlaybackFailure.AccessDenied

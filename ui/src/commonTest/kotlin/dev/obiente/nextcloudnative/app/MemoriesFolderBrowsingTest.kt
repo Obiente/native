@@ -399,6 +399,107 @@ class MemoriesFolderBrowsingTest {
     }
 
     @Test
+    fun preferredInventorySkipsEmptyIndexDaysAndLoadsLaterMedia() {
+        val requests = mutableListOf<NextcloudApiRequest>()
+        val service = MemoriesPreferredFolderInventoryReadService { _, request ->
+            requests += request
+            when (request.relativePath) {
+                "/index.php/apps/memories/api/folders/sub" -> response(200, "[]")
+                "/index.php/apps/memories/api/days" -> response(
+                    200,
+                    """
+                        [
+                          {"dayid":10,"count":0},
+                          {"dayid":9,"count":0},
+                          {"dayid":8,"count":0},
+                          {"dayid":7,"count":0},
+                          {"dayid":6,"count":0},
+                          {"dayid":5,"count":0},
+                          {"dayid":4,"count":0},
+                          {"dayid":3,"count":0},
+                          {"dayid":2,"count":1}
+                        ]
+                    """,
+                )
+                "/index.php/apps/memories/api/days/2" -> response(
+                    200,
+                    """[{"fileid":102,"dayid":2,"basename":"later.jpg","mimetype":"image/jpeg"}]""",
+                )
+                else -> error("Unexpected synthetic request: ${request.relativePath}")
+            }
+        }
+
+        val page = runBlocking {
+            service.loadPage(
+                session = session(),
+                accountScope = "fixture-account",
+                selectedFolderPath = "Photos",
+                scope = PhotoFolderBrowseScope.DirectMediaAndSubfolders,
+                cursor = null,
+                fallback = { error("The supported folder route must not use DAV fallback.") },
+            )
+        }
+
+        assertEquals(listOf("Photos/later.jpg"), page.records.map(NextcloudFile::path))
+        assertNull(page.nextCursor)
+        assertEquals(
+            listOf(
+                "/index.php/apps/memories/api/folders/sub",
+                "/index.php/apps/memories/api/days",
+                "/index.php/apps/memories/api/days/2",
+            ),
+            requests.map(NextcloudApiRequest::relativePath),
+        )
+    }
+
+    @Test
+    fun preferredInventoryRetainsTypedRawRelationshipsForArbitraryNames() {
+        val service = MemoriesPreferredFolderInventoryReadService { _, request ->
+            when (request.relativePath) {
+                "/index.php/apps/memories/api/folders/sub" -> response(200, "[]")
+                "/index.php/apps/memories/api/days" -> response(
+                    200,
+                    """[{"dayid":9,"count":1}]""",
+                )
+                "/index.php/apps/memories/api/days/9" -> response(
+                    200,
+                    """
+                        [
+                          {
+                            "fileid":101,
+                            "dayid":9,
+                            "basename":"edited-cover.jpg",
+                            "mimetype":"image/jpeg",
+                            "stackraw":[{"fileid":901}]
+                          }
+                        ]
+                    """,
+                )
+                else -> error("Unexpected synthetic request: ${request.relativePath}")
+            }
+        }
+
+        val page = runBlocking {
+            service.loadPage(
+                session = session(),
+                accountScope = "fixture-account",
+                selectedFolderPath = "Photos",
+                scope = PhotoFolderBrowseScope.DirectMediaAndSubfolders,
+                cursor = null,
+                fallback = { error("The supported folder route must not use DAV fallback.") },
+            )
+        }
+
+        assertEquals(listOf("Photos/edited-cover.jpg"), page.records.map(NextcloudFile::path))
+        assertEquals(
+            mapOf("Photos/edited-cover.jpg" to listOf(901L)),
+            page.rawStackFileIdsByRecordPath,
+        )
+        assertTrue(page.rawStackRelationshipsAuthoritative)
+        assertTrue(page.rawObserved)
+    }
+
+    @Test
     fun preferredRootInventoryPublishesEveryDirectRootFolder() {
         val requests = mutableListOf<NextcloudApiRequest>()
         val service = MemoriesPreferredFolderInventoryReadService { _, request ->

@@ -96,6 +96,27 @@ data class MemoriesTimelinePlaceholderGeometry(
     fun monthAtFraction(fraction: Float): MemoriesTimelinePlaceholderMonth? =
         monthIndexAtFraction(fraction)?.let(months::get)
 
+    fun dayAtFraction(fraction: Float): MemoriesTimelinePlaceholderDay? {
+        if (
+            days.isEmpty() ||
+            totalAdvertisedItemCount == 0L ||
+            !fraction.isFinite()
+        ) {
+            return null
+        }
+        val clamped = fraction.coerceIn(0f, 1f)
+        if (clamped == 1f) return days.last()
+        var consumed = 0L
+        return days.firstOrNull { day ->
+            consumed += day.advertisedItemCount.toLong()
+            val dayEndFraction = (
+                consumed.toDouble() /
+                    totalAdvertisedItemCount.toDouble()
+                ).toFloat()
+            clamped < dayEndFraction
+        } ?: days.last()
+    }
+
     fun fractionFor(month: PhotoTimelineMonth): Float? {
         val section = months.firstOrNull { section -> section.month == month } ?: return null
         if (totalAdvertisedItemCount == 0L) return 0f
@@ -103,6 +124,21 @@ data class MemoriesTimelinePlaceholderGeometry(
             section.firstAdvertisedItemOffset.toDouble() /
                 totalAdvertisedItemCount.toDouble()
             ).toFloat()
+    }
+
+    fun fractionForDay(dayId: Long): Float? {
+        if (totalAdvertisedItemCount == 0L) return null
+        var advertisedOffset = 0L
+        days.forEach { day ->
+            if (day.dayId == dayId) {
+                return (
+                    advertisedOffset.toDouble() /
+                        totalAdvertisedItemCount.toDouble()
+                    ).toFloat()
+            }
+            advertisedOffset += day.advertisedItemCount.toLong()
+        }
+        return null
     }
 
     fun dayIdsIntersectingGridItems(

@@ -78,6 +78,30 @@ class PlatformVideoPlaybackTest {
     }
 
     @Test
+    fun livePhotoMotionFailureKeepsCompatibilityWithoutOfferingStillHandoff() {
+        val actions = nativeVideoFailureActionPolicy(
+            failure = NativeVideoPlaybackFailure.DecodeFailed(format = null),
+            compatibilityAvailable = true,
+            motionOnly = true,
+        )
+
+        assertTrue(actions.showCompatibilityAction)
+        assertFalse(actions.showExternalAction)
+    }
+
+    @Test
+    fun ordinaryVideoFailureCanStillOfferExternalHandoff() {
+        val actions = nativeVideoFailureActionPolicy(
+            failure = NativeVideoPlaybackFailure.DecodeFailed(format = null),
+            compatibilityAvailable = false,
+            motionOnly = false,
+        )
+
+        assertFalse(actions.showCompatibilityAction)
+        assertTrue(actions.showExternalAction)
+    }
+
+    @Test
     fun seekableVideoReadsAheadWithoutDownloadingTheWholeFile() = runBlocking {
         val content = ByteArray(2_048) { index -> (index % 251).toByte() }
         val reads = mutableListOf<Pair<Long, Int>>()

@@ -707,6 +707,7 @@ class DesktopNextcloudServices(
                 nextCursor = page.nextCursor,
                 optionalRawRemovalAuthoritative = page.optionalRawRemovalAuthoritative,
                 rawObserved = page.rawObserved,
+                optionalRawSearchRetryPending = page.optionalRawSearchRetryPending,
             )
         }
 
@@ -720,6 +721,29 @@ class DesktopNextcloudServices(
         } else {
             loadDavPage(cursor)
         }
+    }
+
+    override suspend fun loadMediaTimelineNavigationSnapshot(
+        session: NextcloudSession,
+        monthResolver: PhotoTimelineMonthResolver,
+    ): MemoriesTimelineNavigationSnapshot? = withContext(Dispatchers.IO) {
+        memoriesTimeline.navigationSnapshot(
+            accountScope = desktopFileCacheAccountId(session),
+            monthResolver = monthResolver,
+        )
+    }
+
+    override suspend fun loadMediaTimelineNavigationTarget(
+        session: NextcloudSession,
+        sourceGeneration: Long,
+        targetDayId: Long,
+    ): MemoriesTimelineNavigationLoadResult = withContext(Dispatchers.IO) {
+        memoriesTimeline.loadNavigationTarget(
+            session = session,
+            accountScope = desktopFileCacheAccountId(session),
+            sourceGeneration = sourceGeneration,
+            targetDayId = targetDayId,
+        )
     }
 
     override suspend fun listSystemTags(session: NextcloudSession): List<NextcloudSystemTag> =

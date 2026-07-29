@@ -50,6 +50,27 @@ class MemoriesTimelinePlaceholderGeometryTest {
     }
 
     @Test
+    fun weightedFractionsResolveTheExactAdvertisedDay() {
+        val geometry = geometry()
+
+        assertEquals(60L, geometry.dayAtFraction(0f)?.dayId)
+        assertEquals(59L, geometry.dayAtFraction(0.2f)?.dayId)
+        assertEquals(31L, geometry.dayAtFraction(0.5f)?.dayId)
+        assertEquals(30L, geometry.dayAtFraction(0.9f)?.dayId)
+        assertEquals(30L, geometry.dayAtFraction(1f)?.dayId)
+        assertNull(geometry.dayAtFraction(Float.NaN))
+        assertEquals(0f, geometry.fractionForDay(60L))
+        assertEquals(0.2f, geometry.fractionForDay(59L))
+        assertEquals(0.5f, geometry.fractionForDay(31L))
+        assertEquals(0.9f, geometry.fractionForDay(30L))
+        assertNull(geometry.fractionForDay(999L))
+        geometry.days.forEach { day ->
+            val fraction = requireNotNull(geometry.fractionForDay(day.dayId))
+            assertEquals(day.dayId, geometry.dayAtFraction(fraction)?.dayId)
+        }
+    }
+
+    @Test
     fun visiblePlaceholderRangeMapsBackToDirectDayRequests() {
         val geometry = geometry()
 

@@ -96,24 +96,33 @@ data class MemoriesMainTimelineDayIndex(
         }
         if (start >= days.size) return MemoriesMainTimelineDayWindow(emptyList(), null, null)
 
-        val first = days[start]
-        if (first.itemCount > maximumItems) {
+        // Empty index days do not consume the bounded request batch or become paging cursors.
+        val remainingContentDays = days
+            .drop(start)
+            .filter { day -> day.itemCount > 0 }
+        // Memories and fallback cursors cannot be mixed. Decide before loading any batch so an
+        // oversized historical day cannot strand a timeline after a Memories cursor was emitted.
+        val oversizedDay = remainingContentDays.firstOrNull { day -> day.itemCount > maximumItems }
+        if (oversizedDay != null) {
             return MemoriesMainTimelineDayWindow(
                 days = emptyList(),
                 nextCursor = null,
-                oversizedDay = first,
+                oversizedDay = oversizedDay,
             )
+        }
+        if (remainingContentDays.isEmpty()) {
+            return MemoriesMainTimelineDayWindow(emptyList(), null, null)
         }
 
         val selected = mutableListOf<NativeMediaDay>()
         var selectedItems = 0
-        for (day in days.drop(start)) {
+        for (day in remainingContentDays) {
             if (selected.size == maximumDays) break
             if (day.itemCount > maximumItems - selectedItems) break
             selected += day
             selectedItems += day.itemCount
         }
-        val hasMore = start + selected.size < days.size
+        val hasMore = selected.size < remainingContentDays.size
         return MemoriesMainTimelineDayWindow(
             days = selected,
             nextCursor = selected.lastOrNull()
@@ -121,6 +130,21 @@ data class MemoriesMainTimelineDayIndex(
                 ?.let { encodeMemoriesMainTimelineCursor(it.id) },
             oversizedDay = null,
         )
+    }
+
+    internal fun targetDay(dayId: Long): NativeMediaDay? =
+        days.firstOrNull { day -> day.id == dayId && day.itemCount > 0 }
+
+    internal fun advertisedItemsBefore(dayId: Long): Long? {
+        var total = 0L
+        days.forEach { day ->
+            if (day.id == dayId) return total
+            if (day.itemCount > 0) {
+                if (total > Long.MAX_VALUE - day.itemCount.toLong()) return null
+                total += day.itemCount.toLong()
+            }
+        }
+        return null
     }
 }
 
@@ -180,6 +204,50 @@ data class MemoriesMainTimelinePage(
         rawStackFileIdsByEntryIdentity = rawStackFileIdsByEntryIdentity,
         rawStackRelationshipsAuthoritative = true,
     )
+}
+
+data class MemoriesTimelineNavigationSnapshot(
+    val sourceGeneration: Long,
+    val geometry: MemoriesTimelinePlaceholderGeometry,
+) {
+    init {
+        require(sourceGeneration > 0L) {
+            "The Memories timeline navigation generation is invalid."
+        }
+    }
+}
+
+sealed interface MemoriesTimelineNavigationLoadResult {
+    data class Loaded(
+        val sourceGeneration: Long,
+        val targetDayId: Long,
+        val page: PhotoTimelinePage,
+        val advertisedNewerItemCount: Int,
+    ) : MemoriesTimelineNavigationLoadResult {
+        init {
+            require(sourceGeneration > 0L) {
+                "The Memories timeline navigation generation is invalid."
+            }
+            require(targetDayId in 1..Long.MAX_VALUE / SECONDS_PER_DAY) {
+                "The Memories timeline navigation day is invalid."
+            }
+            require(advertisedNewerItemCount >= 0) {
+                "The Memories timeline navigation offset is invalid."
+            }
+        }
+    }
+
+    data object Stale : MemoriesTimelineNavigationLoadResult
+
+    data class Unavailable(
+        val message: String,
+    ) : MemoriesTimelineNavigationLoadResult {
+        init {
+            require(message.isNotBlank() && message.length <= 512) {
+                "The Memories timeline navigation error is invalid."
+            }
+        }
+    }
 }
 
 class MemoriesMainTimelineHttpException(
@@ -322,6 +390,43 @@ class MemoriesMainTimelineReadService internal constructor(
             is MemoriesMainTimelineLoadResult.UseFallback -> parsed
         }
     }
+
+    suspend fun loadTargetDay(
+        session: NextcloudSession,
+        index: MemoriesMainTimelineDayIndex,
+        dayId: Long,
+        maximumItems: Int = DEFAULT_PHOTO_TIMELINE_PAGE_SIZE,
+    ): MemoriesMainTimelineLoadResult<MemoriesMainTimelinePage> {
+        require(maximumItems in 1..MAX_PHOTO_TIMELINE_PAGE_SIZE) {
+            "The Memories timeline page size is invalid."
+        }
+        val day = index.targetDay(dayId)
+            ?: return MemoriesMainTimelineLoadResult.UseFallback(
+                availability = MemoriesMainTimelineAvailability.Incompatible,
+                reason = MemoriesMainTimelineFallbackReason.InvalidResponse,
+            )
+        if (day.itemCount > maximumItems) {
+            return MemoriesMainTimelineLoadResult.UseFallback(
+                availability = MemoriesMainTimelineAvailability.Available,
+                reason = MemoriesMainTimelineFallbackReason.SingleDayExceedsPageSize,
+            )
+        }
+        val request = memoriesMainTimelineDaysRequest(listOf(day.id))
+        require(request.method == NextcloudApiMethod.GET && request.body == null)
+        return when (
+            val parsed = parseMemoriesMainTimelineDayContents(
+                response = execute(session, request),
+                expectedDays = listOf(day),
+                maximumItems = maximumItems,
+            )
+        ) {
+            is MemoriesMainTimelineLoadResult.Loaded -> MemoriesMainTimelineLoadResult.Loaded(
+                MemoriesMainTimelinePage(parsed.value, nextCursor = null),
+            )
+
+            is MemoriesMainTimelineLoadResult.UseFallback -> parsed
+        }
+    }
 }
 
 class MemoriesPreferredTimelineReadService(
@@ -340,36 +445,130 @@ class MemoriesPreferredTimelineReadService(
         fallback: suspend (PhotoTimelineCursor?) -> PhotoTimelinePage,
     ): PhotoTimelinePage {
         require(accountScope.isNotBlank()) { "The Memories timeline account scope is missing." }
+        if (cursor != null && !cursor.isMemoriesMainTimelineCursor()) {
+            indexCache.markFallbackActive(accountScope)
+            return fallback(cursor)
+        }
         val indexResult = indexCache.load(
             accountScope = accountScope,
             forceRefresh = cursor == null,
         ) {
             memories.loadDayIndex(session)
         }
-        val index = when (indexResult) {
+        val cachedIndex = when (indexResult) {
             is MemoriesMainTimelineLoadResult.Loaded -> indexResult.value
             is MemoriesMainTimelineLoadResult.UseFallback -> {
                 require(!cursor.isMemoriesMainTimelineCursor()) {
                     "The Memories timeline became unavailable; refresh the timeline."
                 }
+                indexCache.markFallbackActive(accountScope)
                 return fallback(cursor)
             }
         }
         return when (
             val page = memories.loadPage(
                 session = session,
-                index = index,
+                index = cachedIndex.index,
                 cursor = cursor,
                 maximumItems = maximumItems,
             )
         ) {
-            is MemoriesMainTimelineLoadResult.Loaded -> page.value.asPhotoTimelinePage()
+            is MemoriesMainTimelineLoadResult.Loaded -> {
+                check(
+                    indexCache.markMemoriesActive(
+                        accountScope = accountScope,
+                        sourceGeneration = cachedIndex.sourceGeneration,
+                    ),
+                ) {
+                    "The Memories timeline index changed while loading a page; refresh the timeline."
+                }
+                page.value.asPhotoTimelinePage()
+            }
+
             is MemoriesMainTimelineLoadResult.UseFallback -> {
                 require(cursor == null) {
                     "The Memories timeline paging contract changed; refresh the timeline."
                 }
+                indexCache.markFallbackActive(accountScope)
                 fallback(null)
             }
+        }
+    }
+
+    suspend fun navigationSnapshot(
+        accountScope: String,
+        monthResolver: PhotoTimelineMonthResolver = UtcPhotoTimelineMonthResolver,
+    ): MemoriesTimelineNavigationSnapshot? {
+        require(accountScope.isNotBlank()) { "The Memories timeline account scope is missing." }
+        val cached = indexCache.activeMemoriesIndex(accountScope) ?: return null
+        val geometry = buildMemoriesTimelinePlaceholderGeometry(
+            index = cached.index,
+            monthResolver = monthResolver,
+        ) ?: return null
+        return MemoriesTimelineNavigationSnapshot(
+            sourceGeneration = cached.sourceGeneration,
+            geometry = geometry,
+        )
+    }
+
+    suspend fun loadNavigationTarget(
+        session: NextcloudSession,
+        accountScope: String,
+        sourceGeneration: Long,
+        targetDayId: Long,
+        maximumItems: Int = DEFAULT_PHOTO_TIMELINE_PAGE_SIZE,
+    ): MemoriesTimelineNavigationLoadResult {
+        require(accountScope.isNotBlank()) { "The Memories timeline account scope is missing." }
+        require(sourceGeneration > 0L) {
+            "The Memories timeline navigation generation is invalid."
+        }
+        val cached = indexCache.activeMemoriesIndex(
+            accountScope = accountScope,
+            sourceGeneration = sourceGeneration,
+        ) ?: return MemoriesTimelineNavigationLoadResult.Stale
+        val advertisedNewerItems = cached.index.advertisedItemsBefore(targetDayId)
+            ?: return MemoriesTimelineNavigationLoadResult.Unavailable(
+                "This date is no longer present in the photo timeline.",
+            )
+        if (advertisedNewerItems > Int.MAX_VALUE.toLong()) {
+            return MemoriesTimelineNavigationLoadResult.Unavailable(
+                "This date is beyond the supported in-memory navigation range.",
+            )
+        }
+        val loaded = memories.loadTargetDay(
+            session = session,
+            index = cached.index,
+            dayId = targetDayId,
+            maximumItems = maximumItems,
+        )
+        if (
+            !indexCache.matchesActiveMemoriesIndex(
+                accountScope = accountScope,
+                sourceGeneration = sourceGeneration,
+            )
+        ) {
+            return MemoriesTimelineNavigationLoadResult.Stale
+        }
+        return when (loaded) {
+            is MemoriesMainTimelineLoadResult.Loaded ->
+                MemoriesTimelineNavigationLoadResult.Loaded(
+                    sourceGeneration = sourceGeneration,
+                    targetDayId = targetDayId,
+                    page = loaded.value.asPhotoTimelinePage(),
+                    advertisedNewerItemCount = advertisedNewerItems.toInt(),
+                )
+
+            is MemoriesMainTimelineLoadResult.UseFallback ->
+                MemoriesTimelineNavigationLoadResult.Unavailable(
+                    if (
+                        loaded.reason ==
+                        MemoriesMainTimelineFallbackReason.SingleDayExceedsPageSize
+                    ) {
+                        "This day contains too many photos for one bounded timeline window."
+                    } else {
+                        "Could not load photos for this date from Memories."
+                    },
+                )
         }
     }
 }
@@ -378,30 +577,92 @@ private class MemoriesMainTimelineIndexCache {
     private val mutex = Mutex()
     private var accountScope: String? = null
     private var index: MemoriesMainTimelineDayIndex? = null
+    private var sourceGeneration = 0L
+    private var memoriesActive = false
 
     suspend fun load(
         accountScope: String,
         forceRefresh: Boolean,
         fetch: suspend () -> MemoriesMainTimelineLoadResult<MemoriesMainTimelineDayIndex>,
-    ): MemoriesMainTimelineLoadResult<MemoriesMainTimelineDayIndex> = mutex.withLock {
+    ): MemoriesMainTimelineLoadResult<MemoriesMainTimelineCachedIndex> = mutex.withLock {
         if (!forceRefresh && accountScope == this.accountScope) {
-            index?.let { return@withLock MemoriesMainTimelineLoadResult.Loaded(it) }
+            index?.let {
+                return@withLock MemoriesMainTimelineLoadResult.Loaded(
+                    MemoriesMainTimelineCachedIndex(it, sourceGeneration),
+                )
+            }
         }
         val loaded = fetch()
         when (loaded) {
             is MemoriesMainTimelineLoadResult.Loaded -> {
+                sourceGeneration = nextMemoriesTimelineSourceGeneration(sourceGeneration)
                 this.accountScope = accountScope
                 index = loaded.value
+                memoriesActive = false
+                MemoriesMainTimelineLoadResult.Loaded(
+                    MemoriesMainTimelineCachedIndex(loaded.value, sourceGeneration),
+                )
             }
 
             is MemoriesMainTimelineLoadResult.UseFallback -> {
+                sourceGeneration = nextMemoriesTimelineSourceGeneration(sourceGeneration)
                 this.accountScope = null
                 index = null
+                memoriesActive = false
+                loaded
             }
         }
-        loaded
+    }
+
+    suspend fun markMemoriesActive(
+        accountScope: String,
+        sourceGeneration: Long,
+    ): Boolean = mutex.withLock {
+        val matches =
+            accountScope == this.accountScope &&
+                sourceGeneration == this.sourceGeneration &&
+                index != null
+        if (matches) memoriesActive = true
+        matches
+    }
+
+    suspend fun markFallbackActive(accountScope: String) = mutex.withLock {
+        if (accountScope == this.accountScope) memoriesActive = false
+    }
+
+    suspend fun activeMemoriesIndex(
+        accountScope: String,
+        sourceGeneration: Long? = null,
+    ): MemoriesMainTimelineCachedIndex? = mutex.withLock {
+        val currentIndex = index ?: return@withLock null
+        if (
+            !memoriesActive ||
+            accountScope != this.accountScope ||
+            (sourceGeneration != null && sourceGeneration != this.sourceGeneration)
+        ) {
+            return@withLock null
+        }
+        MemoriesMainTimelineCachedIndex(currentIndex, this.sourceGeneration)
+    }
+
+    suspend fun matchesActiveMemoriesIndex(
+        accountScope: String,
+        sourceGeneration: Long,
+    ): Boolean = mutex.withLock {
+        memoriesActive &&
+            index != null &&
+            accountScope == this.accountScope &&
+            sourceGeneration == this.sourceGeneration
     }
 }
+
+private data class MemoriesMainTimelineCachedIndex(
+    val index: MemoriesMainTimelineDayIndex,
+    val sourceGeneration: Long,
+)
+
+private fun nextMemoriesTimelineSourceGeneration(current: Long): Long =
+    if (current == Long.MAX_VALUE) 1L else current + 1L
 
 private fun PhotoTimelineCursor?.isMemoriesMainTimelineCursor(): Boolean =
     this?.value?.startsWith(MEMORIES_MAIN_TIMELINE_CURSOR_PREFIX) == true

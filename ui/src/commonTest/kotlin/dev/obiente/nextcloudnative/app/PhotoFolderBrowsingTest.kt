@@ -110,6 +110,74 @@ class PhotoFolderBrowsingTest {
     }
 
     @Test
+    fun `folder summaries derive newest distinct photo mosaics and preserve explicit covers`() {
+        val accumulator = PhotoFolderSummaryAccumulator(
+            selectedFolderPath = "Photos",
+            selectedScope = PhotoFolderBrowseScope.RecursiveMedia,
+        )
+        accumulator.addPage(
+            listOf(
+                directory("Photos/Trips/City").copy(
+                    directoryPreviewFileIds = listOf(91L, 92L),
+                ),
+                file(
+                    path = "Photos/Trips/City/newest.RAF",
+                    mimeType = "image/x-fuji-raf",
+                    modified = "2026-07-29T12:00:00Z",
+                    fileId = 11L,
+                ),
+                file(
+                    path = "Photos/Trips/City/newest.jpg",
+                    mimeType = "image/jpeg",
+                    modified = "2026-07-29T12:00:00Z",
+                    fileId = 12L,
+                ),
+                file(
+                    path = "Photos/Trips/Coast/second.jpg",
+                    mimeType = "image/jpeg",
+                    modified = "2026-07-29T11:00:00Z",
+                    fileId = 13L,
+                ),
+                file(
+                    path = "Photos/Trips/Coast/third.png",
+                    mimeType = "image/png",
+                    modified = "2026-07-29T10:00:00Z",
+                    fileId = 14L,
+                ),
+                file(
+                    path = "Photos/Trips/Coast/fourth.tif",
+                    mimeType = "image/tiff",
+                    modified = "2026-07-29T09:00:00Z",
+                    fileId = 15L,
+                ),
+                file(
+                    path = "Photos/Trips/Coast/older.jpg",
+                    mimeType = "image/jpeg",
+                    modified = "2026-07-29T08:00:00Z",
+                    fileId = 16L,
+                ),
+                file(
+                    path = "Photos/Trips/Coast/clip.mp4",
+                    mimeType = "video/mp4",
+                    modified = "2026-07-29T13:00:00Z",
+                    fileId = 17L,
+                ),
+            ),
+        )
+
+        val summary = accumulator.summarySnapshot()
+        assertEquals(listOf(91L, 92L), summary.folder("Photos/Trips/City")?.previewFileIds)
+        assertEquals(
+            listOf(12L, 13L, 14L, 15L),
+            summary.folder("Photos/Trips")?.previewFileIds,
+        )
+        assertEquals(
+            listOf(13L, 14L, 15L, 16L),
+            summary.folder("Photos/Trips/Coast")?.previewFileIds,
+        )
+    }
+
+    @Test
     fun `paged repository preserves explicit root child folders`() {
         val repository = PhotoFolderInventoryRepository()
 
@@ -204,6 +272,72 @@ class PhotoFolderBrowsingTest {
     }
 
     @Test
+    fun `typed raw relationship makes arbitrary raw name an exact selectable source`() {
+        val state = PhotoFolderBrowseState(
+            selectedFolderPath = "Photos",
+            scope = PhotoFolderBrowseScope.DirectMediaOnly,
+        )
+        val cover = file(
+            path = "Photos/edited-cover.jpg",
+            mimeType = "image/jpeg",
+            fileId = 101L,
+        )
+        val raw = file(
+            path = "Photos/camera-original.RAF",
+            mimeType = "image/x-fuji-raf",
+            fileId = 901L,
+        )
+        val repository = PhotoFolderInventoryRepository()
+        repository.tryAddPage(
+            records = listOf(cover),
+            rawStackFileIdsByRecordPath = mapOf(cover.path to listOf(901L)),
+            rawStackRelationshipsAuthoritative = true,
+        )
+        val inventory = repository.selectionSnapshot(state)
+
+        val result = buildPhotoFolderBrowseResult(
+            inventory = inventory,
+            state = state,
+            rawStackFilesByRecordPath = mapOf(cover.path to listOf(raw)),
+        )
+        val stack = result.media.single()
+        val sequence = mediaStackViewerSequence(result.media)
+
+        assertEquals(listOf(cover, raw), stack.members)
+        assertEquals(listOf(cover, raw), sequence.sourceMembers)
+        assertEquals(
+            mediaViewerFileIdentity(cover),
+            sequence.navigationIdentityBySourceIdentity[mediaViewerFileIdentity(raw)],
+        )
+    }
+
+    @Test
+    fun `authoritative page removes a stale typed raw relationship`() {
+        val cover = file(
+            path = "Photos/edited-cover.jpg",
+            mimeType = "image/jpeg",
+            fileId = 101L,
+        )
+        val state = PhotoFolderBrowseState(
+            selectedFolderPath = "Photos",
+            scope = PhotoFolderBrowseScope.DirectMediaOnly,
+        )
+        val repository = PhotoFolderInventoryRepository()
+
+        repository.tryAddPage(
+            records = listOf(cover),
+            rawStackFileIdsByRecordPath = mapOf(cover.path to listOf(901L)),
+            rawStackRelationshipsAuthoritative = true,
+        )
+        repository.tryAddPage(
+            records = listOf(cover),
+            rawStackRelationshipsAuthoritative = true,
+        )
+
+        assertTrue(repository.selectionSnapshot(state).rawStackFileIdsByRecordPath.isEmpty())
+    }
+
+    @Test
     fun `grid and list preferences serialize without navigation ambiguity`() {
         val state = PhotoFolderBrowseState(
             selectedFolderPath = "Photos/Trips",
@@ -228,6 +362,27 @@ class PhotoFolderBrowsingTest {
         assertEquals("All nested photos", photoFolderScopeLabel(PhotoFolderBrowseScope.RecursiveMedia))
         assertEquals("Grid view", photoFolderViewModeLabel(PhotoFolderViewMode.Grid))
         assertEquals("List view", photoFolderViewModeLabel(PhotoFolderViewMode.List))
+        assertEquals(
+            "1 media item in this folder",
+            photoFolderMediaCountLabel(
+                count = 1,
+                scope = PhotoFolderBrowseScope.DirectMediaAndSubfolders,
+            ),
+        )
+        assertEquals(
+            "2 media items in this folder tree",
+            photoFolderMediaCountLabel(
+                count = 2,
+                scope = PhotoFolderBrowseScope.RecursiveMedia,
+            ),
+        )
+        assertEquals(
+            "0 media items indexed below this folder",
+            photoFolderMediaCountLabel(
+                count = 0,
+                scope = PhotoFolderBrowseScope.FoldersOnly,
+            ),
+        )
     }
 
     @Test

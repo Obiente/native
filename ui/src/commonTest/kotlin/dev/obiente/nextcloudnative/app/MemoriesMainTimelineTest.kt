@@ -340,6 +340,86 @@ class MemoriesMainTimelineTest {
     }
 
     @Test
+    fun historicalOversizedDayRequestsFallbackBeforeEmittingAMemoriesCursor() {
+        var requests = 0
+        val service = MemoriesMainTimelineReadService { _, _ ->
+            requests += 1
+            error("No Memories day batch may be requested before a consistent fallback.")
+        }
+        val index = MemoriesMainTimelineDayIndex(
+            listOf(
+                NativeMediaDay(30L, 1),
+                NativeMediaDay(29L, 201),
+                NativeMediaDay(28L, 1),
+            ),
+        )
+
+        val fallback = runBlocking {
+            service.loadPage(
+                session = session(),
+                index = index,
+                maximumItems = 200,
+            )
+        }
+
+        val classified = assertIs<MemoriesMainTimelineLoadResult.UseFallback>(fallback)
+        assertEquals(MemoriesMainTimelineAvailability.Available, classified.availability)
+        assertEquals(MemoriesMainTimelineFallbackReason.SingleDayExceedsPageSize, classified.reason)
+        assertEquals(0, requests)
+    }
+
+    @Test
+    fun zeroCountDaysDoNotConsumeBatchesOrHideOlderMedia() {
+        val requests = mutableListOf<String>()
+        val service = MemoriesMainTimelineReadService { _, request ->
+            requests += request.relativePath
+            val dayId = request.relativePath.substringAfterLast('/').toLong()
+            response(
+                200,
+                """[{"fileid":$dayId,"dayid":$dayId,"basename":"day-$dayId.jpg","epoch":$dayId}]""",
+            )
+        }
+        val index = MemoriesMainTimelineDayIndex(
+            listOf(
+                NativeMediaDay(30L, 0),
+                NativeMediaDay(29L, 0),
+                NativeMediaDay(28L, 1),
+                NativeMediaDay(27L, 1),
+            ),
+        )
+
+        val first = runBlocking {
+            service.loadPage(
+                session = session(),
+                index = index,
+                maximumItems = 1,
+                maximumDays = 1,
+            )
+        }.loadedPage()
+        val second = runBlocking {
+            service.loadPage(
+                session = session(),
+                index = index,
+                cursor = first.nextCursor,
+                maximumItems = 1,
+                maximumDays = 1,
+            )
+        }.loadedPage()
+
+        assertEquals(
+            listOf(
+                "/index.php/apps/memories/api/days/28",
+                "/index.php/apps/memories/api/days/27",
+            ),
+            requests,
+        )
+        assertEquals(listOf(28L), first.entries.map { entry -> entry.file.fileId })
+        assertEquals(PhotoTimelineCursor("memories-days-v1:28"), first.nextCursor)
+        assertEquals(listOf(27L), second.entries.map { entry -> entry.file.fileId })
+        assertNull(second.nextCursor)
+    }
+
+    @Test
     fun responseCannotExceedRequestedTimelinePageSize() {
         val payload = (1L..3L).joinToString(prefix = "[", postfix = "]") { fileId ->
             """{"fileid":$fileId,"dayid":30,"basename":"item-$fileId.jpg","epoch":$fileId}"""
@@ -462,6 +542,194 @@ class MemoriesMainTimelineTest {
 
         assertNull(fallbackCursor)
         assertTrue(page.entries.isEmpty())
+    }
+
+    @Test
+    fun preferredTimelineKeepsDavCursorPagesOnTheFallbackPath() {
+        val requests = mutableListOf<String>()
+        val fallbackCursors = mutableListOf<PhotoTimelineCursor?>()
+        val davCursor = PhotoTimelineCursor("v4|i:o,3000,1|v:end|r:")
+        val service = MemoriesPreferredTimelineReadService { _, request ->
+            requests += request.relativePath
+            when (request.relativePath) {
+                "/index.php/apps/memories/api/days" ->
+                    response(200, """[{"dayid":30,"count":1}]""")
+                "/index.php/apps/memories/api/days/30" ->
+                    response(422, "")
+                else -> error("Unexpected request: ${request.relativePath}")
+            }
+        }
+        val fallback: suspend (PhotoTimelineCursor?) -> PhotoTimelinePage = { cursor ->
+            fallbackCursors += cursor
+            PhotoTimelinePage(
+                entries = emptyList(),
+                nextCursor = if (cursor == null) davCursor else null,
+            )
+        }
+
+        val first = runBlocking {
+            service.loadPage(
+                session = session(),
+                accountScope = "account-a",
+                cursor = null,
+                fallback = fallback,
+            )
+        }
+        val second = runBlocking {
+            service.loadPage(
+                session = session(),
+                accountScope = "account-a",
+                cursor = first.nextCursor,
+                fallback = fallback,
+            )
+        }
+
+        assertEquals(
+            listOf(
+                "/index.php/apps/memories/api/days",
+                "/index.php/apps/memories/api/days/30",
+            ),
+            requests,
+        )
+        assertEquals(listOf(null, davCursor), fallbackCursors)
+        assertNull(second.nextCursor)
+    }
+
+    @Test
+    fun navigationSnapshotAndTargetReuseTheActiveMemoriesIndex() {
+        val requests = mutableListOf<String>()
+        val service = MemoriesPreferredTimelineReadService { _, request ->
+            requests += request.relativePath
+            when (request.relativePath) {
+                "/index.php/apps/memories/api/days" -> response(
+                    200,
+                    """
+                        [
+                          {"dayid":60,"count":1},
+                          {"dayid":59,"count":1},
+                          {"dayid":31,"count":1}
+                        ]
+                    """.trimIndent(),
+                )
+
+                "/index.php/apps/memories/api/days/60,59,31" -> response(
+                    200,
+                    """
+                        [
+                          {"fileid":60,"dayid":60,"basename":"new.jpg","epoch":6000},
+                          {"fileid":59,"dayid":59,"basename":"middle.jpg","epoch":5900},
+                          {"fileid":31,"dayid":31,"basename":"old.jpg","epoch":3100}
+                        ]
+                    """.trimIndent(),
+                )
+
+                "/index.php/apps/memories/api/days/31" -> response(
+                    200,
+                    """[{"fileid":31,"dayid":31,"basename":"old.jpg","epoch":3100}]""",
+                )
+
+                else -> error("Unexpected request: ${request.relativePath}")
+            }
+        }
+
+        runBlocking {
+            service.loadPage(
+                session = session(),
+                accountScope = "account-a",
+                cursor = null,
+            ) {
+                error("Fallback was not expected.")
+            }
+        }
+        val snapshot = requireNotNull(
+            runBlocking {
+                service.navigationSnapshot("account-a")
+            },
+        )
+        val target = runBlocking {
+            service.loadNavigationTarget(
+                session = session(),
+                accountScope = "account-a",
+                sourceGeneration = snapshot.sourceGeneration,
+                targetDayId = 31L,
+            )
+        }
+
+        assertEquals(
+            listOf(
+                "/index.php/apps/memories/api/days",
+                "/index.php/apps/memories/api/days/60,59,31",
+                "/index.php/apps/memories/api/days/31",
+            ),
+            requests,
+        )
+        assertEquals(listOf(60L, 59L, 31L), snapshot.geometry.days.map { it.dayId })
+        val loaded = assertIs<MemoriesTimelineNavigationLoadResult.Loaded>(target)
+        assertEquals(2, loaded.advertisedNewerItemCount)
+        assertEquals(listOf(31L), loaded.page.entries.map { it.file.fileId })
+        assertNull(loaded.page.nextCursor)
+    }
+
+    @Test
+    fun navigationSnapshotIsNotPublishedForDavFallback() {
+        val service = MemoriesPreferredTimelineReadService { _, _ -> response(404, "") }
+
+        runBlocking {
+            service.loadPage(
+                session = session(),
+                accountScope = "account-a",
+                cursor = null,
+            ) {
+                PhotoTimelinePage(emptyList(), PhotoTimelineCursor("dav-page-2"))
+            }
+        }
+
+        assertNull(
+            runBlocking {
+                service.navigationSnapshot("account-a")
+            },
+        )
+    }
+
+    @Test
+    fun refreshedMemoriesIndexRejectsAnOlderNavigationGeneration() {
+        val service = MemoriesPreferredTimelineReadService { _, request ->
+            when (request.relativePath) {
+                "/index.php/apps/memories/api/days" ->
+                    response(200, """[{"dayid":30,"count":1}]""")
+                "/index.php/apps/memories/api/days/30" ->
+                    response(
+                        200,
+                        """[{"fileid":30,"dayid":30,"basename":"photo.jpg","epoch":3000}]""",
+                    )
+                else -> error("Unexpected request: ${request.relativePath}")
+            }
+        }
+
+        runBlocking {
+            service.loadPage(session(), "account-a", cursor = null) {
+                error("Fallback was not expected.")
+            }
+        }
+        val firstSnapshot = requireNotNull(
+            runBlocking { service.navigationSnapshot("account-a") },
+        )
+        runBlocking {
+            service.loadPage(session(), "account-a", cursor = null) {
+                error("Fallback was not expected.")
+            }
+        }
+
+        assertIs<MemoriesTimelineNavigationLoadResult.Stale>(
+            runBlocking {
+                service.loadNavigationTarget(
+                    session = session(),
+                    accountScope = "account-a",
+                    sourceGeneration = firstSnapshot.sourceGeneration,
+                    targetDayId = 30L,
+                )
+            },
+        )
     }
 
     @Test

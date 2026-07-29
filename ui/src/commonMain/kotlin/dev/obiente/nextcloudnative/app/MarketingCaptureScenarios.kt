@@ -120,6 +120,22 @@ enum class MarketingCaptureScenario(
         height = 1_800,
         density = 2.625f,
     ),
+    PhotoTimelineRawRetryMobile(
+        "photo-timeline-raw-retry-mobile",
+        "photo-timeline-raw-retry-mobile.png",
+        NextcloudPresentation.Adaptive,
+        "Photos",
+        "Photo timeline",
+        "Ordinary photos with a RAW retry pending",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile",
+        "phone-portrait",
+        pullRequest = 249,
+        issue = 248,
+        width = 1_080,
+        height = 1_800,
+        density = 2.625f,
+    ),
     PhotoFolderBrowserMobile(
         "photo-folder-browser-mobile",
         "photo-folder-browser-mobile.png",
@@ -179,6 +195,38 @@ enum class MarketingCaptureScenario(
         "Embedded high-detail preview", MarketingCapturePurpose.Showcase,
         "desktop", "wide", pullRequest = 218, issue = 85,
         width = 1_440, height = 900, density = 1f,
+    ),
+    LivePhotoMotionFailureMobile(
+        "live-photo-motion-failure-mobile",
+        "live-photo-motion-failure-mobile.png",
+        NextcloudPresentation.Adaptive,
+        "Photos",
+        "Live Photo viewer",
+        "Still visible after motion decoder failure",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile",
+        "phone-compact",
+        pullRequest = 249,
+        issue = 182,
+        width = 1_080,
+        height = 1_200,
+        density = 2.625f,
+    ),
+    NativeTiffPreviewMobile(
+        "native-tiff-preview-mobile",
+        "native-tiff-preview-mobile.png",
+        NextcloudPresentation.Adaptive,
+        "Photos",
+        "TIFF viewer",
+        "Native high-detail preview",
+        MarketingCapturePurpose.Showcase,
+        "mobile",
+        "phone-compact",
+        pullRequest = 249,
+        issue = 84,
+        width = 1_080,
+        height = 1_200,
+        density = 2.625f,
     ),
     FileShareUserMobile(
         "file-share-user-mobile", "file-share-user-mobile.png", NextcloudPresentation.Adaptive,
@@ -352,8 +400,14 @@ val rawPreviewCaptureScenarios: List<MarketingCaptureScenario> = listOf(
     MarketingCaptureScenario.RawPreviewHighDetailDesktop,
 )
 
+val photoMediaReviewCaptureScenarios: List<MarketingCaptureScenario> = listOf(
+    MarketingCaptureScenario.LivePhotoMotionFailureMobile,
+    MarketingCaptureScenario.NativeTiffPreviewMobile,
+)
+
 data class MarketingCaptureAssets(
     val avatar: ImageBitmap,
+    val mediaPreview: ImageBitmap,
     val services: NextcloudPlatformServices,
 )
 

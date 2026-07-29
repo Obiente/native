@@ -126,8 +126,11 @@ import dev.obiente.nextcloudnative.app.mediaSearchDavRequests
 import dev.obiente.nextcloudnative.app.MediaSearchDavTransportResponse
 import dev.obiente.nextcloudnative.app.MediaTimelineDavCarryoverStore
 import dev.obiente.nextcloudnative.app.MemoriesPreferredTimelineReadService
+import dev.obiente.nextcloudnative.app.MemoriesTimelineNavigationLoadResult
+import dev.obiente.nextcloudnative.app.MemoriesTimelineNavigationSnapshot
 import dev.obiente.nextcloudnative.app.PhotoMediaQueryOwner
 import dev.obiente.nextcloudnative.app.PhotoTimelineCursor
+import dev.obiente.nextcloudnative.app.PhotoTimelineMonthResolver
 import dev.obiente.nextcloudnative.app.PhotoTimelinePage
 import dev.obiente.nextcloudnative.app.RawMediaSearchCompatibilityPolicy
 import dev.obiente.nextcloudnative.app.isRawPhoto
@@ -733,6 +736,7 @@ internal class AndroidNextcloudServices(
                 nextCursor = page.nextCursor,
                 optionalRawRemovalAuthoritative = page.optionalRawRemovalAuthoritative,
                 rawObserved = page.rawObserved,
+                optionalRawSearchRetryPending = page.optionalRawSearchRetryPending,
             )
         }
 
@@ -746,6 +750,29 @@ internal class AndroidNextcloudServices(
         } else {
             loadDavPage(cursor)
         }
+    }
+
+    override suspend fun loadMediaTimelineNavigationSnapshot(
+        session: NextcloudSession,
+        monthResolver: PhotoTimelineMonthResolver,
+    ): MemoriesTimelineNavigationSnapshot? = withContext(Dispatchers.IO) {
+        memoriesTimeline.navigationSnapshot(
+            accountScope = NextcloudDocumentIds.cacheAccountId(session),
+            monthResolver = monthResolver,
+        )
+    }
+
+    override suspend fun loadMediaTimelineNavigationTarget(
+        session: NextcloudSession,
+        sourceGeneration: Long,
+        targetDayId: Long,
+    ): MemoriesTimelineNavigationLoadResult = withContext(Dispatchers.IO) {
+        memoriesTimeline.loadNavigationTarget(
+            session = session,
+            accountScope = NextcloudDocumentIds.cacheAccountId(session),
+            sourceGeneration = sourceGeneration,
+            targetDayId = targetDayId,
+        )
     }
 
     override suspend fun loadMediaBackupStatuses(
@@ -895,23 +922,26 @@ internal class AndroidNextcloudServices(
 
     override suspend fun loadNativeMediaPreview(
         session: NextcloudSession,
+        userId: String?,
         file: NextcloudFile,
         maximumDimension: Int,
     ): ByteArray? = withContext(Dispatchers.IO) {
-        if (!file.isNativeTiffPreviewCandidate()) return@withContext null
+        if (!file.isNativeTiffPreviewFormat()) return@withContext null
         val safeDimension = maximumDimension.coerceIn(
             MINIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION,
             MAXIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION,
         )
-        val fileId = file.fileId?.takeIf { it > 0L } ?: return@withContext null
-        val sourceSize = file.size?.takeIf { it > 0L } ?: return@withContext null
-        val etag = file.etag
-            ?.takeIf { runCatching { requireSafeFileRangeEtag(it) }.isSuccess }
+        val sourceFile = resolveNativeTiffPreviewSource(
+            session = session,
+            userId = userId,
+            requestedFile = file,
+        ) ?: return@withContext null
+        val rangePlan = nativeTiffRangeReadPlanOrNull(sourceFile, userId)
             ?: return@withContext null
         val key = NativeMediaPreviewCacheKey(
             accountId = NextcloudDocumentIds.cacheAccountId(session),
-            fileId = fileId,
-            etag = etag,
+            fileId = rangePlan.fileId,
+            etag = rangePlan.etag,
             maximumDimension = safeDimension,
             decoderVersion = NATIVE_TIFF_DECODER_VERSION,
         )
@@ -921,21 +951,31 @@ internal class AndroidNextcloudServices(
         nativeMediaPreviewDecodeMutex.withLock {
             nativeMediaPreviewCache.load(key)?.let { return@withLock it }
             val decoder = AndroidTiffPreviewDecoder(
-                sourceSize = sourceSize,
+                sourceSize = rangePlan.sourceSize,
                 readRange = { offset, length ->
-                    downloadMemoriesFileRange(
-                        session = session,
-                        fileId = fileId,
-                        offset = offset,
-                        length = length,
-                        expectedEtag = etag,
-                        expectedSourceSize = sourceSize,
-                    )
+                    when (rangePlan) {
+                        is NativeTiffRangeReadPlan.FilesDav -> downloadFileRange(
+                            session = session,
+                            userId = rangePlan.userId,
+                            path = rangePlan.path,
+                            offset = offset,
+                            length = length,
+                            expectedEtag = rangePlan.etag,
+                        )
+                        is NativeTiffRangeReadPlan.Memories -> downloadMemoriesFileRange(
+                            session = session,
+                            fileId = rangePlan.fileId,
+                            offset = offset,
+                            length = length,
+                            expectedEtag = rangePlan.etag,
+                            expectedSourceSize = rangePlan.sourceSize,
+                        )
+                    }
                 },
             )
             val encoded = decoder.decodeFirstPage(maximumDimension = safeDimension)
                 ?.also { currentCoroutineContext().ensureActive() }
-                ?.encodeJpeg()
+                ?.encodeDisplayImage()
                 ?: return@withLock null
             currentCoroutineContext().ensureActive()
             if (
@@ -949,6 +989,25 @@ internal class AndroidNextcloudServices(
             }
             encoded
         }
+    }
+
+    private suspend fun resolveNativeTiffPreviewSource(
+        session: NextcloudSession,
+        userId: String?,
+        requestedFile: NextcloudFile,
+    ): NextcloudFile? {
+        if (!requestedFile.isNativeTiffPreviewFormat()) return null
+        if (nativeTiffRangeReadPlanOrNull(requestedFile, userId) != null) return requestedFile
+        val fileId = requestedFile.fileId?.takeIf { it > 0L } ?: return null
+        val safeUserId = userId?.takeIf { it.isNotBlank() } ?: return null
+        val resolved = runCatching {
+            resolveFilesById(session, safeUserId, listOf(fileId))[fileId]
+        }.getOrNull() ?: return null
+        return resolvedNativeTiffPreviewSourceOrNull(
+            requestedFile = requestedFile,
+            resolvedFile = resolved,
+            userId = safeUserId,
+        )
     }
 
     override suspend fun loadMediaInformation(
@@ -965,6 +1024,8 @@ internal class AndroidNextcloudServices(
             }
         val sourceFile = resolvedFile
             ?.copy(
+                originalAccessAllowed =
+                    file.originalAccessAllowed && resolvedFile.originalAccessAllowed,
                 memoriesRenderAllowed = file.memoriesRenderAllowed || resolvedFile.memoriesRenderAllowed,
                 mediaWidth = file.mediaWidth ?: resolvedFile.mediaWidth,
                 mediaHeight = file.mediaHeight ?: resolvedFile.mediaHeight,
@@ -981,8 +1042,27 @@ internal class AndroidNextcloudServices(
             ?.takeIf { runCatching { requireSafeFileRangeEtag(it) }.isSuccess }
             ?: return@withContext information
         val fileId = sourceFile.fileId?.takeIf { it > 0L }
+        val nativeTiffRangePlan = nativeTiffRangeReadPlanOrNull(sourceFile, userId)
         val rangeReader: suspend (Long, Int) -> ByteArray = { offset, length ->
-            if (sourceFile.memoriesRenderAllowed && fileId != null) {
+            if (nativeTiffRangePlan is NativeTiffRangeReadPlan.FilesDav) {
+                downloadFileRange(
+                    session = session,
+                    userId = nativeTiffRangePlan.userId,
+                    path = nativeTiffRangePlan.path,
+                    offset = offset,
+                    length = length,
+                    expectedEtag = nativeTiffRangePlan.etag,
+                )
+            } else if (nativeTiffRangePlan is NativeTiffRangeReadPlan.Memories) {
+                downloadMemoriesFileRange(
+                    session = session,
+                    fileId = nativeTiffRangePlan.fileId,
+                    offset = offset,
+                    length = length,
+                    expectedEtag = nativeTiffRangePlan.etag,
+                    expectedSourceSize = nativeTiffRangePlan.sourceSize,
+                )
+            } else if (sourceFile.memoriesRenderAllowed && fileId != null) {
                 downloadMemoriesFileRange(
                     session = session,
                     fileId = fileId,
@@ -1014,7 +1094,7 @@ internal class AndroidNextcloudServices(
             ?.let(::extractAndroidEmbeddedMediaInformation)
             ?.let { information = information.mergedWith(it) }
 
-        if (sourceFile.isNativeTiffPreviewCandidate()) {
+        if (sourceFile.isNativeTiffPreviewFormat()) {
             runCatching {
                 AndroidTiffPreviewDecoder(sourceSize, rangeReader).inspectFirstPage()
             }.getOrNull()
@@ -2365,11 +2445,98 @@ internal class AndroidNextcloudServices(
     }
 }
 
-private fun NextcloudFile.isNativeTiffPreviewCandidate(): Boolean {
-    if (isDirectory || fileId == null || size == null || etag.isNullOrBlank()) return false
+private fun NextcloudFile.isNativeTiffPreviewFormat(): Boolean {
+    if (isDirectory) return false
     val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.ROOT)
     val mime = mimeType?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT).orEmpty()
     return extension in setOf("tif", "tiff") || mime in setOf("image/tif", "image/tiff")
+}
+
+internal sealed interface NativeTiffRangeReadPlan {
+    val fileId: Long
+    val sourceSize: Long
+    val etag: String
+
+    data class FilesDav(
+        override val fileId: Long,
+        override val sourceSize: Long,
+        override val etag: String,
+        val userId: String,
+        val path: String,
+    ) : NativeTiffRangeReadPlan
+
+    data class Memories(
+        override val fileId: Long,
+        override val sourceSize: Long,
+        override val etag: String,
+    ) : NativeTiffRangeReadPlan
+}
+
+internal fun nativeTiffRangeReadPlanOrNull(
+    file: NextcloudFile,
+    userId: String?,
+): NativeTiffRangeReadPlan? {
+    if (!file.isNativeTiffPreviewFormat()) return null
+    val fileId = file.fileId?.takeIf { it > 0L } ?: return null
+    val sourceSize = file.size?.takeIf { it > 0L } ?: return null
+    val etag = file.etag
+        ?.takeIf { runCatching { requireSafeFileRangeEtag(it) }.isSuccess }
+        ?: return null
+    val safeUserId = userId?.takeIf { it.isNotBlank() && it == it.trim() }
+    val safePath = file.path.takeIf {
+        file.originalAccessAllowed &&
+            file.davPathAuthoritative &&
+            it.isSafeNativeTiffDavPath()
+    }
+    if (safeUserId != null && safePath != null) {
+        return NativeTiffRangeReadPlan.FilesDav(
+            fileId = fileId,
+            sourceSize = sourceSize,
+            etag = etag,
+            userId = safeUserId,
+            path = safePath,
+        )
+    }
+    return if (file.memoriesRenderAllowed) {
+        NativeTiffRangeReadPlan.Memories(
+            fileId = fileId,
+            sourceSize = sourceSize,
+            etag = etag,
+        )
+    } else {
+        null
+    }
+}
+
+private fun String.isSafeNativeTiffDavPath(): Boolean =
+    isNotEmpty() &&
+        '\u0000' !in this &&
+        '\\' !in this &&
+        !startsWith('/') &&
+        !endsWith('/') &&
+        split('/').all { segment ->
+            segment.isNotEmpty() && segment != "." && segment != ".."
+        }
+
+internal fun resolvedNativeTiffPreviewSourceOrNull(
+    requestedFile: NextcloudFile,
+    resolvedFile: NextcloudFile,
+    userId: String,
+): NextcloudFile? {
+    val requestedFileId = requestedFile.fileId?.takeIf { it > 0L } ?: return null
+    if (
+        resolvedFile.fileId != requestedFileId ||
+        !requestedFile.isNativeTiffPreviewFormat() ||
+        !resolvedFile.isNativeTiffPreviewFormat()
+    ) {
+        return null
+    }
+    return resolvedFile.copy(
+        originalAccessAllowed =
+            requestedFile.originalAccessAllowed && resolvedFile.originalAccessAllowed,
+        memoriesRenderAllowed =
+            requestedFile.memoriesRenderAllowed || resolvedFile.memoriesRenderAllowed,
+    ).takeIf { nativeTiffRangeReadPlanOrNull(it, userId) != null }
 }
 
 private fun NextcloudFile.isEmbeddedMediaInformationCandidate(): Boolean {
@@ -2508,5 +2675,5 @@ private const val SYSTEM_TAG_OC_NAMESPACE = "http://owncloud.org/ns"
 private const val SYSTEM_TAG_NC_NAMESPACE = "http://nextcloud.org/ns"
 private const val MINIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION = 64
 private const val MAXIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION = 4_096
-private const val NATIVE_TIFF_DECODER_VERSION = "tiff-stream-v3"
+        private const val NATIVE_TIFF_DECODER_VERSION = "tiff-stream-v4"
 private const val MAXIMUM_EMBEDDED_INFORMATION_PREFIX_BYTES = 4 * 1024 * 1024

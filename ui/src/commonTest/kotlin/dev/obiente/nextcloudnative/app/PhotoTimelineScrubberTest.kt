@@ -108,6 +108,48 @@ class PhotoTimelineScrubberTest {
     }
 
     @Test
+    fun continuousRailFractionClampsEdgesAndRejectsInvalidGeometry() {
+        assertEquals(
+            0f,
+            photoTimelineRailFraction(
+                positionY = -20f,
+                railHeight = 100f,
+                thumbHeight = 20f,
+            ),
+        )
+        assertEquals(
+            0.5f,
+            photoTimelineRailFraction(
+                positionY = 50f,
+                railHeight = 100f,
+                thumbHeight = 20f,
+            ),
+        )
+        assertEquals(
+            1f,
+            photoTimelineRailFraction(
+                positionY = 120f,
+                railHeight = 100f,
+                thumbHeight = 20f,
+            ),
+        )
+        assertNull(
+            photoTimelineRailFraction(
+                positionY = Float.NaN,
+                railHeight = 100f,
+                thumbHeight = 20f,
+            ),
+        )
+        assertNull(
+            photoTimelineRailFraction(
+                positionY = 20f,
+                railHeight = 20f,
+                thumbHeight = 20f,
+            ),
+        )
+    }
+
+    @Test
     fun arrowStepsMoveOneMonthAndStayWithinBounds() {
         assertEquals(0, photoTimelineSectionIndexAfterStep(0, sectionCount = 4, step = -1))
         assertEquals(0, photoTimelineSectionIndexAfterStep(1, sectionCount = 4, step = -1))
@@ -202,6 +244,98 @@ class PhotoTimelineScrubberTest {
         assertEquals(6, lightlySnappedPhotoTimelineGridItem(index, 5))
         assertEquals(3, lightlySnappedPhotoTimelineGridItem(index, 3))
         assertEquals(10, lightlySnappedPhotoTimelineGridItem(index, 99))
+    }
+
+    @Test
+    fun fullIndexReleaseSnapUsesWeightedDaysAndOnlyLightlySnapsToMonths() {
+        val geometry = requireNotNull(
+            buildMemoriesTimelinePlaceholderGeometry(
+                MemoriesMainTimelineDayIndex(
+                    listOf(
+                        NativeMediaDay(60L, 2),
+                        NativeMediaDay(59L, 3),
+                        NativeMediaDay(31L, 4),
+                        NativeMediaDay(30L, 1),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(
+            59L,
+            lightlySnappedMemoriesTimelineDayId(
+                geometry = geometry,
+                fraction = 0.2f,
+            ),
+        )
+        assertEquals(
+            31L,
+            lightlySnappedMemoriesTimelineDayId(
+                geometry = geometry,
+                fraction = 0.5f,
+            ),
+        )
+        assertEquals(
+            30L,
+            lightlySnappedMemoriesTimelineDayId(
+                geometry = geometry,
+                fraction = 0.9f,
+            ),
+        )
+        assertNull(
+            lightlySnappedMemoriesTimelineDayId(
+                geometry = geometry,
+                fraction = Float.NaN,
+            ),
+        )
+    }
+
+    @Test
+    fun fullIndexReleaseSelectsOneFinalSnappedOrRawDay() {
+        val geometry = requireNotNull(
+            buildMemoriesTimelinePlaceholderGeometry(
+                MemoriesMainTimelineDayIndex(
+                    listOf(
+                        NativeMediaDay(60L, 2),
+                        NativeMediaDay(59L, 3),
+                        NativeMediaDay(31L, 4),
+                        NativeMediaDay(30L, 1),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(
+            31L,
+            memoriesTimelineDayIdForScrubberRelease(
+                geometry = geometry,
+                interactionFraction = 0.5f,
+                interactionDayId = 59L,
+            ),
+        )
+        assertEquals(
+            59L,
+            memoriesTimelineDayIdForScrubberRelease(
+                geometry = geometry,
+                interactionFraction = 0.2f,
+                interactionDayId = 59L,
+            ),
+        )
+        assertEquals(
+            30L,
+            memoriesTimelineDayIdForScrubberRelease(
+                geometry = geometry,
+                interactionFraction = Float.NaN,
+                interactionDayId = 30L,
+            ),
+        )
+        assertNull(
+            memoriesTimelineDayIdForScrubberRelease(
+                geometry = geometry,
+                interactionFraction = null,
+                interactionDayId = null,
+            ),
+        )
     }
 
     @Test

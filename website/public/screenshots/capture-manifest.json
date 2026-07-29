@@ -63,22 +63,28 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/HomeWorkspaceLayout.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/HomeWorkspacePersistence.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ImageDecodeBounds.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LivePhotoDetection.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LivePhotos.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LocalFileUpload.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingLivePhotoCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingPhotoFolderCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingPhotoTimelineCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingTransferCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaBackupLedger.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaBackupLedgerStore.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaBackupStatusIndicator.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaInformation.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaSearchDav.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaStacking.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaTransferCenterScreen.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaViewerNavigation.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MemoriesFolderBrowsing.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MemoriesMainTimeline.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MemoriesTimelinePlaceholderGeometry.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeAppCatalogSurface.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeAudioPlayback.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckBoardSurface.kt",
@@ -118,9 +124,11 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoFolderBrowser.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoFolderBrowsing.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoFolderInventoryPaging.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoMediaQueryOwnership.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoNavigation.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoNavigationUi.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoTimelinePaging.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoTimelineRemoteNavigation.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoTimelineScrubber.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PlatformBackHandler.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PlatformImage.kt",
@@ -180,6 +188,7 @@
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/Main.kt",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/MarketingCaptureMain.kt",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/MarketingCaptureOwnership.kt",
+        "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/NativeTiffMarketingCapture.kt",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/NetworkInertMarketingServices.kt",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/PhotoTimelinePreviewMain.kt",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/RawMediaMarketingCapture.kt",
@@ -188,7 +197,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "3c2d694fa0f51ada9cb4f2fa6527c7ad81e76af4cd4b85c55b2b66079e9e3e34",
+    "captureSourceSha256": "95415ff1e63f81bc2e56f2613d8a431876dfeac57f8bd2be0ba0a98b30343986",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {
@@ -289,7 +298,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 246,
             "issue": 242,
-            "sha256": "40551f96d10ecf86791a9d57c161ef222eb8dbe0b5b9c292a37d88f710286a3f"
+            "sha256": "60d76a9530c215f5d5473975e162dda5b192fc56e3672401f53e9c0774c10740"
         },
         {
             "scenario": "photo-timeline-return-to-newest-error-mobile",
@@ -305,7 +314,23 @@
             "viewport": "phone-portrait",
             "pullRequest": 246,
             "issue": 242,
-            "sha256": "2a1d456ccdc8f4f6eb16ced6d19af92b87667879e9f6f37a5c884a2a47b6e709"
+            "sha256": "c6960155703b6bee4216b684adda94c9c4b5325e621d10d7c24be2cd0be5213f"
+        },
+        {
+            "scenario": "photo-timeline-raw-retry-mobile",
+            "file": "photo-timeline-raw-retry-mobile.png",
+            "width": 1080,
+            "height": 1800,
+            "density": 2.625,
+            "feature": "Photos",
+            "surface": "Photo timeline",
+            "state": "Ordinary photos with a RAW retry pending",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "pullRequest": 249,
+            "issue": 248,
+            "sha256": "b82e70232c249715c0e18db678f24bc84f1c77db2463770a8a2c5b4d45c62ee9"
         },
         {
             "scenario": "photo-folder-browser-mobile",
@@ -321,7 +346,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 245,
             "issue": 243,
-            "sha256": "16847ea22ea1ebf408be5e6567a99b7bdee070010171bd5c075e49603b2f6754"
+            "sha256": "c24e27abd1a897d556c0dac47448bf00da2deb1ab12065401aae05f730de6a35"
         },
         {
             "scenario": "photo-folder-browser-desktop",
@@ -337,7 +362,7 @@
             "viewport": "wide",
             "pullRequest": 245,
             "issue": 243,
-            "sha256": "f46d88486d45b68f1a6552f5e8890c7abb63179c65908fa293a8dd566b914cf9"
+            "sha256": "0222cf8131beeff16e5ab0448b8de4e3cf7616520a5781bac015d2755335d5b5"
         },
         {
             "scenario": "raw-preview-loading-mobile",
@@ -385,7 +410,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "a95d688eea8d417caa719f3812ce4f3134aa3592e16db0390b8397a995200f8b"
+            "sha256": "25cd22beb5640c73269b5b786fc6a6525e0913f402c17c29f963c2709c8b2a7a"
         },
         {
             "scenario": "raw-preview-high-detail-desktop",
@@ -401,7 +426,39 @@
             "viewport": "wide",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "c7257f6d2a05d12da3286883800e3da01ca46cbe8d4d5a1dbd0554588939299f"
+            "sha256": "5b0d81b2626247baf3572be949143fee9cdf8392156a5a5eee5d9d70ad160a9e"
+        },
+        {
+            "scenario": "live-photo-motion-failure-mobile",
+            "file": "live-photo-motion-failure-mobile.png",
+            "width": 1080,
+            "height": 1200,
+            "density": 2.625,
+            "feature": "Photos",
+            "surface": "Live Photo viewer",
+            "state": "Still visible after motion decoder failure",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-compact",
+            "pullRequest": 249,
+            "issue": 182,
+            "sha256": "3fc5ec6e2db43ebbebaca5b764e81d46685543bedfbeb391065d95ef0fc97f52"
+        },
+        {
+            "scenario": "native-tiff-preview-mobile",
+            "file": "native-tiff-preview-mobile.png",
+            "width": 1080,
+            "height": 1200,
+            "density": 2.625,
+            "feature": "Photos",
+            "surface": "TIFF viewer",
+            "state": "Native high-detail preview",
+            "purpose": "showcase",
+            "platform": "mobile",
+            "viewport": "phone-compact",
+            "pullRequest": 249,
+            "issue": 84,
+            "sha256": "42a2fba65982fb18c7462b8a2838ad79507f43ebd5443b2cfcbd2bf147fca30d"
         },
         {
             "scenario": "file-share-user-mobile",

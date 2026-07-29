@@ -13,7 +13,7 @@ class ImageDecodeBoundsTest {
             maximumDimension = 4_096,
         )
 
-        assertEquals(2, plan.sampleSize)
+        assertEquals(4, plan.sampleSize)
         assertTrue(plan.targetWidth <= 4_096)
         assertTrue(plan.targetHeight <= 4_096)
         assertTrue(plan.targetPixels <= DEFAULT_MAXIMUM_DECODED_IMAGE_PIXELS)
@@ -27,10 +27,27 @@ class ImageDecodeBoundsTest {
             maximumDimension = 1_600,
         )
 
-        assertEquals(4, plan.sampleSize)
-        assertEquals(1_066, plan.targetWidth)
-        assertEquals(1_600, plan.targetHeight)
+        assertEquals(8, plan.sampleSize)
+        assertEquals(644, plan.targetWidth)
+        assertEquals(966, plan.targetHeight)
         assertTrue(plan.targetPixels <= 1_600L * 1_600L)
+    }
+
+    @Test
+    fun sampledAllocationIsBoundedBeforeFinalScaling() {
+        val plan = boundedImageDecodePlan(
+            sourceWidth = 12_000,
+            sourceHeight = 12_000,
+            maximumDimension = 4_096,
+        )
+
+        assertEquals(8, plan.sampleSize)
+        assertEquals(1_500, plan.targetWidth)
+        assertEquals(1_500, plan.targetHeight)
+        assertTrue(
+            (12_000L / plan.sampleSize) * (12_000L / plan.sampleSize) <=
+                DEFAULT_MAXIMUM_DECODED_IMAGE_PIXELS,
+        )
     }
 
     @Test

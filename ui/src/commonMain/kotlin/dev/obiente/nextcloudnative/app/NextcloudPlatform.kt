@@ -656,6 +656,33 @@ interface NextcloudPlatformServices {
     }
 
     /**
+     * Returns the complete Memories day geometry bound to the currently painted timeline source.
+     *
+     * Platforms return null while DAV fallback is active or when no matching Memories index is
+     * cached. Implementations must reuse the same source cache that served
+     * [listMediaTimelinePage].
+     */
+    suspend fun loadMediaTimelineNavigationSnapshot(
+        session: NextcloudSession,
+        monthResolver: PhotoTimelineMonthResolver,
+    ): MemoriesTimelineNavigationSnapshot? = null
+
+    /**
+     * Loads one bounded Memories day only when [sourceGeneration] still owns the active timeline.
+     *
+     * A stale generation must not be converted to a DAV request because Memories and DAV cursors
+     * do not share an identity or paging contract.
+     */
+    suspend fun loadMediaTimelineNavigationTarget(
+        session: NextcloudSession,
+        sourceGeneration: Long,
+        targetDayId: Long,
+    ): MemoriesTimelineNavigationLoadResult =
+        MemoriesTimelineNavigationLoadResult.Unavailable(
+            "Complete photo timeline navigation is unavailable on this platform.",
+        )
+
+    /**
      * Returns locally known backup state for authoritative server paths.
      *
      * Missing paths mean this platform has no device-local backup evidence. Callers must not infer
@@ -724,6 +751,7 @@ interface NextcloudPlatformServices {
      */
     suspend fun loadNativeMediaPreview(
         session: NextcloudSession,
+        userId: String?,
         file: NextcloudFile,
         maximumDimension: Int = DEFAULT_PREVIEW_DIMENSION,
     ): ByteArray? = null

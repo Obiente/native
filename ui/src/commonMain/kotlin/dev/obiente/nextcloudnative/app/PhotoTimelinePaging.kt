@@ -41,6 +41,7 @@ data class PhotoTimelinePage(
     val nextCursor: PhotoTimelineCursor?,
     val optionalRawRemovalAuthoritative: Boolean = true,
     val rawObserved: Boolean = entries.any { entry -> entry.file.isRawPhoto() },
+    val optionalRawSearchRetryPending: Boolean = false,
     val rawStackFileIdsByEntryIdentity: Map<String, List<Long>> = emptyMap(),
     val rawStackRelationshipsAuthoritative: Boolean = false,
 ) {
@@ -104,6 +105,7 @@ data class PhotoTimelineState(
     val revalidationPendingRemovalIdentities: Set<String> = emptySet(),
     val revalidationPendingRawRemovalAuthoritative: Boolean = true,
     val rawEverObserved: Boolean = entries.any { entry -> entry.file.isRawPhoto() },
+    val optionalRawSearchRetryPending: Boolean = false,
     val rawStackFileIdsByEntryIdentity: Map<String, List<Long>> = emptyMap(),
 ) {
     init {
@@ -501,6 +503,7 @@ data class PhotoTimelineState(
                     true
                 },
             rawEverObserved = rawEverObserved || page.rawObserved,
+            optionalRawSearchRetryPending = page.optionalRawSearchRetryPending,
             rawStackFileIdsByEntryIdentity =
                 updatedRawStackRelationships.filterKeys(retainedIdentities::contains),
         )

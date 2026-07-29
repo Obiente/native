@@ -34,10 +34,37 @@ internal data class PreviewCacheKey(
     val account: String,
     val variant: String,
     val fileId: Long,
-    val etag: String?,
+    val etag: String,
     val width: Int,
     val height: Int,
 )
+
+internal fun previewCacheKeyOrNull(
+    account: String,
+    variant: String,
+    fileId: Long,
+    etag: String?,
+    width: Int,
+    height: Int,
+): PreviewCacheKey? {
+    val generation = etag?.takeIf { it.isNotBlank() } ?: return null
+    return PreviewCacheKey(
+        account = account,
+        variant = variant,
+        fileId = fileId,
+        etag = generation,
+        width = width,
+        height = height,
+    )
+}
+
+internal suspend fun loadPreviewMemoryCached(
+    key: PreviewCacheKey?,
+    load: suspend () -> ByteArray,
+): ByteArray {
+    if (key == null) return load()
+    return PreviewMemoryCache.get(key) ?: load().also { PreviewMemoryCache.put(key, it) }
+}
 
 internal suspend fun NextcloudPlatformServices.loadPreviewCached(
     session: NextcloudSession,
@@ -48,7 +75,7 @@ internal suspend fun NextcloudPlatformServices.loadPreviewCached(
     val fileId = requireNotNull(file.fileId) { "This item does not provide a preview file ID." }
     val safeWidth = boundedPreviewDimension(width)
     val safeHeight = boundedPreviewDimension(height)
-    val key = PreviewCacheKey(
+    val key = previewCacheKeyOrNull(
         account = previewCacheAccount(session),
         variant = "core-preview",
         fileId = fileId,
@@ -56,8 +83,9 @@ internal suspend fun NextcloudPlatformServices.loadPreviewCached(
         width = safeWidth,
         height = safeHeight,
     )
-    return PreviewMemoryCache.get(key) ?: loadPreview(session, fileId, safeWidth, safeHeight)
-        .also { PreviewMemoryCache.put(key, it) }
+    return loadPreviewMemoryCached(key) {
+        loadPreview(session, fileId, safeWidth, safeHeight)
+    }
 }
 
 internal suspend fun NextcloudPlatformServices.loadMemoriesDecodableImageCached(
@@ -70,7 +98,7 @@ internal suspend fun NextcloudPlatformServices.loadMemoriesDecodableImageCached(
     require(file.isPhotoMedia() && file.canUseMemoriesDecodableRender()) {
         "This item cannot use the Memories image renderer."
     }
-    val key = PreviewCacheKey(
+    val key = previewCacheKeyOrNull(
         account = previewCacheAccount(session),
         variant = "memories-decodable",
         fileId = fileId,
@@ -78,16 +106,18 @@ internal suspend fun NextcloudPlatformServices.loadMemoriesDecodableImageCached(
         width = 0,
         height = 0,
     )
-    return PreviewMemoryCache.get(key) ?: memoriesDecodableImageResponseBytes(
-        executeNextcloudApi(
-            session,
-            memoriesPhotoDecodableApiRequest(
-                fileId = fileId,
-                etag = file.etag,
-                maximumResponseBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES.toLong(),
+    return loadPreviewMemoryCached(key) {
+        memoriesDecodableImageResponseBytes(
+            executeNextcloudApi(
+                session,
+                memoriesPhotoDecodableApiRequest(
+                    fileId = fileId,
+                    etag = file.etag,
+                    maximumResponseBytes = MAX_RAW_DISPLAY_PREVIEW_BYTES.toLong(),
+                ),
             ),
-        ),
-    ).also { PreviewMemoryCache.put(key, it) }
+        )
+    }
 }
 
 /**
@@ -97,6 +127,7 @@ internal suspend fun NextcloudPlatformServices.loadMemoriesDecodableImageCached(
 internal suspend fun <T> NextcloudPlatformServices.loadMediaThumbnailDecoded(
     session: NextcloudSession,
     file: NextcloudFile,
+    userId: String? = null,
     width: Int = DEFAULT_PREVIEW_DIMENSION,
     height: Int = DEFAULT_PREVIEW_DIMENSION,
     decode: (MediaDisplayPayload) -> T?,
@@ -112,6 +143,7 @@ internal suspend fun <T> NextcloudPlatformServices.loadMediaThumbnailDecoded(
         loadNativeRender = {
             loadNativeMediaPreview(
                 session = session,
+                userId = userId,
                 file = file,
                 maximumDimension = maxOf(width, height),
             )
@@ -142,7 +174,7 @@ internal suspend fun NextcloudPlatformServices.loadPersonCoverCached(
     person: NextcloudPerson,
 ): ByteArray {
     val coverId = requireNotNull(person.coverFileId) { "This person does not have a selected cover." }
-    val key = PreviewCacheKey(
+    val key = previewCacheKeyOrNull(
         account = previewCacheAccount(session),
         variant = "memories-person-${person.backend}-${person.id}",
         fileId = coverId,
@@ -150,8 +182,9 @@ internal suspend fun NextcloudPlatformServices.loadPersonCoverCached(
         width = 384,
         height = 384,
     )
-    return PreviewMemoryCache.get(key) ?: loadPersonCover(session, person)
-        .also { PreviewMemoryCache.put(key, it) }
+    return loadPreviewMemoryCached(key) {
+        loadPersonCover(session, person)
+    }
 }
 
 private fun previewCacheAccount(session: NextcloudSession): String {

@@ -179,6 +179,25 @@ internal fun photoTimelineGridItemForRailPosition(
     return (fraction * (gridItemCount - 1)).roundToInt()
 }
 
+internal fun photoTimelineRailFraction(
+    positionY: Float,
+    railHeight: Float,
+    thumbHeight: Float,
+): Float? {
+    if (
+        !positionY.isFinite() ||
+        !railHeight.isFinite() ||
+        !thumbHeight.isFinite() ||
+        railHeight <= 0f ||
+        thumbHeight < 0f ||
+        thumbHeight >= railHeight
+    ) {
+        return null
+    }
+    val thumbTravel = railHeight - thumbHeight
+    return ((positionY - thumbHeight / 2f) / thumbTravel).coerceIn(0f, 1f)
+}
+
 internal fun lightlySnappedPhotoTimelineGridItem(
     index: PhotoTimelineDateIndex,
     gridItemIndex: Int,
@@ -195,29 +214,112 @@ internal fun lightlySnappedPhotoTimelineGridItem(
     return nearestHeader?.takeIf { header -> abs(header - target) <= maximumDistance } ?: target
 }
 
+internal fun lightlySnappedMemoriesTimelineDayId(
+    geometry: MemoriesTimelinePlaceholderGeometry,
+    fraction: Float,
+    maximumAdvertisedItemDistance: Long = 1L,
+): Long? {
+    if (
+        !fraction.isFinite() ||
+        maximumAdvertisedItemDistance < 0L ||
+        geometry.totalAdvertisedItemCount <= 0L
+    ) {
+        return null
+    }
+    val clamped = fraction.coerceIn(0f, 1f)
+    val targetOffset = if (clamped == 1f) {
+        geometry.totalAdvertisedItemCount - 1L
+    } else {
+        (clamped.toDouble() * geometry.totalAdvertisedItemCount.toDouble())
+            .toLong()
+            .coerceIn(0L, geometry.totalAdvertisedItemCount - 1L)
+    }
+    val nearestMonth = geometry.months.minByOrNull { month ->
+        kotlin.math.abs(month.firstAdvertisedItemOffset - targetOffset)
+    }
+    val snappedMonth = nearestMonth?.takeIf { month ->
+        kotlin.math.abs(month.firstAdvertisedItemOffset - targetOffset) <=
+            maximumAdvertisedItemDistance
+    }
+    return snappedMonth
+        ?.let { month -> geometry.days.getOrNull(month.firstDayIndex)?.dayId }
+        ?: geometry.dayAtFraction(clamped)?.dayId
+}
+
+internal fun memoriesTimelineDayIdForScrubberRelease(
+    geometry: MemoriesTimelinePlaceholderGeometry,
+    interactionFraction: Float?,
+    interactionDayId: Long?,
+): Long? = interactionFraction
+    ?.let { fraction ->
+        lightlySnappedMemoriesTimelineDayId(
+            geometry = geometry,
+            fraction = fraction,
+        )
+    }
+    ?: interactionDayId
+
 @Composable
 internal fun PhotoTimelineDateScrubber(
     dateIndex: PhotoTimelineDateIndex,
     activeGridItemIndex: Int,
     onJumpToGridItem: suspend (Int) -> Unit,
+    fullGeometry: MemoriesTimelinePlaceholderGeometry? = null,
+    onJumpToAdvertisedDay: (suspend (Long) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    if (dateIndex.sections.isEmpty()) return
+    val completeGeometry = fullGeometry?.takeIf {
+        onJumpToAdvertisedDay != null && it.months.isNotEmpty()
+    }
+    if (dateIndex.sections.isEmpty() && completeGeometry == null) return
     val gridItemCount = photoTimelineGridItemCount(dateIndex)
-    val boundedActiveGridItemIndex = activeGridItemIndex.coerceIn(0, gridItemCount - 1)
+    val boundedActiveGridItemIndex = if (gridItemCount > 0) {
+        activeGridItemIndex.coerceIn(0, gridItemCount - 1)
+    } else {
+        0
+    }
     var interactionGridItemIndex by remember(dateIndex.sections) {
         mutableStateOf<Int?>(null)
+    }
+    var interactionFraction by remember(completeGeometry) {
+        mutableStateOf<Float?>(null)
+    }
+    var interactionDayId by remember(completeGeometry) {
+        mutableStateOf<Long?>(null)
     }
     var pointerInteracting by remember { mutableStateOf(false) }
     var focused by remember { mutableStateOf(false) }
     val displayedGridItemIndex = interactionGridItemIndex ?: boundedActiveGridItemIndex
-    val displayedSectionIndex = requireNotNull(
-        photoTimelineSectionIndexForGridItem(dateIndex, displayedGridItemIndex),
-    )
-    val displayedSection = dateIndex.sections[displayedSectionIndex]
+    val retainedSectionIndex = photoTimelineSectionIndexForGridItem(
+        dateIndex,
+        displayedGridItemIndex,
+    ) ?: 0
+    val retainedSection = dateIndex.sections.getOrNull(retainedSectionIndex)
+    val activeCompleteFraction = retainedSection
+        ?.month
+        ?.let { month -> completeGeometry?.fractionFor(month) }
+        ?: 0f
+    val displayedFraction = interactionFraction ?: if (completeGeometry != null) {
+        activeCompleteFraction
+    } else if (gridItemCount <= 1) {
+        0f
+    } else {
+        displayedGridItemIndex.toFloat() / (gridItemCount - 1)
+    }
+    val displayedSectionIndex = completeGeometry
+        ?.monthIndexAtFraction(displayedFraction)
+        ?: retainedSectionIndex
+    val displayedMonth = completeGeometry
+        ?.months
+        ?.getOrNull(displayedSectionIndex)
+        ?.month
+        ?: retainedSection?.month
+        ?: return
+    val sectionCount = completeGeometry?.months?.size ?: dateIndex.sections.size
     val scope = rememberCoroutineScope()
     val currentOnJumpToGridItem by rememberUpdatedState(onJumpToGridItem)
-    var jumpJob by remember(dateIndex.sections) { mutableStateOf<Job?>(null) }
+    val currentOnJumpToAdvertisedDay by rememberUpdatedState(onJumpToAdvertisedDay)
+    var jumpJob by remember(dateIndex.sections, completeGeometry) { mutableStateOf<Job?>(null) }
     val density = LocalDensity.current
     val scrubberThumbPixels = with(density) {
         PhotoTimelineScrubberThumbHeight.toPx().roundToInt()
@@ -231,21 +333,42 @@ internal fun PhotoTimelineDateScrubber(
         PhotoTimelineScrubberEstimatedLabelHeight.toPx().roundToInt()
     }
 
-    DisposableEffect(dateIndex.sections) {
+    DisposableEffect(dateIndex.sections, completeGeometry) {
         onDispose {
             jumpJob?.cancel()
         }
     }
 
     fun jumpToSection(targetIndex: Int) {
-        val target = dateIndex.sections[targetIndex]
         jumpJob?.cancel()
-        jumpJob = scope.launch {
-            currentOnJumpToGridItem(photoTimelineGridIndex(target, targetIndex))
+        if (completeGeometry != null) {
+            val dayId = completeGeometry.months
+                .getOrNull(targetIndex)
+                ?.let { month -> completeGeometry.days.getOrNull(month.firstDayIndex)?.dayId }
+                ?: return
+            jumpJob = scope.launch {
+                currentOnJumpToAdvertisedDay?.invoke(dayId)
+            }
+        } else {
+            val target = dateIndex.sections[targetIndex]
+            jumpJob = scope.launch {
+                currentOnJumpToGridItem(photoTimelineGridIndex(target, targetIndex))
+            }
         }
     }
 
     fun jumpFromRailPointer(position: Offset, railHeight: Int) {
+        if (completeGeometry != null) {
+            val fraction = photoTimelineRailFraction(
+                positionY = position.y,
+                railHeight = railHeight.toFloat(),
+                thumbHeight = scrubberThumbPixels.toFloat(),
+            ) ?: return
+            val targetDayId = completeGeometry.dayAtFraction(fraction)?.dayId ?: return
+            interactionFraction = fraction
+            interactionDayId = targetDayId
+            return
+        }
         photoTimelineGridItemForRailPosition(
             positionY = position.y,
             railHeight = railHeight.toFloat(),
@@ -269,20 +392,20 @@ internal fun PhotoTimelineDateScrubber(
             .fillMaxHeight()
             .semantics {
                 contentDescription = "Photo timeline date scrubber"
-                stateDescription = displayedSection.month.label
+                stateDescription = displayedMonth.label
                 progressBarRangeInfo = ProgressBarRangeInfo(
                     current = displayedSectionIndex.toFloat(),
-                    range = 0f..dateIndex.sections.lastIndex.toFloat(),
-                    steps = (dateIndex.sections.size - 2).coerceAtLeast(0),
+                    range = 0f..(sectionCount - 1).coerceAtLeast(0).toFloat(),
+                    steps = (sectionCount - 2).coerceAtLeast(0),
                 )
                 setProgress { requested ->
                     val target = requested
                         .roundToInt()
-                        .coerceIn(dateIndex.sections.indices)
+                        .coerceIn(0, (sectionCount - 1).coerceAtLeast(0))
                     distinctPhotoTimelineScrubberJumpTarget(
                         currentSectionIndex = displayedSectionIndex,
                         requestedSectionIndex = target,
-                        sectionCount = dateIndex.sections.size,
+                        sectionCount = sectionCount,
                     )?.let(::jumpToSection)
                     true
                 }
@@ -302,7 +425,7 @@ internal fun PhotoTimelineDateScrubber(
                     }
                     val target = photoTimelineSectionIndexAfterStep(
                         activeSectionIndex = displayedSectionIndex,
-                        sectionCount = dateIndex.sections.size,
+                        sectionCount = sectionCount,
                         step = step,
                     )
                     if (target != null && target != displayedSectionIndex) {
@@ -312,12 +435,13 @@ internal fun PhotoTimelineDateScrubber(
                 }
             }
             .onFocusChanged { focused = it.isFocused }
-            .pointerInput(dateIndex.sections, scrubberThumbPixels) {
+            .pointerInput(dateIndex.sections, completeGeometry, scrubberThumbPixels) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     pointerInteracting = true
                     jumpFromRailPointer(down.position, size.height)
                     down.consume()
+                    var gestureCompleted = false
                     try {
                         var pointerPressed = true
                         while (pointerPressed) {
@@ -333,20 +457,37 @@ internal fun PhotoTimelineDateScrubber(
                                 }
                             }
                         }
+                        gestureCompleted = true
                     } finally {
-                        interactionGridItemIndex
-                            ?.let { target ->
-                                lightlySnappedPhotoTimelineGridItem(dateIndex, target)
-                            }
-                            ?.takeIf { target -> target != interactionGridItemIndex }
-                            ?.let { target ->
-                                jumpJob?.cancel()
-                                jumpJob = scope.launch {
-                                    currentOnJumpToGridItem(target)
+                        if (completeGeometry != null && gestureCompleted) {
+                            memoriesTimelineDayIdForScrubberRelease(
+                                geometry = completeGeometry,
+                                interactionFraction = interactionFraction,
+                                interactionDayId = interactionDayId,
+                            )
+                                ?.let { targetDayId ->
+                                    jumpJob?.cancel()
+                                    jumpJob = scope.launch {
+                                        currentOnJumpToAdvertisedDay?.invoke(targetDayId)
+                                    }
                                 }
-                            }
+                        } else {
+                            interactionGridItemIndex
+                                ?.let { target ->
+                                    lightlySnappedPhotoTimelineGridItem(dateIndex, target)
+                                }
+                                ?.takeIf { target -> target != interactionGridItemIndex }
+                                ?.let { target ->
+                                    jumpJob?.cancel()
+                                    jumpJob = scope.launch {
+                                        currentOnJumpToGridItem(target)
+                                    }
+                                }
+                        }
                         pointerInteracting = false
                         interactionGridItemIndex = null
+                        interactionFraction = null
+                        interactionDayId = null
                     }
                 }
             }
@@ -361,13 +502,8 @@ internal fun PhotoTimelineDateScrubber(
                 .background(MaterialTheme.colorScheme.outlineVariant),
         )
         val availablePixels = constraints.maxHeight - scrubberThumbPixels
-        val fraction = if (gridItemCount == 1) {
-            0f
-        } else {
-            displayedGridItemIndex.toFloat() / (gridItemCount - 1)
-        }
         val thumbOffsetPixels =
-            (availablePixels.coerceAtLeast(0) * fraction).roundToInt()
+            (availablePixels.coerceAtLeast(0) * displayedFraction).roundToInt()
         if (pointerInteracting || focused) {
             val labelOffsetPixels = (
                 thumbOffsetPixels +
@@ -395,7 +531,7 @@ internal fun PhotoTimelineDateScrubber(
                 shape = RoundedCornerShape(NextcloudRadii.Medium),
             ) {
                 Text(
-                    text = displayedSection.month.label,
+                    text = displayedMonth.label,
                     modifier = Modifier.padding(
                         horizontal = NextcloudSpacing.Medium,
                         vertical = NextcloudSpacing.Small,

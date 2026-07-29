@@ -155,6 +155,7 @@ fun NextcloudMediaViewer(
         mutableStateOf<NativeVideoPlaybackFailure?>(null)
     }
     var compatibilityPlaybackRequested by remember(selected.path) { mutableStateOf(false) }
+    var compatibilityPlaybackAttempt by remember(selected.path) { mutableIntStateOf(0) }
     var livePhotoSource by remember(
         session.serverUrl,
         session.loginName,
@@ -275,7 +276,14 @@ fun NextcloudMediaViewer(
         }
     }
 
-    LaunchedEffect(sourceLoadIdentity, selected.fileId, session, retryKey, sourcePlan.previewCandidates) {
+    LaunchedEffect(
+        sourceLoadIdentity,
+        selected.fileId,
+        session,
+        userId,
+        retryKey,
+        sourcePlan.previewCandidates,
+    ) {
         previewState = MediaPreviewState.Loading
         val loaded = loadFirstUsableMediaPreviewSource(
             candidates = sourcePlan.previewCandidates,
@@ -294,6 +302,7 @@ fun NextcloudMediaViewer(
                     loadNativeRender = {
                         services.loadNativeMediaPreview(
                             session = session,
+                            userId = userId,
                             file = candidate,
                             maximumDimension = MAXIMUM_PREVIEW_IMAGE_DIMENSION,
                         )
@@ -349,6 +358,7 @@ fun NextcloudMediaViewer(
 
     LaunchedEffect(
         sourceLoadIdentity,
+        userId,
         previewState is MediaPreviewState.Ready,
         sourcePlan.fullQualityCandidates,
     ) {
@@ -394,6 +404,7 @@ fun NextcloudMediaViewer(
                         if (failure is CancellationException) throw failure
                         val nativeBytes = services.loadNativeMediaPreview(
                             session = session,
+                            userId = userId,
                             file = candidate,
                             maximumDimension = MAXIMUM_DISPLAY_IMAGE_DIMENSION,
                         ) ?: throw failure
@@ -517,19 +528,23 @@ fun NextcloudMediaViewer(
         }
         val playbackRangeSource = remember(
             playbackCompatibilityRangePlan,
+            compatibilityPlaybackRequested,
+            compatibilityPlaybackAttempt,
             session,
             userId,
             services,
         ) {
-            playbackCompatibilityRangePlan?.let { plan ->
-                runCatching {
-                    plan.openRangeSource(
-                        services = services,
-                        session = session,
-                        userId = userId,
-                    )
-                }.getOrNull()
-            }
+            playbackCompatibilityRangePlan
+                ?.takeIf { compatibilityPlaybackRequested }
+                ?.let { plan ->
+                    runCatching {
+                        plan.openRangeSource(
+                            services = services,
+                            session = session,
+                            userId = userId,
+                        )
+                    }.getOrNull()
+                }
         }
         DisposableEffect(playbackRangeSource) {
             onDispose {
@@ -668,84 +683,81 @@ fun NextcloudMediaViewer(
                 }
             }
             nativeVideoFailure?.let { failure ->
-                Column(
+                val motionOnly =
+                    playbackSource is NativeVideoPlaybackSource.MemoriesLivePhoto
+                val actions = nativeVideoFailureActionPolicy(
+                    failure = failure,
+                    compatibilityAvailable = playbackCompatibilityRangePlan != null,
+                    motionOnly = motionOnly,
+                )
+                NativeVideoFailureOverlay(
+                    failure = failure,
+                    motionOnly = motionOnly,
+                    showCompatibilityAction = actions.showCompatibilityAction,
+                    showExternalAction = actions.showExternalAction,
+                    externalActionEnabled =
+                        !externalOpening && selected.hasAuthoritativeMediaDavAccess(userId),
+                    externalOpening = externalOpening,
+                    onCompatibilityPlayback = {
+                        compatibilityPlaybackAttempt += 1
+                        compatibilityPlaybackRequested = true
+                        if (playbackSource is NativeVideoPlaybackSource.MemoriesLivePhoto) {
+                            motionPlaying = true
+                        }
+                        nativeVideoFailure = null
+                    },
+                    onOpenExternal = ::openInMediaApp,
                     modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(horizontal = 32.dp)
-                        .background(
-                            color = ViewerBackground.copy(alpha = 0.94f),
-                            shape = MaterialTheme.shapes.large,
-                        )
-                        .padding(horizontal = 24.dp, vertical = 20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        text = failure.userTitle(),
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        text = failure.userDetail(),
-                        color = Color.White.copy(alpha = 0.78f),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    if (
-                        playbackRangeSource != null &&
-                        failure.canUseSoftwareFallback()
-                    ) {
-                        Button(
-                            onClick = {
-                                compatibilityPlaybackRequested = true
-                                if (playbackSource is NativeVideoPlaybackSource.MemoriesLivePhoto) {
-                                    motionPlaying = true
-                                }
-                                nativeVideoFailure = null
-                            },
-                        ) {
-                            Text("Try compatibility playback")
-                        }
-                    }
-                    if (playbackSource !is NativeVideoPlaybackSource.MemoriesLivePhoto) {
-                        TextButton(
-                            onClick = ::openInMediaApp,
-                            enabled = !externalOpening && selected.hasAuthoritativeMediaDavAccess(userId),
-                        ) {
-                            Text(if (externalOpening) "Preparing..." else "Open in another app")
-                        }
-                    }
-                }
+                        .align(if (motionOnly) Alignment.BottomCenter else Alignment.Center)
+                        .padding(
+                            start = if (motionOnly) 16.dp else 32.dp,
+                            end = if (motionOnly) 16.dp else 32.dp,
+                            bottom = if (motionOnly) 24.dp else 0.dp,
+                        ),
+                )
             }
             ViewerHeader(
                 filename = selected.name,
                 counter = buildString {
                     append("${selectedIndex + 1} of ${items.size}")
-                    append(
-                        when (fullQualityState) {
-                            FullQualityState.Idle -> " - Preview"
-                            FullQualityState.Loading -> " - Loading high-detail render..."
-                            is FullQualityState.Ready -> " - High-detail render"
-                            FullQualityState.Error -> " - Preview (high-detail render unavailable)"
-                        },
-                    )
                     val activeSource = fullQuality?.source ?: readyPreview?.source
-                    if (activeSource != null) {
-                        append(" - ")
-                        append(
-                            describeMediaDisplaySource(
-                                selected = sourcePlan.selected,
-                                displayed = activeSource,
-                                highDetail = fullQuality != null,
-                                payloadKind = when (fullQuality) {
-                                    is FullQualityState.Ready -> fullQualityMediaPayloadKind(
-                                        displayed = fullQuality.source,
-                                        payloadSource = fullQuality.payloadSource,
+                    val qualityState = fullQualityState
+                    when (qualityState) {
+                        FullQualityState.Idle -> {
+                            append(" - ")
+                            append(
+                                activeSource?.let {
+                                    conciseMediaDisplaySourceLabel(
+                                        selected = sourcePlan.selected,
+                                        displayed = it,
+                                        highDetail = false,
+                                        payloadKind =
+                                            readyPreview?.payloadKind
+                                                ?: MediaDisplayPayloadKind.ServerPreview,
                                     )
-                                    else ->
-                                        readyPreview?.payloadKind ?: MediaDisplayPayloadKind.ServerPreview
-                                },
-                            ),
-                        )
+                                } ?: "Preview",
+                            )
+                        }
+                        FullQualityState.Loading ->
+                            append(" - Loading high-detail render...")
+                        is FullQualityState.Ready -> {
+                            append(" - ")
+                            append(
+                                activeSource?.let {
+                                    conciseMediaDisplaySourceLabel(
+                                        selected = sourcePlan.selected,
+                                        displayed = it,
+                                        highDetail = true,
+                                        payloadKind = fullQualityMediaPayloadKind(
+                                            displayed = qualityState.source,
+                                            payloadSource = qualityState.payloadSource,
+                                        ),
+                                    )
+                                } ?: "High detail",
+                            )
+                        }
+                        FullQualityState.Error ->
+                            append(" - Preview; high detail unavailable")
                     }
                 },
                 sourceChoices = sourcePlan.choices,
@@ -1162,6 +1174,89 @@ private fun ViewerNavigationButton(
             contentDescription = if (previous) "Previous media" else "Next media",
             modifier = Modifier.size(34.dp),
         )
+    }
+}
+
+@Composable
+internal fun NativeVideoFailureOverlay(
+    failure: NativeVideoPlaybackFailure,
+    motionOnly: Boolean,
+    showCompatibilityAction: Boolean,
+    showExternalAction: Boolean,
+    externalActionEnabled: Boolean,
+    externalOpening: Boolean,
+    onCompatibilityPlayback: () -> Unit,
+    onOpenExternal: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .background(
+                color = ViewerBackground.copy(alpha = 0.94f),
+                shape = MaterialTheme.shapes.large,
+            )
+            .padding(
+                horizontal = if (motionOnly) 16.dp else 24.dp,
+                vertical = if (motionOnly) 12.dp else 20.dp,
+            ),
+        horizontalAlignment = if (motionOnly) Alignment.Start else Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(if (motionOnly) 4.dp else 8.dp),
+    ) {
+        Text(
+            text = if (motionOnly) "Live motion unavailable" else failure.userTitle(),
+            color = Color.White,
+            style = if (motionOnly) {
+                MaterialTheme.typography.titleSmall
+            } else {
+                MaterialTheme.typography.titleMedium
+            },
+        )
+        Text(
+            text = if (motionOnly) {
+                "The motion video could not play. The still photo remains available."
+            } else {
+                failure.userDetail()
+            },
+            color = Color.White.copy(alpha = 0.78f),
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = if (motionOnly) 2 else Int.MAX_VALUE,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (motionOnly && (showCompatibilityAction || showExternalAction)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (showCompatibilityAction) {
+                    TextButton(onClick = onCompatibilityPlayback) {
+                        Text("Try compatibility mode")
+                    }
+                }
+                if (showExternalAction) {
+                    TextButton(
+                        onClick = onOpenExternal,
+                        enabled = externalActionEnabled,
+                    ) {
+                        Text(if (externalOpening) "Preparing..." else "Open motion externally")
+                    }
+                }
+            }
+        } else {
+            if (showCompatibilityAction) {
+                Button(onClick = onCompatibilityPlayback) {
+                    Text("Try compatibility playback")
+                }
+            }
+            if (showExternalAction) {
+                TextButton(
+                    onClick = onOpenExternal,
+                    enabled = externalActionEnabled,
+                ) {
+                    Text(if (externalOpening) "Preparing..." else "Open in another app")
+                }
+            }
+        }
     }
 }
 

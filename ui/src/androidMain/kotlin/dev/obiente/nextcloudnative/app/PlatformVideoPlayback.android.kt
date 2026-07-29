@@ -1,13 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import android.util.Base64
-import android.os.Handler
-import android.os.HandlerThread
-import android.os.ParcelFileDescriptor
-import android.os.ProxyFileDescriptorCallback
-import android.os.storage.StorageManager
-import android.system.ErrnoException
-import android.system.OsConstants
+import android.content.Intent
 import androidx.annotation.OptIn
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
@@ -17,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,16 +36,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import okhttp3.OkHttpClient
-import org.videolan.libvlc.LibVLC
-import org.videolan.libvlc.Media
-import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.util.VLCVideoLayout
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import java.util.concurrent.atomic.AtomicBoolean
 
 internal actual val platformNativeVideoPlaybackAvailable: Boolean = true
 
@@ -68,6 +54,7 @@ internal actual fun PlatformNativeVideoPlayer(
 ) {
     if (compatibilityPlaybackRequested && rangeSource != null) {
         LibVlcVideoPlayer(
+            source = source,
             rangeSource = rangeSource,
             onPlaybackEnded = onPlaybackEnded,
             onFailure = onFailure,
@@ -193,55 +180,60 @@ private fun Media3VideoPlayer(
 
 @Composable
 private fun LibVlcVideoPlayer(
+    source: NativeVideoPlaybackSource,
     rangeSource: NativeVideoRangeSource,
     onPlaybackEnded: () -> Unit,
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
     modifier: Modifier,
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = androidx.compose.ui.platform.LocalContext.current.applicationContext
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnPlaybackEnded = rememberUpdatedState(onPlaybackEnded)
     val currentOnFailure = rememberUpdatedState(onFailure)
-    var playback by remember(rangeSource) {
-        mutableStateOf<LibVlcRangePlaybackResources?>(null)
+    val request = remember(source, rangeSource) {
+        AndroidCompatibilityVideoPlaybackBridge.createRequest(source, rangeSource)
     }
-    var initializationFailed by remember(rangeSource) { mutableStateOf(false) }
-    var playing by remember(rangeSource) { mutableStateOf(false) }
-    LaunchedEffect(rangeSource) {
-        val result = withContext(NonCancellable + Dispatchers.IO) {
-            runCatching {
-                LibVlcRangePlaybackResources.create(
-                    context = context.applicationContext,
-                    rangeSource = rangeSource,
-                    onPlayingChanged = { playing = it },
-                    onPlaybackEnded = {
-                        playing = false
-                        currentOnPlaybackEnded.value()
-                    },
-                    onFailure = {
-                        playing = false
-                        currentOnFailure.value(NativeVideoPlaybackFailure.Unknown)
-                    },
+    val state by AndroidCompatibilityVideoPlaybackBridge.state.collectAsState()
+    val surfaceController by AndroidCompatibilityVideoPlaybackBridge.surfaceController.collectAsState()
+    val currentState = state.takeIf { it.requestId == request.requestId }
+    val currentSurfaceController = surfaceController
+        ?.takeIf { it.requestId == request.requestId }
+
+    LaunchedEffect(request) {
+        AndroidCompatibilityVideoPlaybackBridge.submit(request)
+        context.startService(
+            Intent(context, AndroidCompatibilityVideoPlaybackService::class.java)
+                .setAction(AndroidCompatibilityVideoPlaybackService.ACTION_OPEN)
+                .putExtra(
+                    AndroidCompatibilityVideoPlaybackService.EXTRA_REQUEST_ID,
+                    request.requestId,
+                ),
+        )
+    }
+    LaunchedEffect(currentState?.status, currentState?.failure) {
+        when (currentState?.status) {
+            AndroidCompatibilityVideoPlaybackStatus.Ended ->
+                currentOnPlaybackEnded.value()
+            AndroidCompatibilityVideoPlaybackStatus.Error ->
+                currentOnFailure.value(
+                    currentState.failure ?: NativeVideoPlaybackFailure.Unknown,
                 )
-            }
-        }
-        if (isActive) {
-            playback = result.getOrNull()
-            initializationFailed = result.isFailure
-        } else {
-            result.getOrNull()?.closeAsync()
+            AndroidCompatibilityVideoPlaybackStatus.Loading,
+            AndroidCompatibilityVideoPlaybackStatus.Playing,
+            AndroidCompatibilityVideoPlaybackStatus.Paused,
+            null,
+            -> Unit
         }
     }
-    val currentPlayback = playback
-    DisposableEffect(currentPlayback) {
+    DisposableEffect(request) {
         onDispose {
-            currentPlayback?.closeAsync()
+            AndroidCompatibilityVideoPlaybackBridge.close(request.requestId)
         }
     }
-    DisposableEffect(currentPlayback, lifecycleOwner) {
+    DisposableEffect(request, lifecycleOwner) {
         val lifecycleObserver = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
-                currentPlayback?.pause()
+                AndroidCompatibilityVideoPlaybackBridge.pause(request.requestId)
             }
         }
         lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
@@ -249,17 +241,10 @@ private fun LibVlcVideoPlayer(
             lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
         }
     }
-    if (currentPlayback == null) {
-        if (initializationFailed) {
-            LaunchedEffect(rangeSource) {
-                currentOnFailure.value(
-                    NativeVideoPlaybackFailure.DecoderInitializationFailed(format = null),
-                )
-            }
-        } else {
-            Box(modifier) {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-            }
+
+    if (currentSurfaceController == null) {
+        Box(modifier) {
+            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
         }
         return
     }
@@ -267,204 +252,36 @@ private fun LibVlcVideoPlayer(
         AndroidView(
             factory = { viewContext ->
                 VLCVideoLayout(viewContext).also { layout ->
-                    currentPlayback.attach(layout)
-                    currentPlayback.play()
+                    currentSurfaceController.attach(layout)
                 }
             },
             update = { layout ->
-                currentPlayback.attach(layout)
-                layout.keepScreenOn = playing
+                currentSurfaceController.attach(layout)
+                layout.keepScreenOn =
+                    currentState?.status == AndroidCompatibilityVideoPlaybackStatus.Playing
             },
-            onRelease = { layout -> currentPlayback.detach(layout) },
+            onRelease = { layout -> currentSurfaceController.detach(layout) },
             modifier = Modifier.matchParentSize(),
         )
         Button(
             onClick = {
-                if (playing) {
-                    currentPlayback.pause()
+                if (currentState?.status == AndroidCompatibilityVideoPlaybackStatus.Playing) {
+                    AndroidCompatibilityVideoPlaybackBridge.pause(request.requestId)
                 } else {
-                    currentPlayback.play()
+                    AndroidCompatibilityVideoPlaybackBridge.play(request.requestId)
                 }
             },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 88.dp),
         ) {
-            Text(if (playing) "Pause" else "Play")
-        }
-    }
-}
-
-private class LibVlcRangePlaybackResources private constructor(
-    private val callbackThread: HandlerThread,
-    private val fileDescriptor: ParcelFileDescriptor,
-    private val libVlc: LibVLC,
-    private val media: Media,
-    private val player: MediaPlayer,
-    private val rangeSource: NativeVideoRangeSource,
-    private val closed: AtomicBoolean,
-) {
-    private var attachedLayout: VLCVideoLayout? = null
-
-    fun attach(layout: VLCVideoLayout) {
-        if (closed.get() || attachedLayout === layout) return
-        if (attachedLayout != null) {
-            player.detachViews()
-        }
-        player.attachViews(layout, null, true, false)
-        attachedLayout = layout
-    }
-
-    fun detach(layout: VLCVideoLayout) {
-        if (attachedLayout !== layout) return
-        player.detachViews()
-        attachedLayout = null
-    }
-
-    fun play() {
-        if (!closed.get()) player.play()
-    }
-
-    fun pause() {
-        if (!closed.get() && player.isPlaying) player.pause()
-    }
-
-    fun closeAsync() {
-        if (!closed.compareAndSet(false, true)) return
-        rangeSource.close()
-        attachedLayout?.let {
-            player.detachViews()
-            attachedLayout = null
-        }
-        Thread(
-            {
-                releaseResources(
-                    callbackThread = callbackThread,
-                    fileDescriptor = fileDescriptor,
-                    libVlc = libVlc,
-                    media = media,
-                    player = player,
-                    rangeSource = rangeSource,
-                )
-            },
-            "nc-native-video-release",
-        ).apply {
-            isDaemon = true
-            start()
-        }
-    }
-
-    companion object {
-        fun create(
-            context: android.content.Context,
-            rangeSource: NativeVideoRangeSource,
-            onPlayingChanged: (Boolean) -> Unit,
-            onPlaybackEnded: () -> Unit,
-            onFailure: () -> Unit,
-        ): LibVlcRangePlaybackResources {
-            val closed = AtomicBoolean(false)
-            val callbackThread = HandlerThread("nc-native-video-range").apply { start() }
-            var fileDescriptor: ParcelFileDescriptor? = null
-            var libVlc: LibVLC? = null
-            var media: Media? = null
-            var player: MediaPlayer? = null
-            try {
-                val rangeCache = NativeVideoRangeCache(rangeSource)
-                fileDescriptor = context.getSystemService(StorageManager::class.java)
-                    .openProxyFileDescriptor(
-                        ParcelFileDescriptor.MODE_READ_ONLY,
-                        object : ProxyFileDescriptorCallback() {
-                            override fun onGetSize(): Long = rangeSource.size
-
-                            override fun onRead(
-                                offset: Long,
-                                size: Int,
-                                data: ByteArray,
-                            ): Int {
-                                if (closed.get()) {
-                                    throw ErrnoException("read", OsConstants.EBADF)
-                                }
-                                if (offset < 0L || size < 0) {
-                                    throw ErrnoException("read", OsConstants.EINVAL)
-                                }
-                                if (offset >= rangeSource.size || size == 0) return 0
-                                val requested = minOf(
-                                    size.toLong(),
-                                    rangeSource.size - offset,
-                                ).toInt()
-                                val bytes = try {
-                                    runBlocking { rangeCache.read(offset, requested) }
-                                } catch (failure: Exception) {
-                                    throw ErrnoException("read", OsConstants.EIO, failure)
-                                }
-                                if (bytes.size != requested) {
-                                    throw ErrnoException("read", OsConstants.EIO)
-                                }
-                                bytes.copyInto(data, endIndex = requested)
-                                return requested
-                            }
-
-                            override fun onRelease() {
-                                rangeSource.close()
-                            }
-                        },
-                        Handler(callbackThread.looper),
-                    )
-                libVlc = LibVLC(context, arrayListOf())
-                media = Media(libVlc, fileDescriptor.fileDescriptor).apply {
-                    setHWDecoderEnabled(false, false)
-                }
-                player = MediaPlayer(media).apply {
-                    setEventListener { event ->
-                        when (event.type) {
-                            MediaPlayer.Event.Playing -> onPlayingChanged(true)
-                            MediaPlayer.Event.Paused,
-                            MediaPlayer.Event.Stopped,
-                            -> onPlayingChanged(false)
-                            MediaPlayer.Event.EndReached -> onPlaybackEnded()
-                            MediaPlayer.Event.EncounteredError -> onFailure()
-                        }
-                    }
-                }
-                return LibVlcRangePlaybackResources(
-                    callbackThread = callbackThread,
-                    fileDescriptor = fileDescriptor,
-                    libVlc = libVlc,
-                    media = media,
-                    player = player,
-                    rangeSource = rangeSource,
-                    closed = closed,
-                )
-            } catch (failure: Exception) {
-                closed.set(true)
-                rangeSource.close()
-                releaseResources(
-                    callbackThread = callbackThread,
-                    fileDescriptor = fileDescriptor,
-                    libVlc = libVlc,
-                    media = media,
-                    player = player,
-                    rangeSource = rangeSource,
-                )
-                throw failure
-            }
-        }
-
-        private fun releaseResources(
-            callbackThread: HandlerThread,
-            fileDescriptor: ParcelFileDescriptor?,
-            libVlc: LibVLC?,
-            media: Media?,
-            player: MediaPlayer?,
-            rangeSource: NativeVideoRangeSource,
-        ) {
-            rangeSource.close()
-            runCatching { player?.stop() }
-            runCatching { player?.release() }
-            runCatching { media?.release() }
-            runCatching { libVlc?.release() }
-            runCatching { fileDescriptor?.close() }
-            callbackThread.quitSafely()
+            Text(
+                if (currentState?.status == AndroidCompatibilityVideoPlaybackStatus.Playing) {
+                    "Pause"
+                } else {
+                    "Play"
+                },
+            )
         }
     }
 }

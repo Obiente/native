@@ -1806,7 +1806,7 @@ class PhotoTimelinePagingTest {
         }
 
     @Test
-    fun davTimelineKeepsMimeCursorPageWhenOptionalRawSearchReturnsServerError() =
+    fun davTimelineKeepsOrdinaryMediaAndTheRawCursorAfterLaterServerError() =
         kotlinx.coroutines.runBlocking {
             val initialImages = (1L..PHOTO_TIMELINE_PARTITION_PAGE_SIZE.toLong()).map { id ->
                 file(
@@ -1862,10 +1862,92 @@ class PhotoTimelinePagingTest {
 
             val first = load(null)
             cursorPage = true
-            val second = load(requireNotNull(first.nextCursor))
+            val retryCursor = requireNotNull(first.nextCursor)
+            val partial = load(retryCursor)
 
-            assertEquals(listOf(ordinaryOlder), second.files)
-            assertFalse(second.optionalRawRemovalAuthoritative)
+            assertEquals(listOf(ordinaryOlder), partial.files)
+            assertTrue(partial.optionalRawSearchRetryPending)
+            assertFalse(partial.optionalRawRemovalAuthoritative)
+            assertTrue(retryCursor.value.contains("|r:"))
+            assertTrue(requireNotNull(partial.nextCursor).value.contains("|r:"))
+        }
+
+    @Test
+    fun davTimelineKeepsLaterRawCursorRetryableAfterTransientFailure() =
+        kotlinx.coroutines.runBlocking {
+            val firstRawPattern = rawPhotoFileNameSearchPatterns().first()
+            val initialRaw = (1L..PHOTO_TIMELINE_PARTITION_PAGE_SIZE.toLong()).map { id ->
+                file(
+                    id = 10_000L + id,
+                    path = "Photos/raw-$id.raf",
+                    lastModified = (20_000L - id).toString(),
+                ).copy(mimeType = "application/octet-stream")
+            }
+            val recoveredRaw = file(
+                id = 20_001L,
+                path = "Photos/recovered-after-retry.raf",
+                lastModified = "10000",
+            ).copy(mimeType = "application/octet-stream")
+            var cursorPage = false
+            var failRawContinuation = false
+
+            suspend fun load(cursor: PhotoTimelineCursor?): MediaTimelineDavPage =
+                collectMediaTimelineDavPage(
+                    userId = "account",
+                    cursor = cursor,
+                    execute = { body ->
+                        when {
+                            "<d:literal>image/%</d:literal>" in body ->
+                                MediaSearchDavTransportResponse(207, "image".encodeToByteArray())
+                            "<d:literal>video/%</d:literal>" in body ->
+                                MediaSearchDavTransportResponse(207, "video".encodeToByteArray())
+                            "<d:literal>$firstRawPattern</d:literal>" in body &&
+                                cursorPage &&
+                                failRawContinuation ->
+                                error("Synthetic transient RAW continuation failure.")
+                            "<d:literal>$firstRawPattern</d:literal>" in body ->
+                                MediaSearchDavTransportResponse(
+                                    207,
+                                    (if (cursorPage) "raw-recovered" else "raw-initial")
+                                        .encodeToByteArray(),
+                                )
+                            else ->
+                                MediaSearchDavTransportResponse(207, "raw-empty".encodeToByteArray())
+                        }
+                    },
+                    parse = { body ->
+                        when (body.decodeToString()) {
+                            "image" -> listOf(
+                                file(
+                                    id = 1L,
+                                    path = "Photos/detected.raf",
+                                    lastModified = "30000",
+                                ).copy(mimeType = "image/x-fuji-raf"),
+                            )
+                            "video", "raw-empty" -> emptyList()
+                            "raw-initial" -> initialRaw
+                            "raw-recovered" -> listOf(recoveredRaw)
+                            else -> error("Unexpected timeline response.")
+                        }
+                    },
+                    shouldSearchRaw = { true },
+                )
+
+            val first = load(null)
+            val retryCursor = requireNotNull(first.nextCursor)
+            cursorPage = true
+            failRawContinuation = true
+
+            val partial = load(retryCursor)
+            assertTrue(partial.optionalRawSearchRetryPending)
+            assertTrue(requireNotNull(partial.nextCursor).value.contains("|r:"))
+
+            failRawContinuation = false
+            val recovered = load(requireNotNull(partial.nextCursor))
+
+            assertEquals(listOf(recoveredRaw), recovered.files)
+            assertNull(recovered.nextCursor)
+            assertFalse(recovered.optionalRawSearchRetryPending)
         }
 
     @Test

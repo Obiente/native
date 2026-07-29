@@ -126,6 +126,29 @@ fun describeMediaDisplaySource(
     }
 }
 
+internal fun conciseMediaDisplaySourceLabel(
+    selected: MediaSourceChoice,
+    displayed: MediaSourceChoice,
+    highDetail: Boolean,
+    payloadKind: MediaDisplayPayloadKind = MediaDisplayPayloadKind.ServerPreview,
+): String {
+    val source = when {
+        payloadKind == MediaDisplayPayloadKind.MemoriesRawRender ->
+            if (highDetail) "Generated RAW high detail" else "Generated RAW"
+        payloadKind == MediaDisplayPayloadKind.NativeGeneratedPreview ->
+            if (highDetail) "Native high detail" else "Native preview"
+        payloadKind == MediaDisplayPayloadKind.EmbeddedCameraPreview -> "Embedded RAW preview"
+        else -> when (displayed.format) {
+            MediaAssetFormat.Raw -> if (highDetail) "RAW high detail" else "RAW preview"
+            MediaAssetFormat.Jpeg -> if (highDetail) "JPEG high detail" else "JPEG preview"
+            MediaAssetFormat.Image -> if (highDetail) "High detail" else "Image preview"
+            MediaAssetFormat.Video -> "Video preview"
+            MediaAssetFormat.Other -> "File preview"
+        }
+    }
+    return if (displayed.file.path == selected.file.path) source else "$source fallback"
+}
+
 fun stackMediaFiles(files: List<NextcloudFile>): List<MediaStack> {
     return files.withIndex()
         .groupBy { indexed -> indexed.value.mediaDirectoryKey() }
@@ -213,6 +236,7 @@ fun planMediaSources(files: List<NextcloudFile>, selected: NextcloudFile): Media
     val previewCandidates = ordered.filter {
         (it.file.fileId != null && it.file.hasPreview) ||
             (it.file.isRawPhoto() && it.file.canUseMemoriesDecodableRender()) ||
+            it.file.canUseNativeTiffPreview() ||
             it.file.canUseEmbeddedRafPreview()
     }
     val fullQualityCandidates = ordered.filter {
@@ -307,10 +331,27 @@ fun NextcloudFile.canOpenInMediaViewer(): Boolean =
     !isDirectory && (
         (
             fileId != null &&
-                (hasPreview || (isRawPhoto() && canUseMemoriesDecodableRender()))
+                (
+                    hasPreview ||
+                        (isRawPhoto() && canUseMemoriesDecodableRender()) ||
+                        canUseNativeTiffPreview()
+                )
         ) ||
             canUseEmbeddedRafPreview()
     )
+
+internal fun NextcloudFile.canUseNativeTiffPreview(): Boolean {
+    if (isDirectory || fileId?.let { it > 0L } != true) return false
+    val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase()
+    val mime = mimeType?.substringBefore(';')?.trim()?.lowercase().orEmpty()
+    if (extension !in nativeTiffExtensions && mime !in nativeTiffMimeTypes) return false
+    return memoriesRenderAllowed ||
+        (
+            originalAccessAllowed &&
+                davPathAuthoritative &&
+                runCatching { requireSafeFilePath(path, allowRoot = false) }.isSuccess
+        )
+}
 
 internal fun NextcloudFile.canUseMemoriesDecodableRender(): Boolean =
     !isDirectory &&
@@ -471,4 +512,6 @@ private val rawPhotoMimeTypes = setOf(
 )
 private val jpegExtensions = setOf("jpg", "jpeg", "jpe")
 private val renderedImageExtensions = setOf("avif", "bmp", "gif", "heic", "heif", "png", "tif", "tiff", "webp")
+private val nativeTiffExtensions = setOf("tif", "tiff")
+private val nativeTiffMimeTypes = setOf("image/tif", "image/tiff")
 private val videoExtensions = setOf("3gp", "avi", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "webm")

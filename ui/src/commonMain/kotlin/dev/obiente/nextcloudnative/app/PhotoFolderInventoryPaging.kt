@@ -35,7 +35,16 @@ data class PhotoFolderInventoryPage(
     val records: List<NextcloudFile>,
     val nextCursor: PhotoFolderInventoryCursor?,
     val rawObserved: Boolean = false,
-)
+    val rawStackFileIdsByRecordPath: Map<String, List<Long>> = emptyMap(),
+    val rawStackRelationshipsAuthoritative: Boolean = false,
+) {
+    init {
+        validatePhotoFolderRawStackRelationships(
+            records = records,
+            relationships = rawStackFileIdsByRecordPath,
+        )
+    }
+}
 
 enum class PhotoFolderInventorySafetyStopReason {
     RepeatedCursor,
@@ -57,10 +66,13 @@ data class PhotoFolderInventoryPagingState(
     val safetyStopReason: PhotoFolderInventorySafetyStopReason?,
     val error: String?,
     val publishedPageCount: Int,
+    val contentGeneration: Long,
 ) {
     init {
         require(publishedPageCount >= 0) { "The published photo folder page count is invalid." }
-        require(!(complete && loading)) { "A complete photo folder inventory cannot still load." }
+        require(contentGeneration >= 0L) {
+            "The photo folder inventory content generation is invalid."
+        }
         require(!(complete && truncationReason != null)) {
             "A truncated photo folder inventory cannot be complete."
         }
@@ -91,14 +103,10 @@ fun PhotoFolderInventoryPagingState.incompleteInventoryMessage(): String? = when
 class PhotoFolderInventoryPager(
     val owner: PhotoFolderInventoryPagingOwner,
     private val maximumMediaRecords: Int = MAX_PHOTO_FOLDER_INVENTORY_PAGING_RECORDS,
-    maximumFolders: Int = MAX_PHOTO_FOLDER_SUMMARY_FOLDERS,
-    maximumSelectedMediaRecords: Int = MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS,
+    private val maximumFolders: Int = MAX_PHOTO_FOLDER_SUMMARY_FOLDERS,
+    private val maximumSelectedMediaRecords: Int = MAX_PHOTO_FOLDER_SELECTED_MEDIA_RECORDS,
 ) {
-    private val repository = PhotoFolderInventoryRepository(
-        maximumMediaRecords = maximumMediaRecords,
-        maximumFolders = maximumFolders,
-        maximumSelectionRecords = maximumSelectedMediaRecords,
-    )
+    private var repository = newRepository()
 
     var state = PhotoFolderInventoryPagingState(
         owner = owner,
@@ -111,6 +119,7 @@ class PhotoFolderInventoryPager(
         safetyStopReason = null,
         error = null,
         publishedPageCount = 0,
+        contentGeneration = 0L,
     )
         private set
 
@@ -143,7 +152,14 @@ class PhotoFolderInventoryPager(
                 return state
             }
 
-            when (val acceptance = repository.tryAddPage(page.records)) {
+            when (
+                val acceptance = repository.tryAddPage(
+                    records = page.records,
+                    rawStackFileIdsByRecordPath = page.rawStackFileIdsByRecordPath,
+                    rawStackRelationshipsAuthoritative =
+                        page.rawStackRelationshipsAuthoritative,
+                )
+            ) {
                 is PhotoFolderPageAcceptance.Truncated -> {
                     state = state.copy(
                         loading = false,
@@ -160,6 +176,7 @@ class PhotoFolderInventoryPager(
                             state.rawPreviouslyObserved || page.rawObserved,
                         resumeCursor = page.nextCursor,
                         publishedPageCount = state.publishedPageCount + 1,
+                        contentGeneration = Math.addExact(state.contentGeneration, 1L),
                         error = null,
                     )
                     onPublish(state)
@@ -205,9 +222,66 @@ class PhotoFolderInventoryPager(
         }
     }
 
+    /**
+     * Rebuilds a completed inventory without clearing its current publication.
+     *
+     * A refresh is accumulated in an isolated repository. The cached publication remains the
+     * screen's paint until the replacement reaches a complete terminal page, then the new
+     * generation is promoted atomically. Failed, cancelled, truncated, or safety-stopped refreshes
+     * retain the last complete publication.
+     */
+    suspend fun revalidate(
+        onPublish: (PhotoFolderInventoryPagingState) -> Unit = {},
+        loadPage: suspend (
+            cursor: PhotoFolderInventoryCursor?,
+            rawPreviouslyObserved: Boolean,
+        ) -> PhotoFolderInventoryPage,
+    ): PhotoFolderInventoryPagingState {
+        if (!state.complete) return load(onPublish, loadPage)
+        check(!state.loading) { "The photo folder inventory is already loading." }
+
+        val cachedState = state
+        state = cachedState.copy(loading = true, error = null)
+        onPublish(state)
+        val replacement = PhotoFolderInventoryPager(
+            owner = owner,
+            maximumMediaRecords = maximumMediaRecords,
+            maximumFolders = maximumFolders,
+            maximumSelectedMediaRecords = maximumSelectedMediaRecords,
+        )
+        val refreshed = try {
+            replacement.load(loadPage = loadPage)
+        } catch (cancellation: CancellationException) {
+            state = cachedState.copy(loading = false)
+            throw cancellation
+        }
+
+        if (refreshed.complete) {
+            repository = replacement.repository
+            state = refreshed.copy(
+                contentGeneration = Math.addExact(cachedState.contentGeneration, 1L),
+            )
+        } else {
+            state = cachedState.copy(
+                loading = false,
+                error = refreshed.error
+                    ?: refreshed.incompleteInventoryMessage()
+                    ?: "The photo folder inventory refresh did not complete.",
+            )
+        }
+        onPublish(state)
+        return state
+    }
+
     fun browse(browseState: PhotoFolderBrowseState): PhotoFolderBrowseResult =
         repository.browse(browseState)
 
     fun selectionSnapshot(browseState: PhotoFolderBrowseState): PhotoFolderPagedInventory =
         repository.selectionSnapshot(browseState)
+
+    private fun newRepository(): PhotoFolderInventoryRepository = PhotoFolderInventoryRepository(
+        maximumMediaRecords = maximumMediaRecords,
+        maximumFolders = maximumFolders,
+        maximumSelectionRecords = maximumSelectedMediaRecords,
+    )
 }

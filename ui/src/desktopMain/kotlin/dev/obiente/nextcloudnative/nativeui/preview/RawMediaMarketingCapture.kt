@@ -30,9 +30,15 @@ internal class RawMediaMarketingCapture private constructor(
     private val renderedPreview: ByteArray,
 ) {
     private val requests = mutableListOf<NextcloudApiRequest>()
+    private val nativePreviewBounds = mutableListOf<Int>()
     private val observations = mutableListOf<MediaViewerStateObservation>()
     private val rejectedCalls = mutableListOf<String>()
     private val services: NextcloudPlatformServices = networkInertServices()
+    private val session = NextcloudSession(
+        serverUrl = "https://fixture.invalid",
+        loginName = "$FIXTURE_USER_ID-${mode.name.lowercase()}",
+        appPassword = "synthetic-capture-password",
+    )
 
     init {
         Image.makeFromEncoded(renderedPreview).use { image ->
@@ -50,7 +56,7 @@ internal class RawMediaMarketingCapture private constructor(
                 NextcloudMediaViewer(
                     media = listOf(rawFile),
                     selected = rawFile,
-                    session = fixtureSession,
+                    session = session,
                     userId = FIXTURE_USER_ID,
                     services = services,
                     taggingAvailable = false,
@@ -77,6 +83,11 @@ internal class RawMediaMarketingCapture private constructor(
             "The RAW capture attempted unsupported service calls: ${rejectedCalls.joinToString()}."
         }
         check(requests.isNotEmpty()) { "The RAW capture did not request the Memories render route." }
+        if (mode == RawCaptureMode.Error) {
+            check(nativePreviewBounds.isNotEmpty()) {
+                "The failed Memories render did not exercise the native-preview fallback."
+            }
+        }
         requests.forEach(::requireExactMemoriesRenderRequest)
 
         val final = observations.lastOrNull()
@@ -95,23 +106,30 @@ internal class RawMediaMarketingCapture private constructor(
                 check(requests.size == 1)
             }
             RawCaptureMode.Ready -> {
-                requireRenderedRawObservation(final, MediaViewerReadiness.RenderReady)
-                check(requests.size == 1)
+                requireRenderedRawObservation(final, MediaViewerReadiness.HighDetailReady)
+                requirePreviewAndHighDetailRequests()
             }
             RawCaptureMode.HighDetail -> {
                 requireRenderedRawObservation(final, MediaViewerReadiness.HighDetailReady)
                 check(final.requestedZoom == HIGH_DETAIL_CAPTURE_ZOOM)
-                check(requests.size == 2)
-                check(
-                    requests.map(NextcloudApiRequest::maximumResponseBytes).toSet() ==
-                        setOf(
-                            MAX_RAW_DISPLAY_PREVIEW_BYTES.toLong(),
-                            MAX_PHOTO_EDIT_SOURCE_BYTES,
-                        ),
-                ) {
-                    "The zoomed capture must request one preview render and one bounded high-detail render."
-                }
+                requirePreviewAndHighDetailRequests()
             }
+        }
+    }
+
+    private fun requirePreviewAndHighDetailRequests() {
+        check(requests.size == 2) {
+            "Expected two RAW render requests, got ${requests.size}: " +
+                requests.joinToString { it.maximumResponseBytes.toString() }
+        }
+        check(
+            requests.map(NextcloudApiRequest::maximumResponseBytes).toSet() ==
+                setOf(
+                    MAX_RAW_DISPLAY_PREVIEW_BYTES.toLong(),
+                    MAX_PHOTO_EDIT_SOURCE_BYTES,
+                ),
+        ) {
+            "The rendered RAW capture must request one preview and one bounded high-detail render."
         }
     }
 
@@ -119,7 +137,10 @@ internal class RawMediaMarketingCapture private constructor(
         observation: MediaViewerStateObservation,
         readiness: MediaViewerReadiness,
     ) {
-        check(observation.readiness == readiness)
+        check(observation.readiness == readiness) {
+            "Expected RAW readiness $readiness, got ${observation.readiness} " +
+                "with payload ${observation.payloadKind}."
+        }
         check(observation.displayedPath == RAW_PATH) {
             "The rendered path must remain the selected standalone RAW file."
         }
@@ -136,6 +157,19 @@ internal class RawMediaMarketingCapture private constructor(
                 "equals" -> proxy === arguments?.singleOrNull()
                 "getExternalFileHandoffSupport" ->
                     ExternalFileHandoffSupport.Unsupported("Disabled in isolated captures.")
+                "loadNativeMediaPreview" -> {
+                    val callArguments = arguments
+                        ?: error("The RAW capture did not receive native-preview arguments.")
+                    val file = callArguments.filterIsInstance<NextcloudFile>().singleOrNull()
+                        ?: error("The RAW capture did not receive one media file.")
+                    check(file == rawFile) {
+                        "The RAW capture requested a native preview for an unexpected file."
+                    }
+                    val maximumDimension = callArguments.filterIsInstance<Int>().singleOrNull()
+                        ?: error("The RAW capture did not receive one native-preview bound.")
+                    nativePreviewBounds += maximumDimension
+                    null
+                }
                 "executeNextcloudApi" -> executeExactMemoriesRequest(arguments)
                 else -> rejectServiceCall(method)
             }
@@ -226,12 +260,6 @@ private const val RAW_FIXTURE_RESOURCE = "/marketing/raw-render-fixture.png"
 internal const val MEMORIES_RAW_RENDER_PATH =
     "/index.php/apps/memories/api/image/decodable/$FIXTURE_FILE_ID"
 private const val HIGH_DETAIL_CAPTURE_ZOOM = 2.5f
-
-private val fixtureSession = NextcloudSession(
-    serverUrl = "https://fixture.invalid",
-    loginName = FIXTURE_USER_ID,
-    appPassword = "synthetic-capture-password",
-)
 
 private val rawFile = NextcloudFile(
     path = RAW_PATH,
