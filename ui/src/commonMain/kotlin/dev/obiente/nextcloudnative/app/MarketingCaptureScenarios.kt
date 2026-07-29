@@ -26,15 +26,30 @@ import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
+import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
+import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
+import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
+import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
+import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
+import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
+import dev.obiente.nextcloudnative.nativeui.model.DynamicForm
+import dev.obiente.nextcloudnative.nativeui.model.DynamicHttpBinding
+import dev.obiente.nextcloudnative.nativeui.model.EndpointPolicy
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
+import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
+import dev.obiente.nextcloudnative.nativeui.runtime.GenericNativeAppScreen
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeScreenState
+import dev.obiente.nextcloudnative.nativeui.runtime.preferredNativeMailComposeAction
 
 enum class MarketingCapturePurpose(val manifestValue: String) {
     Showcase("showcase"),
@@ -383,6 +398,31 @@ enum class MarketingCaptureScenario(
         width = 1_080,
         height = 1_800,
         density = 2.625f,
+    ),
+    MailWorkspaceDesktop(
+        "mail-workspace-desktop", "mail-workspace-desktop.png", NextcloudPresentation.Desktop,
+        "Mail", "Adaptive mailbox workspace", "Inbox message selected", MarketingCapturePurpose.Showcase,
+        "desktop", "wide", issue = 54, width = 1_440, height = 900, density = 1f,
+    ),
+    MailWorkspaceMobile(
+        "mail-workspace-mobile", "mail-workspace-mobile.png", NextcloudPresentation.Adaptive,
+        "Mail", "Adaptive mailbox workspace", "Inbox message list", MarketingCapturePurpose.Showcase,
+        "mobile", "phone-portrait", issue = 54, width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    MailWorkspaceLoadingMobile(
+        "mail-workspace-loading-mobile", "mail-workspace-loading-mobile.png", NextcloudPresentation.Adaptive,
+        "Mail", "Adaptive mailbox workspace", "Loading inbox", MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", issue = 54, width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    MailWorkspaceEmptyMobile(
+        "mail-workspace-empty-mobile", "mail-workspace-empty-mobile.png", NextcloudPresentation.Adaptive,
+        "Mail", "Adaptive mailbox workspace", "Empty inbox", MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", issue = 54, width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    MailWorkspaceErrorDesktop(
+        "mail-workspace-error-desktop", "mail-workspace-error-desktop.png", NextcloudPresentation.Desktop,
+        "Mail", "Adaptive mailbox workspace", "Message body error", MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", issue = 54, width = 1_440, height = 900, density = 1f,
     ),
     PhotoTimelineRevalidationErrorMobile(
         "photo-timeline-revalidation-error-mobile",
@@ -1530,6 +1570,73 @@ internal fun MarketingAdaptiveAppScenario(scenario: MarketingCaptureScenario) {
 }
 
 @Composable
+internal fun MarketingMailWorkspaceScenario(scenario: MarketingCaptureScenario) {
+    require(
+        scenario in setOf(
+            MarketingCaptureScenario.MailWorkspaceDesktop,
+            MarketingCaptureScenario.MailWorkspaceMobile,
+            MarketingCaptureScenario.MailWorkspaceLoadingMobile,
+            MarketingCaptureScenario.MailWorkspaceEmptyMobile,
+            MarketingCaptureScenario.MailWorkspaceErrorDesktop,
+        ),
+    ) {
+        "${scenario.id} is not a Mail workspace capture."
+    }
+    val desktop = scenario.presentation == NextcloudPresentation.Desktop
+    val composeAction = marketingMailDescriptor.preferredNativeMailComposeAction(marketingMailSchema)
+    val currentView = if (desktop) marketingMailBodyView else marketingMailMessageView
+    val currentState = when (scenario) {
+        MarketingCaptureScenario.MailWorkspaceLoadingMobile -> NativeScreenState.Loading
+        MarketingCaptureScenario.MailWorkspaceEmptyMobile -> NativeScreenState.Ready(emptyList())
+        MarketingCaptureScenario.MailWorkspaceErrorDesktop -> NativeScreenState.Error(
+            message = "The server did not return the selected message body.",
+            retry = {},
+            retryLabel = "Try again",
+        )
+        else -> NativeScreenState.Ready(
+            if (desktop) listOf(marketingMailBodyRecord) else marketingMailMessages,
+        )
+    }
+    Column(modifier = Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = "Mail",
+            subtitle = "Inbox",
+            onBack = {},
+            trailingContent = {
+                val compose = composeAction
+                if (compose != null) {
+                    androidx.compose.material3.Button(onClick = {}) {
+                        Text(compose.label)
+                    }
+                }
+            },
+        )
+        GenericNativeAppScreen(
+            schema = marketingMailSchema,
+            view = currentView,
+            state = currentState,
+            actionExecutor = NativeActionExecutor {
+                NativeActionExecutionResult.Failure("This synthetic fixture is read-only.")
+            },
+            selectedRecordId = if (desktop) marketingMailSelectedMessage.id else null,
+            selectedRecordResourceId = if (desktop) "messages" else null,
+            showSelectedRecordDetail = desktop,
+            onSelectRecord = {},
+            datasetContext = NativeDatasetContext(
+                parentResourceId = if (desktop) "messages" else "mailboxes",
+                parentRecord = if (desktop) marketingMailSelectedMessage else marketingMailInbox,
+                relatedRecords = mapOf(
+                    "accounts" to listOf(marketingMailAccount),
+                    "mailboxes" to marketingMailboxes,
+                    "messages" to marketingMailMessages,
+                ),
+            ),
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
 internal fun MarketingHomeDashboardScenario(
     scenario: MarketingCaptureScenario,
     fixture: MarketingDemoFixture,
@@ -1700,6 +1807,218 @@ internal val marketingAdaptiveRecords = listOf(
             "status" to "Available",
             "updated" to "2026-07-19",
         ),
+    ),
+)
+
+private val marketingMailComposeAction = DynamicAction(
+    id = "compose-message",
+    label = "Compose",
+    resourceId = "messages",
+    intent = ActionIntent.create,
+    risk = ActionRisk.mutating,
+    requiresConfirmation = false,
+    binding = DynamicHttpBinding(method = HttpMethod.POST, path = "/fixture/messages"),
+    confidence = Confidence.verified,
+)
+
+private val marketingMailSchema = NativeAppSchema(
+    schemaVersion = "0.1",
+    app = AppIdentity("fixture-mail", "Mail", "fixture"),
+    confidence = Confidence.verified,
+    resources = listOf(
+        ResourceSpec(
+            id = "accounts",
+            name = "Accounts",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("accountName", "Account", FieldKind.string, required = true, readOnly = true),
+                FieldSpec("emailAddress", "Email", FieldKind.string, required = true, readOnly = true),
+            ),
+        ),
+        ResourceSpec(
+            id = "mailboxes",
+            name = "Mailboxes",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("name", "Mailbox", FieldKind.string, required = true, readOnly = true),
+                FieldSpec("specialUse", "Role", FieldKind.string, required = false, readOnly = true),
+                FieldSpec("unreadCount", "Unread", FieldKind.integer, required = false, readOnly = true),
+                FieldSpec("path", "Path", FieldKind.string, required = false, readOnly = true),
+            ),
+        ),
+        ResourceSpec(
+            id = "messages",
+            name = "Messages",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("subject", "Subject", FieldKind.string, required = false, readOnly = true),
+                FieldSpec("from", "From", FieldKind.string, required = false, readOnly = true),
+                FieldSpec("preview", "Preview", FieldKind.string, required = false, readOnly = true),
+                FieldSpec("date", "Date", FieldKind.dateTime, required = false, readOnly = true),
+                FieldSpec("seen", "Seen", FieldKind.boolean, required = false, readOnly = true),
+                FieldSpec("flagged", "Flagged", FieldKind.boolean, required = false, readOnly = true),
+            ),
+        ),
+        ResourceSpec(
+            id = "messageBody",
+            name = "Message body",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("body", "Body", FieldKind.longText, required = true, readOnly = true),
+                FieldSpec("hasHtmlBody", "HTML", FieldKind.boolean, required = false, readOnly = true),
+            ),
+        ),
+    ),
+    views = listOf(
+        ViewSpec(
+            id = "messages.mailbox",
+            title = "Inbox",
+            resourceId = "messages",
+            component = NativeComponent.mailbox,
+            sourceActionId = "fixture.messages.list",
+            confidence = Confidence.verified,
+        ),
+        ViewSpec(
+            id = "message.body",
+            title = "Message",
+            resourceId = "messageBody",
+            component = NativeComponent.detail,
+            sourceActionId = "fixture.message.body",
+            confidence = Confidence.verified,
+        ),
+    ),
+    actions = listOf(
+        ActionSpec(
+            id = marketingMailComposeAction.id,
+            label = marketingMailComposeAction.label,
+            resourceId = marketingMailComposeAction.resourceId,
+            binding = ApiBinding(
+                method = marketingMailComposeAction.binding.method,
+                path = marketingMailComposeAction.binding.path,
+                operationId = marketingMailComposeAction.id,
+            ),
+            intent = marketingMailComposeAction.intent,
+            risk = marketingMailComposeAction.risk,
+            requiresConfirmation = marketingMailComposeAction.requiresConfirmation,
+            confidence = marketingMailComposeAction.confidence,
+        ),
+    ),
+)
+
+private val marketingMailDescriptor = DynamicAppDescriptor(
+    descriptorVersion = "0.1",
+    app = AppIdentity("fixture-mail", "Mail", "fixture"),
+    endpointPolicy = EndpointPolicy(serverOrigin = "https://fixture.invalid"),
+    resources = emptyList(),
+    actions = listOf(marketingMailComposeAction),
+    forms = listOf(
+        DynamicForm(
+            id = "compose-message-form",
+            title = "Compose",
+            resourceId = "messages",
+            actionId = marketingMailComposeAction.id,
+            confidence = Confidence.verified,
+        ),
+    ),
+)
+
+private val marketingMailMessageView = requireNotNull(
+    marketingMailSchema.views.firstOrNull { view -> view.id == "messages.mailbox" },
+)
+private val marketingMailBodyView = requireNotNull(
+    marketingMailSchema.views.firstOrNull { view -> view.id == "message.body" },
+)
+private val marketingMailAccount = NativeRecord(
+    id = "personal",
+    values = mapOf(
+        "accountName" to "Obiente",
+        "emailAddress" to "obiente@example.test",
+    ),
+)
+private val marketingMailInbox = NativeRecord(
+    id = "inbox",
+    values = mapOf(
+        "name" to "Inbox",
+        "specialUse" to "inbox",
+        "unreadCount" to "2",
+        "path" to "Personal/Inbox",
+        "accountId" to marketingMailAccount.id,
+    ),
+)
+private val marketingMailboxes = listOf(
+    marketingMailInbox,
+    NativeRecord(
+        id = "drafts",
+        values = mapOf(
+            "name" to "Drafts", "specialUse" to "drafts", "path" to "Personal/Drafts",
+            "accountId" to marketingMailAccount.id,
+        ),
+    ),
+    NativeRecord(
+        id = "sent",
+        values = mapOf(
+            "name" to "Sent", "specialUse" to "sent", "path" to "Personal/Sent",
+            "accountId" to marketingMailAccount.id,
+        ),
+    ),
+    NativeRecord(
+        id = "archive",
+        values = mapOf(
+            "name" to "Archive", "specialUse" to "archive", "path" to "Personal/Archive",
+            "accountId" to marketingMailAccount.id,
+        ),
+    ),
+)
+private val marketingMailMessages = listOf(
+    NativeRecord(
+        id = "mail-1",
+        values = mapOf(
+            "subject" to "Release candidate is ready",
+            "from" to "Ada <ada@example.test>",
+            "preview" to "The Android and desktop artifacts passed the final checks.",
+            "date" to "2026-07-29T08:42:00Z",
+            "seen" to "false",
+            "flagged" to "true",
+            "accountId" to marketingMailAccount.id,
+            "mailboxId" to marketingMailInbox.id,
+        ),
+    ),
+    NativeRecord(
+        id = "mail-2",
+        values = mapOf(
+            "subject" to "Design review notes",
+            "from" to "Mira <mira@example.test>",
+            "preview" to "I added the adaptive navigation feedback to the shared notes.",
+            "date" to "2026-07-28T17:30:00Z",
+            "seen" to "false",
+            "accountId" to marketingMailAccount.id,
+            "mailboxId" to marketingMailInbox.id,
+        ),
+    ),
+    NativeRecord(
+        id = "mail-3",
+        values = mapOf(
+            "subject" to "Community call",
+            "from" to "Nextcloud community <community@example.test>",
+            "preview" to "Here is the agenda for Thursday's community call.",
+            "date" to "2026-07-27T11:05:00Z",
+            "seen" to "true",
+            "accountId" to marketingMailAccount.id,
+            "mailboxId" to marketingMailInbox.id,
+        ),
+    ),
+)
+private val marketingMailSelectedMessage = marketingMailMessages.first()
+private val marketingMailBodyRecord = NativeRecord(
+    id = marketingMailSelectedMessage.id,
+    values = mapOf(
+        "body" to """
+            <p>Hello Obiente,</p>
+            <p>The <strong>release candidate</strong> is ready for review.</p>
+            <p>Android and desktop artifacts passed the final checks. The visual audit is attached to the build.</p>
+            <p>Thanks,<br>Ada</p>
+        """.trimIndent(),
+        "hasHtmlBody" to "true",
     ),
 )
 

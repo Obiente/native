@@ -219,6 +219,7 @@ fun GenericNativeAppScreen(
     actionExecutor: NativeActionExecutor,
     modifier: Modifier = Modifier,
     selectedRecordId: String? = null,
+    selectedRecordResourceId: String? = null,
     showSelectedRecordDetail: Boolean = false,
     onSelectRecord: ((NativeRecord) -> Unit)? = null,
     onOpenLink: ((String) -> Unit)? = null,
@@ -615,6 +616,72 @@ fun GenericNativeAppScreen(
                 GenericNativeSurface.Table,
             )
     }
+    val mailWorkspaceSection = remember(schema, presentedResource, datasetContext) {
+        presentedResource?.let { currentResource ->
+            nativeMailWorkspaceSection(schema, currentResource, datasetContext)
+        } ?: NativeMailWorkspaceSection.Unknown
+    }
+    val mailWorkspaceEligible = remember(schema, mailWorkspaceSection) {
+        schema.hasNativeMailWorkspaceSemantics() &&
+            mailWorkspaceSection != NativeMailWorkspaceSection.Unknown
+    }
+    val mailWorkspacePlan = remember(
+        schema,
+        presentedResource,
+        presentedRecords,
+        datasetContext,
+        selectedRecordId,
+        selectedRecordResourceId,
+        mailWorkspaceEligible,
+    ) {
+        presentedResource
+            ?.takeIf { mailWorkspaceEligible }
+            ?.let { currentResource ->
+                nativeMailWorkspacePlan(
+                    schema = schema,
+                    currentResource = currentResource,
+                    currentRecords = presentedRecords,
+                    context = datasetContext,
+                    selectedRecordId = selectedRecordId,
+                    selectedRecordResourceId = selectedRecordResourceId,
+                )
+            }
+    }
+    val mailWorkspaceDetailTarget = remember(
+        schema,
+        presentedResource,
+        presentedRecords,
+        datasetContext,
+        mailWorkspacePlan?.selectedMessage,
+    ) {
+        presentedResource
+            ?.takeIf { mailWorkspaceEligible }
+            ?.let { currentResource ->
+                nativeMailWorkspaceDetailTarget(
+                    schema = schema,
+                    currentResource = currentResource,
+                    currentRecords = presentedRecords,
+                    context = datasetContext,
+                    selectedMessage = mailWorkspacePlan?.selectedMessage,
+                )
+            }
+    }
+    val mailWorkspaceContentState = remember(state, mailWorkspaceSection) {
+        when (state) {
+            NativeScreenState.Loading -> NativeMailWorkspaceContentState.Loading(mailWorkspaceSection)
+            is NativeScreenState.Error -> NativeMailWorkspaceContentState.Error(
+                section = mailWorkspaceSection,
+                message = state.message,
+                retry = state.retry,
+                retryLabel = state.retryLabel,
+            )
+            is NativeScreenState.Ready -> if (state.records.isEmpty()) {
+                NativeMailWorkspaceContentState.Empty(mailWorkspaceSection)
+            } else {
+                NativeMailWorkspaceContentState.Ready
+            }
+        }
+    }
     Surface(
         modifier = modifier
             .fillMaxSize()
@@ -657,6 +724,18 @@ fun GenericNativeAppScreen(
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when {
             presentedResource == null -> GenericRendererError("This view references an unknown resource.")
+            mailWorkspacePlan != null && state is NativeScreenState.Loading ->
+                NativeMailWorkspace(
+                    plan = mailWorkspacePlan,
+                    onSelectRecord = onSelectRecord,
+                    contentState = mailWorkspaceContentState,
+                )
+            mailWorkspacePlan != null && state is NativeScreenState.Error ->
+                NativeMailWorkspace(
+                    plan = mailWorkspacePlan,
+                    onSelectRecord = onSelectRecord,
+                    contentState = mailWorkspaceContentState,
+                )
             state is NativeScreenState.Loading -> GenericRendererLoading(view.title)
             state is NativeScreenState.Error -> GenericRendererError(
                 state.message,
@@ -678,6 +757,14 @@ fun GenericNativeAppScreen(
                     // mutation result before the user retries it.
                     onActionOutcomeUnknown = onActionSucceeded,
                     mutationReconciliationGeneration = mutationReconciliationGeneration,
+                )
+            state is NativeScreenState.Ready &&
+                state.records.isEmpty() &&
+                mailWorkspacePlan != null ->
+                NativeMailWorkspace(
+                    plan = mailWorkspacePlan,
+                    onSelectRecord = onSelectRecord,
+                    contentState = mailWorkspaceContentState,
                 )
             state is NativeScreenState.Ready &&
                 presentedRecords.isEmpty() &&
@@ -708,6 +795,27 @@ fun GenericNativeAppScreen(
                     )
                 }
             }
+            state is NativeScreenState.Ready && mailWorkspacePlan != null ->
+                NativeMailWorkspace(
+                    plan = mailWorkspacePlan,
+                    onSelectRecord = onSelectRecord,
+                    contentState = mailWorkspaceContentState,
+                    detailContent = mailWorkspaceDetailTarget
+                        ?.let { target ->
+                        {
+                            GenericMailMessageDetail(
+                                schema = schema,
+                                resource = target.resource,
+                                record = target.record,
+                                message = target.presentation,
+                                datasetContext = datasetContext,
+                                actionExecutor = actionExecutor,
+                                onActionSucceeded = onActionSucceeded,
+                                onInlineActionSucceeded = onInlineActionSucceeded,
+                            )
+                        }
+                    },
+                )
             state is NativeScreenState.Ready -> when (presentedSurface) {
                 GenericNativeSurface.List -> GenericRecordCollection(
                     schema = schema,
@@ -4536,7 +4644,7 @@ private fun GenericMailboxCollection(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            presentation.sender ?: presentation.title,
+                            nativeMailSenderLabel(presentation.sender) ?: presentation.title,
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = if (presentation.unread) FontWeight.Bold else FontWeight.Medium,
@@ -4544,7 +4652,7 @@ private fun GenericMailboxCollection(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        presentation.timestamp?.let { timestamp ->
+                        nativeMailTimestampLabel(presentation.timestamp)?.let { timestamp ->
                             Text(
                                 timestamp,
                                 style = MaterialTheme.typography.labelSmall,
@@ -4563,7 +4671,7 @@ private fun GenericMailboxCollection(
                             }
                         }
                     }
-                    if (presentation.sender != null) {
+                    if (nativeMailSenderLabel(presentation.sender) != null) {
                         Text(
                             presentation.title,
                             style = MaterialTheme.typography.bodyMedium.copy(
@@ -6537,7 +6645,7 @@ private fun GenericGroupwareDetail(
 
 @OptIn(ExperimentalRichTextApi::class)
 @Composable
-private fun GenericMailMessageDetail(
+internal fun GenericMailMessageDetail(
     schema: NativeAppSchema,
     resource: ResourceSpec,
     record: NativeRecord,
@@ -6548,6 +6656,7 @@ private fun GenericMailMessageDetail(
     onInlineActionSucceeded: ((ActionSpec) -> Unit)?,
 ) {
     val structured = remember(resource, record) { nativeStructuredDetail(resource, record) }
+    val threadMessages = remember(resource, record) { nativeMailThreadPresentations(resource, record) }
     val attachments = structured.sections.filter { section ->
         section.fieldId.lowercase().filter(Char::isLetterOrDigit) in setOf("attachments", "inlineattachments")
     }
@@ -6615,7 +6724,10 @@ private fun GenericMailMessageDetail(
                 )
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(message.sender ?: "Unknown sender", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    nativeMailSenderLabel(message.sender) ?: "Unknown sender",
+                    style = MaterialTheme.typography.titleMedium,
+                )
                 message.recipients?.let { recipients ->
                     Text(
                         "To $recipients",
@@ -6626,7 +6738,7 @@ private fun GenericMailMessageDetail(
                     )
                 }
             }
-            message.timestamp?.let { timestamp ->
+            nativeMailTimestampLabel(message.timestamp)?.let { timestamp ->
                 Text(
                     timestamp,
                     style = MaterialTheme.typography.labelMedium,
@@ -6666,24 +6778,35 @@ private fun GenericMailMessageDetail(
                 )
             }
         }
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-            shape = RoundedCornerShape(NextcloudRadii.Card),
-        ) {
-            SelectionContainer {
-                if (!htmlBody.isNullOrBlank()) {
-                    RichText(
-                        state = richTextState,
-                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                } else {
-                    Text(
-                        plainBody?.takeIf(String::isNotBlank) ?: "This message has no readable body.",
-                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
+        if (threadMessages.size > 1) {
+            Text(
+                "${threadMessages.size} messages",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            threadMessages.forEach { threadMessage ->
+                GenericMailThreadMessage(threadMessage)
+            }
+        } else {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+                shape = RoundedCornerShape(NextcloudRadii.Card),
+            ) {
+                SelectionContainer {
+                    if (!htmlBody.isNullOrBlank()) {
+                        RichText(
+                            state = richTextState,
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    } else {
+                        Text(
+                            plainBody?.takeIf(String::isNotBlank) ?: "This message has no readable body.",
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
                 }
             }
         }
@@ -6745,6 +6868,64 @@ private fun GenericMailMessageDetail(
                 }
             },
         )
+    }
+}
+
+@OptIn(ExperimentalRichTextApi::class)
+@Composable
+private fun GenericMailThreadMessage(message: NativeMailMessageDetailPresentation) {
+    val htmlBody = remember(message.body, message.htmlBody) {
+        message.body?.takeIf { value -> message.htmlBody || value.contains('<') && value.contains('>') }
+            ?.let(::sanitizeNativeMailHtml)
+    }
+    val richTextState = rememberRichTextState()
+    LaunchedEffect(htmlBody) {
+        if (!htmlBody.isNullOrBlank()) richTextState.setHtml(htmlBody)
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    nativeMailSenderLabel(message.sender) ?: "Unknown sender",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                nativeMailTimestampLabel(message.timestamp)?.let { timestamp ->
+                    Text(
+                        timestamp,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            SelectionContainer {
+                if (!htmlBody.isNullOrBlank()) {
+                    RichText(
+                        state = richTextState,
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                } else {
+                    Text(
+                        message.body?.takeIf(String::isNotBlank) ?: "This message has no readable body.",
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+            }
+        }
     }
 }
 
