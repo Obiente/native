@@ -48,6 +48,7 @@ import androidx.compose.material.icons.outlined.Eco
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.FaceRetouchingNatural
 import androidx.compose.material.icons.outlined.Folder
@@ -148,6 +149,7 @@ object NextcloudIcons {
     val Add: ImageVector = Icons.Outlined.Add
     val ChevronRight: ImageVector = Icons.Outlined.ChevronRight
     val ExpandMore: ImageVector = Icons.Outlined.ExpandMore
+    val Filter: ImageVector = Icons.Outlined.FilterList
     val Refresh: ImageVector = Icons.Outlined.Refresh
     val Error: ImageVector = Icons.Outlined.ErrorOutline
     val Cloud: ImageVector = Icons.Outlined.Cloud
