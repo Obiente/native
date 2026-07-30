@@ -23,6 +23,7 @@ import dev.obiente.nextcloudnative.nativeui.model.ParameterSource
 import dev.obiente.nextcloudnative.nativeui.model.Provenance
 import dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
@@ -65,11 +66,13 @@ class DynamicNativeRuntimeTest {
         val result = response(
             """{"ocs":{"meta":{"status":"failure","statuscode":997,"message":"Current user is not\nauthorized"},"data":[]}}""",
         ).toDynamicActionExecutionResult(createAction())
+        val failure = assertIs<NativeActionExecutionResult.Failure>(result)
 
         assertEquals(
             "The server rejected Create item: Current user is not authorized.",
-            assertIs<NativeActionExecutionResult.Failure>(result).message,
+            failure.message,
         )
+        assertEquals(NativeActionFailureOutcome.Rejected, failure.outcome)
     }
 
     @Test
@@ -97,13 +100,36 @@ class DynamicNativeRuntimeTest {
     fun `declared OCS mutation fails closed on malformed metadata without exposing its body`() {
         val secretBody = """{"ocs":{"meta":{"status":"ok","message":"token=must-not-leak"},"data":[]}}"""
         val result = response(secretBody).toDynamicActionExecutionResult(createAction())
-        val message = assertIs<NativeActionExecutionResult.Failure>(result).message
+        val failure = assertIs<NativeActionExecutionResult.Failure>(result)
+        val message = failure.message
 
         assertEquals(
             "The server returned invalid OCS metadata for Create item.",
             message,
         )
+        assertEquals(NativeActionFailureOutcome.Unknown, failure.outcome)
         assertFalse(message.contains("must-not-leak"))
+    }
+
+    @Test
+    fun `mutation HTTP failures distinguish rejection from an unknown outcome`() {
+        val rejected = response(
+            body = """{"error":"conflict"}""",
+            status = 409,
+        ).toDynamicActionExecutionResult(createAction())
+        val unavailable = response(
+            body = """{"error":"unavailable"}""",
+            status = 503,
+        ).toDynamicActionExecutionResult(createAction())
+
+        assertEquals(
+            NativeActionFailureOutcome.Rejected,
+            assertIs<NativeActionExecutionResult.Failure>(rejected).outcome,
+        )
+        assertEquals(
+            NativeActionFailureOutcome.Unknown,
+            assertIs<NativeActionExecutionResult.Failure>(unavailable).outcome,
+        )
     }
 
     @Test

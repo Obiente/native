@@ -1095,6 +1095,123 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
+    fun `generic discovery withholds ambiguous result mutations from every semantic source`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Ambiguous results","version":"1"},
+              "paths":{
+                "/apps/example/api/records":{
+                  "get":{
+                    "operationId":"records-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{"id":{"type":"integer"},"name":{"type":"string"}}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/messages":{
+                  "post":{
+                    "operationId":"messages.sendNow",
+                    "summary":"Dispatch notification",
+                    "responses":{"202":{"description":"Accepted"}}
+                  }
+                },
+                "/apps/example/api/records/{recordId}/collaboration":{
+                  "parameters":[{"name":"recordId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{
+                    "operationId":"collaboration-create",
+                    "summary":"Share record",
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                },
+                "/apps/example/api/records/{recordId}/merge":{
+                  "parameters":[{"name":"recordId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{
+                    "operationId":"records-combine",
+                    "summary":"Combine records",
+                    "responses":{"200":{"description":"Combined"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        assertEquals(listOf("records-list"), descriptor.actions.map(DynamicAction::id))
+        assertEquals(
+            3,
+            descriptor.warnings.count { warning ->
+                warning.code == "ignored-ambiguous-result-write"
+            },
+        )
+        assertTrue(descriptor.forms.isEmpty())
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `ambiguous result vocabulary uses exact words and does not hide safe neighbors or reads`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Safe semantic boundaries","version":"1"},
+              "paths":{
+                "/apps/example/api/share":{
+                  "get":{
+                    "operationId":"share-read",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{"enabled":{"type":"boolean"}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/senders":{
+                  "post":{
+                    "operationId":"sender-create",
+                    "summary":"Create sender",
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                },
+                "/apps/example/api/preferences/shared":{
+                  "patch":{
+                    "operationId":"shared-preferences-update",
+                    "summary":"Update shared preferences",
+                    "responses":{"200":{"description":"Updated"}}
+                  }
+                },
+                "/apps/example/api/mergeable/{recordId}":{
+                  "parameters":[{"name":"recordId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "put":{
+                    "operationId":"mergeable-record-update",
+                    "summary":"Update mergeable record",
+                    "responses":{"200":{"description":"Updated"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        assertEquals(
+            setOf(
+                "mergeable-record-update",
+                "sender-create",
+                "share-read",
+                "shared-preferences-update",
+            ),
+            descriptor.actions.map(DynamicAction::id).toSet(),
+        )
+        assertTrue(
+            descriptor.warnings.none { warning ->
+                warning.code == "ignored-ambiguous-result-write"
+            },
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
     fun exposesBodylessAndQueryDrivenMutationsAsConfirmedNativeActions() {
         val withDeleteAndQuery = OPEN_API
             .replace(

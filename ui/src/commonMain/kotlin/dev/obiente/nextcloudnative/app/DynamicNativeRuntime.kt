@@ -27,6 +27,7 @@ import dev.obiente.nextcloudnative.nativeui.model.parseDynamicIntegerArrayInput
 import dev.obiente.nextcloudnative.nativeui.model.requireValid
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredEntry
@@ -500,10 +501,14 @@ class DynamicNextcloudActionExecutor(
 
     override suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult {
         val action = descriptor.actions.firstOrNull { it.id == request.action.id }
-            ?: return NativeActionExecutionResult.Failure("The dynamic action is no longer available.")
+            ?: return NativeActionExecutionResult.Failure(
+                message = "The dynamic action is no longer available.",
+                outcome = NativeActionFailureOutcome.Rejected,
+            )
         if (!versionStatus.allows(action.risk)) {
             return NativeActionExecutionResult.Failure(
-                "Reconnect to verify the server and app versions before changing cloud data.",
+                message = "Reconnect to verify the server and app versions before changing cloud data.",
+                outcome = NativeActionFailureOutcome.Rejected,
             )
         }
         val values = (request as? NativeActionRequest.Submit)?.values.orEmpty()
@@ -516,7 +521,10 @@ class DynamicNextcloudActionExecutor(
             }
             ?.inputSchema
         if (request is NativeActionRequest.Submit && action.requiresConfirmation && !request.confirmed) {
-            return NativeActionExecutionResult.Failure("Confirm this action before changing server data.")
+            return NativeActionExecutionResult.Failure(
+                message = "Confirm this action before changing server data.",
+                outcome = NativeActionFailureOutcome.Rejected,
+            )
         }
         return runCatching {
             val response = executeDynamicAction(
@@ -548,7 +556,12 @@ internal fun NextcloudApiResponse.toDynamicActionExecutionResult(
 ): NativeActionExecutionResult {
     if (status !in 200..299) {
         return NativeActionExecutionResult.Failure(
-            "The server rejected ${action.label} (HTTP $status).",
+            message = "The server rejected ${action.label} (HTTP $status).",
+            outcome = if (status in 400..499) {
+                NativeActionFailureOutcome.Rejected
+            } else {
+                NativeActionFailureOutcome.Unknown
+            },
         )
     }
     val ocs = action.binding.ocs
@@ -573,8 +586,9 @@ internal fun NextcloudApiResponse.toDynamicActionExecutionResult(
         ?.contentOrNull
         ?.toSafeDynamicErrorMessage()
     return NativeActionExecutionResult.Failure(
-        safeMessage?.let { message -> "The server rejected ${action.label}: $message" }
+        message = safeMessage?.let { message -> "The server rejected ${action.label}: $message" }
             ?: "The OCS endpoint rejected ${action.label}.",
+        outcome = NativeActionFailureOutcome.Rejected,
     )
 }
 

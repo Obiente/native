@@ -227,10 +227,14 @@ fun GenericNativeAppScreen(
                 when (val result = actionExecutor.execute(plan.request())) {
                     is NativeActionExecutionResult.Success -> inlineActionSucceeded?.invoke(plan.action)
                     is NativeActionExecutionResult.Failure -> {
+                        if (result.outcome.requiresCommandReconciliation()) {
+                            inlineActionSucceeded?.invoke(plan.action)
+                        }
                         pendingRecordCommandAction = PendingNativeRecordCommandAction(
                             plan = plan,
                             itemLabel = itemLabel,
                             initialError = result.message,
+                            initialFailureOutcome = result.outcome,
                         )
                     }
                 }
@@ -460,6 +464,9 @@ fun GenericNativeAppScreen(
                 pendingRecordCommandAction = null
                 inlineActionSucceeded?.invoke(action)
             },
+            onOutcomeUnknown = { action ->
+                inlineActionSucceeded?.invoke(action)
+            },
         )
     }
 }
@@ -480,6 +487,7 @@ private data class PendingNativeRecordCommandAction(
     val plan: NativeRecordCommandActionPlan,
     val itemLabel: String,
     val initialError: String? = null,
+    val initialFailureOutcome: NativeActionFailureOutcome? = null,
 )
 
 @Composable
@@ -717,18 +725,23 @@ private fun GenericRecordCommandActionDialog(
     actionExecutor: NativeActionExecutor,
     onDismiss: () -> Unit,
     onActionSucceeded: (ActionSpec) -> Unit,
+    onOutcomeUnknown: (ActionSpec) -> Unit,
 ) {
     val ui = nativeRecordCommandUi(pending.plan.effect, pending.itemLabel)
     var error by remember(pending) { mutableStateOf(pending.initialError) }
+    var failureOutcome by remember(pending) { mutableStateOf(pending.initialFailureOutcome) }
     var executing by remember(pending) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val retryingDirectAction = !pending.plan.requiresConfirmation
+    val outcomeUnknown = failureOutcome?.requiresCommandReconciliation() == true
 
     AlertDialog(
         onDismissRequest = { if (!executing) onDismiss() },
         title = {
             Text(
-                if (retryingDirectAction) {
+                if (outcomeUnknown) {
+                    "${ui.label} result unknown"
+                } else if (retryingDirectAction) {
                     "${ui.label} failed"
                 } else {
                     requireNotNull(ui.confirmationTitle)
@@ -747,40 +760,55 @@ private fun GenericRecordCommandActionDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                if (outcomeUnknown) {
+                    Text(
+                        "The collection is being refreshed to check the server result. " +
+                            "Review the refreshed item before trying this action again.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         dismissButton = {
             TextButton(enabled = !executing, onClick = onDismiss) {
-                Text("Cancel")
+                Text(if (outcomeUnknown) "Close" else "Cancel")
             }
         },
         confirmButton = {
-            Button(
-                enabled = !executing,
-                onClick = {
-                    executing = true
-                    error = null
-                    scope.launch {
-                        when (
-                            val result = actionExecutor.execute(
-                                pending.plan.request(confirmed = pending.plan.requiresConfirmation),
-                            )
-                        ) {
-                            is NativeActionExecutionResult.Success -> {
-                                onActionSucceeded(pending.plan.action)
+            if (!outcomeUnknown) {
+                Button(
+                    enabled = !executing,
+                    onClick = {
+                        executing = true
+                        error = null
+                        failureOutcome = null
+                        scope.launch {
+                            when (
+                                val result = actionExecutor.execute(
+                                    pending.plan.request(confirmed = pending.plan.requiresConfirmation),
+                                )
+                            ) {
+                                is NativeActionExecutionResult.Success -> {
+                                    onActionSucceeded(pending.plan.action)
+                                }
+                                is NativeActionExecutionResult.Failure -> {
+                                    error = result.message
+                                    failureOutcome = result.outcome
+                                    if (result.outcome.requiresCommandReconciliation()) {
+                                        onOutcomeUnknown(pending.plan.action)
+                                    }
+                                }
                             }
-                            is NativeActionExecutionResult.Failure -> {
-                                error = result.message
-                            }
+                            executing = false
                         }
-                        executing = false
+                    },
+                ) {
+                    if (executing) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text(if (retryingDirectAction) "Try again" else ui.label)
                     }
-                },
-            ) {
-                if (executing) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    Text(if (retryingDirectAction) "Try again" else ui.label)
                 }
             }
         },
@@ -1373,6 +1401,7 @@ private fun GenericRecordCollection(
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
     imageLoader: NativeImageLoader?,
 ) {
+    val authoritativeRecordsKey = NativeAuthoritativeRecordsKey(records)
     val recipes = remember(resource, records) {
         nativeRecipeCollectionPresentations(resource, records)
     }
@@ -1380,7 +1409,7 @@ private fun GenericRecordCollection(
         GenericRecipeCollection(recipes, onSelectRecord, imageLoader)
         return
     }
-    val tasks = remember(resource, records) {
+    val tasks = remember(resource, authoritativeRecordsKey) {
         nativeTaskCollectionPresentations(resource, records)
     }
     if (tasks != null) {
@@ -1388,6 +1417,7 @@ private fun GenericRecordCollection(
             schema = schema,
             resource = resource,
             rows = tasks,
+            authoritativeRecordsKey = authoritativeRecordsKey,
             navigationContext = datasetContext.bindingValues,
             actionExecutor = actionExecutor,
             onSelectRecord = onSelectRecord,
@@ -1650,11 +1680,48 @@ private fun GenericFinanceDetailHeader(
     }
 }
 
+/**
+ * Compose effect keys use structural equality, while an authoritative refresh can legitimately
+ * return records equal to the previous snapshot. This key treats a newly allocated record list as
+ * a refresh even when its contents are unchanged.
+ */
+internal class NativeAuthoritativeRecordsKey(
+    private val records: List<NativeRecord>,
+) {
+    override fun equals(other: Any?): Boolean =
+        other is NativeAuthoritativeRecordsKey && records === other.records
+
+    override fun hashCode(): Int = 0
+}
+
+internal data class NativeCompletionOverride(
+    val completed: Boolean,
+    val sourceRecordsKey: NativeAuthoritativeRecordsKey,
+)
+
+internal fun effectiveNativeCompletion(
+    override: NativeCompletionOverride?,
+    authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
+    authoritativeCompleted: Boolean,
+): Boolean = override
+    ?.takeIf { candidate -> candidate.sourceRecordsKey == authoritativeRecordsKey }
+    ?.completed
+    ?: authoritativeCompleted
+
+internal fun MutableMap<String, NativeCompletionOverride>.reconcileNativeCompletionOverrides(
+    authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
+) {
+    keys.filter { recordId ->
+        get(recordId)?.sourceRecordsKey != authoritativeRecordsKey
+    }.forEach(::remove)
+}
+
 @Composable
 private fun GenericTaskCollection(
     schema: NativeAppSchema,
     resource: ResourceSpec,
     rows: List<Pair<NativeRecord, NativeGroupwarePresentation>>,
+    authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
     navigationContext: Map<String, String>,
     actionExecutor: NativeActionExecutor,
     onSelectRecord: ((NativeRecord) -> Unit)?,
@@ -1664,9 +1731,14 @@ private fun GenericTaskCollection(
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val completionOverrides = remember(schema, resource.id) { mutableStateMapOf<String, Boolean>() }
+    val completionOverrides = remember(schema, resource.id) {
+        mutableStateMapOf<String, NativeCompletionOverride>()
+    }
     val completionInProgress = remember(schema, resource.id) { mutableStateMapOf<String, Boolean>() }
     val completionErrors = remember(schema, resource.id) { mutableStateMapOf<String, String>() }
+    LaunchedEffect(authoritativeRecordsKey) {
+        completionOverrides.reconcileNativeCompletionOverrides(authoritativeRecordsKey)
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
@@ -1687,9 +1759,12 @@ private fun GenericTaskCollection(
                 )
             }
             val completion = actions.completion
-            val completed = completionOverrides[record.id]
-                ?: completion?.currentlyCompleted
-                ?: task.completed
+            val authoritativeCompleted = completion?.currentlyCompleted ?: task.completed
+            val completed = effectiveNativeCompletion(
+                override = completionOverrides[record.id],
+                authoritativeRecordsKey = authoritativeRecordsKey,
+                authoritativeCompleted = authoritativeCompleted,
+            )
             val completing = completionInProgress[record.id] == true
             val secondaryActions = nativeRecordCardActions(
                 capabilities = actions,
@@ -1740,7 +1815,10 @@ private fun GenericTaskCollection(
                                             )
                                         ) {
                                             is NativeActionExecutionResult.Success -> {
-                                                completionOverrides[record.id] = requested
+                                                completionOverrides[record.id] = NativeCompletionOverride(
+                                                    completed = requested,
+                                                    sourceRecordsKey = authoritativeRecordsKey,
+                                                )
                                                 onActionSucceeded?.invoke(completion.action)
                                             }
                                             is NativeActionExecutionResult.Failure -> {
@@ -1869,6 +1947,9 @@ internal data class NativeRecordCommandUi(
     val confirmationTitle: String? = null,
     val confirmationMessage: String? = null,
 )
+
+internal fun NativeActionFailureOutcome.requiresCommandReconciliation(): Boolean =
+    this == NativeActionFailureOutcome.Unknown
 
 internal fun nativeRecordCommandUi(
     effect: ActionEffect,
@@ -4878,6 +4959,20 @@ private fun String.nativeRelationResourceIdentities(): Set<String> {
     }
 }
 
+internal fun nativeScalarRelationClearChoice(field: FieldSpec): NativeRelationOption? =
+    NativeRelationOption(
+        value = "",
+        label = "None",
+        supportingText = "Clear selection",
+    ).takeIf {
+        !field.required &&
+            field.format !in setOf(
+                DYNAMIC_INTEGER_ARRAY_FORMAT,
+                DYNAMIC_STRING_ARRAY_FORMAT,
+                DYNAMIC_STRING_LIST_FORMAT,
+            )
+    }
+
 @Composable
 private fun GenericRelationshipField(
     field: FieldSpec,
@@ -4888,11 +4983,20 @@ private fun GenericRelationshipField(
     onValueChange: (String) -> Unit,
 ) {
     val displayField = field.copy(label = field.nativeRelationshipDisplayLabel())
+    val clearChoice = nativeScalarRelationClearChoice(displayField)
     when {
-        options.isEmpty() -> GenericUnavailableRelationField(displayField, error)
+        options.isEmpty() && clearChoice == null -> GenericUnavailableRelationField(displayField, error)
         field.format in setOf(DYNAMIC_INTEGER_ARRAY_FORMAT, DYNAMIC_STRING_ARRAY_FORMAT) ->
             GenericRelationMultiPicker(displayField, value, options, error, enabled, onValueChange)
-        else -> GenericRelationPicker(displayField, value, options, error, enabled, onValueChange)
+        else -> GenericRelationPicker(
+            field = displayField,
+            value = value,
+            options = options,
+            clearChoice = clearChoice,
+            error = error,
+            enabled = enabled,
+            onValueChange = onValueChange,
+        )
     }
 }
 
@@ -4937,6 +5041,7 @@ private fun GenericRelationPicker(
     field: FieldSpec,
     value: String,
     options: List<NativeRelationOption>,
+    clearChoice: NativeRelationOption?,
     error: String?,
     enabled: Boolean,
     onValueChange: (String) -> Unit,
@@ -4951,7 +5056,7 @@ private fun GenericRelationPicker(
     }
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
         Text(
-            field.label,
+            requiredFieldLabel(field),
             style = MaterialTheme.typography.labelLarge,
             color = if (error == null) {
                 MaterialTheme.colorScheme.onSurfaceVariant
@@ -4966,7 +5071,11 @@ private fun GenericRelationPicker(
                 modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
             ) {
                 Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
-                    Text(selected?.label ?: "Select ${field.label}")
+                    Text(
+                        selected?.label
+                            ?: clearChoice?.label?.takeIf { value.isBlank() }
+                            ?: "Select ${field.label}",
+                    )
                     selected?.supportingText?.let { supportingText ->
                         Text(
                             supportingText,
@@ -4994,6 +5103,28 @@ private fun GenericRelationPicker(
                         label = { Text("Search") },
                         singleLine = true,
                     )
+                }
+                clearChoice?.let { choice ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(choice.label)
+                                choice.supportingText?.let { supportingText ->
+                                    Text(
+                                        supportingText,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        },
+                        onClick = {
+                            onValueChange(choice.value)
+                            expanded = false
+                            query = ""
+                        },
+                    )
+                    if (visibleOptions.isNotEmpty()) HorizontalDivider()
                 }
                 visibleOptions.forEach { option ->
                     DropdownMenuItem(

@@ -151,6 +151,16 @@ class DynamicAppDescriptorCompiler {
                     )
                     return@operationLoop
                 }
+                if (
+                    method != HttpMethod.GET &&
+                    operation.requiresAmbiguousResultRecoveryPolicy(path, operationId)
+                ) {
+                    state.warnings += DynamicWarning(
+                        code = "ignored-ambiguous-result-write",
+                        message = "Ignored documented $methodName $path because generic send, share, and merge mutations require an operation-specific ambiguous-result recovery policy.",
+                    )
+                    return@operationLoop
+                }
                 state.addOperation(
                     path = path,
                     method = method,
@@ -1448,6 +1458,31 @@ private val SENSITIVE_CREDENTIAL_MUTATION_CONCEPTS = setOf(
     "issue",
     "reset",
     "rotate",
+)
+
+/**
+ * Some mutations produce externally visible or non-repeatable effects whose result cannot be
+ * recovered safely by the generic request pipeline after a timeout or disconnect. Keep those
+ * operations out of generic discovery until the operation declares a dedicated ambiguous-result
+ * policy. Exact semantic words avoid withholding unrelated concepts such as senders, shared
+ * preferences, or mergeable records.
+ */
+private fun JsonObject.requiresAmbiguousResultRecoveryPolicy(
+    path: String,
+    operationId: String,
+): Boolean {
+    val words = actionSemanticWords(
+        path = path,
+        operationId = operationId,
+        label = string("summary").orEmpty(),
+    )
+    return words.any(AMBIGUOUS_RESULT_MUTATION_WORDS::contains)
+}
+
+private val AMBIGUOUS_RESULT_MUTATION_WORDS = setOf(
+    "merge",
+    "send",
+    "share",
 )
 
 /**

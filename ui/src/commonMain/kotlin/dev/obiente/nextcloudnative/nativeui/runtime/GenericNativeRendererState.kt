@@ -1029,9 +1029,17 @@ fun interface NativeActionExecutor {
     suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult
 }
 
+enum class NativeActionFailureOutcome {
+    Rejected,
+    Unknown,
+}
+
 sealed interface NativeActionExecutionResult {
     data class Success(val message: String? = null) : NativeActionExecutionResult
-    data class Failure(val message: String) : NativeActionExecutionResult
+    data class Failure(
+        val message: String,
+        val outcome: NativeActionFailureOutcome = NativeActionFailureOutcome.Unknown,
+    ) : NativeActionExecutionResult
 }
 
 sealed interface NativeActionExecutionState {

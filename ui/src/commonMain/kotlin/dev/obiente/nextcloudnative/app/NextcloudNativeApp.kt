@@ -119,6 +119,7 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.DynamicResourceRecordContext
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
+import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.model.isSecondaryTechnicalDestination
@@ -272,6 +273,37 @@ internal fun planDynamicContractResume(
         serverVersion = live ?: lastKnownServerVersion?.trim()?.takeIf(String::isNotEmpty),
         installedAppVersionHint = lastKnownInstalledAppVersion?.trim()?.takeIf(String::isNotEmpty),
         serverVersionVerified = live != null,
+    )
+}
+
+internal fun resolveDynamicContractRediscovery(
+    cachedDiscovery: DynamicDescriptorDiscovery?,
+    candidate: DynamicDescriptorDiscovery,
+): DynamicDescriptorDiscovery {
+    val retainedCachedContract = cachedDiscovery?.takeIf { cached ->
+        candidate.acquisition == DynamicDescriptorAcquisition.MetadataFallback &&
+            cached.acquisition != DynamicDescriptorAcquisition.MetadataFallback
+    } ?: return candidate
+    // Rediscovery did not verify that this cached contract still matches the installed version.
+    // Retain its useful read surfaces, but never retain its former write authority.
+    return retainedCachedContract.copy(versionStatus = DynamicContractVersionStatus.LastKnownReadOnly)
+}
+
+/**
+ * Projects a retained contract into the action surface its current version evidence permits.
+ *
+ * Executor rejection remains the final defense, but unavailable writes must not be offered as
+ * forms, record controls, inline actions, or header actions in the first place.
+ */
+internal fun NativeAppSchema.forDynamicContractVersion(
+    versionStatus: DynamicContractVersionStatus,
+): NativeAppSchema {
+    if (versionStatus == DynamicContractVersionStatus.VerifiedCurrent) return this
+    val availableActions = actions.filter { action -> versionStatus.allows(action.risk) }
+    val availableActionIds = availableActions.mapTo(hashSetOf(), ActionSpec::id)
+    return copy(
+        actions = availableActions,
+        views = views.filter { view -> view.sourceActionId in availableActionIds },
     )
 }
 
@@ -1449,19 +1481,11 @@ private fun AppInfoScreen(
             )
         }
             .onSuccess { candidate ->
-                onDiscovery(candidate)
-                val retainedCachedContract =
-                    candidate.acquisition == DynamicDescriptorAcquisition.MetadataFallback &&
-                        cachedDiscovery?.acquisition != DynamicDescriptorAcquisition.MetadataFallback
-                discovery = if (retainedCachedContract) {
-                    cachedDiscovery
-                } else {
-                    candidate
-                }
-                sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, discovery ?: candidate)
-                if (cachedDiscovery == null || candidate.acquisition != DynamicDescriptorAcquisition.MetadataFallback) {
-                    discovery = candidate
-                }
+                val resolvedDiscovery = resolveDynamicContractRediscovery(cachedDiscovery, candidate)
+                val retainedCachedContract = resolvedDiscovery !== candidate
+                onDiscovery(resolvedDiscovery)
+                discovery = resolvedDiscovery
+                sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, resolvedDiscovery)
                 if (retainedCachedContract) {
                     discoveryError =
                         "Could not verify the current server and app versions. " +
@@ -1578,7 +1602,9 @@ private fun DynamicDiscoveredAppScreen(
     modifier: Modifier = Modifier,
 ) {
     val descriptor = discovery.descriptor
-    val schema = remember(descriptor) { descriptor.toNativeAppSchema() }
+    val schema = remember(descriptor, discovery.versionStatus) {
+        descriptor.toNativeAppSchema().forDynamicContractVersion(discovery.versionStatus)
+    }
     val initialViewId = remember(descriptor, schema) {
         descriptor.planDynamicNavigation().rootDestinations.firstOrNull()?.layoutId
             ?: schema.views.firstOrNull { it.component != NativeComponent.form }?.id
@@ -2194,7 +2220,7 @@ private fun DynamicDiscoveredAppScreen(
         actionViews.filterNot { candidate -> candidate == primaryCreateAction }
     }
     var actionMenuExpanded by remember(descriptor) { mutableStateOf(false) }
-    var pendingDirectAction by remember(descriptor) {
+    var pendingDirectAction by remember(descriptor, discovery.versionStatus) {
         mutableStateOf<PendingDynamicDirectAction?>(null)
     }
     var directActionRunning by remember(descriptor) { mutableStateOf(false) }
