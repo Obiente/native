@@ -686,7 +686,7 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
-    fun `recipe actions recover useful forms when an external schema is unavailable`() {
+    fun `empty recipe request schemas do not invent mutation fields`() {
         val document = """
             {
               "openapi":"3.0.3",
@@ -726,37 +726,52 @@ class DynamicAppDescriptorCompilerTest {
         val create = descriptor.actions.single { it.id == "newrecipe" }
         val import = descriptor.actions.single { it.id == "import" }
 
-        assertEquals(
-            listOf(
-                "cookTime",
-                "description",
-                "keywords",
-                "name",
-                "prepTime",
-                "recipeCategory",
-                "recipeIngredient",
-                "recipeInstructions",
-                "recipeYield",
-                "tool",
-            ),
-            descriptor.forms.single { it.actionId == create.id }.fields.map(FormField::fieldId),
-        )
-        assertEquals(
-            listOf("url"),
-            descriptor.forms.single { it.actionId == import.id }.fields.map(FormField::fieldId),
-        )
-        assertTrue((assertNotNull(create.binding.body).schema as JsonObject).containsKey("properties"))
-        assertTrue((assertNotNull(import.binding.body).schema as JsonObject).containsKey("properties"))
+        assertTrue(descriptor.forms.single { it.actionId == create.id }.fields.isEmpty())
+        assertTrue(descriptor.forms.single { it.actionId == import.id }.fields.isEmpty())
+        assertTrue((assertNotNull(create.binding.body).schema as JsonObject).isEmpty())
+        assertTrue((assertNotNull(import.binding.body).schema as JsonObject).isEmpty())
         assertEquals("recipes", import.resourceId)
-        assertEquals(
-            setOf("import", "newrecipe"),
-            descriptor.planDynamicNavigation().rootFormActions.map { it.actionId }.toSet(),
-        )
         assertTrue(descriptor.validationErrors().isEmpty())
     }
 
     @Test
-    fun `recipe action recovery preserves undeclared and non object bodies`() {
+    fun `explicit recipe request schema remains authoritative`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Recipes","version":"1"},
+              "paths":{
+                "/apps/example/api/v1/recipes":{
+                  "post":{
+                    "operationId":"newRecipe",
+                    "summary":"Create a new recipe",
+                    "tags":["Recipes"],
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["customTitle"],
+                      "properties":{
+                        "customTitle":{"type":"string","title":"Exact contract title"}
+                      }
+                    }}}},
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val create = descriptor.actions.single { it.id == "newrecipe" }
+        val schema = assertNotNull(create.binding.body).schema as JsonObject
+
+        assertEquals(setOf("customTitle"), (schema["properties"] as? JsonObject)?.keys)
+        assertEquals(listOf("customTitle"), descriptor.forms.single().fields.map(FormField::fieldId))
+        assertEquals("Exact contract title", descriptor.forms.single().fields.single().label)
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `recipe actions preserve undeclared and non object bodies`() {
         val document = """
             {
               "openapi":"3.0.3",

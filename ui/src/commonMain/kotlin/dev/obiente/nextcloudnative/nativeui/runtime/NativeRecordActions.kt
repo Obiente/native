@@ -545,6 +545,7 @@ private fun ApiBinding.resolveRecordActionBindings(
     val requiredPathNames = (pathParameterNames + requiredPathParameterNames).distinct()
     requiredPathNames.forEach { name ->
         val value = resolveRecordActionValue(name, resource, record, sources)
+            ?.takeIf(String::isSafeRecordPathValue)
             ?: sources["id"].takeIf {
                 record == null &&
                     requiredPathNames.size == 1 &&

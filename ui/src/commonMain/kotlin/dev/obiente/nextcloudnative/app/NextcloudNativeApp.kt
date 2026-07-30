@@ -2390,6 +2390,9 @@ private fun DynamicDiscoveredAppScreen(
     }
     var directActionRunning by remember(descriptor) { mutableStateOf(false) }
     var directActionError by remember(descriptor) { mutableStateOf<String?>(null) }
+    var directActionFailureState by remember(descriptor) {
+        mutableStateOf<DynamicDirectActionFailurePolicy?>(null)
+    }
     var contractInfoExpanded by remember(descriptor) { mutableStateOf(false) }
     val contractInfo = remember(discovery, recordContext) { discovery.toContractInfo(recordContext) }
     val dynamicActionScope = rememberCoroutineScope()
@@ -2545,6 +2548,7 @@ private fun DynamicDiscoveredAppScreen(
                     !value.isNullOrBlank()
             }?.value ?: selectedRecord?.id ?: schema.resource(actionSpec.resourceId)?.name ?: "item"
             directActionError = null
+            directActionFailureState = null
             pendingDirectAction = PendingDynamicDirectAction(
                 action = actionSpec,
                 values = action.pathParameterValues,
@@ -2964,17 +2968,34 @@ private fun DynamicDiscoveredAppScreen(
         )
     }
     pendingDirectAction?.let { pending ->
+        val outcomeUnknown = directActionFailureState?.requiresReconciliation == true
         AlertDialog(
             onDismissRequest = {
                 if (!directActionRunning) {
                     pendingDirectAction = null
                     directActionError = null
+                    directActionFailureState = null
                 }
             },
-            title = { Text(dynamicDirectActionTitle(pending.action, pending.targetLabel)) },
+            title = {
+                Text(
+                    if (outcomeUnknown) {
+                        "${dynamicHeaderActionLabel(pending.action, pending.action.label)} result unknown"
+                    } else {
+                        dynamicDirectActionTitle(pending.action, pending.targetLabel)
+                    },
+                )
+            },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                    Text(dynamicDirectActionDescription(pending.action))
+                    if (outcomeUnknown) {
+                        Text(
+                            "The server may already have completed this action. The view is being refreshed " +
+                                "to reconcile the result. Review the refreshed state before trying again.",
+                        )
+                    } else {
+                        Text(dynamicDirectActionDescription(pending.action))
+                    }
                     directActionError?.let { error ->
                         Text(
                             error,
@@ -2990,50 +3011,68 @@ private fun DynamicDiscoveredAppScreen(
                     onClick = {
                         pendingDirectAction = null
                         directActionError = null
+                        directActionFailureState = null
                     },
                 ) {
-                    Text("Cancel")
+                    Text(if (outcomeUnknown) "Close" else "Cancel")
                 }
             },
             confirmButton = {
-                Button(
-                    enabled = !directActionRunning,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                    onClick = {
-                        directActionRunning = true
-                        directActionError = null
-                        dynamicActionScope.launch {
-                            when (
-                                val result = executor.execute(
-                                    NativeActionRequest.Submit(
-                                        action = pending.action,
-                                        values = pending.values,
-                                        confirmed = true,
-                                    ),
-                                )
-                            ) {
-                                is NativeActionExecutionResult.Success -> {
-                                    pendingDirectAction = null
-                                    reconcileSuccessfulMutation(
-                                        action = pending.action,
-                                        leaveMutatedSurface = true,
+                if (directActionFailureState?.retryAllowed != false) {
+                    Button(
+                        enabled = !directActionRunning,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        onClick = {
+                            directActionRunning = true
+                            directActionError = null
+                            directActionFailureState = null
+                            dynamicActionScope.launch {
+                                when (
+                                    val result = executor.execute(
+                                        NativeActionRequest.Submit(
+                                            action = pending.action,
+                                            values = pending.values,
+                                            confirmed = true,
+                                        ),
                                     )
+                                ) {
+                                    is NativeActionExecutionResult.Success -> {
+                                        pendingDirectAction = null
+                                        reconcileSuccessfulMutation(
+                                            action = pending.action,
+                                            leaveMutatedSurface = true,
+                                        )
+                                    }
+                                    is NativeActionExecutionResult.Failure -> {
+                                        directActionError = result.message
+                                        val failurePolicy = dynamicDirectActionFailurePolicy(result.outcome)
+                                        directActionFailureState = failurePolicy
+                                        if (failurePolicy.requiresReconciliation) {
+                                            reconcileSuccessfulMutation(
+                                                action = pending.action,
+                                                leaveMutatedSurface = true,
+                                            )
+                                        }
+                                    }
                                 }
-                                is NativeActionExecutionResult.Failure -> {
-                                    directActionError = result.message
-                                }
+                                directActionRunning = false
                             }
-                            directActionRunning = false
+                        },
+                    ) {
+                        if (directActionRunning) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Text(
+                                if (directActionFailureState == null) {
+                                    dynamicDirectActionConfirmLabel(pending.action)
+                                } else {
+                                    "Try again"
+                                },
+                            )
                         }
-                    },
-                ) {
-                    if (directActionRunning) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        Text(dynamicDirectActionConfirmLabel(pending.action))
                     }
                 }
             },

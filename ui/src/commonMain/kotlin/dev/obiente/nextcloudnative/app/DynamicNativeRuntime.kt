@@ -46,6 +46,8 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import kotlin.math.ceil
+import kotlin.math.floor
 
 private val dynamicJson = Json {
     ignoreUnknownKeys = true
@@ -1000,8 +1002,7 @@ private fun HttpParameter.initialCollectionPageValue(collectionRead: Boolean): S
     if (!collectionRead || required) return null
     val normalizedName = name.lowercase().filter(Char::isLetterOrDigit)
     if (normalizedName !in INITIAL_PAGE_SIZE_PARAMETER_NAMES) return null
-    val type = (schema as? JsonObject)?.get("type")?.let { it as? JsonPrimitive }?.contentOrNull
-    return INITIAL_COLLECTION_PAGE_SIZE.takeIf { type == "integer" || type == "number" }?.toString()
+    return automaticCollectionPageSize()?.toString()
 }
 
 internal enum class DynamicPaginationMode {
@@ -1050,7 +1051,7 @@ internal fun DynamicAction.dynamicPaginationSpec(): DynamicPaginationSpec? {
     }
     val pageSize = optionalIntegerParameters.firstOrNull { parameter ->
         parameter.name.normalizedDynamicParameterName() in INITIAL_PAGE_SIZE_PARAMETER_NAMES
-    }?.let { INITIAL_COLLECTION_PAGE_SIZE }
+    }?.automaticCollectionPageSize()
     val pagingParameter = optionalIntegerParameters.firstOrNull { parameter ->
         parameter.name.normalizedDynamicParameterName() in PAGE_NUMBER_PARAMETER_NAMES
     } ?: optionalIntegerParameters.firstOrNull { parameter ->
@@ -1074,6 +1075,58 @@ internal fun DynamicAction.dynamicPaginationSpec(): DynamicPaginationSpec? {
 private fun HttpParameter.isIntegerNumberParameter(): Boolean {
     val type = (schema as? JsonObject)?.get("type")?.let { it as? JsonPrimitive }?.contentOrNull
     return type == "integer" || type == "number"
+}
+
+/**
+ * Chooses a useful initial page size only from a conventional optional numeric parameter whose
+ * declared schema can be satisfied safely. A valid explicit default wins. Otherwise the normal
+ * initial size is clamped to inclusive minimum/maximum bounds. Malformed, contradictory, fractional
+ * defaults, and minimums above the automatic-fetch safety ceiling are left to the server by
+ * omitting the optional parameter.
+ */
+private fun HttpParameter.automaticCollectionPageSize(): Int? {
+    val objectSchema = schema as? JsonObject ?: return null
+    val type = (objectSchema["type"] as? JsonPrimitive)?.contentOrNull
+    if (type != "integer" && type != "number") return null
+
+    fun declaredNumber(name: String): Double? {
+        val element = objectSchema[name] ?: return null
+        val primitive = element as? JsonPrimitive ?: return Double.NaN
+        return primitive
+            .takeUnless { it.isString }
+            ?.doubleOrNull
+            ?.takeIf { it.isFinite() }
+            ?: Double.NaN
+    }
+
+    val minimum = declaredNumber("minimum")
+    val maximum = declaredNumber("maximum")
+    if (minimum?.isNaN() == true || maximum?.isNaN() == true) return null
+
+    val lowerBound = maxOf(1.0, ceil(minimum ?: 1.0))
+    val upperBound = minOf(
+        MAX_AUTOMATIC_COLLECTION_PAGE_SIZE.toDouble(),
+        floor(maximum ?: MAX_AUTOMATIC_COLLECTION_PAGE_SIZE.toDouble()),
+    )
+    if (lowerBound > upperBound) return null
+
+    if ("default" in objectSchema) {
+        val declaredDefault = declaredNumber("default")
+            ?.takeUnless { it.isNaN() }
+            ?: return null
+        if (
+            declaredDefault % 1.0 != 0.0 ||
+            declaredDefault < lowerBound ||
+            declaredDefault > upperBound
+        ) {
+            return null
+        }
+        return declaredDefault.toInt()
+    }
+
+    return INITIAL_COLLECTION_PAGE_SIZE.toDouble()
+        .coerceIn(lowerBound, upperBound)
+        .toInt()
 }
 
 private fun String.normalizedDynamicParameterName(): String = lowercase().filter(Char::isLetterOrDigit)
@@ -1108,6 +1161,7 @@ private fun String.identityResourceStem(): String? = takeIf {
 private fun String.sameRuntimeResource(other: String): Boolean = runtimeResourceIdentity() == other.runtimeResourceIdentity()
 
 internal const val INITIAL_COLLECTION_PAGE_SIZE = 50
+private const val MAX_AUTOMATIC_COLLECTION_PAGE_SIZE = 500
 private val INITIAL_PAGE_SIZE_PARAMETER_NAMES = setOf("limit", "pagesize", "perpage", "maxresults")
 private val PAGE_NUMBER_PARAMETER_NAMES = setOf("page", "pagenumber", "pageno")
 private val OFFSET_PARAMETER_NAMES = setOf("offset")

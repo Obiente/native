@@ -7,8 +7,11 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class DynamicActionUiTest {
     @Test
@@ -60,6 +63,17 @@ class DynamicActionUiTest {
         )
         assertEquals("Clear photo?", dynamicDirectActionTitle(clear, "photo"))
         assertEquals("Clear", dynamicDirectActionConfirmLabel(clear))
+    }
+
+    @Test
+    fun `unknown direct mutation requires reconciliation and cannot be retried immediately`() {
+        val rejected = dynamicDirectActionFailurePolicy(NativeActionFailureOutcome.Rejected)
+        val unknown = dynamicDirectActionFailurePolicy(NativeActionFailureOutcome.Unknown)
+
+        assertTrue(rejected.retryAllowed)
+        assertFalse(rejected.requiresReconciliation)
+        assertFalse(unknown.retryAllowed)
+        assertTrue(unknown.requiresReconciliation)
     }
 
     @Test

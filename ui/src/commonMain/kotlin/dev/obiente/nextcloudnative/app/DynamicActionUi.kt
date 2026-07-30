@@ -5,6 +5,7 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 
 internal data class PendingDynamicDirectAction(
     val action: ActionSpec,
@@ -15,6 +16,29 @@ internal data class PendingDynamicDirectAction(
 internal enum class DynamicActionUiMode {
     NavigateToForm,
     ConfirmDirectly,
+}
+
+internal data class DynamicDirectActionFailurePolicy(
+    val retryAllowed: Boolean,
+    val requiresReconciliation: Boolean,
+)
+
+/**
+ * A rejected request is known not to have applied and may be retried. An unknown outcome may have
+ * reached the server, so the host must refresh authoritative state and suppress the same action
+ * until the user reviews that refreshed state.
+ */
+internal fun dynamicDirectActionFailurePolicy(
+    outcome: NativeActionFailureOutcome,
+): DynamicDirectActionFailurePolicy = when (outcome) {
+    NativeActionFailureOutcome.Rejected -> DynamicDirectActionFailurePolicy(
+        retryAllowed = true,
+        requiresReconciliation = false,
+    )
+    NativeActionFailureOutcome.Unknown -> DynamicDirectActionFailurePolicy(
+        retryAllowed = false,
+        requiresReconciliation = true,
+    )
 }
 
 /**

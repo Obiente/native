@@ -660,13 +660,7 @@ private class KotlinCompilerState(
             defaultPathParameters,
             collection && method == HttpMethod.GET,
         )
-        val body = semanticActionBody(
-            method = method,
-            path = boundPath,
-            operationId = operationId,
-            label = label,
-            declared = declaredBody,
-        )
+        val body = declaredBody
         (body?.schema as? JsonObject)?.let { bodySchema ->
             resource.mergeFields(fieldsFromSchema(bodySchema))
         }
@@ -1540,96 +1534,6 @@ private fun semanticFilteredCollectionResourceId(
         else -> null
     }
 }
-
-private fun semanticActionBody(
-    method: HttpMethod,
-    path: String,
-    operationId: String,
-    label: String,
-    declared: HttpBody?,
-): HttpBody? {
-    if (method == HttpMethod.GET || method == HttpMethod.DELETE) return declared
-    val declaredBody = declared ?: return null
-    val declaredSchema = declaredBody.schema as? JsonObject ?: return declared
-    val declaredType = declaredSchema.string("type")
-    if (declaredType != null && declaredType != "object") return declared
-    val declaredProperties = declaredSchema["properties"] as? JsonObject
-    if (!declaredProperties.isNullOrEmpty()) return declared
-
-    val semantics = "$operationId $label $path".lowercase()
-    val recipeAction = "recipe" in semantics
-    if (!recipeAction) return declared
-
-    val properties = when {
-        "import" in semantics && ("url" in semantics || "website" in semantics) -> JsonObject(
-            mapOf(
-                "url" to semanticStringSchema(
-                    title = "Recipe URL",
-                    description = "Link to a webpage containing a recipe",
-                    format = "uri",
-                ),
-            ),
-        )
-        method in setOf(HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH) &&
-            listOf("create", "new", "update", "edit").any(semantics::contains) -> recipeEditProperties()
-        else -> return declared
-    }
-    val required = if ("url" in properties) listOf("url") else listOf("name")
-    return HttpBody(
-        contentType = declaredBody.contentType,
-        required = declaredBody.required,
-        schema = JsonObject(
-            mapOf(
-                "type" to JsonPrimitive("object"),
-                "properties" to properties,
-                "required" to JsonArray(required.map(::JsonPrimitive)),
-            ),
-        ),
-    )
-}
-
-private fun recipeEditProperties(): JsonObject = JsonObject(
-    mapOf(
-        "name" to semanticStringSchema("Recipe name"),
-        "description" to semanticStringSchema("Description"),
-        "recipeYield" to JsonObject(
-            mapOf(
-                "type" to JsonPrimitive("integer"),
-                "title" to JsonPrimitive("Servings"),
-                "minimum" to JsonPrimitive(1),
-            ),
-        ),
-        "recipeCategory" to semanticStringSchema("Category"),
-        "keywords" to semanticStringSchema("Tags", "Separate tags with commas"),
-        "prepTime" to semanticStringSchema("Preparation time", "For example: PT20M"),
-        "cookTime" to semanticStringSchema("Cooking time", "For example: PT45M"),
-        "recipeIngredient" to semanticStringArraySchema("Ingredients"),
-        "recipeInstructions" to semanticStringArraySchema("Instructions"),
-        "tool" to semanticStringArraySchema("Tools"),
-    ),
-)
-
-private fun semanticStringSchema(
-    title: String,
-    description: String? = null,
-    format: String? = null,
-): JsonObject = JsonObject(
-    buildMap {
-        put("type", JsonPrimitive("string"))
-        put("title", JsonPrimitive(title))
-        description?.let { put("description", JsonPrimitive(it)) }
-        format?.let { put("format", JsonPrimitive(it)) }
-    },
-)
-
-private fun semanticStringArraySchema(title: String): JsonObject = JsonObject(
-    mapOf(
-        "type" to JsonPrimitive("array"),
-        "title" to JsonPrimitive(title),
-        "items" to JsonObject(mapOf("type" to JsonPrimitive("string"))),
-        "format" to JsonPrimitive(DYNAMIC_STRING_ARRAY_FORMAT),
-    ),
-)
 
 private const val RESOURCE_ID_EXTENSION = "x-nextcloud-native-resource-id"
 

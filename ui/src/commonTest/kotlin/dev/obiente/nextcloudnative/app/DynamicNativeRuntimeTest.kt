@@ -429,6 +429,102 @@ class DynamicNativeRuntimeTest {
     }
 
     @Test
+    fun `initial collection page size honors declared defaults and inclusive bounds`() {
+        data class Case(
+            val name: String,
+            val schema: String,
+            val expected: String?,
+        )
+
+        listOf(
+            Case(
+                name = "limit",
+                schema = """{"type":"integer","default":12,"minimum":1,"maximum":20}""",
+                expected = "12",
+            ),
+            Case(
+                name = "pageSize",
+                schema = """{"type":"integer","maximum":20}""",
+                expected = "20",
+            ),
+            Case(
+                name = "perPage",
+                schema = """{"type":"number","minimum":75,"maximum":100}""",
+                expected = "75",
+            ),
+            Case(
+                name = "maxResults",
+                schema = """{"type":"integer","minimum":501}""",
+                expected = null,
+            ),
+            Case(
+                name = "limit",
+                schema = """{"type":"integer","default":25,"maximum":20}""",
+                expected = null,
+            ),
+            Case(
+                name = "limit",
+                schema = """{"type":"number","default":12.5,"minimum":1,"maximum":20}""",
+                expected = null,
+            ),
+        ).forEach { case ->
+            val action = readAction().copy(
+                binding = readAction().binding.copy(
+                    queryParameters = listOf(
+                        HttpParameter(
+                            name = case.name,
+                            required = false,
+                            schema = json.parseToJsonElement(case.schema),
+                            source = ParameterSource.userInput,
+                        ),
+                    ),
+                ),
+            )
+
+            val request = buildDynamicApiRequest(descriptor(action), action, values = emptyMap())
+
+            assertEquals(case.expected, request.queryParameters[case.name], case.toString())
+        }
+    }
+
+    @Test
+    fun `pagination expectation uses the same schema derived page size as the initial request`() {
+        fun action(pageSizeSchema: String): DynamicAction = readAction().copy(
+            binding = readAction().binding.copy(
+                queryParameters = listOf(
+                    HttpParameter(
+                        name = "page_size",
+                        required = false,
+                        schema = json.parseToJsonElement(pageSizeSchema),
+                        source = ParameterSource.userInput,
+                    ),
+                    HttpParameter(
+                        name = "page",
+                        required = false,
+                        schema = json.parseToJsonElement("""{"type":"integer"}"""),
+                        source = ParameterSource.userInput,
+                    ),
+                ),
+            ),
+        )
+
+        val bounded = action("""{"type":"integer","default":18,"minimum":5,"maximum":20}""")
+        assertEquals(
+            "18",
+            buildDynamicApiRequest(descriptor(bounded), bounded, values = emptyMap())
+                .queryParameters["page_size"],
+        )
+        assertEquals(18, requireNotNull(bounded.dynamicPaginationSpec()).expectedPageSize)
+
+        val unsafe = action("""{"type":"integer","minimum":501}""")
+        assertNull(
+            buildDynamicApiRequest(descriptor(unsafe), unsafe, values = emptyMap())
+                .queryParameters["page_size"],
+        )
+        assertNull(requireNotNull(unsafe.dynamicPaginationSpec()).expectedPageSize)
+    }
+
+    @Test
     fun `typed optional page parameter enables reusable page number pagination`() {
         val action = readAction().copy(
             binding = readAction().binding.copy(

@@ -1001,6 +1001,71 @@ class NativeRecordActionsTest {
     }
 
     @Test
+    fun `unsafe canonical record ids withhold every path mutation`() {
+        val resource = resource(
+            fields = listOf(
+                field("title", "Title", FieldKind.string),
+                field("done", "Done", FieldKind.boolean),
+            ),
+        )
+        val actions = listOf(
+            action(
+                id = "edit",
+                intent = ActionIntent.update,
+                method = HttpMethod.PATCH,
+                pathNames = listOf("recordId"),
+                bodyNames = listOf("title"),
+            ).withRecordPath("edit"),
+            action(
+                id = "delete",
+                intent = ActionIntent.delete,
+                risk = ActionRisk.destructive,
+                method = HttpMethod.DELETE,
+                pathNames = listOf("recordId"),
+                confirmation = true,
+            ).withRecordPath("delete"),
+            action(
+                id = "complete",
+                intent = ActionIntent.update,
+                method = HttpMethod.PATCH,
+                pathNames = listOf("recordId"),
+                bodyNames = listOf("done"),
+                requiredBodyNames = listOf("done"),
+            ).withRecordPath("complete"),
+            action(
+                id = "archive",
+                intent = ActionIntent.execute,
+                effect = ActionEffect.archive,
+                method = HttpMethod.POST,
+                pathNames = listOf("recordId"),
+            ).withRecordPath("archive"),
+        )
+        val schema = schema(resource, actions)
+
+        listOf(
+            "",
+            "item/9",
+            "item\\9",
+            "item\n9",
+            "x".repeat(257),
+        ).forEach { unsafeId ->
+            val plans = nativeRecordActions(
+                schema = schema,
+                resource = resource,
+                record = NativeRecord(
+                    id = unsafeId,
+                    values = mapOf("title" to "Example", "done" to "false"),
+                ),
+            )
+
+            assertNull(plans.edit, "Edit must reject unsafe canonical ID '$unsafeId'.")
+            assertNull(plans.delete, "Delete must reject unsafe canonical ID '$unsafeId'.")
+            assertNull(plans.completion, "Completion must reject unsafe canonical ID '$unsafeId'.")
+            assertTrue(plans.commands.isEmpty(), "Commands must reject unsafe canonical ID '$unsafeId'.")
+        }
+    }
+
+    @Test
     fun `record identity wins only for the selected child resource`() {
         val resource = resource(
             fields = listOf(
