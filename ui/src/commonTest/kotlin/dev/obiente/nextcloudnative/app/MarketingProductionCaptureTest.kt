@@ -20,7 +20,7 @@ class MarketingProductionCaptureTest {
     }
 
     @Test
-    fun `dynamic table captures cover desktop and compact viewports`() {
+    fun `dynamic visual QA captures cover desktop and compact viewports`() {
         val desktop = MarketingCaptureScenario.AdaptiveApp
         val mobile = MarketingCaptureScenario.AdaptiveAppMobile
 

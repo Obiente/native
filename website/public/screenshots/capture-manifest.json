@@ -72,6 +72,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingLivePhotoCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingPhotoFolderCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingPhotoTimelineCaptureScenarios.kt",
@@ -202,7 +203,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "86d0935e0ea2c3d1f13af160aae650b59340ad8e2dfdf40301c590e09097b02f",
+    "captureSourceSha256": "cbbec9045a73dc1d02ea934ac9efc461f4ae55ac6e069357b605c272dfb08fca",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {
@@ -268,12 +269,12 @@
             "height": 900,
             "density": 1.0,
             "feature": "Dynamic apps",
-            "surface": "Data table",
-            "state": "Ready",
-            "purpose": "showcase",
+            "surface": "Nested collection and semantic form",
+            "state": "Synthetic visual QA",
+            "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "8ea77b6433330f84daf342c6443879fbf969be212d61d19a27be36d5e10db400"
+            "sha256": "5eb5ee8183bcf9fe1ca89f3da73e922bb1415bb63ae4ad0dd42bdd7b23ab16fc"
         },
         {
             "scenario": "adaptive-dynamic-data-mobile",
@@ -282,12 +283,12 @@
             "height": 1800,
             "density": 2.625,
             "feature": "Dynamic apps",
-            "surface": "Data table",
-            "state": "Ready",
-            "purpose": "showcase",
+            "surface": "Nested collection and semantic form",
+            "state": "Synthetic visual QA",
+            "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "4cdd69a0f017606101ece12a1b98ec87e73479fe8721e2af0d0d83ef3660f42d"
+            "sha256": "cf114035ff299bdc3b2b855143e27f503855f0e6f2a88f3a5df02c750591cfbb"
         },
         {
             "scenario": "photo-timeline-revalidation-error-mobile",

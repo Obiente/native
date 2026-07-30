@@ -2,7 +2,6 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -30,9 +29,6 @@ import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
-import dev.obiente.nextcloudnative.nativeui.runtime.GenericNativeAppScreen
-import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
-import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeScreenState
 
@@ -80,12 +76,14 @@ enum class MarketingCaptureScenario(
     ),
     AdaptiveApp(
         "adaptive-dynamic-data", "adaptive-dynamic-data.png", NextcloudPresentation.Desktop,
-        "Dynamic apps", "Data table", "Ready", MarketingCapturePurpose.Showcase,
+        "Dynamic apps", "Nested collection and semantic form", "Synthetic visual QA",
+        MarketingCapturePurpose.StateCoverage,
         "desktop", "wide", width = 1_440, height = 900, density = 1f,
     ),
     AdaptiveAppMobile(
         "adaptive-dynamic-data-mobile", "adaptive-dynamic-data-mobile.png", NextcloudPresentation.Adaptive,
-        "Dynamic apps", "Data table", "Ready", MarketingCapturePurpose.Showcase,
+        "Dynamic apps", "Nested collection and semantic form", "Synthetic visual QA",
+        MarketingCapturePurpose.StateCoverage,
         "mobile", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f,
     ),
     PhotoTimelineRevalidationErrorMobile(
@@ -676,30 +674,7 @@ internal fun MarketingAdaptiveAppScenario(scenario: MarketingCaptureScenario) {
     ) {
         "${scenario.id} is not an adaptive data capture."
     }
-    val schema = marketingAdaptiveSchema
-    val view = schema.views.single()
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val compact = shouldUseCompactDynamicAppChrome(maxWidth.value, maxHeight.value)
-        Column(modifier = Modifier.fillMaxSize()) {
-            DynamicAppChromeHeader(
-                title = schema.app.name,
-                subtitle = view.title,
-                onBack = {},
-                compact = compact,
-                onContractInfo = {},
-            )
-            GenericNativeAppScreen(
-                schema = schema,
-                view = view,
-                state = NativeScreenState.Ready(marketingAdaptiveRecords),
-                actionExecutor = NativeActionExecutor {
-                    NativeActionExecutionResult.Failure("This fixture is read-only.")
-                },
-                onSelectRecord = {},
-                modifier = Modifier.weight(1f),
-            )
-        }
-    }
+    MarketingDynamicUiScenario(scenario)
 }
 
 @Composable
