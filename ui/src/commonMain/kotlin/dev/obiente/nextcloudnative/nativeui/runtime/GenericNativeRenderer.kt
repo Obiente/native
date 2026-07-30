@@ -61,6 +61,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -110,6 +111,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -180,8 +182,8 @@ fun GenericNativeAppScreen(
         nestedBoard != null -> GenericNativeSurface.Board
         else -> view.genericSurface(presentedResource, presentedRecords)
     }
-    var pendingRecordFormAction by remember(schema, view.id) {
-        mutableStateOf<PendingNativeRecordFormAction?>(null)
+    var pendingRecordFormActionToken by rememberSaveable(schema.app.id, view.id) {
+        mutableStateOf<String?>(null)
     }
     var pendingRecordDeleteAction by remember(schema, view.id) {
         mutableStateOf<PendingNativeRecordDeleteAction?>(null)
@@ -194,12 +196,12 @@ fun GenericNativeAppScreen(
     val inlineActionSucceeded = onInlineActionSucceeded ?: onActionSucceeded
     val openRecordEdit: (NativeRecord, NativeRecordFormActionPlan) -> Unit = edit@{ record, plan ->
         val actionResource = presentedResource ?: return@edit
-        pendingRecordFormAction = PendingNativeRecordFormAction(
-            plan = plan,
-            itemLabel = nativeRecordPresentation(actionResource, record).title,
-            resource = actionResource,
-            datasetContext = datasetContext,
-        )
+        pendingRecordFormActionToken = RestorableNativeRecordFormAction(
+            actionId = plan.action.id,
+            resourceId = actionResource.id,
+            kind = plan.kind,
+            recordId = record.id,
+        ).encode()
     }
     val openRecordDelete: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit = { record, plan ->
         pendingRecordDeleteAction = PendingNativeRecordDeleteAction(
@@ -255,14 +257,49 @@ fun GenericNativeAppScreen(
     val openCollectionCreate: (() -> Unit)? = collectionCreatePlan?.let { plan ->
         val actionResource = presentedResource
         {
-            pendingRecordFormAction = PendingNativeRecordFormAction(
-                plan = plan,
-                itemLabel = actionResource.name,
-                resource = actionResource,
-                datasetContext = datasetContext,
-            )
+            pendingRecordFormActionToken = RestorableNativeRecordFormAction(
+                actionId = plan.action.id,
+                resourceId = actionResource.id,
+                kind = plan.kind,
+                recordId = null,
+            ).encode()
         }
     }
+    val pendingRecordFormAction = pendingRecordFormActionToken
+        ?.let(::decodeRestorableNativeRecordFormAction)
+        ?.let pending@{ saved ->
+            val actionResource = presentedResource
+                ?.takeIf { resourceSpec -> resourceSpec.id == saved.resourceId }
+                ?: schema.resource(saved.resourceId)
+                ?: return@pending null
+            val record = if (saved.recordId != null) {
+                presentedRecords.firstOrNull { candidate -> candidate.id == saved.recordId }
+                    ?: return@pending null
+            } else {
+                null
+            }
+            val plan = nativeRecordActions(
+                schema = schema,
+                resource = actionResource,
+                record = record,
+                navigationContext = datasetContext.bindingValues,
+            ).let { capabilities ->
+                when (saved.kind) {
+                    NativeRecordFormActionKind.Create -> capabilities.create
+                    NativeRecordFormActionKind.Edit -> capabilities.edit
+                }
+            }?.takeIf { candidate -> candidate.action.id == saved.actionId }
+                ?: return@pending null
+            PendingNativeRecordFormAction(
+                plan = plan,
+                itemLabel = record
+                    ?.let { nativeRecordPresentation(actionResource, it).title }
+                    ?: actionResource.name,
+                resource = actionResource,
+                datasetContext = datasetContext,
+                restoreKey = pendingRecordFormActionToken.orEmpty(),
+            )
+        }
     Surface(
         modifier = modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -437,9 +474,12 @@ fun GenericNativeAppScreen(
             pending = pending,
             schema = schema,
             actionExecutor = actionExecutor,
-            onDismiss = { pendingRecordFormAction = null },
+            onDismiss = { pendingRecordFormActionToken = null },
             onActionSucceeded = { action ->
-                pendingRecordFormAction = null
+                pendingRecordFormActionToken = null
+                inlineActionSucceeded?.invoke(action)
+            },
+            onOutcomeUnknown = { action ->
                 inlineActionSucceeded?.invoke(action)
             },
         )
@@ -476,7 +516,116 @@ private data class PendingNativeRecordFormAction(
     val itemLabel: String,
     val resource: ResourceSpec,
     val datasetContext: NativeDatasetContext,
+    val restoreKey: String,
 )
+
+internal data class RestorableNativeRecordFormAction(
+    val actionId: String,
+    val resourceId: String,
+    val kind: NativeRecordFormActionKind,
+    val recordId: String?,
+)
+
+internal fun RestorableNativeRecordFormAction.encode(): String? {
+    if (
+        actionId.isBlank() ||
+        resourceId.isBlank() ||
+        actionId.length > MAX_SAVED_FORM_ID_LENGTH ||
+        resourceId.length > MAX_SAVED_FORM_ID_LENGTH ||
+        recordId?.length?.let { it > MAX_SAVED_FORM_ID_LENGTH } == true
+    ) {
+        return null
+    }
+    return JsonArray(
+        listOf(
+            JsonPrimitive(actionId),
+            JsonPrimitive(resourceId),
+            JsonPrimitive(kind.name),
+            recordId?.let(::JsonPrimitive) ?: JsonNull,
+        ),
+    ).toString()
+}
+
+internal fun decodeRestorableNativeRecordFormAction(value: String): RestorableNativeRecordFormAction? {
+    if (value.length > MAX_SAVED_FORM_TOKEN_LENGTH) return null
+    val parts = runCatching { Json.parseToJsonElement(value) }.getOrNull() as? JsonArray ?: return null
+    if (parts.size != 4) return null
+    val actionId = (parts[0] as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.contentOrNull ?: return null
+    val resourceId = (parts[1] as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.contentOrNull ?: return null
+    val kindName = (parts[2] as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.contentOrNull ?: return null
+    val recordId = when (val record = parts[3]) {
+        JsonNull -> null
+        is JsonPrimitive -> record.takeIf(JsonPrimitive::isString)?.contentOrNull ?: return null
+        else -> return null
+    }
+    if (
+        actionId.isBlank() ||
+        resourceId.isBlank() ||
+        actionId.length > MAX_SAVED_FORM_ID_LENGTH ||
+        resourceId.length > MAX_SAVED_FORM_ID_LENGTH ||
+        recordId?.length?.let { it > MAX_SAVED_FORM_ID_LENGTH } == true
+    ) {
+        return null
+    }
+    val kind = NativeRecordFormActionKind.entries.firstOrNull { candidate -> candidate.name == kindName }
+        ?: return null
+    return RestorableNativeRecordFormAction(actionId, resourceId, kind, recordId)
+}
+
+internal fun encodeNativeRecordFormDraft(values: Map<String, String>): List<String>? {
+    if (values.size > MAX_SAVED_FORM_FIELDS) return null
+    var totalLength = 0
+    val saved = ArrayList<String>(values.size * 2)
+    values.entries.sortedBy(Map.Entry<String, String>::key).forEach { (key, value) ->
+        if (
+            key.isBlank() ||
+            key.length > MAX_SAVED_FORM_ID_LENGTH ||
+            value.length > MAX_SAVED_FORM_VALUE_LENGTH
+        ) {
+            return null
+        }
+        totalLength += key.length + value.length
+        if (totalLength > MAX_SAVED_FORM_TOTAL_LENGTH) return null
+        saved += key
+        saved += value
+    }
+    return saved
+}
+
+internal fun decodeNativeRecordFormDraft(values: List<String>): Map<String, String>? {
+    if (values.size % 2 != 0 || values.size / 2 > MAX_SAVED_FORM_FIELDS) return null
+    val entries = linkedMapOf<String, String>()
+    var totalLength = 0
+    values.chunked(2).forEach { (key, value) ->
+        if (
+            key.isBlank() ||
+            key in entries ||
+            key.length > MAX_SAVED_FORM_ID_LENGTH ||
+            value.length > MAX_SAVED_FORM_VALUE_LENGTH
+        ) {
+            return null
+        }
+        totalLength += key.length + value.length
+        if (totalLength > MAX_SAVED_FORM_TOTAL_LENGTH) return null
+        entries[key] = value
+    }
+    return entries
+}
+
+private fun nativeRecordFormDraftSaver(declaredFieldIds: Set<String>) = Saver<Map<String, String>, List<String>>(
+    save = { draft ->
+        if (draft.keys.all(declaredFieldIds::contains)) encodeNativeRecordFormDraft(draft) else null
+    },
+    restore = { saved ->
+        decodeNativeRecordFormDraft(saved)?.takeIf { values -> values.keys.all(declaredFieldIds::contains) }
+    },
+)
+
+private const val MAX_SAVED_FORM_FIELDS = 64
+private const val MAX_SAVED_FORM_ID_LENGTH = 256
+private const val MAX_SAVED_FORM_VALUE_LENGTH = 64 * 1024
+private const val MAX_SAVED_FORM_TOTAL_LENGTH = 256 * 1024
+private const val MAX_SAVED_FORM_TOKEN_LENGTH = 2 * 1024
 
 private data class PendingNativeRecordDeleteAction(
     val plan: NativeRecordDeleteActionPlan,
@@ -497,12 +646,19 @@ private fun GenericRecordFormActionDialog(
     actionExecutor: NativeActionExecutor,
     onDismiss: () -> Unit,
     onActionSucceeded: (ActionSpec) -> Unit,
+    onOutcomeUnknown: (ActionSpec) -> Unit,
 ) {
     val plan = pending.plan
-    var values by remember(pending) { mutableStateOf(plan.initialValues) }
+    val draftSaver = remember(plan.fields) {
+        nativeRecordFormDraftSaver(plan.fields.mapTo(linkedSetOf(), FieldSpec::id))
+    }
+    var values by rememberSaveable(pending.restoreKey, stateSaver = draftSaver) {
+        mutableStateOf(plan.initialValues)
+    }
     var error by remember(pending) { mutableStateOf<String?>(null) }
-    var awaitingConfirmation by remember(pending) { mutableStateOf(false) }
+    var awaitingConfirmation by rememberSaveable(pending.restoreKey) { mutableStateOf(false) }
     var submitting by remember(pending) { mutableStateOf(false) }
+    var outcomeUnknown by rememberSaveable(pending.restoreKey) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val operation = when (plan.kind) {
         NativeRecordFormActionKind.Create -> "Create"
@@ -521,23 +677,31 @@ private fun GenericRecordFormActionDialog(
         }
         submitting = true
         error = null
+        outcomeUnknown = false
         scope.launch {
             when (val result = actionExecutor.execute(request)) {
                 is NativeActionExecutionResult.Success -> onActionSucceeded(plan.action)
                 is NativeActionExecutionResult.Failure -> {
                     error = result.message
                     awaitingConfirmation = false
+                    outcomeUnknown = !result.outcome.allowsGenericFormRetry()
+                    if (outcomeUnknown) {
+                        onOutcomeUnknown(plan.action)
+                    }
                 }
             }
             submitting = false
         }
     }
+    val formRetryAllowed = !outcomeUnknown
 
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
         title = {
             Text(
-                if (awaitingConfirmation) {
+                if (outcomeUnknown) {
+                    "$operation result unknown"
+                } else if (awaitingConfirmation) {
                     "Confirm ${operation.lowercase()}"
                 } else {
                     "$operation ${pending.itemLabel}"
@@ -581,7 +745,7 @@ private fun GenericRecordFormActionDialog(
                                     value = values[field.id].orEmpty(),
                                     options = relationOptions,
                                     error = null,
-                                    enabled = !submitting,
+                                    enabled = !submitting && formRetryAllowed,
                                     onValueChange = { value ->
                                         values = values + (field.id to value)
                                         error = null
@@ -592,7 +756,7 @@ private fun GenericRecordFormActionDialog(
                                     field = field,
                                     value = values[field.id].orEmpty(),
                                     error = null,
-                                    enabled = !submitting,
+                                    enabled = !submitting && formRetryAllowed,
                                     filePicker = null,
                                     onValueChange = { value ->
                                         values = values + (field.id to value)
@@ -607,6 +771,14 @@ private fun GenericRecordFormActionDialog(
                             message,
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    if (outcomeUnknown) {
+                        Text(
+                            "The data is being refreshed to check the server result. " +
+                                "Review the refreshed data before trying this action again.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -624,34 +796,42 @@ private fun GenericRecordFormActionDialog(
                     }
                 },
             ) {
-                Text(if (awaitingConfirmation) "Back" else "Cancel")
+                Text(
+                    when {
+                        outcomeUnknown -> "Close"
+                        awaitingConfirmation -> "Back"
+                        else -> "Cancel"
+                    },
+                )
             }
         },
         confirmButton = {
-            Button(
-                enabled = !submitting,
-                onClick = {
-                    when {
-                        awaitingConfirmation -> submit(confirmed = true)
-                        plan.action.requiresConfirmation -> {
-                            val validation = runCatching {
-                                plan.request(inputValues = values, confirmed = true)
-                            }.exceptionOrNull()
-                            if (validation == null) {
-                                error = null
-                                awaitingConfirmation = true
-                            } else {
-                                error = validation.message ?: "The values could not be submitted."
+            if (formRetryAllowed) {
+                Button(
+                    enabled = !submitting,
+                    onClick = {
+                        when {
+                            awaitingConfirmation -> submit(confirmed = true)
+                            plan.action.requiresConfirmation -> {
+                                val validation = runCatching {
+                                    plan.request(inputValues = values, confirmed = true)
+                                }.exceptionOrNull()
+                                if (validation == null) {
+                                    error = null
+                                    awaitingConfirmation = true
+                                } else {
+                                    error = validation.message ?: "The values could not be submitted."
+                                }
                             }
+                            else -> submit(confirmed = false)
                         }
-                        else -> submit(confirmed = false)
+                    },
+                ) {
+                    if (submitting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text(if (awaitingConfirmation) "Confirm" else operation)
                     }
-                },
-            ) {
-                if (submitting) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    Text(if (awaitingConfirmation) "Confirm" else operation)
                 }
             }
         },
@@ -1948,8 +2128,14 @@ internal data class NativeRecordCommandUi(
     val confirmationMessage: String? = null,
 )
 
-internal fun NativeActionFailureOutcome.requiresCommandReconciliation(): Boolean =
+internal fun NativeActionFailureOutcome.requiresMutationReconciliation(): Boolean =
     this == NativeActionFailureOutcome.Unknown
+
+internal fun NativeActionFailureOutcome.requiresCommandReconciliation(): Boolean =
+    requiresMutationReconciliation()
+
+internal fun NativeActionFailureOutcome.allowsGenericFormRetry(): Boolean =
+    !requiresMutationReconciliation()
 
 internal fun nativeRecordCommandUi(
     effect: ActionEffect,
@@ -4781,7 +4967,7 @@ internal fun nativeFormAutoBindingResolution(
         relationship.childResourceId == resource.id &&
             relationship.parentResourceId == parentResourceId &&
             relationship.childFieldId != null &&
-            relationship.confidence in setOf(Confidence.high, Confidence.verified)
+            relationship.confidence == Confidence.verified
     }
     if (
         acceptedRelationships.groupBy { relationship -> relationship.childFieldId }
@@ -4973,6 +5159,30 @@ internal fun nativeScalarRelationClearChoice(field: FieldSpec): NativeRelationOp
             )
     }
 
+internal data class NativeRelationOptionWindow(
+    val options: List<NativeRelationOption>,
+    val hasMore: Boolean,
+)
+
+internal fun nativeRelationOptionWindow(
+    options: List<NativeRelationOption>,
+    query: String,
+): NativeRelationOptionWindow {
+    val boundedQuery = query.take(NATIVE_RELATION_MAX_QUERY_LENGTH)
+    val matches = options.asSequence()
+        .filter { option ->
+            boundedQuery.isBlank() ||
+                option.label.contains(boundedQuery, ignoreCase = true) ||
+                option.supportingText?.contains(boundedQuery, ignoreCase = true) == true
+        }
+        .take(NATIVE_RELATION_OPTION_WINDOW_SIZE + 1)
+        .toList()
+    return NativeRelationOptionWindow(
+        options = matches.take(NATIVE_RELATION_OPTION_WINDOW_SIZE),
+        hasMore = matches.size > NATIVE_RELATION_OPTION_WINDOW_SIZE,
+    )
+}
+
 @Composable
 private fun GenericRelationshipField(
     field: FieldSpec,
@@ -5047,13 +5257,9 @@ private fun GenericRelationPicker(
     onValueChange: (String) -> Unit,
 ) {
     var expanded by remember(field.id) { mutableStateOf(false) }
-    var query by remember(field.id) { mutableStateOf("") }
+    var query by rememberSaveable(field.id) { mutableStateOf("") }
     val selected = options.firstOrNull { option -> option.value == value }
-    val visibleOptions = options.filter { option ->
-        query.isBlank() ||
-            option.label.contains(query, ignoreCase = true) ||
-            option.supportingText?.contains(query, ignoreCase = true) == true
-    }
+    val optionWindow = nativeRelationOptionWindow(options, query)
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
         Text(
             requiredFieldLabel(field),
@@ -5100,9 +5306,10 @@ private fun GenericRelationPicker(
                             horizontal = NextcloudSpacing.Small,
                             vertical = NextcloudSpacing.XSmall,
                         ).widthIn(min = 280.dp),
-                        label = { Text("Search") },
+                        label = { Text("Search ${field.label.lowercase()}") },
                         singleLine = true,
                     )
+                    GenericRelationSearchGuidance(options.size, query, optionWindow)
                 }
                 clearChoice?.let { choice ->
                     DropdownMenuItem(
@@ -5124,9 +5331,9 @@ private fun GenericRelationPicker(
                             query = ""
                         },
                     )
-                    if (visibleOptions.isNotEmpty()) HorizontalDivider()
+                    if (optionWindow.options.isNotEmpty()) HorizontalDivider()
                 }
-                visibleOptions.forEach { option ->
+                optionWindow.options.forEach { option ->
                     DropdownMenuItem(
                         text = {
                             Column {
@@ -5165,15 +5372,11 @@ private fun GenericRelationMultiPicker(
     onValueChange: (String) -> Unit,
 ) {
     var expanded by remember(field.id) { mutableStateOf(false) }
-    var query by remember(field.id) { mutableStateOf("") }
+    var query by rememberSaveable(field.id) { mutableStateOf("") }
     val selectedValues = remember(value, field.format) {
         value.nativeRelationSelectedValues(field.format)
     }
-    val visibleOptions = options.filter { option ->
-        query.isBlank() ||
-            option.label.contains(query, ignoreCase = true) ||
-            option.supportingText?.contains(query, ignoreCase = true) == true
-    }
+    val optionWindow = nativeRelationOptionWindow(options, query)
     val selectedLabels = options.filter { option -> option.value in selectedValues }
         .joinToString(", ", transform = NativeRelationOption::label)
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
@@ -5206,11 +5409,12 @@ private fun GenericRelationMultiPicker(
                             horizontal = NextcloudSpacing.Small,
                             vertical = NextcloudSpacing.XSmall,
                         ).widthIn(min = 280.dp),
-                        label = { Text("Search") },
+                        label = { Text("Search ${field.label.lowercase()}") },
                         singleLine = true,
                     )
+                    GenericRelationSearchGuidance(options.size, query, optionWindow)
                 }
-                visibleOptions.forEach { option ->
+                optionWindow.options.forEach { option ->
                     val selected = option.value in selectedValues
                     DropdownMenuItem(
                         leadingIcon = {
@@ -5246,6 +5450,28 @@ private fun GenericRelationMultiPicker(
     }
 }
 
+@Composable
+private fun GenericRelationSearchGuidance(
+    totalOptionCount: Int,
+    query: String,
+    window: NativeRelationOptionWindow,
+) {
+    val message = when {
+        query.isBlank() ->
+            "Showing the first ${window.options.size} of $totalOptionCount choices. Search to narrow the list."
+        window.hasMore ->
+            "Showing the first ${window.options.size} matches. Refine your search to see fewer choices."
+        window.options.isEmpty() -> "No matching choices."
+        else -> "${window.options.size} matching choices."
+    }
+    Text(
+        message,
+        modifier = Modifier.padding(horizontal = NextcloudSpacing.Small),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 private fun String.nativeRelationSelectedValues(format: String?): List<String> {
     if (isBlank()) return emptyList()
     val array = runCatching { Json.parseToJsonElement(this) }.getOrNull() as? JsonArray
@@ -5268,6 +5494,7 @@ private fun List<String>.toNativeRelationArray(format: String?): String = when (
 
 private const val NATIVE_RELATION_SEARCH_THRESHOLD = 8
 private const val NATIVE_RELATION_MAX_QUERY_LENGTH = 120
+internal const val NATIVE_RELATION_OPTION_WINDOW_SIZE = 40
 
 internal fun nativeFormTitle(view: ViewSpec, resource: ResourceSpec, action: ActionSpec): String =
     if (action.isSettingsWrite(resource)) "Settings" else view.title

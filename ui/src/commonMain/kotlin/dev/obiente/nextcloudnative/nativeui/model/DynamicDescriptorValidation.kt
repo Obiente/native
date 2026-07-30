@@ -74,7 +74,18 @@ fun DynamicAppDescriptor.validationErrors(): List<String> = buildList {
         }
     }
     actions.forEach { action ->
-        if (action.resourceId !in resourcesById) add("Missing resource reference: ${action.resourceId}")
+        val resource = resourcesById[action.resourceId]
+        if (resource == null) {
+            add("Missing resource reference: ${action.resourceId}")
+        } else {
+            val resourceFieldIds = resource.fields.mapTo(mutableSetOf(), DynamicField::id)
+            action.responseFieldIds.filter { it !in resourceFieldIds }.forEach {
+                add("Missing response field reference: ${action.resourceId}.$it")
+            }
+        }
+        if (action.binding.method != HttpMethod.GET && action.responseFieldIds.isNotEmpty()) {
+            add("Mutation action declares read-response fields: ${action.id}")
+        }
         if (!action.binding.path.isSafeRelativePath()) {
             add("Invalid action endpoint: ${action.binding.path}")
         } else if (endpointPolicy.approvedApiPrefixes.none { action.binding.path.matchesPrefix(it) }) {

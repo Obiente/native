@@ -11,8 +11,11 @@ import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
 import dev.obiente.nextcloudnative.nativeui.model.ResourceRelationshipSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 class DynamicFormRelationsTest {
     @Test
@@ -88,6 +91,129 @@ class DynamicFormRelationsTest {
                 mapOf("workspaceId" to "7"),
             ),
         )
+    }
+
+    @Test
+    fun `relation cache identity follows exact declared hierarchy bindings`() {
+        val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
+        val schema = schema(
+            form = form,
+            relationship = ResourceRelationshipSpec(
+                "categories",
+                "entries",
+                "id",
+                "categoryId",
+                Confidence.verified,
+            ),
+            reads = listOf(
+                action(
+                    "category-index",
+                    "categories",
+                    "/api/workspaces/{workspaceId}/categories",
+                    requiredPathNames = listOf("workspaceId"),
+                ),
+            ),
+        )
+        val firstRequest = dynamicFormRelationLoadRequests(
+            schema,
+            form,
+            mapOf("workspaceId" to "workspace-7", "unrelated" to "ignored"),
+        ).single()
+        val sameScope = dynamicFormRelationLoadRequests(
+            schema,
+            form,
+            mapOf("workspaceId" to "workspace-7"),
+        ).single()
+        val nextParent = dynamicFormRelationLoadRequests(
+            schema,
+            form,
+            mapOf("workspaceId" to "workspace-8"),
+        ).single()
+        val records = listOf(NativeRecord("category-1", mapOf("name" to "First")))
+        val cached = DynamicFormRelationCacheState().loadSucceeded(firstRequest, records)
+        val staleGenericRecords = mapOf(
+            "categories" to listOf(NativeRecord("stale", mapOf("name" to "Wrong parent"))),
+            "unrelated" to listOf(NativeRecord("other", mapOf("name" to "Keep me"))),
+        )
+
+        assertEquals(firstRequest.cacheKey, sameScope.cacheKey)
+        assertNotEquals(firstRequest.cacheKey, nextParent.cacheKey)
+        assertEquals(mapOf("categories" to records), cached.relatedRecords(listOf(sameScope)))
+        assertTrue(cached.relatedRecords(listOf(nextParent)).isEmpty())
+        assertEquals(listOf(nextParent), cached.pendingRequests(listOf(nextParent)))
+        assertEquals(
+            mapOf("unrelated" to staleGenericRecords.getValue("unrelated")),
+            cached.datasetRelatedRecords(staleGenericRecords, listOf(nextParent)),
+        )
+        assertEquals(
+            mapOf(
+                "unrelated" to staleGenericRecords.getValue("unrelated"),
+                "categories" to records,
+            ),
+            cached.datasetRelatedRecords(staleGenericRecords, listOf(sameScope)),
+        )
+    }
+
+    @Test
+    fun `relation failures stay visible until targeted retry and cache state remains bounded`() {
+        val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
+        val schema = schema(
+            form = form,
+            relationship = ResourceRelationshipSpec(
+                "categories",
+                "entries",
+                "id",
+                "categoryId",
+                Confidence.verified,
+            ),
+            reads = listOf(
+                action(
+                    "category-index",
+                    "categories",
+                    "/api/workspaces/{workspaceId}/categories",
+                    requiredPathNames = listOf("workspaceId"),
+                ),
+            ),
+        )
+        val request = dynamicFormRelationLoadRequests(
+            schema,
+            form,
+            mapOf("workspaceId" to "workspace-7"),
+        ).single()
+        val failed = DynamicFormRelationCacheState().loadFailed(request)
+        val staleGenericRecords = mapOf(
+            "categories" to listOf(NativeRecord("stale", mapOf("name" to "Wrong parent"))),
+        )
+
+        assertEquals(listOf(request), failed.failedRequests(listOf(request)))
+        assertTrue(failed.pendingRequests(listOf(request)).isEmpty())
+        assertTrue(failed.datasetRelatedRecords(staleGenericRecords, listOf(request)).isEmpty())
+
+        val retrying = failed.retry(listOf(request))
+
+        assertTrue(retrying.failedRequests(listOf(request)).isEmpty())
+        assertEquals(listOf(request), retrying.pendingRequests(listOf(request)))
+
+        val bounded = (1..24).fold(DynamicFormRelationCacheState()) { state, index ->
+            val scoped = request.copy(
+                cacheKey = request.cacheKey.copy(
+                    bindingValues = mapOf("workspaceId" to "workspace-$index"),
+                ),
+            )
+            state.loadSucceeded(
+                scoped,
+                listOf(NativeRecord("category-$index", mapOf("name" to "Category $index"))),
+            ).loadFailed(
+                scoped.copy(
+                    cacheKey = scoped.cacheKey.copy(
+                        bindingValues = mapOf("workspaceId" to "failed-$index"),
+                    ),
+                ),
+            )
+        }
+
+        assertEquals(16, bounded.recordsByKey.size)
+        assertEquals(16, bounded.failedKeys.size)
     }
 
     private fun schema(

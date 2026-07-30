@@ -608,10 +608,6 @@ suspend fun loadDynamicRecords(
 ): List<NativeRecord> {
     val action = descriptor.actions.firstOrNull { it.id == actionId }
         ?: error("This view has no declared load action.")
-    val declaredFieldIds = descriptor.resources.firstOrNull { it.id == action.resourceId }
-        ?.fields
-        .orEmpty()
-        .mapTo(linkedSetOf()) { it.id }
     val bindingContext = (action.binding.pathParameters + action.binding.queryParameters)
         .asSequence()
         .mapNotNull { parameter ->
@@ -624,7 +620,6 @@ suspend fun loadDynamicRecords(
     return executeDynamicReadWithFallback(
         descriptor = descriptor,
         actionId = actionId,
-        declaredFieldIds = declaredFieldIds,
         execute = { candidate ->
             val candidateValues = remapReadFallbackValues(action, candidate, values)
             val request = buildDynamicApiRequest(
@@ -689,7 +684,6 @@ private fun DynamicHttpBinding.requiredReadParameters(): List<HttpParameter> =
 internal suspend fun executeDynamicReadWithFallback(
     descriptor: DynamicAppDescriptor,
     actionId: String,
-    declaredFieldIds: Set<String> = emptySet(),
     execute: suspend (DynamicAction) -> NextcloudApiResponse,
 ): List<NativeRecord> {
     val actionsById = descriptor.actions.associateBy(DynamicAction::id)
@@ -713,7 +707,7 @@ internal suspend fun executeDynamicReadWithFallback(
                     intent = preferred.intent,
                 )
             }
-            parseDynamicRecords(parsingAction, execute(candidate), declaredFieldIds)
+            parseDynamicRecords(parsingAction, execute(candidate), candidate.responseFieldIds.toSet())
         }.onFailure { failure ->
             val specificity = (failure as? DynamicReadLoadException)?.specificity ?: 0
             if (bestFailure == null || specificity > bestFailureSpecificity) {

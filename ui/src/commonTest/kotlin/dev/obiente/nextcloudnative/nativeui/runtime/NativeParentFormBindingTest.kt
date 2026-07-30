@@ -382,6 +382,55 @@ class NativeParentFormBindingTest {
     }
 
     @Test
+    fun `inferred parent relationship stays an explicit form choice`() {
+        val resource = ResourceSpec(
+            id = "entries",
+            name = "Entries",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("collectionId", "Collection", FieldKind.integer, required = true, readOnly = false),
+            ),
+        )
+        val action = ActionSpec(
+            id = "create-entry",
+            label = "Create entry",
+            resourceId = resource.id,
+            binding = ApiBinding(
+                method = HttpMethod.POST,
+                path = "/entries",
+                operationId = "create-entry",
+                bodyFieldNames = listOf("collectionId"),
+                requiredBodyFieldNames = listOf("collectionId"),
+            ),
+            intent = ActionIntent.create,
+            risk = ActionRisk.mutating,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        )
+        val selectedParent = NativeRecord(
+            id = "7",
+            values = mapOf("id" to "7"),
+        )
+
+        val resolution = nativeFormAutoBindingResolution(
+            schema = bindingSchema(
+                resource = resource,
+                action = action,
+                parentResourceId = "collections",
+                childFieldId = "collectionId",
+                relationshipConfidence = Confidence.high,
+            ),
+            action = action,
+            resource = resource,
+            record = selectedParent,
+            parentResourceId = "collections",
+        )
+
+        assertNull(resolution.error)
+        assertEquals(emptyMap(), resolution.values)
+    }
+
+    @Test
     fun `selected parent fields do not prefill a child create form`() {
         val resource = ResourceSpec(
             id = "folders",
@@ -487,6 +536,7 @@ class NativeParentFormBindingTest {
         action: ActionSpec,
         parentResourceId: String? = null,
         childFieldId: String? = null,
+        relationshipConfidence: Confidence = Confidence.verified,
     ): NativeAppSchema = NativeAppSchema(
         schemaVersion = "test",
         app = AppIdentity("synthetic", "Synthetic", "test"),
@@ -500,7 +550,7 @@ class NativeParentFormBindingTest {
                     childResourceId = resource.id,
                     parentFieldId = "id",
                     childFieldId = childFieldId,
-                    confidence = Confidence.verified,
+                    confidence = relationshipConfidence,
                 ),
             )
         } else {

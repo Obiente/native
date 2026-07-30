@@ -277,6 +277,7 @@ private fun compileObservedReads(input: DynamicDiscoveryInput): DynamicAppDescri
                 auth = listOf(AuthRequirement("nextcloud-session", AuthKind.nextcloudSession)),
                 ocs = if (observation.ocs) ocsMetadata(observation.path, query) else null,
             ),
+            responseFieldIds = discoveredFields.map(DynamicField::id),
             permissionIds = (listOf(sessionPermissionId) + observation.permissionIds).distinct().sorted(),
             confidence = Confidence.medium,
             provenance = listOf(source),
@@ -639,7 +640,8 @@ private class KotlinCompilerState(
                 ?: inferredResourceId
         val resource = resources.getOrPut(resourceId) { KotlinResourceBuilder(resourceId) }
         resource.collection = resource.collection || collection
-        itemSchema?.let { resource.mergeFields(fieldsFromSchema(it)) }
+        val responseFields = itemSchema?.let(::fieldsFromSchema).orEmpty()
+        resource.mergeFields(responseFields)
 
         val (documentedPathParameters, queryParameters) = parameters(
             inheritedParameters,
@@ -716,6 +718,11 @@ private class KotlinCompilerState(
                 ocs = ocsMetadata(path, queryParameters),
             ),
             fallbackOnly = fallbackForOperationId != null,
+            responseFieldIds = if (method == HttpMethod.GET) {
+                responseFields.map(DynamicField::id)
+            } else {
+                emptyList()
+            },
             permissionIds = permissionIds,
             confidence = Confidence.high,
             provenance = listOf(source),

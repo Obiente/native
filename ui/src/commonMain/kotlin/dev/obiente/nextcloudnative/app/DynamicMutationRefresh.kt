@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.nativeui.model.ActionEffect
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
@@ -110,7 +111,7 @@ internal fun NativeAppSchema.planDynamicMutationRefresh(
         selectedRecordResourceId == null ->
             DynamicSelectedRecordReconciliation.Keep
         selectedRecordResourceId == canonicalAction.resourceId &&
-            canonicalAction.intent == ActionIntent.delete ->
+            canonicalAction.clearsSelectedRecordAfterSuccess() ->
             DynamicSelectedRecordReconciliation.ClearDeletedSelection
         selectedRecordResourceId in affectedResourceIds ->
             DynamicSelectedRecordReconciliation.KeepRouteAndReloadWhenVisible
@@ -125,4 +126,19 @@ internal fun NativeAppSchema.planDynamicMutationRefresh(
         affectedViewIds = affectedViewIds,
         selectedRecordReconciliation = selectedRecordReconciliation,
     )
+}
+
+/**
+ * Selection lifetime follows the concrete operation effect, not its broad UI intent. Clearing
+ * subordinate data leaves the selected record available, while leaving a resource removes the
+ * caller's access even though its intent is execute. The unspecified fallback preserves schemas
+ * that predate ActionEffect and represented record deletion only by intent.
+ */
+private fun ActionSpec.clearsSelectedRecordAfterSuccess(): Boolean = when (effect) {
+    ActionEffect.delete,
+    ActionEffect.permanentDelete,
+    ActionEffect.leave,
+    -> true
+    ActionEffect.unspecified -> intent == ActionIntent.delete
+    else -> false
 }

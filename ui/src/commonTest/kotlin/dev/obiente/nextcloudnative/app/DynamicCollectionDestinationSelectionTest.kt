@@ -76,6 +76,28 @@ class DynamicCollectionDestinationSelectionTest {
     }
 
     @Test
+    fun `discovery exception downgrades cached write authority`() {
+        val descriptor = DynamicAppDescriptor(
+            descriptorVersion = DYNAMIC_APP_DESCRIPTOR_VERSION,
+            app = AppIdentity("workspace", "Workspace", "1"),
+            endpointPolicy = EndpointPolicy("https://cloud.example.test"),
+        )
+        val cached = DynamicDescriptorDiscovery(
+            descriptor = descriptor,
+            sourcePath = "signed-contract.json",
+            acquisition = DynamicDescriptorAcquisition.SignedAppStorePackage,
+            versionStatus = DynamicContractVersionStatus.VerifiedCurrent,
+        )
+
+        val retained = retainedDynamicContractAfterDiscoveryFailure(cached)
+
+        assertEquals(DynamicContractVersionStatus.LastKnownReadOnly, retained?.versionStatus)
+        assertSame(descriptor, retained?.descriptor)
+        assertEquals(cached.acquisition, retained?.acquisition)
+        assertEquals(null, retainedDynamicContractAfterDiscoveryFailure(null))
+    }
+
+    @Test
     fun `last known read only schema exposes reads but no mutation actions or form views`() {
         val read = action("list-records", HttpMethod.GET, ActionIntent.list, ActionRisk.readOnly)
         val create = action("create-record", HttpMethod.POST, ActionIntent.create, ActionRisk.mutating)

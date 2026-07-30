@@ -15,6 +15,56 @@ import kotlin.test.assertTrue
 
 class DynamicAppDescriptorCompilerTest {
     @Test
+    fun `read response fields remain separate from write-only resource fields`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Records","version":"1"},
+              "servers":[{"url":"/apps/records"}],
+              "paths":{
+                "/api/records":{
+                  "get":{
+                    "operationId":"records-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{"title":{"type":"string"}}}
+                    }}}}}
+                  },
+                  "post":{
+                    "operationId":"records-create",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["id","title"],
+                      "properties":{"id":{"type":"string"},"title":{"type":"string"}}
+                    }}}},
+                    "responses":{"200":{"description":"OK"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            DynamicDiscoveryInput(
+                app = AppIdentity("records", "Records", "1"),
+                endpointPolicy = EndpointPolicy("https://cloud.example.test", listOf("/apps/records")),
+                advertisedOpenApi = AdvertisedOpenApi(
+                    "/apps/records/openapi.json",
+                    Json.parseToJsonElement(document),
+                    OpenApiTrust.sameOriginAdvertisement,
+                ),
+            ),
+        )
+
+        val read = descriptor.actions.single { it.id == "records-list" }
+        val create = descriptor.actions.single { it.id == "records-create" }
+        assertEquals(setOf("id", "title"), descriptor.resources.single().fields.mapTo(mutableSetOf()) { it.id })
+        assertEquals(listOf("title"), read.responseFieldIds)
+        assertTrue(create.responseFieldIds.isEmpty())
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
     fun `specialized route constants discard stale inherited path parameters`() {
         val document = """
             {

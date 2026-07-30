@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.nativeui.model.ActionEffect
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
@@ -58,7 +59,14 @@ class DynamicMutationRefreshTest {
     fun `deleting the selected target clears only that deleted selection`() {
         val schema = schema(
             resources = listOf("collections", "entries"),
-            actions = listOf(mutation("delete-entry", "entries", ActionIntent.delete)),
+            actions = listOf(
+                mutation(
+                    id = "delete-entry",
+                    resourceId = "entries",
+                    intent = ActionIntent.delete,
+                    effect = ActionEffect.delete,
+                ),
+            ),
             relationships = listOf(relationship("collections", "entries")),
         )
 
@@ -72,6 +80,52 @@ class DynamicMutationRefreshTest {
             schema.planDynamicMutationRefresh(schema.actions.single(), "collections")
                 ?.selectedRecordReconciliation,
         )
+    }
+
+    @Test
+    fun `concrete effects exhaustively control selected record lifetime across mutation intents`() {
+        val mutationIntents = listOf(
+            ActionIntent.create,
+            ActionIntent.update,
+            ActionIntent.delete,
+            ActionIntent.execute,
+        )
+        val recordRemovingEffects = setOf(
+            ActionEffect.delete,
+            ActionEffect.permanentDelete,
+            ActionEffect.leave,
+        )
+
+        ActionEffect.entries.forEach { effect ->
+            mutationIntents.forEach { intent ->
+                val action = mutation(
+                    id = "reconcile-${effect.name}-${intent.name}",
+                    resourceId = "entries",
+                    intent = intent,
+                    effect = effect,
+                )
+                val schema = schema(
+                    resources = listOf("entries"),
+                    actions = listOf(action),
+                )
+                val reconciliation = schema.planDynamicMutationRefresh(action, "entries")
+                    ?.selectedRecordReconciliation
+                val expected = when {
+                    effect in recordRemovingEffects ->
+                        DynamicSelectedRecordReconciliation.ClearDeletedSelection
+                    effect == ActionEffect.unspecified && intent == ActionIntent.delete ->
+                        DynamicSelectedRecordReconciliation.ClearDeletedSelection
+                    else ->
+                        DynamicSelectedRecordReconciliation.KeepRouteAndReloadWhenVisible
+                }
+
+                assertEquals(
+                    expected,
+                    reconciliation,
+                    "effect=$effect intent=$intent",
+                )
+            }
+        }
     }
 
     @Test
@@ -230,6 +284,7 @@ class DynamicMutationRefreshTest {
         id: String,
         resourceId: String,
         intent: ActionIntent,
+        effect: ActionEffect = ActionEffect.unspecified,
     ): ActionSpec = ActionSpec(
         id = id,
         label = id,
@@ -249,6 +304,7 @@ class DynamicMutationRefreshTest {
         risk = if (intent == ActionIntent.delete) ActionRisk.destructive else ActionRisk.mutating,
         requiresConfirmation = intent == ActionIntent.delete,
         confidence = Confidence.verified,
+        effect = effect,
     )
 
     private fun relationship(

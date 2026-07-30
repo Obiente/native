@@ -175,7 +175,7 @@ internal fun nativeRecordActions(
     val permittedRecordActions = if (record == null) {
         resourceActions
     } else {
-        resourceActions.filterNot { action -> record.explicitlyDenies(action, resource) }
+        resourceActions.filter { action -> record.permits(action, resource) }
     }
     val verifiedRelationshipFieldIds = schema.relationships
         .asSequence()
@@ -819,12 +819,12 @@ private fun Confidence.isSafeRecordActionConfidence(): Boolean =
     this == Confidence.high || this == Confidence.verified
 
 /**
- * Honors exact record-level capability fields when a contract exposes them. Endpoint availability
- * remains the fallback when no capability is declared, but an explicit denial must never leave a
- * write affordance visible.
+ * Honors exact record-level capability fields when a contract exposes them. A declared capability
+ * whose current-record value is absent or unparseable is unknown and therefore cannot authorize a
+ * write. A trusted endpoint with no applicable per-record capability field remains unconditional.
  */
-private fun NativeRecord.explicitlyDenies(action: ActionSpec, resource: ResourceSpec): Boolean {
-    val capabilities = resource.fields.mapNotNull { field ->
+private fun NativeRecord.permits(action: ActionSpec, resource: ResourceSpec): Boolean {
+    val capabilityFields = resource.fields.mapNotNull { field ->
         val semanticId = field.id.lowercase().filter(Char::isLetterOrDigit)
         if (
             semanticId !in setOf(
@@ -838,19 +838,34 @@ private fun NativeRecord.explicitlyDenies(action: ActionSpec, resource: Resource
         ) {
             return@mapNotNull null
         }
-        val value = values[field.id]?.nativeCapabilityBooleanOrNull() ?: return@mapNotNull null
-        semanticId to value
+        semanticId to field.id
     }.toMap()
-    if (capabilities["readonly"] == true) return true
-    if (capabilities["writable"] == false || capabilities["canwrite"] == false) return true
+    if (capabilityFields.isEmpty()) return true
 
-    val deletion = action.intent == ActionIntent.delete ||
-        action.effect in setOf(ActionEffect.permanentDelete, ActionEffect.clear, ActionEffect.leave)
+    fun declaredCapability(id: String): Boolean? {
+        val fieldId = capabilityFields[id] ?: return null
+        return values[fieldId]?.nativeCapabilityBooleanOrNull()
+    }
+    if ("readonly" in capabilityFields && declaredCapability("readonly") != false) return false
+    if ("writable" in capabilityFields && declaredCapability("writable") != true) return false
+    if ("canwrite" in capabilityFields && declaredCapability("canwrite") != true) return false
+
+    val deletion = when (action.effect) {
+        ActionEffect.delete,
+        ActionEffect.permanentDelete,
+        -> true
+        ActionEffect.clear,
+        ActionEffect.leave,
+        -> false
+        else -> action.intent == ActionIntent.delete
+    }
     return if (deletion) {
-        capabilities["candelete"] == false
+        "candelete" !in capabilityFields || declaredCapability("candelete") == true
     } else {
-        action.intent in setOf(ActionIntent.update, ActionIntent.execute) &&
-            (capabilities["canedit"] == false || capabilities["canupdate"] == false)
+        val applicable = setOf("canedit", "canupdate").filter(capabilityFields::containsKey)
+        action.intent !in setOf(ActionIntent.update, ActionIntent.execute) ||
+            applicable.isEmpty() ||
+            applicable.all { id -> declaredCapability(id) == true }
     }
 }
 

@@ -184,6 +184,13 @@ data class DynamicAction(
     val fallbackActionIds: List<String> = emptyList(),
     /** True when this action exists only as a runtime fallback and must not become a UI surface. */
     val fallbackOnly: Boolean = false,
+    /**
+     * Fields declared by this action's successful read-response item schema.
+     *
+     * This is deliberately action-local: [DynamicResource.fields] may also contain fields merged
+     * from mutation request bodies and therefore cannot authorize record identities for writes.
+     */
+    val responseFieldIds: List<String> = emptyList(),
     val capabilityIds: List<String> = emptyList(),
     val permissionIds: List<String> = emptyList(),
     val confidence: Confidence,

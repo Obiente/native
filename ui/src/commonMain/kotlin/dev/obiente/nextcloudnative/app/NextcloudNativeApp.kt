@@ -289,6 +289,12 @@ internal fun resolveDynamicContractRediscovery(
     return retainedCachedContract.copy(versionStatus = DynamicContractVersionStatus.LastKnownReadOnly)
 }
 
+internal fun retainedDynamicContractAfterDiscoveryFailure(
+    cachedDiscovery: DynamicDescriptorDiscovery?,
+): DynamicDescriptorDiscovery? = cachedDiscovery?.copy(
+    versionStatus = DynamicContractVersionStatus.LastKnownReadOnly,
+)
+
 /**
  * Projects a retained contract into the action surface its current version evidence permits.
  *
@@ -306,6 +312,118 @@ internal fun NativeAppSchema.forDynamicContractVersion(
         views = views.filter { view -> view.sourceActionId in availableActionIds },
     )
 }
+
+internal data class DynamicFormRelationCacheKey(
+    val resourceId: String,
+    val actionId: String,
+    val bindingValues: Map<String, String>,
+)
+
+internal data class DynamicFormRelationLoadRequest(
+    val plan: DynamicFormRelationLoadPlan,
+    val cacheKey: DynamicFormRelationCacheKey,
+)
+
+internal data class DynamicFormRelationCacheState(
+    val recordsByKey: Map<DynamicFormRelationCacheKey, List<NativeRecord>> = emptyMap(),
+    val failedKeys: Set<DynamicFormRelationCacheKey> = emptySet(),
+) {
+    fun pendingRequests(
+        requests: List<DynamicFormRelationLoadRequest>,
+    ): List<DynamicFormRelationLoadRequest> = requests.filter { request ->
+        request.cacheKey !in recordsByKey && request.cacheKey !in failedKeys
+    }
+
+    fun relatedRecords(
+        requests: List<DynamicFormRelationLoadRequest>,
+    ): Map<String, List<NativeRecord>> = requests.mapNotNull { request ->
+        recordsByKey[request.cacheKey]?.let { records -> request.plan.resourceId to records }
+    }.toMap()
+
+    fun datasetRelatedRecords(
+        genericRecords: Map<String, List<NativeRecord>>,
+        requests: List<DynamicFormRelationLoadRequest>,
+    ): Map<String, List<NativeRecord>> {
+        val scopedResourceIds = requests.mapTo(hashSetOf()) { request -> request.plan.resourceId }
+        return genericRecords.filterKeys { resourceId -> resourceId !in scopedResourceIds } +
+            relatedRecords(requests)
+    }
+
+    fun failedRequests(
+        requests: List<DynamicFormRelationLoadRequest>,
+    ): List<DynamicFormRelationLoadRequest> = requests.filter { request ->
+        request.cacheKey in failedKeys
+    }
+
+    fun loadSucceeded(
+        request: DynamicFormRelationLoadRequest,
+        records: List<NativeRecord>,
+    ): DynamicFormRelationCacheState = copy(
+        recordsByKey = recordsByKey.putBounded(
+            request.cacheKey,
+            records.take(INITIAL_COLLECTION_PAGE_SIZE),
+        ),
+        failedKeys = failedKeys - request.cacheKey,
+    )
+
+    fun loadFailed(
+        request: DynamicFormRelationLoadRequest,
+    ): DynamicFormRelationCacheState = copy(
+        recordsByKey = recordsByKey - request.cacheKey,
+        failedKeys = (failedKeys + request.cacheKey)
+            .toList()
+            .takeLast(MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES)
+            .toSet(),
+    )
+
+    fun retry(
+        requests: List<DynamicFormRelationLoadRequest>,
+    ): DynamicFormRelationCacheState {
+        val retryKeys = requests.mapTo(hashSetOf(), DynamicFormRelationLoadRequest::cacheKey)
+        return copy(failedKeys = failedKeys - retryKeys)
+    }
+}
+
+internal fun dynamicFormRelationLoadRequests(
+    schema: NativeAppSchema,
+    formView: ViewSpec,
+    availableValues: Map<String, String>,
+): List<DynamicFormRelationLoadRequest> = dynamicFormRelationLoadPlans(
+    schema = schema,
+    formView = formView,
+    availableValues = availableValues,
+).mapNotNull { plan ->
+    val action = schema.action(plan.actionId) ?: return@mapNotNull null
+    val bindingNames = (
+        action.binding.pathParameterNames +
+            action.binding.requiredPathParameterNames +
+            action.binding.queryParameterNames +
+            action.binding.requiredQueryParameterNames
+        ).distinct()
+    if (bindingNames.size > MAX_DYNAMIC_FORM_RELATION_BINDINGS) return@mapNotNull null
+    val bindingValues = bindingNames.mapNotNull { name ->
+        availableValues[name]?.takeIf(String::isNotBlank)?.let { value -> name to value }
+    }.sortedBy { (name, _) -> name }
+        .toMap()
+    DynamicFormRelationLoadRequest(
+        plan = plan,
+        cacheKey = DynamicFormRelationCacheKey(
+            resourceId = plan.resourceId,
+            actionId = plan.actionId,
+            bindingValues = bindingValues,
+        ),
+    )
+}
+
+private fun <K, V> Map<K, V>.putBounded(key: K, value: V): Map<K, V> =
+    ((this - key) + (key to value))
+        .entries
+        .toList()
+        .takeLast(MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES)
+        .associate(Map.Entry<K, V>::toPair)
+
+private const val MAX_DYNAMIC_FORM_RELATION_BINDINGS = 32
+private const val MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES = 16
 
 private class PhotoTimelineUiState {
     val timeline = mutableStateOf(PhotoTimelineState(pageSize = MAX_PHOTO_TIMELINE_PAGE_SIZE))
@@ -1496,6 +1614,12 @@ private fun AppInfoScreen(
             }
             .onFailure { failure ->
                 if (failure is CancellationException) throw failure
+                val retainedReadOnly = retainedDynamicContractAfterDiscoveryFailure(cachedDiscovery)
+                if (retainedReadOnly != null) {
+                    onDiscovery(retainedReadOnly)
+                    discovery = retainedReadOnly
+                    sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, retainedReadOnly)
+                }
                 sharedDynamicNativeMemoryCache.markDiscoveryFailure(session, app.id)
                 discoveryError = if (cachedDiscovery == null) {
                     failure.message ?: "Could not discover this app's native API."
@@ -1643,6 +1767,22 @@ private fun DynamicDiscoveredAppScreen(
     var recordsByResourceId by remember(descriptor) {
         mutableStateOf<Map<String, List<NativeRecord>>>(emptyMap())
     }
+    var formRelationCache by remember(
+        session.serverUrl,
+        session.loginName,
+        descriptor,
+        discovery.versionStatus,
+    ) {
+        mutableStateOf(DynamicFormRelationCacheState())
+    }
+    var formRelationLoadAttempt by remember(
+        session.serverUrl,
+        session.loginName,
+        descriptor,
+        discovery.versionStatus,
+    ) {
+        mutableStateOf(0)
+    }
     var loadAttempt by remember(descriptor) { mutableStateOf(0) }
     var paginationState by remember(descriptor) { mutableStateOf<DynamicPaginationState?>(null) }
     var loadingMore by remember(descriptor) { mutableStateOf(false) }
@@ -1691,6 +1831,12 @@ private fun DynamicDiscoveredAppScreen(
     }
     val selectedView = schema.views.firstOrNull { it.id == selectedViewId }
         ?: schema.views.firstOrNull()
+    val formRelationValues = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
+    val formRelationRequests = remember(schema, selectedView, formRelationValues) {
+        selectedView?.let { view ->
+            dynamicFormRelationLoadRequests(schema, view, formRelationValues)
+        }.orEmpty()
+    }
     val audioSourceCapability = remember(discovery) {
         descriptor.actions.firstNotNullOfOrNull { action ->
             nativeAudioSourceCapability(discovery, action)
@@ -1750,7 +1896,15 @@ private fun DynamicDiscoveredAppScreen(
         )
     }
 
-    LaunchedEffect(descriptor, selectedView?.id, selectedRecord?.id, selectedPathParameterValues, loadAttempt) {
+    LaunchedEffect(
+        descriptor,
+        selectedView?.id,
+        selectedRecord?.id,
+        selectedPathParameterValues,
+        formRelationRequests,
+        formRelationLoadAttempt,
+        loadAttempt,
+    ) {
         val view = selectedView ?: return@LaunchedEffect
         val cacheKey = dynamicScreenCacheKey(
             session = session,
@@ -1763,20 +1917,19 @@ private fun DynamicDiscoveredAppScreen(
         loadingMore = false
         loadMoreError = null
         if (view.component == NativeComponent.form) {
-            val values = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
-            val relationPlans = dynamicFormRelationLoadPlans(schema, view, values)
-                .filterNot { plan -> plan.resourceId in recordsByResourceId }
-            if (relationPlans.isNotEmpty()) {
+            val values = formRelationValues
+            val pendingRelationRequests = formRelationCache.pendingRequests(formRelationRequests)
+            if (pendingRelationRequests.isNotEmpty()) {
                 viewState = NativeScreenState.Loading
-                val loadedRelations = coroutineScope {
-                    relationPlans.map { plan ->
+                val relationOutcomes = coroutineScope {
+                    pendingRelationRequests.map { request ->
                         async {
-                            runCatching {
-                                plan.resourceId to loadDynamicRecords(
+                            val records = runCatching {
+                                loadDynamicRecords(
                                     services = services,
                                     session = session,
                                     descriptor = descriptor,
-                                    actionId = plan.actionId,
+                                    actionId = request.plan.actionId,
                                     values = values,
                                     runtimeContext = values,
                                 )
@@ -1784,13 +1937,20 @@ private fun DynamicDiscoveredAppScreen(
                                 if (failure is CancellationException) throw failure
                                 null
                             }
+                            request to records
                         }
                     }.awaitAll()
-                }.filterNotNull().toMap()
-                currentCoroutineContext().ensureActive()
-                if (loadedRelations.isNotEmpty()) {
-                    recordsByResourceId = recordsByResourceId + loadedRelations
                 }
+                currentCoroutineContext().ensureActive()
+                var updatedRelationCache = formRelationCache
+                relationOutcomes.forEach { (request, records) ->
+                    updatedRelationCache = if (records == null) {
+                        updatedRelationCache.loadFailed(request)
+                    } else {
+                        updatedRelationCache.loadSucceeded(request, records)
+                    }
+                }
+                formRelationCache = updatedRelationCache
             }
             val rememberedRecords = recordsByResourceId[view.resourceId].orEmpty()
             val cachedRecords = rememberedRecords.ifEmpty {
@@ -2040,6 +2200,11 @@ private fun DynamicDiscoveredAppScreen(
         selectedPathParameterValues = selectedPathParameterValues,
         runtimeValues = runtimeValues,
     )
+    val datasetRelatedRecords = formRelationCache.datasetRelatedRecords(
+        genericRecords = recordsByResourceId,
+        requests = formRelationRequests,
+    )
+    val failedFormRelationRequests = formRelationCache.failedRequests(formRelationRequests)
     val executor = remember(services, session, descriptor, runtimeValues, discovery.versionStatus) {
         DynamicNextcloudActionExecutor(
             services = services,
@@ -2336,6 +2501,7 @@ private fun DynamicDiscoveredAppScreen(
         leaveMutatedSurface: Boolean,
     ) {
         sharedDynamicNativeMemoryCache.invalidateScreens(session, descriptor.app.id)
+        formRelationCache = DynamicFormRelationCacheState()
         val refreshPlan = schema.planDynamicMutationRefresh(
             action = action,
             selectedRecordResourceId = selectedRecordResourceId,
@@ -2593,6 +2759,47 @@ private fun DynamicDiscoveredAppScreen(
                 }
             }
         }
+            if (failedFormRelationRequests.isNotEmpty()) {
+                val failedResources = failedFormRelationRequests
+                    .map { request ->
+                        schema.resource(request.plan.resourceId)?.name ?: request.plan.resourceId
+                    }
+                    .distinct()
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(
+                        horizontal = NextcloudSpacing.Large,
+                        vertical = NextcloudSpacing.Small,
+                    ),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    shape = RoundedCornerShape(NextcloudRadii.Small),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (failedResources.size == 1) {
+                                "Could not load ${failedResources.single()} choices. " +
+                                    "Other form fields remain available."
+                            } else {
+                                "Some choices could not be loaded. Other form fields remain available."
+                            },
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        TextButton(
+                            onClick = {
+                                formRelationCache = formRelationCache.retry(formRelationRequests)
+                                formRelationLoadAttempt += 1
+                            },
+                        ) {
+                            Text("Retry choices")
+                        }
+                    }
+                }
+            }
             GenericNativeAppScreen(
                 schema = schema,
                 view = selectedView,
@@ -2604,7 +2811,7 @@ private fun DynamicDiscoveredAppScreen(
                     parentResourceId = selectedRecordResourceId,
                     parentRecord = selectedRecord,
                     bindingValues = datasetBindingValues,
-                    relatedRecords = recordsByResourceId,
+                    relatedRecords = datasetRelatedRecords,
                 ),
             onSelectRecord = selectedView.takeIf {
                 it.component != NativeComponent.detail && it.component != NativeComponent.form

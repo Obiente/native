@@ -180,7 +180,11 @@ data class NextcloudApiResponse(
     val body: ByteArray,
     val contentType: String?,
     val etag: String?,
-    /** Present only when redirects are disabled and the server returned a Location header. */
+    /**
+     * Present only when redirects are disabled and the server returned a safe Location header.
+     * Authenticated platform transports resolve same-account redirects and expose only the
+     * account-relative path; cross-origin and out-of-account locations are withheld.
+     */
     val location: String? = null,
 )
 

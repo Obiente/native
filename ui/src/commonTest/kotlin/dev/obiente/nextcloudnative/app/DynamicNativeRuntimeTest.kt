@@ -10,6 +10,7 @@ import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_APP_DESCRIPTOR_VERSION
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
+import dev.obiente.nextcloudnative.nativeui.model.DynamicField
 import dev.obiente.nextcloudnative.nativeui.model.DynamicHttpBinding
 import dev.obiente.nextcloudnative.nativeui.model.DynamicResource
 import dev.obiente.nextcloudnative.nativeui.model.EndpointPolicy
@@ -1887,6 +1888,50 @@ class DynamicNativeRuntimeTest {
         assertTrue(records.all { it.id.length <= 256 })
         assertEquals(records.size, records.map(NativeRecord::id).distinct().size)
         assertTrue(records.none(NativeRecord::actionSafeIdentity))
+    }
+
+    @Test
+    fun `write-only resource identity fields cannot authorize records from a read response`() = runBlocking {
+        val read = readAction().copy(responseFieldIds = listOf("title"))
+        val base = descriptor(read)
+        val descriptor = base.copy(
+            resources = listOf(
+                base.resources.single().copy(
+                    fields = listOf(
+                        DynamicField(
+                            id = "id",
+                            label = "ID",
+                            kind = FieldKind.string,
+                            required = true,
+                            readOnly = false,
+                            nullable = false,
+                            multiple = false,
+                            confidence = Confidence.high,
+                        ),
+                        DynamicField(
+                            id = "title",
+                            label = "Title",
+                            kind = FieldKind.string,
+                            required = true,
+                            readOnly = false,
+                            nullable = false,
+                            multiple = false,
+                            confidence = Confidence.high,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val record = executeDynamicReadWithFallback(descriptor, read.id) {
+            response(
+                """{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[{"id":"write-only","title":"Visible"}]}}""",
+            )
+        }.single()
+
+        assertEquals("write-only", record.id)
+        assertEquals("Visible", record.values["title"])
+        assertFalse(record.actionSafeIdentity)
     }
 
     @Test

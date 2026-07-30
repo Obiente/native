@@ -64,6 +64,13 @@ class NativeRecordActionsTest {
                 bodyNames = listOf("done"),
                 requiredBodyNames = listOf("done"),
             ),
+            action(
+                id = "archive",
+                intent = ActionIntent.execute,
+                effect = ActionEffect.archive,
+                method = HttpMethod.POST,
+                pathNames = listOf("recordId"),
+            ).withRecordPath("archive"),
         )
         val schema = schema(resource, actions)
         val record = NativeRecord(
@@ -164,6 +171,13 @@ class NativeRecordActionsTest {
                 bodyNames = listOf("done"),
                 requiredBodyNames = listOf("done"),
             ),
+            action(
+                id = "archive",
+                intent = ActionIntent.execute,
+                effect = ActionEffect.archive,
+                method = HttpMethod.POST,
+                pathNames = listOf("recordId"),
+            ).withRecordPath("archive"),
         )
         val schema = schema(resource, actions)
         val readOnlyRecord = NativeRecord(
@@ -183,6 +197,21 @@ class NativeRecordActionsTest {
         assertNull(readOnlyPlans.edit)
         assertNull(readOnlyPlans.delete)
         assertNull(readOnlyPlans.completion)
+        assertTrue(readOnlyPlans.commands.isEmpty())
+
+        val unknownPlans = nativeRecordActions(
+            schema,
+            resource,
+            readOnlyRecord.copy(
+                values = readOnlyRecord.values + ("readOnly" to "false"),
+            ),
+        )
+
+        assertTrue(unknownPlans.create != null)
+        assertNull(unknownPlans.edit)
+        assertNull(unknownPlans.delete)
+        assertNull(unknownPlans.completion)
+        assertTrue(unknownPlans.commands.isEmpty())
 
         val deleteOnlyRecord = readOnlyRecord.copy(
             values = readOnlyRecord.values + mapOf(
@@ -196,6 +225,16 @@ class NativeRecordActionsTest {
         assertNull(deleteOnlyPlans.edit)
         assertNull(deleteOnlyPlans.completion)
         assertTrue(deleteOnlyPlans.delete != null)
+        assertTrue(deleteOnlyPlans.commands.isEmpty())
+
+        val writablePlans = nativeRecordActions(
+            schema,
+            resource,
+            deleteOnlyRecord.copy(
+                values = deleteOnlyRecord.values + ("canEdit" to "true"),
+            ),
+        )
+        assertEquals(listOf(ActionEffect.archive), writablePlans.commands.map { command -> command.effect })
     }
 
     @Test
