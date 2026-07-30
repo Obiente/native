@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.nativeui.model.AuthKind
 import dev.obiente.nextcloudnative.nativeui.model.AuthRequirement
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_APP_DESCRIPTOR_VERSION
+import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
 import dev.obiente.nextcloudnative.nativeui.model.DynamicHttpBinding
@@ -21,6 +22,7 @@ import dev.obiente.nextcloudnative.nativeui.model.OcsMetadata
 import dev.obiente.nextcloudnative.nativeui.model.ParameterSource
 import dev.obiente.nextcloudnative.nativeui.model.Provenance
 import dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
@@ -34,10 +36,90 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DynamicNativeRuntimeTest {
+    @Test
+    fun `last known contracts allow reads but fail closed for mutations`() {
+        assertTrue(DynamicContractVersionStatus.LastKnownReadOnly.allows(readAction().risk))
+        assertFalse(DynamicContractVersionStatus.LastKnownReadOnly.allows(createAction().risk))
+        assertTrue(DynamicContractVersionStatus.VerifiedCurrent.allows(createAction().risk))
+    }
+
+    @Test
+    fun `declared OCS mutation accepts explicit successful metadata`() {
+        val result = response(
+            """{"ocs":{"meta":{"status":"ok","statuscode":100,"message":"OK"},"data":{"id":7}}}""",
+        ).toDynamicActionExecutionResult(createAction())
+
+        assertEquals(
+            "Create item completed.",
+            assertIs<NativeActionExecutionResult.Success>(result).message,
+        )
+    }
+
+    @Test
+    fun `declared OCS mutation rejects HTTP 200 failure with sanitized message`() {
+        val result = response(
+            """{"ocs":{"meta":{"status":"failure","statuscode":997,"message":"Current user is not\nauthorized"},"data":[]}}""",
+        ).toDynamicActionExecutionResult(createAction())
+
+        assertEquals(
+            "The server rejected Create item: Current user is not authorized.",
+            assertIs<NativeActionExecutionResult.Failure>(result).message,
+        )
+    }
+
+    @Test
+    fun `declared OCS mutation rejects a non success status code`() {
+        val result = response(
+            """{"ocs":{"meta":{"status":"ok","statuscode":403,"message":"Permission denied"},"data":[]}}""",
+        ).toDynamicActionExecutionResult(createAction())
+
+        assertEquals(
+            "The server rejected Create item: Permission denied.",
+            assertIs<NativeActionExecutionResult.Failure>(result).message,
+        )
+    }
+
+    @Test
+    fun `declared OCS mutation fails closed on contradictory metadata`() {
+        val result = response(
+            """{"ocs":{"meta":{"status":"failure","statuscode":100,"message":"Contradictory result"},"data":[]}}""",
+        ).toDynamicActionExecutionResult(createAction())
+
+        assertIs<NativeActionExecutionResult.Failure>(result)
+    }
+
+    @Test
+    fun `declared OCS mutation fails closed on malformed metadata without exposing its body`() {
+        val secretBody = """{"ocs":{"meta":{"status":"ok","message":"token=must-not-leak"},"data":[]}}"""
+        val result = response(secretBody).toDynamicActionExecutionResult(createAction())
+        val message = assertIs<NativeActionExecutionResult.Failure>(result).message
+
+        assertEquals(
+            "The server returned invalid OCS metadata for Create item.",
+            message,
+        )
+        assertFalse(message.contains("must-not-leak"))
+    }
+
+    @Test
+    fun `ordinary non OCS mutation preserves HTTP 2xx success behavior`() {
+        val action = createAction().copy(
+            binding = createAction().binding.copy(ocs = null),
+        )
+        val result = response("not an OCS envelope", contentType = "text/plain")
+            .toDynamicActionExecutionResult(action)
+
+        assertEquals(
+            "Create item completed.",
+            assertIs<NativeActionExecutionResult.Success>(result).message,
+        )
+    }
+
     @Test
     fun dynamicArtworkRequestsStayInsideTheActiveAppNamespace() {
         val request = dynamicAppAssetRequest(
@@ -213,6 +295,89 @@ class DynamicNativeRuntimeTest {
         assertEquals(JsonPrimitive("Shared list"), body["title"])
         assertEquals(JsonPrimitive(4), body["count"])
         assertEquals(JsonPrimitive(true), body["enabled"])
+        assertFalse("undeclared" in body)
+    }
+
+    @Test
+    fun `pantry checklist create binds house path separately from its JSON body`() {
+        val action = DynamicAction(
+            id = "checklist-create-list",
+            label = "Create a checklist in a house",
+            resourceId = "lists",
+            intent = ActionIntent.create,
+            risk = ActionRisk.mutating,
+            requiresConfirmation = false,
+            binding = DynamicHttpBinding(
+                method = HttpMethod.POST,
+                path = "/ocs/v2.php/apps/pantry/api/houses/{houseId}/lists",
+                pathParameters = listOf(
+                    HttpParameter(
+                        name = "houseId",
+                        required = true,
+                        schema = json.parseToJsonElement("""{"type":"integer","format":"int64"}"""),
+                        source = ParameterSource.resourceField,
+                    ),
+                ),
+                body = HttpBody(
+                    contentType = "application/json",
+                    required = true,
+                    schema = json.parseToJsonElement(
+                        """
+                        {
+                          "type": "object",
+                          "required": ["name"],
+                          "properties": {
+                            "name": {"type": "string"},
+                            "description": {"type": "string", "nullable": true},
+                            "icon": {"type": "string", "nullable": true},
+                            "color": {"type": "string", "nullable": true}
+                          }
+                        }
+                        """.trimIndent(),
+                    ),
+                ),
+                auth = listOf(AuthRequirement("basicAuth", AuthKind.basic)),
+                ocs = OcsMetadata(
+                    apiRequestHeader = true,
+                    responseDataPointer = "/ocs/data",
+                    responseMetaPointer = "/ocs/meta",
+                    formatQueryParameter = "format",
+                ),
+            ),
+            confidence = Confidence.high,
+            provenance = listOf(
+                Provenance(
+                    kind = ProvenanceKind.verifiedAppPackage,
+                    source = "pantry-0.23.0",
+                    detail = "Verified signed Pantry OpenAPI contract",
+                ),
+            ),
+        )
+        val descriptor = descriptor(action).copy(
+            app = AppIdentity("pantry", "Pantry", "0.23.0"),
+            endpointPolicy = EndpointPolicy(
+                serverOrigin = "https://cloud.example.test",
+                approvedApiPrefixes = listOf("/ocs/v2.php/apps/pantry/api"),
+            ),
+        )
+
+        val request = buildDynamicApiRequest(
+            descriptor = descriptor,
+            action = action,
+            values = mapOf(
+                "houseId" to "7",
+                "name" to "Groceries",
+                "description" to "Weekly shop",
+                "undeclared" to "must-not-leak",
+            ),
+        )
+
+        assertEquals("/ocs/v2.php/apps/pantry/api/houses/7/lists", request.relativePath)
+        val body = json.parseToJsonElement(requireNotNull(request.body).decodeToString()) as JsonObject
+        assertEquals(setOf("name", "description"), body.keys)
+        assertEquals(JsonPrimitive("Groceries"), body["name"])
+        assertEquals(JsonPrimitive("Weekly shop"), body["description"])
+        assertFalse("houseId" in body)
         assertFalse("undeclared" in body)
     }
 
@@ -515,6 +680,270 @@ class DynamicNativeRuntimeTest {
         assertEquals(
             JsonArray(listOf(JsonPrimitive("Music/Archive"), JsonPrimitive("Shared"))),
             body["value"],
+        )
+    }
+
+    @Test
+    fun `exact declared integer arrays encode bounded JSON numbers and omit blank optional values`() {
+        val bodySchema = json.parseToJsonElement(
+            """{
+              "type":"object",
+              "additionalProperties":false,
+              "properties":{
+                "requiredIds":{
+                  "type":"array",
+                  "items":{"type":"integer"},
+                  "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT"
+                },
+                "optionalIds":{
+                  "type":"array",
+                  "items":{"type":"integer"},
+                  "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT"
+                }
+              },
+              "required":["requiredIds"]
+            }""",
+        )
+        val action = readAction().copy(
+            id = "assignments.update",
+            resourceId = "assignments",
+            intent = ActionIntent.update,
+            risk = ActionRisk.mutating,
+            binding = readAction().binding.copy(
+                method = HttpMethod.PUT,
+                path = "/ocs/v2.php/apps/example/api/assignments",
+                body = HttpBody("application/json", true, bodySchema),
+            ),
+            provenance = listOf(
+                Provenance(ProvenanceKind.verifiedAppPackage, "signed-package", "Verified assignment setter"),
+            ),
+        )
+
+        val request = buildDynamicApiRequest(
+            descriptor(action),
+            action,
+            values = mapOf(
+                "requiredIds" to "[7,-2,7,9223372036854775807]",
+                "optionalIds" to "   ",
+                "undeclaredIds" to "[99]",
+            ),
+        )
+        val body = json.parseToJsonElement(requireNotNull(request.body).decodeToString()) as JsonObject
+
+        assertEquals(setOf("requiredIds"), body.keys)
+        assertEquals(
+            JsonArray(
+                listOf(
+                    JsonPrimitive(7),
+                    JsonPrimitive(-2),
+                    JsonPrimitive(7),
+                    JsonPrimitive(Long.MAX_VALUE),
+                ),
+            ),
+            body["requiredIds"],
+        )
+    }
+
+    @Test
+    fun `integer array encoding enforces every supported declared constraint`() {
+        val bodySchema = json.parseToJsonElement(
+            """{
+              "type":"object",
+              "properties":{
+                "ids":{
+                  "type":"array",
+                  "items":{
+                    "type":"integer",
+                    "minimum":2,
+                    "exclusiveMaximum":12,
+                    "multipleOf":2
+                  },
+                  "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT",
+                  "minItems":2,
+                  "maxItems":3,
+                  "uniqueItems":true
+                }
+              },
+              "required":["ids"]
+            }""",
+        )
+        val action = readAction().copy(
+            id = "assignments.update",
+            resourceId = "assignments",
+            intent = ActionIntent.update,
+            risk = ActionRisk.mutating,
+            binding = readAction().binding.copy(
+                method = HttpMethod.PUT,
+                path = "/ocs/v2.php/apps/example/api/assignments",
+                body = HttpBody("application/json", true, bodySchema),
+            ),
+            provenance = listOf(
+                Provenance(ProvenanceKind.verifiedAppPackage, "signed-package", "Verified assignment setter"),
+            ),
+        )
+
+        val request = buildDynamicApiRequest(
+            descriptor(action),
+            action,
+            values = mapOf("ids" to "[2,4,10]"),
+        )
+        val body = json.parseToJsonElement(requireNotNull(request.body).decodeToString()) as JsonObject
+        assertEquals(
+            JsonArray(listOf(JsonPrimitive(2), JsonPrimitive(4), JsonPrimitive(10))),
+            body["ids"],
+        )
+
+        listOf(
+            "[]",
+            "[2]",
+            "[2,4,6,8]",
+            "[2,2]",
+            "[0,2]",
+            "[2,12]",
+            "[2,3]",
+        ).forEach { value ->
+            assertFailsWith<IllegalStateException>(value) {
+                buildDynamicApiRequest(descriptor(action), action, values = mapOf("ids" to value))
+            }
+        }
+    }
+
+    @Test
+    fun `blank optional typed scalars are omitted while blank strings remain explicit`() {
+        val bodySchema = json.parseToJsonElement(
+            """{
+              "type":"object",
+              "properties":{
+                "categoryId":{"type":"integer","nullable":true},
+                "amount":{"type":"number","nullable":true},
+                "enabled":{"type":"boolean"},
+                "description":{"type":"string","nullable":true}
+              }
+            }""",
+        )
+        val action = readAction().copy(
+            id = "entries.create",
+            resourceId = "entries",
+            intent = ActionIntent.create,
+            risk = ActionRisk.mutating,
+            binding = readAction().binding.copy(
+                method = HttpMethod.POST,
+                path = "/ocs/v2.php/apps/example/api/entries",
+                body = HttpBody("application/json", true, bodySchema),
+            ),
+            provenance = listOf(
+                Provenance(ProvenanceKind.verifiedAppPackage, "signed-package", "Verified entry create"),
+            ),
+        )
+
+        val request = buildDynamicApiRequest(
+            descriptor(action),
+            action,
+            values = mapOf(
+                "categoryId" to "",
+                "amount" to " ",
+                "enabled" to "",
+                "description" to "",
+            ),
+        )
+        val body = json.parseToJsonElement(requireNotNull(request.body).decodeToString()) as JsonObject
+
+        assertEquals(setOf("description"), body.keys)
+        assertEquals(JsonPrimitive(""), body["description"])
+    }
+
+    @Test
+    fun `integer array encoding rejects malformed wrong-type overflowing and oversized inputs`() {
+        val bodySchema = json.parseToJsonElement(
+            """{
+              "type":"object",
+              "properties":{
+                "ids":{
+                  "type":"array",
+                  "items":{"type":"integer"},
+                  "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT"
+                }
+              },
+              "required":["ids"]
+            }""",
+        )
+        val action = readAction().copy(
+            id = "assignments.update",
+            resourceId = "assignments",
+            intent = ActionIntent.update,
+            risk = ActionRisk.mutating,
+            binding = readAction().binding.copy(
+                method = HttpMethod.PUT,
+                body = HttpBody("application/json", true, bodySchema),
+            ),
+            provenance = listOf(
+                Provenance(ProvenanceKind.verifiedAppPackage, "signed-package", "Verified assignment setter"),
+            ),
+        )
+        val tooMany = (0..256).joinToString(prefix = "[", postfix = "]")
+        listOf(
+            "1\n2",
+            """[1,"2"]""",
+            "[1.5]",
+            "[true]",
+            """[{"id":1}]""",
+            "[9223372036854775808]",
+            tooMany,
+        ).forEach { value ->
+            assertFailsWith<IllegalStateException>(value) {
+                buildDynamicApiRequest(descriptor(action), action, values = mapOf("ids" to value))
+            }
+        }
+    }
+
+    @Test
+    fun `integer-looking arrays without an exact declared integer format fail closed`() {
+        fun requestFor(propertySchema: String) {
+            val bodySchema = json.parseToJsonElement(
+                """{"type":"object","properties":{"ids":$propertySchema},"required":["ids"]}""",
+            )
+            val action = readAction().copy(
+                id = "assignments.update",
+                resourceId = "assignments",
+                intent = ActionIntent.update,
+                risk = ActionRisk.mutating,
+                binding = readAction().binding.copy(
+                    method = HttpMethod.PUT,
+                    body = HttpBody("application/json", true, bodySchema),
+                ),
+                provenance = listOf(
+                    Provenance(ProvenanceKind.verifiedAppPackage, "signed-package", "Verified assignment setter"),
+                ),
+            )
+            assertFailsWith<IllegalStateException> {
+                buildDynamicApiRequest(descriptor(action), action, values = mapOf("ids" to "[1,2]"))
+            }
+        }
+
+        requestFor("""{"type":"array","items":{"type":"integer"}}""")
+        requestFor(
+            """{
+              "type":"array",
+              "items":{"type":"string"},
+              "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT"
+            }""",
+        )
+        requestFor("""{"type":"array","items":{"type":"number"}}""")
+        requestFor("""{"type":"array"}""")
+        requestFor(
+            """{
+              "type":"array",
+              "items":{"type":"integer"},
+              "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT",
+              "contains":{"const":1}
+            }""",
+        )
+        requestFor(
+            """{
+              "type":"array",
+              "items":{"type":"integer","enum":[1,2]},
+              "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT"
+            }""",
         )
     }
 

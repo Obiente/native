@@ -3,12 +3,15 @@ package dev.obiente.nextcloudnative.app
 import dev.obiente.nextcloudnative.template.scanBracedTemplate
 
 import dev.obiente.nextcloudnative.nativeui.model.AdvertisedOpenApi
+import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.AuthKind
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
+import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_LIST_FORMAT
+import dev.obiente.nextcloudnative.nativeui.model.DynamicIntegerArrayParseResult
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptorCompiler
 import dev.obiente.nextcloudnative.nativeui.model.DynamicDiscoveryInput
 import dev.obiente.nextcloudnative.nativeui.model.DynamicHttpBinding
@@ -19,6 +22,8 @@ import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.HttpParameter
 import dev.obiente.nextcloudnative.nativeui.model.OpenApiTrust
 import dev.obiente.nextcloudnative.nativeui.model.ParameterSource
+import dev.obiente.nextcloudnative.nativeui.model.isExactDynamicIntegerArraySchema
+import dev.obiente.nextcloudnative.nativeui.model.parseDynamicIntegerArrayInput
 import dev.obiente.nextcloudnative.nativeui.model.requireValid
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
@@ -52,7 +57,16 @@ data class DynamicDescriptorDiscovery(
     val sourcePath: String?,
     val acquisition: DynamicDescriptorAcquisition,
     val diagnostics: List<String> = emptyList(),
+    val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
 )
+
+enum class DynamicContractVersionStatus {
+    VerifiedCurrent,
+    LastKnownReadOnly,
+}
+
+internal fun DynamicContractVersionStatus.allows(risk: ActionRisk): Boolean =
+    this == DynamicContractVersionStatus.VerifiedCurrent || risk == ActionRisk.readOnly
 
 enum class DynamicDescriptorAcquisition {
     OcsApiViewer,
@@ -78,6 +92,8 @@ suspend fun discoverDynamicAppDescriptor(
     session: NextcloudSession,
     app: NextcloudAppEntry,
     serverVersion: String? = null,
+    installedAppVersionHint: String? = null,
+    serverVersionVerified: Boolean = true,
 ): DynamicDescriptorDiscovery {
     val sameOrigin = discoverDynamicAppDescriptor(
         serverUrl = session.serverUrl,
@@ -91,7 +107,13 @@ suspend fun discoverDynamicAppDescriptor(
                 "The server version is unavailable, so an App Store release could not be selected safely.",
         )
     val contractAppId = app.canonicalAppStoreId()
-    val installedVersion = discoverInstalledAppVersion(services, session, contractAppId)
+    val observedInstalledVersion = discoverInstalledAppVersion(services, session, contractAppId)
+    val installedVersion = observedInstalledVersion ?: installedAppVersionHint?.safeDynamicVersionHint()
+    val versionStatus = if (serverVersionVerified && observedInstalledVersion != null) {
+        DynamicContractVersionStatus.VerifiedCurrent
+    } else {
+        DynamicContractVersionStatus.LastKnownReadOnly
+    }
     val acquired = runCatching {
         services.acquireSignedOpenApiContract(contractAppId, coreVersion, installedVersion)
     }.getOrElse { failure ->
@@ -174,13 +196,45 @@ suspend fun discoverDynamicAppDescriptor(
                 DynamicDescriptorAcquisition.AppStoreLinkedGitHubTag
             else -> DynamicDescriptorAcquisition.AppStoreLinkedGitHubTag
         },
-        diagnostics = sameOrigin.diagnostics + acquired.successDiagnostic(
-            app = app,
-            endpointCount = descriptor.actions.size,
-            verifiedReadRouteCount = verifiedReadRouteCount,
-        ),
+        diagnostics = sameOrigin.diagnostics +
+            acquired.successDiagnostic(
+                app = app,
+                endpointCount = descriptor.actions.size,
+                verifiedReadRouteCount = verifiedReadRouteCount,
+            ) +
+            if (versionStatus == DynamicContractVersionStatus.LastKnownReadOnly) {
+                listOf(
+                    "The cached contract uses the last verified server or app version. " +
+                        "Reads remain available, but writes are disabled until both versions are verified again.",
+                )
+            } else {
+                emptyList()
+            },
+        versionStatus = versionStatus,
     )
 }
+
+internal fun DynamicDescriptorAcquisition.usesAppStoreContract(): Boolean = when (this) {
+    DynamicDescriptorAcquisition.SignedAppStorePackage,
+    DynamicDescriptorAcquisition.SignedAppStoreStaticRoutes,
+    DynamicDescriptorAcquisition.SignedAppStoreMergedContract,
+    DynamicDescriptorAcquisition.AppStoreLinkedGitHubTag,
+    DynamicDescriptorAcquisition.AppStoreLinkedStaticRoutes,
+    DynamicDescriptorAcquisition.AppStoreLinkedMergedContract,
+    -> true
+    DynamicDescriptorAcquisition.OcsApiViewer,
+    DynamicDescriptorAcquisition.StaticAppAsset,
+    DynamicDescriptorAcquisition.MetadataFallback,
+    -> false
+}
+
+private fun String.safeDynamicVersionHint(): String? = trim()
+    .takeIf { version ->
+        version.length in 1..MAX_DYNAMIC_VERSION_HINT_CHARACTERS &&
+            version.all { character ->
+                character.isLetterOrDigit() || character in setOf('.', '-', '_', '+')
+            }
+    }
 
 private fun AcquiredOpenApiContractSourceKind.isSignedPackage(): Boolean =
     this == AcquiredOpenApiContractSourceKind.SignedAppPackage ||
@@ -438,6 +492,7 @@ class DynamicNextcloudActionExecutor(
     private val session: NextcloudSession,
     private val descriptor: DynamicAppDescriptor,
     private val runtimeContext: Map<String, String> = emptyMap(),
+    private val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
 ) : NativeActionExecutor {
     init {
         descriptor.requireValid()
@@ -446,6 +501,11 @@ class DynamicNextcloudActionExecutor(
     override suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult {
         val action = descriptor.actions.firstOrNull { it.id == request.action.id }
             ?: return NativeActionExecutionResult.Failure("The dynamic action is no longer available.")
+        if (!versionStatus.allows(action.risk)) {
+            return NativeActionExecutionResult.Failure(
+                "Reconnect to verify the server and app versions before changing cloud data.",
+            )
+        }
         val values = (request as? NativeActionRequest.Submit)?.values.orEmpty()
         val observedInputSchema = (request as? NativeActionRequest.Submit)
             ?.action
@@ -468,16 +528,61 @@ class DynamicNextcloudActionExecutor(
                 runtimeContext,
                 observedInputSchema,
             )
-            if (response.status !in 200..299) {
-                NativeActionExecutionResult.Failure("The server rejected ${action.label} (HTTP ${response.status}).")
-            } else {
-                NativeActionExecutionResult.Success("${action.label} completed.")
-            }
+            response.toDynamicActionExecutionResult(action)
         }.getOrElse { failure ->
             NativeActionExecutionResult.Failure(failure.message ?: "The dynamic action failed.")
         }
     }
 }
+
+/**
+ * Validates a mutation response against the action's declared response envelope.
+ *
+ * OCS endpoints can report an application failure inside an HTTP 2xx response. A declared OCS
+ * mutation therefore succeeds only when its bounded JSON metadata contains both an `ok` status
+ * and a successful OCS status code. Missing, malformed, or contradictory metadata fails closed
+ * without exposing the response body.
+ */
+internal fun NextcloudApiResponse.toDynamicActionExecutionResult(
+    action: DynamicAction,
+): NativeActionExecutionResult {
+    if (status !in 200..299) {
+        return NativeActionExecutionResult.Failure(
+            "The server rejected ${action.label} (HTTP $status).",
+        )
+    }
+    val ocs = action.binding.ocs
+        ?: return NativeActionExecutionResult.Success("${action.label} completed.")
+    val metadata = runCatching {
+        body.parseBoundedDynamicJson().atJsonPointer(ocs.responseMetaPointer)
+    }.getOrNull() as? JsonObject
+        ?: return malformedDynamicOcsActionResult(action)
+    val ocsStatus = (metadata["status"] as? JsonPrimitive)
+        ?.contentOrNull
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?: return malformedDynamicOcsActionResult(action)
+    val statusCode = (metadata["statuscode"] as? JsonPrimitive)?.longOrNull
+        ?: return malformedDynamicOcsActionResult(action)
+    val statusIsSuccessful = ocsStatus.equals("ok", ignoreCase = true)
+    val codeIsSuccessful = statusCode == 100L || statusCode in 200L..299L
+    if (statusIsSuccessful && codeIsSuccessful) {
+        return NativeActionExecutionResult.Success("${action.label} completed.")
+    }
+    val safeMessage = (metadata["message"] as? JsonPrimitive)
+        ?.contentOrNull
+        ?.toSafeDynamicErrorMessage()
+    return NativeActionExecutionResult.Failure(
+        safeMessage?.let { message -> "The server rejected ${action.label}: $message" }
+            ?: "The OCS endpoint rejected ${action.label}.",
+    )
+}
+
+private fun malformedDynamicOcsActionResult(
+    action: DynamicAction,
+): NativeActionExecutionResult.Failure = NativeActionExecutionResult.Failure(
+    "The server returned invalid OCS metadata for ${action.label}.",
+)
 
 suspend fun loadDynamicRecords(
     services: NextcloudPlatformServices,
@@ -1006,7 +1111,8 @@ private fun String.runtimeResourceIdentity(): String {
     return when {
         normalized.endsWith("ies") && normalized.length > 3 -> normalized.dropLast(3) + "y"
         normalized.endsWith("ches") || normalized.endsWith("shes") -> normalized.dropLast(2)
-        normalized.endsWith("ses") || normalized.endsWith("xes") || normalized.endsWith("zes") -> normalized.dropLast(2)
+        normalized.endsWith("sses") || normalized.endsWith("xes") || normalized.endsWith("zes") ->
+            normalized.dropLast(2)
         normalized.endsWith('s') && normalized.length > 1 -> normalized.dropLast(1)
         else -> normalized
     }
@@ -1049,6 +1155,17 @@ private fun buildDynamicBody(
                 val wireNames = mutableSetOf<String>()
                 allowed.forEach { (name, value) ->
                     val property = properties[name] as? JsonObject
+                    val propertyType = (property?.get("type") as? JsonPrimitive)?.contentOrNull
+                    if (
+                        value.isBlank() &&
+                        name !in requiredProperties &&
+                        (
+                            propertyType in setOf("boolean", "integer", "number") ||
+                                property.isExactDynamicIntegerArraySchema()
+                            )
+                    ) {
+                        return@forEach
+                    }
                     val observedProperty = observedProperties[name]
                         ?.takeIf { allowsObservedSettings }
                     val wireName = (property?.get(SETTINGS_WIRE_NAME_EXTENSION) as? JsonPrimitive)
@@ -1131,22 +1248,36 @@ private fun String.toTypedJsonValue(schema: JsonElement): JsonElement {
         val objectSchema = schema
         val format = (objectSchema["format"] as? JsonPrimitive)?.contentOrNull
         val itemType = ((objectSchema["items"] as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull
-        require(
-            format in setOf(DYNAMIC_STRING_LIST_FORMAT, DYNAMIC_STRING_ARRAY_FORMAT) && itemType == "string",
-        ) {
-            "Only contract-declared text arrays can be edited as a dynamic list."
+        when {
+            objectSchema.isExactDynamicIntegerArraySchema() -> {
+                when (val parsed = parseDynamicIntegerArrayInput(this, objectSchema)) {
+                    is DynamicIntegerArrayParseResult.Valid ->
+                        JsonArray(parsed.values.map(::JsonPrimitive))
+                    is DynamicIntegerArrayParseResult.Invalid -> error(parsed.message)
+                }
+            }
+            format in setOf(DYNAMIC_STRING_LIST_FORMAT, DYNAMIC_STRING_ARRAY_FORMAT) &&
+                itemType == "string" -> {
+                val items = lineSequence()
+                    .map(String::trim)
+                    .filter(String::isNotEmpty)
+                val preserved = if (format == DYNAMIC_STRING_LIST_FORMAT) items.distinct() else items
+                JsonArray(
+                    preserved
+                        .take(MAX_DYNAMIC_STRING_LIST_ITEMS + 1)
+                        .toList()
+                        .also {
+                            require(it.size <= MAX_DYNAMIC_STRING_LIST_ITEMS) {
+                                "This list has too many values."
+                            }
+                        }
+                        .map(::JsonPrimitive),
+                )
+            }
+            format == DYNAMIC_INTEGER_ARRAY_FORMAT ->
+                error("Only exact contract-declared integer arrays can be edited.")
+            else -> error("Only contract-declared scalar arrays can be edited.")
         }
-        val items = lineSequence()
-            .map(String::trim)
-            .filter(String::isNotEmpty)
-        val preserved = if (format == DYNAMIC_STRING_LIST_FORMAT) items.distinct() else items
-        JsonArray(
-            preserved
-                .take(MAX_DYNAMIC_STRING_LIST_ITEMS + 1)
-                .toList()
-                .also { require(it.size <= MAX_DYNAMIC_STRING_LIST_ITEMS) { "This list has too many values." } }
-                .map(::JsonPrimitive),
-        )
     }
     else -> JsonPrimitive(this)
     }
@@ -1691,5 +1822,6 @@ private fun String.encodeUrlComponent(): String = buildString {
 private const val DYNAMIC_HEX = "0123456789ABCDEF"
 private const val MAX_DYNAMIC_ERROR_BODY_CHARS = 8_192
 private const val MAX_DYNAMIC_ERROR_MESSAGE_CHARS = 240
+private const val MAX_DYNAMIC_VERSION_HINT_CHARACTERS = 128
 private const val OCS_API_VIEWER_CATALOG_PATH = "/index.php/apps/ocs_api_viewer/apps"
 private const val OCS_API_VIEWER_SPEC_PATH = "/index.php/apps/ocs_api_viewer/apps"

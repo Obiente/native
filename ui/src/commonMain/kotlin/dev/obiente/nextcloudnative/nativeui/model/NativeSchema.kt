@@ -144,6 +144,7 @@ data class ActionSpec(
     val confidence: Confidence,
     val inputSchema: JsonElement? = null,
     val evidence: List<Evidence> = emptyList(),
+    val effect: ActionEffect = ActionEffect.unspecified,
 )
 
 @Serializable
@@ -179,6 +180,39 @@ enum class ActionIntent {
     create,
     update,
     delete,
+    execute,
+}
+
+/**
+ * Contract-derived user-visible effect of an action.
+ *
+ * HTTP methods do not describe product behavior: POST can create a record, toggle state, restore
+ * one, reorder a collection, or run a batch command. Keeping the effect separate lets generic
+ * renderers choose the right affordance and recovery behavior without knowing an app identity or
+ * endpoint.
+ */
+@Serializable
+enum class ActionEffect {
+    unspecified,
+    list,
+    read,
+    create,
+    update,
+    delete,
+    permanentDelete,
+    empty,
+    toggle,
+    archive,
+    unarchive,
+    restore,
+    move,
+    copy,
+    reorder,
+    batch,
+    upload,
+    assign,
+    leave,
+    clear,
     execute,
 }
 

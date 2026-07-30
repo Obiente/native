@@ -1,0 +1,340 @@
+package dev.obiente.nextcloudnative.app.design
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class NextcloudCollectionNavigatorTest {
+    @Test
+    fun `navigation stays hidden when there is no choice`() {
+        NextcloudCollectionNavigationHost.entries.forEach { host ->
+            listOf(0, 1).forEach { destinationCount ->
+                assertEquals(
+                    NextcloudCollectionNavigationMode.Hidden,
+                    resolveNextcloudCollectionNavigationMode(host, 1_400, destinationCount),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `adaptive Android switches from drawer to rail at shared breakpoint`() {
+        assertEquals(
+            NextcloudCollectionNavigationMode.Drawer,
+            resolveNextcloudCollectionNavigationMode(
+                NextcloudCollectionNavigationHost.AdaptiveAndroid,
+                NextcloudWorkspaceBreakpoints.AdaptiveRailDp - 1,
+                2,
+            ),
+        )
+        assertEquals(
+            NextcloudCollectionNavigationMode.Rail,
+            resolveNextcloudCollectionNavigationMode(
+                NextcloudCollectionNavigationHost.AdaptiveAndroid,
+                NextcloudWorkspaceBreakpoints.AdaptiveRailDp,
+                2,
+            ),
+        )
+    }
+
+    @Test
+    fun `desktop switches from rail to sidebar at shared breakpoint`() {
+        assertEquals(
+            NextcloudCollectionNavigationMode.Rail,
+            resolveNextcloudCollectionNavigationMode(
+                NextcloudCollectionNavigationHost.Desktop,
+                NextcloudWorkspaceBreakpoints.DesktopSidebarDp - 1,
+                3,
+            ),
+        )
+        assertEquals(
+            NextcloudCollectionNavigationMode.Sidebar,
+            resolveNextcloudCollectionNavigationMode(
+                NextcloudCollectionNavigationHost.Desktop,
+                NextcloudWorkspaceBreakpoints.DesktopSidebarDp,
+                3,
+            ),
+        )
+    }
+
+    @Test
+    fun `compact root uses menu while nested routes use back`() {
+        assertEquals(
+            NextcloudCollectionLeadingControl.Menu,
+            resolveNextcloudCollectionLeadingControl(
+                mode = NextcloudCollectionNavigationMode.Drawer,
+                hasHierarchyBack = false,
+            ),
+        )
+        assertEquals(
+            NextcloudCollectionLeadingControl.Back,
+            resolveNextcloudCollectionLeadingControl(
+                mode = NextcloudCollectionNavigationMode.Drawer,
+                hasHierarchyBack = true,
+            ),
+        )
+        listOf(
+            NextcloudCollectionNavigationMode.Hidden,
+            NextcloudCollectionNavigationMode.Rail,
+            NextcloudCollectionNavigationMode.Sidebar,
+        ).forEach { mode ->
+            assertEquals(
+                NextcloudCollectionLeadingControl.Back,
+                resolveNextcloudCollectionLeadingControl(
+                    mode = mode,
+                    hasHierarchyBack = false,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `nested compact route keeps back and exposes drawer access`() {
+        assertEquals(
+            NextcloudCollectionLeadingControl.Back,
+            resolveNextcloudCollectionLeadingControl(
+                mode = NextcloudCollectionNavigationMode.Drawer,
+                hasHierarchyBack = true,
+            ),
+        )
+        assertTrue(
+            shouldShowNextcloudCollectionTrailingNavigation(
+                mode = NextcloudCollectionNavigationMode.Drawer,
+                hasHierarchyBack = true,
+            ),
+        )
+        assertFalse(
+            shouldShowNextcloudCollectionTrailingNavigation(
+                mode = NextcloudCollectionNavigationMode.Drawer,
+                hasHierarchyBack = false,
+            ),
+        )
+        assertFalse(
+            shouldShowNextcloudCollectionTrailingNavigation(
+                mode = NextcloudCollectionNavigationMode.Rail,
+                hasHierarchyBack = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `drawer and sidebar give long destination labels a second line`() {
+        assertEquals(
+            2,
+            resolveNextcloudCollectionDestinationLabelMaxLines(
+                NextcloudCollectionNavigationMode.Drawer,
+            ),
+        )
+        assertEquals(
+            2,
+            resolveNextcloudCollectionDestinationLabelMaxLines(
+                NextcloudCollectionNavigationMode.Sidebar,
+            ),
+        )
+        assertEquals(
+            1,
+            resolveNextcloudCollectionDestinationLabelMaxLines(
+                NextcloudCollectionNavigationMode.Rail,
+            ),
+        )
+        assertEquals(
+            1,
+            resolveNextcloudCollectionDestinationLabelMaxLines(
+                NextcloudCollectionNavigationMode.Hidden,
+            ),
+        )
+    }
+
+    @Test
+    fun `model copies destinations and resolves selection`() {
+        val mutableDestinations = mutableListOf(
+            NextcloudCollectionDestination("all", "All items", 4),
+            NextcloudCollectionDestination("assigned", "Assigned to me"),
+        )
+        val model = NextcloudCollectionNavigationModel.create(mutableDestinations, "assigned")
+
+        mutableDestinations.clear()
+
+        assertEquals(2, model.destinations.size)
+        assertEquals("assigned", model.selectedDestination?.id)
+    }
+
+    @Test
+    fun `empty model permits only an empty selection`() {
+        assertNull(NextcloudCollectionNavigationModel.create(emptyList(), null).selectedDestination)
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudCollectionNavigationModel.create(emptyList(), "missing")
+        }
+    }
+
+    @Test
+    fun `model permits no primary selection while a contextual view is active`() {
+        val destinations = listOf(
+            NextcloudCollectionDestination("today", "Today"),
+            NextcloudCollectionDestination("upcoming", "Upcoming"),
+        )
+
+        val model = NextcloudCollectionNavigationModel.create(destinations, null)
+
+        assertNull(model.selectedDestinationId)
+        assertNull(model.selectedDestination)
+    }
+
+    @Test
+    fun `model rejects missing and duplicate identities`() {
+        val destinations = listOf(
+            NextcloudCollectionDestination("today", "Today"),
+            NextcloudCollectionDestination("upcoming", "Upcoming"),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudCollectionNavigationModel.create(destinations, "missing")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudCollectionNavigationModel.create(
+                listOf(
+                    NextcloudCollectionDestination("today", "Today"),
+                    NextcloudCollectionDestination("today", "Also today"),
+                ),
+                "today",
+            )
+        }
+    }
+
+    @Test
+    fun `keyboard movement follows destination order and wraps at the ends`() {
+        val model = NextcloudCollectionNavigationModel.create(
+            destinations = listOf(
+                NextcloudCollectionDestination("all", "All"),
+                NextcloudCollectionDestination("open", "Open"),
+                NextcloudCollectionDestination("done", "Done"),
+            ),
+            selectedDestinationId = "open",
+        )
+
+        assertEquals(
+            "done",
+            resolveNextcloudCollectionKeyboardDestination(
+                model = model,
+                focusedDestinationId = "open",
+                move = NextcloudCollectionNavigationMove.Next,
+            )?.id,
+        )
+        assertEquals(
+            "all",
+            resolveNextcloudCollectionKeyboardDestination(
+                model = model,
+                focusedDestinationId = "done",
+                move = NextcloudCollectionNavigationMove.Next,
+            )?.id,
+        )
+        assertEquals(
+            "done",
+            resolveNextcloudCollectionKeyboardDestination(
+                model = model,
+                focusedDestinationId = "all",
+                move = NextcloudCollectionNavigationMove.Previous,
+            )?.id,
+        )
+        assertEquals(
+            "all",
+            resolveNextcloudCollectionKeyboardDestination(
+                model = model,
+                focusedDestinationId = "open",
+                move = NextcloudCollectionNavigationMove.First,
+            )?.id,
+        )
+        assertEquals(
+            "done",
+            resolveNextcloudCollectionKeyboardDestination(
+                model = model,
+                focusedDestinationId = "open",
+                move = NextcloudCollectionNavigationMove.Last,
+            )?.id,
+        )
+    }
+
+    @Test
+    fun `keyboard movement from a contextual view focuses without inventing selection`() {
+        val model = NextcloudCollectionNavigationModel.create(
+            destinations = listOf(
+                NextcloudCollectionDestination("all", "All"),
+                NextcloudCollectionDestination("open", "Open"),
+            ),
+            selectedDestinationId = null,
+        )
+
+        assertEquals(
+            "all",
+            resolveNextcloudCollectionKeyboardDestination(
+                model = model,
+                focusedDestinationId = null,
+                move = NextcloudCollectionNavigationMove.Next,
+            )?.id,
+        )
+        assertEquals(
+            "open",
+            resolveNextcloudCollectionKeyboardDestination(
+                model = model,
+                focusedDestinationId = null,
+                move = NextcloudCollectionNavigationMove.Previous,
+            )?.id,
+        )
+        assertNull(model.selectedDestination)
+    }
+
+    @Test
+    fun `keyboard movement tolerates stale focus and empty destinations`() {
+        val model = NextcloudCollectionNavigationModel.create(
+            destinations = listOf(
+                NextcloudCollectionDestination("all", "All"),
+                NextcloudCollectionDestination("open", "Open"),
+            ),
+            selectedDestinationId = "open",
+        )
+        assertEquals(
+            "all",
+            resolveNextcloudCollectionKeyboardDestination(
+                model = model,
+                focusedDestinationId = "removed",
+                move = NextcloudCollectionNavigationMove.Next,
+            )?.id,
+        )
+        assertNull(
+            resolveNextcloudCollectionKeyboardDestination(
+                model = NextcloudCollectionNavigationModel.create(emptyList(), null),
+                focusedDestinationId = null,
+                move = NextcloudCollectionNavigationMove.Next,
+            ),
+        )
+    }
+
+    @Test
+    fun `destination and policy reject impossible values`() {
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudCollectionDestination("", "Today")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudCollectionDestination("today", " ")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudCollectionDestination("today", "Today", -1)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            resolveNextcloudCollectionNavigationMode(
+                NextcloudCollectionNavigationHost.Desktop,
+                -1,
+                2,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            resolveNextcloudCollectionNavigationMode(
+                NextcloudCollectionNavigationHost.Desktop,
+                800,
+                -1,
+            )
+        }
+    }
+}

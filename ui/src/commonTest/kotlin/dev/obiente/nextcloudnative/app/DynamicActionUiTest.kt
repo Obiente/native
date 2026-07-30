@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
+import dev.obiente.nextcloudnative.nativeui.model.ActionEffect
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
@@ -37,6 +38,31 @@ class DynamicActionUiTest {
     }
 
     @Test
+    fun `semantic effects keep distinct labels and confirmations`() {
+        val permanentDelete = action(
+            "delete-permanently",
+            ActionIntent.delete,
+            ActionRisk.destructive,
+            HttpMethod.DELETE,
+        ).copy(effect = ActionEffect.permanentDelete)
+        val clear = action(
+            "clear-image",
+            ActionIntent.execute,
+            ActionRisk.destructive,
+            HttpMethod.DELETE,
+        ).copy(effect = ActionEffect.clear)
+
+        assertEquals("Delete permanently", dynamicHeaderActionLabel(permanentDelete, "Delete"))
+        assertEquals("Clear", dynamicHeaderActionLabel(clear, "Delete"))
+        assertEquals(
+            DynamicActionUiMode.ConfirmDirectly,
+            dynamicActionUiMode(clear, editableFieldCount = 0),
+        )
+        assertEquals("Clear photo?", dynamicDirectActionTitle(clear, "photo"))
+        assertEquals("Clear", dynamicDirectActionConfirmLabel(clear))
+    }
+
+    @Test
     fun `quick actions prioritize create and edit ahead of destructive operations`() {
         assertEquals(
             listOf(ActionIntent.create, ActionIntent.update, ActionIntent.execute, ActionIntent.delete),
@@ -46,6 +72,41 @@ class DynamicActionUiTest {
                 action("edit", ActionIntent.update, ActionRisk.mutating, HttpMethod.PUT),
                 action("create", ActionIntent.create, ActionRisk.mutating, HttpMethod.POST),
             ).sortedBy(::dynamicQuickActionPriority).map(ActionSpec::intent),
+        )
+    }
+
+    @Test
+    fun `state collection reads are recognized without app or operation identifiers`() {
+        val trash = action(
+            "arbitrary-read",
+            ActionIntent.list,
+            ActionRisk.readOnly,
+            HttpMethod.GET,
+        ).copy(binding = ApiBinding(HttpMethod.GET, "/api/workspaces/{workspaceId}/records/trash", "read"))
+        val active = trash.copy(binding = trash.binding.copy(path = "/api/workspaces/{workspaceId}/records"))
+        val mutation = trash.copy(
+            intent = ActionIntent.delete,
+            binding = trash.binding.copy(method = HttpMethod.DELETE),
+        )
+
+        assertEquals("trash", dynamicCollectionState(trash))
+        assertEquals(null, dynamicCollectionState(active))
+        assertEquals(null, dynamicCollectionState(mutation))
+    }
+
+    @Test
+    fun `duplicate state destinations include their resource names`() {
+        assertEquals(
+            "Checklist Trash",
+            dynamicSecondaryDestinationLabel("Trash", "Checklist", duplicate = true),
+        )
+        assertEquals(
+            "Trash",
+            dynamicSecondaryDestinationLabel("Trash", "Checklist", duplicate = false),
+        )
+        assertEquals(
+            "Trash",
+            dynamicSecondaryDestinationLabel("Trash", "Trash", duplicate = true),
         )
     }
 

@@ -93,6 +93,10 @@ import com.mikepenz.markdown.m3.Markdown
 import dev.obiente.nextcloudnative.app.design.NextcloudAppBackground
 import dev.obiente.nextcloudnative.app.design.NextcloudAppTile
 import dev.obiente.nextcloudnative.app.design.NextcloudBottomNavigation
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestination
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationHost
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationModel
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionWorkspaceScaffold
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
@@ -109,10 +113,12 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.isNextcloudDarkTheme
 import dev.obiente.nextcloudnative.app.design.resolveNextcloudRootShellLayout
+import dev.obiente.nextcloudnative.app.design.resolveNextcloudCollectionNavigationMode
 import dev.obiente.nextcloudnative.app.design.shouldUseNextcloudRootShell
 import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.DynamicResourceRecordContext
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
+import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.model.isSecondaryTechnicalDestination
@@ -134,6 +140,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.nativeAudioTrack
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.effectiveNativeResourceId
 import dev.obiente.nextcloudnative.nativeui.runtime.actionBindingValues
+import dev.obiente.nextcloudnative.nativeui.runtime.safeActionBindingValues
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeScreenState
 import dev.obiente.nextcloudnative.nativeui.runtime.settingsFormPrefillView
 import dev.obiente.nextcloudnative.nativeui.runtime.editableNativeFields
@@ -143,6 +150,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -197,6 +206,8 @@ private sealed interface Screen {
     data class AppInfo(
         val app: NextcloudAppEntry,
         val navigation: DynamicAppNavigationState = DynamicAppNavigationState(),
+        val lastKnownServerVersion: String? = null,
+        val lastKnownInstalledAppVersion: String? = null,
     ) : Screen
     @Serializable
     data class MediaViewer(
@@ -244,6 +255,25 @@ private val screenSaver = Saver<Screen, String>(
         runCatching { navigationStateJson.decodeFromString<Screen>(encoded) }.getOrDefault(Screen.Root)
     },
 )
+
+internal data class DynamicContractResumePlan(
+    val serverVersion: String?,
+    val installedAppVersionHint: String?,
+    val serverVersionVerified: Boolean,
+)
+
+internal fun planDynamicContractResume(
+    liveServerVersion: String?,
+    lastKnownServerVersion: String?,
+    lastKnownInstalledAppVersion: String?,
+): DynamicContractResumePlan {
+    val live = liveServerVersion?.trim()?.takeIf(String::isNotEmpty)
+    return DynamicContractResumePlan(
+        serverVersion = live ?: lastKnownServerVersion?.trim()?.takeIf(String::isNotEmpty),
+        installedAppVersionHint = lastKnownInstalledAppVersion?.trim()?.takeIf(String::isNotEmpty),
+        serverVersionVerified = live != null,
+    )
+}
 
 private class PhotoTimelineUiState {
     val timeline = mutableStateOf(PhotoTimelineState(pageSize = MAX_PHOTO_TIMELINE_PAGE_SIZE))
@@ -642,7 +672,10 @@ private fun AuthenticatedApp(
                 destination = NextcloudDestination.Activity
                 Screen.Root
             }
-            else -> Screen.AppInfo(app)
+            else -> Screen.AppInfo(
+                app = app,
+                lastKnownServerVersion = serverInfo?.version,
+            )
         }
     }
 
@@ -1012,29 +1045,52 @@ private fun AuthenticatedApp(
                 openMediaViewer(listOf(file), file, current)
             },
         )
-        is Screen.AppInfo -> AppInfoScreen(
-            services = services,
-            session = session,
-            app = current.app,
-            serverVersion = serverInfo?.version,
-            cachedDiscovery = cachedAppDiscoveries[current.app.id]
-                ?: sharedDynamicNativeMemoryCache.discovery(session, current.app.id),
-            onDiscovery = { candidate ->
-                val cached = cachedAppDiscoveries[current.app.id]
-                if (cached == null || candidate.acquisition != DynamicDescriptorAcquisition.MetadataFallback) {
-                    cachedAppDiscoveries[current.app.id] = candidate
-                    sharedDynamicNativeMemoryCache.storeDiscovery(session, current.app.id, candidate)
-                }
-            },
-            navigation = current.navigation,
-            onNavigationChanged = { navigation ->
-                val active = screen as? Screen.AppInfo
-                if (active?.app?.id == current.app.id && active.navigation != navigation) {
-                    screen = active.copy(navigation = navigation)
-                }
-            },
-            onBack = ::navigateBack,
-        )
+        is Screen.AppInfo -> {
+            val resumePlan = planDynamicContractResume(
+                liveServerVersion = serverInfo?.version,
+                lastKnownServerVersion = current.lastKnownServerVersion,
+                lastKnownInstalledAppVersion = current.lastKnownInstalledAppVersion,
+            )
+            AppInfoScreen(
+                services = services,
+                session = session,
+                app = current.app,
+                serverVersion = resumePlan.serverVersion,
+                installedAppVersionHint = resumePlan.installedAppVersionHint,
+                serverVersionVerified = resumePlan.serverVersionVerified,
+                onRetryServerInfo = { discoveryAttempt += 1 },
+                cachedDiscovery = cachedAppDiscoveries[current.app.id]
+                    ?: sharedDynamicNativeMemoryCache.discovery(session, current.app.id),
+                onDiscovery = { candidate ->
+                    val cached = cachedAppDiscoveries[current.app.id]
+                    if (cached == null || candidate.acquisition != DynamicDescriptorAcquisition.MetadataFallback) {
+                        cachedAppDiscoveries[current.app.id] = candidate
+                        sharedDynamicNativeMemoryCache.storeDiscovery(session, current.app.id, candidate)
+                    }
+                    val liveServerVersion = serverInfo?.version
+                    val active = screen as? Screen.AppInfo
+                    if (
+                        active?.app?.id == current.app.id &&
+                        liveServerVersion != null &&
+                        candidate.versionStatus == DynamicContractVersionStatus.VerifiedCurrent &&
+                        candidate.acquisition.usesAppStoreContract()
+                    ) {
+                        screen = active.copy(
+                            lastKnownServerVersion = liveServerVersion,
+                            lastKnownInstalledAppVersion = candidate.descriptor.app.version,
+                        )
+                    }
+                },
+                navigation = current.navigation,
+                onNavigationChanged = { navigation ->
+                    val active = screen as? Screen.AppInfo
+                    if (active?.app?.id == current.app.id && active.navigation != navigation) {
+                        screen = active.copy(navigation = navigation)
+                    }
+                },
+                onBack = ::navigateBack,
+            )
+        }
         is Screen.MediaViewer -> {
             val route = MediaViewerNavigationRoute(
                 key = current.navigationKey,
@@ -1344,6 +1400,9 @@ private fun AppInfoScreen(
     session: NextcloudSession,
     app: NextcloudAppEntry,
     serverVersion: String?,
+    installedAppVersionHint: String?,
+    serverVersionVerified: Boolean,
+    onRetryServerInfo: () -> Unit,
     cachedDiscovery: DynamicDescriptorDiscovery?,
     onDiscovery: (DynamicDescriptorDiscovery) -> Unit,
     navigation: DynamicAppNavigationState,
@@ -1355,7 +1414,19 @@ private fun AppInfoScreen(
     var discoveryError by remember(app.id, session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(app.id, session) { mutableStateOf(0) }
 
-    LaunchedEffect(app.id, session, serverVersion, discoveryAttempt) {
+    fun retryDiscoveryAndServerInfo() {
+        discoveryAttempt += 1
+        onRetryServerInfo()
+    }
+
+    LaunchedEffect(
+        app.id,
+        session,
+        serverVersion,
+        installedAppVersionHint,
+        serverVersionVerified,
+        discoveryAttempt,
+    ) {
         if (cachedDiscovery != null) {
             discovery = cachedDiscovery
         }
@@ -1367,13 +1438,22 @@ private fun AppInfoScreen(
         }
         if (!shouldRetry) discovery = null
         discoveryError = null
-        runCatching { discoverDynamicAppDescriptor(services, session, app, serverVersion) }
+        runCatching {
+            discoverDynamicAppDescriptor(
+                services = services,
+                session = session,
+                app = app,
+                serverVersion = serverVersion,
+                installedAppVersionHint = installedAppVersionHint,
+                serverVersionVerified = serverVersionVerified,
+            )
+        }
             .onSuccess { candidate ->
                 onDiscovery(candidate)
-                discovery = if (
+                val retainedCachedContract =
                     candidate.acquisition == DynamicDescriptorAcquisition.MetadataFallback &&
-                    cachedDiscovery?.acquisition != DynamicDescriptorAcquisition.MetadataFallback
-                ) {
+                        cachedDiscovery?.acquisition != DynamicDescriptorAcquisition.MetadataFallback
+                discovery = if (retainedCachedContract) {
                     cachedDiscovery
                 } else {
                     candidate
@@ -1382,11 +1462,22 @@ private fun AppInfoScreen(
                 if (cachedDiscovery == null || candidate.acquisition != DynamicDescriptorAcquisition.MetadataFallback) {
                     discovery = candidate
                 }
+                if (retainedCachedContract) {
+                    discoveryError =
+                        "Could not verify the current server and app versions. " +
+                            "The last verified contract remains available in read-only mode."
+                } else {
+                    discoveryError = null
+                }
             }
             .onFailure { failure ->
+                if (failure is CancellationException) throw failure
                 sharedDynamicNativeMemoryCache.markDiscoveryFailure(session, app.id)
-                if (cachedDiscovery == null) {
-                    discoveryError = failure.message ?: "Could not discover this app's native API."
+                discoveryError = if (cachedDiscovery == null) {
+                    failure.message ?: "Could not discover this app's native API."
+                } else {
+                    "Could not verify the current server and app versions. " +
+                        "The last verified contract remains available in read-only mode."
                 }
             }
     }
@@ -1424,7 +1515,7 @@ private fun AppInfoScreen(
             }
         }
         discoveryError?.let { message ->
-            ErrorMessage("Dynamic contract failed: $message") { discoveryAttempt += 1 }
+            ErrorMessage("Dynamic contract failed: $message", ::retryDiscoveryAndServerInfo)
         }
         if (resolved == null) {
             GenericNativeAppScreen(
@@ -1435,13 +1526,39 @@ private fun AppInfoScreen(
                 modifier = Modifier.weight(1f),
             )
         } else {
+            if (resolved.versionStatus == DynamicContractVersionStatus.LastKnownReadOnly) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(
+                            horizontal = NextcloudSpacing.Large,
+                            vertical = NextcloudSpacing.Small,
+                        ),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "Using the last verified contract. Browsing remains available, but changes require " +
+                                "a fresh server and app version check.",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                        TextButton(onClick = ::retryDiscoveryAndServerInfo) {
+                            Text("Retry")
+                        }
+                    }
+                }
+            }
             DynamicDiscoveredAppScreen(
                 services = services,
                 session = session,
                 discovery = resolved,
                 restoredNavigation = navigation,
                 onNavigationChanged = onNavigationChanged,
-                onRetryDiscovery = { discoveryAttempt += 1 },
+                onRetryDiscovery = ::retryDiscoveryAndServerInfo,
                 onExit = onBack,
                 modifier = Modifier.weight(1f),
             )
@@ -1620,6 +1737,35 @@ private fun DynamicDiscoveredAppScreen(
         loadingMore = false
         loadMoreError = null
         if (view.component == NativeComponent.form) {
+            val values = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
+            val relationPlans = dynamicFormRelationLoadPlans(schema, view, values)
+                .filterNot { plan -> plan.resourceId in recordsByResourceId }
+            if (relationPlans.isNotEmpty()) {
+                viewState = NativeScreenState.Loading
+                val loadedRelations = coroutineScope {
+                    relationPlans.map { plan ->
+                        async {
+                            runCatching {
+                                plan.resourceId to loadDynamicRecords(
+                                    services = services,
+                                    session = session,
+                                    descriptor = descriptor,
+                                    actionId = plan.actionId,
+                                    values = values,
+                                    runtimeContext = values,
+                                )
+                            }.getOrElse { failure ->
+                                if (failure is CancellationException) throw failure
+                                null
+                            }
+                        }
+                    }.awaitAll()
+                }.filterNotNull().toMap()
+                currentCoroutineContext().ensureActive()
+                if (loadedRelations.isNotEmpty()) {
+                    recordsByResourceId = recordsByResourceId + loadedRelations
+                }
+            }
             val rememberedRecords = recordsByResourceId[view.resourceId].orEmpty()
             val cachedRecords = rememberedRecords.ifEmpty {
                 sharedDynamicNativeMemoryCache.screen(cacheKey)?.records.orEmpty()
@@ -1635,9 +1781,8 @@ private fun DynamicDiscoveredAppScreen(
                 return@LaunchedEffect
             }
             viewState = NativeScreenState.Loading
-            val values = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
             runCatching {
-                loadDynamicRecords(
+                val records = loadDynamicRecords(
                     services = services,
                     session = session,
                     descriptor = descriptor,
@@ -1645,6 +1790,8 @@ private fun DynamicDiscoveredAppScreen(
                     values = values,
                     runtimeContext = values,
                 )
+                currentCoroutineContext().ensureActive()
+                records
             }.onSuccess { records ->
                 if (records.isEmpty()) {
                     viewState = NativeScreenState.Error(
@@ -1661,6 +1808,7 @@ private fun DynamicDiscoveredAppScreen(
                     )
                 }
             }.onFailure { failure ->
+                if (failure is CancellationException) throw failure
                 viewState = NativeScreenState.Error(
                     message = failure.message ?: "Could not load the current settings.",
                     retry = { loadAttempt += 1 },
@@ -1700,7 +1848,7 @@ private fun DynamicDiscoveredAppScreen(
             if (staleSnapshot == null) viewState = NativeScreenState.Loading
             val values = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
             runCatching {
-                coroutineScope {
+                val loaded = coroutineScope {
                     listOf(
                         composite.columnResourceId to composite.columnSourceActionId,
                         composite.rowResourceId to composite.rowSourceActionId,
@@ -1717,6 +1865,8 @@ private fun DynamicDiscoveredAppScreen(
                         }
                     }.awaitAll()
                 }
+                currentCoroutineContext().ensureActive()
+                loaded
             }.onSuccess { loaded ->
                 val updatedRecords = recordsByResourceId + loaded.toMap()
                 val rows = loaded.first { (resourceId, _) -> resourceId == composite.rowResourceId }.second
@@ -1727,6 +1877,7 @@ private fun DynamicDiscoveredAppScreen(
                     DynamicScreenSnapshot(rows, updatedRecords),
                 )
             }.onFailure { failure ->
+                if (failure is CancellationException) throw failure
                 viewState = staleSnapshot?.let { NativeScreenState.Ready(it.records) }
                     ?: NativeScreenState.Error(
                         message = failure.message ?: "Could not load ${view.title}.",
@@ -1749,7 +1900,7 @@ private fun DynamicDiscoveredAppScreen(
         if (staleSnapshot == null) viewState = NativeScreenState.Loading
         val values = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
         runCatching {
-            loadDynamicRecords(
+            val records = loadDynamicRecords(
                 services = services,
                 session = session,
                 descriptor = descriptor,
@@ -1757,6 +1908,8 @@ private fun DynamicDiscoveredAppScreen(
                 values = values,
                 runtimeContext = values,
             )
+            currentCoroutineContext().ensureActive()
+            records
         }.onSuccess { records ->
             val updatedRecords = recordsByResourceId + (view.resourceId to records)
             val nextPagination = descriptor.actions.firstOrNull { action -> action.id == view.sourceActionId }
@@ -1785,6 +1938,7 @@ private fun DynamicDiscoveredAppScreen(
                 ),
             )
         }.onFailure { failure ->
+            if (failure is CancellationException) throw failure
             if (staleSnapshot != null) {
                 viewState = NativeScreenState.Ready(staleSnapshot.records)
                 return@onFailure
@@ -1803,9 +1957,11 @@ private fun DynamicDiscoveredAppScreen(
                                     "Mailbox synchronization failed (HTTP ${response.status})."
                                 }
                                 delay(1_200)
+                                currentCoroutineContext().ensureActive()
                             }.onSuccess {
                                 loadAttempt += 1
                             }.onFailure { recoveryFailure ->
+                                if (recoveryFailure is CancellationException) throw recoveryFailure
                                 viewState = NativeScreenState.Error(
                                     message = recoveryFailure.message ?: "Could not synchronize this mailbox.",
                                     retry = { loadAttempt += 1 },
@@ -1838,9 +1994,34 @@ private fun DynamicDiscoveredAppScreen(
         return
     }
 
-    val runtimeValues = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
-    val executor = remember(services, session, descriptor, runtimeValues) {
-        DynamicNextcloudActionExecutor(services, session, descriptor, runtimeValues)
+    val selectedRuntimeValues = selectedDynamicRecordRuntimeValues(
+        record = selectedRecord,
+        resourceId = selectedRecordResourceId,
+        parameterNames = schema.action(selectedView.sourceActionId)
+            ?.binding
+            ?.pathParameterNames
+            .orEmpty(),
+    )
+    val runtimeValues = selectedRuntimeValues
+        ?.let { values -> safeActionBindingValues(values, selectedPathParameterValues) }
+        .orEmpty()
+    val datasetBindingValues = dynamicDatasetBindingValues(
+        component = selectedView.component,
+        declaredParameterNames = schema.action(selectedView.sourceActionId)
+            ?.binding
+            ?.let { binding -> binding.pathParameterNames + binding.queryParameterNames }
+            .orEmpty(),
+        selectedPathParameterValues = selectedPathParameterValues,
+        runtimeValues = runtimeValues,
+    )
+    val executor = remember(services, session, descriptor, runtimeValues, discovery.versionStatus) {
+        DynamicNextcloudActionExecutor(
+            services = services,
+            session = session,
+            descriptor = descriptor,
+            runtimeContext = runtimeValues,
+            versionStatus = discovery.versionStatus,
+        )
     }
     val recordContext = selectedRecord?.let { record ->
         val visitedStates = buildSet {
@@ -1867,6 +2048,7 @@ private fun DynamicDiscoveredAppScreen(
             fieldValues = record.values,
             parameterValues = selectedPathParameterValues,
             actionSafeIdentity = record.actionSafeIdentity,
+            actionBindingProvenanceValid = record.actionBindingProvenanceValid,
             currentLayoutId = selectedView.id,
             visitedStates = visitedStates,
         )
@@ -1954,10 +2136,20 @@ private fun DynamicDiscoveredAppScreen(
         val secondaryViewIds = secondaryNavigationDestinations.mapTo(hashSetOf()) { (_, view) -> view.id }
         navigationDestinations.filterNot { (_, view) -> view.id in secondaryViewIds }
     }
-    val actionViews = remember(navigationPlan, schema, selectedRecord, selectedView.resourceId) {
+    val selectedCollectionState = remember(schema, selectedView.sourceActionId) {
+        dynamicCollectionState(schema.action(selectedView.sourceActionId))
+    }
+    val actionViews = remember(
+        navigationPlan,
+        schema,
+        selectedRecord,
+        selectedView.resourceId,
+        selectedCollectionState,
+    ) {
         val planned = if (selectedRecord == null) {
             navigationPlan.rootFormActions.filter { action ->
-                action.resourceId == selectedView.resourceId
+                action.resourceId == selectedView.resourceId &&
+                    selectedCollectionState == null
             }
         } else {
             val currentResourceId = selectedRecordResourceId.orEmpty()
@@ -1965,7 +2157,9 @@ private fun DynamicDiscoveredAppScreen(
                 val spec = schema.action(action.actionId)
                 val targetsCurrentRecord = action.resourceId.sameDynamicResourceAs(currentResourceId)
                 val targetsCurrentView = action.resourceId.sameDynamicResourceAs(selectedView.resourceId)
-                val createsCurrentViewResource = spec?.intent == ActionIntent.create && targetsCurrentView
+                val createsCurrentViewResource = spec?.intent == ActionIntent.create &&
+                    targetsCurrentView &&
+                    selectedCollectionState == null
                 val editsSelectedRecord = spec?.intent in setOf(ActionIntent.update, ActionIntent.delete) &&
                     targetsCurrentRecord &&
                     (targetsCurrentView || selectedView.component == NativeComponent.detail)
@@ -1991,13 +2185,15 @@ private fun DynamicDiscoveredAppScreen(
             "$label|$route"
         }
     }
-    val quickActionViews = remember(actionViews, schema) {
-        actionViews.sortedBy { (action, _) ->
-            dynamicQuickActionPriority(schema.action(action.actionId))
-        }.take(2)
+    val primaryCreateAction = remember(actionViews, schema) {
+        actionViews
+            .filter { (action, _) -> schema.action(action.actionId)?.intent == ActionIntent.create }
+            .minByOrNull { (action, _) -> dynamicQuickActionPriority(schema.action(action.actionId)) }
+    }
+    val overflowActionViews = remember(actionViews, primaryCreateAction) {
+        actionViews.filterNot { candidate -> candidate == primaryCreateAction }
     }
     var actionMenuExpanded by remember(descriptor) { mutableStateOf(false) }
-    var advancedNavigationExpanded by remember(descriptor, recordContext) { mutableStateOf(false) }
     var pendingDirectAction by remember(descriptor) {
         mutableStateOf<PendingDynamicDirectAction?>(null)
     }
@@ -2109,6 +2305,34 @@ private fun DynamicDiscoveredAppScreen(
         onExit()
     }
 
+    fun reconcileSuccessfulMutation(
+        action: ActionSpec,
+        leaveMutatedSurface: Boolean,
+    ) {
+        sharedDynamicNativeMemoryCache.invalidateScreens(session, descriptor.app.id)
+        val refreshPlan = schema.planDynamicMutationRefresh(
+            action = action,
+            selectedRecordResourceId = selectedRecordResourceId,
+        )
+        if (refreshPlan != null) {
+            recordsByResourceId = refreshPlan.discardAffectedRelatedRecords(recordsByResourceId)
+        }
+        val deletedSelectedRecord = refreshPlan?.selectedRecordReconciliation ==
+            DynamicSelectedRecordReconciliation.ClearDeletedSelection
+        when {
+            deletedSelectedRecord && navigationHistory.isNotEmpty() -> navigateWithinDynamicApp()
+            deletedSelectedRecord -> {
+                navigationHistory = emptyList()
+                selectedRecord = null
+                selectedRecordResourceId = null
+                selectedPathParameterValues = emptyMap()
+                selectedViewId = initialViewId
+            }
+            leaveMutatedSurface -> navigateWithinDynamicApp()
+        }
+        loadAttempt += 1
+    }
+
     fun selectDynamicAction(
         action: dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationFormAction,
         view: ViewSpec,
@@ -2141,7 +2365,29 @@ private fun DynamicDiscoveredAppScreen(
         selectedViewId = view.id
     }
 
+    fun selectCollectionDestination(
+        destination: DynamicNavigationDestination,
+        view: ViewSpec,
+    ) {
+        actionMenuExpanded = false
+        val selection = planDynamicCollectionDestinationSelection(
+            isTopLevelDestination = selectedRecord == null,
+            destinationPathParameterValues = destination.pathParameterValues,
+        )
+        if (selection.clearHierarchyContext) {
+            navigationHistory = emptyList()
+            selectedRecord = null
+            selectedRecordResourceId = null
+            paginationState = null
+            loadingMore = false
+            loadMoreError = null
+        }
+        selectedPathParameterValues = selection.pathParameterValues
+        selectedViewId = view.id
+    }
+
     val hasInternalBack = navigationHistory.isNotEmpty() || selectedRecord != null || selectedViewId != initialViewId
+    val hasCollectionHierarchyBack = navigationHistory.isNotEmpty() || selectedRecord != null
     PlatformBackHandler(enabled = hasInternalBack, onBack = ::navigateWithinDynamicApp)
     val showFallbackRecordDetail = shouldShowDynamicRecordFallbackDetail(
         viewResourceId = selectedView.resourceId,
@@ -2152,49 +2398,149 @@ private fun DynamicDiscoveredAppScreen(
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val compactLandscape = shouldUseCompactDynamicAppChrome(maxWidth.value, maxHeight.value)
-        Column(modifier = Modifier.fillMaxSize()) {
-            DynamicAppChromeHeader(
-                title = descriptor.app.name,
-                subtitle = selectedRecord?.dynamicContextSubtitle(
-                    selectedView,
-                    schema.resource(selectedRecordResourceId.orEmpty())?.name,
-                ) ?: selectedView.dynamicRootSubtitle(descriptor.app.name),
-                onBack = ::navigateWithinDynamicApp,
-                compact = compactLandscape,
-                onContractInfo = { contractInfoExpanded = true },
-                trailingContent = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (actionViews.isNotEmpty()) {
-                            Box {
-                                IconButton(onClick = { actionMenuExpanded = true }) {
-                                    Icon(NextcloudIcons.More, contentDescription = "Available actions")
-                                }
-                                DropdownMenu(
-                                    expanded = actionMenuExpanded,
-                                    onDismissRequest = { actionMenuExpanded = false },
-                                ) {
-                                    actionViews.forEach { (action, view) ->
-                                        val actionSpec = schema.action(action.actionId)
-                                        DropdownMenuItem(
-                                            text = {
-                                                Text(
-                                                    actionSpec?.let { spec ->
-                                                        dynamicHeaderActionLabel(spec, view.dynamicActionLabel())
-                                                    } ?: view.dynamicActionLabel(),
-                                                )
-                                            },
-                                            onClick = { selectDynamicAction(action, view) },
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        if (compactLandscape) {
-                            TextButton(onClick = { contractInfoExpanded = true }) { Text("Contract") }
-                        }
-                    }
-                },
+        val collectionDestinationEntries = remember(
+            primaryNavigationDestinations,
+            descriptor.app.name,
+        ) {
+            primaryNavigationDestinations
+                .distinctBy { (_, view) -> view.id }
+                .map { (destination, view) ->
+                    destination to NextcloudCollectionDestination(
+                        id = view.id,
+                        label = destination.label
+                            .dynamicUiLabel(descriptor.app.name)
+                            .ifBlank { view.dynamicNavigationLabel(descriptor.app.name) },
+                    )
+                }
+        }
+        val selectedCollectionDestinationId = collectionDestinationEntries
+            .firstOrNull { (_, item) -> item.id == selectedView.id }
+            ?.second
+            ?.id
+        val collectionNavigationModel = remember(
+            collectionDestinationEntries,
+            selectedCollectionDestinationId,
+        ) {
+            NextcloudCollectionNavigationModel.create(
+                destinations = collectionDestinationEntries.map { (_, item) -> item },
+                selectedDestinationId = selectedCollectionDestinationId,
             )
+        }
+        val workspaceCapabilities = LocalNextcloudWorkspaceCapabilities.current
+        val collectionNavigationHost = if (workspaceCapabilities.isDesktop) {
+            NextcloudCollectionNavigationHost.Desktop
+        } else {
+            NextcloudCollectionNavigationHost.AdaptiveAndroid
+        }
+        val collectionNavigationMode = resolveNextcloudCollectionNavigationMode(
+            host = collectionNavigationHost,
+            availableWidthDp = maxWidth.value.toInt(),
+            destinationCount = collectionNavigationModel.destinations.size,
+        )
+        val collectionSubtitle = selectedRecord?.dynamicContextSubtitle(
+            selectedView,
+            schema.resource(selectedRecordResourceId.orEmpty())?.name,
+        ) ?: selectedView.dynamicRootSubtitle(descriptor.app.name)
+
+        NextcloudCollectionWorkspaceScaffold(
+            model = collectionNavigationModel,
+            mode = collectionNavigationMode,
+            title = descriptor.app.name,
+            subtitle = collectionSubtitle,
+            onBack = ::navigateWithinDynamicApp,
+            hasHierarchyBack = hasCollectionHierarchyBack,
+            onDestinationSelected = { selected ->
+                collectionDestinationEntries
+                    .firstOrNull { (_, item) -> item.id == selected.id }
+                    ?.first
+                    ?.let { destination ->
+                        schema.views.firstOrNull { view -> view.id == selected.id }
+                            ?.let { view -> selectCollectionDestination(destination, view) }
+                    }
+            },
+            compactHeader = compactLandscape,
+            destinationIcon = { destination ->
+                schema.views.firstOrNull { view -> view.id == destination.id }
+                    ?.dynamicCollectionNavigationIcon()
+            },
+            headerActions = {
+                primaryCreateAction?.let { (action, view) ->
+                    val actionSpec = schema.action(action.actionId)
+                    val label = actionSpec?.let { spec ->
+                        dynamicHeaderActionLabel(spec, view.dynamicActionLabel())
+                    } ?: view.dynamicActionLabel()
+                    IconButton(onClick = { selectDynamicAction(action, view) }) {
+                        Icon(NextcloudIcons.Add, contentDescription = label)
+                    }
+                }
+                Box {
+                    IconButton(onClick = { actionMenuExpanded = true }) {
+                        Icon(NextcloudIcons.More, contentDescription = "More options")
+                    }
+                    DropdownMenu(
+                        expanded = actionMenuExpanded,
+                        onDismissRequest = { actionMenuExpanded = false },
+                    ) {
+                        overflowActionViews.forEach { (action, view) ->
+                            val actionSpec = schema.action(action.actionId)
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        actionSpec?.let { spec ->
+                                            dynamicHeaderActionLabel(spec, view.dynamicActionLabel())
+                                        } ?: view.dynamicActionLabel(),
+                                    )
+                                },
+                                onClick = { selectDynamicAction(action, view) },
+                            )
+                        }
+                        if (
+                            overflowActionViews.isNotEmpty() &&
+                            secondaryNavigationDestinations.isNotEmpty()
+                        ) {
+                            HorizontalDivider()
+                        }
+                        secondaryNavigationDestinations.forEach { (destination, view) ->
+                            val baseLabel = destination.label.dynamicUiLabel(descriptor.app.name)
+                            val duplicate = secondaryNavigationDestinations.count { (candidate, _) ->
+                                candidate.label.dynamicUiLabel(descriptor.app.name)
+                                    .equals(baseLabel, ignoreCase = true)
+                            } > 1
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        dynamicSecondaryDestinationLabel(
+                                            destinationLabel = baseLabel,
+                                            resourceLabel = schema.resource(view.resourceId)?.name
+                                                ?: view.resourceId,
+                                            duplicate = duplicate,
+                                        ),
+                                    )
+                                },
+                                onClick = {
+                                    selectCollectionDestination(destination, view)
+                                },
+                            )
+                        }
+                        if (
+                            overflowActionViews.isNotEmpty() ||
+                            secondaryNavigationDestinations.isNotEmpty()
+                        ) {
+                            HorizontalDivider()
+                        }
+                        DropdownMenuItem(
+                            text = { Text("Contract info") },
+                            onClick = {
+                                actionMenuExpanded = false
+                                contractInfoExpanded = true
+                            },
+                        )
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
             if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback) {
             Surface(
                 modifier = Modifier.fillMaxWidth().padding(
@@ -2221,86 +2567,6 @@ private fun DynamicDiscoveredAppScreen(
                 }
             }
         }
-            if (primaryNavigationDestinations.size > 1 || secondaryNavigationDestinations.isNotEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                LazyRow(
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(
-                        start = NextcloudSpacing.Large,
-                        end = NextcloudSpacing.Small,
-                        top = NextcloudSpacing.Small,
-                        bottom = NextcloudSpacing.Small,
-                    ),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    listItems(primaryNavigationDestinations, key = { (_, view) -> view.id }) { (destination, view) ->
-                        FilterChip(
-                            selected = view.id == selectedView.id,
-                            onClick = {
-                                selectedPathParameterValues = destination.pathParameterValues
-                                selectedViewId = view.id
-                            },
-                            label = { Text(destination.label.dynamicUiLabel(descriptor.app.name)) },
-                        )
-                    }
-                }
-                if (secondaryNavigationDestinations.isNotEmpty()) {
-                    Box {
-                        IconButton(onClick = { advancedNavigationExpanded = true }) {
-                            Icon(NextcloudIcons.More, contentDescription = "Advanced views")
-                        }
-                        DropdownMenu(
-                            expanded = advancedNavigationExpanded,
-                            onDismissRequest = { advancedNavigationExpanded = false },
-                        ) {
-                            secondaryNavigationDestinations.forEach { (destination, view) ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(destination.label.dynamicUiLabel(descriptor.app.name))
-                                    },
-                                    onClick = {
-                                        selectedPathParameterValues = destination.pathParameterValues
-                                        selectedViewId = view.id
-                                        advancedNavigationExpanded = false
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-            if (!compactLandscape && quickActionViews.isNotEmpty()) {
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(
-                        start = NextcloudSpacing.Large,
-                        end = NextcloudSpacing.Large,
-                        bottom = NextcloudSpacing.Small,
-                    ),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    listItems(quickActionViews, key = { (action, view) -> "${action.actionId}:${view.id}" }) {
-                            (action, view) ->
-                        val actionSpec = schema.action(action.actionId)
-                        val label = actionSpec?.let { spec ->
-                            dynamicHeaderActionLabel(spec, view.dynamicActionLabel())
-                        } ?: view.dynamicActionLabel()
-                        if (actionSpec?.intent == ActionIntent.create) {
-                            Button(onClick = { selectDynamicAction(action, view) }) {
-                                Text(label)
-                            }
-                        } else {
-                            OutlinedButton(onClick = { selectDynamicAction(action, view) }) {
-                                Text(label)
-                            }
-                        }
-                    }
-                }
-            }
             GenericNativeAppScreen(
                 schema = schema,
                 view = selectedView,
@@ -2311,6 +2577,7 @@ private fun DynamicDiscoveredAppScreen(
                 datasetContext = NativeDatasetContext(
                     parentResourceId = selectedRecordResourceId,
                     parentRecord = selectedRecord,
+                    bindingValues = datasetBindingValues,
                     relatedRecords = recordsByResourceId,
                 ),
             onSelectRecord = selectedView.takeIf {
@@ -2329,6 +2596,7 @@ private fun DynamicDiscoveredAppScreen(
                         fieldValues = record.values,
                         parameterValues = inheritedParameters,
                         actionSafeIdentity = record.actionSafeIdentity,
+                        actionBindingProvenanceValid = record.actionBindingProvenanceValid,
                         currentLayoutId = selectedView.id,
                     )
                     val nextPlan = descriptor.planDynamicNavigation(nextContext)
@@ -2381,21 +2649,20 @@ private fun DynamicDiscoveredAppScreen(
                     selectedViewId = nextViewId
                 }
                 },
-                onActionSucceeded = {
-                    if (schema.action(selectedView.sourceActionId)?.intent == ActionIntent.delete) {
-                        navigationHistory = emptyList()
-                        selectedRecord = null
-                        selectedRecordResourceId = null
-                        selectedPathParameterValues = emptyMap()
-                        selectedViewId = initialViewId
-                    } else {
-                        // Update/config actions return to their previous surface, which immediately
-                        // reloads the authoritative server representation through loadAttempt.
-                        navigateWithinDynamicApp()
-                    }
-                    loadAttempt += 1
+                onActionSucceeded = { action ->
+                    reconcileSuccessfulMutation(
+                        action = action,
+                        leaveMutatedSurface = true,
+                    )
                 },
-                onInlineActionSucceeded = { loadAttempt += 1 },
+                onInlineActionSucceeded = { action ->
+                    reconcileSuccessfulMutation(
+                        action = action,
+                        leaveMutatedSurface = false,
+                    )
+                },
+                showCollectionCreateAction = primaryCreateAction == null &&
+                    selectedCollectionState == null,
                 onOpenLink = services::openExternalUrl,
                 imageLoader = imageLoader,
                 audioPlayer = audioSourceCapability?.let {
@@ -2456,6 +2723,7 @@ private fun DynamicDiscoveredAppScreen(
             }
         }
     }
+    }
     if (contractInfoExpanded) {
         DynamicContractInfoDialog(
             info = contractInfo,
@@ -2470,10 +2738,10 @@ private fun DynamicDiscoveredAppScreen(
                     directActionError = null
                 }
             },
-            title = { Text("Delete ${pending.targetLabel}?") },
+            title = { Text(dynamicDirectActionTitle(pending.action, pending.targetLabel)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                    Text("This removes the item from the server and cannot be undone.")
+                    Text(dynamicDirectActionDescription(pending.action))
                     directActionError?.let { error ->
                         Text(
                             error,
@@ -2513,12 +2781,10 @@ private fun DynamicDiscoveredAppScreen(
                             ) {
                                 is NativeActionExecutionResult.Success -> {
                                     pendingDirectAction = null
-                                    navigationHistory = emptyList()
-                                    selectedRecord = null
-                                    selectedRecordResourceId = null
-                                    selectedPathParameterValues = emptyMap()
-                                    selectedViewId = initialViewId
-                                    loadAttempt += 1
+                                    reconcileSuccessfulMutation(
+                                        action = pending.action,
+                                        leaveMutatedSurface = true,
+                                    )
                                 }
                                 is NativeActionExecutionResult.Failure -> {
                                     directActionError = result.message
@@ -2534,7 +2800,7 @@ private fun DynamicDiscoveredAppScreen(
                             strokeWidth = 2.dp,
                         )
                     } else {
-                        Text("Delete")
+                        Text(dynamicDirectActionConfirmLabel(pending.action))
                     }
                 }
             },
@@ -2966,6 +3232,19 @@ private data class DynamicAppNavigationState(
     val history: List<DynamicNavigationSnapshot> = emptyList(),
 )
 
+internal data class DynamicCollectionDestinationSelectionPlan(
+    val pathParameterValues: Map<String, String>,
+    val clearHierarchyContext: Boolean,
+)
+
+internal fun planDynamicCollectionDestinationSelection(
+    isTopLevelDestination: Boolean,
+    destinationPathParameterValues: Map<String, String>,
+): DynamicCollectionDestinationSelectionPlan = DynamicCollectionDestinationSelectionPlan(
+    pathParameterValues = destinationPathParameterValues.toMap(),
+    clearHierarchyContext = isTopLevelDestination,
+)
+
 private data class DynamicPaginationState(
     val viewId: String,
     val spec: DynamicPaginationSpec,
@@ -3065,6 +3344,34 @@ private fun ViewSpec.dynamicRootSubtitle(appName: String): String = when (compon
     else -> dynamicNavigationLabel(appName)
 }
 
+private fun ViewSpec.dynamicCollectionNavigationIcon(): ImageVector = when (component) {
+    NativeComponent.fileBrowser -> NextcloudIcons.Folder
+    NativeComponent.mediaGrid,
+    NativeComponent.mediaLibrary,
+    -> NextcloudIcons.Photo
+
+    NativeComponent.calendar,
+    NativeComponent.timeline,
+    -> NextcloudIcons.Calendar
+
+    NativeComponent.board -> NextcloudIcons.Board
+    NativeComponent.mailbox -> NextcloudIcons.Mail
+    NativeComponent.taskList -> NextcloudIcons.Task
+    NativeComponent.dataTable -> NextcloudIcons.Table
+    NativeComponent.recipeList -> NextcloudIcons.Recipe
+    NativeComponent.form,
+    NativeComponent.documentEditor,
+    -> NextcloudIcons.Edit
+
+    NativeComponent.detail -> NextcloudIcons.Info
+    NativeComponent.dashboard -> NextcloudIcons.Home
+    NativeComponent.collectionList,
+    NativeComponent.contactList,
+    NativeComponent.conversationList,
+    NativeComponent.chatThread,
+    -> NextcloudIcons.ListView
+}
+
 private fun ViewSpec.dynamicNavigationLabel(appName: String): String {
     val cleaned = title
         .removePrefix("API ")
@@ -3101,6 +3408,55 @@ private fun metadataRecordsForDynamicView(
 
 private fun NativeRecord.toDynamicRuntimeValues(): Map<String, String> = buildMap {
     putAll(actionBindingValues(allowUnsafeIdentity = true))
+}
+
+/**
+ * Qualifies a selected parent identity with the exact path-parameter name declared by the active
+ * action. This lets any nested resource supply its parent identity to a declared child action even
+ * when a restored form no longer carries the navigation planner's transient parameter map.
+ */
+internal fun selectedDynamicRecordRuntimeValues(
+    record: NativeRecord?,
+    resourceId: String?,
+    parameterNames: List<String>,
+): Map<String, String>? {
+    record ?: return emptyMap()
+    val runtimeValues = record.safeActionBindingValues() ?: return null
+    val parentResourceId = resourceId?.takeIf(String::isNotBlank) ?: return runtimeValues
+    val identity = record.id.takeIf { record.actionSafeIdentity && it.isNotBlank() } ?: return runtimeValues
+    val qualifiedParentValues = buildMap {
+        parameterNames.forEach { parameterName ->
+            val resourceStem = parameterName
+                .takeIf { it.length > 2 && it.endsWith("Id", ignoreCase = true) }
+                ?.dropLast(2)
+                ?: return@forEach
+            if (resourceStem.sameDynamicResourceAs(parentResourceId)) {
+                put(parameterName, identity)
+            }
+        }
+    }
+    return safeActionBindingValues(runtimeValues, qualifiedParentValues)
+}
+
+/**
+ * Makes only the active form action's declared technical parameters available to form binding.
+ *
+ * The action executor already receives these qualified values. Supplying the same bounded subset
+ * to the renderer keeps its preflight validation aligned with execution without exposing the
+ * selected parent's ordinary fields as child-form defaults.
+ */
+internal fun dynamicDatasetBindingValues(
+    component: NativeComponent,
+    declaredParameterNames: List<String>,
+    selectedPathParameterValues: Map<String, String>,
+    runtimeValues: Map<String, String>,
+): Map<String, String> {
+    if (component != NativeComponent.form) return selectedPathParameterValues
+    val declaredNames = declaredParameterNames.toSet()
+    return (
+        runtimeValues.filterKeys(declaredNames::contains) +
+            selectedPathParameterValues.filterKeys(declaredNames::contains)
+        )
 }
 
 internal fun inheritDynamicParentParameters(
@@ -6496,7 +6852,17 @@ private fun PersonMediaScreen(
     var error by remember(person.id, person.backend) { mutableStateOf<String?>(null) }
     var loadAttempt by remember(person.id, person.backend) { mutableStateOf(0) }
     var actionMenuExpanded by remember(person.id) { mutableStateOf(false) }
-    var showFaceRectangles by rememberSaveable(currentUserId, person.id, person.backend) { mutableStateOf(false) }
+    // Server info is loaded again after Android restores the activity. During that window,
+    // currentUserId falls back to the login name and can then change to the canonical user ID.
+    // Keep saveable workflow state keyed to the stable session identity instead.
+    var showFaceRectangles by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        person.id,
+        person.backend,
+    ) {
+        mutableStateOf(false)
+    }
     var photoSelectionMode by remember(person.id) { mutableStateOf<PersonPhotoSelectionMode?>(null) }
     var renameDialogVisible by remember(person.id) { mutableStateOf(false) }
     var renameDraft by remember(person.id) { mutableStateOf(person.name) }
@@ -6510,7 +6876,8 @@ private fun PersonMediaScreen(
     var pendingMergeWorkflow by remember(person.id) { mutableStateOf<PersonMergeWorkflow?>(null) }
     var pendingPlan by remember(person.id) { mutableStateOf<PeopleActionPlan?>(null) }
     var postMutationRefreshExpectationState by rememberSaveable(
-        currentUserId,
+        session.serverUrl,
+        session.loginName,
         person.id,
         person.backend,
     ) {
@@ -6519,7 +6886,12 @@ private fun PersonMediaScreen(
     val postMutationRefreshExpectation = remember(postMutationRefreshExpectationState) {
         postMutationRefreshExpectationState?.let(::decodePeoplePostMutationExpectation)
     }
-    var postMutationRefreshAttempt by rememberSaveable(currentUserId, person.id, person.backend) {
+    var postMutationRefreshAttempt by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        person.id,
+        person.backend,
+    ) {
         mutableStateOf(0)
     }
     var postMutationRefreshRunning by remember(person.id, person.backend) { mutableStateOf(false) }

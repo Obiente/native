@@ -188,6 +188,7 @@ data class DynamicAction(
     val permissionIds: List<String> = emptyList(),
     val confidence: Confidence,
     val provenance: List<Provenance> = emptyList(),
+    val effect: ActionEffect = ActionEffect.unspecified,
 )
 
 @Serializable

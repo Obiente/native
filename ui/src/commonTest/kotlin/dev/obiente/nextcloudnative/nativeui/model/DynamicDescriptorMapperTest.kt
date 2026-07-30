@@ -134,12 +134,86 @@ class DynamicDescriptorMapperTest {
     }
 
     @Test
+    fun infersUnambiguousSiblingForeignKeysWithoutAppSpecificRelationshipAdapters() {
+        val categories = resource("categories", fields("id", "name"))
+        val stores = resource("stores", fields("id", "name"))
+        val entries = resource(
+            "entries",
+            fields("id", "name", "categoryId") +
+                field("storeIds", FieldKind.integer, format = DYNAMIC_INTEGER_ARRAY_FORMAT),
+        )
+        val descriptor = DynamicAppDescriptor(
+            descriptorVersion = DYNAMIC_APP_DESCRIPTOR_VERSION,
+            app = AppIdentity("example", "Example", "1"),
+            endpointPolicy = EndpointPolicy("https://cloud.example.test", listOf("/api")),
+            resources = listOf(categories, stores, entries),
+        )
+
+        assertEquals(
+            setOf(
+                ResourceRelationshipSpec("categories", "entries", "id", "categoryId", Confidence.high),
+                ResourceRelationshipSpec("stores", "entries", "id", "storeIds", Confidence.high),
+            ),
+            descriptor.toNativeAppSchema().relationships.toSet(),
+        )
+    }
+
+    @Test
+    fun inferredForeignKeysNeverBecomeVerifiedWriteEvidence() {
+        val parents = resource("workspaces", fields("id", "name")).copy(
+            confidence = Confidence.verified,
+            fields = fields("id", "name").map { field -> field.copy(confidence = Confidence.verified) },
+        )
+        val children = resource("entries", fields("id", "workspaceId", "title")).copy(
+            confidence = Confidence.verified,
+            fields = fields("id", "workspaceId", "title").map { field ->
+                field.copy(confidence = Confidence.verified)
+            },
+        )
+        val descriptor = DynamicAppDescriptor(
+            descriptorVersion = DYNAMIC_APP_DESCRIPTOR_VERSION,
+            app = AppIdentity("example", "Example", "1"),
+            endpointPolicy = EndpointPolicy("https://cloud.example.test", listOf("/api")),
+            resources = listOf(parents, children),
+        )
+
+        assertEquals(
+            ResourceRelationshipSpec("workspaces", "entries", "id", "workspaceId", Confidence.high),
+            descriptor.toNativeAppSchema().relationships.single(),
+        )
+    }
+
+    @Test
+    fun ambiguousForeignKeyResourceNamesDoNotCreateRelationshipEvidence() {
+        val category = resource("category", fields("id", "name"))
+        val categories = resource("categories", fields("id", "name"))
+        val entries = resource("entries", fields("id", "name", "categoryId"))
+        val descriptor = DynamicAppDescriptor(
+            descriptorVersion = DYNAMIC_APP_DESCRIPTOR_VERSION,
+            app = AppIdentity("example", "Example", "1"),
+            endpointPolicy = EndpointPolicy("https://cloud.example.test", listOf("/api")),
+            resources = listOf(category, categories, entries),
+        )
+
+        assertEquals(emptyList(), descriptor.toNativeAppSchema().relationships)
+    }
+
+    @Test
     fun selectsSpecializedNativeComponentsFromSemanticAndFieldEvidence() {
         assertEquals(NativeComponent.dataTable, component("rows", fields("id", "columnId", "value")))
         assertEquals(NativeComponent.board, component("cards", fields("id", "title", "stackId")))
         assertEquals(
             NativeComponent.board,
             component("work-items", fields("id", "title", "stage", "position")),
+        )
+        assertEquals(
+            NativeComponent.taskList,
+            component(
+                "items",
+                fields("id", "name", "listId") +
+                    field("sortOrder", FieldKind.integer) +
+                    field("done", FieldKind.boolean),
+            ),
         )
         assertEquals(
             NativeComponent.dashboard,
@@ -277,10 +351,15 @@ class DynamicDescriptorMapperTest {
         confidence = Confidence.high,
     )
 
-    private fun field(id: String, kind: FieldKind = FieldKind.string) = DynamicField(
+    private fun field(
+        id: String,
+        kind: FieldKind = FieldKind.string,
+        format: String? = null,
+    ) = DynamicField(
         id = id,
         label = id,
         kind = kind,
+        format = format,
         required = false,
         readOnly = true,
         nullable = true,

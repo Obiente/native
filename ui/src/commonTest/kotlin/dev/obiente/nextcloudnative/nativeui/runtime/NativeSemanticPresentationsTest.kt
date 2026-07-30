@@ -721,6 +721,81 @@ class NativeSemanticPresentationsTest {
     }
 
     @Test
+    fun `typed completion fields promote generic item collections without app identifiers`() {
+        val booleanResource = ResourceSpec(
+            id = "entries",
+            name = "Entries",
+            confidence = Confidence.high,
+            fields = listOf(
+                FieldSpec("label", "Label", FieldKind.string, required = true, readOnly = false),
+                FieldSpec("completed", "Completed", FieldKind.boolean, required = true, readOnly = false),
+            ),
+        )
+        val booleanRows = requireNotNull(
+            nativeTaskCollectionPresentations(
+                booleanResource,
+                listOf(
+                    NativeRecord("entry-a", mapOf("label" to "First entry", "completed" to "false")),
+                    NativeRecord("entry-b", mapOf("label" to "Second entry", "completed" to "true")),
+                ),
+            ),
+        )
+
+        assertEquals(listOf("First entry", "Second entry"), booleanRows.map { (_, item) -> item.title })
+        assertEquals(listOf(false, true), booleanRows.map { (_, item) -> item.completed })
+
+        val enumeratedResource = ResourceSpec(
+            id = "records",
+            name = "Records",
+            confidence = Confidence.high,
+            fields = listOf(
+                FieldSpec("label", "Label", FieldKind.string, required = true, readOnly = false),
+                FieldSpec(
+                    "state",
+                    "State",
+                    FieldKind.enumeration,
+                    required = true,
+                    readOnly = false,
+                    enumValues = listOf("active", "finished"),
+                ),
+            ),
+        )
+        val enumeratedRows = requireNotNull(
+            nativeTaskCollectionPresentations(
+                enumeratedResource,
+                listOf(
+                    NativeRecord("record-a", mapOf("label" to "Open record", "state" to "active")),
+                    NativeRecord("record-b", mapOf("label" to "Closed record", "state" to "finished")),
+                ),
+            ),
+        )
+
+        assertEquals(listOf("Open record", "Closed record"), enumeratedRows.map { (_, item) -> item.title })
+        assertEquals(listOf(false, true), enumeratedRows.map { (_, item) -> item.completed })
+    }
+
+    @Test
+    fun `unrelated boolean fields do not promote ordinary records to tasks`() {
+        val resource = ResourceSpec(
+            id = "entries",
+            name = "Entries",
+            confidence = Confidence.high,
+            fields = listOf(
+                FieldSpec("label", "Label", FieldKind.string, required = true, readOnly = false),
+                FieldSpec("favorite", "Favorite", FieldKind.boolean, required = false, readOnly = false),
+            ),
+        )
+
+        assertEquals(
+            null,
+            nativeTaskCollectionPresentations(
+                resource,
+                listOf(NativeRecord("entry-a", mapOf("label" to "Ordinary record", "favorite" to "true"))),
+            ),
+        )
+    }
+
+    @Test
     fun `ordinary cards do not become contacts from their resource name alone`() {
         val presentation = nativeGroupwarePresentation(
             resource("cards", "Cards", "title", "stackId"),

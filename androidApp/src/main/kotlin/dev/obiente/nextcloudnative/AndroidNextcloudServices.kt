@@ -2198,10 +2198,7 @@ internal class AndroidNextcloudServices(
         client: OkHttpClient = httpClient,
         streamingBody: RequestBody? = null,
     ): HttpResponse {
-        check(
-            !appContext.isReadOnlyTestMode() ||
-                method.isReadOnlyTestRequestMethod(),
-        ) {
+        check(appContext.isAllowedTestRequest(method, url)) {
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
         }
         val requestBody = when {

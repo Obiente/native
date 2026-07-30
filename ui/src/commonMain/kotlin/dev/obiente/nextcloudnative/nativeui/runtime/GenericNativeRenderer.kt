@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.horizontalScroll
@@ -37,6 +38,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -64,6 +66,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -90,10 +93,14 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 import dev.obiente.nextcloudnative.app.design.resolveBoardDragVerticalLane
+import dev.obiente.nextcloudnative.nativeui.model.ActionEffect
+import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
+import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_LIST_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
+import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
@@ -101,6 +108,11 @@ import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlin.math.roundToInt
 
 fun interface NativeFileFieldPicker {
@@ -130,9 +142,10 @@ fun GenericNativeAppScreen(
     onSelectRecord: ((NativeRecord) -> Unit)? = null,
     onOpenLink: ((String) -> Unit)? = null,
     filePicker: NativeFileFieldPicker? = null,
-    onActionSucceeded: (() -> Unit)? = null,
+    onActionSucceeded: ((ActionSpec) -> Unit)? = null,
     datasetContext: NativeDatasetContext = NativeDatasetContext(),
-    onInlineActionSucceeded: (() -> Unit)? = null,
+    onInlineActionSucceeded: ((ActionSpec) -> Unit)? = null,
+    showCollectionCreateAction: Boolean = false,
     imageLoader: NativeImageLoader? = null,
     onLoadMore: (() -> Unit)? = null,
     loadingMore: Boolean = false,
@@ -167,6 +180,85 @@ fun GenericNativeAppScreen(
         nestedBoard != null -> GenericNativeSurface.Board
         else -> view.genericSurface(presentedResource, presentedRecords)
     }
+    var pendingRecordFormAction by remember(schema, view.id) {
+        mutableStateOf<PendingNativeRecordFormAction?>(null)
+    }
+    var pendingRecordDeleteAction by remember(schema, view.id) {
+        mutableStateOf<PendingNativeRecordDeleteAction?>(null)
+    }
+    var pendingRecordCommandAction by remember(schema, view.id) {
+        mutableStateOf<PendingNativeRecordCommandAction?>(null)
+    }
+    val recordCommandsInFlight = remember(schema, view.id) { mutableSetOf<String>() }
+    val recordCommandScope = rememberCoroutineScope()
+    val inlineActionSucceeded = onInlineActionSucceeded ?: onActionSucceeded
+    val openRecordEdit: (NativeRecord, NativeRecordFormActionPlan) -> Unit = edit@{ record, plan ->
+        val actionResource = presentedResource ?: return@edit
+        pendingRecordFormAction = PendingNativeRecordFormAction(
+            plan = plan,
+            itemLabel = nativeRecordPresentation(actionResource, record).title,
+            resource = actionResource,
+            datasetContext = datasetContext,
+        )
+    }
+    val openRecordDelete: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit = { record, plan ->
+        pendingRecordDeleteAction = PendingNativeRecordDeleteAction(
+            plan = plan,
+            itemLabel = presentedResource
+                ?.let { resourceSpec -> nativeRecordPresentation(resourceSpec, record).title }
+                ?: record.id,
+        )
+    }
+    val executeRecordCommand: (NativeRecord, NativeRecordCommandActionPlan) -> Unit = command@{ record, plan ->
+        val itemLabel = presentedResource
+            ?.let { resourceSpec -> nativeRecordPresentation(resourceSpec, record).title }
+            ?: record.id
+        if (plan.requiresConfirmation) {
+            pendingRecordCommandAction = PendingNativeRecordCommandAction(
+                plan = plan,
+                itemLabel = itemLabel,
+            )
+            return@command
+        }
+        val executionKey = "${record.id}\u0000${plan.action.id}"
+        if (!recordCommandsInFlight.add(executionKey)) return@command
+        recordCommandScope.launch {
+            try {
+                when (val result = actionExecutor.execute(plan.request())) {
+                    is NativeActionExecutionResult.Success -> inlineActionSucceeded?.invoke(plan.action)
+                    is NativeActionExecutionResult.Failure -> {
+                        pendingRecordCommandAction = PendingNativeRecordCommandAction(
+                            plan = plan,
+                            itemLabel = itemLabel,
+                            initialError = result.message,
+                        )
+                    }
+                }
+            } finally {
+                recordCommandsInFlight.remove(executionKey)
+            }
+        }
+    }
+    val collectionCreatePlan = presentedResource
+        ?.takeIf { showCollectionCreateAction }
+        ?.let { resource ->
+        nativeRecordActions(
+            schema = schema,
+            resource = resource,
+            navigationContext = datasetContext.bindingValues,
+        ).create
+    }
+    val openCollectionCreate: (() -> Unit)? = collectionCreatePlan?.let { plan ->
+        val actionResource = presentedResource
+        {
+            pendingRecordFormAction = PendingNativeRecordFormAction(
+                plan = plan,
+                itemLabel = actionResource.name,
+                resource = actionResource,
+                datasetContext = datasetContext,
+            )
+        }
+    }
     Surface(
         modifier = modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -196,13 +288,25 @@ fun GenericNativeAppScreen(
             state is NativeScreenState.Ready &&
                 presentedRecords.isEmpty() &&
                 view.compositeDataGrid == null &&
-                nestedBoard == null ->
-                GenericRendererEmpty(presentedResource.name)
+                nestedBoard == null -> {
+                GenericRendererEmpty(
+                    resourceName = presentedResource.name,
+                    createLabel = collectionCreatePlan?.action?.label,
+                    onCreate = openCollectionCreate,
+                )
+            }
             state is NativeScreenState.Ready -> when (presentedSurface) {
                 GenericNativeSurface.List -> GenericRecordCollection(
+                    schema = schema,
                     resource = presentedResource,
                     records = presentedRecords,
+                    datasetContext = datasetContext,
+                    actionExecutor = actionExecutor,
                     onSelectRecord = onSelectRecord,
+                    onInlineActionSucceeded = inlineActionSucceeded,
+                    onEditRecord = openRecordEdit,
+                    onDeleteRecord = openRecordDelete,
+                    onCommandRecord = executeRecordCommand,
                     imageLoader = imageLoader,
                 )
                 GenericNativeSurface.Grid -> GenericRecordGrid(presentedResource, presentedRecords, onSelectRecord)
@@ -260,6 +364,32 @@ fun GenericNativeAppScreen(
                 GenericNativeSurface.Form -> Unit
             }
             }
+                if (
+                    state is NativeScreenState.Ready &&
+                    presentedRecords.isNotEmpty() &&
+                    showCollectionCreateAction &&
+                    presentedSurface in setOf(
+                        GenericNativeSurface.List,
+                        GenericNativeSurface.Grid,
+                        GenericNativeSurface.Table,
+                    ) &&
+                    openCollectionCreate != null
+                ) {
+                    Button(
+                        onClick = openCollectionCreate,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(NextcloudSpacing.Large)
+                            .heightIn(min = 48.dp),
+                    ) {
+                        Icon(
+                            NextcloudIcons.Add,
+                            contentDescription = collectionCreatePlan.action.label,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text("Create", modifier = Modifier.padding(start = NextcloudSpacing.Small))
+                    }
+                }
             }
             if (state is NativeScreenState.Ready && onLoadMore != null) {
                 Surface(
@@ -298,6 +428,363 @@ fun GenericNativeAppScreen(
             }
         }
     }
+    pendingRecordFormAction?.let { pending ->
+        GenericRecordFormActionDialog(
+            pending = pending,
+            schema = schema,
+            actionExecutor = actionExecutor,
+            onDismiss = { pendingRecordFormAction = null },
+            onActionSucceeded = { action ->
+                pendingRecordFormAction = null
+                inlineActionSucceeded?.invoke(action)
+            },
+        )
+    }
+    pendingRecordDeleteAction?.let { pending ->
+        GenericRecordDeleteActionDialog(
+            pending = pending,
+            actionExecutor = actionExecutor,
+            onDismiss = { pendingRecordDeleteAction = null },
+            onActionSucceeded = { action ->
+                pendingRecordDeleteAction = null
+                inlineActionSucceeded?.invoke(action)
+            },
+        )
+    }
+    pendingRecordCommandAction?.let { pending ->
+        GenericRecordCommandActionDialog(
+            pending = pending,
+            actionExecutor = actionExecutor,
+            onDismiss = { pendingRecordCommandAction = null },
+            onActionSucceeded = { action ->
+                pendingRecordCommandAction = null
+                inlineActionSucceeded?.invoke(action)
+            },
+        )
+    }
+}
+
+private data class PendingNativeRecordFormAction(
+    val plan: NativeRecordFormActionPlan,
+    val itemLabel: String,
+    val resource: ResourceSpec,
+    val datasetContext: NativeDatasetContext,
+)
+
+private data class PendingNativeRecordDeleteAction(
+    val plan: NativeRecordDeleteActionPlan,
+    val itemLabel: String,
+)
+
+private data class PendingNativeRecordCommandAction(
+    val plan: NativeRecordCommandActionPlan,
+    val itemLabel: String,
+    val initialError: String? = null,
+)
+
+@Composable
+private fun GenericRecordFormActionDialog(
+    pending: PendingNativeRecordFormAction,
+    schema: NativeAppSchema,
+    actionExecutor: NativeActionExecutor,
+    onDismiss: () -> Unit,
+    onActionSucceeded: (ActionSpec) -> Unit,
+) {
+    val plan = pending.plan
+    var values by remember(pending) { mutableStateOf(plan.initialValues) }
+    var error by remember(pending) { mutableStateOf<String?>(null) }
+    var awaitingConfirmation by remember(pending) { mutableStateOf(false) }
+    var submitting by remember(pending) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val operation = when (plan.kind) {
+        NativeRecordFormActionKind.Create -> "Create"
+        NativeRecordFormActionKind.Edit -> "Edit"
+    }
+
+    fun submit(confirmed: Boolean) {
+        val request = runCatching {
+            plan.request(
+                inputValues = values,
+                confirmed = confirmed,
+            )
+        }.getOrElse { failure ->
+            error = failure.message ?: "The values could not be submitted."
+            return
+        }
+        submitting = true
+        error = null
+        scope.launch {
+            when (val result = actionExecutor.execute(request)) {
+                is NativeActionExecutionResult.Success -> onActionSucceeded(plan.action)
+                is NativeActionExecutionResult.Failure -> {
+                    error = result.message
+                    awaitingConfirmation = false
+                }
+            }
+            submitting = false
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!submitting) onDismiss() },
+        title = {
+            Text(
+                if (awaitingConfirmation) {
+                    "Confirm ${operation.lowercase()}"
+                } else {
+                    "$operation ${pending.itemLabel}"
+                },
+            )
+        },
+        text = {
+            if (awaitingConfirmation) {
+                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+                    Text(
+                        "${plan.action.label} will change server data for ${pending.itemLabel}. Continue?",
+                    )
+                    error?.let { message ->
+                        Text(
+                            message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                ) {
+                    if (plan.fields.isEmpty()) {
+                        Text("No additional information is needed.")
+                    } else {
+                        plan.fields.forEach { field ->
+                            val relationOptions = remember(field, pending, schema) {
+                                nativeRelationOptions(
+                                    field = field,
+                                    formResource = pending.resource,
+                                    schema = schema,
+                                    context = pending.datasetContext,
+                                )
+                            }
+                            if (nativeRelationFieldRequiresChoice(field, pending.resource, schema)) {
+                                GenericRelationshipField(
+                                    field = field,
+                                    value = values[field.id].orEmpty(),
+                                    options = relationOptions,
+                                    error = null,
+                                    enabled = !submitting,
+                                    onValueChange = { value ->
+                                        values = values + (field.id to value)
+                                        error = null
+                                    },
+                                )
+                            } else {
+                                GenericFormField(
+                                    field = field,
+                                    value = values[field.id].orEmpty(),
+                                    error = null,
+                                    enabled = !submitting,
+                                    filePicker = null,
+                                    onValueChange = { value ->
+                                        values = values + (field.id to value)
+                                        error = null
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    error?.let { message ->
+                        Text(
+                            message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                enabled = !submitting,
+                onClick = {
+                    if (awaitingConfirmation) {
+                        awaitingConfirmation = false
+                        error = null
+                    } else {
+                        onDismiss()
+                    }
+                },
+            ) {
+                Text(if (awaitingConfirmation) "Back" else "Cancel")
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !submitting,
+                onClick = {
+                    when {
+                        awaitingConfirmation -> submit(confirmed = true)
+                        plan.action.requiresConfirmation -> {
+                            val validation = runCatching {
+                                plan.request(inputValues = values, confirmed = true)
+                            }.exceptionOrNull()
+                            if (validation == null) {
+                                error = null
+                                awaitingConfirmation = true
+                            } else {
+                                error = validation.message ?: "The values could not be submitted."
+                            }
+                        }
+                        else -> submit(confirmed = false)
+                    }
+                },
+            ) {
+                if (submitting) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(if (awaitingConfirmation) "Confirm" else operation)
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun GenericRecordDeleteActionDialog(
+    pending: PendingNativeRecordDeleteAction,
+    actionExecutor: NativeActionExecutor,
+    onDismiss: () -> Unit,
+    onActionSucceeded: (ActionSpec) -> Unit,
+) {
+    var error by remember(pending) { mutableStateOf<String?>(null) }
+    var deleting by remember(pending) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    AlertDialog(
+        onDismissRequest = { if (!deleting) onDismiss() },
+        title = { Text("Delete ${pending.itemLabel}?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+                Text("This removes the item from the server and cannot be undone.")
+                error?.let { message ->
+                    Text(
+                        message,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !deleting, onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !deleting,
+                onClick = {
+                    val request = pending.plan.request(confirmed = true)
+                    deleting = true
+                    error = null
+                    scope.launch {
+                        when (val result = actionExecutor.execute(request)) {
+                            is NativeActionExecutionResult.Success -> {
+                                onActionSucceeded(pending.plan.action)
+                            }
+                            is NativeActionExecutionResult.Failure -> {
+                                error = result.message
+                            }
+                        }
+                        deleting = false
+                    }
+                },
+            ) {
+                if (deleting) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Text("Delete")
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun GenericRecordCommandActionDialog(
+    pending: PendingNativeRecordCommandAction,
+    actionExecutor: NativeActionExecutor,
+    onDismiss: () -> Unit,
+    onActionSucceeded: (ActionSpec) -> Unit,
+) {
+    val ui = nativeRecordCommandUi(pending.plan.effect, pending.itemLabel)
+    var error by remember(pending) { mutableStateOf(pending.initialError) }
+    var executing by remember(pending) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val retryingDirectAction = !pending.plan.requiresConfirmation
+
+    AlertDialog(
+        onDismissRequest = { if (!executing) onDismiss() },
+        title = {
+            Text(
+                if (retryingDirectAction) {
+                    "${ui.label} failed"
+                } else {
+                    requireNotNull(ui.confirmationTitle)
+                },
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+                ui.confirmationMessage?.takeIf { pending.plan.requiresConfirmation }?.let { message ->
+                    Text(message)
+                }
+                error?.let { message ->
+                    Text(
+                        message,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !executing, onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !executing,
+                onClick = {
+                    executing = true
+                    error = null
+                    scope.launch {
+                        when (
+                            val result = actionExecutor.execute(
+                                pending.plan.request(confirmed = pending.plan.requiresConfirmation),
+                            )
+                        ) {
+                            is NativeActionExecutionResult.Success -> {
+                                onActionSucceeded(pending.plan.action)
+                            }
+                            is NativeActionExecutionResult.Failure -> {
+                                error = result.message
+                            }
+                        }
+                        executing = false
+                    }
+                },
+            ) {
+                if (executing) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(if (retryingDirectAction) "Try again" else ui.label)
+                }
+            }
+        },
+    )
 }
 
 @Composable
@@ -309,7 +796,7 @@ private fun GenericRecordTable(
     datasetContext: NativeDatasetContext,
     actionExecutor: NativeActionExecutor,
     onSelectRecord: ((NativeRecord) -> Unit)?,
-    onInlineActionSucceeded: (() -> Unit)?,
+    onInlineActionSucceeded: ((ActionSpec) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val composite = view.compositeDataGrid
@@ -461,7 +948,7 @@ private fun GenericRecordTable(
                                     is NativeActionExecutionResult.Success -> {
                                         editedValues[NativeCellAddress(plan.recordId, plan.field.id)] = editValue.trim()
                                         activeEdit = null
-                                        onInlineActionSucceeded?.invoke()
+                                        onInlineActionSucceeded?.invoke(plan.action)
                                     }
                                     is NativeActionExecutionResult.Failure -> editError = result.message
                                 }
@@ -487,7 +974,7 @@ private fun GenericTableCollection(
     datasetContext: NativeDatasetContext,
     actionExecutor: NativeActionExecutor,
     onSelectRecord: ((NativeRecord) -> Unit)?,
-    onInlineActionSucceeded: (() -> Unit)?,
+    onInlineActionSucceeded: ((ActionSpec) -> Unit)?,
 ) {
     val composite = view.compositeDataGrid
     val columnResource = composite?.let { schema.resource(it.columnResourceId) }
@@ -635,7 +1122,11 @@ private fun GenericRendererLoading(title: String) {
 }
 
 @Composable
-private fun GenericRendererEmpty(resourceName: String) {
+private fun GenericRendererEmpty(
+    resourceName: String,
+    createLabel: String? = null,
+    onCreate: (() -> Unit)? = null,
+) {
     GenericCenteredState {
         GenericStateIcon(NextcloudIcons.Apps)
         Text("No ${resourceName.lowercase()} yet", style = MaterialTheme.typography.titleLarge)
@@ -644,6 +1135,18 @@ private fun GenericRendererEmpty(resourceName: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
         )
+        if (onCreate != null) {
+            Button(
+                onClick = onCreate,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Icon(NextcloudIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(
+                    createLabel?.takeIf(String::isNotBlank) ?: "Create item",
+                    modifier = Modifier.padding(start = NextcloudSpacing.Small),
+                )
+            }
+        }
     }
 }
 
@@ -703,6 +1206,7 @@ private fun GenericRecordList(
     records: List<NativeRecord>,
     onSelectRecord: ((NativeRecord) -> Unit)?,
     modifier: Modifier = Modifier,
+    secondaryActions: (NativeRecord) -> List<NextcloudCardAction> = { emptyList() },
 ) {
     LazyColumn(
         modifier = modifier,
@@ -715,7 +1219,12 @@ private fun GenericRecordList(
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
         items(records, key = NativeRecord::id) { record ->
-            GenericCollectionCard(resource, record, onSelectRecord)
+            GenericCollectionCard(
+                resource = resource,
+                record = record,
+                onSelectRecord = onSelectRecord,
+                secondaryActions = secondaryActions(record),
+            )
         }
     }
 }
@@ -728,7 +1237,7 @@ private fun GenericEditableTableRecordList(
     records: List<NativeRecord>,
     onSelectRecord: ((NativeRecord) -> Unit)?,
     actionExecutor: NativeActionExecutor,
-    onInlineActionSucceeded: (() -> Unit)?,
+    onInlineActionSucceeded: ((ActionSpec) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val fields = remember(projection) {
@@ -830,7 +1339,7 @@ private fun GenericEditableTableRecordList(
                                             NativeCellAddress(plan.recordId, plan.field.id)
                                         ] = editValue.trim()
                                         activeEdit = null
-                                        onInlineActionSucceeded?.invoke()
+                                        onInlineActionSucceeded?.invoke(plan.action)
                                     }
                                     is NativeActionExecutionResult.Failure -> editError = result.message
                                 }
@@ -852,9 +1361,16 @@ private fun GenericEditableTableRecordList(
 
 @Composable
 private fun GenericRecordCollection(
+    schema: NativeAppSchema,
     resource: ResourceSpec,
     records: List<NativeRecord>,
+    datasetContext: NativeDatasetContext,
+    actionExecutor: NativeActionExecutor,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    onInlineActionSucceeded: ((ActionSpec) -> Unit)?,
+    onEditRecord: (NativeRecord, NativeRecordFormActionPlan) -> Unit,
+    onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
+    onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
     imageLoader: NativeImageLoader?,
 ) {
     val recipes = remember(resource, records) {
@@ -868,7 +1384,18 @@ private fun GenericRecordCollection(
         nativeTaskCollectionPresentations(resource, records)
     }
     if (tasks != null) {
-        GenericTaskCollection(tasks, onSelectRecord)
+        GenericTaskCollection(
+            schema = schema,
+            resource = resource,
+            rows = tasks,
+            navigationContext = datasetContext.bindingValues,
+            actionExecutor = actionExecutor,
+            onSelectRecord = onSelectRecord,
+            onActionSucceeded = onInlineActionSucceeded,
+            onEditRecord = onEditRecord,
+            onDeleteRecord = onDeleteRecord,
+            onCommandRecord = onCommandRecord,
+        )
         return
     }
     val groupware = remember(resource, records) {
@@ -897,7 +1424,26 @@ private fun GenericRecordCollection(
                     stateKey = "collection:${resource.id}",
                 )
             }
-            GenericRecordList(resource, records, onSelectRecord, Modifier.weight(1f))
+            GenericRecordList(
+                resource = resource,
+                records = records,
+                onSelectRecord = onSelectRecord,
+                modifier = Modifier.weight(1f),
+                secondaryActions = { record ->
+                    nativeRecordCardActions(
+                        capabilities = nativeRecordActions(
+                            schema = schema,
+                            resource = resource,
+                            record = record,
+                            navigationContext = datasetContext.bindingValues,
+                        ),
+                        record = record,
+                        onEditRecord = onEditRecord,
+                        onDeleteRecord = onDeleteRecord,
+                        onCommandRecord = onCommandRecord,
+                    )
+                },
+            )
         }
     }
 }
@@ -953,7 +1499,12 @@ private fun GenericFinanceCollection(
                                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                GenericResourceIcon(resource)
+                                val presentation = nativeRecordPresentation(resource, record)
+                                GenericResourceIcon(
+                                    resource,
+                                    presentation.iconKey,
+                                    presentation.colorArgb,
+                                )
                                 Text(
                                     transaction.title,
                                     modifier = Modifier.weight(1f),
@@ -1101,9 +1652,21 @@ private fun GenericFinanceDetailHeader(
 
 @Composable
 private fun GenericTaskCollection(
+    schema: NativeAppSchema,
+    resource: ResourceSpec,
     rows: List<Pair<NativeRecord, NativeGroupwarePresentation>>,
+    navigationContext: Map<String, String>,
+    actionExecutor: NativeActionExecutor,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    onActionSucceeded: ((ActionSpec) -> Unit)?,
+    onEditRecord: (NativeRecord, NativeRecordFormActionPlan) -> Unit,
+    onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
+    onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
+    val completionOverrides = remember(schema, resource.id) { mutableStateMapOf<String, Boolean>() }
+    val completionInProgress = remember(schema, resource.id) { mutableStateMapOf<String, Boolean>() }
+    val completionErrors = remember(schema, resource.id) { mutableStateMapOf<String, String>() }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
@@ -1115,11 +1678,38 @@ private fun GenericTaskCollection(
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
         items(rows, key = { (record, _) -> record.id }) { (record, task) ->
-            val interaction = onSelectRecord
-                ?.let { callback -> Modifier.clickable { callback(record) } }
-                ?: Modifier
+            val actions = remember(schema, resource, record, navigationContext) {
+                nativeRecordActions(
+                    schema = schema,
+                    resource = resource,
+                    record = record,
+                    navigationContext = navigationContext,
+                )
+            }
+            val completion = actions.completion
+            val completed = completionOverrides[record.id]
+                ?: completion?.currentlyCompleted
+                ?: task.completed
+            val completing = completionInProgress[record.id] == true
+            val secondaryActions = nativeRecordCardActions(
+                capabilities = actions,
+                record = record,
+                onEditRecord = onEditRecord,
+                onDeleteRecord = onDeleteRecord,
+                onCommandRecord = onCommandRecord,
+            )
+            var actionsExpanded by rememberSaveable(record.id) { mutableStateOf(false) }
             Card(
-                modifier = interaction.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+                    onOpen = onSelectRecord?.let { callback -> { callback(record) } },
+                    onShowActions = if (secondaryActions.isNotEmpty()) {
+                        { actionsExpanded = true }
+                    } else {
+                        null
+                    },
+                    openLabel = "Open ${task.title}",
+                    actionsLabel = "Show actions for ${task.title}",
+                ),
                 colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
                 shape = RoundedCornerShape(NextcloudRadii.Card),
             ) {
@@ -1129,27 +1719,54 @@ private fun GenericTaskCollection(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Surface(
-                        color = if (task.completed) {
+                        color = if (completed) {
                             MaterialTheme.colorScheme.primaryContainer
                         } else {
                             NextcloudTheme.colors.appIconContainer
                         },
                         shape = MaterialTheme.shapes.extraLarge,
                     ) {
-                        Icon(
-                            imageVector = if (task.completed) {
-                                NextcloudIcons.CheckCircle
-                            } else {
-                                NextcloudIcons.app("tasks")
-                            },
-                            contentDescription = if (task.completed) "Completed" else "Open task",
-                            modifier = Modifier.padding(NextcloudSpacing.Small).size(24.dp),
-                            tint = if (task.completed) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            } else {
-                                NextcloudTheme.colors.appIcon
-                            },
-                        )
+                        if (completion != null) {
+                            Checkbox(
+                                checked = completed,
+                                enabled = !completing,
+                                onCheckedChange = { requested ->
+                                    completionErrors.remove(record.id)
+                                    completionInProgress[record.id] = true
+                                    scope.launch {
+                                        when (
+                                            val result = actionExecutor.execute(
+                                                completion.request(completed = requested),
+                                            )
+                                        ) {
+                                            is NativeActionExecutionResult.Success -> {
+                                                completionOverrides[record.id] = requested
+                                                onActionSucceeded?.invoke(completion.action)
+                                            }
+                                            is NativeActionExecutionResult.Failure -> {
+                                                completionErrors[record.id] = result.message
+                                            }
+                                        }
+                                        completionInProgress.remove(record.id)
+                                    }
+                                },
+                            )
+                        } else {
+                            Icon(
+                                imageVector = if (completed) {
+                                    NextcloudIcons.CheckCircle
+                                } else {
+                                    NextcloudIcons.FormatChecklist
+                                },
+                                contentDescription = if (completed) "Completed" else "Open item",
+                                modifier = Modifier.padding(NextcloudSpacing.Small).size(24.dp),
+                                tint = if (completed) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    NextcloudTheme.colors.appIcon
+                                },
+                            )
+                        }
                     }
                     Column(
                         modifier = Modifier.weight(1f),
@@ -1168,7 +1785,7 @@ private fun GenericTaskCollection(
                             task.effortPoints?.let { "$it ${if (it == 1) "point" else "points"}" },
                             task.recurrenceRule?.taskRecurrenceLabel(),
                             task.status?.takeUnless { status ->
-                                status.equals("completed", ignoreCase = true) && task.completed
+                                status.equals("completed", ignoreCase = true) && completed
                             },
                         ).distinct().joinToString(" · ").takeIf(String::isNotBlank)?.let { metadata ->
                             Text(
@@ -1179,8 +1796,24 @@ private fun GenericTaskCollection(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
+                        completionErrors[record.id]?.let { message ->
+                            Text(
+                                message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
-                    if (onSelectRecord != null) {
+                    if (secondaryActions.isNotEmpty()) {
+                        NextcloudCardOverflow(
+                            itemLabel = task.title,
+                            actions = secondaryActions,
+                            expanded = actionsExpanded,
+                            onExpandedChange = { actionsExpanded = it },
+                        )
+                    } else if (onSelectRecord != null) {
                         Icon(
                             NextcloudIcons.ChevronRight,
                             contentDescription = "Open ${task.title}",
@@ -1192,6 +1825,78 @@ private fun GenericTaskCollection(
             }
         }
     }
+}
+
+internal fun nativeRecordCardActions(
+    capabilities: NativeRecordActionCapabilities,
+    record: NativeRecord,
+    onEditRecord: (NativeRecord, NativeRecordFormActionPlan) -> Unit,
+    onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
+    onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
+): List<NextcloudCardAction> = buildList {
+    capabilities.edit?.let { plan ->
+        add(
+            NextcloudCardAction(
+                label = "Edit",
+                onClick = { onEditRecord(record, plan) },
+            ),
+        )
+    }
+    capabilities.commands.forEach { plan ->
+        val ui = nativeRecordCommandUi(plan.effect, record.id)
+        add(
+            NextcloudCardAction(
+                label = ui.label,
+                destructive = ui.destructive,
+                onClick = { onCommandRecord(record, plan) },
+            ),
+        )
+    }
+    capabilities.delete?.let { plan ->
+        add(
+            NextcloudCardAction(
+                label = "Delete",
+                destructive = true,
+                onClick = { onDeleteRecord(record, plan) },
+            ),
+        )
+    }
+}
+
+internal data class NativeRecordCommandUi(
+    val label: String,
+    val destructive: Boolean,
+    val confirmationTitle: String? = null,
+    val confirmationMessage: String? = null,
+)
+
+internal fun nativeRecordCommandUi(
+    effect: ActionEffect,
+    itemLabel: String,
+): NativeRecordCommandUi = when (effect) {
+    ActionEffect.archive -> NativeRecordCommandUi(label = "Archive", destructive = false)
+    ActionEffect.unarchive -> NativeRecordCommandUi(label = "Unarchive", destructive = false)
+    ActionEffect.restore -> NativeRecordCommandUi(label = "Restore", destructive = false)
+    ActionEffect.copy -> NativeRecordCommandUi(label = "Copy", destructive = false)
+    ActionEffect.permanentDelete -> NativeRecordCommandUi(
+        label = "Delete permanently",
+        destructive = true,
+        confirmationTitle = "Delete $itemLabel permanently?",
+        confirmationMessage = "This permanently removes the item from the server and cannot be undone.",
+    )
+    ActionEffect.clear -> NativeRecordCommandUi(
+        label = "Clear",
+        destructive = true,
+        confirmationTitle = "Clear $itemLabel?",
+        confirmationMessage = "This permanently clears the selected item and cannot be undone.",
+    )
+    ActionEffect.leave -> NativeRecordCommandUi(
+        label = "Leave",
+        destructive = true,
+        confirmationTitle = "Leave $itemLabel?",
+        confirmationMessage = "You may lose access to this item after leaving.",
+    )
+    else -> error("Unsupported record command effect: $effect")
 }
 
 @Composable
@@ -1811,7 +2516,7 @@ private fun GenericRecordBoard(
     declaredLanes: List<NativeBoardLane>? = null,
     onSelectRecord: ((NativeRecord) -> Unit)?,
     actionExecutor: NativeActionExecutor,
-    onActionSucceeded: (() -> Unit)?,
+    onActionSucceeded: ((ActionSpec) -> Unit)?,
     reconciliation: NativeBoardMoveReconciliation,
 ) {
     val discoveredLanes = remember(resource, records, declaredLanes) {
@@ -1935,7 +2640,7 @@ private fun GenericRecordBoard(
                 is NativeActionExecutionResult.Success -> {
                     editTarget = null
                     actionMessage = "Update accepted. Refreshing the card..."
-                    onActionSucceeded?.invoke()
+                    onActionSucceeded?.invoke(target.plan.action)
                 }
                 is NativeActionExecutionResult.Failure -> actionError = result.message
             }
@@ -1958,7 +2663,7 @@ private fun GenericRecordBoard(
                         beforeFingerprint = fingerprint,
                     )
                     actionMessage = "Move accepted. Refreshing the board to verify it..."
-                    onActionSucceeded?.invoke()
+                    onActionSucceeded?.invoke(target.plan.action)
                 }
                 is NativeActionExecutionResult.Failure -> actionError = result.message
             }
@@ -1975,7 +2680,7 @@ private fun GenericRecordBoard(
                 is NativeActionExecutionResult.Success -> {
                     createTarget = null
                     actionMessage = "Card created in ${target.lane.title}. Refreshing the board..."
-                    onActionSucceeded?.invoke()
+                    onActionSucceeded?.invoke(target.action)
                 }
                 is NativeActionExecutionResult.Failure -> actionError = result.message
             }
@@ -1992,7 +2697,7 @@ private fun GenericRecordBoard(
                 is NativeActionExecutionResult.Success -> {
                     confirmTarget = null
                     actionMessage = "${target.plan.label} accepted. Refreshing the board..."
-                    onActionSucceeded?.invoke()
+                    onActionSucceeded?.invoke(target.plan.action)
                 }
                 is NativeActionExecutionResult.Failure -> actionError = result.message
             }
@@ -2643,7 +3348,7 @@ private fun GenericCollectionCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
         ) {
-            GenericResourceIcon(resource)
+            GenericResourceIcon(resource, presentation.iconKey, presentation.colorArgb)
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
                     presentation.title,
@@ -2719,7 +3424,7 @@ private fun GenericRecordGrid(
                     modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                 ) {
-                    GenericResourceIcon(resource)
+                    GenericResourceIcon(resource, presentation.iconKey, presentation.colorArgb)
                     Text(
                         presentation.title,
                         style = MaterialTheme.typography.titleMedium,
@@ -2749,8 +3454,8 @@ private fun GenericRecordDetail(
     record: NativeRecord,
     datasetContext: NativeDatasetContext,
     actionExecutor: NativeActionExecutor,
-    onActionSucceeded: (() -> Unit)?,
-    onInlineActionSucceeded: (() -> Unit)?,
+    onActionSucceeded: ((ActionSpec) -> Unit)?,
+    onInlineActionSucceeded: ((ActionSpec) -> Unit)?,
     onOpenLink: ((String) -> Unit)?,
     imageLoader: NativeImageLoader?,
 ) {
@@ -2818,9 +3523,15 @@ private fun GenericRecordDetail(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
-                GenericResourceIcon(resource, large = true)
+                val presentation = nativeRecordPresentation(resource, record)
+                GenericResourceIcon(
+                    resource,
+                    presentation.iconKey,
+                    presentation.colorArgb,
+                    large = true,
+                )
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(nativeRecordPresentation(resource, record).title, style = MaterialTheme.typography.headlineSmall)
+                    Text(presentation.title, style = MaterialTheme.typography.headlineSmall)
                     Text(
                         resource.name,
                         style = MaterialTheme.typography.bodyMedium,
@@ -3153,8 +3864,8 @@ private fun GenericMailMessageDetail(
     message: NativeMailMessageDetailPresentation,
     datasetContext: NativeDatasetContext,
     actionExecutor: NativeActionExecutor,
-    onActionSucceeded: (() -> Unit)?,
-    onInlineActionSucceeded: (() -> Unit)?,
+    onActionSucceeded: ((ActionSpec) -> Unit)?,
+    onInlineActionSucceeded: ((ActionSpec) -> Unit)?,
 ) {
     val structured = remember(resource, record) { nativeStructuredDetail(resource, record) }
     val attachments = structured.sections.filter { section ->
@@ -3195,9 +3906,9 @@ private fun GenericMailMessageDetail(
                             NativeMailMessageActionKind.Delete,
                         )
                     ) {
-                        onActionSucceeded?.invoke()
+                        onActionSucceeded?.invoke(plan.action)
                     } else {
-                        (onInlineActionSucceeded ?: onActionSucceeded)?.invoke()
+                        (onInlineActionSucceeded ?: onActionSucceeded)?.invoke(plan.action)
                     }
                 }
                 is NativeActionExecutionResult.Failure -> actionError = result.message
@@ -3527,8 +4238,15 @@ private fun GenericStructuredOmission(count: Int) {
 }
 
 @Composable
-private fun GenericResourceIcon(resource: ResourceSpec, large: Boolean = false) {
-    val icon = nativeResourceIconAppId(resource)?.let(NextcloudIcons::app) ?: when {
+private fun GenericResourceIcon(
+    resource: ResourceSpec,
+    recordIconKey: String? = null,
+    recordColorArgb: Int? = null,
+    large: Boolean = false,
+) {
+    val icon = recordIconKey?.let(NextcloudIcons::semantic)
+        ?: nativeResourceIconAppId(resource)?.let(NextcloudIcons::app)
+        ?: when {
         resource.fields.any { it.kind == FieldKind.image } -> NextcloudIcons.Image
         resource.fields.any { it.kind == FieldKind.file } -> NextcloudIcons.File
         resource.fields.any { it.kind == FieldKind.date || it.kind == FieldKind.dateTime } -> NextcloudIcons.Calendar
@@ -3539,7 +4257,7 @@ private fun GenericResourceIcon(resource: ResourceSpec, large: Boolean = false) 
         Icon(
             icon,
             contentDescription = null,
-            tint = NextcloudTheme.colors.appIcon,
+            tint = recordColorArgb?.let(::Color) ?: NextcloudTheme.colors.appIcon,
             modifier = Modifier.padding(if (large) NextcloudSpacing.Medium else NextcloudSpacing.Small)
                 .size(if (large) 30.dp else 24.dp),
         )
@@ -3603,15 +4321,28 @@ private fun GenericNativeForm(
     datasetContext: NativeDatasetContext,
     executor: NativeActionExecutor,
     filePicker: NativeFileFieldPicker?,
-    onActionSucceeded: (() -> Unit)?,
+    onActionSucceeded: ((ActionSpec) -> Unit)?,
 ) {
     val action = schema.action(view.sourceActionId)
     if (action == null || action.resourceId != resource.id) {
         GenericRendererError("This form has no matching schema-declared action.")
         return
     }
-    val formResource = remember(resource, action, initialRecord) {
-        resource.withObservedSettingsFormTypes(action, initialRecord)
+    val prefillRecord = remember(
+        action,
+        resource,
+        initialRecord,
+        datasetContext.parentResourceId,
+    ) {
+        nativeFormPrefillRecord(
+            action = action,
+            resource = resource,
+            record = initialRecord,
+            parentResourceId = datasetContext.parentResourceId,
+        )
+    }
+    val formResource = remember(resource, action, prefillRecord) {
+        resource.withObservedSettingsFormTypes(action, prefillRecord)
     }
     val formAction = remember(action, formResource) {
         action.withObservedSettingsInputTypes(formResource)
@@ -3627,15 +4358,47 @@ private fun GenericNativeForm(
         )
     }
     val coordinator = remember(formSchema, view, executor) { NativeActionCoordinator(formSchema, view, executor) }
-    val autoBoundValues = remember(action, initialRecord) {
-        nativeFormAutoBoundValues(action, formResource, initialRecord)
-    }
-    val initialDraft = remember(formSchema, view, formResource, initialRecord, autoBoundValues) {
-        initialNativeFormDraft(formResource, action, initialRecord).copy(
-            values = initialNativeFormDraft(formResource, action, initialRecord).values + autoBoundValues,
+    val bindingRecord = remember(
+        initialRecord,
+        datasetContext.parentResourceId,
+        datasetContext.parentRecord,
+    ) {
+        nativeFormBindingRecord(
+            initialRecord = initialRecord,
+            parentResourceId = datasetContext.parentResourceId,
+            parentRecord = datasetContext.parentRecord,
         )
     }
-    var draft by remember(formSchema, view, formResource, initialRecord) {
+    val autoBinding = remember(
+        action,
+        bindingRecord,
+        datasetContext.parentResourceId,
+        datasetContext.bindingValues,
+    ) {
+        nativeFormAutoBindingResolution(
+            schema = schema,
+            action = action,
+            resource = formResource,
+            record = bindingRecord,
+            parentResourceId = datasetContext.parentResourceId,
+            navigationValues = datasetContext.bindingValues,
+        )
+    }
+    val autoBoundValues = autoBinding.values
+    val initialDraft = remember(formSchema, view, formResource, prefillRecord, autoBoundValues) {
+        initialNativeFormDraft(formResource, action, prefillRecord).let { draft ->
+            draft.copy(values = draft.values + autoBoundValues)
+        }
+    }
+    var draft by remember(
+        formSchema,
+        view,
+        formResource,
+        prefillRecord,
+        datasetContext.parentResourceId,
+        datasetContext.parentRecord?.id,
+        autoBoundValues,
+    ) {
         mutableStateOf(initialDraft)
     }
     val scope = rememberCoroutineScope()
@@ -3643,11 +4406,17 @@ private fun GenericNativeForm(
     val validationErrors = (executionState as? NativeActionExecutionState.ValidationFailed)?.fieldErrors.orEmpty()
     val submitting = executionState is NativeActionExecutionState.Running
     val fields = editableNativeFields(formResource, action).filterNot { field -> field.id in autoBoundValues }
+    val uneditableBodyFieldIds = uneditableNativeBodyFieldIds(
+        action = action,
+        editableFields = fields,
+        autoBoundValues = autoBoundValues,
+    )
+    val hasUneditableBodyFields = uneditableBodyFieldIds.isNotEmpty()
     val settingsWrite = action.isSettingsWrite(resource)
     val hasChanges = draft.hasChangesFrom(initialDraft)
 
     LaunchedEffect(executionState) {
-        if (executionState is NativeActionExecutionState.Succeeded) onActionSucceeded?.invoke()
+        if (executionState is NativeActionExecutionState.Succeeded) onActionSucceeded?.invoke(action)
     }
 
     Column(
@@ -3662,6 +4431,23 @@ private fun GenericNativeForm(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        autoBinding.error?.let { error ->
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                shape = RoundedCornerShape(NextcloudRadii.Card),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Text(error, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
         if (fields.isNotEmpty()) {
             GenericSectionHeading("Details", "Information sent with this action")
             Surface(
@@ -3675,10 +4461,10 @@ private fun GenericNativeForm(
                 ) {
                     fields.forEach { field ->
                         val relationOptions = remember(field, schema, datasetContext) {
-                            nativeRelationOptions(field, schema, datasetContext)
+                            nativeRelationOptions(field, formResource, schema, datasetContext)
                         }
-                        if (relationOptions.isNotEmpty()) {
-                            GenericRelationPicker(
+                        if (nativeRelationFieldRequiresChoice(field, formResource, schema)) {
+                            GenericRelationshipField(
                                 field = field,
                                 value = draft.values[field.id].orEmpty(),
                                 options = relationOptions,
@@ -3705,7 +4491,7 @@ private fun GenericNativeForm(
                     }
                 }
             }
-        } else {
+        } else if (!hasUneditableBodyFields) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = NextcloudTheme.colors.appTile,
@@ -3718,11 +4504,28 @@ private fun GenericNativeForm(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        } else {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                shape = RoundedCornerShape(NextcloudRadii.Card),
+            ) {
+                Text(
+                    "This action needs structured information that cannot be edited safely yet.",
+                    modifier = Modifier.padding(NextcloudSpacing.Large),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
         GenericSectionHeading("Action", "Review the details before continuing")
         GenericActionStatus(executionState, coordinator::clearStatus)
         Button(
-            enabled = !submitting && (!settingsWrite || hasChanges),
+            enabled =
+                autoBinding.error == null &&
+                    !hasUneditableBodyFields &&
+                    !submitting &&
+                    (!settingsWrite || hasChanges),
             onClick = { scope.launch { coordinator.submit(draft.values) } },
             modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
         ) {
@@ -3787,108 +4590,347 @@ private fun GenericNativeForm(
     }
 }
 
-internal data class NativeRelationOption(
-    val value: String,
-    val label: String,
-    val supportingText: String? = null,
-)
+/**
+ * A nested form may expose an observed child row while the selected parent record carries the
+ * relationship identity required by the action. Use the parent for hidden relationship binding,
+ * while the observed row remains available separately for safe form prefilling.
+ */
+internal fun nativeFormBindingRecord(
+    initialRecord: NativeRecord?,
+    parentResourceId: String?,
+    parentRecord: NativeRecord?,
+): NativeRecord? =
+    if (parentResourceId.isNullOrBlank()) initialRecord else parentRecord ?: initialRecord
+
+/**
+ * A selected parent record supplies relationship identities to a child create action, but its
+ * user-authored fields are not defaults for the new child. Creating a nested child must not copy
+ * the parent's title or other editable content into the new record.
+ */
+internal fun nativeFormPrefillRecord(
+    action: ActionSpec,
+    resource: ResourceSpec,
+    record: NativeRecord?,
+    parentResourceId: String? = null,
+): NativeRecord? {
+    record ?: return null
+    if (action.intent != ActionIntent.create || parentResourceId.isNullOrBlank()) return record
+    val parentIdentities = parentResourceId.nativeRelationResourceIdentities()
+    val formIdentities = resource.id.nativeRelationResourceIdentities()
+    return record.takeIf { parentIdentities.intersect(formIdentities).isNotEmpty() }
+}
 
 /**
  * Resolves already-known technical identities without exposing them as text inputs.
  * Destination fields remain user choices: source context is never destination intent.
  */
 internal fun nativeFormAutoBoundValues(
+    schema: NativeAppSchema,
     action: ActionSpec,
     resource: ResourceSpec,
     record: NativeRecord?,
-): Map<String, String> {
-    record ?: return emptyMap()
-    val available = record.actionBindingValues(allowUnsafeIdentity = true)
-    return buildMap {
-        editableNativeFields(resource, action).forEach { field ->
-            val semantic = field.id.nativeRelationSemanticId()
-            if (
-                semantic.isDestinationRelationField() ||
-                semantic !in setOf("accountid", "folderid", "id", "mailboxid", "messageid", "sourceid")
-            ) return@forEach
-            val value = available.entries.firstOrNull { (key, _) ->
-                key.nativeRelationSemanticId() == semantic
-            }?.value ?: when (semantic) {
-                "id", "messageid" -> record.id.takeIf { record.canResolveUnsafeActionIdentity() }
-                else -> null
-            }
-            value?.takeIf(String::isNotBlank)?.let { put(field.id, it) }
-        }
-    }
-}
+    parentResourceId: String? = null,
+): Map<String, String> = nativeFormAutoBindingResolution(
+    schema = schema,
+    action = action,
+    resource = resource,
+    record = record,
+    parentResourceId = parentResourceId,
+).values
+
+internal data class NativeFormAutoBindingResolution(
+    val values: Map<String, String>,
+    val error: String? = null,
+)
 
 /**
- * Builds a labeled relation picker from loaded records. Mailbox/folder move destinations and any
- * future destination-folder relation can reuse this without an app-id adapter.
+ * Resolves schema-declared technical inputs from verified navigation and record provenance.
+ *
+ * No app, endpoint, or domain vocabulary participates. Conflicting identities leave the action
+ * disabled instead of silently selecting one source. User-selected destinations remain visible.
  */
-internal fun nativeRelationOptions(
-    field: FieldSpec,
+internal fun nativeFormAutoBindingResolution(
     schema: NativeAppSchema,
-    context: NativeDatasetContext,
-): List<NativeRelationOption> {
-    if (!field.id.nativeRelationSemanticId().isDestinationRelationField()) return emptyList()
-    val currentAccountId = context.parentRecord.nativeRelationValue("accountid")
-    val currentMailboxId = context.parentRecord.nativeRelationValue("mailboxid")
-    return context.relatedRecords.flatMap { (resourceId, records) ->
-        val resource = schema.resource(resourceId) ?: return@flatMap emptyList()
-        records.mapNotNull { record ->
-            val presentation = nativeMailboxPresentation(resource, record)
-            if (presentation.kind != NativeMailboxItemKind.Folder) return@mapNotNull null
-            val accountId = record.nativeRelationValue("accountid")
-            if (currentAccountId != null && accountId != null && currentAccountId != accountId) {
-                return@mapNotNull null
+    action: ActionSpec,
+    resource: ResourceSpec,
+    record: NativeRecord?,
+    parentResourceId: String? = null,
+    navigationValues: Map<String, String> = emptyMap(),
+): NativeFormAutoBindingResolution {
+    val declaredBindingNames = buildSet {
+        addAll(action.binding.pathParameterNames)
+        addAll(action.binding.queryParameterNames)
+        addAll(action.binding.bodyFieldNames)
+    }
+    val declaredNavigationValues = navigationValues.filterKeys(declaredBindingNames::contains)
+    val available = when (record) {
+        null -> safeActionBindingValues(declaredNavigationValues)
+        else -> {
+            if (!record.actionBindingProvenanceValid) {
+                return NativeFormAutoBindingResolution(
+                    values = emptyMap(),
+                    error = "This action cannot be linked because the selected item's identity provenance is ambiguous.",
+                )
             }
-            val id = record.nativeRelationValue("databaseid")
-                ?: record.nativeRelationValue("id")
-                ?: record.id.takeIf { record.canResolveUnsafeActionIdentity() }
-                ?: return@mapNotNull null
-            if (id == currentMailboxId) return@mapNotNull null
-            NativeRelationOption(
-                value = id,
-                label = presentation.title,
-                supportingText = record.nativeRelationValue("specialuse")
-                    ?.trim('\\')
-                    ?.takeIf { value -> !value.equals(presentation.title, ignoreCase = true) },
+            val recordValues = record.nativeFormDeclaredBindingValues(declaredBindingNames)
+                ?: return NativeFormAutoBindingResolution(
+                    values = emptyMap(),
+                    error = "This action cannot be linked because the selected item contains conflicting declared identities.",
+                )
+            safeActionBindingValues(recordValues, declaredNavigationValues)
+                ?: return NativeFormAutoBindingResolution(
+                    values = emptyMap(),
+                    error = "This action cannot be linked because the selected item no longer matches the navigation context.",
+                )
+        }
+    } ?: return NativeFormAutoBindingResolution(
+        values = emptyMap(),
+        error = "This action cannot be linked because its navigation context is invalid.",
+    )
+    if (
+        schema.resources.count { candidate -> candidate.id == resource.id } != 1 ||
+        schema.actions.count { candidate -> candidate.id == action.id && candidate == action } != 1
+    ) {
+        return NativeFormAutoBindingResolution(
+            values = emptyMap(),
+            error = "This action cannot be linked because its schema contract is ambiguous.",
+        )
+    }
+    val acceptedRelationships = schema.relationships.filter { relationship ->
+        relationship.childResourceId == resource.id &&
+            relationship.parentResourceId == parentResourceId &&
+            relationship.childFieldId != null &&
+            relationship.confidence in setOf(Confidence.high, Confidence.verified)
+    }
+    if (
+        acceptedRelationships.groupBy { relationship -> relationship.childFieldId }
+            .any { (_, relationships) -> relationships.distinct().size > 1 }
+    ) {
+        return NativeFormAutoBindingResolution(
+            values = emptyMap(),
+            error = "This action cannot be linked because its parent relationship is ambiguous.",
+        )
+    }
+    val acceptedRelationshipFieldIds = acceptedRelationships.mapNotNullTo(mutableSetOf()) { relationship ->
+        relationship.childFieldId
+    }
+    val requiredInputFieldNames = ((action.inputSchema as? JsonObject)?.get("required") as? JsonArray)
+        ?.mapNotNull { element -> (element as? JsonPrimitive)?.contentOrNull }
+        .orEmpty()
+        .toSet()
+    val resolved = linkedMapOf<String, String>()
+    if (action.intent == ActionIntent.create) {
+        acceptedRelationships.distinct().forEach { relationship ->
+            val childFieldId = requireNotNull(relationship.childFieldId)
+            if (childFieldId !in declaredBindingNames) return@forEach
+            val parentValues = record
+                ?.takeIf { parent ->
+                    parent.actionSafeIdentity && parent.actionBindingProvenanceValid
+                }
+                ?.safeActionBindingValues()
+                ?.get(relationship.parentFieldId)
+                ?.let(::listOf)
+                .orEmpty()
+            val exactValues = buildList {
+                declaredNavigationValues[childFieldId]?.takeIf(String::isNotBlank)?.let(::add)
+                addAll(parentValues.filter(String::isNotBlank))
+            }.distinct()
+            if (exactValues.size > 1) {
+                return NativeFormAutoBindingResolution(
+                    values = emptyMap(),
+                    error = "This action cannot be safely linked to the selected parent because its identities conflict.",
+                )
+            }
+            val value = exactValues.singleOrNull()
+            if (
+                value == null &&
+                childFieldId in (
+                    action.binding.pathParameterNames +
+                        action.binding.requiredQueryParameterNames +
+                        action.binding.requiredBodyFieldNames +
+                        requiredInputFieldNames
+                    )
+            ) {
+                return NativeFormAutoBindingResolution(
+                    values = emptyMap(),
+                    error = "This action cannot be linked because the selected parent identity could not be verified.",
+                )
+            }
+            value?.let { resolved[childFieldId] = it }
+        }
+    }
+    if (action.intent != ActionIntent.create) {
+        val requiredBindingNames = buildSet {
+            addAll(action.binding.requiredPathParameterNames)
+            addAll(action.binding.requiredQueryParameterNames)
+            addAll(action.binding.requiredBodyFieldNames)
+        }
+        resource.fields.asSequence()
+            .filter { field ->
+                val normalized = field.id.nativeRelationSemanticId()
+                field.id in requiredBindingNames &&
+                    field.id !in acceptedRelationshipFieldIds &&
+                    normalized.length > 2 &&
+                    normalized.endsWith("id")
+            }
+            .forEach { field ->
+                available[field.id]
+                    ?.takeIf(String::isNotBlank)
+                    ?.let { value -> resolved[field.id] = value }
+            }
+    }
+    val technicalParameterNames = (
+        action.binding.pathParameterNames + action.binding.queryParameterNames
+        ).distinct()
+    technicalParameterNames.forEach { parameterName ->
+        if (parameterName in resolved) return@forEach
+        if (
+            action.intent == ActionIntent.create &&
+            parentResourceId != null &&
+            parameterName.nativeRelationSemanticId().isIdentityForNativeParent(parentResourceId) &&
+            parameterName !in acceptedRelationshipFieldIds
+        ) {
+            declaredNavigationValues[parameterName]
+                ?.takeIf(String::isNotBlank)
+                ?.let { value -> resolved[parameterName] = value }
+            return@forEach
+        }
+        val exactCandidates = available[parameterName]
+            ?.takeIf(String::isNotBlank)
+            ?.let(::listOf)
+            .orEmpty()
+        val canonicalRecordIdentity = record
+            ?.takeIf {
+                it.actionSafeIdentity &&
+                    it.actionBindingProvenanceValid &&
+                    parameterName.nativeRelationSemanticId().isIdentityForNativeParent(resource.id)
+            }
+            ?.id
+            ?.takeIf(String::isNotBlank)
+        val candidates = (exactCandidates + listOfNotNull(canonicalRecordIdentity)).distinct()
+        if (candidates.size > 1) {
+            return NativeFormAutoBindingResolution(
+                values = emptyMap(),
+                error = "This action cannot be safely linked because the required identity is ambiguous.",
             )
         }
-    }.distinctBy(NativeRelationOption::value)
-        .sortedWith(
-            compareBy<NativeRelationOption> { option ->
-                when (option.label.lowercase()) {
-                    "inbox" -> 0
-                    "archive", "archives" -> 1
-                    "sent" -> 2
-                    "drafts" -> 3
-                    "trash", "deleted" -> 4
-                    else -> 5
-                }
-            }.thenBy { option -> option.label.lowercase() },
-        )
+        candidates.singleOrNull()?.let { value -> resolved[parameterName] = value }
+    }
+    return NativeFormAutoBindingResolution(values = resolved)
 }
 
-private fun NativeRecord?.nativeRelationValue(name: String): String? = this?.let { record ->
-    record.values.entries.firstOrNull { (key, _) ->
-        key.nativeRelationSemanticId() == name.nativeRelationSemanticId()
-    }?.value?.takeIf { value -> !value.isNullOrBlank() }
-        ?: record.displayValues.entries.firstOrNull { (key, _) ->
-            key.nativeRelationSemanticId() == name.nativeRelationSemanticId()
-        }?.value?.takeIf(String::isNotBlank)
+private fun NativeRecord.nativeFormDeclaredBindingValues(
+    declaredBindingNames: Set<String>,
+): Map<String, String>? {
+    val declaredSemanticNames = declaredBindingNames
+        .mapTo(linkedSetOf()) { name -> name.nativeRelationSemanticId() }
+    val declaredContext = bindingContext.filterKeys { key ->
+        key.nativeRelationSemanticId() in declaredSemanticNames
+    }
+    val declaredObservedValues = values.mapNotNull { (key, value) ->
+        val semanticKey = key.nativeRelationSemanticId()
+        value
+            ?.takeIf {
+                key !in structuredValues &&
+                    semanticKey in declaredSemanticNames &&
+                    semanticKey != "id"
+            }
+            ?.let { key to it }
+    }.toMap()
+    val canonicalIdentity = if (actionSafeIdentity) {
+        declaredBindingNames
+            .filter { name -> name.nativeRelationSemanticId() == "id" }
+            .associateWith { id }
+    } else {
+        emptyMap()
+    }
+    return safeActionBindingValues(
+        declaredContext,
+        declaredObservedValues,
+        canonicalIdentity,
+    )
 }
 
 private fun String.nativeRelationSemanticId(): String = lowercase().filter(Char::isLetterOrDigit)
 
-private fun String.isDestinationRelationField(): Boolean =
-    endsWith("id") && (
-        startsWith("dest") ||
-            startsWith("destination") ||
-            contains("targetfolder") ||
-            contains("targetmailbox")
+private fun String.isIdentityForNativeParent(parentResourceId: String): Boolean {
+    if (length <= 2 || !endsWith("id")) return false
+    return dropLast(2).nativeRelationResourceIdentities()
+        .intersect(parentResourceId.nativeRelationResourceIdentities())
+        .isNotEmpty()
+}
+
+private fun String.nativeRelationResourceIdentities(): Set<String> {
+    val normalized = nativeRelationSemanticId()
+    return buildSet {
+        add(normalized)
+        if (normalized.endsWith('s') && normalized.length > 1) add(normalized.dropLast(1))
+        if (normalized.endsWith("ies") && normalized.length > 3) add(normalized.dropLast(3) + "y")
+        if (
+            normalized.endsWith("ches") ||
+            normalized.endsWith("shes") ||
+            normalized.endsWith("sses") ||
+            normalized.endsWith("xes") ||
+            normalized.endsWith("zes")
+        ) {
+            add(normalized.dropLast(2))
+        }
+    }
+}
+
+@Composable
+private fun GenericRelationshipField(
+    field: FieldSpec,
+    value: String,
+    options: List<NativeRelationOption>,
+    error: String?,
+    enabled: Boolean,
+    onValueChange: (String) -> Unit,
+) {
+    val displayField = field.copy(label = field.nativeRelationshipDisplayLabel())
+    when {
+        options.isEmpty() -> GenericUnavailableRelationField(displayField, error)
+        field.format in setOf(DYNAMIC_INTEGER_ARRAY_FORMAT, DYNAMIC_STRING_ARRAY_FORMAT) ->
+            GenericRelationMultiPicker(displayField, value, options, error, enabled, onValueChange)
+        else -> GenericRelationPicker(displayField, value, options, error, enabled, onValueChange)
+    }
+}
+
+@Composable
+private fun GenericUnavailableRelationField(field: FieldSpec, error: String?) {
+    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+        Text(requiredFieldLabel(field), style = MaterialTheme.typography.labelLarge)
+        OutlinedButton(
+            onClick = {},
+            enabled = false,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+        ) {
+            Text("No verified choices available", modifier = Modifier.weight(1f))
+        }
+        Text(
+            error ?: if (field.required) {
+                "Create or load a server record before choosing this required value."
+            } else {
+                "No choices are available. This optional value will be left empty."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (error == null) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.error
+            },
         )
+    }
+}
+
+private fun FieldSpec.nativeRelationshipDisplayLabel(): String {
+    val trimmed = label.trim()
+    return when {
+        trimmed.endsWith(" ids", ignoreCase = true) -> trimmed.dropLast(4)
+        trimmed.endsWith(" id", ignoreCase = true) -> trimmed.dropLast(3)
+        else -> trimmed
+    }.ifBlank { label }
+}
 
 @Composable
 private fun GenericRelationPicker(
@@ -3900,7 +4942,13 @@ private fun GenericRelationPicker(
     onValueChange: (String) -> Unit,
 ) {
     var expanded by remember(field.id) { mutableStateOf(false) }
+    var query by remember(field.id) { mutableStateOf("") }
     val selected = options.firstOrNull { option -> option.value == value }
+    val visibleOptions = options.filter { option ->
+        query.isBlank() ||
+            option.label.contains(query, ignoreCase = true) ||
+            option.supportingText?.contains(query, ignoreCase = true) == true
+    }
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
         Text(
             field.label,
@@ -3918,7 +4966,7 @@ private fun GenericRelationPicker(
                 modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
             ) {
                 Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
-                    Text(selected?.label ?: "Choose a folder")
+                    Text(selected?.label ?: "Select ${field.label}")
                     selected?.supportingText?.let { supportingText ->
                         Text(
                             supportingText,
@@ -3928,8 +4976,26 @@ private fun GenericRelationPicker(
                     }
                 }
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                options.forEach { option ->
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = {
+                    expanded = false
+                    query = ""
+                },
+            ) {
+                if (options.size > NATIVE_RELATION_SEARCH_THRESHOLD) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it.take(NATIVE_RELATION_MAX_QUERY_LENGTH) },
+                        modifier = Modifier.padding(
+                            horizontal = NextcloudSpacing.Small,
+                            vertical = NextcloudSpacing.XSmall,
+                        ).widthIn(min = 280.dp),
+                        label = { Text("Search") },
+                        singleLine = true,
+                    )
+                }
+                visibleOptions.forEach { option ->
                     DropdownMenuItem(
                         text = {
                             Column {
@@ -3946,6 +5012,7 @@ private fun GenericRelationPicker(
                         onClick = {
                             onValueChange(option.value)
                             expanded = false
+                            query = ""
                         },
                     )
                 }
@@ -3956,6 +5023,120 @@ private fun GenericRelationPicker(
         }
     }
 }
+
+@Composable
+private fun GenericRelationMultiPicker(
+    field: FieldSpec,
+    value: String,
+    options: List<NativeRelationOption>,
+    error: String?,
+    enabled: Boolean,
+    onValueChange: (String) -> Unit,
+) {
+    var expanded by remember(field.id) { mutableStateOf(false) }
+    var query by remember(field.id) { mutableStateOf("") }
+    val selectedValues = remember(value, field.format) {
+        value.nativeRelationSelectedValues(field.format)
+    }
+    val visibleOptions = options.filter { option ->
+        query.isBlank() ||
+            option.label.contains(query, ignoreCase = true) ||
+            option.supportingText?.contains(query, ignoreCase = true) == true
+    }
+    val selectedLabels = options.filter { option -> option.value in selectedValues }
+        .joinToString(", ", transform = NativeRelationOption::label)
+    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+        Text(requiredFieldLabel(field), style = MaterialTheme.typography.labelLarge)
+        Box {
+            OutlinedButton(
+                onClick = { expanded = true },
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+            ) {
+                Text(
+                    selectedLabels.ifBlank { "Choose ${field.label.lowercase()}" },
+                    modifier = Modifier.weight(1f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = {
+                    expanded = false
+                    query = ""
+                },
+            ) {
+                if (options.size > NATIVE_RELATION_SEARCH_THRESHOLD) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it.take(NATIVE_RELATION_MAX_QUERY_LENGTH) },
+                        modifier = Modifier.padding(
+                            horizontal = NextcloudSpacing.Small,
+                            vertical = NextcloudSpacing.XSmall,
+                        ).widthIn(min = 280.dp),
+                        label = { Text("Search") },
+                        singleLine = true,
+                    )
+                }
+                visibleOptions.forEach { option ->
+                    val selected = option.value in selectedValues
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Checkbox(checked = selected, onCheckedChange = null)
+                        },
+                        text = {
+                            Column {
+                                Text(option.label)
+                                option.supportingText?.let { supportingText ->
+                                    Text(
+                                        supportingText,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        },
+                        onClick = {
+                            val updated = if (selected) {
+                                selectedValues - option.value
+                            } else {
+                                selectedValues + option.value
+                            }
+                            onValueChange(updated.toNativeRelationArray(field.format))
+                        },
+                    )
+                }
+            }
+        }
+        error?.let { message ->
+            Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+private fun String.nativeRelationSelectedValues(format: String?): List<String> {
+    if (isBlank()) return emptyList()
+    val array = runCatching { Json.parseToJsonElement(this) }.getOrNull() as? JsonArray
+        ?: return emptyList()
+    return array.mapNotNull { element ->
+        val scalar = element as? JsonPrimitive ?: return@mapNotNull null
+        when (format) {
+            DYNAMIC_INTEGER_ARRAY_FORMAT -> scalar.takeUnless(JsonPrimitive::isString)?.contentOrNull
+            DYNAMIC_STRING_ARRAY_FORMAT -> scalar.takeIf(JsonPrimitive::isString)?.contentOrNull
+            else -> null
+        }
+    }.distinct()
+}
+
+private fun List<String>.toNativeRelationArray(format: String?): String = when (format) {
+    DYNAMIC_INTEGER_ARRAY_FORMAT -> joinToString(prefix = "[", postfix = "]", separator = ",")
+    DYNAMIC_STRING_ARRAY_FORMAT -> JsonArray(map(::JsonPrimitive)).toString()
+    else -> ""
+}
+
+private const val NATIVE_RELATION_SEARCH_THRESHOLD = 8
+private const val NATIVE_RELATION_MAX_QUERY_LENGTH = 120
 
 internal fun nativeFormTitle(view: ViewSpec, resource: ResourceSpec, action: ActionSpec): String =
     if (action.isSettingsWrite(resource)) "Settings" else view.title
@@ -4047,6 +5228,8 @@ private fun GenericFormField(
             Switch(checked = value == "true", enabled = enabled, onCheckedChange = { onValueChange(it.toString()) })
         }
 
+        field.hasNativeRecurrenceRuleSemantics() ->
+            GenericRecurrenceRuleField(field, value, error, enabled, onValueChange)
         field.kind == FieldKind.enumeration -> GenericEnumField(field, value, error, enabled, onValueChange)
         field.kind == FieldKind.file -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             OutlinedTextField(
@@ -4107,6 +5290,79 @@ private fun GenericFormField(
     }
 }
 
+@Composable
+private fun GenericRecurrenceRuleField(
+    field: FieldSpec,
+    value: String,
+    error: String?,
+    enabled: Boolean,
+    onValueChange: (String) -> Unit,
+) {
+    var expanded by remember(field.id) { mutableStateOf(false) }
+    var custom by remember(field.id, value) {
+        mutableStateOf(value.isNotBlank() && NATIVE_RECURRENCE_PRESETS.none { (_, rule) -> rule == value })
+    }
+    val selectedLabel = NATIVE_RECURRENCE_PRESETS.firstOrNull { (_, rule) -> rule == value }?.first
+        ?: if (custom) "Custom rule" else "Does not repeat"
+    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+        Text("Repeat", style = MaterialTheme.typography.labelLarge)
+        Box {
+            OutlinedButton(
+                onClick = { expanded = true },
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) {
+                Text(selectedLabel, modifier = Modifier.weight(1f))
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                NATIVE_RECURRENCE_PRESETS.forEach { (label, rule) ->
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        onClick = {
+                            custom = false
+                            expanded = false
+                            onValueChange(rule)
+                        },
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text("Custom rule") },
+                    onClick = {
+                        custom = true
+                        expanded = false
+                    },
+                )
+            }
+        }
+        if (custom) {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("RFC 5545 recurrence rule") },
+                placeholder = { Text("FREQ=WEEKLY;INTERVAL=2") },
+                singleLine = true,
+                isError = error != null,
+            )
+        }
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+private fun FieldSpec.hasNativeRecurrenceRuleSemantics(): Boolean =
+    id.lowercase().filter(Char::isLetterOrDigit) in setOf("rrule", "recurrencerule") &&
+        kind in setOf(FieldKind.string, FieldKind.longText)
+
+private val NATIVE_RECURRENCE_PRESETS = listOf(
+    "Does not repeat" to "",
+    "Every day" to "FREQ=DAILY",
+    "Every weekday" to "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+    "Every week" to "FREQ=WEEKLY",
+    "Every month" to "FREQ=MONTHLY",
+    "Every year" to "FREQ=YEARLY",
+)
+
 private fun String.dynamicSettingLabel(): String = replace('-', ' ').replace('_', ' ')
     .split(' ')
     .filter(String::isNotBlank)
@@ -4129,12 +5385,45 @@ private fun GenericEnumField(
                 enabled = enabled && !field.enumValues.isNullOrEmpty(),
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
             ) {
-                Text(value.ifBlank { "Choose an option" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                value.takeIf(String::isNotBlank)
+                    ?.takeIf { field.isNativeVisualIconField() }
+                    ?.let(NextcloudIcons::semantic)
+                    ?.let { icon ->
+                        Icon(
+                            icon,
+                            contentDescription = null,
+                            modifier = Modifier.padding(end = NextcloudSpacing.Small).size(20.dp),
+                        )
+                    }
+                value.nativeFormColorOrNull(field)?.let { color ->
+                    NativeColorSwatch(
+                        color,
+                        modifier = Modifier.padding(end = NextcloudSpacing.Small),
+                    )
+                }
+                Text(
+                    value.takeIf(String::isNotBlank)?.dynamicSettingLabel() ?: "Choose an option",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 field.enumValues.orEmpty().forEach { option ->
+                    val optionIcon = option.takeIf { field.isNativeVisualIconField() }
+                        ?.let(NextcloudIcons::semantic)
+                    val optionColor = option.nativeFormColorOrNull(field)
                     DropdownMenuItem(
-                        text = { Text(option) },
+                        leadingIcon = if (optionIcon != null || optionColor != null) {
+                            {
+                                optionIcon?.let { icon ->
+                                    Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+                                }
+                                optionColor?.let { color -> NativeColorSwatch(color) }
+                            }
+                        } else {
+                            null
+                        },
+                        text = { Text(option.dynamicSettingLabel()) },
                         onClick = {
                             expanded = false
                             onValueChange(option)
@@ -4145,6 +5434,28 @@ private fun GenericEnumField(
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }
+}
+
+@Composable
+private fun NativeColorSwatch(color: Color, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.size(20.dp),
+        color = color,
+        shape = RoundedCornerShape(5.dp),
+        content = {},
+    )
+}
+
+private fun String.nativeFormColorOrNull(field: FieldSpec): Color? {
+    return nativeFormColorArgbOrNull(field)?.let(::Color)
+}
+
+internal fun String.nativeFormColorArgbOrNull(field: FieldSpec): Int? {
+    if (field.id.lowercase().filter(Char::isLetterOrDigit) !in setOf("color", "colour")) return null
+    val hex = trim().removePrefix("#")
+    if (hex.length != 6 || !hex.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) return null
+    val rgb = hex.toLongOrNull(16) ?: return null
+    return (0xFF000000L or rgb).toInt()
 }
 
 private fun requiredFieldLabel(field: FieldSpec): String = if (field.required) "${field.label} *" else field.label
@@ -4204,6 +5515,8 @@ private fun NativeConfirmationDialog(action: ActionSpec, onDismiss: () -> Unit, 
 internal data class NativeRecordPresentation(
     val title: String,
     val subtitle: String?,
+    val iconKey: String? = null,
+    val colorArgb: Int? = null,
 )
 
 internal data class NativeDetailFieldPresentation(
@@ -4224,11 +5537,13 @@ internal data class NativeStructuredDetailSection(
 )
 
 internal fun nativeRecordPresentation(resource: ResourceSpec, record: NativeRecord): NativeRecordPresentation {
+    val iconKey = nativeRecordIconKey(resource, record)
+    val colorArgb = nativeRecordColorArgb(resource, record)
     nativeHouseholdPresentation(resource, record)?.let { presentation ->
-        return NativeRecordPresentation(presentation.title, presentation.subtitle)
+        return NativeRecordPresentation(presentation.title, presentation.subtitle, iconKey, colorArgb)
     }
     nativeGroupwarePresentation(resource, record)?.let { presentation ->
-        return NativeRecordPresentation(presentation.title, presentation.subtitle)
+        return NativeRecordPresentation(presentation.title, presentation.subtitle, iconKey, colorArgb)
     }
     val titleField = nativeRecordTitleField(resource, record)
     val title = titleField
@@ -4254,7 +5569,45 @@ internal fun nativeRecordPresentation(resource: ResourceSpec, record: NativeReco
                     !value.isPresentationMimeType()
             }
         }
-    return NativeRecordPresentation(title, subtitle)
+    return NativeRecordPresentation(title, subtitle, iconKey, colorArgb)
+}
+
+internal fun nativeRecordIconKey(resource: ResourceSpec, record: NativeRecord): String? {
+    val declaredIconFields = resource.fields.filter(FieldSpec::isNativeVisualIconField)
+    if (declaredIconFields.isEmpty()) return null
+    val populated = declaredIconFields.mapNotNull { field ->
+        record.values[field.id]?.takeIf(String::isNotBlank)
+    }
+    if (populated.isEmpty()) return null
+    val resolved = populated.map { raw ->
+        raw.takeIf { value ->
+            value.length <= MAX_NATIVE_RECORD_ICON_KEY_LENGTH &&
+                value.all { character ->
+                    character.isLetterOrDigit() || character in setOf('-', '_', ' ')
+                }
+        }
+            ?.trim()
+            ?.lowercase()
+            ?.replace('_', '-')
+            ?.replace(' ', '-')
+            ?.takeIf { key -> NextcloudIcons.semantic(key) != null }
+            ?: return null
+    }.distinct()
+    return resolved.singleOrNull()
+}
+
+internal fun nativeRecordColorArgb(resource: ResourceSpec, record: NativeRecord): Int? {
+    val declaredColorFields = resource.fields.filter { field ->
+        field.id.lowercase().filter(Char::isLetterOrDigit) in setOf("color", "colour") &&
+            field.kind in setOf(FieldKind.string, FieldKind.enumeration)
+    }
+    if (declaredColorFields.isEmpty()) return null
+    val populated = declaredColorFields.mapNotNull { field ->
+        record.values[field.id]
+            ?.takeIf(String::isNotBlank)
+            ?.nativeFormColorArgbOrNull(field)
+    }
+    return populated.distinct().singleOrNull()
 }
 
 /**
@@ -4455,7 +5808,7 @@ private fun FieldSpec.subtitlePriority(): Int {
         FieldKind.currency, FieldKind.decimal -> 230
         FieldKind.objectValue -> 220
         FieldKind.userReference -> 210
-        FieldKind.integer -> 120
+        FieldKind.integer -> 0
         FieldKind.boolean, FieldKind.image, FieldKind.file, FieldKind.unknown -> 0
     }
     return semantic + typed
@@ -4475,5 +5828,12 @@ private fun FieldSpec.isTechnicalPresentationField(): Boolean {
     return normalized in setOf(
         "id", "uuid", "token", "etag", "href", "permissions", "permission", "capabilities",
         "active", "enabled", "deleted", "favorite", "favourite", "archived", "readonly",
+        "icon", "symbol", "color", "colour",
     ) || normalized.endsWith("id")
 }
+
+private fun FieldSpec.isNativeVisualIconField(): Boolean =
+    id.lowercase().filter(Char::isLetterOrDigit) in setOf("icon", "symbol") &&
+        kind in setOf(FieldKind.string, FieldKind.enumeration)
+
+private const val MAX_NATIVE_RECORD_ICON_KEY_LENGTH = 64

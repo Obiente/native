@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.CompositeDataGridSpec
+import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
@@ -31,6 +32,25 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GenericNativeRendererStateTest {
+    @Test
+    fun formColorOptionsProduceOrdinaryOpaqueArgbValues() {
+        val colorField = FieldSpec(
+            id = "color",
+            label = "Color",
+            kind = FieldKind.enumeration,
+            required = false,
+            readOnly = false,
+            enumValues = listOf("f97316"),
+        )
+
+        assertEquals(0xFFF97316.toInt(), "f97316".nativeFormColorArgbOrNull(colorField))
+        assertEquals(0xFFF97316.toInt(), "#F97316".nativeFormColorArgbOrNull(colorField))
+        assertNull("not-a-color".nativeFormColorArgbOrNull(colorField))
+        assertNull(
+            "f97316".nativeFormColorArgbOrNull(colorField.copy(id = "status")),
+        )
+    }
+
     @Test
     fun datasetInsightsDefaultToTransactionsOnPhoneSizedViewports() {
         assertFalse(datasetInsightsDefaultExpanded(widthDp = 412f, heightDp = 915f))
@@ -722,6 +742,56 @@ class GenericNativeRendererStateTest {
     }
 
     @Test
+    fun `dataset insights reject unrecognized numeric metadata and timestamps`() {
+        val resource = ResourceSpec(
+            id = "houses",
+            name = "Houses",
+            confidence = Confidence.high,
+            fields = listOf(
+                field("id", FieldKind.integer),
+                field("houseId", FieldKind.integer),
+                field("createdAt", FieldKind.integer),
+                field("updatedAt", FieldKind.integer),
+                field("revision", FieldKind.integer),
+            ),
+        )
+        val record = NativeRecord(
+            "one",
+            mapOf(
+                "id" to "1",
+                "houseId" to "1",
+                "createdAt" to "1785263751",
+                "updatedAt" to "1785263751",
+                "revision" to "4",
+            ),
+        )
+
+        assertNull(nativeDatasetInsights(resource, listOf(record)))
+    }
+
+    @Test
+    fun `dataset insights retain explicitly supported integer measures`() {
+        val resource = ResourceSpec(
+            id = "stock",
+            name = "Stock",
+            confidence = Confidence.high,
+            fields = listOf(
+                field("quantity", FieldKind.integer),
+                field("count", FieldKind.integer),
+            ),
+        )
+        val records = listOf(
+            NativeRecord("one", mapOf("quantity" to "2", "count" to "1")),
+            NativeRecord("two", mapOf("quantity" to "3", "count" to "1")),
+        )
+
+        val insights = requireNotNull(nativeDatasetInsights(resource, records))
+
+        assertEquals("quantity", insights.measure.id)
+        assertEquals(5.0, insights.total)
+    }
+
+    @Test
     fun `budget category amounts become chart measures without promoting technical counters`() {
         val resource = ResourceSpec(
             id = "categories",
@@ -820,6 +890,271 @@ class GenericNativeRendererStateTest {
         assertEquals("7", hydrated.records.first().values["stackId"])
         assertEquals("In review", hydrated.records.first().displayValues["stackId"])
         assertEquals(listOf("In review", "To do"), lanes.map { it.title })
+    }
+
+    @Test
+    fun schemaRelationshipOffersHumanReadableParentChoicesForWritableFields() {
+        val collections = ResourceSpec(
+            id = "collections",
+            name = "Collections",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("id", "ID", FieldKind.string, required = true, readOnly = true),
+                FieldSpec("title", "Title", FieldKind.string, required = true, readOnly = false),
+            ),
+        )
+        val entries = ResourceSpec(
+            id = "entries",
+            name = "Entries",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("collectionId", "Collection", FieldKind.string, required = true, readOnly = false),
+                FieldSpec("title", "Title", FieldKind.string, required = true, readOnly = false),
+            ),
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "test",
+            app = AppIdentity("synthetic", "Synthetic", "test"),
+            confidence = Confidence.verified,
+            resources = listOf(collections, entries),
+            relationships = listOf(
+                ResourceRelationshipSpec(
+                    parentResourceId = collections.id,
+                    childResourceId = entries.id,
+                    parentFieldId = "id",
+                    childFieldId = "collectionId",
+                    confidence = Confidence.verified,
+                ),
+            ),
+        )
+        val options = nativeRelationOptions(
+            field = entries.fields.first(),
+            formResource = entries,
+            schema = schema,
+            context = NativeDatasetContext(
+                relatedRecords = mapOf(
+                    collections.id to listOf(
+                        NativeRecord("collection-9", mapOf("id" to "collection-9", "title" to "Later")),
+                        NativeRecord("collection-4", mapOf("id" to "collection-4", "title" to "Earlier")),
+                        NativeRecord(
+                            id = "collection-unsafe",
+                            values = mapOf("id" to "collection-unsafe", "title" to "Unsafe"),
+                            actionBindingProvenanceValid = false,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(
+            listOf(
+                NativeRelationOption("collection-4", "Earlier", "Collections"),
+                NativeRelationOption("collection-9", "Later", "Collections"),
+            ),
+            options,
+        )
+    }
+
+    @Test
+    fun relationshipChoiceFallsBackToRecordIdentityWithoutADeclaredLabelField() {
+        val collections = ResourceSpec(
+            id = "collections",
+            name = "Collections",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("id", "ID", FieldKind.string, required = true, readOnly = true),
+                FieldSpec("description", "Description", FieldKind.string, required = false, readOnly = false),
+            ),
+        )
+        val entries = ResourceSpec(
+            id = "entries",
+            name = "Entries",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("collectionId", "Collection", FieldKind.string, required = true, readOnly = false),
+            ),
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "test",
+            app = AppIdentity("synthetic", "Synthetic", "test"),
+            confidence = Confidence.verified,
+            resources = listOf(collections, entries),
+            relationships = listOf(
+                ResourceRelationshipSpec(
+                    parentResourceId = collections.id,
+                    childResourceId = entries.id,
+                    parentFieldId = "id",
+                    childFieldId = "collectionId",
+                    confidence = Confidence.verified,
+                ),
+            ),
+        )
+
+        assertEquals(
+            listOf(NativeRelationOption("collection-4", "collection-4", "Collections")),
+            nativeRelationOptions(
+                field = entries.fields.single(),
+                formResource = entries,
+                schema = schema,
+                context = NativeDatasetContext(
+                    relatedRecords = mapOf(
+                        collections.id to listOf(
+                            NativeRecord(
+                                "collection-4",
+                                mapOf("id" to "collection-4", "description" to "Must not become the label"),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun destinationFieldReusesDeclaredRelationshipAndExactSharedScope() {
+        val containers = ResourceSpec(
+            id = "containers",
+            name = "Containers",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("id", "ID", FieldKind.string, required = true, readOnly = true),
+                FieldSpec("accountId", "Account", FieldKind.string, required = true, readOnly = true),
+                FieldSpec("name", "Name", FieldKind.string, required = true, readOnly = false),
+            ),
+        )
+        val documents = ResourceSpec(
+            id = "documents",
+            name = "Documents",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("containerId", "Container", FieldKind.string, required = true, readOnly = true),
+                FieldSpec(
+                    "targetContainerId",
+                    "Target container",
+                    FieldKind.string,
+                    required = true,
+                    readOnly = false,
+                ),
+            ),
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "test",
+            app = AppIdentity("synthetic", "Synthetic", "test"),
+            confidence = Confidence.verified,
+            resources = listOf(containers, documents),
+            relationships = listOf(
+                ResourceRelationshipSpec(
+                    parentResourceId = containers.id,
+                    childResourceId = documents.id,
+                    parentFieldId = "id",
+                    childFieldId = "containerId",
+                    confidence = Confidence.verified,
+                ),
+            ),
+        )
+        val options = nativeRelationOptions(
+            field = documents.fields.single { field -> field.id == "targetContainerId" },
+            formResource = documents,
+            schema = schema,
+            context = NativeDatasetContext(
+                parentRecord = NativeRecord(
+                    id = "document-2",
+                    values = mapOf("id" to "document-2", "accountId" to "account-a"),
+                ),
+                relatedRecords = mapOf(
+                    containers.id to listOf(
+                        NativeRecord(
+                            "container-1",
+                            mapOf("id" to "container-1", "accountId" to "account-a", "name" to "Primary"),
+                        ),
+                        NativeRecord(
+                            "container-2",
+                            mapOf("id" to "container-2", "accountId" to "account-b", "name" to "Other scope"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(listOf(NativeRelationOption("container-1", "Primary", "Containers")), options)
+    }
+
+    @Test
+    fun ambiguousRelationshipEvidenceOffersNoMutationChoice() {
+        val parents = listOf(
+            ResourceSpec("collections", "Collections", Confidence.verified),
+            ResourceSpec("archives", "Archives", Confidence.verified),
+        )
+        val entries = ResourceSpec(
+            id = "entries",
+            name = "Entries",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("parentId", "Parent", FieldKind.string, required = true, readOnly = false),
+            ),
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "test",
+            app = AppIdentity("synthetic", "Synthetic", "test"),
+            confidence = Confidence.verified,
+            resources = parents + entries,
+            relationships = parents.map { parent ->
+                ResourceRelationshipSpec(
+                    parentResourceId = parent.id,
+                    childResourceId = entries.id,
+                    parentFieldId = "id",
+                    childFieldId = "parentId",
+                    confidence = Confidence.verified,
+                )
+            },
+        )
+
+        assertTrue(
+            nativeRelationOptions(
+                field = entries.fields.single(),
+                formResource = entries,
+                schema = schema,
+                context = NativeDatasetContext(
+                    relatedRecords = parents.associate { parent ->
+                        parent.id to listOf(NativeRecord("${parent.id}-1", mapOf("id" to "${parent.id}-1")))
+                    },
+                ),
+            ).isEmpty(),
+        )
+        assertTrue(
+            nativeRelationFieldRequiresChoice(
+                field = entries.fields.single(),
+                formResource = entries,
+                schema = schema,
+            ),
+        )
+    }
+
+    @Test
+    fun `opaque writable identifiers require choices instead of raw manual input`() {
+        val entries = ResourceSpec(
+            id = "entries",
+            name = "Entries",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec(
+                    "categoryId",
+                    "Category",
+                    FieldKind.integer,
+                    required = false,
+                    readOnly = false,
+                ),
+            ),
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "test",
+            app = AppIdentity("synthetic", "Synthetic", "test"),
+            confidence = Confidence.verified,
+            resources = listOf(entries),
+        )
+
+        assertTrue(nativeRelationFieldRequiresChoice(entries.fields.single(), entries, schema))
+        assertTrue(nativeRelationOptions(entries.fields.single(), entries, schema, NativeDatasetContext()).isEmpty())
     }
 
     @Test
@@ -1054,7 +1389,7 @@ class GenericNativeRendererStateTest {
         assertEquals("42", request.values["columnId"])
         assertEquals("revision-4", request.values["etag"])
         assertEquals("15.75", request.values["value"])
-        assertEquals("7", request.values["id"])
+        assertEquals("row-7", request.values["id"])
         assertEquals(record.values["dataByAlias"], request.values["dataByAlias"])
         assertTrue(request.confirmed)
     }
@@ -1361,6 +1696,123 @@ class GenericNativeRendererStateTest {
     }
 
     @Test
+    fun `declared record icons render visually while descriptions remain text`() {
+        val resource = ResourceSpec(
+            id = "collections",
+            name = "Collections",
+            confidence = Confidence.verified,
+            fields = listOf(
+                field("name", FieldKind.string),
+                field("icon", FieldKind.enumeration),
+                field("color", FieldKind.enumeration),
+                field("description", FieldKind.longText),
+            ),
+        )
+        val record = NativeRecord(
+            id = "collection-1",
+            values = mapOf(
+                "name" to "Weekly groceries",
+                "icon" to "clipboard-check",
+                "color" to "#f97316",
+                "description" to "Shared household list",
+            ),
+        )
+
+        assertEquals(
+            NativeRecordPresentation(
+                title = "Weekly groceries",
+                subtitle = "Shared household list",
+                iconKey = "clipboard-check",
+                colorArgb = 0xFFF97316.toInt(),
+            ),
+            nativeRecordPresentation(resource, record),
+        )
+        assertEquals(
+            listOf("name", "description"),
+            nativeTableFields(resource, listOf(record)).map(FieldSpec::id),
+        )
+        assertEquals(
+            listOf("name", "description"),
+            nativeDetailFields(resource, record).map(NativeDetailFieldPresentation::fieldId),
+        )
+    }
+
+    @Test
+    fun `record icon tokens fail closed and never become title or subtitle`() {
+        val resource = ResourceSpec(
+            id = "collections",
+            name = "Collections",
+            confidence = Confidence.verified,
+            fields = listOf(
+                field("icon", FieldKind.enumeration),
+                field("symbol", FieldKind.string),
+            ),
+        )
+
+        assertEquals(
+            NativeRecordPresentation("collection-1", null, null),
+            nativeRecordPresentation(
+                resource,
+                NativeRecord(
+                    "collection-1",
+                    mapOf("icon" to "https://invalid.example/icon", "symbol" to "clipboard-check"),
+                ),
+            ),
+        )
+        assertEquals(
+            NativeRecordPresentation("collection-2", null, null),
+            nativeRecordPresentation(
+                resource,
+                NativeRecord(
+                    "collection-2",
+                    mapOf("icon" to "clipboard-check", "symbol" to "heart"),
+                ),
+            ),
+        )
+        assertEquals(
+            NativeRecordPresentation("collection-3", null, "heart"),
+            nativeRecordPresentation(
+                resource,
+                NativeRecord(
+                    "collection-3",
+                    mapOf("icon" to "heart", "symbol" to "heart"),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `technical integer metadata does not replace an empty description`() {
+        val resource = ResourceSpec(
+            id = "collections",
+            name = "Collections",
+            confidence = Confidence.verified,
+            fields = listOf(
+                field("name", FieldKind.string),
+                field("description", FieldKind.longText),
+                field("createdAt", FieldKind.integer),
+                field("sortOrder", FieldKind.integer),
+            ),
+        )
+
+        assertEquals(
+            NativeRecordPresentation("Groceries", null),
+            nativeRecordPresentation(
+                resource,
+                NativeRecord(
+                    "collection-1",
+                    mapOf(
+                        "name" to "Groceries",
+                        "description" to "",
+                        "createdAt" to "1785424226",
+                        "sortOrder" to "1",
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun collectionPresentationPrefersSemanticContextOverTechnicalFlags() {
         val resource = ResourceSpec(
             id = "projects",
@@ -1544,6 +1996,428 @@ class GenericNativeRendererStateTest {
     }
 
     @Test
+    fun `generic create submit binds one structurally proven normalized parent id`() {
+        val resource = ResourceSpec(
+            id = "lists",
+            name = "Lists",
+            confidence = Confidence.high,
+            fields = listOf(field(id = "name", kind = FieldKind.string, required = true)),
+        )
+        val create = action(
+            id = "lists.create",
+            intent = ActionIntent.create,
+            risk = ActionRisk.mutating,
+            method = HttpMethod.POST,
+        ).copy(
+            resourceId = resource.id,
+            binding = ApiBinding(
+                method = HttpMethod.POST,
+                path = "/api/houses/{houseId}/lists",
+                operationId = "lists.create",
+                pathParameterNames = listOf("houseId"),
+                requiredPathParameterNames = listOf("houseId"),
+                bodyFieldNames = listOf("name"),
+                requiredBodyFieldNames = listOf("name"),
+                bodyContentType = "application/json",
+            ),
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "0.1",
+            app = AppIdentity("dynamic-test", "Dynamic Test", "1.0"),
+            confidence = Confidence.high,
+            resources = listOf(resource),
+            views = listOf(
+                ViewSpec(
+                    id = "lists.create.form",
+                    title = "Create list",
+                    resourceId = resource.id,
+                    component = NativeComponent.form,
+                    sourceActionId = create.id,
+                    confidence = Confidence.high,
+                ),
+            ),
+            actions = listOf(create),
+        )
+
+        val ready = assertIs<NativeRequestBuildResult.Ready>(
+            buildNativeSubmitRequest(
+                schema = schema,
+                view = schema.views.single(),
+                values = mapOf("id" to "house-7", "name" to "Shopping"),
+                confirmed = false,
+            ),
+        )
+        assertEquals(
+            mapOf("houseId" to "house-7", "name" to "Shopping"),
+            assertIs<NativeActionRequest.Submit>(ready.request).values,
+        )
+
+        val unrelated = schema.copy(
+            actions = listOf(
+                create.copy(binding = create.binding.copy(path = "/api/accounts/{houseId}/lists")),
+            ),
+        )
+        assertIs<NativeRequestBuildResult.Invalid>(
+            buildNativeSubmitRequest(
+                schema = unrelated,
+                view = unrelated.views.single(),
+                values = mapOf("id" to "house-7", "name" to "Shopping"),
+                confirmed = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `exact integer arrays are editable validated and safely prefilled as bounded JSON`() {
+        val bodySchema = Json.parseToJsonElement(
+            """{
+              "type":"object",
+              "properties":{
+                "ids":{
+                  "type":"array",
+                  "items":{"type":"integer"},
+                  "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT"
+                }
+              },
+              "required":["ids"]
+            }""",
+        )
+        val action = action(
+            id = "assignments.submit",
+            intent = ActionIntent.update,
+            risk = ActionRisk.mutating,
+            method = HttpMethod.PUT,
+        ).copy(
+            binding = ApiBinding(
+                method = HttpMethod.PUT,
+                path = "/ocs/v2.php/apps/example/api/assignments",
+                operationId = "assignments.submit",
+                bodyFieldNames = listOf("ids"),
+                requiredBodyFieldNames = listOf("ids"),
+                bodyContentType = "application/json",
+                bodySchema = bodySchema,
+            ),
+            inputSchema = buildJsonObject {
+                put("properties", buildJsonObject { put("ids", buildJsonObject {}) })
+                put("required", buildJsonArray { add(JsonPrimitive("ids")) })
+            },
+        )
+        val resource = ResourceSpec(
+            id = "items",
+            name = "Items",
+            confidence = Confidence.high,
+            fields = listOf(
+                field(
+                    id = "ids",
+                    kind = FieldKind.integer,
+                    required = true,
+                    format = DYNAMIC_INTEGER_ARRAY_FORMAT,
+                ),
+            ),
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "0.1",
+            app = AppIdentity("dynamic-test", "Dynamic Test", "1.0"),
+            confidence = Confidence.high,
+            resources = listOf(resource),
+            views = listOf(view(NativeComponent.form, sourceActionId = action.id)),
+            actions = listOf(action),
+        )
+
+        assertEquals(listOf("ids"), editableNativeFields(resource, action).map(FieldSpec::id))
+        assertTrue(validateNativeForm(resource, action, mapOf("ids" to "[1,-2,1]")).isValid)
+        assertIs<NativeRequestBuildResult.Ready>(
+            buildNativeSubmitRequest(
+                schema = schema,
+                view = schema.views.single(),
+                values = mapOf("ids" to "[1,-2,1]"),
+                confirmed = false,
+            ),
+        )
+
+        val tooMany = (0..256).joinToString(prefix = "[", postfix = "]")
+        listOf(
+            "1,2",
+            """[1,"2"]""",
+            "[1.5]",
+            "[null]",
+            """[{"id":1}]""",
+            "[9223372036854775808]",
+            tooMany,
+        ).forEach { value ->
+            assertEquals(
+                setOf("ids"),
+                validateNativeForm(resource, action, mapOf("ids" to value)).errors.keys,
+                value,
+            )
+        }
+
+        val record = NativeRecord(
+            id = "assignment",
+            values = emptyMap(),
+            structuredValues = mapOf(
+                "ids" to NativeStructuredValue.ListValue(
+                    listOf(
+                        NativeStructuredValue.Scalar("4", NativeStructuredScalarKind.number),
+                        NativeStructuredValue.Scalar("-2", NativeStructuredScalarKind.number),
+                    ),
+                ),
+            ),
+        )
+        assertEquals("[4,-2]", initialNativeFormDraft(resource, action, record).values["ids"])
+        val truncated = record.copy(
+            structuredValues = mapOf(
+                "ids" to NativeStructuredValue.ListValue(
+                    items = listOf(
+                        NativeStructuredValue.Scalar("4", NativeStructuredScalarKind.number),
+                    ),
+                    omittedItems = 1,
+                ),
+            ),
+        )
+        assertEquals("", initialNativeFormDraft(resource, action, truncated).values["ids"])
+    }
+
+    @Test
+    fun `integer array forms enforce supported constraints and reject unsupported constraint schemas`() {
+        val constrainedSchema = Json.parseToJsonElement(
+            """{
+              "type":"object",
+              "properties":{
+                "ids":{
+                  "type":"array",
+                  "items":{"type":"integer","minimum":2,"maximum":10,"multipleOf":2},
+                  "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT",
+                  "minItems":2,
+                  "maxItems":3,
+                  "uniqueItems":true
+                }
+              },
+              "required":["ids"]
+            }""",
+        )
+        val base = action(
+            id = "assignments.submit",
+            intent = ActionIntent.update,
+            risk = ActionRisk.mutating,
+            method = HttpMethod.PUT,
+        )
+        val action = base.copy(
+            binding = ApiBinding(
+                method = HttpMethod.PUT,
+                path = "/ocs/v2.php/apps/example/api/assignments",
+                operationId = base.id,
+                bodyFieldNames = listOf("ids"),
+                requiredBodyFieldNames = listOf("ids"),
+                bodyContentType = "application/json",
+                bodySchema = constrainedSchema,
+            ),
+            inputSchema = buildJsonObject {
+                put("properties", buildJsonObject { put("ids", buildJsonObject {}) })
+                put("required", buildJsonArray { add(JsonPrimitive("ids")) })
+            },
+        )
+        val resource = ResourceSpec(
+            id = "items",
+            name = "Items",
+            confidence = Confidence.high,
+            fields = listOf(field("ids", FieldKind.integer, format = DYNAMIC_INTEGER_ARRAY_FORMAT)),
+        )
+
+        assertEquals(listOf("ids"), editableNativeFields(resource, action).map(FieldSpec::id))
+        assertTrue(validateNativeForm(resource, action, mapOf("ids" to "[2,4]")).isValid)
+        listOf(
+            "[]",
+            "[2]",
+            "[2,4,6,8]",
+            "[2,2]",
+            "[0,2]",
+            "[2,12]",
+            "[2,3]",
+        ).forEach { value ->
+            assertEquals(
+                setOf("ids"),
+                validateNativeForm(resource, action, mapOf("ids" to value)).errors.keys,
+                value,
+            )
+        }
+
+        val unsupported = action.copy(
+            binding = action.binding.copy(
+                bodySchema = Json.parseToJsonElement(
+                    """{
+                      "type":"object",
+                      "properties":{
+                        "ids":{
+                          "type":"array",
+                          "items":{"type":"integer"},
+                          "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT",
+                          "contains":{"const":1}
+                        }
+                      }
+                    }""",
+                ),
+            ),
+        )
+        assertTrue(editableNativeFields(resource, unsupported).isEmpty())
+        assertEquals(
+            setOf("ids"),
+            uneditableNativeBodyFieldIds(unsupported, editableNativeFields(resource, unsupported), emptyMap()),
+        )
+    }
+
+    @Test
+    fun `unsupported or mismatched array schemas remain uneditable and block submission`() {
+        val base = action(
+            id = "assignments.submit",
+            intent = ActionIntent.update,
+            risk = ActionRisk.mutating,
+            method = HttpMethod.PUT,
+        )
+        val resource = ResourceSpec(
+            id = "items",
+            name = "Items",
+            confidence = Confidence.high,
+            fields = listOf(
+                field("ids", FieldKind.integer, format = DYNAMIC_INTEGER_ARRAY_FORMAT),
+                field("weights", FieldKind.decimal),
+            ),
+        )
+        val action = base.copy(
+            binding = ApiBinding(
+                method = HttpMethod.PUT,
+                path = "/ocs/v2.php/apps/example/api/assignments",
+                operationId = base.id,
+                bodyFieldNames = listOf("ids", "weights"),
+                bodyContentType = "application/json",
+                bodySchema = Json.parseToJsonElement(
+                    """{
+                      "type":"object",
+                      "properties":{
+                        "ids":{
+                          "type":"array",
+                          "items":{"type":"string"},
+                          "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT"
+                        },
+                        "weights":{"type":"array","items":{"type":"number"}}
+                      }
+                    }""",
+                ),
+            ),
+            inputSchema = buildJsonObject {
+                put("properties", buildJsonObject {
+                    put("ids", buildJsonObject {})
+                    put("weights", buildJsonObject {})
+                })
+            },
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "0.1",
+            app = AppIdentity("dynamic-test", "Dynamic Test", "1.0"),
+            confidence = Confidence.high,
+            resources = listOf(resource),
+            views = listOf(view(NativeComponent.form, sourceActionId = action.id)),
+            actions = listOf(action),
+        )
+
+        assertTrue(editableNativeFields(resource, action).isEmpty())
+        assertEquals(
+            setOf("ids", "weights"),
+            uneditableNativeBodyFieldIds(action, editableNativeFields(resource, action), emptyMap()),
+        )
+        assertIs<NativeRequestBuildResult.Invalid>(
+            buildNativeSubmitRequest(
+                schema = schema,
+                view = schema.views.single(),
+                values = mapOf("ids" to "[1,2]", "weights" to "[1.5]"),
+                confirmed = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `ordering fields are omitted only with exact request schema evidence`() {
+        val bodySchema = Json.parseToJsonElement(
+            """{
+              "type":"object",
+              "properties":{
+                "position":{"type":"integer"},
+                "rank":{"type":"integer","readOnly":true},
+                "sortOrder":{"type":"integer","x-nextcloud-native-server-managed":true}
+              }
+            }""",
+        )
+        val base = action(
+            id = "items.update",
+            intent = ActionIntent.update,
+            risk = ActionRisk.mutating,
+            method = HttpMethod.PUT,
+        )
+        val action = base.copy(
+            binding = ApiBinding(
+                method = HttpMethod.PUT,
+                path = "/ocs/v2.php/apps/example/api/items",
+                operationId = base.id,
+                bodyFieldNames = listOf("position", "rank", "sortOrder"),
+                bodyContentType = "application/json",
+                bodySchema = bodySchema,
+            ),
+            inputSchema = buildJsonObject {
+                put("properties", buildJsonObject { put("position", buildJsonObject {}) })
+            },
+        )
+        val resource = ResourceSpec(
+            id = "items",
+            name = "Items",
+            confidence = Confidence.high,
+            fields = listOf(
+                field("position", FieldKind.integer, readOnly = true),
+                field("rank", FieldKind.integer, readOnly = true),
+                field("sortOrder", FieldKind.integer, readOnly = true),
+            ),
+        )
+
+        val editable = editableNativeFields(resource, action)
+        assertEquals(listOf("position"), editable.map(FieldSpec::id))
+        assertTrue(uneditableNativeBodyFieldIds(action, editable, emptyMap()).isEmpty())
+
+        val unsupportedAssumption = action.copy(
+            binding = action.binding.copy(
+                bodySchema = Json.parseToJsonElement(
+                    """{
+                      "type":"object",
+                      "properties":{
+                        "position":{"type":"integer"},
+                        "rank":{"type":"integer"},
+                        "sortOrder":{"type":"integer"}
+                      }
+                    }""",
+                ),
+            ),
+        )
+        assertEquals(
+            setOf("rank", "sortOrder"),
+            uneditableNativeBodyFieldIds(
+                unsupportedAssumption,
+                editableNativeFields(resource, unsupportedAssumption),
+                emptyMap(),
+            ),
+        )
+
+        val requiredServerManaged = action.copy(
+            binding = action.binding.copy(requiredBodyFieldNames = listOf("rank")),
+        )
+        assertEquals(
+            setOf("rank"),
+            uneditableNativeBodyFieldIds(
+                requiredServerManaged,
+                editableNativeFields(resource, requiredServerManaged),
+                emptyMap(),
+            ),
+        )
+    }
+
+    @Test
     fun formDraftChangeTrackingIgnoresTouchOnlyAndDetectsValueChanges() {
         val initial = NativeFormDraft(values = mapOf("enabled" to "true"))
 
@@ -1680,6 +2554,44 @@ class GenericNativeRendererStateTest {
         )
 
         assertTrue("password" in editableNativeFields(resource, action).map(FieldSpec::id))
+    }
+
+    @Test
+    fun `declared body fields without a safe editor block partial mutation forms`() {
+        val schema = formSchema(ActionRisk.mutating)
+        val base = schema.actions.single()
+        val action = base.copy(
+            binding = base.binding.copy(
+                bodyFieldNames = listOf("title", "roleIds", "shares"),
+            ),
+        )
+        val editable = editableNativeFields(schema.resources.single(), action)
+
+        assertEquals(
+            setOf("roleIds", "shares"),
+            uneditableNativeBodyFieldIds(
+                action = action,
+                editableFields = editable,
+                autoBoundValues = emptyMap(),
+            ),
+        )
+        assertEquals(
+            setOf("shares"),
+            uneditableNativeBodyFieldIds(
+                action = action,
+                editableFields = editable,
+                autoBoundValues = mapOf("roleIds" to "[1,2]"),
+            ),
+        )
+        val unsafeSchema = schema.copy(actions = listOf(action))
+        assertIs<NativeRequestBuildResult.Invalid>(
+            buildNativeSubmitRequest(
+                schema = unsafeSchema,
+                view = unsafeSchema.views.single(),
+                values = validValues(),
+                confirmed = false,
+            ),
+        )
     }
 
     @Test

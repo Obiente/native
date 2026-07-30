@@ -81,7 +81,7 @@ fun main() = application {
                         view = dynamicBoardView(),
                         state = NativeScreenState.Ready(records),
                         actionExecutor = executor,
-                        onActionSucceeded = {},
+                        onActionSucceeded = { _ -> },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

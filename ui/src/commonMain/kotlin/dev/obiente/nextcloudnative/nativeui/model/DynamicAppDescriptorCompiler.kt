@@ -93,12 +93,31 @@ class DynamicAppDescriptorCompiler {
                     "Imported advertised OpenAPI ${document.string("openapi")}"
             },
         )
-        val state = KotlinCompilerState(input, document, source)
+        val state = KotlinCompilerState(
+            input = input,
+            document = document,
+            source = source,
+        )
         if (sanitized.ignoredCount > 0) {
             state.warnings += DynamicWarning(
                 code = "opaque-external-schema-reference",
                 message = "Ignored ${sanitized.ignoredCount} external OpenAPI schema references; endpoints remain available without inferred fields.",
             )
+        }
+        val inferredReadRouteResourceIdentities = paths.entries.mapNotNull { (openApiPath, itemElement) ->
+            val path = combinePaths(serverBase, openApiPath)
+            val pathItem = itemElement as? JsonObject ?: return@mapNotNull null
+            state.routeResourceIdentity(path, pathItem)?.let { identity -> path to identity }
+        }.toMap()
+        val readRouteResourceIdentities = inferredReadRouteResourceIdentities.mapValues { (path, identity) ->
+            (
+                path.collectionRouteForTerminalIdentity()
+                    ?: path.collectionRouteForTerminalState()
+                )
+                ?.let(inferredReadRouteResourceIdentities::get)
+                ?.takeIf { parent -> parent.collection }
+                ?.let { parent -> identity.copy(resourceId = parent.resourceId) }
+                ?: identity
         }
 
         paths.entries.sortedBy(Map.Entry<String, JsonElement>::key).forEach { (openApiPath, itemElement) ->
@@ -109,6 +128,7 @@ class DynamicAppDescriptorCompiler {
             require(path.isApproved(input.endpointPolicy)) { "Unapproved OpenAPI path: $path" }
             val pathItem = itemElement as? JsonObject ?: return@forEach
             val inheritedParameters = pathItem["parameters"] as? JsonArray
+            val routeResourceIdentity = readRouteResourceIdentities[path]
             pathItem.entries.sortedBy(Map.Entry<String, JsonElement>::key).forEach operationLoop@{ (methodName, operationElement) ->
                 val method = methodName.toHttpMethod() ?: return@operationLoop
                 val operation = operationElement as? JsonObject ?: return@operationLoop
@@ -120,12 +140,25 @@ class DynamicAppDescriptorCompiler {
                     )
                     return@operationLoop
                 }
+                val operationId = advertisedOperationId ?: "get-${path.stableId()}"
+                if (
+                    method != HttpMethod.GET &&
+                    operation.isSensitiveCredentialMutation(path, operationId)
+                ) {
+                    state.warnings += DynamicWarning(
+                        code = "ignored-sensitive-credential-write",
+                        message = "Ignored documented $methodName $path because generic credential mutations require a dedicated trusted workflow.",
+                    )
+                    return@operationLoop
+                }
                 state.addOperation(
                     path = path,
                     method = method,
                     operation = operation,
-                    operationId = advertisedOperationId ?: "get-${path.stableId()}",
+                    operationId = operationId,
                     inheritedParameters = inheritedParameters,
+                    routeResourceIdentity = routeResourceIdentity,
+                    readRouteResourceIdentities = readRouteResourceIdentities,
                 )
             }
         }
@@ -365,6 +398,140 @@ private fun String.observedResourceId(): String = split('/').asReversed().firstO
     segment.isNotBlank() && !segment.startsWith('{') && !segment.matches(Regex("v[0-9]+"))
 }?.stableId()?.takeIf(String::isNotBlank) ?: "resource"
 
+private data class KotlinRouteResourceIdentity(
+    val resourceId: String,
+    val collection: Boolean,
+)
+
+private fun String.collectionRouteForTerminalIdentity(): String? {
+    val segments = trimEnd('/').split('/')
+    val terminal = segments.lastOrNull() ?: return null
+    if (!terminal.startsWith('{') || !terminal.endsWith('}')) return null
+    return segments.dropLast(1).joinToString("/").ifBlank { "/" }
+}
+
+private fun String.collectionRouteForTerminalState(): String? {
+    val segments = trimEnd('/').split('/')
+    if (terminalCollectionState() == null) return null
+    return segments.dropLast(1).joinToString("/").ifBlank { "/" }
+}
+
+private fun String.terminalCollectionState(): String? =
+    trimEnd('/')
+        .substringAfterLast('/')
+        .stableId()
+        .takeIf(COLLECTION_STATE_ROUTE_WORDS::contains)
+
+/**
+ * Command routes such as `/{id}/toggle`, `/trash/{id}/restore`, and `/batch/move`
+ * describe an effect on an existing resource rather than a new resource named after the terminal
+ * route segment. Match their normalized route back to a verified JSON GET route only when that
+ * route proves ownership: either the normalized routes are equal, or a collection read owns the
+ * single terminal item identity targeted by the command.
+ *
+ * This deliberately depends on route shape plus the already-derived semantic effect. It does not
+ * know an app ID, operation ID, entity name, or server-specific parameter name. If equally strong
+ * candidates disagree about the resource, the action remains unbound instead of guessing.
+ */
+private fun transitionRouteResourceIdentity(
+    path: String,
+    effect: ActionEffect,
+    readRouteResourceIdentities: Map<String, KotlinRouteResourceIdentity>,
+): KotlinRouteResourceIdentity? {
+    val targetRoute = path.transitionResourceRoute(effect) ?: return null
+    val candidates = readRouteResourceIdentities.mapNotNull { (readPath, identity) ->
+        val candidateRoute = readPath.readResourceRoute()
+        val exact = candidateRoute == targetRoute
+        val collectionItem =
+            identity.collection &&
+                targetRoute == candidateRoute + "{}"
+        if (!exact && !collectionItem) return@mapNotNull null
+        val stateSegmentCount = readPath.routeSegments().count { segment ->
+            segment.stableId() in COLLECTION_STATE_ROUTE_WORDS
+        }
+        KotlinTransitionRouteCandidate(
+            identity = identity,
+            exact = exact,
+            routeSegmentCount = candidateRoute.size,
+            stateSegmentCount = stateSegmentCount,
+        )
+    }
+    val bestScore = candidates.maxOfOrNull(KotlinTransitionRouteCandidate::score) ?: return null
+    val best = candidates.filter { candidate -> candidate.score == bestScore }
+    val resourceIds = best.map { candidate -> candidate.identity.resourceId }.distinct()
+    if (resourceIds.size != 1) return null
+    return best.first().identity
+}
+
+private data class KotlinTransitionRouteCandidate(
+    val identity: KotlinRouteResourceIdentity,
+    val exact: Boolean,
+    val routeSegmentCount: Int,
+    val stateSegmentCount: Int,
+) {
+    val score: Int
+        get() =
+            (if (exact) 1_000_000 else 0) +
+                routeSegmentCount * 100 -
+                stateSegmentCount
+}
+
+private fun String.transitionResourceRoute(effect: ActionEffect): List<String>? {
+    val effectWords = when (effect) {
+        ActionEffect.toggle -> TOGGLE_WORDS
+        ActionEffect.archive -> setOf("archive", "archived")
+        ActionEffect.unarchive -> setOf("archive", "archived", "unarchive")
+        ActionEffect.restore -> setOf("restore")
+        ActionEffect.move -> setOf("move")
+        ActionEffect.copy -> setOf("copy", "duplicate")
+        ActionEffect.reorder -> REORDER_WORDS
+        ActionEffect.batch -> return routeSegments()
+            .takeWhile { segment -> segment.stableId() != "batch" }
+            .toNormalizedResourceRoute()
+            .takeIf(List<String>::isNotEmpty)
+        ActionEffect.upload -> setOf("upload", "import", "image")
+        ActionEffect.leave -> setOf("leave")
+        ActionEffect.clear -> setOf("clear", "image")
+        ActionEffect.permanentDelete -> PERMANENT_DELETE_WORDS + setOf("delete")
+        ActionEffect.empty -> setOf("empty")
+        ActionEffect.unspecified,
+        ActionEffect.list,
+        ActionEffect.read,
+        ActionEffect.create,
+        ActionEffect.update,
+        ActionEffect.delete,
+        ActionEffect.assign,
+        ActionEffect.execute,
+        -> return null
+    }
+    return routeSegments()
+        .filterNot { segment ->
+            val word = segment.stableId()
+            word in effectWords || word in COLLECTION_STATE_ROUTE_WORDS
+        }
+        .toNormalizedResourceRoute()
+        .takeIf(List<String>::isNotEmpty)
+}
+
+private fun String.readResourceRoute(): List<String> = routeSegments()
+    .filterNot { segment -> segment.stableId() in COLLECTION_STATE_ROUTE_WORDS }
+    .toNormalizedResourceRoute()
+
+private fun String.routeSegments(): List<String> = trim('/')
+    .split('/')
+    .filter(String::isNotBlank)
+
+private fun List<String>.toNormalizedResourceRoute(): List<String> = map { segment ->
+    if (segment.startsWith('{') && segment.endsWith('}')) "{}" else segment.stableId()
+}
+
+private val COLLECTION_STATE_ROUTE_WORDS = setOf(
+    "archive",
+    "archived",
+    "deleted",
+    "trash",
+)
+
 private class KotlinCompilerState(
     private val input: DynamicDiscoveryInput,
     private val document: JsonObject,
@@ -379,13 +546,45 @@ private class KotlinCompilerState(
     private val fallbackOperationIds = linkedMapOf<String, List<String>>()
     val warnings = mutableListOf<DynamicWarning>()
 
+    /**
+     * One REST route is one resource even when its read and write operations use different tags.
+     * OpenAPI generators commonly group GET and mutations by controller instead of by returned
+     * record type. Anchor the route family to its JSON GET while retaining whether that response is
+     * a collection so creates normalize parent bindings without turning detail routes into lists.
+     */
+    fun routeResourceIdentity(path: String, pathItem: JsonObject): KotlinRouteResourceIdentity? {
+        val operation = pathItem["get"] as? JsonObject ?: return null
+        if (operation.hasSuccessfulBinaryResponse()) return null
+        val operationId = operation.string("operationId")
+            ?.takeIf(String::isNotBlank)
+            ?: "get-${path.stableId()}"
+        val filteredCollectionResourceId =
+            semanticFilteredCollectionResourceId(operation, path, operationId, HttpMethod.GET)
+        val (itemSchema, responseCollection) = responseItemSchema(responseSchema(operation))
+        if (itemSchema == null && filteredCollectionResourceId == null) return null
+        val resourceId = resourceId(
+            operation = operation,
+            path = path,
+            operationId = operationId,
+            method = HttpMethod.GET,
+            filteredCollectionResourceId = filteredCollectionResourceId,
+        )
+        return KotlinRouteResourceIdentity(
+            resourceId = resourceId,
+            collection = responseCollection || filteredCollectionResourceId != null,
+        )
+    }
+
     fun addOperation(
         path: String,
         method: HttpMethod,
         operation: JsonObject,
         operationId: String,
         inheritedParameters: JsonArray?,
+        routeResourceIdentity: KotlinRouteResourceIdentity?,
+        readRouteResourceIdentities: Map<String, KotlinRouteResourceIdentity>,
     ) {
+        val declaredBody = body(operation)
         val actionId = uniqueId(actions.keys, operationId.stableId())
         operationActionIds.putIfAbsent(operationId, actionId)
         val fallbackForOperationId = operation.string(READ_FALLBACK_FOR_OPERATION_EXTENSION)
@@ -395,7 +594,7 @@ private class KotlinCompilerState(
         }
         val filteredCollectionResourceId =
             semanticFilteredCollectionResourceId(operation, path, operationId, method)
-        val resourceId = resourceId(
+        val inferredResourceId = resourceId(
             operation = operation,
             path = path,
             operationId = operationId,
@@ -405,7 +604,29 @@ private class KotlinCompilerState(
         val response = responseSchema(operation)
         val binaryRead = method == HttpMethod.GET && operation.hasSuccessfulBinaryResponse()
         val (itemSchema, responseCollection) = responseItemSchema(response)
-        val collection = responseCollection || filteredCollectionResourceId != null
+        val preliminaryCollection =
+            responseCollection ||
+                filteredCollectionResourceId != null ||
+                routeResourceIdentity?.collection == true
+        val label = operation.string("summary") ?: operationId.humanize()
+        val effect = actionEffect(
+            method = method,
+            path = path,
+            operationId = operationId,
+            label = label,
+            collection = preliminaryCollection,
+        )
+        val semanticRouteResourceIdentity = transitionRouteResourceIdentity(
+            path = path,
+            effect = effect,
+            readRouteResourceIdentities = readRouteResourceIdentities,
+        )
+            ?: routeResourceIdentity
+        val collection = preliminaryCollection || semanticRouteResourceIdentity?.collection == true
+        val resourceId =
+            filteredCollectionResourceId
+                ?: semanticRouteResourceIdentity?.resourceId
+                ?: inferredResourceId
         val resource = resources.getOrPut(resourceId) { KotlinResourceBuilder(resourceId) }
         resource.collection = resource.collection || collection
         itemSchema?.let { resource.mergeFields(fieldsFromSchema(it)) }
@@ -425,17 +646,26 @@ private class KotlinCompilerState(
         val (boundPath, pathParameters) = normalizeCollectionParentIdentifier(
             defaultBoundPath,
             defaultPathParameters,
-            collection,
+            collection && method == HttpMethod.GET,
         )
-        val label = operation.string("summary") ?: operationId.humanize()
         val body = semanticActionBody(
             method = method,
             path = boundPath,
             operationId = operationId,
             label = label,
-            declared = body(operation),
+            declared = declaredBody,
         )
+        (body?.schema as? JsonObject)?.let { bodySchema ->
+            resource.mergeFields(fieldsFromSchema(bodySchema))
+        }
         val auth = auth(operation)
+        val risk = actionRisk(
+            method = method,
+            effect = effect,
+            path = boundPath,
+            operationId = operationId,
+            label = label,
+        )
         val permissionIds = auth.map { requirement ->
             val permissionId = "auth.${requirement.scheme.stableId()}"
             permissions.putIfAbsent(
@@ -459,13 +689,9 @@ private class KotlinCompilerState(
             id = actionId,
             label = label,
             resourceId = resourceId,
-            intent = intent(method, boundPath, operationId, collection),
-            risk = when (method) {
-                HttpMethod.GET -> ActionRisk.readOnly
-                HttpMethod.DELETE -> ActionRisk.destructive
-                else -> ActionRisk.mutating
-            },
-            requiresConfirmation = method != HttpMethod.GET,
+            intent = effect.toActionIntent(),
+            risk = risk,
+            requiresConfirmation = risk == ActionRisk.destructive,
             binding = DynamicHttpBinding(
                 method = method,
                 path = boundPath,
@@ -483,13 +709,31 @@ private class KotlinCompilerState(
             permissionIds = permissionIds,
             confidence = Confidence.high,
             provenance = listOf(source),
+            effect = effect,
         )
         actions[actionId] = action
 
         if (method == HttpMethod.GET) {
             if (fallbackForOperationId == null && !binaryRead) {
                 val kind = if (collection) LayoutKind.list else LayoutKind.detail
-                val layoutId = if (kind == LayoutKind.list && filteredCollectionResourceId != null) {
+                val collectionState = path.terminalCollectionState()
+                val layoutId = if (
+                    (
+                        kind == LayoutKind.list &&
+                            (
+                                filteredCollectionResourceId != null ||
+                                    collectionState != null ||
+                                    pathParameters.count { parameter ->
+                                        parameter.name.isIdentityParameterName()
+                                    } > 1
+                                )
+                        ) ||
+                    (
+                        kind == LayoutKind.detail &&
+                            pathParameters.isNotEmpty() &&
+                            resourceId.isScopedSingletonSurface()
+                        )
+                ) {
                     "$resourceId.${kind.name}.${operationId.stableId()}"
                 } else {
                     "$resourceId.${kind.name}"
@@ -497,13 +741,14 @@ private class KotlinCompilerState(
                 layoutPreference(resourceId, boundPath, operationId, kind, pathParameters)?.let { preference ->
                     val candidate = KotlinLayoutSeed(
                         id = layoutId,
-                        title = resourceId.humanize(),
+                        title = collectionState?.humanize() ?: resourceId.humanize(),
                         resourceId = resourceId,
                         kind = kind,
                         sourceActionId = actionId,
                         preference = preference,
                         semanticFamily = resourceId.surfaceFamily(),
-                        alternate = isAlternateSurface(resourceId, boundPath, operationId),
+                        alternate = collectionState == null &&
+                            isAlternateSurface(resourceId, boundPath, operationId),
                     )
                     val current = layoutSeeds[layoutId]
                     if (current == null || candidate.isPreferredTo(current)) layoutSeeds[layoutId] = candidate
@@ -771,13 +1016,16 @@ private class KotlinCompilerState(
         val properties = schema["properties"] as? JsonObject ?: return schema
         val formattedProperties = JsonObject(
             properties.mapValues { (_, property) ->
-                val propertySchema = property as? JsonObject ?: return@mapValues property
+                val propertySchema = resolveLocal(property) as? JsonObject ?: return@mapValues property
                 val type = propertySchema.string("type")
                 val itemType = (propertySchema["items"] as? JsonObject)?.string("type")
-                if (type == "array" && itemType == "string") {
-                    JsonObject(propertySchema + ("format" to JsonPrimitive(DYNAMIC_STRING_ARRAY_FORMAT)))
-                } else {
-                    property
+                when {
+                    type == "array" && itemType == "string" ->
+                        JsonObject(propertySchema + ("format" to JsonPrimitive(DYNAMIC_STRING_ARRAY_FORMAT)))
+                    type == "array" && itemType == "integer" ->
+                        JsonObject(propertySchema + ("format" to JsonPrimitive(DYNAMIC_INTEGER_ARRAY_FORMAT)))
+                    type == "array" -> propertySchema
+                    else -> property
                 }
             },
         )
@@ -911,7 +1159,24 @@ private data class KotlinResourceBuilder(
     val fields: MutableMap<String, DynamicField> = linkedMapOf(),
 ) {
     fun mergeFields(discovered: List<DynamicField>) {
-        discovered.forEach { fields.putIfAbsent(it.id, it) }
+        discovered.forEach { candidate ->
+            val current = fields[candidate.id]
+            fields[candidate.id] = when {
+                current == null -> candidate
+                current.kind == FieldKind.unknown && candidate.kind != FieldKind.unknown ->
+                    candidate.copy(
+                        required = current.required || candidate.required,
+                        readOnly = current.readOnly,
+                        provenance = (current.provenance + candidate.provenance).distinct(),
+                    )
+                current.format == null && candidate.format != null ->
+                    current.copy(
+                        format = candidate.format,
+                        provenance = (current.provenance + candidate.provenance).distinct(),
+                    )
+                else -> current
+            }
+        }
     }
 
     fun finish(): DynamicResource = DynamicResource(
@@ -1152,6 +1417,38 @@ private fun JsonObject.referencesSemanticResource(resourceId: String, operationI
         variant.length >= 4 && evidence.contains(variant)
     }
 }
+
+private fun JsonObject.isSensitiveCredentialMutation(path: String, operationId: String): Boolean {
+    val semantics = listOfNotNull(
+        operationId,
+        string("summary"),
+        string("description"),
+        path,
+    ).joinToString(" ").lowercase()
+    val credentialTarget = SENSITIVE_CREDENTIAL_CONCEPTS.any(semantics::contains)
+    val credentialMutation = SENSITIVE_CREDENTIAL_MUTATION_CONCEPTS.any(semantics::contains)
+    return credentialTarget && credentialMutation
+}
+
+private val SENSITIVE_CREDENTIAL_CONCEPTS = setOf(
+    "api key",
+    "apikey",
+    "credential",
+    "password",
+    "secret",
+    "token",
+    "userkey",
+    "/keys",
+    "/key/",
+)
+
+private val SENSITIVE_CREDENTIAL_MUTATION_CONCEPTS = setOf(
+    "create",
+    "generate",
+    "issue",
+    "reset",
+    "rotate",
+)
 
 /**
  * Binary reads are valid API capabilities, but they are not record/detail layouts. Their bytes are
@@ -1405,6 +1702,9 @@ private fun String.identityResourceStem(): String? = takeIf {
     length > 2 && endsWith("Id", ignoreCase = true)
 }?.dropLast(2)?.takeIf(String::isNotBlank)
 
+private fun String.isIdentityParameterName(): Boolean =
+    equals("id", ignoreCase = true) || identityResourceStem() != null
+
 private fun String.hierarchyParent(
     childResourceId: String,
     resources: List<DynamicResource>,
@@ -1476,15 +1776,35 @@ private fun layoutPreference(
 
 private fun String.resourceNameVariants(): Set<String> {
     val normalized = stableId()
-    val singular = when {
-        normalized.endsWith("ies") && normalized.length > 3 -> normalized.dropLast(3) + "y"
-        normalized.endsWith("ches") || normalized.endsWith("shes") -> normalized.dropLast(2)
-        normalized.endsWith("ses") || normalized.endsWith("xes") || normalized.endsWith("zes") -> normalized.dropLast(2)
-        normalized.endsWith('s') && !normalized.endsWith("ss") -> normalized.dropLast(1)
-        else -> normalized
+    return buildSet {
+        add(normalized)
+        when {
+            normalized.endsWith("ies") && normalized.length > 3 -> add(normalized.dropLast(3) + "y")
+            normalized.endsWith("ches") || normalized.endsWith("shes") -> add(normalized.dropLast(2))
+            normalized.endsWith("ses") || normalized.endsWith("xes") || normalized.endsWith("zes") -> {
+                // Both forms are linguistically valid: boxes -> box, while houses -> house.
+                // Retain both bounded candidates and let the declared resource set disambiguate.
+                add(normalized.dropLast(2))
+                add(normalized.dropLast(1))
+            }
+            normalized.endsWith('s') && !normalized.endsWith("ss") -> add(normalized.dropLast(1))
+        }
     }
-    return setOf(normalized, singular)
 }
+
+private fun String.isScopedSingletonSurface(): Boolean =
+    semanticBaseVariants().any(SCOPED_SINGLETON_SURFACES::contains)
+
+private val SCOPED_SINGLETON_SURFACES = setOf(
+    "capability",
+    "config",
+    "configuration",
+    "preference",
+    "prefs",
+    "profile",
+    "setting",
+    "status",
+)
 
 private fun String.surfaceFamily(): String = stableId()
     .split('-')
@@ -1514,21 +1834,132 @@ private val ALTERNATE_SURFACE_WORDS = setOf(
 
 private val SURFACE_SCOPE_WORDS = ALTERNATE_SURFACE_WORDS + setOf("api", "local", "shared")
 
-private fun intent(
+private fun actionEffect(
     method: HttpMethod,
     path: String,
     operationId: String,
+    label: String,
     collection: Boolean,
-): ActionIntent = when {
-    method == HttpMethod.GET && path.endsWithIdentityPlaceholder() -> ActionIntent.read
-    method == HttpMethod.GET && collection -> ActionIntent.list
-    method == HttpMethod.GET && operationId.looksLikeCollectionReadOperation() -> ActionIntent.list
-    method == HttpMethod.GET && path.contains('{') -> ActionIntent.read
-    method == HttpMethod.GET -> ActionIntent.read
-    method == HttpMethod.POST -> ActionIntent.create
-    method == HttpMethod.DELETE -> ActionIntent.delete
-    else -> ActionIntent.update
+): ActionEffect {
+    if (method == HttpMethod.GET) {
+        return when {
+            path.endsWithIdentityPlaceholder() -> ActionEffect.read
+            collection -> ActionEffect.list
+            operationId.looksLikeCollectionReadOperation() -> ActionEffect.list
+            path.contains('{') -> ActionEffect.read
+            else -> ActionEffect.read
+        }
+    }
+
+    val words = actionSemanticWords(path, operationId, label)
+    return when {
+        "empty" in words -> ActionEffect.empty
+        words.any { it in PERMANENT_DELETE_WORDS } -> ActionEffect.permanentDelete
+        words.any { it in REORDER_WORDS } -> ActionEffect.reorder
+        "batch" in words -> ActionEffect.batch
+        "restore" in words -> ActionEffect.restore
+        "unarchive" in words -> ActionEffect.unarchive
+        "archive" in words -> ActionEffect.archive
+        words.any { it in COMPLETION_TRANSITION_WORDS } ||
+            ("toggle" in words && words.any { it in COMPLETION_STATE_WORDS }) -> ActionEffect.toggle
+        "move" in words -> ActionEffect.move
+        "copy" in words || "duplicate" in words -> ActionEffect.copy
+        "upload" in words || "import" in words -> ActionEffect.upload
+        "assign" in words || "replace" in words -> ActionEffect.assign
+        "leave" in words -> ActionEffect.leave
+        "clear" in words -> ActionEffect.clear
+        method == HttpMethod.DELETE -> ActionEffect.delete
+        words.any { it in CREATE_WORDS } -> ActionEffect.create
+        method == HttpMethod.PUT || method == HttpMethod.PATCH -> ActionEffect.update
+        else -> ActionEffect.execute
+    }
 }
+
+private fun actionRisk(
+    method: HttpMethod,
+    effect: ActionEffect,
+    path: String,
+    operationId: String,
+    label: String,
+): ActionRisk {
+    if (method == HttpMethod.GET) return ActionRisk.readOnly
+    if (
+        effect in setOf(
+            ActionEffect.delete,
+            ActionEffect.permanentDelete,
+            ActionEffect.empty,
+            ActionEffect.leave,
+            ActionEffect.clear,
+        )
+    ) {
+        return ActionRisk.destructive
+    }
+    val words = actionSemanticWords(path, operationId, label)
+    return if (words.any { it in DESTRUCTIVE_ACTION_WORDS }) {
+        ActionRisk.destructive
+    } else {
+        ActionRisk.mutating
+    }
+}
+
+private fun ActionEffect.toActionIntent(): ActionIntent = when (this) {
+    ActionEffect.list -> ActionIntent.list
+    ActionEffect.read -> ActionIntent.read
+    ActionEffect.create -> ActionIntent.create
+    ActionEffect.update,
+    ActionEffect.assign,
+    -> ActionIntent.update
+    ActionEffect.delete,
+    ActionEffect.permanentDelete,
+    ActionEffect.empty,
+    ActionEffect.clear,
+    -> ActionIntent.delete
+    ActionEffect.unspecified,
+    ActionEffect.toggle,
+    ActionEffect.archive,
+    ActionEffect.unarchive,
+    ActionEffect.restore,
+    ActionEffect.move,
+    ActionEffect.copy,
+    ActionEffect.reorder,
+    ActionEffect.batch,
+    ActionEffect.upload,
+    ActionEffect.leave,
+    ActionEffect.execute,
+    -> ActionIntent.execute
+}
+
+private fun actionSemanticWords(
+    path: String,
+    operationId: String,
+    label: String,
+): Set<String> = sequenceOf(path, operationId.humanize(), label)
+    .flatMap { value -> value.stableId().split('-').asSequence() }
+    .filter(String::isNotBlank)
+    .toSet()
+
+private val CREATE_WORDS = setOf("add", "create", "new")
+private val TOGGLE_WORDS = setOf("toggle", "complete", "reopen")
+private val COMPLETION_TRANSITION_WORDS = setOf("complete", "reopen")
+private val COMPLETION_STATE_WORDS = setOf(
+    "checked",
+    "complete",
+    "completed",
+    "completion",
+    "done",
+)
+private val REORDER_WORDS = setOf("reorder", "reposition", "sort")
+private val PERMANENT_DELETE_WORDS = setOf("permanent", "permanently", "purge")
+private val DESTRUCTIVE_ACTION_WORDS = setOf(
+    "clear",
+    "delete",
+    "destroy",
+    "empty",
+    "permanent",
+    "permanently",
+    "purge",
+    "remove",
+)
 
 /**
  * A terminal identity placeholder proves an item read even when a plural operation name such as
@@ -1656,7 +2087,26 @@ private fun String.stableId(): String = buildString {
     }
 }.trim('-')
 
-private fun String.humanize(): String = replace('-', ' ').replace('_', ' ').replace('.', ' ')
+private fun String.humanize(): String = buildString(length + 4) {
+    this@humanize.forEachIndexed { index, character ->
+        val previous = this@humanize.getOrNull(index - 1)
+        val next = this@humanize.getOrNull(index + 1)
+        when {
+            character == '-' || character == '_' || character == '.' || character.isWhitespace() -> {
+                if (isNotEmpty() && last() != ' ') append(' ')
+            }
+            character.isUpperCase() && (
+                previous?.isLowerCase() == true ||
+                    previous?.isDigit() == true ||
+                    (previous?.isUpperCase() == true && next?.isLowerCase() == true)
+                ) -> {
+                if (isNotEmpty() && last() != ' ') append(' ')
+                append(character)
+            }
+            else -> append(character)
+        }
+    }
+}
     .split(' ')
     .filter(String::isNotBlank)
     .joinToString(" ") { word -> word.replaceFirstChar(Char::uppercaseChar) }
