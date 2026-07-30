@@ -312,6 +312,61 @@ class NextcloudCollectionNavigatorTest {
     }
 
     @Test
+    fun `large dynamic destination sets retain full keyboard reachability`() {
+        val destinations = List(10_000) { index ->
+            NextcloudCollectionDestination(
+                id = "destination-$index",
+                label = "Destination $index",
+            )
+        }
+        val model = NextcloudCollectionNavigationModel.create(
+            destinations = destinations,
+            selectedDestinationId = destinations.first().id,
+        )
+
+        assertEquals(
+            destinations.last().id,
+            resolveNextcloudCollectionKeyboardDestination(
+                model = model,
+                focusedDestinationId = destinations.first().id,
+                move = NextcloudCollectionNavigationMove.Last,
+            )?.id,
+        )
+        assertEquals(
+            destinations.first().id,
+            resolveNextcloudCollectionKeyboardDestination(
+                model = model,
+                focusedDestinationId = destinations.last().id,
+                move = NextcloudCollectionNavigationMove.Next,
+            )?.id,
+        )
+    }
+
+    @Test
+    fun `large destination models retain focus state only for composed lazy items`() {
+        val destinationIds = List(10_000) { index -> "destination-$index" }
+        val registry = NextcloudCollectionComposedDestinationRegistry<Any>()
+        val firstVisible = Any()
+        val secondVisible = Any()
+        val recycled = Any()
+
+        assertEquals(0, registry.retainedCount)
+        registry.attach(destinationIds.first(), firstVisible)
+        registry.attach(destinationIds[1], secondVisible)
+        assertEquals(2, registry.retainedCount)
+
+        registry.attach(destinationIds.first(), recycled)
+        registry.detach(destinationIds.first(), firstVisible)
+        assertEquals(2, registry.retainedCount)
+        assertEquals(recycled, registry[destinationIds.first()])
+
+        registry.detach(destinationIds.first(), recycled)
+        registry.detach(destinationIds[1], secondVisible)
+        assertEquals(0, registry.retainedCount)
+        assertNull(registry[destinationIds.last()])
+    }
+
+    @Test
     fun `destination and policy reject impossible values`() {
         assertFailsWith<IllegalArgumentException> {
             NextcloudCollectionDestination("", "Today")

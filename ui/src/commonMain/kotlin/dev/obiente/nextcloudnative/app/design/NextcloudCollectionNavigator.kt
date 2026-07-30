@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Badge
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
@@ -29,12 +31,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -51,6 +55,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 enum class NextcloudCollectionNavigationMode {
@@ -489,41 +494,57 @@ private fun NextcloudCollectionNavigationRail(
 ) {
     val focusRequesters = rememberNextcloudCollectionFocusRequesters(model)
     var focusedDestinationId by remember(model.destinations) { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
 
     Row {
         NavigationRail(
             modifier = Modifier
                 .width(NextcloudCollectionRailWidthDp.dp)
-                .fillMaxHeight()
-                .verticalScroll(rememberScrollState())
-                .nextcloudCollectionKeyboardNavigation(
-                    model = model,
-                    focusedDestinationId = focusedDestinationId,
-                    focusRequesters = focusRequesters,
-                )
-                .selectableGroup(),
+                .fillMaxHeight(),
             containerColor = MaterialTheme.colorScheme.background,
         ) {
-            model.destinations.forEach { destination ->
-                NavigationRailItem(
-                    selected = destination.id == model.selectedDestinationId,
-                    onClick = { onDestinationSelected(destination) },
-                    modifier = Modifier
-                        .heightIn(min = NextcloudCollectionMinimumTouchTargetDp.dp)
-                        .focusRequester(requireNotNull(focusRequesters[destination.id]))
-                        .onFocusChanged { focusState ->
-                            if (focusState.isFocused) focusedDestinationId = destination.id
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .nextcloudCollectionKeyboardNavigation(
+                        model = model,
+                        focusedDestinationId = focusedDestinationId,
+                        focusRequesters = focusRequesters,
+                        listState = listState,
+                        coroutineScope = coroutineScope,
+                    )
+                    .selectableGroup(),
+                state = listState,
+            ) {
+                items(
+                    items = model.destinations,
+                    key = NextcloudCollectionDestination::id,
+                ) { destination ->
+                    val focusRequester = rememberNextcloudCollectionFocusRequester(
+                        destinationId = destination.id,
+                        registry = focusRequesters,
+                    )
+                    NavigationRailItem(
+                        selected = destination.id == model.selectedDestinationId,
+                        onClick = { onDestinationSelected(destination) },
+                        modifier = Modifier
+                            .heightIn(min = NextcloudCollectionMinimumTouchTargetDp.dp)
+                            .focusRequester(focusRequester)
+                            .onFocusChanged { focusState ->
+                                if (focusState.isFocused) focusedDestinationId = destination.id
+                            },
+                        icon = {
+                            destinationIcon(destination)?.let { icon ->
+                                Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp))
+                            }
                         },
-                    icon = {
-                        destinationIcon(destination)?.let { icon ->
-                            Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp))
-                        }
-                    },
-                    label = {
-                        Text(destination.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    },
-                    alwaysShowLabel = true,
-                )
+                        label = {
+                            Text(destination.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        },
+                        alwaysShowLabel = true,
+                    )
+                }
             }
         }
         VerticalDivider(
@@ -587,20 +608,31 @@ private fun NextcloudCollectionDestinationList(
 ) {
     val focusRequesters = rememberNextcloudCollectionFocusRequesters(model)
     var focusedDestinationId by remember(model.destinations) { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
 
-    Column(
+    LazyColumn(
         modifier = modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
             .nextcloudCollectionKeyboardNavigation(
                 model = model,
                 focusedDestinationId = focusedDestinationId,
                 focusRequesters = focusRequesters,
+                listState = listState,
+                coroutineScope = coroutineScope,
             )
             .selectableGroup(),
+        state = listState,
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
     ) {
-        model.destinations.forEach { destination ->
+        items(
+            items = model.destinations,
+            key = NextcloudCollectionDestination::id,
+        ) { destination ->
+            val focusRequester = rememberNextcloudCollectionFocusRequester(
+                destinationId = destination.id,
+                registry = focusRequesters,
+            )
             NavigationDrawerItem(
                 label = {
                     Text(
@@ -614,7 +646,7 @@ private fun NextcloudCollectionDestinationList(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = NextcloudCollectionMinimumTouchTargetDp.dp)
-                    .focusRequester(requireNotNull(focusRequesters[destination.id]))
+                    .focusRequester(focusRequester)
                     .onFocusChanged { focusState ->
                         if (focusState.isFocused) focusedDestinationId = destination.id
                     },
@@ -635,17 +667,51 @@ private fun NextcloudCollectionDestinationList(
     }
 }
 
+internal class NextcloudCollectionComposedDestinationRegistry<T : Any> {
+    private val values = mutableMapOf<String, T>()
+
+    val retainedCount: Int
+        get() = values.size
+
+    operator fun get(destinationId: String): T? = values[destinationId]
+
+    fun attach(destinationId: String, value: T) {
+        values[destinationId] = value
+    }
+
+    fun detach(destinationId: String, value: T) {
+        if (values[destinationId] === value) values.remove(destinationId)
+    }
+}
+
 @Composable
 private fun rememberNextcloudCollectionFocusRequesters(
     model: NextcloudCollectionNavigationModel,
-): Map<String, FocusRequester> = remember(model.destinations.map(NextcloudCollectionDestination::id)) {
-    model.destinations.associate { destination -> destination.id to FocusRequester() }
+): NextcloudCollectionComposedDestinationRegistry<FocusRequester> = remember(model.destinations) {
+    NextcloudCollectionComposedDestinationRegistry()
+}
+
+@Composable
+private fun rememberNextcloudCollectionFocusRequester(
+    destinationId: String,
+    registry: NextcloudCollectionComposedDestinationRegistry<FocusRequester>,
+): FocusRequester {
+    val focusRequester = remember(destinationId) { FocusRequester() }
+    DisposableEffect(registry, destinationId, focusRequester) {
+        registry.attach(destinationId, focusRequester)
+        onDispose {
+            registry.detach(destinationId, focusRequester)
+        }
+    }
+    return focusRequester
 }
 
 private fun Modifier.nextcloudCollectionKeyboardNavigation(
     model: NextcloudCollectionNavigationModel,
     focusedDestinationId: String?,
-    focusRequesters: Map<String, FocusRequester>,
+    focusRequesters: NextcloudCollectionComposedDestinationRegistry<FocusRequester>,
+    listState: LazyListState,
+    coroutineScope: CoroutineScope,
 ): Modifier = onPreviewKeyEvent { event ->
     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
@@ -661,8 +727,18 @@ private fun Modifier.nextcloudCollectionKeyboardNavigation(
         focusedDestinationId = focusedDestinationId,
         move = move,
     )?.let { destination ->
-        val focusRequester = focusRequesters[destination.id] ?: return@onPreviewKeyEvent false
-        focusRequester.requestFocus()
+        val targetIndex = model.destinations.indexOfFirst { candidate -> candidate.id == destination.id }
+        if (targetIndex < 0) return@onPreviewKeyEvent false
+        coroutineScope.launch {
+            listState.scrollToItem(targetIndex)
+            repeat(NextcloudCollectionFocusAttachmentFrameLimit) {
+                withFrameNanos { }
+                focusRequesters[destination.id]?.let { focusRequester ->
+                    focusRequester.requestFocus()
+                    return@launch
+                }
+            }
+        }
         true
     } ?: false
 }
@@ -673,3 +749,4 @@ private const val NextcloudCollectionMinimumTouchTargetDp = 48
 private const val NextcloudCollectionDrawerWidthDp = 320
 private const val NextcloudCollectionRailWidthDp = 88
 private const val NextcloudCollectionSidebarWidthDp = 252
+private const val NextcloudCollectionFocusAttachmentFrameLimit = 2
