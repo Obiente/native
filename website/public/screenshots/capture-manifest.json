@@ -203,7 +203,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "cbbec9045a73dc1d02ea934ac9efc461f4ae55ac6e069357b605c272dfb08fca",
+    "captureSourceSha256": "2f2d1a33ef247c76a3e153b6c06a12160b4d38872f66a42df5b411d949b1480b",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {
@@ -271,7 +271,7 @@
             "feature": "Dynamic apps",
             "surface": "Nested collection and semantic form",
             "state": "Synthetic visual QA",
-            "purpose": "state-coverage",
+            "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
             "sha256": "5eb5ee8183bcf9fe1ca89f3da73e922bb1415bb63ae4ad0dd42bdd7b23ab16fc"

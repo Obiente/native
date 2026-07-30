@@ -25,8 +25,8 @@ class MarketingDynamicUiCaptureScenarioTest {
         assertEquals(desktop.surface, phone.surface)
         assertEquals("Synthetic visual QA", desktop.state)
         assertEquals(desktop.state, phone.state)
-        assertEquals(MarketingCapturePurpose.StateCoverage, desktop.purpose)
-        assertEquals(desktop.purpose, phone.purpose)
+        assertEquals(MarketingCapturePurpose.Showcase, desktop.purpose)
+        assertEquals(MarketingCapturePurpose.StateCoverage, phone.purpose)
         assertEquals(1_440 to 900, desktop.width to desktop.height)
         assertEquals(1_080 to 1_800, phone.width to phone.height)
     }

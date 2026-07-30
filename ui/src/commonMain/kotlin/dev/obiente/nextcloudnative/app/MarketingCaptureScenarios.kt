@@ -77,7 +77,7 @@ enum class MarketingCaptureScenario(
     AdaptiveApp(
         "adaptive-dynamic-data", "adaptive-dynamic-data.png", NextcloudPresentation.Desktop,
         "Dynamic apps", "Nested collection and semantic form", "Synthetic visual QA",
-        MarketingCapturePurpose.StateCoverage,
+        MarketingCapturePurpose.Showcase,
         "desktop", "wide", width = 1_440, height = 900, density = 1f,
     ),
     AdaptiveAppMobile(
