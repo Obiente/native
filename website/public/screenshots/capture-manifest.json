@@ -188,6 +188,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecipeScaling.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecordActions.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeSemanticPresentations.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeTaskSemantics.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/RuntimeState.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/template/BracedTemplate.kt",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/DeckInteractionPreviewMain.kt",
@@ -204,7 +205,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "52f7ae3a53619891e359f6cc0e56820350a6650d8e8418389f15c1b18f6e8fc3",
+    "captureSourceSha256": "d7878f14d5c4722d3ff38ac548021d440744291c0d3d57c6a76064db149126cb",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {

@@ -544,7 +544,8 @@ internal fun nativeGroupwarePresentation(
                 values.hasAny("summary", "title", "name", "displayname", "label")
         }
     val taskShape = values.hasAny(
-        "due", "duedate", "percentcomplete", "completed", "priority", "relatedto",
+        "assignee", "assignedto", "due", "duedate", "percentcomplete", "priority",
+        "relatedto",
     ) || typedCompletion != null
     val completionShape = values.hasAny("worktime", "completedat", "donetimestamp") &&
         values.hasAny("member", "assignee", "user")
@@ -689,11 +690,18 @@ private fun ResourceSpec.uniqueNativeTaskCompletionSemantics(): NativeTaskComple
     val candidates = fields.mapNotNull { field ->
         if (field.taskCompletionFieldScore() == 0) return@mapNotNull null
         when (field.kind) {
-            FieldKind.boolean -> NativeTaskCompletionSemantics(
-                field = field,
-                completedWireValue = "true",
-                incompleteWireValue = "false",
-            )
+            FieldKind.boolean -> if (
+                !field.requiresIndependentNativeTaskEvidence() ||
+                hasIndependentNativeTaskEvidence(field)
+            ) {
+                NativeTaskCompletionSemantics(
+                    field = field,
+                    completedWireValue = "true",
+                    incompleteWireValue = "false",
+                )
+            } else {
+                null
+            }
             FieldKind.enumeration -> {
                 val values = field.enumValues.orEmpty()
                 val completed = values.singleOrNull { value ->

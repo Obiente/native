@@ -2631,7 +2631,10 @@ class GenericNativeRendererStateTest {
         var calls = 0
         val coordinator = NativeActionCoordinator(schema, schema.views.single()) {
             calls += 1
-            NativeActionExecutionResult.Failure("Server rejected the request")
+            NativeActionExecutionResult.Failure(
+                message = "Server rejected the request",
+                outcome = NativeActionFailureOutcome.Rejected,
+            )
         }
 
         coordinator.submit(emptyMap())
@@ -2641,6 +2644,61 @@ class GenericNativeRendererStateTest {
         coordinator.submit(validValues())
         assertEquals(1, calls)
         assertEquals("Server rejected the request", assertIs<NativeActionExecutionState.Failed>(coordinator.state).message)
+    }
+
+    @Test
+    fun unknownFormOutcomeBlocksRetryUntilANewerAuthoritativeRefresh() = runBlocking {
+        val schema = formSchema(ActionRisk.mutating)
+        var calls = 0
+        val coordinator = NativeActionCoordinator(schema, schema.views.single()) {
+            calls += 1
+            NativeActionExecutionResult.Failure(
+                message = "Response ended before the result arrived",
+                outcome = NativeActionFailureOutcome.Unknown,
+            )
+        }
+
+        coordinator.submit(validValues(), reconciliationGeneration = 7)
+
+        val awaiting = assertIs<NativeActionExecutionState.AwaitingReconciliation>(coordinator.state)
+        assertEquals("Response ended before the result arrived", awaiting.message)
+        assertEquals(7, awaiting.reconciliationGeneration)
+
+        coordinator.clearStatus()
+        coordinator.submit(validValues(), reconciliationGeneration = 7)
+        assertEquals(1, calls)
+        assertIs<NativeActionExecutionState.AwaitingReconciliation>(coordinator.state)
+
+        coordinator.reconcileAuthoritativeRefresh(reconciliationGeneration = 7)
+        assertIs<NativeActionExecutionState.AwaitingReconciliation>(coordinator.state)
+
+        coordinator.reconcileAuthoritativeRefresh(reconciliationGeneration = 8)
+        assertIs<NativeActionExecutionState.Idle>(coordinator.state)
+
+        coordinator.submit(validValues(), reconciliationGeneration = 8)
+        assertEquals(2, calls)
+        Unit
+    }
+
+    @Test
+    fun rejectedFormOutcomeRemainsImmediatelyRetryable() = runBlocking {
+        val schema = formSchema(ActionRisk.mutating)
+        var calls = 0
+        val coordinator = NativeActionCoordinator(schema, schema.views.single()) {
+            calls += 1
+            NativeActionExecutionResult.Failure(
+                message = "Validation rejected",
+                outcome = NativeActionFailureOutcome.Rejected,
+            )
+        }
+
+        coordinator.submit(validValues(), reconciliationGeneration = 3)
+        assertIs<NativeActionExecutionState.Failed>(coordinator.state)
+
+        coordinator.submit(validValues(), reconciliationGeneration = 3)
+        assertEquals(2, calls)
+        assertIs<NativeActionExecutionState.Failed>(coordinator.state)
+        Unit
     }
 
     @Test

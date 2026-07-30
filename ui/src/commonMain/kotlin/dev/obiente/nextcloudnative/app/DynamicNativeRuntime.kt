@@ -1211,7 +1211,17 @@ private fun buildDynamicBody(
     } else {
         values.filterKeys(properties::containsKey)
     }
-    return when (contentType.substringBefore(';').trim().lowercase()) {
+    val normalizedContentType = contentType.substringBefore(';').trim().lowercase()
+    if (normalizedContentType == "application/x-www-form-urlencoded") {
+        allowed.keys.forEach { name ->
+            val property = properties[name] as? JsonObject ?: return@forEach
+            require((property["type"] as? JsonPrimitive)?.contentOrNull != "array") {
+                "Form-encoded array fields require an exact serialization contract " +
+                    "that is not supported yet."
+            }
+        }
+    }
+    return when (normalizedContentType) {
         "application/json" -> {
             buildJsonObject {
                 val wireNames = mutableSetOf<String>()

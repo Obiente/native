@@ -206,6 +206,91 @@ class DynamicNavigationPlannerTest {
     }
 
     @Test
+    fun `record capabilities gate same-record forms without blocking a verified child create`() {
+        val deleteProject = action(
+            "delete-project",
+            "projects",
+            ActionIntent.delete,
+            "projectId",
+            method = HttpMethod.DELETE,
+        )
+        val capabilityFields = listOf(
+            "readOnly",
+            "writable",
+            "canWrite",
+            "canEdit",
+            "canUpdate",
+            "canDelete",
+        ).map { fieldId ->
+            DynamicField(
+                id = fieldId,
+                label = fieldId,
+                kind = FieldKind.boolean,
+                required = false,
+                readOnly = true,
+                nullable = false,
+                multiple = false,
+                confidence = Confidence.high,
+            )
+        }
+        val baseline = hierarchyDescriptor()
+        val descriptor = baseline.copy(
+            resources = baseline.resources.map { resource ->
+                resource.takeUnless { it.id == "projects" }
+                    ?: resource.copy(fields = capabilityFields)
+            },
+            forms = baseline.forms + form(
+                "delete-project.form",
+                "Delete project",
+                "projects",
+                deleteProject.id,
+            ),
+            actions = baseline.actions + deleteProject,
+        )
+        val baseContext = DynamicResourceRecordContext(
+            resourceId = "projects",
+            recordId = "project-7",
+            parameterValues = mapOf("projectId" to "project-7"),
+        )
+
+        fun contextualFormIds(fieldValues: Map<String, String?>): Set<String> =
+            descriptor.planDynamicNavigation(baseContext.copy(fieldValues = fieldValues))
+                .contextualFormActions
+                .mapTo(mutableSetOf(), DynamicNavigationFormAction::formId)
+
+        val allowed = mapOf(
+            "readOnly" to "false",
+            "writable" to "true",
+            "canWrite" to "true",
+            "canEdit" to "true",
+            "canUpdate" to "true",
+            "canDelete" to "true",
+        )
+        assertEquals(
+            setOf("create-bill.form", "delete-project.form", "edit-project.form"),
+            contextualFormIds(allowed),
+        )
+        assertEquals(
+            setOf("create-bill.form"),
+            contextualFormIds(allowed + ("readOnly" to "true")),
+        )
+        assertEquals(
+            setOf("create-bill.form"),
+            contextualFormIds(
+                allowed + mapOf(
+                    "canEdit" to "false",
+                    "canUpdate" to "false",
+                    "canDelete" to "false",
+                ),
+            ),
+        )
+        assertEquals(
+            setOf("create-bill.form"),
+            contextualFormIds(emptyMap()),
+        )
+    }
+
+    @Test
     fun `declared child create can bind one required parent body field from record context`() {
         val listCollections = action("list-collections", "collections", ActionIntent.list)
         val listEntries = action("list-entries", "entries", ActionIntent.list, "collectionId")

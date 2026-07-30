@@ -354,14 +354,16 @@ fun GenericNativeAppScreen(
             )
             state is NativeScreenState.Ready && presentedSurface == GenericNativeSurface.Form ->
                 GenericNativeForm(
-                    schema,
-                    view,
-                    presentedResource,
-                    presentedRecords.firstOrNull() ?: datasetContext.parentRecord,
-                    datasetContext,
-                    actionExecutor,
-                    filePicker,
-                    onActionSucceeded,
+                    schema = schema,
+                    view = view,
+                    resource = presentedResource,
+                    initialRecord = presentedRecords.firstOrNull() ?: datasetContext.parentRecord,
+                    datasetContext = datasetContext,
+                    executor = actionExecutor,
+                    filePicker = filePicker,
+                    onActionSucceeded = onActionSucceeded,
+                    onActionOutcomeUnknown = inlineActionSucceeded,
+                    mutationReconciliationGeneration = mutationReconciliationGeneration,
                 )
             state is NativeScreenState.Ready &&
                 presentedRecords.isEmpty() &&
@@ -4740,6 +4742,8 @@ private fun GenericNativeForm(
     executor: NativeActionExecutor,
     filePicker: NativeFileFieldPicker?,
     onActionSucceeded: ((ActionSpec) -> Unit)?,
+    onActionOutcomeUnknown: ((ActionSpec) -> Unit)?,
+    mutationReconciliationGeneration: Int,
 ) {
     val action = schema.action(view.sourceActionId)
     if (action == null || action.resourceId != resource.id) {
@@ -4823,6 +4827,8 @@ private fun GenericNativeForm(
     val executionState = coordinator.state
     val validationErrors = (executionState as? NativeActionExecutionState.ValidationFailed)?.fieldErrors.orEmpty()
     val submitting = executionState is NativeActionExecutionState.Running
+    val awaitingReconciliation = executionState is NativeActionExecutionState.AwaitingReconciliation
+    val submissionBlocked = submitting || awaitingReconciliation
     val fields = editableNativeFields(formResource, action).filterNot { field -> field.id in autoBoundValues }
     val uneditableBodyFieldIds = uneditableNativeBodyFieldIds(
         action = action,
@@ -4834,7 +4840,15 @@ private fun GenericNativeForm(
     val hasChanges = draft.hasChangesFrom(initialDraft)
 
     LaunchedEffect(executionState) {
-        if (executionState is NativeActionExecutionState.Succeeded) onActionSucceeded?.invoke(action)
+        when (executionState) {
+            is NativeActionExecutionState.Succeeded -> onActionSucceeded?.invoke(action)
+            is NativeActionExecutionState.AwaitingReconciliation -> onActionOutcomeUnknown?.invoke(action)
+            else -> Unit
+        }
+    }
+
+    LaunchedEffect(mutationReconciliationGeneration) {
+        coordinator.reconcileAuthoritativeRefresh(mutationReconciliationGeneration)
     }
 
     Column(
@@ -4888,7 +4902,7 @@ private fun GenericNativeForm(
                                 options = relationOptions,
                                 paging = nativeRelationPaging(field, formResource, schema, datasetContext),
                                 error = validationErrors[field.id],
-                                enabled = !submitting,
+                                enabled = !submissionBlocked,
                                 onValueChange = { value ->
                                     coordinator.clearStatus()
                                     draft = draft.update(field.id, value)
@@ -4899,7 +4913,7 @@ private fun GenericNativeForm(
                                 field = field,
                                 value = draft.values[field.id].orEmpty(),
                                 error = validationErrors[field.id],
-                                enabled = !submitting,
+                                enabled = !submissionBlocked,
                                 filePicker = filePicker,
                                 onValueChange = { value ->
                                     coordinator.clearStatus()
@@ -4943,9 +4957,16 @@ private fun GenericNativeForm(
             enabled =
                 autoBinding.error == null &&
                     !hasUneditableBodyFields &&
-                    !submitting &&
+                    !submissionBlocked &&
                     (!settingsWrite || hasChanges),
-            onClick = { scope.launch { coordinator.submit(draft.values) } },
+            onClick = {
+                scope.launch {
+                    coordinator.submit(
+                        values = draft.values,
+                        reconciliationGeneration = mutationReconciliationGeneration,
+                    )
+                }
+            },
             modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
         ) {
             if (submitting) {
@@ -4967,7 +4988,7 @@ private fun GenericNativeForm(
                 )
                 if (hasChanges) {
                     TextButton(
-                        enabled = !submitting,
+                        enabled = !submissionBlocked,
                         onClick = {
                             coordinator.clearStatus()
                             draft = initialDraft
@@ -5004,7 +5025,11 @@ private fun GenericNativeForm(
         NativeConfirmationDialog(
             action = pending.request.action,
             onDismiss = coordinator::cancelConfirmation,
-            onConfirm = { scope.launch { coordinator.confirm() } },
+            onConfirm = {
+                scope.launch {
+                    coordinator.confirm(mutationReconciliationGeneration)
+                }
+            },
         )
     }
 }
@@ -6029,12 +6054,22 @@ private fun GenericActionStatus(state: NativeActionExecutionState, onDismiss: ()
         is NativeActionExecutionState.Running,
         -> null
         is NativeActionExecutionState.ValidationFailed -> state.message
+        is NativeActionExecutionState.AwaitingReconciliation ->
+            "${state.message} Refreshing authoritative server data before this action can be tried again."
         is NativeActionExecutionState.Succeeded -> state.message ?: "Action completed."
         is NativeActionExecutionState.Failed -> state.message
     } ?: return
-    val failure = state is NativeActionExecutionState.Failed || state is NativeActionExecutionState.ValidationFailed
+    val failure =
+        state is NativeActionExecutionState.Failed ||
+            state is NativeActionExecutionState.ValidationFailed ||
+            state is NativeActionExecutionState.AwaitingReconciliation
+    val dismissible = state !is NativeActionExecutionState.AwaitingReconciliation
     Surface(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onDismiss),
+        modifier = if (dismissible) {
+            Modifier.fillMaxWidth().clickable(onClick = onDismiss)
+        } else {
+            Modifier.fillMaxWidth()
+        },
         color = if (failure) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
         contentColor = if (failure) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
         shape = MaterialTheme.shapes.small,

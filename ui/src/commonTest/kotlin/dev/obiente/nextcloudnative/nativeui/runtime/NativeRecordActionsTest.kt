@@ -300,6 +300,55 @@ class NativeRecordActionsTest {
     }
 
     @Test
+    fun `non-task boolean state aliases expose no completion mutation`() {
+        listOf(
+            "enabled" to "Status",
+            "published" to "State",
+            "available" to "Status",
+        ).forEach { (stateFieldId, stateFieldLabel) ->
+            val resource = resource(
+                fields = listOf(
+                    field("id", "ID", FieldKind.string, readOnly = true),
+                    field("title", "Title", FieldKind.string),
+                    field(stateFieldId, stateFieldLabel, FieldKind.boolean),
+                ),
+            )
+            val setState = action(
+                id = "set-$stateFieldId",
+                intent = ActionIntent.update,
+                method = HttpMethod.PATCH,
+                pathNames = listOf("recordId"),
+                bodyNames = listOf(stateFieldId),
+                requiredBodyNames = listOf(stateFieldId),
+            )
+            val toggle = action(
+                id = "toggle-$stateFieldId",
+                intent = ActionIntent.execute,
+                effect = ActionEffect.toggle,
+                method = HttpMethod.POST,
+                pathNames = listOf("recordId"),
+            ).withRecordPath("toggle-$stateFieldId")
+            val record = NativeRecord(
+                id = "record-14",
+                values = mapOf(
+                    "id" to "record-14",
+                    "title" to "Ordinary record",
+                    stateFieldId to "true",
+                ),
+            )
+
+            assertNull(
+                nativeRecordActions(
+                    schema(resource, listOf(setState, toggle)),
+                    resource,
+                    record,
+                ).completion,
+                "$stateFieldId must not acquire task completion semantics from a boolean state alias.",
+            )
+        }
+    }
+
+    @Test
     fun `record transition commands bind exact identities and declared values`() {
         val resource = resource(
             fields = listOf(

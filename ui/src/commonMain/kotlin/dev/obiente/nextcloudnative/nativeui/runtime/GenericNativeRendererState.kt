@@ -1047,6 +1047,14 @@ sealed interface NativeActionExecutionState {
     data class ValidationFailed(val message: String, val fieldErrors: Map<String, String>) : NativeActionExecutionState
     data class AwaitingConfirmation(val request: NativeActionRequest.Submit) : NativeActionExecutionState
     data class Running(val request: NativeActionRequest.Submit) : NativeActionExecutionState
+    data class AwaitingReconciliation(
+        val message: String,
+        val reconciliationGeneration: Int,
+    ) : NativeActionExecutionState {
+        init {
+            require(reconciliationGeneration >= 0)
+        }
+    }
     data class Succeeded(val message: String?) : NativeActionExecutionState
     data class Failed(val message: String) : NativeActionExecutionState
 }
@@ -1059,7 +1067,16 @@ class NativeActionCoordinator(
     var state: NativeActionExecutionState by mutableStateOf(NativeActionExecutionState.Idle)
         private set
 
-    suspend fun submit(values: Map<String, String>) {
+    suspend fun submit(
+        values: Map<String, String>,
+        reconciliationGeneration: Int = 0,
+    ) {
+        if (
+            state is NativeActionExecutionState.Running ||
+            state is NativeActionExecutionState.AwaitingReconciliation
+        ) {
+            return
+        }
         val built = buildNativeSubmitRequest(schema, view, values, confirmed = false)
         when (built) {
             is NativeRequestBuildResult.Invalid -> {
@@ -1070,15 +1087,15 @@ class NativeActionCoordinator(
                 if (request.action.needsExplicitConfirmation()) {
                     state = NativeActionExecutionState.AwaitingConfirmation(request)
                 } else {
-                    execute(request)
+                    execute(request, reconciliationGeneration)
                 }
             }
         }
     }
 
-    suspend fun confirm() {
+    suspend fun confirm(reconciliationGeneration: Int = 0) {
         val pending = (state as? NativeActionExecutionState.AwaitingConfirmation)?.request ?: return
-        execute(pending.copy(confirmed = true))
+        execute(pending.copy(confirmed = true), reconciliationGeneration)
     }
 
     fun cancelConfirmation() {
@@ -1086,20 +1103,44 @@ class NativeActionCoordinator(
     }
 
     fun clearStatus() {
-        if (state !is NativeActionExecutionState.Running) state = NativeActionExecutionState.Idle
+        if (
+            state !is NativeActionExecutionState.Running &&
+            state !is NativeActionExecutionState.AwaitingReconciliation
+        ) {
+            state = NativeActionExecutionState.Idle
+        }
     }
 
-    private suspend fun execute(request: NativeActionRequest.Submit) {
+    fun reconcileAuthoritativeRefresh(reconciliationGeneration: Int) {
+        val pending = state as? NativeActionExecutionState.AwaitingReconciliation ?: return
+        if (reconciliationGeneration > pending.reconciliationGeneration) {
+            state = NativeActionExecutionState.Idle
+        }
+    }
+
+    private suspend fun execute(
+        request: NativeActionRequest.Submit,
+        reconciliationGeneration: Int,
+    ) {
         state = NativeActionExecutionState.Running(request)
         state = try {
             when (val result = executor.execute(request)) {
                 is NativeActionExecutionResult.Success -> NativeActionExecutionState.Succeeded(result.message)
-                is NativeActionExecutionResult.Failure -> NativeActionExecutionState.Failed(result.message)
+                is NativeActionExecutionResult.Failure -> when (result.outcome) {
+                    NativeActionFailureOutcome.Rejected -> NativeActionExecutionState.Failed(result.message)
+                    NativeActionFailureOutcome.Unknown -> NativeActionExecutionState.AwaitingReconciliation(
+                        message = result.message,
+                        reconciliationGeneration = reconciliationGeneration,
+                    )
+                }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
-            NativeActionExecutionState.Failed(failure.message ?: "The action failed.")
+            NativeActionExecutionState.AwaitingReconciliation(
+                message = failure.message ?: "The action result could not be confirmed.",
+                reconciliationGeneration = reconciliationGeneration,
+            )
         }
     }
 }

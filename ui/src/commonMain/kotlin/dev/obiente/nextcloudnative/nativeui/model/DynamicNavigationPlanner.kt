@@ -453,6 +453,7 @@ fun DynamicAppDescriptor.planDynamicNavigation(
                 context = selectedRecord,
                 parentLinks = actionLinks,
             ) ?: return@mapNotNull null
+            if (!selectedRecord.permitsContextualForm(action, resources)) return@mapNotNull null
             DynamicNavigationFormAction(
                 formId = form.id,
                 label = form.title,
@@ -468,6 +469,61 @@ fun DynamicAppDescriptor.planDynamicNavigation(
         contextualChildDestinations = contextualChildren,
         contextualFormActions = contextualForms,
     )
+}
+
+/**
+ * Applies exact record-level capability fields before exposing a mutation form.
+ *
+ * A relationship-proven child create is governed by the child action contract, not by whether the
+ * selected parent itself is editable. For same-record writes, however, a declared capability whose
+ * value is absent or malformed is unknown and therefore cannot authorize the form.
+ */
+private fun DynamicResourceRecordContext.permitsContextualForm(
+    action: DynamicAction,
+    resources: List<DynamicResource>,
+): Boolean {
+    if (!action.resourceId.sameResourceAs(resourceId)) return true
+    val resource = resources.firstOrNull { candidate ->
+        candidate.id.sameResourceAs(action.resourceId)
+    } ?: return true
+    val capabilityFields = resource.fields.mapNotNull { field ->
+        val semanticId = field.id.lowercase().filter(Char::isLetterOrDigit)
+        semanticId.takeIf(RECORD_MUTATION_CAPABILITY_IDS::contains)?.let { it to field.id }
+    }.toMap()
+    if (capabilityFields.isEmpty()) return true
+
+    fun declaredCapability(id: String): Boolean? {
+        val fieldId = capabilityFields[id] ?: return null
+        return fieldValues[fieldId]?.dynamicCapabilityBooleanOrNull()
+    }
+
+    if ("readonly" in capabilityFields && declaredCapability("readonly") != false) return false
+    if ("writable" in capabilityFields && declaredCapability("writable") != true) return false
+    if ("canwrite" in capabilityFields && declaredCapability("canwrite") != true) return false
+
+    val deletion = when (action.effect) {
+        ActionEffect.delete,
+        ActionEffect.permanentDelete,
+        -> true
+        ActionEffect.clear,
+        ActionEffect.leave,
+        -> false
+        else -> action.intent == ActionIntent.delete
+    }
+    return if (deletion) {
+        "candelete" !in capabilityFields || declaredCapability("candelete") == true
+    } else {
+        val editCapabilities = setOf("canedit", "canupdate").filter(capabilityFields::containsKey)
+        action.intent !in setOf(ActionIntent.update, ActionIntent.execute) ||
+            editCapabilities.isEmpty() ||
+            editCapabilities.all { id -> declaredCapability(id) == true }
+    }
+}
+
+private fun String.dynamicCapabilityBooleanOrNull(): Boolean? = when (trim().lowercase()) {
+    "true", "1", "yes" -> true
+    "false", "0", "no" -> false
+    else -> null
 }
 
 /**
@@ -945,6 +1001,15 @@ private fun DynamicNavigationDestination.primaryRootScore(descriptor: DynamicApp
     if (destinationConcepts.any(TECHNICAL_ROOT_CONCEPTS::contains)) score -= 900
     return score
 }
+
+private val RECORD_MUTATION_CAPABILITY_IDS = setOf(
+    "readonly",
+    "writable",
+    "canwrite",
+    "canedit",
+    "canupdate",
+    "candelete",
+)
 
 private val PRIMARY_CONTENT_ROOT_CONCEPTS = setOf(
     "board",

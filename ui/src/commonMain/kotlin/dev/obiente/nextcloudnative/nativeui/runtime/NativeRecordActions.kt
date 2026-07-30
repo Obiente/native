@@ -713,7 +713,14 @@ private fun ResourceSpec.uniqueRecordCompletionSemantics(
         val score = field.recordCompletionScore()
         if (score == 0) return@mapNotNull null
         val semantics = when (field.kind) {
-            FieldKind.boolean -> NativeRecordCompletionSemantics(field, "true", "false")
+            FieldKind.boolean -> if (
+                !field.requiresIndependentNativeTaskEvidence() ||
+                hasIndependentNativeTaskEvidence(field)
+            ) {
+                NativeRecordCompletionSemantics(field, "true", "false")
+            } else {
+                null
+            }
             FieldKind.enumeration -> {
                 val values = field.enumValues.orEmpty()
                 val completed = values.singleOrNull {

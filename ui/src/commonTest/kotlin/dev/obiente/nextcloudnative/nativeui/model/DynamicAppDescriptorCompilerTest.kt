@@ -1382,6 +1382,43 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
+    fun `form encoded arrays do not receive JSON typed editor formats`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Form array contract","version":"1"},
+              "paths":{
+                "/apps/example/api/assignments":{
+                  "post":{
+                    "operationId":"assignments-form-update",
+                    "requestBody":{"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                      "type":"object",
+                      "properties":{
+                        "integerIds":{"type":"array","items":{"type":"integer"}},
+                        "textIds":{"type":"array","items":{"type":"string"}},
+                        "label":{"type":"string"}
+                      }
+                    }}}},
+                    "responses":{"200":{"description":"Updated"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val action = descriptor.actions.single { it.id == "assignments-form-update" }
+        val fields = descriptor.forms.single().fields.associateBy(FormField::fieldId)
+        val bodyProperties = ((requireNotNull(action.binding.body).schema as JsonObject)["properties"] as JsonObject)
+
+        assertEquals("application/x-www-form-urlencoded", action.binding.body.contentType)
+        assertEquals(setOf("label"), fields.keys)
+        assertNull((bodyProperties.getValue("integerIds") as JsonObject)["format"])
+        assertNull((bodyProperties.getValue("textIds") as JsonObject)["format"])
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
     fun rejectsLegacyOpenApiAndRemoteReferences() {
         assertFailsWith<IllegalArgumentException> {
             DynamicAppDescriptorCompiler().compile(input(OPEN_API.replace("3.0.3", "2.0")))

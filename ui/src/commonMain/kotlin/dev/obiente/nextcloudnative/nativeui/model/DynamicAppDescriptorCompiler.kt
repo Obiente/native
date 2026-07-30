@@ -767,7 +767,7 @@ private class KotlinCompilerState(
             }
         } else {
             val ocsFormatParameter = action.binding.ocs?.formatQueryParameter
-            val bodyFields = body?.schema?.let(::formFields).orEmpty()
+            val bodyFields = body?.let(::formFields).orEmpty()
             val queryFields = queryParameters
                 .filter { parameter ->
                     parameter.source == ParameterSource.userInput && parameter.name != ocsFormatParameter
@@ -1014,7 +1014,16 @@ private class KotlinCompilerState(
             "multipart/form-data",
         ).firstOrNull(content::containsKey) ?: content.keys.firstOrNull() ?: return null
         val media = content[contentType] as? JsonObject ?: return null
-        val schema = media["schema"]?.let(::resolveLocal)?.withDynamicFormFormats() ?: return null
+        val declaredSchema = media["schema"]?.let(::resolveLocal) ?: return null
+        // The generic array editors produce a typed JSON value. Form and multipart array
+        // serialization depends on exact media encoding/style/explode metadata that the descriptor
+        // does not retain, so those bodies must not acquire a JSON-oriented editor format.
+        val jsonBody = contentType.substringBefore(';').trim().equals("application/json", ignoreCase = true)
+        val schema = if (jsonBody) {
+            declaredSchema.withDynamicFormFormats()
+        } else {
+            declaredSchema
+        }
         return HttpBody(
             contentType = contentType,
             required = request.boolean("required") ?: false,
@@ -1110,8 +1119,10 @@ private class KotlinCompilerState(
         ).orEmpty()
     }
 
-    private fun formFields(schemaElement: JsonElement): List<FormField>? {
-        val schema = resolveLocal(schemaElement) as? JsonObject ?: return null
+    private fun formFields(body: HttpBody): List<FormField>? {
+        val schema = resolveLocal(body.schema) as? JsonObject ?: return null
+        val supportsTypedArrays = body.contentType.substringBefore(';').trim()
+            .equals("application/json", ignoreCase = true)
         val required = (schema["required"] as? JsonArray)
             .orEmpty()
             .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
@@ -1120,6 +1131,7 @@ private class KotlinCompilerState(
         return properties.entries.sortedBy(Map.Entry<String, JsonElement>::key).mapNotNull { (id, element) ->
             val field = resolveLocal(element) as? JsonObject ?: return@mapNotNull null
             if (field.boolean("readOnly") == true) return@mapNotNull null
+            if (field.string("type") == "array" && !supportsTypedArrays) return@mapNotNull null
             FormField(
                 fieldId = id,
                 label = field.string("title") ?: id.humanize(),

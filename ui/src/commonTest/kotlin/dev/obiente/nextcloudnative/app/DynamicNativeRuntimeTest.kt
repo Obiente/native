@@ -868,6 +868,52 @@ class DynamicNativeRuntimeTest {
     }
 
     @Test
+    fun `form encoded arrays fail closed while scalar siblings remain supported`() {
+        val bodySchema = json.parseToJsonElement(
+            """{
+              "type":"object",
+              "properties":{
+                "ids":{
+                  "type":"array",
+                  "items":{"type":"integer"},
+                  "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT"
+                },
+                "label":{"type":"string"}
+              }
+            }""",
+        )
+        val action = readAction().copy(
+            id = "assignments.form.update",
+            resourceId = "assignments",
+            intent = ActionIntent.update,
+            risk = ActionRisk.mutating,
+            binding = readAction().binding.copy(
+                method = HttpMethod.POST,
+                path = "/ocs/v2.php/apps/example/api/assignments",
+                body = HttpBody("application/x-www-form-urlencoded", true, bodySchema),
+            ),
+            provenance = listOf(
+                Provenance(ProvenanceKind.verifiedAppPackage, "signed-package", "Verified assignment setter"),
+            ),
+        )
+
+        val scalarRequest = buildDynamicApiRequest(
+            descriptor(action),
+            action,
+            values = mapOf("label" to "One"),
+        )
+        assertEquals("label=One", requireNotNull(scalarRequest.body).decodeToString())
+
+        assertFailsWith<IllegalArgumentException> {
+            buildDynamicApiRequest(
+                descriptor(action),
+                action,
+                values = mapOf("ids" to "[1,2]", "label" to "One"),
+            )
+        }
+    }
+
+    @Test
     fun `integer array encoding enforces every supported declared constraint`() {
         val bodySchema = json.parseToJsonElement(
             """{

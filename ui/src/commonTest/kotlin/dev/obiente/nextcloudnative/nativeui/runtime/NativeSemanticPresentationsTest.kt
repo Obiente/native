@@ -775,6 +775,38 @@ class NativeSemanticPresentationsTest {
     }
 
     @Test
+    fun `non-task boolean state aliases do not render as task completion`() {
+        listOf(
+            "enabled" to "Status",
+            "published" to "State",
+            "available" to "Status",
+        ).forEach { (stateFieldId, stateFieldLabel) ->
+            val resource = ResourceSpec(
+                id = "entries",
+                name = "Entries",
+                confidence = Confidence.high,
+                fields = listOf(
+                    FieldSpec("label", "Label", FieldKind.string, required = true, readOnly = false),
+                    FieldSpec(
+                        stateFieldId,
+                        stateFieldLabel,
+                        FieldKind.boolean,
+                        required = true,
+                        readOnly = false,
+                    ),
+                ),
+            )
+            val record = NativeRecord(
+                "entry-a",
+                mapOf("label" to "Ordinary record", stateFieldId to "true"),
+            )
+
+            assertEquals(null, nativeGroupwarePresentation(resource, record))
+            assertEquals(null, nativeTaskCollectionPresentations(resource, listOf(record)))
+        }
+    }
+
+    @Test
     fun `unrelated boolean fields do not promote ordinary records to tasks`() {
         val resource = ResourceSpec(
             id = "entries",
