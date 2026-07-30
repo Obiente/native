@@ -283,6 +283,20 @@ class NativeRecordActionsTest {
             mapOf("recordId" to "record-14"),
             reversePlan.request(completed = false).values,
         )
+
+        val dedicatedPutToggle = toggle.copy(
+            binding = toggle.binding.copy(method = HttpMethod.PUT),
+        )
+        assertEquals(
+            NativeRecordCompletionActionKind.Toggle,
+            requireNotNull(
+                nativeRecordActions(
+                    schema(resource, listOf(dedicatedPutToggle)),
+                    resource,
+                    incomplete,
+                ).completion,
+            ).kind,
+        )
     }
 
     @Test
@@ -634,7 +648,7 @@ class NativeRecordActionsTest {
         val update = action(
             id = "update-state",
             intent = ActionIntent.update,
-            method = HttpMethod.PUT,
+            method = HttpMethod.PATCH,
             pathNames = listOf("recordId"),
             bodyNames = listOf("state"),
             requiredBodyNames = listOf("state"),
@@ -661,6 +675,59 @@ class NativeRecordActionsTest {
                 oneWayResource,
                 record,
             ).completion,
+        )
+    }
+
+    @Test
+    fun `partial completion update is withheld from replacement style put`() {
+        val resource = resource(
+            fields = listOf(
+                field("id", "ID", FieldKind.string, readOnly = true),
+                field("title", "Title", FieldKind.string),
+                field("done", "Done", FieldKind.boolean),
+            ),
+        )
+        val putUpdate = action(
+            id = "replace-record",
+            intent = ActionIntent.update,
+            method = HttpMethod.PUT,
+            pathNames = listOf("recordId"),
+            bodyNames = listOf("title", "done"),
+            requiredBodyNames = listOf("done"),
+        )
+        val record = NativeRecord(
+            id = "record-22",
+            values = mapOf(
+                "id" to "record-22",
+                "title" to "Authoritative title",
+                "done" to "false",
+            ),
+        )
+
+        assertNull(
+            nativeRecordActions(
+                schema(resource, listOf(putUpdate)),
+                resource,
+                record,
+            ).completion,
+        )
+
+        val patchUpdate = putUpdate.copy(
+            id = "patch-record",
+            binding = putUpdate.binding.copy(
+                method = HttpMethod.PATCH,
+                operationId = "patch-record",
+            ),
+        )
+        assertEquals(
+            mapOf("recordId" to "record-22", "done" to "true"),
+            requireNotNull(
+                nativeRecordActions(
+                    schema(resource, listOf(patchUpdate)),
+                    resource,
+                    record,
+                ).completion,
+            ).request(completed = true).values,
         )
     }
 

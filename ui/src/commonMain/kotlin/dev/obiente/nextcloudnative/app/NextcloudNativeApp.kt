@@ -115,6 +115,7 @@ import dev.obiente.nextcloudnative.app.design.isNextcloudDarkTheme
 import dev.obiente.nextcloudnative.app.design.resolveNextcloudRootShellLayout
 import dev.obiente.nextcloudnative.app.design.resolveNextcloudCollectionNavigationMode
 import dev.obiente.nextcloudnative.app.design.shouldUseNextcloudRootShell
+import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
 import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.DynamicResourceRecordContext
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
@@ -135,6 +136,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeRelatedRecordPaging
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeImageLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeAudioRecordPlayer
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeAudioTrack
@@ -324,8 +326,22 @@ internal data class DynamicFormRelationLoadRequest(
     val cacheKey: DynamicFormRelationCacheKey,
 )
 
+internal data class DynamicFormRelationContinuation(
+    val spec: DynamicPaginationSpec,
+    val nextPageNumber: Int,
+    val nextRequestValue: String,
+    val loadedRecordCount: Int,
+)
+
+private data class DynamicFormRelationLoadResult(
+    val records: List<NativeRecord>,
+    val pagination: DynamicPaginationSpec?,
+)
+
 internal data class DynamicFormRelationCacheState(
     val recordsByKey: Map<DynamicFormRelationCacheKey, List<NativeRecord>> = emptyMap(),
+    val continuationsByKey: Map<DynamicFormRelationCacheKey, DynamicFormRelationContinuation> = emptyMap(),
+    val safetyLimitedKeys: Set<DynamicFormRelationCacheKey> = emptySet(),
     val failedKeys: Set<DynamicFormRelationCacheKey> = emptySet(),
 ) {
     fun pendingRequests(
@@ -358,18 +374,85 @@ internal data class DynamicFormRelationCacheState(
     fun loadSucceeded(
         request: DynamicFormRelationLoadRequest,
         records: List<NativeRecord>,
-    ): DynamicFormRelationCacheState = copy(
-        recordsByKey = recordsByKey.putBounded(
-            request.cacheKey,
-            records.take(INITIAL_COLLECTION_PAGE_SIZE),
-        ),
-        failedKeys = failedKeys - request.cacheKey,
-    )
+        pagination: DynamicPaginationSpec? = null,
+    ): DynamicFormRelationCacheState {
+        val boundedRecords = records.distinctBy(NativeRecord::id).take(MAX_DYNAMIC_FORM_RELATION_RECORDS)
+        val continuation = pagination?.nextDynamicFormRelationContinuation(
+            lastPage = records,
+            loadedRecordCount = records.size,
+        )
+        val safetyLimited =
+            records.size > boundedRecords.size ||
+                (boundedRecords.size >= MAX_DYNAMIC_FORM_RELATION_RECORDS && continuation != null)
+        return copy(
+            recordsByKey = recordsByKey.putBounded(request.cacheKey, boundedRecords),
+            continuationsByKey = if (safetyLimited || continuation == null) {
+                continuationsByKey - request.cacheKey
+            } else {
+                continuationsByKey.putBounded(request.cacheKey, continuation)
+            },
+            safetyLimitedKeys = if (safetyLimited) {
+                (safetyLimitedKeys + request.cacheKey)
+                    .toList()
+                    .takeLast(MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES)
+                    .toSet()
+            } else {
+                safetyLimitedKeys - request.cacheKey
+            },
+            failedKeys = failedKeys - request.cacheKey,
+        )
+    }
+
+    fun appendPageSucceeded(
+        request: DynamicFormRelationLoadRequest,
+        page: List<NativeRecord>,
+    ): DynamicFormRelationCacheState {
+        val current = recordsByKey[request.cacheKey].orEmpty()
+        val activeContinuation = continuationsByKey[request.cacheKey] ?: return this
+        val currentIds = current.mapTo(hashSetOf(), NativeRecord::id)
+        val novelRecords = page.distinctBy(NativeRecord::id)
+            .filterNot { record -> record.id in currentIds }
+        val merged = (current + novelRecords).take(MAX_DYNAMIC_FORM_RELATION_RECORDS)
+        val nextContinuation = activeContinuation.spec.nextDynamicFormRelationContinuation(
+            lastPage = page,
+            loadedRecordCount = activeContinuation.loadedRecordCount + page.size,
+            novelRecordCount = novelRecords.size,
+            nextPageNumber = activeContinuation.nextPageNumber + 1,
+        )
+        val safetyLimited =
+            current.size + novelRecords.size > merged.size ||
+                (merged.size >= MAX_DYNAMIC_FORM_RELATION_RECORDS && nextContinuation != null)
+        return copy(
+            recordsByKey = recordsByKey.putBounded(request.cacheKey, merged),
+            continuationsByKey = if (safetyLimited || nextContinuation == null) {
+                continuationsByKey - request.cacheKey
+            } else {
+                continuationsByKey.putBounded(request.cacheKey, nextContinuation)
+            },
+            safetyLimitedKeys = if (safetyLimited) {
+                (safetyLimitedKeys + request.cacheKey)
+                    .toList()
+                    .takeLast(MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES)
+                    .toSet()
+            } else {
+                safetyLimitedKeys - request.cacheKey
+            },
+        )
+    }
+
+    fun continuation(
+        request: DynamicFormRelationLoadRequest,
+    ): DynamicFormRelationContinuation? = continuationsByKey[request.cacheKey]
+
+    fun reachedSafetyLimit(request: DynamicFormRelationLoadRequest): Boolean =
+        request.cacheKey in safetyLimitedKeys
 
     fun loadFailed(
         request: DynamicFormRelationLoadRequest,
     ): DynamicFormRelationCacheState = copy(
         recordsByKey = recordsByKey - request.cacheKey,
+        continuationsByKey = continuationsByKey - request.cacheKey,
+        safetyLimitedKeys = safetyLimitedKeys - request.cacheKey,
         failedKeys = (failedKeys + request.cacheKey)
             .toList()
             .takeLast(MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES)
@@ -382,6 +465,39 @@ internal data class DynamicFormRelationCacheState(
         val retryKeys = requests.mapTo(hashSetOf(), DynamicFormRelationLoadRequest::cacheKey)
         return copy(failedKeys = failedKeys - retryKeys)
     }
+}
+
+private fun DynamicPaginationSpec.nextDynamicFormRelationContinuation(
+    lastPage: List<NativeRecord>,
+    loadedRecordCount: Int,
+    novelRecordCount: Int = lastPage.size,
+    nextPageNumber: Int = 2,
+): DynamicFormRelationContinuation? {
+    if (!canContinue(lastPage.size, novelRecordCount)) return null
+    val nextValue = nextValue(nextPageNumber, loadedRecordCount, lastPage) ?: return null
+    return DynamicFormRelationContinuation(this, nextPageNumber, nextValue, loadedRecordCount)
+}
+
+private suspend fun loadInitialDynamicFormRelationRecords(
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+    descriptor: DynamicAppDescriptor,
+    request: DynamicFormRelationLoadRequest,
+    values: Map<String, String>,
+): DynamicFormRelationLoadResult {
+    val action = descriptor.actions.singleOrNull { action -> action.id == request.plan.actionId }
+        ?: error("This relation has no declared load action.")
+    return DynamicFormRelationLoadResult(
+        records = loadDynamicRecords(
+            services = services,
+            session = session,
+            descriptor = descriptor,
+            actionId = action.id,
+            values = values,
+            runtimeContext = values,
+        ),
+        pagination = action.dynamicPaginationSpec(),
+    )
 }
 
 internal fun dynamicFormRelationLoadRequests(
@@ -424,6 +540,7 @@ private fun <K, V> Map<K, V>.putBounded(key: K, value: V): Map<K, V> =
 
 private const val MAX_DYNAMIC_FORM_RELATION_BINDINGS = 32
 private const val MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES = 16
+internal const val MAX_DYNAMIC_FORM_RELATION_RECORDS = 500
 
 private class PhotoTimelineUiState {
     val timeline = mutableStateOf(PhotoTimelineState(pageSize = MAX_PHOTO_TIMELINE_PAGE_SIZE))
@@ -1783,12 +1900,26 @@ private fun DynamicDiscoveredAppScreen(
     ) {
         mutableStateOf(0)
     }
+    var loadingFormRelationPageKeys by remember(descriptor) {
+        mutableStateOf<Set<DynamicFormRelationCacheKey>>(emptySet())
+    }
+    var formRelationPageErrors by remember(descriptor) {
+        mutableStateOf<Map<DynamicFormRelationCacheKey, String>>(emptyMap())
+    }
     var loadAttempt by remember(descriptor) { mutableStateOf(0) }
+    var mutationReconciliationGeneration by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        descriptor.app.id,
+    ) {
+        mutableStateOf(0)
+    }
     var paginationState by remember(descriptor) { mutableStateOf<DynamicPaginationState?>(null) }
     var loadingMore by remember(descriptor) { mutableStateOf(false) }
     var loadMoreError by remember(descriptor) { mutableStateOf<String?>(null) }
     val dynamicRecoveryScope = rememberCoroutineScope()
     val dynamicPaginationScope = rememberCoroutineScope()
+    val formRelationPageScope = rememberCoroutineScope()
     val dynamicAssetCache = remember(session.serverUrl, session.loginName, descriptor.app.id) {
         DynamicArtworkMemoryCache<ImageBitmap>(
             maximumBytes = MAX_DYNAMIC_ARTWORK_DECODED_BYTES,
@@ -1924,30 +2055,33 @@ private fun DynamicDiscoveredAppScreen(
                 val relationOutcomes = coroutineScope {
                     pendingRelationRequests.map { request ->
                         async {
-                            val records = runCatching {
-                                loadDynamicRecords(
+                            val result = runCatching {
+                                loadInitialDynamicFormRelationRecords(
                                     services = services,
                                     session = session,
                                     descriptor = descriptor,
-                                    actionId = request.plan.actionId,
+                                    request = request,
                                     values = values,
-                                    runtimeContext = values,
                                 )
                             }.getOrElse { failure ->
                                 if (failure is CancellationException) throw failure
                                 null
                             }
-                            request to records
+                            request to result
                         }
                     }.awaitAll()
                 }
                 currentCoroutineContext().ensureActive()
                 var updatedRelationCache = formRelationCache
-                relationOutcomes.forEach { (request, records) ->
-                    updatedRelationCache = if (records == null) {
+                relationOutcomes.forEach { (request, result) ->
+                    updatedRelationCache = if (result == null) {
                         updatedRelationCache.loadFailed(request)
                     } else {
-                        updatedRelationCache.loadSucceeded(request, records)
+                        updatedRelationCache.loadSucceeded(
+                            request = request,
+                            records = result.records,
+                            pagination = result.pagination,
+                        )
                     }
                 }
                 formRelationCache = updatedRelationCache
@@ -1988,6 +2122,7 @@ private fun DynamicDiscoveredAppScreen(
                     val updatedRecords = recordsByResourceId + (view.resourceId to records)
                     recordsByResourceId = updatedRecords
                     viewState = NativeScreenState.Ready(records)
+                    mutationReconciliationGeneration += 1
                     sharedDynamicNativeMemoryCache.storeScreen(
                         cacheKey,
                         DynamicScreenSnapshot(records, updatedRecords),
@@ -2058,6 +2193,7 @@ private fun DynamicDiscoveredAppScreen(
                 val rows = loaded.first { (resourceId, _) -> resourceId == composite.rowResourceId }.second
                 recordsByResourceId = updatedRecords
                 viewState = NativeScreenState.Ready(rows)
+                mutationReconciliationGeneration += 1
                 sharedDynamicNativeMemoryCache.storeScreen(
                     cacheKey,
                     DynamicScreenSnapshot(rows, updatedRecords),
@@ -2103,6 +2239,7 @@ private fun DynamicDiscoveredAppScreen(
                 ?.toDynamicPaginationState(view.id, records)
             recordsByResourceId = updatedRecords
             viewState = NativeScreenState.Ready(records)
+            mutationReconciliationGeneration += 1
             records.firstOrNull()?.let { authoritative ->
                 if (
                     view.component == NativeComponent.detail &&
@@ -2204,6 +2341,66 @@ private fun DynamicDiscoveredAppScreen(
         genericRecords = recordsByResourceId,
         requests = formRelationRequests,
     )
+    val relatedRecordPaging = remember(
+        formRelationRequests,
+        formRelationCache,
+        loadingFormRelationPageKeys,
+        formRelationPageErrors,
+        formRelationValues,
+    ) {
+        formRelationRequests.mapNotNull { request ->
+            val continuation = formRelationCache.continuation(request)
+            val loading = request.cacheKey in loadingFormRelationPageKeys
+            val safetyLimitMessage = if (formRelationCache.reachedSafetyLimit(request)) {
+                "More choices exist, but automatic relation loading stopped at the safety limit."
+            } else {
+                null
+            }
+            val error = formRelationPageErrors[request.cacheKey] ?: safetyLimitMessage
+            if (continuation == null && error == null && !loading) return@mapNotNull null
+            request.plan.resourceId to NativeRelatedRecordPaging(
+                loading = loading,
+                error = error,
+                loadMore = continuation?.takeUnless { loading || safetyLimitMessage != null }?.let {
+                    {
+                        if (request.cacheKey !in loadingFormRelationPageKeys) {
+                            loadingFormRelationPageKeys += request.cacheKey
+                            formRelationPageErrors -= request.cacheKey
+                            formRelationPageScope.launch {
+                                val active = formRelationCache.continuation(request)
+                                if (active == null) {
+                                    loadingFormRelationPageKeys -= request.cacheKey
+                                    return@launch
+                                }
+                                val pageValues = formRelationValues +
+                                    (active.spec.parameterName to active.nextRequestValue)
+                                runCatching {
+                                    loadDynamicRecords(
+                                        services = services,
+                                        session = session,
+                                        descriptor = descriptor,
+                                        actionId = request.plan.actionId,
+                                        values = pageValues,
+                                        runtimeContext = pageValues,
+                                    )
+                                }.onSuccess { page ->
+                                    formRelationCache = formRelationCache.appendPageSucceeded(request, page)
+                                    formRelationPageErrors -= request.cacheKey
+                                }.onFailure { failure ->
+                                    if (failure is CancellationException) throw failure
+                                    formRelationPageErrors = formRelationPageErrors.putBounded(
+                                        request.cacheKey,
+                                        failure.message ?: "Could not load more choices.",
+                                    )
+                                }
+                                loadingFormRelationPageKeys -= request.cacheKey
+                            }
+                        }
+                    }
+                },
+            )
+        }.toMap()
+    }
     val failedFormRelationRequests = formRelationCache.failedRequests(formRelationRequests)
     val executor = remember(services, session, descriptor, runtimeValues, discovery.versionStatus) {
         DynamicNextcloudActionExecutor(
@@ -2816,7 +3013,9 @@ private fun DynamicDiscoveredAppScreen(
                     parentRecord = selectedRecord,
                     bindingValues = datasetBindingValues,
                     relatedRecords = datasetRelatedRecords,
+                    relatedRecordPaging = relatedRecordPaging,
                 ),
+                mutationReconciliationGeneration = mutationReconciliationGeneration,
             onSelectRecord = selectedView.takeIf {
                 it.component != NativeComponent.detail && it.component != NativeComponent.form
             }?.let {

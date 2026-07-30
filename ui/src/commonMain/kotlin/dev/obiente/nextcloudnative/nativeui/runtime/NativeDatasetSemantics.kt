@@ -194,6 +194,13 @@ data class NativeDatasetContext(
      */
     val bindingValues: Map<String, String> = emptyMap(),
     val relatedRecords: Map<String, List<NativeRecord>> = emptyMap(),
+    val relatedRecordPaging: Map<String, NativeRelatedRecordPaging> = emptyMap(),
+)
+
+data class NativeRelatedRecordPaging(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val loadMore: (() -> Unit)? = null,
 )
 
 internal data class HydratedNativeDataset(

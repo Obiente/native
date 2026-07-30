@@ -117,7 +117,7 @@ internal fun nativeRelationFieldRequiresChoice(
 ): Boolean = nativeRelationRelationship(field, formResource, schema) != null ||
     field.isOpaqueNativeRelationshipIdentity()
 
-private fun nativeRelationRelationship(
+internal fun nativeRelationRelationship(
     field: FieldSpec,
     formResource: ResourceSpec,
     schema: NativeAppSchema,

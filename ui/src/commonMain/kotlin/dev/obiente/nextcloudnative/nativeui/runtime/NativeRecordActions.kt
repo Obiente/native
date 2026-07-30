@@ -464,7 +464,10 @@ private fun ActionSpec.recordCompletionPlan(
         intent != ActionIntent.update ||
         risk != ActionRisk.mutating ||
         requiresConfirmation ||
-        binding.method !in RECORD_UPDATE_METHODS ||
+        // Set-value completion intentionally emits a partial body. ApiBinding cannot currently
+        // prove both a complete authoritative replacement and a version/ETag precondition, so an
+        // ordinary PUT must not be treated as an inline completion capability.
+        binding.method != HttpMethod.PATCH ||
         !binding.hasSafeRecordActionBody() ||
         binding.hasOverlappingRecordActionChannels() ||
         binding.bodyFieldNames.count { it == semantics.field.id } != 1

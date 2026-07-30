@@ -155,6 +155,7 @@ fun GenericNativeAppScreen(
     loadMoreError: String? = null,
     audioPlayer: NativeAudioRecordPlayer? = null,
     mediaArtworkResolver: NativeMediaArtworkResolver? = null,
+    mutationReconciliationGeneration: Int = 0,
 ) {
     val resource = schema.resource(view.resourceId)
     val boardMoveReconciliation = remember(schema.app.id, view.id, resource?.id) {
@@ -195,7 +196,32 @@ fun GenericNativeAppScreen(
     val recordCommandsInFlight = remember(schema, view.id) { mutableSetOf<String>() }
     val recordCommandScope = rememberCoroutineScope()
     val inlineActionSucceeded = onInlineActionSucceeded ?: onActionSucceeded
+    val activeFormMutationOwners = remember(schema.app.id) {
+        mutableSetOf<NativeFormMutationRecoveryOwner>()
+    }
+    var formMutationRecoveryToken by rememberSaveable(schema.app.id) {
+        mutableStateOf<String?>(null)
+    }
+    val formMutationRecovery = resolveNativeFormMutationRecoveryState(
+        encoded = formMutationRecoveryToken,
+        currentReconciliationGeneration = mutationReconciliationGeneration,
+        ownerStillExecuting = activeFormMutationOwners::contains,
+    )
+    val normalizedFormMutationRecoveryToken = formMutationRecovery?.encode()
+    LaunchedEffect(normalizedFormMutationRecoveryToken, formMutationRecoveryToken) {
+        if (formMutationRecoveryToken != normalizedFormMutationRecoveryToken) {
+            formMutationRecoveryToken = normalizedFormMutationRecoveryToken
+        }
+    }
+    LaunchedEffect(formMutationRecovery?.owner, formMutationRecovery?.phase) {
+        val actionId = formMutationRecovery?.authoritativeReconciliationActionId
+            ?: return@LaunchedEffect
+        schema.action(actionId)?.let { action ->
+            inlineActionSucceeded?.invoke(action)
+        }
+    }
     val openRecordEdit: (NativeRecord, NativeRecordFormActionPlan) -> Unit = edit@{ record, plan ->
+        if (formMutationRecovery?.blocksSubmission == true) return@edit
         val actionResource = presentedResource ?: return@edit
         pendingRecordFormActionToken = RestorableNativeRecordFormAction(
             actionId = plan.action.id,
@@ -257,7 +283,8 @@ fun GenericNativeAppScreen(
     }
     val openCollectionCreate: (() -> Unit)? = collectionCreatePlan?.let { plan ->
         val actionResource = presentedResource
-        {
+        create@{
+            if (formMutationRecovery?.blocksSubmission == true) return@create
             pendingRecordFormActionToken = RestorableNativeRecordFormAction(
                 actionId = plan.action.id,
                 resourceId = actionResource.id,
@@ -291,6 +318,14 @@ fun GenericNativeAppScreen(
                 }
             }?.takeIf { candidate -> candidate.action.id == saved.actionId }
                 ?: return@pending null
+            val mutationRecoveryOwner = nativeFormMutationRecoveryOwner(
+                appId = schema.app.id,
+                viewId = view.id,
+                actionId = plan.action.id,
+                resourceId = actionResource.id,
+                intent = plan.action.intent,
+                recordId = record?.id,
+            ) ?: return@pending null
             PendingNativeRecordFormAction(
                 plan = plan,
                 itemLabel = record
@@ -299,6 +334,7 @@ fun GenericNativeAppScreen(
                 resource = actionResource,
                 datasetContext = datasetContext,
                 restoreKey = pendingRecordFormActionToken.orEmpty(),
+                mutationRecoveryOwner = mutationRecoveryOwner,
             )
         }
     Surface(
@@ -475,12 +511,24 @@ fun GenericNativeAppScreen(
             pending = pending,
             schema = schema,
             actionExecutor = actionExecutor,
+            mutationRecovery = formMutationRecovery,
+            onMutationStarted = { owner ->
+                activeFormMutationOwners += owner
+                formMutationRecoveryToken = owner.begin(mutationReconciliationGeneration).encode()
+            },
+            onMutationFinished = { owner, result ->
+                activeFormMutationOwners -= owner
+                val current = decodeNativeFormMutationRecoveryState(formMutationRecoveryToken)
+                if (current?.owner == owner) {
+                    formMutationRecoveryToken = current.afterExecutionResult(
+                        result = result,
+                        currentReconciliationGeneration = mutationReconciliationGeneration,
+                    )?.encode()
+                }
+            },
             onDismiss = { pendingRecordFormActionToken = null },
             onActionSucceeded = { action ->
                 pendingRecordFormActionToken = null
-                inlineActionSucceeded?.invoke(action)
-            },
-            onOutcomeUnknown = { action ->
                 inlineActionSucceeded?.invoke(action)
             },
         )
@@ -521,6 +569,7 @@ private data class PendingNativeRecordFormAction(
     val resource: ResourceSpec,
     val datasetContext: NativeDatasetContext,
     val restoreKey: String,
+    val mutationRecoveryOwner: NativeFormMutationRecoveryOwner,
 )
 
 internal data class RestorableNativeRecordFormAction(
@@ -648,9 +697,11 @@ private fun GenericRecordFormActionDialog(
     pending: PendingNativeRecordFormAction,
     schema: NativeAppSchema,
     actionExecutor: NativeActionExecutor,
+    mutationRecovery: NativeFormMutationRecoveryState?,
+    onMutationStarted: (NativeFormMutationRecoveryOwner) -> Unit,
+    onMutationFinished: (NativeFormMutationRecoveryOwner, NativeActionExecutionResult) -> Unit,
     onDismiss: () -> Unit,
     onActionSucceeded: (ActionSpec) -> Unit,
-    onOutcomeUnknown: (ActionSpec) -> Unit,
 ) {
     val plan = pending.plan
     val draftSaver = remember(plan.fields) {
@@ -662,7 +713,6 @@ private fun GenericRecordFormActionDialog(
     var error by remember(pending) { mutableStateOf<String?>(null) }
     var awaitingConfirmation by rememberSaveable(pending.restoreKey) { mutableStateOf(false) }
     var submitting by remember(pending) { mutableStateOf(false) }
-    var outcomeUnknown by rememberSaveable(pending.restoreKey) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val operation = when (plan.kind) {
         NativeRecordFormActionKind.Create -> "Create"
@@ -681,23 +731,24 @@ private fun GenericRecordFormActionDialog(
         }
         submitting = true
         error = null
-        outcomeUnknown = false
+        onMutationStarted(pending.mutationRecoveryOwner)
         scope.launch {
-            when (val result = actionExecutor.execute(request)) {
+            val result = actionExecutor.execute(request)
+            onMutationFinished(pending.mutationRecoveryOwner, result)
+            when (result) {
                 is NativeActionExecutionResult.Success -> onActionSucceeded(plan.action)
                 is NativeActionExecutionResult.Failure -> {
                     error = result.message
                     awaitingConfirmation = false
-                    outcomeUnknown = !result.outcome.allowsGenericFormRetry()
-                    if (outcomeUnknown) {
-                        onOutcomeUnknown(plan.action)
-                    }
                 }
             }
             submitting = false
         }
     }
-    val formRetryAllowed = !outcomeUnknown
+    val outcomeUnknown =
+        mutationRecovery?.owner == pending.mutationRecoveryOwner &&
+            mutationRecovery.phase == NativeFormMutationRecoveryPhase.AwaitingReconciliation
+    val formRetryAllowed = mutationRecovery == null
 
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
@@ -748,6 +799,12 @@ private fun GenericRecordFormActionDialog(
                                     field = field,
                                     value = values[field.id].orEmpty(),
                                     options = relationOptions,
+                                    paging = nativeRelationPaging(
+                                        field,
+                                        pending.resource,
+                                        schema,
+                                        pending.datasetContext,
+                                    ),
                                     error = null,
                                     enabled = !submitting && formRetryAllowed,
                                     onValueChange = { value ->
@@ -4829,6 +4886,7 @@ private fun GenericNativeForm(
                                 field = field,
                                 value = draft.values[field.id].orEmpty(),
                                 options = relationOptions,
+                                paging = nativeRelationPaging(field, formResource, schema, datasetContext),
                                 error = validationErrors[field.id],
                                 enabled = !submitting,
                                 onValueChange = { value ->
@@ -5282,6 +5340,7 @@ private fun GenericRelationshipField(
     field: FieldSpec,
     value: String,
     options: List<NativeRelationOption>,
+    paging: NativeRelatedRecordPaging?,
     error: String?,
     enabled: Boolean,
     onValueChange: (String) -> Unit,
@@ -5289,20 +5348,31 @@ private fun GenericRelationshipField(
     val displayField = field.copy(label = field.nativeRelationshipDisplayLabel())
     val clearChoice = nativeScalarRelationClearChoice(displayField)
     when {
-        options.isEmpty() && clearChoice == null -> GenericUnavailableRelationField(displayField, error)
+        options.isEmpty() && clearChoice == null && paging == null ->
+            GenericUnavailableRelationField(displayField, error)
         field.format in setOf(DYNAMIC_INTEGER_ARRAY_FORMAT, DYNAMIC_STRING_ARRAY_FORMAT) ->
-            GenericRelationMultiPicker(displayField, value, options, error, enabled, onValueChange)
+            GenericRelationMultiPicker(displayField, value, options, paging, error, enabled, onValueChange)
         else -> GenericRelationPicker(
             field = displayField,
             value = value,
             options = options,
             clearChoice = clearChoice,
+            paging = paging,
             error = error,
             enabled = enabled,
             onValueChange = onValueChange,
         )
     }
 }
+
+private fun nativeRelationPaging(
+    field: FieldSpec,
+    formResource: ResourceSpec,
+    schema: NativeAppSchema,
+    context: NativeDatasetContext,
+): NativeRelatedRecordPaging? = nativeRelationRelationship(field, formResource, schema)
+    ?.parentResourceId
+    ?.let(context.relatedRecordPaging::get)
 
 @Composable
 private fun GenericUnavailableRelationField(field: FieldSpec, error: String?) {
@@ -5346,6 +5416,7 @@ private fun GenericRelationPicker(
     value: String,
     options: List<NativeRelationOption>,
     clearChoice: NativeRelationOption?,
+    paging: NativeRelatedRecordPaging?,
     error: String?,
     enabled: Boolean,
     onValueChange: (String) -> Unit,
@@ -5448,6 +5519,7 @@ private fun GenericRelationPicker(
                         },
                     )
                 }
+                GenericRelationPagingItem(paging)
             }
         }
         error?.let { message ->
@@ -5461,6 +5533,7 @@ private fun GenericRelationMultiPicker(
     field: FieldSpec,
     value: String,
     options: List<NativeRelationOption>,
+    paging: NativeRelatedRecordPaging?,
     error: String?,
     enabled: Boolean,
     onValueChange: (String) -> Unit,
@@ -5536,12 +5609,48 @@ private fun GenericRelationMultiPicker(
                         },
                     )
                 }
+                GenericRelationPagingItem(paging)
             }
         }
         error?.let { message ->
             Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
     }
+}
+
+@Composable
+private fun GenericRelationPagingItem(paging: NativeRelatedRecordPaging?) {
+    paging ?: return
+    if (paging.loading) {
+        DropdownMenuItem(
+            text = { Text("Loading more choices...") },
+            onClick = {},
+            enabled = false,
+        )
+        return
+    }
+    DropdownMenuItem(
+        text = {
+            Column {
+                Text(
+                    when {
+                        paging.loadMore == null -> "More choices unavailable"
+                        paging.error == null -> "Load more choices"
+                        else -> "Try loading more choices"
+                    },
+                )
+                paging.error?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        onClick = { paging.loadMore?.invoke() },
+        enabled = paging.loadMore != null,
+    )
 }
 
 @Composable

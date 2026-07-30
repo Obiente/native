@@ -53,6 +53,93 @@ class DynamicFormRelationsTest {
     }
 
     @Test
+    fun `relation cache preserves later records while retaining a strict per scope bound`() {
+        val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
+        val schema = schema(
+            form = form,
+            relationship = ResourceRelationshipSpec(
+                "categories",
+                "entries",
+                "id",
+                "categoryId",
+                Confidence.verified,
+            ),
+            reads = listOf(
+                action(
+                    "category-index",
+                    "categories",
+                    "/api/categories",
+                    requiredPathNames = emptyList(),
+                ),
+            ),
+        )
+        val request = dynamicFormRelationLoadRequests(schema, form, emptyMap()).single()
+        val records = (1..700).map { index ->
+            NativeRecord(
+                id = "category-$index",
+                values = mapOf("id" to "category-$index", "name" to "Category $index"),
+            )
+        }
+
+        val state = DynamicFormRelationCacheState().loadSucceeded(request, records)
+        val cached = state.relatedRecords(listOf(request))
+            .getValue("categories")
+
+        assertEquals(MAX_DYNAMIC_FORM_RELATION_RECORDS, cached.size)
+        assertTrue(cached.any { record -> record.id == "category-75" })
+        assertTrue(cached.any { record -> record.id == "category-500" })
+        assertTrue(cached.none { record -> record.id == "category-501" })
+        assertTrue(state.reachedSafetyLimit(request))
+    }
+
+    @Test
+    fun `relation pagination progressively preserves later pages and declared continuation`() {
+        val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
+        val schema = schema(
+            form = form,
+            relationship = ResourceRelationshipSpec(
+                "categories",
+                "entries",
+                "id",
+                "categoryId",
+                Confidence.verified,
+            ),
+            reads = listOf(
+                action(
+                    "category-index",
+                    "categories",
+                    "/api/categories",
+                    requiredPathNames = emptyList(),
+                ),
+            ),
+        )
+        val request = dynamicFormRelationLoadRequests(schema, form, emptyMap()).single()
+        val pagination = DynamicPaginationSpec(
+                parameterName = "page",
+                mode = DynamicPaginationMode.PageNumber,
+                expectedPageSize = 50,
+        )
+
+        val firstPage = DynamicFormRelationCacheState().loadSucceeded(
+            request = request,
+            records = records(1..50),
+            pagination = pagination,
+        )
+        assertEquals("2", firstPage.continuation(request)?.nextRequestValue)
+
+        val secondPage = firstPage.appendPageSucceeded(request, records(46..95))
+        val secondPageRecords = secondPage.relatedRecords(listOf(request)).getValue("categories")
+        assertEquals(95, secondPageRecords.size)
+        assertEquals(secondPageRecords.size, secondPageRecords.map(NativeRecord::id).distinct().size)
+        assertTrue(secondPageRecords.any { record -> record.id == "category-75" })
+        assertEquals("3", secondPage.continuation(request)?.nextRequestValue)
+
+        val finalPage = secondPage.appendPageSucceeded(request, records(96..107))
+        assertEquals(107, finalPage.relatedRecords(listOf(request)).getValue("categories").size)
+        assertEquals(null, finalPage.continuation(request))
+    }
+
+    @Test
     fun `unbound or unrelated reads do not become form lookup dependencies`() {
         val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
         val schema = schema(
@@ -283,4 +370,11 @@ class DynamicFormRelationsTest {
         sourceActionId = sourceActionId,
         confidence = Confidence.verified,
     )
+
+    private fun records(range: IntRange): List<NativeRecord> = range.map { index ->
+        NativeRecord(
+            id = "category-$index",
+            values = mapOf("id" to "category-$index", "name" to "Category $index"),
+        )
+    }
 }
