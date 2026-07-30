@@ -74,6 +74,46 @@ class GenericNativeRendererActionsTest {
     }
 
     @Test
+    fun `unknown delete outcomes reconcile without retry while explicit rejections remain retryable`() {
+        assertTrue(NativeActionFailureOutcome.Unknown.requiresMutationReconciliation())
+        assertFalse(NativeActionFailureOutcome.Unknown.allowsGenericDeleteRetry())
+
+        assertFalse(NativeActionFailureOutcome.Rejected.requiresMutationReconciliation())
+        assertTrue(NativeActionFailureOutcome.Rejected.allowsGenericDeleteRetry())
+    }
+
+    @Test
+    fun `unknown completion outcomes suppress retry until refresh while rejection stays retryable`() {
+        val originalRecords = listOf(NativeRecord("task-1", mapOf("completed" to "false")))
+        val originalKey = NativeAuthoritativeRecordsKey(originalRecords)
+        val reconciliation = mutableMapOf<String, NativeAuthoritativeRecordsKey>()
+
+        val refreshRequired = reconciliation.recordNativeCompletionFailure(
+            recordId = "task-1",
+            authoritativeRecordsKey = originalKey,
+            outcome = NativeActionFailureOutcome.Unknown,
+        )
+
+        assertTrue(refreshRequired)
+        assertTrue(reconciliation.isNativeCompletionReconciling("task-1", originalKey))
+
+        reconciliation["task-2"] = originalKey
+        val rejectedRefreshRequired = reconciliation.recordNativeCompletionFailure(
+            recordId = "task-2",
+            authoritativeRecordsKey = originalKey,
+            outcome = NativeActionFailureOutcome.Rejected,
+        )
+        assertFalse(rejectedRefreshRequired)
+        assertFalse(reconciliation.isNativeCompletionReconciling("task-2", originalKey))
+
+        val refreshedKey = NativeAuthoritativeRecordsKey(
+            listOf(NativeRecord("task-1", mapOf("completed" to "false"))),
+        )
+        assertEquals(setOf("task-1"), reconciliation.reconcileNativeCompletionFailures(refreshedKey))
+        assertFalse(reconciliation.isNativeCompletionReconciling("task-1", refreshedKey))
+    }
+
+    @Test
     fun `authoritative refresh wins over completion override even when records are unchanged`() {
         val originalRecords = listOf(NativeRecord("task-1", mapOf("completed" to "false")))
         val unchangedRefreshedRecords = listOf(NativeRecord("task-1", mapOf("completed" to "false")))

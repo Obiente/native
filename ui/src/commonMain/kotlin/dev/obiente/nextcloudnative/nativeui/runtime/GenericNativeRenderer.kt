@@ -61,6 +61,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -493,6 +494,9 @@ fun GenericNativeAppScreen(
                 pendingRecordDeleteAction = null
                 inlineActionSucceeded?.invoke(action)
             },
+            onOutcomeUnknown = { action ->
+                inlineActionSucceeded?.invoke(action)
+            },
         )
     }
     pendingRecordCommandAction?.let { pending ->
@@ -844,14 +848,24 @@ private fun GenericRecordDeleteActionDialog(
     actionExecutor: NativeActionExecutor,
     onDismiss: () -> Unit,
     onActionSucceeded: (ActionSpec) -> Unit,
+    onOutcomeUnknown: (ActionSpec) -> Unit,
 ) {
     var error by remember(pending) { mutableStateOf<String?>(null) }
     var deleting by remember(pending) { mutableStateOf(false) }
+    var outcomeUnknown by remember(pending) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     AlertDialog(
         onDismissRequest = { if (!deleting) onDismiss() },
-        title = { Text("Delete ${pending.itemLabel}?") },
+        title = {
+            Text(
+                if (outcomeUnknown) {
+                    "Delete result unknown"
+                } else {
+                    "Delete ${pending.itemLabel}?"
+                },
+            )
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
                 Text("This removes the item from the server and cannot be undone.")
@@ -862,37 +876,52 @@ private fun GenericRecordDeleteActionDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                if (outcomeUnknown) {
+                    Text(
+                        "The collection is being refreshed to check the server result. " +
+                            "Review the refreshed data before trying to delete this item again.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         dismissButton = {
             TextButton(enabled = !deleting, onClick = onDismiss) {
-                Text("Cancel")
+                Text(if (outcomeUnknown) "Close" else "Cancel")
             }
         },
         confirmButton = {
-            Button(
-                enabled = !deleting,
-                onClick = {
-                    val request = pending.plan.request(confirmed = true)
-                    deleting = true
-                    error = null
-                    scope.launch {
-                        when (val result = actionExecutor.execute(request)) {
-                            is NativeActionExecutionResult.Success -> {
-                                onActionSucceeded(pending.plan.action)
+            if (!outcomeUnknown) {
+                Button(
+                    enabled = !deleting,
+                    onClick = {
+                        val request = pending.plan.request(confirmed = true)
+                        deleting = true
+                        error = null
+                        outcomeUnknown = false
+                        scope.launch {
+                            when (val result = actionExecutor.execute(request)) {
+                                is NativeActionExecutionResult.Success -> {
+                                    onActionSucceeded(pending.plan.action)
+                                }
+                                is NativeActionExecutionResult.Failure -> {
+                                    error = result.message
+                                    outcomeUnknown = !result.outcome.allowsGenericDeleteRetry()
+                                    if (outcomeUnknown) {
+                                        onOutcomeUnknown(pending.plan.action)
+                                    }
+                                }
                             }
-                            is NativeActionExecutionResult.Failure -> {
-                                error = result.message
-                            }
+                            deleting = false
                         }
-                        deleting = false
+                    },
+                ) {
+                    if (deleting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Delete")
                     }
-                },
-            ) {
-                if (deleting) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    Text("Delete")
                 }
             }
         },
@@ -1896,6 +1925,38 @@ internal fun MutableMap<String, NativeCompletionOverride>.reconcileNativeComplet
     }.forEach(::remove)
 }
 
+/**
+ * Records a completion result whose server outcome is unknown until a later authoritative refresh.
+ * The Boolean return value tells the UI whether it must request that refresh.
+ */
+internal fun MutableMap<String, NativeAuthoritativeRecordsKey>.recordNativeCompletionFailure(
+    recordId: String,
+    authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
+    outcome: NativeActionFailureOutcome,
+): Boolean {
+    if (!outcome.requiresMutationReconciliation()) {
+        remove(recordId)
+        return false
+    }
+    this[recordId] = authoritativeRecordsKey
+    return true
+}
+
+internal fun Map<String, NativeAuthoritativeRecordsKey>.isNativeCompletionReconciling(
+    recordId: String,
+    authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
+): Boolean = get(recordId) == authoritativeRecordsKey
+
+internal fun MutableMap<String, NativeAuthoritativeRecordsKey>.reconcileNativeCompletionFailures(
+    authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
+): Set<String> {
+    val reconciledRecordIds = keys.filterTo(linkedSetOf()) { recordId ->
+        get(recordId) != authoritativeRecordsKey
+    }
+    reconciledRecordIds.forEach(::remove)
+    return reconciledRecordIds
+}
+
 @Composable
 private fun GenericTaskCollection(
     schema: NativeAppSchema,
@@ -1911,13 +1972,20 @@ private fun GenericTaskCollection(
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val currentAuthoritativeRecordsKey by rememberUpdatedState(authoritativeRecordsKey)
     val completionOverrides = remember(schema, resource.id) {
         mutableStateMapOf<String, NativeCompletionOverride>()
     }
     val completionInProgress = remember(schema, resource.id) { mutableStateMapOf<String, Boolean>() }
+    val completionReconciliations = remember(schema, resource.id) {
+        mutableStateMapOf<String, NativeAuthoritativeRecordsKey>()
+    }
     val completionErrors = remember(schema, resource.id) { mutableStateMapOf<String, String>() }
     LaunchedEffect(authoritativeRecordsKey) {
         completionOverrides.reconcileNativeCompletionOverrides(authoritativeRecordsKey)
+        completionReconciliations
+            .reconcileNativeCompletionFailures(authoritativeRecordsKey)
+            .forEach(completionErrors::remove)
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1946,6 +2014,10 @@ private fun GenericTaskCollection(
                 authoritativeCompleted = authoritativeCompleted,
             )
             val completing = completionInProgress[record.id] == true
+            val reconciling = completionReconciliations.isNativeCompletionReconciling(
+                recordId = record.id,
+                authoritativeRecordsKey = authoritativeRecordsKey,
+            )
             val secondaryActions = nativeRecordCardActions(
                 capabilities = actions,
                 record = record,
@@ -1984,7 +2056,7 @@ private fun GenericTaskCollection(
                         if (completion != null) {
                             Checkbox(
                                 checked = completed,
-                                enabled = !completing,
+                                enabled = !completing && !reconciling,
                                 onCheckedChange = { requested ->
                                     completionErrors.remove(record.id)
                                     completionInProgress[record.id] = true
@@ -1995,6 +2067,7 @@ private fun GenericTaskCollection(
                                             )
                                         ) {
                                             is NativeActionExecutionResult.Success -> {
+                                                completionReconciliations.remove(record.id)
                                                 completionOverrides[record.id] = NativeCompletionOverride(
                                                     completed = requested,
                                                     sourceRecordsKey = authoritativeRecordsKey,
@@ -2003,6 +2076,15 @@ private fun GenericTaskCollection(
                                             }
                                             is NativeActionExecutionResult.Failure -> {
                                                 completionErrors[record.id] = result.message
+                                                val refreshRequired =
+                                                    completionReconciliations.recordNativeCompletionFailure(
+                                                        recordId = record.id,
+                                                        authoritativeRecordsKey = currentAuthoritativeRecordsKey,
+                                                        outcome = result.outcome,
+                                                    )
+                                                if (refreshRequired) {
+                                                    onActionSucceeded?.invoke(completion.action)
+                                                }
                                             }
                                         }
                                         completionInProgress.remove(record.id)
@@ -2059,6 +2141,15 @@ private fun GenericTaskCollection(
                                 message,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (reconciling) {
+                            Text(
+                                "Refreshing to verify the completion result before another change.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -2135,6 +2226,9 @@ internal fun NativeActionFailureOutcome.requiresCommandReconciliation(): Boolean
     requiresMutationReconciliation()
 
 internal fun NativeActionFailureOutcome.allowsGenericFormRetry(): Boolean =
+    !requiresMutationReconciliation()
+
+internal fun NativeActionFailureOutcome.allowsGenericDeleteRetry(): Boolean =
     !requiresMutationReconciliation()
 
 internal fun nativeRecordCommandUi(
