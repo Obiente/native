@@ -107,6 +107,7 @@ internal fun DynamicContractChildInfo.reasonLabel(): String = when (status) {
     DynamicChildCandidateStatus.selfEdge -> "Omitted: self edge"
     DynamicChildCandidateStatus.cycle -> "Omitted: cycle"
     DynamicChildCandidateStatus.missingContext -> "Omitted: missing context"
+    DynamicChildCandidateStatus.ancestorOnlyContext -> "Omitted: ancestor context only"
     DynamicChildCandidateStatus.noLayout -> "Omitted: no layout"
     DynamicChildCandidateStatus.noLink -> "Omitted: no link"
 }

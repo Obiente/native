@@ -143,11 +143,20 @@ internal fun nativeBoardCardActionPlan(
     record: NativeRecord,
     lanes: List<NativeBoardLane>,
 ): NativeBoardCardActionPlan {
-    if (!record.canResolveUnsafeActionIdentity()) return NativeBoardCardActionPlan(edit = null, move = null)
-    val laneContext = lanes.firstOrNull { lane ->
+    val selectedLane = lanes.firstOrNull { lane ->
         lane.records.any { laneRecord -> laneRecord.id == record.id }
-    }?.contextValues.orEmpty()
-    val bindingValues = laneContext + record.actionBindingValues(allowUnsafeIdentity = true)
+    }
+    if (selectedLane?.actionBindingProvenanceValid == false) {
+        return NativeBoardCardActionPlan(edit = null, move = null)
+    }
+    val laneContext = selectedLane?.contextValues.orEmpty().filterKeys { key ->
+        val semantic = key.boardSemanticId()
+        semantic != "id" && (semantic.endsWith("id") || semantic in BOARD_LANE_BODY_FIELD_NAMES)
+    }
+    val recordBindingValues = record.safeActionBindingValues()
+        ?: return NativeBoardCardActionPlan(edit = null, move = null)
+    val bindingValues = safeActionBindingValues(laneContext, recordBindingValues)
+        ?: return NativeBoardCardActionPlan(edit = null, move = null)
     val actions = schema.actions.filter { action ->
         action.resourceId.sameBoardActionResource(resource.id) &&
             action.risk == ActionRisk.mutating &&
@@ -177,13 +186,7 @@ internal fun nativeBoardLaneCreatePlan(
     resource: ResourceSpec,
     lane: NativeBoardLane,
 ): NativeBoardCreatePlan? {
-    val bindingValues = lane.contextValues + mapOf(
-        "laneId" to lane.key,
-        "stackId" to lane.key,
-        "columnId" to lane.key,
-        "listId" to lane.key,
-        "stageId" to lane.key,
-    )
+    if (!lane.actionBindingProvenanceValid) return null
     return schema.actions.mapNotNull { action ->
         if (
             !action.resourceId.sameBoardActionResource(resource.id) ||
@@ -194,6 +197,15 @@ internal fun nativeBoardLaneCreatePlan(
         ) {
             return@mapNotNull null
         }
+        val laneAliases = (
+            action.binding.pathParameterNames +
+                action.binding.queryParameterNames +
+                action.binding.bodyFieldNames
+            )
+            .filter { name -> name.boardSemanticId() in BOARD_LANE_BODY_FIELD_NAMES }
+            .associateWith { lane.key }
+        val bindingValues = safeActionBindingValues(lane.contextValues, laneAliases)
+            ?: return@mapNotNull null
         val titleField = action.binding.bodyFieldNames
             .mapNotNull { name ->
                 BOARD_CREATE_TITLE_FIELDS[name.boardSemanticId()]?.let { priority -> name to priority }
@@ -203,6 +215,9 @@ internal fun nativeBoardLaneCreatePlan(
             ?: return@mapNotNull null
         val descriptionField = action.binding.bodyFieldNames.singleOrNull {
             it.boardSemanticId() in BOARD_CREATE_DESCRIPTION_FIELDS
+        }
+        if (action.binding.hasFlatBoardActionCollision(listOfNotNull(titleField, descriptionField))) {
+            return@mapNotNull null
         }
         val available = bindingValues.keys + titleField + listOfNotNull(descriptionField)
         if (!action.binding.canResolveExactBoardValues(available, action.resourceId)) return@mapNotNull null
@@ -240,7 +255,12 @@ private fun nativeBoardDirectActions(
     val candidates = schema.actions.mapNotNull { action ->
         if (!action.resourceId.sameBoardActionResource(resource.id)) return@mapNotNull null
         val kind = action.boardDirectActionKind() ?: return@mapNotNull null
-        val resolvedBindingValues = action.withBoardIdentityAliases(bindingValues, record.id)
+        val resolvedBindingValues = action.withBoardIdentityAliases(
+            values = bindingValues,
+            recordId = record.id,
+            canonicalIdentityAvailable = record.actionSafeIdentity,
+        )
+            ?: return@mapNotNull null
         if (
             kind == NativeBoardDirectActionKind.Delete &&
             (action.risk != ActionRisk.destructive || action.binding.method != HttpMethod.DELETE)
@@ -254,6 +274,9 @@ private fun nativeBoardDirectActions(
             return@mapNotNull null
         }
         if (action.binding.bodyFieldNames.any { it.boardSemanticId() !in BOARD_DIRECT_IDENTITY_FIELDS }) {
+            return@mapNotNull null
+        }
+        if (action.binding.hasFlatBoardActionCollision(action.binding.bodyFieldNames)) {
             return@mapNotNull null
         }
         if (!action.binding.canResolveExactBoardValues(resolvedBindingValues.keys, action.resourceId)) {
@@ -293,20 +316,24 @@ private fun nativeBoardDirectActions(
 private fun ActionSpec.withBoardIdentityAliases(
     values: Map<String, String>,
     recordId: String,
-): Map<String, String> = buildMap {
-    putAll(values)
-    val declaredNames = binding.pathParameterNames + binding.queryParameterNames + binding.bodyFieldNames
-    declaredNames.forEach { name ->
-        val normalized = name.boardSemanticId()
-        val stem = normalized.removeSuffix("id")
-        if (
-            normalized.endsWith("id") &&
-            stem.sameBoardActionResource(resourceId) &&
-            keys.none { existing -> existing.boardSemanticId() == normalized }
-        ) {
-            put(name, recordId)
+    canonicalIdentityAvailable: Boolean,
+): Map<String, String>? {
+    val aliases = buildMap<String, String> {
+        if (!canonicalIdentityAvailable) return@buildMap
+        val declaredNames = binding.pathParameterNames + binding.queryParameterNames + binding.bodyFieldNames
+        declaredNames.forEach { name ->
+            val normalized = name.boardSemanticId()
+            val stem = normalized.removeSuffix("id")
+            if (
+                normalized.endsWith("id") &&
+                stem.sameBoardActionResource(resourceId) &&
+                keys.none { existing -> existing.boardSemanticId() == normalized }
+            ) {
+                put(name, recordId)
+            }
         }
     }
+    return safeActionBindingValues(values, aliases)
 }
 
 private fun ActionSpec.boardDirectActionKind(): NativeBoardDirectActionKind? {
@@ -366,8 +393,11 @@ private fun ActionSpec.toBoardEditCandidate(
         NativeBoardEditableField(field, bodyName)
     }
     if (editableFields.isEmpty()) return null
+    if (binding.hasFlatBoardActionCollision(editableFields.map(NativeBoardEditableField::bodyFieldName))) {
+        return null
+    }
     val available = bindingValues.keys + editableFields.map(NativeBoardEditableField::bodyFieldName)
-    if (!binding.canResolveRequiredBoardValues(available)) return null
+    if (!binding.canResolveExactBoardValues(available, resourceId)) return null
     val initialValues = editableFields.associate { editable ->
         editable.field.id to bindingValues.valueForBoardName(editable.field.id).orEmpty()
     }
@@ -392,6 +422,7 @@ private fun ActionSpec.toBoardMoveCandidate(
     if (intent !in setOf(ActionIntent.update, ActionIntent.execute)) return null
     val laneField = binding.bodyFieldNames.singleOrNull { it.boardSemanticId() in BOARD_LANE_BODY_FIELD_NAMES }
         ?: return null
+    if (binding.hasFlatBoardActionCollision(listOf(laneField))) return null
     val currentLane = record.values.entries.firstOrNull {
         it.key.boardSemanticId() in BOARD_LANE_BODY_FIELD_NAMES
     }?.value?.trim()?.takeIf(String::isNotBlank) ?: return null
@@ -402,7 +433,7 @@ private fun ActionSpec.toBoardMoveCandidate(
         .toList()
     if (targets.isEmpty()) return null
     val available = bindingValues.keys + laneField
-    if (!binding.canResolveRequiredBoardValues(available)) return null
+    if (!binding.canResolveExactBoardValues(available, resourceId)) return null
     val semantic = "$id $label ${binding.operationId} ${binding.path}".boardSemanticWords()
     val rank = when {
         "move" in semantic -> 500
@@ -414,19 +445,6 @@ private fun ActionSpec.toBoardMoveCandidate(
         NativeBoardMovePlan(this, laneField, currentLane, targets, bindingValues),
         rank,
     )
-}
-
-private fun dev.obiente.nextcloudnative.nativeui.model.ApiBinding.canResolveRequiredBoardValues(
-    available: Set<String>,
-): Boolean {
-    val normalized = available.mapTo(mutableSetOf()) { it.boardSemanticId() }
-    fun String.resolvable(): Boolean {
-        val name = boardSemanticId()
-        return name in normalized || name.endsWith("id") && "id" in normalized
-    }
-    return requiredPathParameterNames.all(String::resolvable) &&
-        requiredQueryParameterNames.all(String::resolvable) &&
-        requiredBodyFieldNames.all(String::resolvable)
 }
 
 private fun dev.obiente.nextcloudnative.nativeui.model.ApiBinding.canResolveExactBoardValues(
@@ -445,6 +463,17 @@ private fun dev.obiente.nextcloudnative.nativeui.model.ApiBinding.canResolveExac
     return requiredPathParameterNames.all(String::resolvable) &&
         requiredQueryParameterNames.all(String::resolvable) &&
         requiredBodyFieldNames.all { it.boardSemanticId() in normalized }
+}
+
+/**
+ * NativeActionRequest currently carries one flat value map. A submitted body field therefore
+ * cannot safely have a different value from a path or query parameter with the same semantic name.
+ */
+private fun dev.obiente.nextcloudnative.nativeui.model.ApiBinding.hasFlatBoardActionCollision(
+    submittedBodyFields: Collection<String>,
+): Boolean {
+    val routeFields = (pathParameterNames + queryParameterNames).mapTo(mutableSetOf(), String::boardSemanticId)
+    return submittedBodyFields.any { it.boardSemanticId() in routeFields }
 }
 
 private fun <T> List<RankedBoardPlan<T>>.singleHighestOrNull(): T? {

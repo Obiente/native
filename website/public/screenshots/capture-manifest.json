@@ -30,6 +30,8 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicApiRequestCoalescer.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicArtworkMemoryCache.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicContractInfo.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicFormRelations.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicMutationRefresh.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeMemoryCache.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntime.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExifOrientation.kt",
@@ -70,6 +72,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingLivePhotoCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingPhotoFolderCaptureScenarios.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingPhotoTimelineCaptureScenarios.kt",
@@ -154,17 +157,20 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudBoardDragAutoScroll.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudBoardDragHandle.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudCardActions.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudCollectionNavigator.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudComponents.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudContextMenu.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudIcons.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudTheme.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudTokens.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudWorkspaceBreakpoints.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptor.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptorCompiler.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicDescriptorMapper.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicDescriptorValidation.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicFormFormats.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicNavigationPlanner.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicStructuredForm.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/NativeSchema.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/SemanticConceptTokens.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/NativeRuntimePreviewApp.kt",
@@ -175,12 +181,18 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeAudioLibrary.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeBoardActions.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeBoardDragPlacement.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeCollectionActionUiState.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeCollectionActions.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeDatasetSemantics.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeFormMutationRecovery.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailActions.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailMarkup.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecipePresentations.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecipeScaling.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecordActions.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRepeatableObjectUiState.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeSemanticPresentations.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeTaskSemantics.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/RuntimeState.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/template/BracedTemplate.kt",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/DeckInteractionPreviewMain.kt",
@@ -197,7 +209,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "95415ff1e63f81bc2e56f2613d8a431876dfeac57f8bd2be0ba0a98b30343986",
+    "captureSourceSha256": "63ba7406572b71015c8cd07a89ee35c575fc626b506508fdfc923e68888cc56d",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {
@@ -212,7 +224,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "8c51b7a628149cd9c7dad580de118d55e653eb11708651d699346393e0cdb814"
+            "sha256": "1495005bbb47a669a52ebd4931e821e1cbc7a76608b7df608382aabf7fa41f95"
         },
         {
             "scenario": "mobile-home",
@@ -226,7 +238,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "071f9d85242b37a8cac81a06fb23e290d452bd0c48923c910155fc50882336bc"
+            "sha256": "f92c861a4800b7a52886eb902849c5719ebc6db6eadfa6ea4e8d4ae8600ce714"
         },
         {
             "scenario": "obsidian-vault-sync",
@@ -240,7 +252,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-compact",
-            "sha256": "193b88b5ab1cf40c269a76fe44ac91038465225f17dc7b20fc35f08f9d6bdbd4"
+            "sha256": "d55a72b9dea2139eb28bf2f361726f91a3726df9f9b7aa6c7742c903f2955e57"
         },
         {
             "scenario": "media-backup-queue",
@@ -254,7 +266,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "c0c83a52a1b1912d403a0ddcd61a75f5e5d758ea45e571c9ecf3e1f834e2ee53"
+            "sha256": "cf3059d8088e16a1171ebdbfc46816c817775ec8173995bf0501597c5abd64fa"
         },
         {
             "scenario": "adaptive-dynamic-data",
@@ -263,12 +275,12 @@
             "height": 900,
             "density": 1.0,
             "feature": "Dynamic apps",
-            "surface": "Data table",
-            "state": "Ready",
+            "surface": "Nested collection and semantic form",
+            "state": "Synthetic visual QA",
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "8d67ba3f63f6a47eb314ca6c46bd48a080148afeb9f9182a2a87154b8c6e772c"
+            "sha256": "ddbe82d0dc42a3902f41897231147402d7e3b6d0c0b51a15ce69ff1d2cf40202"
         },
         {
             "scenario": "adaptive-dynamic-data-mobile",
@@ -277,12 +289,40 @@
             "height": 1800,
             "density": 2.625,
             "feature": "Dynamic apps",
-            "surface": "Data table",
-            "state": "Ready",
-            "purpose": "showcase",
+            "surface": "Nested collection and semantic form",
+            "state": "Synthetic visual QA",
+            "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "f1290c89723184800c127401de7fea4256294049828d014beed5ce11c8e35ea5"
+            "sha256": "304a7dea161c51ec61978764db46d69fbf9194476fe7ae05b8c900b645fe59c7"
+        },
+        {
+            "scenario": "adaptive-dynamic-collection-mobile",
+            "file": "adaptive-dynamic-collection-mobile.png",
+            "width": 1080,
+            "height": 1800,
+            "density": 2.625,
+            "feature": "Dynamic apps",
+            "surface": "Nested collection actions",
+            "state": "Synthetic visual QA",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "849dbda0b56d984944f77b7d547d03b9bf3aaf0ac6de2d96ce6138445d65f796"
+        },
+        {
+            "scenario": "adaptive-dynamic-context-menu-mobile",
+            "file": "adaptive-dynamic-context-menu-mobile.png",
+            "width": 1080,
+            "height": 1800,
+            "density": 2.625,
+            "feature": "Dynamic apps",
+            "surface": "Context workspace menu",
+            "state": "Synthetic visual QA",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "e483aa2640fc4df5c905c1a79af01c522cc2fa8c7ffc511433bd730329551080"
         },
         {
             "scenario": "photo-timeline-revalidation-error-mobile",
@@ -298,7 +338,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 246,
             "issue": 242,
-            "sha256": "60d76a9530c215f5d5473975e162dda5b192fc56e3672401f53e9c0774c10740"
+            "sha256": "74b26981a5d7b8abfe3837acc238d69e99a34db6f2af88cda7d20b41d5b32d03"
         },
         {
             "scenario": "photo-timeline-return-to-newest-error-mobile",
@@ -314,7 +354,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 246,
             "issue": 242,
-            "sha256": "c6960155703b6bee4216b684adda94c9c4b5325e621d10d7c24be2cd0be5213f"
+            "sha256": "dbe920a60aed29947f5c81c30d173c67e0013506a84329ebefb57125fe702b2f"
         },
         {
             "scenario": "photo-timeline-raw-retry-mobile",
@@ -330,7 +370,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 249,
             "issue": 248,
-            "sha256": "b82e70232c249715c0e18db678f24bc84f1c77db2463770a8a2c5b4d45c62ee9"
+            "sha256": "6af1b7d716ea58413727e3e5ce1fbd178d772b583e8481ebc71a5cd6fa1ebccd"
         },
         {
             "scenario": "photo-folder-browser-mobile",
@@ -346,7 +386,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 245,
             "issue": 243,
-            "sha256": "c24e27abd1a897d556c0dac47448bf00da2deb1ab12065401aae05f730de6a35"
+            "sha256": "60c32a8efa89d4f1c6d006a44912abd6504cdf7321002b0e886f9ea45204d219"
         },
         {
             "scenario": "photo-folder-browser-desktop",
@@ -362,7 +402,7 @@
             "viewport": "wide",
             "pullRequest": 245,
             "issue": 243,
-            "sha256": "0222cf8131beeff16e5ab0448b8de4e3cf7616520a5781bac015d2755335d5b5"
+            "sha256": "c22be231ab73c80eeb8619932b7830463100fe0aa1293ee0f31660f3b09cabfd"
         },
         {
             "scenario": "raw-preview-loading-mobile",
@@ -378,7 +418,7 @@
             "viewport": "phone-compact",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "05e2c33c9a37cad7a95808419b77e72b7e33c1d4274e658cb04e65edac9c0193"
+            "sha256": "14744822f7b9e60015675f2515f3b7e9685345ef3d56c080556f2cf9acc935e7"
         },
         {
             "scenario": "raw-preview-error-mobile",
@@ -394,7 +434,7 @@
             "viewport": "phone-compact",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "01d0d42f3dc57b3f0a5da0353ad40f30a9e9e219fbc52b0c65358d72c41758d0"
+            "sha256": "7aef0508cdbae8d691c9187847de3c0d188cef65465021ce861aee6d3eb0863a"
         },
         {
             "scenario": "raw-preview-memories-ready-mobile",
@@ -410,7 +450,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "25cd22beb5640c73269b5b786fc6a6525e0913f402c17c29f963c2709c8b2a7a"
+            "sha256": "0381f21fa25ef09aeca8d7a9606f39eab96a8ad0e5a2178ef1fc14561fa0fc39"
         },
         {
             "scenario": "raw-preview-high-detail-desktop",
@@ -426,7 +466,7 @@
             "viewport": "wide",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "5b0d81b2626247baf3572be949143fee9cdf8392156a5a5eee5d9d70ad160a9e"
+            "sha256": "265c35d941a8ebce4c0408544dcb78cfc0ac3700dd4b1366e04cf2792b451028"
         },
         {
             "scenario": "live-photo-motion-failure-mobile",
@@ -442,7 +482,7 @@
             "viewport": "phone-compact",
             "pullRequest": 249,
             "issue": 182,
-            "sha256": "3fc5ec6e2db43ebbebaca5b764e81d46685543bedfbeb391065d95ef0fc97f52"
+            "sha256": "2f248b1b9251f0211774cd57c33a9e639c31ca7935147d0a309120f070ae914a"
         },
         {
             "scenario": "native-tiff-preview-mobile",
@@ -458,7 +498,7 @@
             "viewport": "phone-compact",
             "pullRequest": 249,
             "issue": 84,
-            "sha256": "42a2fba65982fb18c7462b8a2838ad79507f43ebd5443b2cfcbd2bf147fca30d"
+            "sha256": "780fbac0bcf219772df7d99b2726deeec27ed9fa2355a16e1576e17ccdbe8ae2"
         },
         {
             "scenario": "file-share-user-mobile",
@@ -474,7 +514,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "ea41901e75f47ff662d9b4d2f0ffb5fdf9822f8fde4e0decbdddef7675da8ae0"
+            "sha256": "c1084b73d58e6ad6f0dffc2e7e31f6c2388b1fe268205c3f20ff303f14f69aa0"
         },
         {
             "scenario": "file-share-group-desktop",
@@ -490,7 +530,7 @@
             "viewport": "wide",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "5fc62f679169035bfdb67a2dbe8cea7c8c21a418448896294fc7988814f8e5b6"
+            "sha256": "7ec0df01a0a04ff054afb8a50672e64b3edfcf45f35cc15d90f8d396e3ff78ee"
         },
         {
             "scenario": "file-share-loading-mobile",
@@ -506,7 +546,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "e524289888582bbf6531c9e6467664d187e99c9d23508f020f0aaff638b48c02"
+            "sha256": "03646d3ee9b1a809531b586df0014095f0cb1a6b9c885ab5b9d562492e2328e3"
         },
         {
             "scenario": "file-share-error-mobile",
@@ -522,7 +562,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "30107de4377bddd5a13fd851bc5283f784ef3fe96f67e8cc81be5e41c35ae83e"
+            "sha256": "5500df269e219eecbf7d9173b11698fef809e2d1b99a39ece1b4c4ec5a112514"
         },
         {
             "scenario": "transfer-mobile-pending",
@@ -538,7 +578,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "5a8ec403de582eab401e9c2173df8e5fdddabf7bf5664dc5a592eb037f9109e2"
+            "sha256": "9cc97dd52807da7d43fa0ae5a2ec1b2d1acf8258d5289a38262ea7c8ffd8b992"
         },
         {
             "scenario": "transfer-mobile-failed-cached",
@@ -554,7 +594,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "e5c2ecbc65842cd46b12006cc879ac0dfc7787d2cee03e5938d1222a05708da4"
+            "sha256": "497e4544313c5b4910d6bec4f77547ed1876cb071305879a87b970275271ce59"
         },
         {
             "scenario": "transfer-desktop-active",
@@ -570,7 +610,7 @@
             "viewport": "wide",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "b1c3ba9ed6236345ae8fe8d18024ea2adaed33a861758a1aa52d571d634083a1"
+            "sha256": "099c1cbb5c61037b5aba13fe2ca59cf00307aebe98d2bce74f5b14b8252ea69f"
         },
         {
             "scenario": "transfer-desktop-completed-page",
@@ -586,7 +626,7 @@
             "viewport": "wide",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "570b0c78d0d88f73407a7ea827fb6c26a8d1c3f4bc19f2bd05e10a8e38df9a23"
+            "sha256": "2d2d6887f26d60551c25e774b0f3bcd4ea46df54d34d697a408d5661bd61d1df"
         },
         {
             "scenario": "deck-board-desktop",
@@ -602,7 +642,7 @@
             "viewport": "wide",
             "pullRequest": 221,
             "issue": 52,
-            "sha256": "b41f9a2d8da5653fb1bc174d77f72bf1eda5c10b63e38209ed8f5fc9a17bc019"
+            "sha256": "f13fdb332b679bc88f76a2d9393f9da1c529dbb893c6aec490f455bfe44ec9fe"
         },
         {
             "scenario": "deck-board-mobile",
@@ -618,7 +658,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 221,
             "issue": 52,
-            "sha256": "ea047a30de48e5366edf30e43d142ab8a6491617dcf0051d6f1f932a213133f5"
+            "sha256": "a1cfcc4d620103cb146c3f2f5b2de1f9dd3ffdea6c73e8b31444107537fd6e18"
         }
     ]
 }

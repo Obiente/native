@@ -51,7 +51,10 @@ internal class DynamicNativeMemoryCache(
         session: NextcloudSession,
         appId: String,
     ): Boolean = discoveryMetadata[DynamicDiscoveryCacheKey(session.dynamicAccountKey(), appId)]
-        ?.takeIf { it.storedAt.elapsedNow() <= discoveryFreshFor } != null
+        ?.takeIf { entry ->
+            entry.discovery.versionStatus == DynamicContractVersionStatus.VerifiedCurrent &&
+                entry.storedAt.elapsedNow() <= discoveryFreshFor
+        } != null
 
     fun shouldRetryDiscovery(session: NextcloudSession, appId: String): Boolean {
         val key = DynamicDiscoveryCacheKey(session.dynamicAccountKey(), appId)
@@ -92,6 +95,13 @@ internal class DynamicNativeMemoryCache(
         screens.remove(key)
         screens[key] = ScreenEntry(snapshot.bounded(), timeSource.markNow())
         while (screens.size > maximumScreens) screens.remove(screens.keys.first())
+    }
+
+    fun invalidateScreens(session: NextcloudSession, appId: String) {
+        val account = session.dynamicAccountKey()
+        screens.keys.removeAll { key ->
+            key.account == account && key.appId == appId
+        }
     }
 
     private fun DynamicScreenSnapshot.bounded(): DynamicScreenSnapshot {

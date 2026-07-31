@@ -173,6 +173,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -181,6 +183,40 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
+
+internal fun resolveAndroidNextcloudRedirectLocation(
+    requestUrl: HttpUrl,
+    serverUrl: String,
+    location: String?,
+): String? {
+    val target = location?.let(requestUrl::resolve) ?: return null
+    if (target.fragment != null) return null
+    val account = serverUrl.toHttpUrlOrNull() ?: return null
+    if (
+        target.scheme != account.scheme ||
+        target.host != account.host ||
+        target.port != account.port
+    ) {
+        return null
+    }
+    val accountPath = account.encodedPath.trimEnd('/').takeUnless { it == "/" }.orEmpty()
+    if (
+        accountPath.isNotEmpty() &&
+        target.encodedPath != accountPath &&
+        !target.encodedPath.startsWith("$accountPath/")
+    ) {
+        return null
+    }
+    val relativePath = target.encodedPath.removePrefix(accountPath)
+    if (!relativePath.startsWith('/') || relativePath.startsWith("//")) return null
+    return buildString {
+        append(relativePath)
+        target.encodedQuery?.let { query ->
+            append('?')
+            append(query)
+        }
+    }
+}
 
 internal suspend fun executeAndroidDynamicApiGet(
     accountId: String,
@@ -1562,6 +1598,12 @@ internal class AndroidNextcloudServices(
         request: NextcloudApiRequest,
     ): NextcloudApiResponse = withContext(Dispatchers.IO) {
         val safeRequest = request.requireSafe()
+        safeRequest.multipartBody?.let { multipart ->
+            return@withContext executeNextcloudMultipartUpload(
+                session,
+                multipart.toUploadRequest(safeRequest),
+            )
+        }
         val accountId = NextcloudDocumentIds.cacheAccountId(session)
         val cacheIdentity = safeRequest.dynamicReadCacheIdentity()
         if (safeRequest.method != dev.obiente.nextcloudnative.app.NextcloudApiMethod.GET) {
@@ -2198,10 +2240,7 @@ internal class AndroidNextcloudServices(
         client: OkHttpClient = httpClient,
         streamingBody: RequestBody? = null,
     ): HttpResponse {
-        check(
-            !appContext.isReadOnlyTestMode() ||
-                method.isReadOnlyTestRequestMethod(),
-        ) {
+        check(appContext.isAllowedTestRequest(method, url)) {
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
         }
         val requestBody = when {
@@ -2235,7 +2274,15 @@ internal class AndroidNextcloudServices(
                 body = responseBody.byteStream().readBounded(readLimit),
                 contentType = responseBody.contentType()?.toString(),
                 etag = response.header("ETag") ?: response.header("OC-Etag"),
-                location = response.header("Location"),
+                location = if (session == null) {
+                    response.header("Location")
+                } else {
+                    resolveAndroidNextcloudRedirectLocation(
+                        requestUrl = response.request.url,
+                        serverUrl = session.serverUrl,
+                        location = response.header("Location"),
+                    )
+                },
                 chatLastGiven = response.header("X-Chat-Last-Given"),
                 contentRange = response.header("Content-Range"),
             )

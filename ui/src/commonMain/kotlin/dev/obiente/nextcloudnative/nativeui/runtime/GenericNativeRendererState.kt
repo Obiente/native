@@ -5,9 +5,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
+import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_LIST_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
+import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
+import dev.obiente.nextcloudnative.nativeui.model.Confidence
+import dev.obiente.nextcloudnative.nativeui.model.DynamicIntegerArrayParseResult
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
@@ -15,10 +19,15 @@ import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
+import dev.obiente.nextcloudnative.nativeui.model.isExactDynamicIntegerArraySchema
+import dev.obiente.nextcloudnative.nativeui.model.parseDynamicIntegerArrayInput
+import dev.obiente.nextcloudnative.nativeui.model.sameDynamicResourceAs
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
@@ -36,6 +45,313 @@ enum class GenericNativeSurface {
     Detail,
     Form,
 }
+
+internal data class NativeRelationOption(
+    val value: String,
+    val label: String,
+    val supportingText: String? = null,
+)
+
+internal enum class NativeRelationChoiceUnavailableReason {
+    relationship,
+    parentResource,
+    source,
+    sourceEmpty,
+    unsafeIdentity,
+    ambiguousBinding,
+    scopeMismatch,
+    invalidValue,
+    duplicateValue,
+}
+
+/**
+ * Builds human-readable choices for a writable relationship field from the accepted schema graph.
+ *
+ * The relationship must identify one exact parent resource for the form resource. Loaded parent
+ * records must retain safe action provenance, and their declared parent-field value must resolve
+ * without conflict. Semantic field/resource evidence is used only to match destination-style
+ * fields to an already-declared relationship; it never creates a relationship or authorizes a
+ * mutation on its own.
+ */
+internal fun nativeRelationOptions(
+    field: FieldSpec,
+    formResource: ResourceSpec,
+    schema: NativeAppSchema,
+    context: NativeDatasetContext,
+): List<NativeRelationOption> {
+    val relationship = nativeRelationRelationship(field, formResource, schema) ?: return emptyList()
+    val parentResource = schema.resources.singleOrNull { resource ->
+        resource.id == relationship.parentResourceId &&
+            resource.confidence.isAcceptedNativeRelationshipConfidence()
+    } ?: return emptyList()
+    val parentRecords = context.relatedRecords.entries
+        .singleOrNull { (resourceId, _) -> resourceId == parentResource.id }
+        ?.value
+        ?: return emptyList()
+    val currentBindings = context.parentRecord?.safeActionBindingValues()
+    val candidates = parentRecords.mapNotNull { record ->
+        if (!record.actionSafeIdentity || !record.actionBindingProvenanceValid) return@mapNotNull null
+        val bindings = record.safeActionBindingValues() ?: return@mapNotNull null
+        if (!bindings.shareNativeRelationshipScopeWith(currentBindings, field.id, relationship.parentFieldId)) {
+            return@mapNotNull null
+        }
+        val value = bindings[relationship.parentFieldId]
+            ?.takeIf(String::isSafeNativeRelationOptionValue)
+            ?: return@mapNotNull null
+        if (
+            field.hasNativeDestinationRelationshipSemantics() &&
+            currentBindings?.matchesNativeRelationshipSource(
+                value = value,
+                destinationFieldId = field.id,
+                parentResource = parentResource,
+            ) == true
+        ) {
+            return@mapNotNull null
+        }
+        NativeRelationOption(
+            value = value,
+            label = parentResource.nativeRelationshipRecordLabel(record),
+            supportingText = parentResource.name,
+        )
+    }
+    val values = candidates.groupingBy(NativeRelationOption::value).eachCount()
+    if (values.any { (_, count) -> count > 1 }) return emptyList()
+    return candidates.sortedWith(
+        compareBy<NativeRelationOption> { option -> option.label.lowercase() }
+            .thenBy(NativeRelationOption::value),
+    )
+}
+
+internal fun nativeRelationChoiceUnavailableReason(
+    field: FieldSpec,
+    formResource: ResourceSpec,
+    schema: NativeAppSchema,
+    context: NativeDatasetContext,
+): NativeRelationChoiceUnavailableReason? {
+    val relationship = nativeRelationRelationship(field, formResource, schema)
+        ?: return NativeRelationChoiceUnavailableReason.relationship
+    val parentResource = schema.resources.singleOrNull { resource ->
+        resource.id == relationship.parentResourceId &&
+            resource.confidence.isAcceptedNativeRelationshipConfidence()
+    } ?: return NativeRelationChoiceUnavailableReason.parentResource
+    val parentRecords = context.relatedRecords.entries
+        .singleOrNull { (resourceId, _) -> resourceId == parentResource.id }
+        ?.value
+        ?: return NativeRelationChoiceUnavailableReason.source
+    if (parentRecords.isEmpty()) return NativeRelationChoiceUnavailableReason.sourceEmpty
+    val actionSafe = parentRecords.filter { record ->
+        record.actionSafeIdentity && record.actionBindingProvenanceValid
+    }
+    if (actionSafe.isEmpty()) return NativeRelationChoiceUnavailableReason.unsafeIdentity
+    val bound = actionSafe.mapNotNull { record ->
+        record.safeActionBindingValues()?.let { bindings -> record to bindings }
+    }
+    if (bound.isEmpty()) return NativeRelationChoiceUnavailableReason.ambiguousBinding
+    val currentBindings = context.parentRecord?.safeActionBindingValues()
+    val scoped = bound.filter { (_, bindings) ->
+        bindings.shareNativeRelationshipScopeWith(
+            currentBindings,
+            field.id,
+            relationship.parentFieldId,
+        )
+    }
+    if (scoped.isEmpty()) return NativeRelationChoiceUnavailableReason.scopeMismatch
+    val values = scoped.mapNotNull { (_, bindings) ->
+        bindings[relationship.parentFieldId]
+            ?.takeIf(String::isSafeNativeRelationOptionValue)
+    }
+    if (values.isEmpty()) return NativeRelationChoiceUnavailableReason.invalidValue
+    if (values.groupingBy { value -> value }.eachCount().any { (_, count) -> count > 1 }) {
+        return NativeRelationChoiceUnavailableReason.duplicateValue
+    }
+    return null
+}
+
+internal fun nativeRelationFieldRequiresChoice(
+    field: FieldSpec,
+    formResource: ResourceSpec,
+    schema: NativeAppSchema,
+): Boolean = nativeRelationRelationship(field, formResource, schema) != null ||
+    field.isOpaqueNativeRelationshipIdentity()
+
+internal fun nativeRelationChoicesLoaded(
+    field: FieldSpec,
+    formResource: ResourceSpec,
+    schema: NativeAppSchema,
+    context: NativeDatasetContext,
+): Boolean = nativeRelationRelationship(field, formResource, schema)
+    ?.parentResourceId
+    ?.let(context.relatedRecords::containsKey)
+    ?: false
+
+internal fun nativeRelationChoiceSourceHasRecords(
+    field: FieldSpec,
+    formResource: ResourceSpec,
+    schema: NativeAppSchema,
+    context: NativeDatasetContext,
+): Boolean = nativeRelationRelationship(field, formResource, schema)
+    ?.parentResourceId
+    ?.let { resourceId -> context.relatedRecords[resourceId].orEmpty().isNotEmpty() }
+    ?: false
+
+internal fun nativeRelationRelationship(
+    field: FieldSpec,
+    formResource: ResourceSpec,
+    schema: NativeAppSchema,
+): dev.obiente.nextcloudnative.nativeui.model.ResourceRelationshipSpec? {
+    if (field.readOnly) return null
+    val acceptedRelationships = schema.relationships
+        .filter { relationship ->
+            relationship.childResourceId == formResource.id &&
+                relationship.childFieldId != null &&
+                relationship.confidence.isAcceptedNativeRelationshipConfidence()
+        }
+        .distinct()
+    val exactRelationships = acceptedRelationships.filter { relationship ->
+        relationship.childFieldId == field.id
+    }
+    val relationship = when {
+        exactRelationships.size == 1 -> exactRelationships.single()
+        exactRelationships.size > 1 -> return null
+        else -> {
+            val targetIdentities = field.nativeRelationshipTargetIdentities()
+            acceptedRelationships.filter { candidate ->
+                val parent = schema.resources.singleOrNull { resource ->
+                    resource.id == candidate.parentResourceId
+                } ?: return@filter false
+                targetIdentities.intersect(parent.nativeRelationshipResourceIdentities()).isNotEmpty()
+            }.singleOrNull() ?: return null
+        }
+    }
+    return relationship
+}
+
+private fun Confidence.isAcceptedNativeRelationshipConfidence(): Boolean =
+    this == Confidence.high || this == Confidence.verified
+
+private fun FieldSpec.nativeRelationshipTargetIdentities(): Set<String> = buildSet {
+    sequenceOf(id, label).forEach { source ->
+        val normalized = source.lowercase().filter(Char::isLetterOrDigit)
+            .removePrefix("destination")
+            .removePrefix("target")
+            .removePrefix("dest")
+            .removeSuffix("ids")
+            .removeSuffix("id")
+        if (normalized.isNotBlank()) addAll(normalized.nativeRelationshipWordIdentities())
+    }
+}
+
+private fun FieldSpec.isOpaqueNativeRelationshipIdentity(): Boolean {
+    val normalized = id.lowercase().filter(Char::isLetterOrDigit)
+    return when {
+        normalized == "id" -> false
+        normalized.endsWith("ids") ->
+            format in setOf(DYNAMIC_INTEGER_ARRAY_FORMAT, DYNAMIC_STRING_ARRAY_FORMAT)
+        else -> normalized.endsWith("id") && kind in setOf(
+            FieldKind.integer,
+            FieldKind.string,
+            FieldKind.userReference,
+        )
+    }
+}
+
+private fun ResourceSpec.nativeRelationshipResourceIdentities(): Set<String> = buildSet {
+    addAll(id.nativeRelationshipWordIdentities())
+    addAll(name.nativeRelationshipWordIdentities())
+}
+
+private fun String.nativeRelationshipWordIdentities(): Set<String> {
+    val normalized = lowercase().filter(Char::isLetterOrDigit)
+    return buildSet {
+        if (normalized.isNotBlank()) add(normalized)
+        if (normalized.endsWith('s') && normalized.length > 1) add(normalized.dropLast(1))
+        if (normalized.endsWith("ies") && normalized.length > 3) add(normalized.dropLast(3) + "y")
+        if (
+            normalized.endsWith("ches") ||
+            normalized.endsWith("shes") ||
+            normalized.endsWith("sses") ||
+            normalized.endsWith("xes") ||
+            normalized.endsWith("zes")
+        ) {
+            add(normalized.dropLast(2))
+        }
+    }
+}
+
+private fun Map<String, String>.shareNativeRelationshipScopeWith(
+    currentBindings: Map<String, String>?,
+    childFieldId: String,
+    parentFieldId: String,
+): Boolean {
+    currentBindings ?: return true
+    val excluded = setOf(
+        "id",
+        childFieldId.nativeRelationshipBindingKey(),
+        parentFieldId.nativeRelationshipBindingKey(),
+    )
+    return entries
+        .filter { (key, _) ->
+            val normalized = key.nativeRelationshipBindingKey()
+            normalized.endsWith("id") && normalized !in excluded
+        }
+        .all { (key, value) ->
+            currentBindings.entries.firstOrNull { (currentKey, _) ->
+                currentKey.nativeRelationshipBindingKey() == key.nativeRelationshipBindingKey()
+            }?.value?.let { currentValue -> currentValue == value } ?: true
+        }
+}
+
+private fun ResourceSpec.nativeRelationshipRecordLabel(record: NativeRecord): String {
+    val preferredField = fields
+        .map { field ->
+            field to when (field.id.nativeRelationshipBindingKey()) {
+                "displayname" -> 600
+                "name", "title", "subject" -> 500
+                "label", "summary" -> 400
+                else -> 0
+            }
+        }
+        .filter { (_, score) -> score > 0 }
+        .maxByOrNull { (_, score) -> score }
+        ?.first
+    return preferredField
+        ?.let { field -> record.presentationValue(field.id)?.takeIf(String::isNotBlank) }
+        ?: record.id
+}
+
+private fun String.nativeRelationshipBindingKey(): String = lowercase().filter(Char::isLetterOrDigit)
+
+private fun FieldSpec.hasNativeDestinationRelationshipSemantics(): Boolean =
+    sequenceOf(id, label)
+        .map(String::nativeRelationshipBindingKey)
+        .any { value ->
+            value.startsWith("destination") ||
+                value.startsWith("target") ||
+                value.startsWith("dest")
+        }
+
+private fun Map<String, String>.matchesNativeRelationshipSource(
+    value: String,
+    destinationFieldId: String,
+    parentResource: ResourceSpec,
+): Boolean {
+    val destinationKey = destinationFieldId.nativeRelationshipBindingKey()
+    val parentIdentities = parentResource.nativeRelationshipResourceIdentities()
+    return any { (key, candidateValue) ->
+        val normalizedKey = key.nativeRelationshipBindingKey()
+        candidateValue == value &&
+            normalizedKey != destinationKey &&
+            normalizedKey.removeSuffix("id")
+                .nativeRelationshipWordIdentities()
+                .intersect(parentIdentities)
+                .isNotEmpty()
+    }
+}
+
+private fun String.isSafeNativeRelationOptionValue(): Boolean =
+    isNotBlank() && length <= 256 && none { character ->
+        character == '/' || character == '\\' || character.isISOControl()
+    }
 
 fun ViewSpec.genericSurface(): GenericNativeSurface = when (component) {
     NativeComponent.mediaGrid -> GenericNativeSurface.Grid
@@ -163,6 +479,7 @@ internal fun nativeTableFields(
     if (maximumColumns <= 0) return emptyList()
     val populated = resource.fields.filter { field ->
         field.kind !in setOf(FieldKind.objectValue, FieldKind.image, FieldKind.unknown) &&
+            !field.isNativeVisualPresentationField() &&
             records.any { record -> !record.presentationValue(field.id).isNullOrBlank() }
     }
     val preferredIds = listOf("name", "title", "displayName", "subject", "description")
@@ -350,6 +667,18 @@ private fun NativeRecord.nativeFormValue(field: FieldSpec): String? {
             ?.mapNotNull { item -> (item as? NativeStructuredValue.Scalar)?.value }
         if (!values.isNullOrEmpty()) return values.joinToString("\n")
     }
+    if (field.format == DYNAMIC_INTEGER_ARRAY_FORMAT) {
+        val list = structuredValues[field.id] as? NativeStructuredValue.ListValue
+        if (list != null) {
+            if (list.omittedItems != 0) return null
+            val values = list.items.map { item ->
+                val scalar = item as? NativeStructuredValue.Scalar ?: return null
+                if (scalar.kind != NativeStructuredScalarKind.number) return null
+                scalar.value?.toLongOrNull() ?: return null
+            }
+            return JsonArray(values.map(::JsonPrimitive)).toString()
+        }
+    }
     return presentationValue(field.id)
 }
 
@@ -466,7 +795,22 @@ fun validateNativeForm(
         ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
         .orEmpty()
         .toSet()
-    val normalized = fields.associate { field -> field.id to values[field.id].orEmpty().trim() }
+    val normalizedEditableValues = fields.associate { field ->
+        field.id to values[field.id].orEmpty().trim()
+    }
+    val declaredBindingNames = buildSet {
+        addAll(action.binding.pathParameterNames)
+        addAll(action.binding.queryParameterNames)
+        addAll(action.binding.bodyFieldNames)
+    }
+    val normalized = buildMap {
+        putAll(normalizedEditableValues)
+        declaredBindingNames
+            .filterNot { name -> containsKey(name) }
+            .forEach { name ->
+                values[name]?.trim()?.let { value -> put(name, value) }
+            }
+    }
     val errors = buildMap {
         fields.forEach { field ->
             val value = normalized.getValue(field.id)
@@ -474,6 +818,20 @@ fun validateNativeForm(
             val error = when {
                 required && value.isBlank() -> "${field.label} is required."
                 value.isBlank() -> null
+                field.format == DYNAMIC_INTEGER_ARRAY_FORMAT &&
+                    !action.hasExactDynamicIntegerArrayBodyField(field.id) ->
+                    "This integer list does not have an exact contract schema."
+                field.format == DYNAMIC_INTEGER_ARRAY_FORMAT -> {
+                    when (
+                        val parsed = parseDynamicIntegerArrayInput(
+                            value,
+                            action.dynamicIntegerArrayBodySchema(field.id),
+                        )
+                    ) {
+                        is DynamicIntegerArrayParseResult.Valid -> null
+                        is DynamicIntegerArrayParseResult.Invalid -> parsed.message
+                    }
+                }
                 field.kind == FieldKind.integer && value.toLongOrNull() == null -> "Enter a whole number."
                 field.kind in setOf(FieldKind.decimal, FieldKind.currency) && !value.isPlainDecimal() ->
                     "Enter a valid number."
@@ -488,23 +846,112 @@ fun validateNativeForm(
             }
             if (error != null) put(field.id, error)
         }
+        (
+            action.binding.requiredPathParameterNames +
+                action.binding.requiredQueryParameterNames
+            ).distinct().forEach { parameterName ->
+            if (normalized[parameterName].isNullOrBlank()) {
+                put(parameterName, "$parameterName is required.")
+            }
+        }
     }
     return NativeFormValidation(normalized, errors)
 }
 
 fun editableNativeFields(resource: ResourceSpec, action: ActionSpec): List<FieldSpec> {
     val properties = (action.inputSchema as? JsonObject)?.get("properties") as? JsonObject
-    return resource.fields.filter { field ->
-        (!field.readOnly || action.binding.allowsObservedBodyFields) &&
-            (!action.binding.allowsObservedBodyFields || !field.hasSensitiveSettingSemantics()) &&
-            (field.kind !in setOf(FieldKind.objectValue, FieldKind.image, FieldKind.unknown) ||
-                field.format in setOf(
-                    SETTINGS_BOOLEAN_MAP_FORMAT,
-                    DYNAMIC_STRING_LIST_FORMAT,
-                    DYNAMIC_STRING_ARRAY_FORMAT,
-                )) &&
-            (action.binding.allowsObservedBodyFields || properties == null || field.id in properties)
+    val requiredByInput = (action.inputSchema as? JsonObject)
+        ?.get("required")
+        .let { it as? JsonArray }
+        ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+        .orEmpty()
+        .toSet()
+    return resource.fields
+        .filter { field ->
+                (
+                    !field.readOnly ||
+                        action.binding.allowsObservedBodyFields ||
+                        properties?.containsKey(field.id) == true
+                    ) &&
+                (!action.binding.allowsObservedBodyFields || !field.hasSensitiveSettingSemantics()) &&
+                !action.hasExactServerManagedBodyFieldEvidence(field.id) &&
+                action.hasSupportedDynamicArrayBodyField(field) &&
+                (
+                    field.format != DYNAMIC_INTEGER_ARRAY_FORMAT ||
+                        action.hasExactDynamicIntegerArrayBodyField(field.id)
+                    ) &&
+                (field.kind !in setOf(FieldKind.objectValue, FieldKind.image, FieldKind.unknown) ||
+                    field.format in setOf(
+                        SETTINGS_BOOLEAN_MAP_FORMAT,
+                        DYNAMIC_INTEGER_ARRAY_FORMAT,
+                        DYNAMIC_STRING_LIST_FORMAT,
+                        DYNAMIC_STRING_ARRAY_FORMAT,
+                    )) &&
+                (action.binding.allowsObservedBodyFields || properties == null || field.id in properties)
+        }
+        .map { field ->
+            if (properties == null || action.binding.allowsObservedBodyFields) {
+                field
+            } else {
+                field.copy(required = field.id in requiredByInput)
+            }
+        }
+}
+
+private fun ActionSpec.hasExactDynamicIntegerArrayBodyField(fieldId: String): Boolean {
+    return dynamicIntegerArrayBodySchema(fieldId).isExactDynamicIntegerArraySchema()
+}
+
+private fun ActionSpec.dynamicIntegerArrayBodySchema(fieldId: String): JsonElement? {
+    val properties = (binding.bodySchema as? JsonObject)?.get("properties") as? JsonObject
+        ?: return null
+    return properties[fieldId]
+}
+
+private fun ActionSpec.hasSupportedDynamicArrayBodyField(field: FieldSpec): Boolean {
+    val properties = (binding.bodySchema as? JsonObject)?.get("properties") as? JsonObject
+        ?: return true
+    val property = properties[field.id] as? JsonObject ?: return true
+    if ((property["type"] as? JsonPrimitive)?.contentOrNull != "array") return true
+    val itemType = ((property["items"] as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull
+    val format = (property["format"] as? JsonPrimitive)?.contentOrNull
+    return when (field.format) {
+        DYNAMIC_INTEGER_ARRAY_FORMAT -> property.isExactDynamicIntegerArraySchema()
+        DYNAMIC_STRING_ARRAY_FORMAT,
+        DYNAMIC_STRING_LIST_FORMAT,
+        -> itemType == "string" && format == field.format
+        else -> false
     }
+}
+
+/**
+ * Returns declared body inputs that neither have a safe native editor nor an exact contextual
+ * binding. A mutation with any such field must be withheld: silently sending a partial or empty
+ * body can replace structured server state with defaults.
+ */
+internal fun uneditableNativeBodyFieldIds(
+    action: ActionSpec,
+    editableFields: List<FieldSpec>,
+    autoBoundValues: Map<String, String>,
+): Set<String> {
+    val represented = editableFields.mapTo(mutableSetOf(), FieldSpec::id) + autoBoundValues.keys
+    return action.binding.bodyFieldNames
+        .filterNotTo(linkedSetOf()) { fieldId ->
+            fieldId in represented || action.isOmissibleServerManagedBodyField(fieldId)
+        }
+}
+
+private fun ActionSpec.isOmissibleServerManagedBodyField(fieldId: String): Boolean {
+    if (fieldId in binding.requiredBodyFieldNames) return false
+    return hasExactServerManagedBodyFieldEvidence(fieldId)
+}
+
+private fun ActionSpec.hasExactServerManagedBodyFieldEvidence(fieldId: String): Boolean {
+    val property = ((binding.bodySchema as? JsonObject)?.get("properties") as? JsonObject)
+        ?.get(fieldId) as? JsonObject
+        ?: return false
+    return (property["readOnly"] as? JsonPrimitive)?.booleanOrNull == true ||
+        (property["x-nextcloud-native-server-managed"] as? JsonPrimitive)?.booleanOrNull == true
 }
 
 /**
@@ -532,12 +979,16 @@ private fun FieldSpec.hasSensitiveSettingSemantics(): Boolean {
  */
 internal fun FieldSpec.isSafeNativeDetailField(resource: ResourceSpec): Boolean {
     if (hasSensitiveSettingSemantics()) return false
+    if (isNativeVisualPresentationField()) return false
     val resourceIdentity = (resource.id + resource.name).lowercase().filter(Char::isLetterOrDigit)
     if (!resourceIdentity.contains("account")) return true
     val fieldIdentity = (id + label).lowercase().filter(Char::isLetterOrDigit)
     return fieldIdentity !in ACCOUNT_INTERNAL_DETAIL_FIELDS &&
         ACCOUNT_INTERNAL_DETAIL_PREFIXES.none(fieldIdentity::startsWith)
 }
+
+private fun FieldSpec.isNativeVisualPresentationField(): Boolean =
+    id.lowercase().filter(Char::isLetterOrDigit) in setOf("icon", "symbol", "color", "colour")
 
 private val ACCOUNT_INTERNAL_DETAIL_FIELDS = setOf(
     "authmethod",
@@ -600,7 +1051,19 @@ fun buildNativeSubmitRequest(
     ) {
         return NativeRequestBuildResult.Invalid("The declared action cannot submit this form.")
     }
-    val validation = validateNativeForm(resource, action, values)
+    if (
+        uneditableNativeBodyFieldIds(
+            action = action,
+            editableFields = editableNativeFields(resource, action),
+            autoBoundValues = emptyMap(),
+        ).isNotEmpty()
+    ) {
+        return NativeRequestBuildResult.Invalid(
+            "This action contains structured fields that cannot be submitted safely yet.",
+        )
+    }
+    val aliasedValues = action.resolveNativeCreateParentAlias(values)
+    val validation = validateNativeForm(resource, action, aliasedValues)
     if (!validation.isValid) {
         return NativeRequestBuildResult.Invalid("Check the highlighted fields.", validation.errors)
     }
@@ -609,13 +1072,51 @@ fun buildNativeSubmitRequest(
     )
 }
 
+private fun ActionSpec.resolveNativeCreateParentAlias(values: Map<String, String>): Map<String, String> {
+    if (
+        intent != ActionIntent.create ||
+        "id" in binding.bodyFieldNames ||
+        "id" in binding.queryParameterNames
+    ) {
+        return values
+    }
+    val requiredPathNames = (
+        binding.pathParameterNames + binding.requiredPathParameterNames
+    ).distinct()
+    val parameterName = requiredPathNames.singleOrNull() ?: return values
+    if (values[parameterName]?.isNotBlank() == true) return values
+    val parentId = values["id"]?.takeIf(String::isNotBlank) ?: return values
+    if (!binding.isProvenNativeCreateParentAlias(parameterName)) return values
+    return values + (parameterName to parentId)
+}
+
+private fun ApiBinding.isProvenNativeCreateParentAlias(parameterName: String): Boolean {
+    if (!parameterName.endsWith("Id", ignoreCase = true) || parameterName.length <= 2) return false
+    val parentResourceId = parameterName.dropLast(2)
+    val segments = path.substringBefore('?').split('/').filter(String::isNotBlank)
+    val placeholder = "{$parameterName}"
+    return segments.indices.any { index ->
+        segments[index] == placeholder &&
+            index > 0 &&
+            segments[index - 1].sameDynamicResourceAs(parentResourceId)
+    }
+}
+
 fun interface NativeActionExecutor {
     suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult
 }
 
+enum class NativeActionFailureOutcome {
+    Rejected,
+    Unknown,
+}
+
 sealed interface NativeActionExecutionResult {
     data class Success(val message: String? = null) : NativeActionExecutionResult
-    data class Failure(val message: String) : NativeActionExecutionResult
+    data class Failure(
+        val message: String,
+        val outcome: NativeActionFailureOutcome = NativeActionFailureOutcome.Unknown,
+    ) : NativeActionExecutionResult
 }
 
 sealed interface NativeActionExecutionState {
@@ -623,6 +1124,14 @@ sealed interface NativeActionExecutionState {
     data class ValidationFailed(val message: String, val fieldErrors: Map<String, String>) : NativeActionExecutionState
     data class AwaitingConfirmation(val request: NativeActionRequest.Submit) : NativeActionExecutionState
     data class Running(val request: NativeActionRequest.Submit) : NativeActionExecutionState
+    data class AwaitingReconciliation(
+        val message: String,
+        val reconciliationGeneration: Int,
+    ) : NativeActionExecutionState {
+        init {
+            require(reconciliationGeneration >= 0)
+        }
+    }
     data class Succeeded(val message: String?) : NativeActionExecutionState
     data class Failed(val message: String) : NativeActionExecutionState
 }
@@ -635,7 +1144,16 @@ class NativeActionCoordinator(
     var state: NativeActionExecutionState by mutableStateOf(NativeActionExecutionState.Idle)
         private set
 
-    suspend fun submit(values: Map<String, String>) {
+    suspend fun submit(
+        values: Map<String, String>,
+        reconciliationGeneration: Int = 0,
+    ) {
+        if (
+            state is NativeActionExecutionState.Running ||
+            state is NativeActionExecutionState.AwaitingReconciliation
+        ) {
+            return
+        }
         val built = buildNativeSubmitRequest(schema, view, values, confirmed = false)
         when (built) {
             is NativeRequestBuildResult.Invalid -> {
@@ -646,15 +1164,15 @@ class NativeActionCoordinator(
                 if (request.action.needsExplicitConfirmation()) {
                     state = NativeActionExecutionState.AwaitingConfirmation(request)
                 } else {
-                    execute(request)
+                    execute(request, reconciliationGeneration)
                 }
             }
         }
     }
 
-    suspend fun confirm() {
+    suspend fun confirm(reconciliationGeneration: Int = 0) {
         val pending = (state as? NativeActionExecutionState.AwaitingConfirmation)?.request ?: return
-        execute(pending.copy(confirmed = true))
+        execute(pending.copy(confirmed = true), reconciliationGeneration)
     }
 
     fun cancelConfirmation() {
@@ -662,20 +1180,44 @@ class NativeActionCoordinator(
     }
 
     fun clearStatus() {
-        if (state !is NativeActionExecutionState.Running) state = NativeActionExecutionState.Idle
+        if (
+            state !is NativeActionExecutionState.Running &&
+            state !is NativeActionExecutionState.AwaitingReconciliation
+        ) {
+            state = NativeActionExecutionState.Idle
+        }
     }
 
-    private suspend fun execute(request: NativeActionRequest.Submit) {
+    fun reconcileAuthoritativeRefresh(reconciliationGeneration: Int) {
+        val pending = state as? NativeActionExecutionState.AwaitingReconciliation ?: return
+        if (reconciliationGeneration > pending.reconciliationGeneration) {
+            state = NativeActionExecutionState.Idle
+        }
+    }
+
+    private suspend fun execute(
+        request: NativeActionRequest.Submit,
+        reconciliationGeneration: Int,
+    ) {
         state = NativeActionExecutionState.Running(request)
         state = try {
             when (val result = executor.execute(request)) {
                 is NativeActionExecutionResult.Success -> NativeActionExecutionState.Succeeded(result.message)
-                is NativeActionExecutionResult.Failure -> NativeActionExecutionState.Failed(result.message)
+                is NativeActionExecutionResult.Failure -> when (result.outcome) {
+                    NativeActionFailureOutcome.Rejected -> NativeActionExecutionState.Failed(result.message)
+                    NativeActionFailureOutcome.Unknown -> NativeActionExecutionState.AwaitingReconciliation(
+                        message = result.message,
+                        reconciliationGeneration = reconciliationGeneration,
+                    )
+                }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
-            NativeActionExecutionState.Failed(failure.message ?: "The action failed.")
+            NativeActionExecutionState.AwaitingReconciliation(
+                message = failure.message ?: "The action result could not be confirmed.",
+                reconciliationGeneration = reconciliationGeneration,
+            )
         }
     }
 }

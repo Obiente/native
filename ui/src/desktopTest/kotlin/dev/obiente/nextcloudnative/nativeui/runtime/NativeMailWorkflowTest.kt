@@ -10,6 +10,7 @@ import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
+import dev.obiente.nextcloudnative.nativeui.model.ResourceRelationshipSpec
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -131,7 +132,26 @@ class NativeMailWorkflowTest {
             readOnly = false,
         )
         val messages = resource("messages", "Messages", listOf(destination, account))
-        val mailboxes = resource("mailboxes", "Mailboxes")
+        val mailboxes = resource(
+            "mailboxes",
+            "Mailboxes",
+            listOf(
+                FieldSpec(
+                    id = "databaseId",
+                    label = "Database ID",
+                    kind = FieldKind.integer,
+                    required = true,
+                    readOnly = true,
+                ),
+                FieldSpec(
+                    id = "name",
+                    label = "Name",
+                    kind = FieldKind.string,
+                    required = true,
+                    readOnly = true,
+                ),
+            ),
+        )
         val move = action(
             id = "messages-move",
             method = HttpMethod.POST,
@@ -144,14 +164,27 @@ class NativeMailWorkflowTest {
             id = "42",
             values = mapOf("subject" to "Move me", "from" to "sender@example.test", "accountId" to "7", "mailboxId" to "9"),
         )
-        val appSchema = schema(resources = listOf(messages, mailboxes), actions = listOf(move))
+        val appSchema = schema(
+            resources = listOf(messages, mailboxes),
+            actions = listOf(move),
+            relationships = listOf(
+                ResourceRelationshipSpec(
+                    parentResourceId = mailboxes.id,
+                    childResourceId = messages.id,
+                    parentFieldId = "databaseId",
+                    childFieldId = destination.id,
+                    confidence = Confidence.verified,
+                ),
+            ),
+        )
 
         assertEquals(
-            mapOf("accountId" to "7"),
-            nativeFormAutoBoundValues(move, messages, selectedMessage),
+            mapOf("accountId" to "7", "id" to "42"),
+            nativeFormAutoBoundValues(appSchema, move, messages, selectedMessage),
         )
         val options = nativeRelationOptions(
             field = destination,
+            formResource = messages,
             schema = appSchema,
             context = NativeDatasetContext(
                 parentResourceId = messages.id,
@@ -205,6 +238,7 @@ class NativeMailWorkflowTest {
     private fun schema(
         resources: List<ResourceSpec>,
         actions: List<ActionSpec> = emptyList(),
+        relationships: List<ResourceRelationshipSpec> = emptyList(),
     ) = NativeAppSchema(
         schemaVersion = "1",
         app = AppIdentity("mail", "Mail", "5.10.9"),
@@ -212,5 +246,6 @@ class NativeMailWorkflowTest {
         resources = resources,
         views = emptyList(),
         actions = actions,
+        relationships = relationships,
     )
 }

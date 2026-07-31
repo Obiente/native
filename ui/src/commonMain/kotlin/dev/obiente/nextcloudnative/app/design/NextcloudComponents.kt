@@ -29,6 +29,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -162,11 +164,19 @@ fun NextcloudAppTile(
     modifier: Modifier = Modifier,
     supportingText: String? = null,
     enabled: Boolean = true,
+    accessibilityId: String = title,
+    accessibilityDescription: String = "Open app $accessibilityId",
 ) {
+    require(accessibilityId.isNotBlank()) { "App tile accessibility IDs must not be blank." }
+    require(accessibilityDescription.isNotBlank()) {
+        "App tile accessibility descriptions must not be blank."
+    }
     val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
     Card(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.semantics {
+            contentDescription = accessibilityDescription
+        },
         enabled = enabled,
         colors = CardDefaults.cardColors(
             containerColor = NextcloudTheme.colors.appTile,

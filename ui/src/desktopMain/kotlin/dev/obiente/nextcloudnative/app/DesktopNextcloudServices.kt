@@ -29,6 +29,8 @@ import java.util.prefs.Preferences
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -72,6 +74,40 @@ internal const val DIRECT_EDITING_INFO_RELATIVE_PATH =
 
 internal const val NEXTCLOUD_CAPABILITIES_RELATIVE_PATH =
     "/ocs/v1.php/cloud/capabilities?format=json"
+
+internal fun resolveDesktopNextcloudRedirectLocation(
+    requestUrl: HttpUrl,
+    serverUrl: String,
+    location: String?,
+): String? {
+    val target = location?.let(requestUrl::resolve) ?: return null
+    if (target.fragment != null) return null
+    val account = serverUrl.toHttpUrlOrNull() ?: return null
+    if (
+        target.scheme != account.scheme ||
+        target.host != account.host ||
+        target.port != account.port
+    ) {
+        return null
+    }
+    val accountPath = account.encodedPath.trimEnd('/').takeUnless { it == "/" }.orEmpty()
+    if (
+        accountPath.isNotEmpty() &&
+        target.encodedPath != accountPath &&
+        !target.encodedPath.startsWith("$accountPath/")
+    ) {
+        return null
+    }
+    val relativePath = target.encodedPath.removePrefix(accountPath)
+    if (!relativePath.startsWith('/') || relativePath.startsWith("//")) return null
+    return buildString {
+        append(relativePath)
+        target.encodedQuery?.let { query ->
+            append('?')
+            append(query)
+        }
+    }
+}
 
 internal const val DIRECT_EDITING_OPEN_RELATIVE_PATH =
     "/ocs/v2.php/apps/files/api/v1/directEditing/open?format=json"
@@ -1160,6 +1196,12 @@ class DesktopNextcloudServices(
         request: NextcloudApiRequest,
     ): NextcloudApiResponse = withContext(Dispatchers.IO) {
         val safeRequest = request.requireSafe()
+        safeRequest.multipartBody?.let { multipart ->
+            return@withContext executeNextcloudMultipartUpload(
+                session,
+                multipart.toUploadRequest(safeRequest),
+            )
+        }
         val accountId = desktopFileCacheAccountId(session)
         val cacheIdentity = safeRequest.dynamicReadCacheIdentity()
         if (safeRequest.method != NextcloudApiMethod.GET) {
@@ -1882,7 +1924,15 @@ class DesktopNextcloudServices(
                 responseBody.byteStream().readBounded(readLimit),
                 responseBody.contentType()?.toString(),
                 response.header("ETag") ?: response.header("OC-Etag"),
-                response.header("Location"),
+                if (session == null) {
+                    response.header("Location")
+                } else {
+                    resolveDesktopNextcloudRedirectLocation(
+                        requestUrl = response.request.url,
+                        serverUrl = session.serverUrl,
+                        location = response.header("Location"),
+                    )
+                },
                 response.header("X-Chat-Last-Given"),
                 response.header("Content-Range"),
             )

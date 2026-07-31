@@ -173,6 +173,7 @@ data class NextcloudApiRequest(
     val ocsApiRequest: Boolean = false,
     val maximumResponseBytes: Long = DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES,
     val cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
+    val multipartBody: NextcloudMultipartBody? = null,
 )
 
 data class NextcloudApiResponse(
@@ -180,7 +181,11 @@ data class NextcloudApiResponse(
     val body: ByteArray,
     val contentType: String?,
     val etag: String?,
-    /** Present only when redirects are disabled and the server returned a Location header. */
+    /**
+     * Present only when redirects are disabled and the server returned a safe Location header.
+     * Authenticated platform transports resolve same-account redirects and expose only the
+     * account-relative path; cross-origin and out-of-account locations are withheld.
+     */
     val location: String? = null,
 )
 
@@ -1293,6 +1298,15 @@ fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
         "Dynamic API response limit is outside the allowed range."
     }
     require(contentType == null || contentType.length <= 160) { "Dynamic API content type is invalid." }
+    multipartBody?.let { multipart ->
+        require(method in setOf(NextcloudApiMethod.POST, NextcloudApiMethod.PUT, NextcloudApiMethod.PATCH)) {
+            "Multipart uploads require POST, PUT, or PATCH."
+        }
+        require(body == null && contentType == null) {
+            "A typed multipart body cannot be combined with a raw request body or content type."
+        }
+        multipart.requireSafe()
+    }
     return this
 }
 
