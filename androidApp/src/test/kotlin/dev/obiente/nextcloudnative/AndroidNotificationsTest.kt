@@ -99,6 +99,18 @@ class AndroidNotificationsTest {
                 channelImportance = NotificationManager.IMPORTANCE_NONE,
             ),
         )
+        assertTrue(
+            notificationPermissionAllowed(
+                runtimePermissionGranted = true,
+                appNotificationsEnabled = true,
+            ),
+        )
+        assertFalse(
+            notificationPermissionAllowed(
+                runtimePermissionGranted = true,
+                appNotificationsEnabled = false,
+            ),
+        )
         assertFalse(
             notificationDeliveryAllowed(
                 sdk = 33,

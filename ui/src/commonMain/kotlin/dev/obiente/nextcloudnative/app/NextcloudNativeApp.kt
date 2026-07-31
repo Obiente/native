@@ -9833,14 +9833,20 @@ private fun AppUpdateSettingsCard(
             status.capability == PlatformCapability.Notifications
         }
     }
-    val notificationPermissionGranted =
-        notificationCapability?.state == PlatformCapabilityState.Granted
+    val appUpdateNotificationDeliveryAllowed = remember(services, platformCapabilityRefreshRequest) {
+        services.appUpdateNotificationDeliveryAllowed()
+    }
     var notificationEnablePending by remember(services) { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }
     var installing by remember { mutableStateOf(false) }
     var installMessage by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(notificationCapability?.state, notificationEnablePending) {
-        if (notificationEnablePending && notificationPermissionGranted) {
+    LaunchedEffect(
+        appUpdateNotificationDeliveryAllowed,
+        notificationCapability?.state,
+        notificationEnablePending,
+        platformCapabilityRefreshRequest,
+    ) {
+        if (notificationEnablePending && appUpdateNotificationDeliveryAllowed) {
             val updated = updatePreferences.copy(notifications = true)
             if (services.saveAppUpdatePreferences(updated)) {
                 updatePreferences = updated
@@ -10021,32 +10027,32 @@ private fun AppUpdateSettingsCard(
                     )
                     UpdatePreferenceRow(
                         label = "Notify when available",
-                        description = when (notificationCapability?.state) {
-                            PlatformCapabilityState.Granted ->
+                        description = when {
+                            notificationCapability?.state == PlatformCapabilityState.Granted &&
+                                appUpdateNotificationDeliveryAllowed ->
                                 "Post one Android notification for each newly discovered version."
-                            PlatformCapabilityState.NeedsPermission ->
+                            notificationCapability?.state == PlatformCapabilityState.Granted ->
+                                "The App updates notification channel is blocked. Turn it on in Android settings."
+                            notificationCapability?.state == PlatformCapabilityState.NeedsPermission ->
                                 "Allow Android notifications to be notified about newly discovered versions."
-                            PlatformCapabilityState.Blocked ->
+                            notificationCapability?.state == PlatformCapabilityState.Blocked ->
                                 "Notifications are blocked. Turn them on in Android app settings to use this option."
-                            PlatformCapabilityState.Unsupported ->
+                            notificationCapability?.state == PlatformCapabilityState.Unsupported ->
                                 "Android notifications are unavailable on this device."
-                            PlatformCapabilityState.AvailableWithoutPermission, null ->
+                            else ->
                                 "Android notification permission status is unavailable."
                         },
-                        checked = updatePreferences.notifications && notificationPermissionGranted,
+                        checked = updatePreferences.notifications && appUpdateNotificationDeliveryAllowed,
                         enabled = updatePreferences.automaticChecks,
                         onCheckedChange = { enabled ->
                             if (!enabled) {
                                 notificationEnablePending = false
                                 val updated = updatePreferences.copy(notifications = false)
                                 if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
-                            } else if (notificationPermissionGranted) {
+                            } else if (appUpdateNotificationDeliveryAllowed) {
                                 val updated = updatePreferences.copy(notifications = true)
                                 if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
-                            } else if (
-                                notificationCapability != null &&
-                                services.requestPlatformCapability(PlatformCapability.Notifications)
-                            ) {
+                            } else if (services.requestAppUpdateNotificationDelivery()) {
                                 notificationEnablePending = true
                                 installMessage = "Allow notifications in Android to finish enabling update alerts."
                             } else {

@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContract
@@ -257,6 +258,7 @@ internal class AndroidNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
 ) : NextcloudPlatformServices {
     private val appContext = context.applicationContext
+    private val activity = context as? Activity
     private val preferences = appContext.getSharedPreferences("nextcloud_native", Context.MODE_PRIVATE)
     private val sessionCipher = SessionCipher()
     private val httpClient = OkHttpClient()
@@ -285,10 +287,10 @@ internal class AndroidNextcloudServices(
     private val externalFileHandoff = AndroidExternalFileHandoff(appContext)
     private val platformCapabilities = AndroidPlatformCapabilities(
         context = appContext,
-        activity = context as? Activity,
+        activity = activity,
         requestPermissions = requestPlatformPermissions,
     )
-    private val projectContent = AndroidProjectContentClient(appContext, context as? Activity)
+    private val projectContent = AndroidProjectContentClient(appContext, activity)
     private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext)
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
 
@@ -329,6 +331,23 @@ internal class AndroidNextcloudServices(
     override fun saveAppUpdatePreferences(preferences: AppUpdatePreferences): Boolean {
         projectContent.saveUpdatePreferences(preferences)
         AndroidAppUpdateWork.schedule(appContext, preferences)
+        return true
+    }
+
+    override fun appUpdateNotificationDeliveryAllowed(): Boolean =
+        notificationDeliveryAllowed(appContext, CHANNEL_APP_UPDATES)
+
+    override fun requestAppUpdateNotificationDelivery(): Boolean {
+        if (!notificationPermissionAllowed(appContext)) {
+            return platformCapabilities.request(PlatformCapability.Notifications)
+        }
+        val host = activity ?: return false
+        host.startActivity(
+            Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, appContext.packageName)
+                putExtra(Settings.EXTRA_CHANNEL_ID, CHANNEL_APP_UPDATES)
+            },
+        )
         return true
     }
 

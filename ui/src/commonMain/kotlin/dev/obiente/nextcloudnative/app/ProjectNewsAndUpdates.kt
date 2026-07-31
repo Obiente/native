@@ -222,7 +222,11 @@ sealed interface AppUpdateCheckResult {
         val release: AppUpdateRelease,
     ) : AppUpdateCheckResult
     data class Unavailable(val support: AppUpdateSupport) : AppUpdateCheckResult
-    data class Failed(val support: AppUpdateSupport, val message: String) : AppUpdateCheckResult
+    data class Failed(
+        val support: AppUpdateSupport,
+        val message: String,
+        val retryable: Boolean = false,
+    ) : AppUpdateCheckResult
 }
 
 sealed interface AppUpdateInstallResult {

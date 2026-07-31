@@ -386,6 +386,12 @@ interface NextcloudPlatformServices {
 
     fun saveAppUpdatePreferences(preferences: AppUpdatePreferences): Boolean = false
 
+    /** True only when the platform can currently deliver the dedicated app-update notification. */
+    fun appUpdateNotificationDeliveryAllowed(): Boolean = false
+
+    /** Requests runtime, app-wide, or app-update-channel notification access as appropriate. */
+    fun requestAppUpdateNotificationDelivery(): Boolean = false
+
     /** Periodic check interval while this app process is running, or null for platform-owned scheduling. */
     fun appUpdateAutomaticCheckIntervalMillis(): Long? = null
 

@@ -49,8 +49,8 @@ internal class AndroidAppUpdateWorker(
         val services = AndroidNextcloudServices(applicationContext)
         val preferences = services.loadAppUpdatePreferences()
         if (!preferences.automaticChecks) return Result.success()
-        return when (services.checkForAppUpdate(automatic = true)) {
-            is AppUpdateCheckResult.Failed -> Result.retry()
+        return when (val check = services.checkForAppUpdate(automatic = true)) {
+            is AppUpdateCheckResult.Failed -> if (check.retryable) Result.retry() else Result.success()
             else -> Result.success()
         }
     }

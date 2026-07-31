@@ -71,7 +71,7 @@ internal class AndroidPlatformCapabilities(
         if (permissions.isEmpty()) {
             return if (
                 capability == PlatformCapability.Notifications &&
-                !notificationDeliveryAllowed(context, CHANNEL_APP_UPDATES)
+                !notificationPermissionAllowed(context)
             ) {
                 PlatformCapabilityState.Blocked
             } else {
@@ -90,7 +90,7 @@ internal class AndroidPlatformCapabilities(
         if (hasPermission) {
             if (
                 capability == PlatformCapability.Notifications &&
-                !notificationDeliveryAllowed(context, CHANNEL_APP_UPDATES)
+                !notificationPermissionAllowed(context)
             ) {
                 return PlatformCapabilityState.Blocked
             }

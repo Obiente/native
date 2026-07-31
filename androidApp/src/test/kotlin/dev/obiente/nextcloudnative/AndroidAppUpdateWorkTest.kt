@@ -33,4 +33,14 @@ class AndroidAppUpdateWorkTest {
         assertFalse(shouldNotifyAppUpdate(11, 10, enabled = true))
         assertTrue(shouldNotifyAppUpdate(10, 11, enabled = true))
     }
+
+    @Test
+    fun onlyTransientUpdateHttpFailuresUseWorkManagerBackoff() {
+        assertTrue(isRetryableAppUpdateHttpStatus(408))
+        assertTrue(isRetryableAppUpdateHttpStatus(429))
+        assertTrue(isRetryableAppUpdateHttpStatus(500))
+        assertTrue(isRetryableAppUpdateHttpStatus(503))
+        assertFalse(isRetryableAppUpdateHttpStatus(400))
+        assertFalse(isRetryableAppUpdateHttpStatus(404))
+    }
 }

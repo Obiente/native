@@ -281,10 +281,6 @@ internal val NOTIFICATION_ACTIVITY_FLAGS: Int =
     Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
 
 internal fun notificationDeliveryAllowed(context: Context, channelId: String): Boolean {
-    val runtimePermissionGranted = Build.VERSION.SDK_INT < 33 ||
-        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-        PackageManager.PERMISSION_GRANTED
-    val appNotificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
     val channelImportance = if (Build.VERSION.SDK_INT >= 26) {
         context.getSystemService(NotificationManager::class.java)
             .getNotificationChannel(channelId)
@@ -294,11 +290,27 @@ internal fun notificationDeliveryAllowed(context: Context, channelId: String): B
     }
     return notificationDeliveryAllowed(
         sdk = Build.VERSION.SDK_INT,
-        runtimePermissionGranted = runtimePermissionGranted,
-        appNotificationsEnabled = appNotificationsEnabled,
+        runtimePermissionGranted = notificationRuntimePermissionGranted(context),
+        appNotificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled(),
         channelImportance = channelImportance,
     )
 }
+
+internal fun notificationPermissionAllowed(context: Context): Boolean =
+    notificationPermissionAllowed(
+        runtimePermissionGranted = notificationRuntimePermissionGranted(context),
+        appNotificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled(),
+    )
+
+private fun notificationRuntimePermissionGranted(context: Context): Boolean =
+    Build.VERSION.SDK_INT < 33 ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+        PackageManager.PERMISSION_GRANTED
+
+internal fun notificationPermissionAllowed(
+    runtimePermissionGranted: Boolean,
+    appNotificationsEnabled: Boolean,
+): Boolean = runtimePermissionGranted && appNotificationsEnabled
 
 internal fun notificationDeliveryAllowed(
     sdk: Int,
@@ -306,8 +318,7 @@ internal fun notificationDeliveryAllowed(
     appNotificationsEnabled: Boolean,
     channelImportance: Int?,
 ): Boolean =
-    runtimePermissionGranted &&
-        appNotificationsEnabled &&
+    notificationPermissionAllowed(runtimePermissionGranted, appNotificationsEnabled) &&
         (sdk < 26 || channelImportance == null || channelImportance != NotificationManager.IMPORTANCE_NONE)
 
 private fun notificationChannels(): List<NotificationChannel> = if (Build.VERSION.SDK_INT < 26) emptyList() else listOf(

@@ -29,7 +29,11 @@ if [[ "$1 $2" == "release download" ]]; then
         shift
     done
     [[ -n "$destination" ]]
-    cp "$FAKE_POINTER_MANIFEST" "$destination/update-manifest.json"
+    cp "$FAKE_POINTER_MANIFEST" "$destination/${FAKE_POINTER_MANIFEST_NAME:-update-manifest.json}"
+    exit 0
+fi
+if [[ "$1 $2" == "release upload" ]]; then
+    cp "$4" "$FAKE_UPLOADED_MANIFEST"
     exit 0
 fi
 
@@ -74,4 +78,43 @@ if [[ -e "$execution_marker" ]]; then
     exit 1
 fi
 
-printf 'Update channel promotion rejects executable version-code strings.\n'
+desktop_candidate="$temporary_directory/desktop-candidate.json"
+jq -n \
+    --arg tag "$immutable_tag" \
+    '{
+      schemaVersion: 1,
+      channel: "nightly-v1",
+      versionName: $tag,
+      versionCode: 2,
+      packageVersion: "2.0.0",
+      releaseNotesUrl: ("https://github.com/Obiente/nc-native/releases/tag/" + $tag),
+      assets: [{
+        platform: "linux",
+        format: "deb",
+        architecture: "x86_64",
+        url: ("https://github.com/Obiente/nc-native/releases/download/" + $tag + "/nextcloud-native_amd64.deb"),
+        size: 1234,
+        sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }]
+    }' >"$desktop_candidate"
+malformed_desktop="$temporary_directory/malformed-desktop.json"
+jq '.versionCode = 3 | .assets[0].sha256 = "invalid"' \
+    "$desktop_candidate" >"$malformed_desktop"
+uploaded_desktop="$temporary_directory/uploaded-desktop.json"
+
+PATH="$fake_bin:$PATH" \
+    FAKE_POINTER_MANIFEST="$malformed_desktop" \
+    FAKE_POINTER_MANIFEST_NAME=desktop-update-manifest.json \
+    FAKE_UPLOADED_MANIFEST="$uploaded_desktop" \
+    "$project_root/tools/promote-app-update-channel.sh" \
+    Obiente/nc-native \
+    channel-nightly \
+    "$immutable_tag" \
+    0123456789abcdef0123456789abcdef01234567 \
+    - \
+    "$desktop_candidate" \
+    1 >/dev/null
+
+cmp "$desktop_candidate" "$uploaded_desktop"
+
+printf 'Update channel promotion rejects executable codes and repairs invalid desktop pointers.\n'

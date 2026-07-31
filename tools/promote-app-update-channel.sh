@@ -68,6 +68,65 @@ manifest_code() {
         ' "$manifest"
 }
 
+desktop_pointer_state() {
+    local manifest="$1"
+    local candidate_code="$2"
+    jq -er \
+        --arg channel "$expected_channel" \
+        --argjson candidate "$candidate_code" \
+        '
+          . as $manifest |
+          select(keys == [
+            "assets", "channel", "packageVersion", "releaseNotesUrl",
+            "schemaVersion", "versionCode", "versionName"
+          ]) |
+          select(.schemaVersion == 1 and .channel == $channel) |
+          select(.versionName | type == "string" and length > 0) |
+          select(.versionCode | type == "number" and . > 0 and floor == .) |
+          select(.packageVersion | type == "string" and test("^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$")) |
+          select(
+            .releaseNotesUrl | type == "string" and
+            startswith("https://github.com/Obiente/nc-native/releases/tag/")
+          ) |
+          (.releaseNotesUrl | ltrimstr("https://github.com/Obiente/nc-native/releases/tag/")) as $tag |
+          select(
+            if $channel == "prerelease-v1" then
+              ($tag | test("^v0\\.[0-9]+\\.[0-9]+-(alpha|beta|rc)\\.[1-9][0-9]*$")) and
+              ("v" + .versionName == $tag)
+            else
+              ($tag | test("^nightly-[0-9]{8}-[0-9]{4}-run[1-9][0-9]*-[a-f0-9]{8}$")) and
+              (.versionName == $tag)
+            end
+          ) |
+          ("https://github.com/Obiente/nc-native/releases/download/" + $tag + "/") as $asset_prefix |
+          select(.assets | type == "array" and length >= 1 and length <= 8) |
+          select(all(.assets[]; . as $asset |
+            (keys == ["architecture", "format", "platform", "sha256", "size", "url"]) and
+            (
+              (.platform == "linux" and (.format == "deb" or .format == "rpm")) or
+              (.platform == "windows" and .format == "msi") or
+              (.platform == "macos" and .format == "dmg")
+            ) and
+            (.architecture == "x86_64" or .architecture == "aarch64") and
+            (.size | type == "number" and . > 0 and . <= 536870912 and floor == .) and
+            (.sha256 | type == "string" and test("^[a-f0-9]{64}$")) and
+            (.url | type == "string" and startswith($asset_prefix) and
+              endswith("." + $asset.format) and
+              (ltrimstr($asset_prefix) | test("^[A-Za-z0-9][A-Za-z0-9._+-]*$")))
+          )) |
+          select(
+            .assets | map([.platform, .format, .architecture] | join(":")) |
+            length == (unique | length)
+          ) |
+          [
+            (if .versionCode >= $candidate then "keep" else "replace" end),
+            (.versionCode | tostring)
+          ] |
+          @tsv
+        ' \
+        "$manifest"
+}
+
 declare -A candidates=()
 declare -A candidate_codes=()
 if [[ "$android_manifest" != "-" ]]; then
@@ -117,21 +176,29 @@ mkdir -p "$temporary/publish"
 for name in "${!candidates[@]}"; do
     current="$temporary/existing/$name"
     if [[ -f "$current" ]]; then
-        current_state="$(
-            jq -er \
-                --arg channel "$expected_channel" \
-                --argjson candidate "${candidate_codes[$name]}" \
-                '
-                  select(.schemaVersion == 1 and .channel == $channel) |
-                  select(.versionCode | type == "number" and . > 0 and floor == .) |
-                  [
-                    (if .versionCode >= $candidate then "keep" else "replace" end),
-                    (.versionCode | tostring)
-                  ] |
-                  @tsv
-                ' \
-                "$current"
-        )"
+        if [[ "$name" == "desktop-update-manifest.json" ]]; then
+            if ! current_state="$(
+                desktop_pointer_state "$current" "${candidate_codes[$name]}" 2>/dev/null
+            )"; then
+                current_state=$'replace\tinvalid'
+            fi
+        else
+            current_state="$(
+                jq -er \
+                    --arg channel "$expected_channel" \
+                    --argjson candidate "${candidate_codes[$name]}" \
+                    '
+                      select(.schemaVersion == 1 and .channel == $channel) |
+                      select(.versionCode | type == "number" and . > 0 and floor == .) |
+                      [
+                        (if .versionCode >= $candidate then "keep" else "replace" end),
+                        (.versionCode | tostring)
+                      ] |
+                      @tsv
+                    ' \
+                    "$current"
+            )"
+        fi
         IFS=$'\t' read -r promotion_action current_code <<<"$current_state"
         if [[ "$promotion_action" == "keep" ]]; then
             printf '%s pointer already has version code %s.\n' "$name" "$current_code"

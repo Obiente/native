@@ -256,6 +256,7 @@ internal class AndroidProjectContentClient(
             AppUpdateCheckResult.Failed(
                 support,
                 failure.message ?: "The update check failed.",
+                retryable = failure is IOException,
             )
         }
         return synchronized(updateChannelStateLock) {
@@ -463,7 +464,13 @@ internal class AndroidProjectContentClient(
         )
         val request = Request.Builder().url(url).get().build()
         executeWithTrustedGitHubReleaseRedirect(client, request).use { response ->
-            check(response.isSuccessful) { "Public content request failed (HTTP ${response.code})." }
+            if (!response.isSuccessful) {
+                val message = "Public content request failed (HTTP ${response.code})."
+                if (updateChannel != null && isRetryableAppUpdateHttpStatus(response.code)) {
+                    throw IOException(message)
+                }
+                error(message)
+            }
             val body = requireNotNull(response.body)
             check(body.contentLength() in -1..maximumBytes)
             return body.byteStream().use { input ->
@@ -615,6 +622,9 @@ internal class AndroidProjectContentClient(
     private fun storedUpdateChannel(): AndroidUpdateChannel =
         parseAndroidUpdateChannel(preferences.getString(KEY_UPDATE_CHANNEL, null))
 }
+
+internal fun isRetryableAppUpdateHttpStatus(status: Int): Boolean =
+    status == 408 || status == 429 || status in 500..599
 
 internal data class AndroidInstallSource(
     val installerPackage: String?,
