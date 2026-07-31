@@ -16,6 +16,8 @@ import dev.obiente.nextcloudnative.app.AppDistributionChannel
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallState
+import dev.obiente.nextcloudnative.app.AppUpdatePreferences
+import dev.obiente.nextcloudnative.app.AppUpdateRelease
 import dev.obiente.nextcloudnative.app.AppUpdateSupport
 import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_APK_BYTES
 import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_METADATA_BYTES
@@ -77,6 +79,7 @@ internal class AndroidProjectContentClient(
     private val newsImageDirectory = File(appContext.cacheDir, "project-content/news-images")
     private val updateDirectory = File(appContext.cacheDir, "app-updates")
     private val updateMutex = Mutex()
+    private val mutableUpdateCheckResult = MutableStateFlow<AppUpdateCheckResult?>(null)
     private val mutableUpdateState = MutableStateFlow<AppUpdateInstallState>(AppUpdateInstallState.Idle)
     @Volatile private var activeUpdateCall: Call? = null
     @Volatile private var updateCancellationRequested = false
@@ -111,6 +114,8 @@ internal class AndroidProjectContentClient(
                     "This APK was installed directly. Updates are checked securely by Nextcloud Native."
                 AppDistributionChannel.DirectApk ->
                     "This build does not include direct APK installation. Use its distribution channel for updates."
+                AppDistributionChannel.DirectDesktopPackage ->
+                    "Desktop packages cannot be installed by Android."
                 AppDistributionChannel.GooglePlay ->
                     "Google Play owns updates for this installation."
                 AppDistributionChannel.FDroid ->
@@ -141,6 +146,9 @@ internal class AndroidProjectContentClient(
     }
 
     fun observeUpdateState(): Flow<AppUpdateInstallState> = mutableUpdateState.asStateFlow()
+
+    fun observeUpdateCheckResult(): Flow<AppUpdateCheckResult?> =
+        mutableUpdateCheckResult.asStateFlow()
 
     fun cancelUpdate(): Boolean {
         if (mutableUpdateState.value !is AppUpdateInstallState.Downloading) return false
@@ -196,26 +204,40 @@ internal class AndroidProjectContentClient(
 
     fun saveUpdateChannel(channel: AndroidUpdateChannel): Boolean {
         if (!canSelectAppUpdateChannel(support(), channel)) return false
+        if (channel != updateChannel()) mutableUpdateCheckResult.value = null
         preferences.edit().putString(KEY_UPDATE_CHANNEL, channel.storageValue).apply()
         return true
     }
 
+    fun updatePreferences(): AppUpdatePreferences = AppUpdatePreferences(
+        automaticChecks = preferences.getBoolean(KEY_AUTOMATIC_UPDATE_CHECKS, true),
+        unmeteredNetworkOnly = preferences.getBoolean(KEY_UNMETERED_UPDATE_CHECKS, true),
+        notifications = preferences.getBoolean(KEY_UPDATE_NOTIFICATIONS, true),
+    )
+
+    fun saveUpdatePreferences(value: AppUpdatePreferences) {
+        preferences.edit()
+            .putBoolean(KEY_AUTOMATIC_UPDATE_CHECKS, value.automaticChecks)
+            .putBoolean(KEY_UNMETERED_UPDATE_CHECKS, value.unmeteredNetworkOnly)
+            .putBoolean(KEY_UPDATE_NOTIFICATIONS, value.notifications)
+            .apply()
+    }
+
     fun checkForUpdate(channel: AndroidUpdateChannel): AppUpdateCheckResult {
         val support = support()
-        if (!support.canCheckDirectUpdates) return AppUpdateCheckResult.Unavailable(support)
-        if (!channel.available) {
-            return AppUpdateCheckResult.Failed(
+        val result = if (!support.canCheckDirectUpdates) {
+            AppUpdateCheckResult.Unavailable(support)
+        } else if (!channel.available) {
+            AppUpdateCheckResult.Failed(
                 support,
                 "${channel.name} updates are not available yet.",
             )
-        }
-        if (channel != updateChannel()) {
-            return AppUpdateCheckResult.Failed(
+        } else if (channel != updateChannel()) {
+            AppUpdateCheckResult.Failed(
                 support,
                 "The update channel changed. Check again using the saved channel.",
             )
-        }
-        return runCatching {
+        } else runCatching {
             val metadataUrl = channel.manifestUrl()
             val metadata = getBounded(
                 metadataUrl,
@@ -234,14 +256,18 @@ internal class AndroidProjectContentClient(
                 failure.message ?: "The update check failed.",
             )
         }
+        mutableUpdateCheckResult.value = result
+        return result
     }
 
-    suspend fun beginUpdate(release: AndroidDirectRelease): AppUpdateInstallResult {
+    suspend fun beginUpdate(release: AppUpdateRelease): AppUpdateInstallResult {
+        val androidRelease = release as? AndroidDirectRelease
+            ?: return AppUpdateInstallResult.Rejected("This is not an Android update package.")
         if (!updateMutex.tryLock()) {
             return AppUpdateInstallResult.Rejected("An app update is already in progress.")
         }
         try {
-            return beginUpdateLocked(release)
+            return beginUpdateLocked(androidRelease)
         } finally {
             activeUpdateCall = null
             updateMutex.unlock()
@@ -566,6 +592,9 @@ internal class AndroidProjectContentClient(
         const val PREFERENCES = "project-content-v1"
         const val KEY_NEWS_FETCHED_AT = "news-fetched-at"
         const val KEY_UPDATE_CHANNEL = "update-channel"
+        const val KEY_AUTOMATIC_UPDATE_CHECKS = "automatic-update-checks"
+        const val KEY_UNMETERED_UPDATE_CHECKS = "unmetered-update-checks"
+        const val KEY_UPDATE_NOTIFICATIONS = "update-notifications"
         const val NEWS_CACHE_TTL_MILLIS = 6 * 60 * 60 * 1_000L
         const val UPDATE_PROGRESS_STEP_BYTES = 256L * 1024L
     }

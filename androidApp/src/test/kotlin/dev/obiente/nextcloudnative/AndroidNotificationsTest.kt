@@ -53,6 +53,21 @@ class AndroidNotificationsTest {
     }
 
     @Test
+    fun appUpdatesUseTheirOwnChannelAndOpenTheReviewedUpdateFlow() {
+        val update = NextcloudNotificationEvent.AppUpdateAvailable(
+            id = 9,
+            accountKey = "device",
+            versionName = "0.2.0-alpha.1",
+        ).notificationPolicy()
+
+        assertEquals(CHANNEL_APP_UPDATES, update.channelId)
+        assertEquals(NotificationCompat.CATEGORY_STATUS, update.category)
+        assertTrue(isAppUpdateReviewIntentAction("dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE"))
+        assertFalse(isAppUpdateReviewIntentAction(null))
+        assertFalse(isAppUpdateReviewIntentAction("dev.obiente.nextcloudnative.notification.open"))
+    }
+
+    @Test
     fun activityPlansRouteDynamicallyWithoutMessageReadActionsOrPosting() {
         val message = activityPlan(NextcloudActivitySemantic.Message, ActivityNotificationDestination.Talk)
             .toAndroidNotificationEvent("account")

@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit
 import java.util.prefs.Preferences
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -364,6 +365,7 @@ class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
 ) : NextcloudPlatformServices {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
+    private val appUpdater = DesktopAppUpdater(preferences.node("app-updates-v1"))
     private val httpClient = OkHttpClient()
     private val noRedirectHttpClient = httpClient.newBuilder()
         .followRedirects(false)
@@ -472,6 +474,43 @@ class DesktopNextcloudServices(
                     bytes
                 }
         }
+
+    override fun appUpdateSupport(): AppUpdateSupport = appUpdater.support()
+
+    override fun loadAppUpdateChannel(): AndroidUpdateChannel = appUpdater.updateChannel()
+
+    override fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean =
+        appUpdater.saveUpdateChannel(channel)
+
+    override fun loadAppUpdatePreferences(): AppUpdatePreferences =
+        appUpdater.updatePreferences()
+
+    override fun saveAppUpdatePreferences(preferences: AppUpdatePreferences): Boolean {
+        appUpdater.saveUpdatePreferences(preferences)
+        return true
+    }
+
+    override fun observeAppUpdateCheckResult(): Flow<AppUpdateCheckResult?> =
+        appUpdater.observeCheckResult()
+
+    override suspend fun checkForAppUpdate(
+        channel: AndroidUpdateChannel,
+        automatic: Boolean,
+    ): AppUpdateCheckResult = withContext(Dispatchers.IO) {
+        if (automatic && !appUpdater.updatePreferences().automaticChecks) {
+            AppUpdateCheckResult.Unavailable(appUpdater.support())
+        } else {
+            appUpdater.checkForUpdate(channel)
+        }
+    }
+
+    override fun observeAppUpdateInstallState(): Flow<AppUpdateInstallState> =
+        appUpdater.observeInstallState()
+
+    override suspend fun beginAppUpdate(release: AppUpdateRelease): AppUpdateInstallResult =
+        withContext(Dispatchers.IO) { appUpdater.beginUpdate(release) }
+
+    override fun cancelAppUpdate(): Boolean = appUpdater.cancelUpdate()
 
     override fun loadLastOpenedAppId(): String = preferences.get(KEY_LAST_OPENED_APP, "files")
 

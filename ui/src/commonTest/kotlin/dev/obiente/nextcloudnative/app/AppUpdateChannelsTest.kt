@@ -46,6 +46,12 @@ class AppUpdateChannelsTest {
                 AndroidUpdateChannel.Nightly,
             ),
         )
+        assertTrue(
+            canSelectAppUpdateChannel(
+                directSupport.copy(channel = AppDistributionChannel.DirectDesktopPackage),
+                AndroidUpdateChannel.Nightly,
+            ),
+        )
     }
 
     @Test

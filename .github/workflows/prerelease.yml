@@ -161,6 +161,9 @@ jobs:
           ./gradlew --no-daemon \
             -PncDesktopPackageVersion="${RELEASE_DESKTOP_VERSION}" \
             -PncMacosPackageVersion="${RELEASE_DESKTOP_VERSION}" \
+            -PncVersionName="${GITHUB_REF_NAME#v}" \
+            -PncVersionCode="${{ needs.authorize-signing.outputs.version-code }}" \
+            -PncDesktopReleaseBuild=true \
             ${{ matrix.tasks }}
           status=$?
           if [[ "${status}" -ne 0 ]]; then
@@ -648,6 +651,27 @@ jobs:
                 "${version}" \
                 "${RELEASE_VERSION_CODE}"
             fi
+            tools/create-desktop-update-manifest.sh \
+              "${canonical}/desktop-update-manifest.json" \
+              prerelease-v1 \
+              "${GITHUB_REF_NAME}" \
+              "${version}" \
+              "${RELEASE_VERSION_CODE}" \
+              "${{ needs.authorize-signing.outputs.desktop-version }}" \
+              "${canonical}"
+            tools/verify-desktop-update-manifest-assets.sh \
+              "${canonical}/desktop-update-manifest.json" \
+              "${canonical}" \
+              "${GITHUB_REPOSITORY}" \
+              "${GITHUB_REF_NAME}" \
+              prerelease-v1 \
+              "${version}" \
+              "${RELEASE_VERSION_CODE}" \
+              "${{ needs.authorize-signing.outputs.desktop-version }}"
+            gh release upload "${GITHUB_REF_NAME}" \
+              "${canonical}/desktop-update-manifest.json" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
             (
               cd "${canonical}"
               find . -maxdepth 1 -type f -printf '%P\0' |
@@ -700,7 +724,7 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     concurrency:
-      group: android-prerelease-channel
+      group: app-prerelease-channel
       cancel-in-progress: false
     permissions:
       contents: write
@@ -708,23 +732,25 @@ jobs:
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Advance the Android prerelease channel
+      - name: Advance the app prerelease channel
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p channel
-          if gh release download "${GITHUB_REF_NAME}" \
+          gh release download "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --pattern update-manifest.json \
-            --dir channel; then
-            tools/promote-android-update-channel.sh \
-              "${GITHUB_REPOSITORY}" \
-              channel-prerelease \
-              "${GITHUB_REF_NAME}" \
-              "${GITHUB_SHA}" \
-              channel/update-manifest.json
-          else
-            echo "This prerelease has no Android package; the Android channel was not changed." \
-              >>"${GITHUB_STEP_SUMMARY}"
-          fi
+            --pattern '*update-manifest.json' \
+            --dir channel
+          android_manifest="-"
+          desktop_manifest="-"
+          [[ -f channel/update-manifest.json ]] && android_manifest=channel/update-manifest.json
+          [[ -f channel/desktop-update-manifest.json ]] && desktop_manifest=channel/desktop-update-manifest.json
+          tools/promote-app-update-channel.sh \
+            "${GITHUB_REPOSITORY}" \
+            channel-prerelease \
+            "${GITHUB_REF_NAME}" \
+            "${GITHUB_SHA}" \
+            "${android_manifest}" \
+            "${desktop_manifest}" \
+            1

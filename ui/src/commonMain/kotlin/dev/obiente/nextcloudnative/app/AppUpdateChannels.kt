@@ -20,7 +20,10 @@ fun canSelectAppUpdateChannel(
     support: AppUpdateSupport,
     requested: AndroidUpdateChannel,
 ): Boolean =
-    support.channel == AppDistributionChannel.DirectApk &&
+    support.channel in setOf(
+        AppDistributionChannel.DirectApk,
+        AppDistributionChannel.DirectDesktopPackage,
+    ) &&
         support.canCheckDirectUpdates &&
         requested.available
 
@@ -35,7 +38,10 @@ fun appUpdateChannelPresentation(
     support: AppUpdateSupport,
     selectedChannel: AndroidUpdateChannel,
 ): AppUpdateChannelPresentation {
-    val selectorVisible = support.channel == AppDistributionChannel.DirectApk
+    val selectorVisible = support.channel in setOf(
+        AppDistributionChannel.DirectApk,
+        AppDistributionChannel.DirectDesktopPackage,
+    )
     val selectorEnabled = selectorVisible && support.canCheckDirectUpdates
     return AppUpdateChannelPresentation(
         selectorVisible = selectorVisible,

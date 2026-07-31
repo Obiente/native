@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative
 
 import android.os.Bundle
+import android.content.Intent
 import android.content.res.Configuration
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -8,8 +9,11 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
@@ -17,10 +21,17 @@ import dev.obiente.nextcloudnative.app.NextcloudNativeApp
 import dev.obiente.nextcloudnative.app.ThemePreference
 
 class MainActivity : ComponentActivity() {
+    private var appUpdateReviewRequest by mutableLongStateOf(0L)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        receiveNotificationIntent(intent)
         SessionTestBootstrap.importIfPresent(applicationContext)
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
+        AndroidAppUpdateWork.schedule(
+            applicationContext,
+            AndroidProjectContentClient(applicationContext, null).updatePreferences(),
+        )
         val fileSyncRootPicker = AndroidFileSyncRootPicker(this)
         fileSyncRootPicker.attach(
             registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -71,7 +82,22 @@ class MainActivity : ComponentActivity() {
                 window.decorView.setBackgroundColor(background.toArgb())
             }
 
-            NextcloudNativeApp(services)
+            NextcloudNativeApp(
+                services = services,
+                appUpdateReviewRequest = appUpdateReviewRequest,
+            )
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        receiveNotificationIntent(intent)
+    }
+
+    private fun receiveNotificationIntent(intent: Intent?) {
+        if (isAppUpdateReviewIntentAction(intent?.action)) {
+            appUpdateReviewRequest += 1
         }
     }
 
@@ -80,3 +106,6 @@ class MainActivity : ComponentActivity() {
         val LightWindowBackground = Color(0xFFF7F6FA)
     }
 }
+
+internal fun isAppUpdateReviewIntentAction(action: String?): Boolean =
+    action == "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE"

@@ -93,6 +93,8 @@ import dev.obiente.nextcloudnative.app.AndroidUpdateChannel
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallState
+import dev.obiente.nextcloudnative.app.AppUpdatePreferences
+import dev.obiente.nextcloudnative.app.AppUpdateRelease
 import dev.obiente.nextcloudnative.app.AppUpdateSupport
 import dev.obiente.nextcloudnative.app.ProjectNewsResult
 import dev.obiente.nextcloudnative.app.ProjectNewsImage
@@ -310,16 +312,53 @@ internal class AndroidNextcloudServices(
 
     override fun loadAppUpdateChannel(): AndroidUpdateChannel = projectContent.updateChannel()
 
-    override fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean =
-        projectContent.saveUpdateChannel(channel)
+    override fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean {
+        val saved = projectContent.saveUpdateChannel(channel)
+        if (saved) AndroidAppUpdateWork.schedule(appContext, projectContent.updatePreferences())
+        return saved
+    }
 
-    override suspend fun checkForAppUpdate(channel: AndroidUpdateChannel): AppUpdateCheckResult =
-        withContext(Dispatchers.IO) { projectContent.checkForUpdate(channel) }
+    override fun loadAppUpdatePreferences(): AppUpdatePreferences =
+        projectContent.updatePreferences()
+
+    override fun saveAppUpdatePreferences(preferences: AppUpdatePreferences): Boolean {
+        projectContent.saveUpdatePreferences(preferences)
+        AndroidAppUpdateWork.schedule(appContext, preferences)
+        return true
+    }
+
+    override fun observeAppUpdateCheckResult(): Flow<AppUpdateCheckResult?> =
+        projectContent.observeUpdateCheckResult()
+
+    override suspend fun checkForAppUpdate(
+        channel: AndroidUpdateChannel,
+        automatic: Boolean,
+    ): AppUpdateCheckResult = withContext(Dispatchers.IO) {
+        val updatePreferences = projectContent.updatePreferences()
+        if (
+            automatic &&
+            !automaticAndroidUpdateCheckAllowed(
+                preferences = updatePreferences,
+                networkMetered = isAndroidActiveNetworkMetered(appContext),
+            )
+        ) {
+            return@withContext AppUpdateCheckResult.Unavailable(projectContent.support())
+        }
+        val result = projectContent.checkForUpdate(channel)
+        if (automatic && result is AppUpdateCheckResult.Available) {
+            AndroidAppUpdateNotifier(appContext).notifyIfNeeded(
+                channel = channel,
+                update = result,
+                enabled = updatePreferences.notifications,
+            )
+        }
+        result
+    }
 
     override fun observeAppUpdateInstallState(): Flow<AppUpdateInstallState> =
         projectContent.observeUpdateState()
 
-    override suspend fun beginAppUpdate(release: AndroidDirectRelease): AppUpdateInstallResult =
+    override suspend fun beginAppUpdate(release: AppUpdateRelease): AppUpdateInstallResult =
         withContext(Dispatchers.IO) { projectContent.beginUpdate(release) }
 
     override fun cancelAppUpdate(): Boolean = projectContent.cancelUpdate()

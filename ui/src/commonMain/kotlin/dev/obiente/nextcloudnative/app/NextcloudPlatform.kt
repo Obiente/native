@@ -382,8 +382,15 @@ interface NextcloudPlatformServices {
      */
     fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean = false
 
+    fun loadAppUpdatePreferences(): AppUpdatePreferences = AppUpdatePreferences()
+
+    fun saveAppUpdatePreferences(preferences: AppUpdatePreferences): Boolean = false
+
+    fun observeAppUpdateCheckResult(): Flow<AppUpdateCheckResult?> = flowOf(null)
+
     suspend fun checkForAppUpdate(
         channel: AndroidUpdateChannel = loadAppUpdateChannel(),
+        automatic: Boolean = false,
     ): AppUpdateCheckResult =
         AppUpdateCheckResult.Unavailable(appUpdateSupport())
 
@@ -396,7 +403,7 @@ interface NextcloudPlatformServices {
      *
      * Implementations may never silently install or invoke this for store-owned installs.
      */
-    suspend fun beginAppUpdate(release: AndroidDirectRelease): AppUpdateInstallResult =
+    suspend fun beginAppUpdate(release: AppUpdateRelease): AppUpdateInstallResult =
         AppUpdateInstallResult.Rejected("Direct app updates are unavailable on this platform.")
 
     /** Cancels the active direct-APK download while retaining a safe resumable partial file. */

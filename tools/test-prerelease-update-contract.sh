@@ -21,9 +21,11 @@ grep -Fq 'tools/create-prerelease-update-manifest.sh' \
   "$project_root/.github/workflows/prerelease.yml"
 grep -Fq 'update-manifest.json' "$project_root/.github/workflows/prerelease.yml"
 grep -Fq 'channel-prerelease' \
-  "$project_root/tools/promote-android-update-channel.sh"
+  "$project_root/tools/promote-app-update-channel.sh"
 grep -Fq 'channel-nightly' \
-  "$project_root/tools/promote-android-update-channel.sh"
+  "$project_root/tools/promote-app-update-channel.sh"
+grep -Fq 'desktop-update-manifest.json' \
+  "$project_root/.github/workflows/prerelease.yml"
 grep -Fq 'https://github.com/Obiente/nc-native/releases/download/$pointerTag/update-manifest.json' \
   "$project_root/ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ProjectNewsAndUpdates.kt"
 

@@ -78,6 +78,12 @@ internal sealed interface NextcloudNotificationEvent {
         val detail: String,
         val semantic: NextcloudActivitySemantic = NextcloudActivitySemantic.General,
     ) : NextcloudNotificationEvent
+
+    data class AppUpdateAvailable(
+        override val id: Int,
+        override val accountKey: String,
+        val versionName: String,
+    ) : NextcloudNotificationEvent
 }
 
 internal data class NextcloudNotificationPolicy(
@@ -131,6 +137,12 @@ internal fun NextcloudNotificationEvent.notificationPolicy(): NextcloudNotificat
             NotificationCompat.PRIORITY_DEFAULT,
         )
     }
+    is NextcloudNotificationEvent.AppUpdateAvailable -> NextcloudNotificationPolicy(
+        CHANNEL_APP_UPDATES,
+        "app-updates",
+        NotificationCompat.CATEGORY_STATUS,
+        NotificationCompat.PRIORITY_DEFAULT,
+    )
 }
 
 internal fun DynamicActivityNotificationPlan.toAndroidNotificationEvent(
@@ -235,6 +247,10 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
                 .setContentTitle(event.title)
                 .setContentText(event.detail)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(event.detail))
+            is NextcloudNotificationEvent.AppUpdateAvailable -> builder
+                .setContentTitle("Nextcloud Native update available")
+                .setContentText("Version ${event.versionName} is ready to review")
+                .setContentIntent(openAppIntent(ACTION_REVIEW_APP_UPDATE, event.id))
         }
         NotificationManagerCompat.from(context).notify(event.accountKey, event.id, builder.build())
         return true
@@ -279,6 +295,9 @@ private fun notificationChannels(): List<NotificationChannel> = if (Build.VERSIO
     NotificationChannel(CHANNEL_ACTIVITY, "Nextcloud activity", NotificationManager.IMPORTANCE_DEFAULT).apply {
         description = "Shares, comments, app events, and administrative updates"
     },
+    NotificationChannel(CHANNEL_APP_UPDATES, "App updates", NotificationManager.IMPORTANCE_DEFAULT).apply {
+        description = "New Nextcloud Native versions ready to review"
+    },
 )
 
 internal const val CHANNEL_MESSAGES = "nextcloud_messages"
@@ -288,3 +307,5 @@ internal const val CHANNEL_SYNC = "nextcloud_sync"
 internal const val CHANNEL_MEDIA = "nextcloud_media"
 internal const val CHANNEL_REMINDERS = "nextcloud_reminders"
 internal const val CHANNEL_ACTIVITY = "nextcloud_activity"
+internal const val CHANNEL_APP_UPDATES = "nextcloud_app_updates"
+internal const val ACTION_REVIEW_APP_UPDATE = "review-app-update"

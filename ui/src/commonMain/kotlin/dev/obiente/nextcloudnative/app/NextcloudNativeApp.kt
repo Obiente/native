@@ -58,6 +58,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -694,6 +695,7 @@ private val nativeAppIds = setOf(
 fun NextcloudNativeApp(
     services: NextcloudPlatformServices,
     presentation: NextcloudPresentation = NextcloudPresentation.Adaptive,
+    appUpdateReviewRequest: Long = 0L,
 ) {
     var themePreference by remember { mutableStateOf(services.loadThemePreference()) }
     val darkTheme = isNextcloudDarkTheme(themePreference)
@@ -714,6 +716,7 @@ fun NextcloudNativeApp(
                     services = services,
                     session = requireNotNull(session),
                     presentation = presentation,
+                    appUpdateReviewRequest = appUpdateReviewRequest,
                     themePreference = themePreference,
                     onThemePreferenceChanged = { selected ->
                         services.saveThemePreference(selected)
@@ -891,6 +894,7 @@ private fun AuthenticatedApp(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     presentation: NextcloudPresentation,
+    appUpdateReviewRequest: Long,
     themePreference: ThemePreference,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
     onLoggedOut: () -> Unit,
@@ -942,6 +946,23 @@ private fun AuthenticatedApp(
         PhotoTimelineUiStateRepository.stateFor(session)
     }
     val photoTimelineGridState = rememberLazyGridState()
+    val appUpdateResult by remember(services) {
+        services.observeAppUpdateCheckResult()
+    }.collectAsState(null)
+
+    LaunchedEffect(services) {
+        val updatePreferences = services.loadAppUpdatePreferences()
+        if (updatePreferences.automaticChecks) {
+            services.checkForAppUpdate(automatic = true)
+        }
+    }
+
+    LaunchedEffect(appUpdateReviewRequest) {
+        if (appUpdateReviewRequest > 0) {
+            screen = Screen.Root
+            destination = NextcloudDestination.Settings
+        }
+    }
 
     LaunchedEffect(session, discoveryAttempt) {
         serverInfo = null
@@ -1473,19 +1494,60 @@ private fun AuthenticatedApp(
             )
         }
     }
-    if (shouldUseNextcloudRootShell(presentation, screen == Screen.Root)) {
-        RootShell(
-            presentation = presentation,
-            selected = destination,
-            onSelected = {
-                destination = it
-                screen = Screen.Root
-            },
-            identity = desktopIdentity,
-            content = screenContent,
-        )
-    } else {
-        screenContent()
+    Column(modifier = Modifier.fillMaxSize()) {
+        val availableUpdate = (appUpdateResult as? AppUpdateCheckResult.Available)
+            ?.takeIf { screen != Screen.Root || destination != NextcloudDestination.Settings }
+        availableUpdate?.let { update ->
+            AppUpdateAvailableBanner(
+                release = update.release,
+                onReview = {
+                    screen = Screen.Root
+                    destination = NextcloudDestination.Settings
+                },
+            )
+        }
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (shouldUseNextcloudRootShell(presentation, screen == Screen.Root)) {
+                RootShell(
+                    presentation = presentation,
+                    selected = destination,
+                    onSelected = {
+                        destination = it
+                        screen = Screen.Root
+                    },
+                    identity = desktopIdentity,
+                    content = screenContent,
+                )
+            } else {
+                screenContent()
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppUpdateAvailableBanner(
+    release: AppUpdateRelease,
+    onReview: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Nextcloud Native ${release.versionName} is available", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Review the verified package before installing.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            TextButton(onClick = onReview) { Text("Review update") }
+        }
     }
 }
 
@@ -9670,17 +9732,22 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
     val updateState by remember(services) {
         services.observeAppUpdateInstallState()
     }.collectAsState(AppUpdateInstallState.Idle)
+    val observedCheckResult by remember(services) {
+        services.observeAppUpdateCheckResult()
+    }.collectAsState(null)
+    var updatePreferences by remember(services) {
+        mutableStateOf(services.loadAppUpdatePreferences())
+    }
     var checking by remember { mutableStateOf(false) }
     var installing by remember { mutableStateOf(false) }
-    var checkResult by remember { mutableStateOf<AppUpdateCheckResult?>(null) }
     var installMessage by remember { mutableStateOf<String?>(null) }
-    fun beginInstall(release: AndroidDirectRelease) {
+    fun beginInstall(release: AppUpdateRelease) {
         installing = true
         installMessage = null
         scope.launch {
             installMessage = when (val install = services.beginAppUpdate(release)) {
                 AppUpdateInstallResult.ConfirmationOpened ->
-                    "Android opened the update confirmation."
+                    "The system installer opened the update confirmation."
                 AppUpdateInstallResult.Cancelled ->
                     "Download paused. You can resume it without starting over."
                 is AppUpdateInstallResult.PermissionRequired -> install.message
@@ -9727,10 +9794,9 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                         enabled = !checking && updateChannel.available,
                         onClick = {
                             checking = true
-                            checkResult = null
                             installMessage = null
                             scope.launch {
-                                checkResult = services.checkForAppUpdate(updateChannel)
+                                services.checkForAppUpdate(updateChannel)
                                 checking = false
                             }
                         },
@@ -9765,11 +9831,6 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                                     role = Role.RadioButton,
                                     onClick = {
                                         if (services.saveAppUpdateChannel(option.channel)) {
-                                            checkResult = retainedAppUpdateCheckResult(
-                                                previousChannel = updateChannel,
-                                                selectedChannel = option.channel,
-                                                previousResult = checkResult,
-                                            )
                                             updateChannel = option.channel
                                             installMessage = null
                                         }
@@ -9808,7 +9869,40 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                     }
                 }
             }
-            when (val checked = checkResult) {
+            if (channelPresentation.selectorVisible) {
+                UpdatePreferenceRow(
+                    label = "Check automatically",
+                    description = "Check the selected channel in the background without downloading packages.",
+                    checked = updatePreferences.automaticChecks,
+                    onCheckedChange = { enabled ->
+                        val updated = updatePreferences.copy(automaticChecks = enabled)
+                        if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
+                    },
+                )
+                if (support.channel == AppDistributionChannel.DirectApk) {
+                    UpdatePreferenceRow(
+                        label = "Use unmetered networks only",
+                        description = "Automatic Android checks wait for an unmetered connection.",
+                        checked = updatePreferences.unmeteredNetworkOnly,
+                        enabled = updatePreferences.automaticChecks,
+                        onCheckedChange = { enabled ->
+                            val updated = updatePreferences.copy(unmeteredNetworkOnly = enabled)
+                            if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
+                        },
+                    )
+                    UpdatePreferenceRow(
+                        label = "Notify when available",
+                        description = "Post one Android notification for each newly discovered version.",
+                        checked = updatePreferences.notifications,
+                        enabled = updatePreferences.automaticChecks,
+                        onCheckedChange = { enabled ->
+                            val updated = updatePreferences.copy(notifications = enabled)
+                            if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
+                        },
+                    )
+                }
+            }
+            when (val checked = observedCheckResult) {
                 is AppUpdateCheckResult.Available -> {
                     val release = checked.release
                     val releaseState = updateState.takeIf { state ->
@@ -9841,7 +9935,7 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                                     append(formatBytes(releaseState.downloadedBytes))
                                     append(" of ")
                                     append(formatBytes(releaseState.totalBytes))
-                                    if (releaseState.resumedFromBytes > 0) append(" · resumed")
+                                    if (releaseState.resumedFromBytes > 0) append(" - resumed")
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -9901,7 +9995,7 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                             }
                         }
                         is AppUpdateInstallState.ConfirmationOpened -> Text(
-                            "Android opened the update confirmation.",
+                            "The system installer opened the update confirmation.",
                             style = MaterialTheme.typography.bodySmall,
                             color = NextcloudTheme.colors.success,
                         )
@@ -9933,6 +10027,35 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                 Text(it, style = MaterialTheme.typography.bodySmall)
             }
         }
+    }
+}
+
+@Composable
+private fun UpdatePreferenceRow(
+    label: String,
+    description: String,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.titleSmall)
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = checked,
+            enabled = enabled,
+            onCheckedChange = onCheckedChange,
+        )
     }
 }
 
