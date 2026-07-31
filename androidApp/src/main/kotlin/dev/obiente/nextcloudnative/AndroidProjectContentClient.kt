@@ -38,6 +38,8 @@ import dev.obiente.nextcloudnative.app.validateAndroidDirectRelease
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -323,9 +325,15 @@ internal class AndroidProjectContentClient(
             return AppUpdateInstallResult.PermissionRequired(message)
         }
 
-        updateDirectory.mkdirs()
+        check(updateDirectory.isDirectory || updateDirectory.mkdirs()) {
+            "Could not create the Android app-update cache."
+        }
         val staged = File(updateDirectory, "nextcloud-native-${release.versionCode}.apk")
         val temporary = File(updateDirectory, "${staged.name}.part")
+        cleanupAndroidUpdatePackages(
+            directory = updateDirectory,
+            activePartial = temporary,
+        )
         updateCancellationRequested = false
         return try {
             val resumedFromBytes = settleUpdatePartial(
@@ -747,6 +755,42 @@ internal fun settleUpdatePartial(
     }
     return length
 }
+
+internal fun cleanupAndroidUpdatePackages(
+    directory: File,
+    activePartial: File,
+): Int {
+    if (!directory.isDirectory) return 0
+    val activePath = activePartial.toPath().toAbsolutePath().normalize()
+    var removed = 0
+    directory.listFiles().orEmpty().forEach { candidate ->
+        if (
+            candidate.androidUpdatePackageVersionCode() != null &&
+            candidate.toPath().toAbsolutePath().normalize() != activePath &&
+            Files.isRegularFile(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)
+        ) {
+            check(candidate.delete()) { "Could not clear an obsolete Android update package." }
+            removed += 1
+        }
+    }
+    return removed
+}
+
+private fun File.androidUpdatePackageVersionCode(): Long? {
+    if (!name.startsWith(ANDROID_UPDATE_PACKAGE_PREFIX)) return null
+    val version = when {
+        name.endsWith(ANDROID_UPDATE_PARTIAL_SUFFIX) ->
+            name.removePrefix(ANDROID_UPDATE_PACKAGE_PREFIX).removeSuffix(ANDROID_UPDATE_PARTIAL_SUFFIX)
+        name.endsWith(ANDROID_UPDATE_PACKAGE_SUFFIX) ->
+            name.removePrefix(ANDROID_UPDATE_PACKAGE_PREFIX).removeSuffix(ANDROID_UPDATE_PACKAGE_SUFFIX)
+        else -> return null
+    }
+    return version.toLongOrNull()?.takeIf { it > 0 }
+}
+
+private const val ANDROID_UPDATE_PACKAGE_PREFIX = "nextcloud-native-"
+private const val ANDROID_UPDATE_PACKAGE_SUFFIX = ".apk"
+private const val ANDROID_UPDATE_PARTIAL_SUFFIX = ".apk.part"
 
 internal fun downloadUpdateApk(
     client: OkHttpClient,
