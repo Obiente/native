@@ -22,7 +22,7 @@ class AndroidVirtualFileCacheInstrumentedTest {
     private val session = NextcloudSession(
         serverUrl = "https://cloud.invalid",
         loginName = "virtual-cache-fixture",
-        appPassword = "not-used-by-cache",
+        appPassword = "x",
     )
 
     @Before
