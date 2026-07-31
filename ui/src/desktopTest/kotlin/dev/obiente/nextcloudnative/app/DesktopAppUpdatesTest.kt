@@ -16,16 +16,46 @@ class DesktopAppUpdatesTest {
     fun linuxTargetDetectionSelectsOnlyAnUnambiguousNativePackage() {
         assertEquals(
             DesktopUpdateTarget("linux", "rpm", "x86_64"),
-            detectDesktopUpdateTarget("Linux", "amd64", debianMarker = false, rpmMarker = true),
+            detectDesktopUpdateTarget(
+                "Linux",
+                "amd64",
+                debianMarker = false,
+                rpmMarker = true,
+                installedPackageFormat = null,
+            ),
         )
         assertEquals(
             DesktopUpdateTarget("linux", "deb", "aarch64"),
-            detectDesktopUpdateTarget("Linux", "arm64", debianMarker = true, rpmMarker = false),
+            detectDesktopUpdateTarget(
+                "Linux",
+                "arm64",
+                debianMarker = true,
+                rpmMarker = false,
+                installedPackageFormat = null,
+            ),
         )
-        assertNull(detectDesktopUpdateTarget("Windows 11", "amd64", false, false))
-        assertNull(detectDesktopUpdateTarget("Linux", "riscv64", false, true))
-        assertNull(detectDesktopUpdateTarget("Linux", "amd64", true, true))
-        assertNull(detectDesktopUpdateTarget("Linux", "amd64", false, false))
+        assertEquals(
+            DesktopUpdateTarget("linux", "rpm", "x86_64"),
+            detectDesktopUpdateTarget("Linux", "amd64", false, false, installedPackageFormat = "rpm"),
+        )
+        assertNull(detectDesktopUpdateTarget("Windows 11", "amd64", false, false, null))
+        assertNull(detectDesktopUpdateTarget("Linux", "riscv64", false, true, null))
+        assertNull(detectDesktopUpdateTarget("Linux", "amd64", true, true, null))
+        assertNull(detectDesktopUpdateTarget("Linux", "amd64", false, false, null))
+        assertEquals(
+            "rpm",
+            detectInstalledDesktopPackageFormat("Linux") { command ->
+                if (command.first().endsWith("/rpm")) "nextcloudnative" else null
+            },
+        )
+        assertEquals(
+            "deb",
+            detectInstalledDesktopPackageFormat("Linux") { command ->
+                if (command.first().endsWith("/dpkg-query")) "ii " else null
+            },
+        )
+        assertNull(detectInstalledDesktopPackageFormat("Linux") { "unexpected" })
+        assertNull(detectInstalledDesktopPackageFormat("Windows 11") { "unexpected" })
     }
 
     @Test
@@ -84,20 +114,55 @@ class DesktopAppUpdatesTest {
     }
 
     @Test
-    fun completedUpdatePackagesAreEvictedWithoutTouchingPartialsOrUnrelatedFiles() {
+    fun completedAndAbandonedUpdatePackagesAreEvictedWithinAProtectedPartialBudget() {
         val directory = Files.createTempDirectory("desktop-update-cleanup-test").toFile()
         try {
+            val now = 2 * DESKTOP_PARTIAL_RETENTION_MILLIS
             val rpm = directory.resolve("nextcloud-native-old.rpm").apply { writeText("rpm") }
             val deb = directory.resolve("nextcloud-native-old.deb").apply { writeText("deb") }
-            val partial = directory.resolve("nextcloud-native-new.rpm.part").apply { writeText("partial") }
+            val expiredPartial = directory.resolve("nextcloud-native-old.rpm.part").apply {
+                writeText("old")
+                setLastModified(now - DESKTOP_PARTIAL_RETENTION_MILLIS - 1)
+            }
+            val overBudgetPartial = directory.resolve("nextcloud-native-large.deb.part").apply {
+                writeText("large")
+                setLastModified(now - 2)
+            }
+            val freshPartial = directory.resolve("nextcloud-native-new.rpm.part").apply {
+                writeText("new")
+                setLastModified(now - 1)
+            }
+            val activePartial = directory.resolve("nextcloud-native-active.rpm.part").apply {
+                writeText("active")
+                setLastModified(0)
+            }
             val unrelated = directory.resolve("README.txt").apply { writeText("keep") }
 
-            assertEquals(2, cleanupCompletedDesktopUpdatePackages(directory))
+            assertEquals(
+                4,
+                cleanupDesktopUpdatePackages(
+                    directory = directory,
+                    activePartial = activePartial,
+                    nowMillis = now,
+                    maximumPartialBytes = freshPartial.length(),
+                ),
+            )
             assertFalse(rpm.exists())
             assertFalse(deb.exists())
-            assertTrue(partial.isFile)
+            assertFalse(expiredPartial.exists())
+            assertFalse(overBudgetPartial.exists())
+            assertTrue(freshPartial.isFile)
+            assertTrue(activePartial.isFile)
             assertTrue(unrelated.isFile)
-            assertEquals(0, cleanupCompletedDesktopUpdatePackages(directory))
+            assertEquals(
+                0,
+                cleanupDesktopUpdatePackages(
+                    directory = directory,
+                    activePartial = activePartial,
+                    nowMillis = now,
+                    maximumPartialBytes = freshPartial.length(),
+                ),
+            )
         } finally {
             directory.deleteRecursively()
         }

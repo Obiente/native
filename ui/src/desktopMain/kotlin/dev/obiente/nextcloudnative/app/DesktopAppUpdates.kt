@@ -49,6 +49,7 @@ internal fun detectDesktopUpdateTarget(
     architecture: String = System.getProperty("os.arch", ""),
     debianMarker: Boolean = File("/etc/debian_version").isFile,
     rpmMarker: Boolean = File("/etc/redhat-release").isFile || File("/etc/fedora-release").isFile,
+    installedPackageFormat: String? = detectInstalledDesktopPackageFormat(osName),
 ): DesktopUpdateTarget? {
     if (!osName.startsWith("Linux", ignoreCase = true)) return null
     val normalizedArchitecture = when (architecture.lowercase()) {
@@ -56,13 +57,48 @@ internal fun detectDesktopUpdateTarget(
         "aarch64", "arm64" -> "aarch64"
         else -> return null
     }
-    val format = when {
-        rpmMarker && !debianMarker -> "rpm"
-        debianMarker && !rpmMarker -> "deb"
-        else -> return null
-    }
+    val format = installedPackageFormat?.takeIf { it in DESKTOP_LINUX_PACKAGE_FORMATS }
+        ?: when {
+            rpmMarker && !debianMarker -> "rpm"
+            debianMarker && !rpmMarker -> "deb"
+            else -> return null
+        }
     return DesktopUpdateTarget("linux", format, normalizedArchitecture)
 }
+
+internal fun detectInstalledDesktopPackageFormat(
+    osName: String,
+    packageQueryOutput: (List<String>) -> String? = ::desktopPackageQueryOutput,
+): String? {
+    if (!osName.startsWith("Linux", ignoreCase = true)) return null
+    val debInstalled = packageQueryOutput(
+        listOf("/usr/bin/dpkg-query", "--show", "--showformat=\${db:Status-Abbrev}", DESKTOP_PACKAGE_NAME),
+    )?.startsWith("ii") == true
+    val rpmInstalled = packageQueryOutput(
+        listOf("/usr/bin/rpm", "--query", "--queryformat=%{NAME}", DESKTOP_PACKAGE_NAME),
+    ) == DESKTOP_PACKAGE_NAME
+    return when {
+        debInstalled && !rpmInstalled -> "deb"
+        rpmInstalled && !debInstalled -> "rpm"
+        else -> null
+    }
+}
+
+private fun desktopPackageQueryOutput(command: List<String>): String? = runCatching {
+    val process = ProcessBuilder(command)
+        .redirectError(ProcessBuilder.Redirect.DISCARD)
+        .start()
+    if (!process.waitFor(DESKTOP_PACKAGE_QUERY_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
+        process.destroyForcibly()
+        null
+    } else if (process.exitValue() != 0) {
+        null
+    } else {
+        process.inputStream.bufferedReader().use { output ->
+            output.readText().take(DESKTOP_PACKAGE_QUERY_MAX_OUTPUT_CHARACTERS).trimEnd()
+        }
+    }
+}.getOrNull()
 
 internal class DesktopAppUpdater(
     private val preferences: Preferences,
@@ -202,9 +238,9 @@ internal class DesktopAppUpdater(
             check(updateDirectory.isDirectory || updateDirectory.mkdirs()) {
                 "Could not create the desktop app-update cache."
             }
-            cleanupCompletedDesktopUpdatePackages(updateDirectory)
             val packageFile = File(updateDirectory, desktopRelease.asset.url.substringAfterLast('/'))
             val temporary = File(updateDirectory, "${packageFile.name}.part")
+            cleanupDesktopUpdatePackages(updateDirectory, activePartial = temporary)
             temporary.delete()
             cancellationRequested = false
             mutableInstallState.value = AppUpdateInstallState.Downloading(
@@ -313,25 +349,60 @@ internal class DesktopAppUpdater(
     }
 }
 
-internal fun cleanupCompletedDesktopUpdatePackages(directory: File): Int {
+internal fun cleanupDesktopUpdatePackages(
+    directory: File,
+    activePartial: File? = null,
+    nowMillis: Long = System.currentTimeMillis(),
+    partialRetentionMillis: Long = DESKTOP_PARTIAL_RETENTION_MILLIS,
+    maximumPartialBytes: Long = MAX_DESKTOP_UPDATE_PACKAGE_BYTES,
+): Int {
     if (!directory.isDirectory) return 0
+    require(partialRetentionMillis >= 0)
+    require(maximumPartialBytes >= 0)
     var removed = 0
-    directory.listFiles().orEmpty().forEach { candidate ->
+    val regularFiles = directory.listFiles().orEmpty().filter { candidate ->
+        Files.isRegularFile(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)
+    }
+    regularFiles.forEach { candidate ->
         val extension = candidate.extension.lowercase()
-        if (
-            extension in DESKTOP_UPDATE_PACKAGE_EXTENSIONS &&
-            Files.isRegularFile(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)
-        ) {
+        if (extension in DESKTOP_UPDATE_PACKAGE_EXTENSIONS) {
             check(candidate.delete()) { "Could not clear an older desktop update package." }
+            removed += 1
+        }
+    }
+    val activePath = activePartial?.toPath()?.toAbsolutePath()?.normalize()
+    val partials = regularFiles
+        .filter(File::isDesktopUpdatePartial)
+        .filter { candidate -> candidate.toPath().toAbsolutePath().normalize() != activePath }
+        .sortedBy(File::lastModified)
+    var retainedPartialBytes = partials.sumOf(File::length)
+    partials.forEach { candidate ->
+        val expired = candidate.lastModified() <= nowMillis - partialRetentionMillis
+        val overBudget = retainedPartialBytes > maximumPartialBytes
+        if (expired || overBudget) {
+            val size = candidate.length()
+            check(candidate.delete()) { "Could not clear an abandoned desktop update download." }
+            retainedPartialBytes -= size
             removed += 1
         }
     }
     return removed
 }
 
+private fun File.isDesktopUpdatePartial(): Boolean {
+    if (!name.endsWith(".part", ignoreCase = true)) return false
+    val packageExtension = name.dropLast(".part".length).substringAfterLast('.').lowercase()
+    return packageExtension in DESKTOP_UPDATE_PACKAGE_EXTENSIONS
+}
+
 internal val DESKTOP_APP_UPDATE_CHECK_INTERVAL_MILLIS: Long = TimeUnit.HOURS.toMillis(6)
 
 private val DESKTOP_UPDATE_PACKAGE_EXTENSIONS = setOf("deb", "rpm", "msi", "dmg", "pkg")
+private val DESKTOP_LINUX_PACKAGE_FORMATS = setOf("deb", "rpm")
+private const val DESKTOP_PACKAGE_NAME = "nextcloudnative"
+private const val DESKTOP_PACKAGE_QUERY_TIMEOUT_MILLIS = 500L
+private const val DESKTOP_PACKAGE_QUERY_MAX_OUTPUT_CHARACTERS = 64
+internal val DESKTOP_PARTIAL_RETENTION_MILLIS: Long = TimeUnit.HOURS.toMillis(24)
 
 internal fun buildDesktopUpdateHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS)
