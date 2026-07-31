@@ -17,6 +17,7 @@ repository="${GITHUB_REPOSITORY:-Obiente/nc-native}"
 
 [[ "$repository" == "Obiente/nc-native" ]]
 [[ -d "$asset_directory" ]]
+"$(dirname "$0")/has-direct-linux-update-assets.sh" "$asset_directory"
 case "$channel" in
     prerelease-v1)
         [[ "$version" =~ ^0\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[1-9][0-9]*$ ]]

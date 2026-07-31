@@ -20,6 +20,7 @@ assert root.find("url[@type='homepage']").text == "https://nc-native.obiente.dev
 screenshots = root.findall("./screenshots/screenshot")
 assert len(screenshots) >= 3
 assert all(item.findtext("image", "").startswith("https://nc-native.obiente.dev/screenshots/") for item in screenshots)
+assert "available offline" not in " ".join(root.itertext()).lower()
 PY
 
 grep -Fq 'Homepage: https://nc-native.obiente.dev/' "$templates/control"

@@ -11,6 +11,8 @@ printf 'deb fixture' >"$temporary/nextcloudnative_1.0.2921_amd64.deb"
 printf 'msi fixture' >"$temporary/NextcloudNative-1.0.2921.msi"
 printf 'dmg fixture' >"$temporary/NextcloudNative-1.0.2921.dmg"
 
+"$project_root/tools/has-direct-linux-update-assets.sh" "$temporary"
+
 GITHUB_REPOSITORY=Obiente/nc-native \
     "$project_root/tools/create-desktop-update-manifest.sh" \
     "$temporary/desktop-update-manifest.json" \
@@ -35,5 +37,26 @@ jq -e '
   ([.assets[] | .platform] | sort) == ["linux","linux","macos","windows"] and
   ([.assets[] | select(.platform == "linux") | .format] | sort) == ["deb","rpm"]
 ' "$temporary/desktop-update-manifest.json" >/dev/null
+
+non_linux="$temporary/non-linux"
+mkdir "$non_linux"
+printf 'msi fixture' >"$non_linux/NextcloudNative-1.0.2921.msi"
+printf 'dmg fixture' >"$non_linux/NextcloudNative-1.0.2921.dmg"
+if "$project_root/tools/has-direct-linux-update-assets.sh" "$non_linux"; then
+    echo "Non-Linux assets must not advance the direct desktop update channel." >&2
+    exit 1
+fi
+if GITHUB_REPOSITORY=Obiente/nc-native \
+    "$project_root/tools/create-desktop-update-manifest.sh" \
+    "$non_linux/desktop-update-manifest.json" \
+    nightly-v1 \
+    "$tag" \
+    "$tag" \
+    20002921 \
+    1.0.2921 \
+    "$non_linux"; then
+    echo "A desktop update manifest was created without direct Linux packages." >&2
+    exit 1
+fi
 
 printf 'Desktop update manifest generation checks passed.\n'

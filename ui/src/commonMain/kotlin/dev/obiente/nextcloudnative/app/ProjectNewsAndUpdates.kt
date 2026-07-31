@@ -64,6 +64,9 @@ enum class AppDistributionChannel {
     Unsupported,
 }
 
+internal fun appUpdateDownloadCancellationLabel(channel: AppDistributionChannel): String =
+    if (channel == AppDistributionChannel.DirectDesktopPackage) "Cancel download" else "Pause download"
+
 data class AppUpdateSupport(
     val channel: AppDistributionChannel,
     val currentVersionName: String,

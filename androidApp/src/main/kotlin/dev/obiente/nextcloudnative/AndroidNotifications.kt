@@ -259,7 +259,9 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
     private fun openAppIntent(action: String, requestCode: Int): PendingIntent = PendingIntent.getActivity(
         context,
         requestCode,
-        Intent(context, MainActivity::class.java).setAction("dev.obiente.nextcloudnative.notification.$action"),
+        Intent(context, MainActivity::class.java)
+            .setAction("dev.obiente.nextcloudnative.notification.$action")
+            .addFlags(NOTIFICATION_ACTIVITY_FLAGS),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
@@ -269,6 +271,9 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
         .setContentText("Open the app to view this update")
         .build()
 }
+
+internal val NOTIFICATION_ACTIVITY_FLAGS: Int =
+    Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
 
 private fun notificationChannels(): List<NotificationChannel> = if (Build.VERSION.SDK_INT < 26) emptyList() else listOf(
     NotificationChannel(CHANNEL_CALLS, "Calls", NotificationManager.IMPORTANCE_HIGH).apply {

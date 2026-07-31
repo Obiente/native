@@ -655,27 +655,34 @@ jobs:
                 "${version}" \
                 "${RELEASE_VERSION_CODE}"
             fi
-            tools/create-desktop-update-manifest.sh \
-              "${canonical}/desktop-update-manifest.json" \
-              prerelease-v1 \
-              "${GITHUB_REF_NAME}" \
-              "${version}" \
-              "${RELEASE_VERSION_CODE}" \
-              "${{ needs.authorize-signing.outputs.desktop-version }}" \
-              "${canonical}"
-            tools/verify-desktop-update-manifest-assets.sh \
-              "${canonical}/desktop-update-manifest.json" \
-              "${canonical}" \
-              "${GITHUB_REPOSITORY}" \
-              "${GITHUB_REF_NAME}" \
-              prerelease-v1 \
-              "${version}" \
-              "${RELEASE_VERSION_CODE}" \
-              "${{ needs.authorize-signing.outputs.desktop-version }}"
-            gh release upload "${GITHUB_REF_NAME}" \
-              "${canonical}/desktop-update-manifest.json" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --clobber
+            if tools/has-direct-linux-update-assets.sh "${canonical}"; then
+              tools/create-desktop-update-manifest.sh \
+                "${canonical}/desktop-update-manifest.json" \
+                prerelease-v1 \
+                "${GITHUB_REF_NAME}" \
+                "${version}" \
+                "${RELEASE_VERSION_CODE}" \
+                "${{ needs.authorize-signing.outputs.desktop-version }}" \
+                "${canonical}"
+              tools/verify-desktop-update-manifest-assets.sh \
+                "${canonical}/desktop-update-manifest.json" \
+                "${canonical}" \
+                "${GITHUB_REPOSITORY}" \
+                "${GITHUB_REF_NAME}" \
+                prerelease-v1 \
+                "${version}" \
+                "${RELEASE_VERSION_CODE}" \
+                "${{ needs.authorize-signing.outputs.desktop-version }}"
+              gh release upload "${GITHUB_REF_NAME}" \
+                "${canonical}/desktop-update-manifest.json" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --clobber
+            elif [[ -f "${canonical}/desktop-update-manifest.json" ]]; then
+              gh release delete-asset "${GITHUB_REF_NAME}" desktop-update-manifest.json \
+                --repo "${GITHUB_REPOSITORY}" \
+                --yes
+              rm "${canonical}/desktop-update-manifest.json"
+            fi
             (
               cd "${canonical}"
               find . -maxdepth 1 -type f -printf '%P\0' |

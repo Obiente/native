@@ -529,27 +529,34 @@ jobs:
             --title "Nextcloud Native ${NIGHTLY_VERSION}"
 
           if [[ "${canonical_successful}" -ge 3 ]]; then
-            tools/create-desktop-update-manifest.sh \
-              "${canonical}/desktop-update-manifest.json" \
-              nightly-v1 \
-              "${NIGHTLY_TAG}" \
-              "${NIGHTLY_VERSION}" \
-              "${NIGHTLY_VERSION_CODE}" \
-              "${{ needs.source.outputs.desktop-version }}" \
-              "${canonical}"
-            tools/verify-desktop-update-manifest-assets.sh \
-              "${canonical}/desktop-update-manifest.json" \
-              "${canonical}" \
-              "${GITHUB_REPOSITORY}" \
-              "${NIGHTLY_TAG}" \
-              nightly-v1 \
-              "${NIGHTLY_VERSION}" \
-              "${NIGHTLY_VERSION_CODE}" \
-              "${{ needs.source.outputs.desktop-version }}"
-            gh release upload "${NIGHTLY_TAG}" \
-              "${canonical}/desktop-update-manifest.json" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --clobber
+            if tools/has-direct-linux-update-assets.sh "${canonical}"; then
+              tools/create-desktop-update-manifest.sh \
+                "${canonical}/desktop-update-manifest.json" \
+                nightly-v1 \
+                "${NIGHTLY_TAG}" \
+                "${NIGHTLY_VERSION}" \
+                "${NIGHTLY_VERSION_CODE}" \
+                "${{ needs.source.outputs.desktop-version }}" \
+                "${canonical}"
+              tools/verify-desktop-update-manifest-assets.sh \
+                "${canonical}/desktop-update-manifest.json" \
+                "${canonical}" \
+                "${GITHUB_REPOSITORY}" \
+                "${NIGHTLY_TAG}" \
+                nightly-v1 \
+                "${NIGHTLY_VERSION}" \
+                "${NIGHTLY_VERSION_CODE}" \
+                "${{ needs.source.outputs.desktop-version }}"
+              gh release upload "${NIGHTLY_TAG}" \
+                "${canonical}/desktop-update-manifest.json" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --clobber
+            elif [[ -f "${canonical}/desktop-update-manifest.json" ]]; then
+              gh release delete-asset "${NIGHTLY_TAG}" desktop-update-manifest.json \
+                --repo "${GITHUB_REPOSITORY}" \
+                --yes
+              rm "${canonical}/desktop-update-manifest.json"
+            fi
             mapfile -d '' canonical_apks < <(
               find "${canonical}" -maxdepth 1 -type f \
                 -name 'nextcloud-native-*-android.apk' -print0
