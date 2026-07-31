@@ -39,6 +39,8 @@ class NativeRecordActionsTest {
                 field("title", "Title", FieldKind.string),
                 field("notes", "Notes", FieldKind.longText),
                 field("done", "Done", FieldKind.boolean),
+                field("canEdit", "Can edit", FieldKind.boolean, readOnly = true),
+                field("canDelete", "Can delete", FieldKind.boolean, readOnly = true),
             ),
         )
         val actions = listOf(
@@ -90,6 +92,8 @@ class NativeRecordActionsTest {
                 "title" to "Prepare room",
                 "notes" to "Before noon",
                 "done" to "false",
+                "canEdit" to "true",
+                "canDelete" to "true",
             ),
             displayValues = mapOf("notes" to "Formatted notes must not become a write value"),
             bindingContext = mapOf("containerId" to "collection-4"),
@@ -277,9 +281,9 @@ class NativeRecordActionsTest {
             record = record,
         )
 
-        assertTrue(
-            observedOnly.edit != null,
-            "A renderer-local observed field must not become authoritative permission evidence.",
+        assertNull(
+            observedOnly.edit,
+            "Neither endpoint existence nor a renderer-local field may authorize mutation.",
         )
 
         val declaredResource = canonicalResource.copy(fields = presentationResource.fields)
@@ -594,6 +598,7 @@ class NativeRecordActionsTest {
             resource = notes,
             record = note,
             navigationContext = mapOf("id" to "4"),
+            authorityContext = affirmativeParentAuthority(),
         ).commands.single()
 
         assertEquals(
@@ -609,6 +614,7 @@ class NativeRecordActionsTest {
                 field("id", "ID", FieldKind.string, readOnly = true),
                 field("title", "Title", FieldKind.string),
                 field("description", "Description", FieldKind.longText),
+                field("canEdit", "Can edit", FieldKind.boolean, readOnly = true),
             ),
         )
         val replace = action(
@@ -621,7 +627,11 @@ class NativeRecordActionsTest {
         )
         val sparseRecord = NativeRecord(
             id = "item-9",
-            values = mapOf("id" to "item-9", "title" to "Visible title"),
+            values = mapOf(
+                "id" to "item-9",
+                "title" to "Visible title",
+                "canEdit" to "true",
+            ),
         )
 
         assertNull(
@@ -636,16 +646,144 @@ class NativeRecordActionsTest {
             nativeRecordActions(schema(resource, listOf(patch)), resource, sparseRecord).edit != null,
         )
 
+        val nullableRecord = sparseRecord.copy(
+            values = sparseRecord.values + ("description" to null),
+        )
         val completeRecord = sparseRecord.copy(
             values = sparseRecord.values + ("description" to "Authoritative description"),
         )
-        assertEquals(
-            mapOf("title" to "Visible title", "description" to "Authoritative description"),
-            nativeRecordActions(
-                schema(resource, listOf(replace)),
-                resource,
-                completeRecord,
-            ).edit?.initialValues,
+        assertNull(nativeRecordActions(schema(resource, listOf(replace)), resource, nullableRecord).edit)
+        assertNull(nativeRecordActions(schema(resource, listOf(replace)), resource, completeRecord).edit)
+
+        val unsafePlan = NativeRecordFormActionPlan(
+            kind = NativeRecordFormActionKind.Edit,
+            action = replace,
+            fields = resource.fields.filter { field -> field.id in replace.binding.bodyFieldNames },
+            initialValues = mapOf(
+                "title" to "Visible title",
+                "description" to "Authoritative description",
+            ),
+            bindingValues = mapOf("recordId" to "item-9"),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            unsafePlan.request(
+                mapOf(
+                    "title" to "Updated title",
+                    "description" to "Updated description",
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `selected record mutations require affirmative capability or parent authority`() {
+        val resource = resource(
+            fields = listOf(
+                field("id", "ID", FieldKind.string, readOnly = true),
+                field("title", "Title", FieldKind.string),
+            ),
+        )
+        val parent = resource(
+            id = "spaces",
+            fields = listOf(
+                field("id", "ID", FieldKind.string, readOnly = true),
+                field("isAdmin", "Is admin", FieldKind.boolean, readOnly = true),
+            ),
+        )
+        val edit = action(
+            id = "change",
+            intent = ActionIntent.update,
+            method = HttpMethod.PATCH,
+            pathNames = listOf("recordId"),
+            bodyNames = listOf("title"),
+        )
+        val archive = action(
+            id = "archive",
+            intent = ActionIntent.execute,
+            effect = ActionEffect.archive,
+            method = HttpMethod.POST,
+            pathNames = listOf("recordId"),
+        ).withRecordPath("archive")
+        val delete = action(
+            id = "remove",
+            intent = ActionIntent.delete,
+            risk = ActionRisk.destructive,
+            method = HttpMethod.DELETE,
+            pathNames = listOf("recordId"),
+            confirmation = true,
+        ).withRecordPath("")
+        val actions = listOf(edit, archive, delete)
+        val record = NativeRecord(
+            id = "item-9",
+            values = mapOf("id" to "item-9", "title" to "Selected"),
+        )
+        val nativeSchema = schema(resource, actions).copy(resources = listOf(resource, parent))
+
+        val absent = nativeRecordActions(nativeSchema, resource, record)
+        val unscoped = nativeRecordActions(
+            schema = nativeSchema,
+            resource = resource,
+            record = record,
+            authorityContext = NativeRecordAuthorityContext(
+                parentResource = parent.copy(fields = parent.fields.take(1)),
+                parentRecord = NativeRecord("space-4", mapOf("id" to "space-4")),
+            ),
+        )
+        listOf(absent, unscoped).forEach { capabilities ->
+            assertNull(capabilities.edit)
+            assertNull(capabilities.delete)
+            assertTrue(capabilities.commands.isEmpty())
+        }
+
+        val parentAllowed = nativeRecordActions(
+            schema = nativeSchema,
+            resource = resource,
+            record = record,
+            authorityContext = NativeRecordAuthorityContext(
+                parentResource = parent,
+                parentRecord = NativeRecord(
+                    id = "space-4",
+                    values = mapOf("id" to "space-4", "isAdmin" to "true"),
+                ),
+            ),
+        )
+        assertTrue(parentAllowed.edit != null)
+        assertTrue(parentAllowed.delete != null)
+        assertEquals(listOf(ActionEffect.archive), parentAllowed.commands.map { plan -> plan.effect })
+
+        val capableResource = resource.copy(
+            fields = resource.fields +
+                field("canEdit", "Can edit", FieldKind.boolean, readOnly = true) +
+                field("canDelete", "Can delete", FieldKind.boolean, readOnly = true),
+        )
+        val canonicalAllowed = nativeRecordActions(
+            schema = schema(capableResource, actions),
+            resource = capableResource,
+            record = record.copy(
+                values = record.values + mapOf("canEdit" to "true", "canDelete" to "true"),
+            ),
+        )
+        assertTrue(canonicalAllowed.edit != null)
+        assertTrue(canonicalAllowed.delete != null)
+        assertEquals(listOf(ActionEffect.archive), canonicalAllowed.commands.map { plan -> plan.effect })
+
+        val scopedEditResource = resource.copy(
+            fields = resource.fields +
+                field("writable", "Writable", FieldKind.boolean, readOnly = true) +
+                field("canEdit", "Can edit", FieldKind.boolean, readOnly = true),
+        )
+        val scopedEditOnly = nativeRecordActions(
+            schema = schema(scopedEditResource, actions),
+            resource = scopedEditResource,
+            record = record.copy(
+                values = record.values + mapOf("writable" to "true", "canEdit" to "true"),
+            ),
+        )
+        assertTrue(scopedEditOnly.edit != null)
+        assertEquals(listOf(ActionEffect.archive), scopedEditOnly.commands.map { plan -> plan.effect })
+        assertNull(
+            scopedEditOnly.delete,
+            "General writable evidence cannot fill an absent canDelete capability category.",
         )
     }
 
@@ -693,7 +831,12 @@ class NativeRecordActionsTest {
         assertEquals(
             mapOf("projectId" to "project-4", "taskId" to "task-9"),
             requireNotNull(
-                nativeRecordActions(schema(resource, listOf(itemDelete)), resource, record).delete,
+                nativeRecordActions(
+                    schema = schema(resource, listOf(itemDelete)),
+                    resource = resource,
+                    record = record,
+                    authorityContext = affirmativeParentAuthority(),
+                ).delete,
             ).request(confirmed = true).values,
         )
     }
@@ -723,7 +866,12 @@ class NativeRecordActionsTest {
         )
 
         val plan = requireNotNull(
-            nativeRecordActions(schema(resource, listOf(toggle)), resource, incomplete).completion,
+            nativeRecordActions(
+                schema = schema(resource, listOf(toggle)),
+                resource = resource,
+                record = incomplete,
+                authorityContext = affirmativeParentAuthority(),
+            ).completion,
         )
 
         assertEquals(NativeRecordCompletionActionKind.Toggle, plan.kind)
@@ -738,7 +886,12 @@ class NativeRecordActionsTest {
 
         val completed = incomplete.copy(values = incomplete.values + ("done" to "true"))
         val reversePlan = requireNotNull(
-            nativeRecordActions(schema(resource, listOf(toggle)), resource, completed).completion,
+            nativeRecordActions(
+                schema = schema(resource, listOf(toggle)),
+                resource = resource,
+                record = completed,
+                authorityContext = affirmativeParentAuthority(),
+            ).completion,
         )
         assertEquals(
             mapOf("recordId" to "record-14"),
@@ -755,6 +908,7 @@ class NativeRecordActionsTest {
                     schema(resource, listOf(dedicatedPutToggle)),
                     resource,
                     incomplete,
+                    authorityContext = affirmativeParentAuthority(),
                 ).completion,
             ).kind,
         )
@@ -843,9 +997,10 @@ class NativeRecordActionsTest {
         )
 
         val capabilities = nativeRecordActions(
-            schema(resource, listOf(copy, archive)),
-            resource,
-            record,
+            schema = schema(resource, listOf(copy, archive)),
+            resource = resource,
+            record = record,
+            authorityContext = affirmativeParentAuthority(),
         )
 
         assertEquals(
@@ -882,9 +1037,10 @@ class NativeRecordActionsTest {
 
         val plan = requireNotNull(
             nativeRecordActions(
-                schema(resource, listOf(permanentDelete)),
-                resource,
-                record,
+                schema = schema(resource, listOf(permanentDelete)),
+                resource = resource,
+                record = record,
+                authorityContext = affirmativeParentAuthority(),
             ).commands.singleOrNull(),
         )
 
@@ -933,31 +1089,34 @@ class NativeRecordActionsTest {
         assertEquals(
             listOf(ActionEffect.archive),
             nativeRecordActions(
-                schema,
-                resource,
-                NativeRecord("record-active", mapOf("id" to "record-active")),
+                schema = schema,
+                resource = resource,
+                record = NativeRecord("record-active", mapOf("id" to "record-active")),
+                authorityContext = affirmativeParentAuthority(),
             ).commands.map(NativeRecordCommandActionPlan::effect),
         )
         assertEquals(
             listOf(ActionEffect.unarchive),
             nativeRecordActions(
-                schema,
-                resource,
-                NativeRecord(
+                schema = schema,
+                resource = resource,
+                record = NativeRecord(
                     "record-archived",
                     mapOf("id" to "record-archived", "archivedAt" to "2026-07-30T12:00:00Z"),
                 ),
+                authorityContext = affirmativeParentAuthority(),
             ).commands.map(NativeRecordCommandActionPlan::effect),
         )
         assertEquals(
             listOf(ActionEffect.restore, ActionEffect.permanentDelete),
             nativeRecordActions(
-                schema,
-                resource,
-                NativeRecord(
+                schema = schema,
+                resource = resource,
+                record = NativeRecord(
                     "record-deleted",
                     mapOf("id" to "record-deleted", "deletedAt" to "2026-07-30T12:00:00Z"),
                 ),
+                authorityContext = affirmativeParentAuthority(),
             ).commands.map(NativeRecordCommandActionPlan::effect),
         )
     }
@@ -1112,7 +1271,12 @@ class NativeRecordActionsTest {
             id = "item-12",
             values = mapOf("id" to "item-12", "title" to "Reachable item"),
         )
-        val capabilities = nativeRecordActions(schema, resource, record)
+        val capabilities = nativeRecordActions(
+            schema = schema,
+            resource = resource,
+            record = record,
+            authorityContext = affirmativeParentAuthority(),
+        )
         var editTarget: Pair<NativeRecord, NativeRecordFormActionPlan>? = null
         var deleteTarget: Pair<NativeRecord, NativeRecordDeleteActionPlan>? = null
         var commandTarget: Pair<NativeRecord, NativeRecordCommandActionPlan>? = null
@@ -1237,6 +1401,7 @@ class NativeRecordActionsTest {
             resource = resource,
             record = record,
             navigationContext = mapOf("containerId" to "container-4"),
+            authorityContext = affirmativeParentAuthority(),
         )
 
         assertNull(plans.edit)
@@ -1364,9 +1529,10 @@ class NativeRecordActionsTest {
         )
 
         val plan = nativeRecordActions(
-            schema(resource, listOf(assign)),
-            resource,
-            record,
+            schema = schema(resource, listOf(assign)),
+            resource = resource,
+            record = record,
+            authorityContext = affirmativeParentAuthority(),
         ).commandForms.single()
         val request = plan.requestWithStructuredInput(
             scalarInputValues = emptyMap(),
@@ -1424,7 +1590,12 @@ class NativeRecordActionsTest {
         val record = NativeRecord("record-4", emptyMap())
 
         fun commandForms(action: ActionSpec, target: ResourceSpec = resource) =
-            nativeRecordActions(schema(target, listOf(action)), target, record).commandForms
+            nativeRecordActions(
+                schema = schema(target, listOf(action)),
+                resource = target,
+                record = record,
+                authorityContext = affirmativeParentAuthority(),
+            ).commandForms
 
         assertEquals(listOf("copy-record"), commandForms(safe).map { it.action.id })
         assertTrue(
@@ -1580,6 +1751,7 @@ class NativeRecordActionsTest {
                 resource = members,
                 record = member,
                 navigationContext = mapOf("id" to "4"),
+                authorityContext = affirmativeParentAuthority(),
             ).commandForms.singleOrNull(),
         )
 
@@ -1603,6 +1775,7 @@ class NativeRecordActionsTest {
                 resource = members,
                 record = member,
                 navigationContext = mapOf("id" to "4"),
+                authorityContext = affirmativeParentAuthority(),
             ).commandForms.isEmpty(),
         )
     }
@@ -1634,7 +1807,14 @@ class NativeRecordActionsTest {
             values = mapOf("uuid" to "entry-a", "summary" to "Lock up", "state" to "active"),
         )
 
-        val plan = requireNotNull(nativeRecordActions(schema(resource, listOf(update)), resource, record).completion)
+        val plan = requireNotNull(
+            nativeRecordActions(
+                schema = schema(resource, listOf(update)),
+                resource = resource,
+                record = record,
+                authorityContext = affirmativeParentAuthority(),
+            ).completion,
+        )
 
         assertEquals("finished", plan.completedWireValue)
         assertEquals("active", plan.incompleteWireValue)
@@ -1647,9 +1827,10 @@ class NativeRecordActionsTest {
         )
         assertNull(
             nativeRecordActions(
-                schema(oneWayResource, listOf(update)),
-                oneWayResource,
-                record,
+                schema = schema(oneWayResource, listOf(update)),
+                resource = oneWayResource,
+                record = record,
+                authorityContext = affirmativeParentAuthority(),
             ).completion,
         )
     }
@@ -1682,9 +1863,10 @@ class NativeRecordActionsTest {
 
         assertNull(
             nativeRecordActions(
-                schema(resource, listOf(putUpdate)),
-                resource,
-                record,
+                schema = schema(resource, listOf(putUpdate)),
+                resource = resource,
+                record = record,
+                authorityContext = affirmativeParentAuthority(),
             ).completion,
         )
 
@@ -1699,9 +1881,10 @@ class NativeRecordActionsTest {
             mapOf("recordId" to "record-22", "done" to "true"),
             requireNotNull(
                 nativeRecordActions(
-                    schema(resource, listOf(patchUpdate)),
-                    resource,
-                    record,
+                    schema = schema(resource, listOf(patchUpdate)),
+                    resource = resource,
+                    record = record,
+                    authorityContext = affirmativeParentAuthority(),
                 ).completion,
             ).request(completed = true).values,
         )
@@ -1900,9 +2083,10 @@ class NativeRecordActionsTest {
         ).withRecordPath("")
         val plan = requireNotNull(
             nativeRecordActions(
-                schema(resource, listOf(delete)),
-                resource,
-                NativeRecord("row-3", emptyMap()),
+                schema = schema(resource, listOf(delete)),
+                resource = resource,
+                record = NativeRecord("row-3", emptyMap()),
+                authorityContext = affirmativeParentAuthority(),
             ).delete,
         )
 
@@ -2031,9 +2215,10 @@ class NativeRecordActionsTest {
 
         val plan = requireNotNull(
             nativeRecordActions(
-                schema(resource, listOf(edit)),
-                resource,
-                NativeRecord("entry-7", mapOf("title" to "Before")),
+                schema = schema(resource, listOf(edit)),
+                resource = resource,
+                record = NativeRecord("entry-7", mapOf("title" to "Before")),
+                authorityContext = affirmativeParentAuthority(),
             ).edit,
         )
 
@@ -2135,6 +2320,7 @@ class NativeRecordActionsTest {
                 resource,
                 record,
                 navigationContext = mapOf("id" to "parent-4"),
+                authorityContext = affirmativeParentAuthority(),
             ).edit,
         )
 
@@ -2328,6 +2514,7 @@ class NativeRecordActionsTest {
                 resource = resource,
                 record = record,
                 navigationContext = mapOf("workspaceId" to "workspace-4"),
+                authorityContext = affirmativeParentAuthority(),
             ).edit,
         )
 
@@ -2354,6 +2541,19 @@ class NativeRecordActionsTest {
         name = id.replaceFirstChar(Char::uppercase),
         confidence = Confidence.verified,
         fields = fields,
+    )
+
+    private fun affirmativeParentAuthority() = NativeRecordAuthorityContext(
+        parentResource = resource(
+            id = "parent-records",
+            fields = listOf(
+                field("isAdmin", "Is admin", FieldKind.boolean, readOnly = true),
+            ),
+        ),
+        parentRecord = NativeRecord(
+            id = "parent-1",
+            values = mapOf("isAdmin" to "true"),
+        ),
     )
 
     private fun field(

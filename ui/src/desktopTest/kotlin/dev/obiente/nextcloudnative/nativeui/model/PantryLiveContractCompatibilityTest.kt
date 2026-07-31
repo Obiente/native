@@ -660,6 +660,13 @@ class PantryLiveContractCompatibilityTest {
                 "houseId" to "house-7",
                 "listId" to "list-9",
             ),
+            authorityContext = NativeRecordAuthorityContext(
+                parentResource = houseResource,
+                parentRecord = NativeRecord(
+                    id = "house-7",
+                    values = mapOf("id" to "house-7", "isAdmin" to "true"),
+                ),
+            ),
         )
         val completion = assertNotNull(
             itemActions.completion,
@@ -1154,6 +1161,7 @@ private fun samplePantryAuditValue(fieldId: String, kind: FieldKind? = null): St
     val semanticId = fieldId.lowercase().filter(Char::isLetterOrDigit)
     return when {
         semanticId in setOf("readonly") -> "false"
+        semanticId == "isadmin" -> "true"
         semanticId in setOf("writable", "canwrite", "canedit", "canupdate", "candelete") -> "true"
         semanticId.contains("deleted") ||
             semanticId.contains("trashed") ||

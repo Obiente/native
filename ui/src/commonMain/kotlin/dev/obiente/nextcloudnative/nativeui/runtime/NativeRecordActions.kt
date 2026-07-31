@@ -73,6 +73,9 @@ internal data class NativeRecordFormActionPlan(
         inputValues: Map<String, String>,
         confirmed: Boolean = false,
     ): NativeActionRequest.Submit {
+        require(kind != NativeRecordFormActionKind.Edit || action.binding.method != HttpMethod.PUT) {
+            "Replacement PUT record edits require authoritative completeness and precondition evidence."
+        }
         require(!action.requiresConfirmation || confirmed) {
             "This action requires explicit confirmation."
         }
@@ -453,13 +456,12 @@ private fun ActionSpec.recordFormPlan(
     val fields = declaredFields.filterNot { field -> field.id in contextualRelationshipValues }
     if (fields.map(FieldSpec::id).distinct().size != fields.size) return null
     if (kind == NativeRecordFormActionKind.Edit && fields.isEmpty()) return null
-    if (
-        kind == NativeRecordFormActionKind.Edit &&
-        binding.method == HttpMethod.PUT &&
-        fields.any { field -> record?.values?.containsKey(field.id) != true }
-    ) {
-        // A replacement-style write must not be assembled from a sparse collection record.
-        // Without every declared editable field, omitted optional values could be cleared.
+    if (kind == NativeRecordFormActionKind.Edit && binding.method == HttpMethod.PUT) {
+        // NativeRecord currently proves selected-record identity and binding provenance, but it
+        // cannot prove that a collection row is a complete replacement representation or carry an
+        // applicable version/ETag precondition. Even a present nullable field is dropped from the
+        // string-valued initial draft, so allowing a generic PUT edit could still clear omitted
+        // server state. Semantic whole-resource commands use their separately gated command plan.
         return null
     }
     if (
@@ -1351,21 +1353,21 @@ private fun Confidence.isSafeRecordActionConfidence(): Boolean =
     this == Confidence.high || this == Confidence.verified
 
 /**
- * Honors exact record-level capability fields when a contract exposes them. A declared capability
- * whose current-record value is absent or unparseable is unknown and therefore cannot authorize a
- * write. A trusted endpoint with no scoped per-record capability surface remains unconditional.
- * Once any edit/delete capability is declared, each mutation category requires its own affirmative
- * evidence instead of inferring permission from a differently scoped capability.
+ * Honors exact record-level capability fields and affirmative parent authority. Endpoint existence
+ * is never permission evidence: selected-record mutations fail closed when both sources are absent
+ * or unscoped. A declared capability whose current-record value is absent or unparseable is unknown
+ * and cannot authorize a write. Explicit denials also cannot be overridden by parent authority.
  */
 private fun NativeRecord.permits(
     action: ActionSpec,
     resource: ResourceSpec,
     authorityContext: NativeRecordAuthorityContext?,
 ): Boolean {
-    val capabilityFields = resource.fields.mapNotNull { field ->
+    val capabilityEntries = resource.fields.mapNotNull { field ->
         val semanticId = field.id.lowercase().filter(Char::isLetterOrDigit)
         if (
             semanticId !in setOf(
+                "isadmin",
                 "readonly",
                 "writable",
                 "canwrite",
@@ -1377,32 +1379,58 @@ private fun NativeRecord.permits(
             return@mapNotNull null
         }
         semanticId to field.id
-    }.toMap()
-    if (capabilityFields.isEmpty()) {
-        return when (authorityContext?.authorityEvidence(action, resource)) {
-            null,
-            NativeAuthorityEvidence.Unscoped,
-            -> true
-            NativeAuthorityEvidence.Allowed -> true
-            NativeAuthorityEvidence.Denied,
-            NativeAuthorityEvidence.Absent,
-            NativeAuthorityEvidence.Ambiguous,
-            -> false
-        }
     }
+    if (capabilityEntries.groupingBy { entry -> entry.first }.eachCount().any { (_, count) -> count != 1 }) {
+        return false
+    }
+    val capabilityFields = capabilityEntries.toMap()
 
     fun declaredCapability(id: String): Boolean? {
         val fieldId = capabilityFields[id] ?: return null
         return values[fieldId]?.nativeCapabilityBooleanOrNull()
     }
-    if ("readonly" in capabilityFields && declaredCapability("readonly") != false) return false
-    if ("writable" in capabilityFields && declaredCapability("writable") != true) return false
-    if ("canwrite" in capabilityFields && declaredCapability("canwrite") != true) return false
+
+    val selectedAdminEvidence = if ("isadmin" in capabilityFields) {
+        when (declaredCapability("isadmin")) {
+            true -> NativeAuthorityEvidence.Allowed
+            false -> NativeAuthorityEvidence.Absent
+            null -> NativeAuthorityEvidence.Denied
+        }
+    } else {
+        NativeAuthorityEvidence.Absent
+    }
+    val generalWriteEvidence = buildList {
+        if ("readonly" in capabilityFields) {
+            add(
+                if (declaredCapability("readonly") == false) {
+                    NativeAuthorityEvidence.Allowed
+                } else {
+                    NativeAuthorityEvidence.Denied
+                },
+            )
+        }
+        listOf("writable", "canwrite").forEach { id ->
+            if (id in capabilityFields) {
+                add(
+                    if (declaredCapability(id) == true) {
+                        NativeAuthorityEvidence.Allowed
+                    } else {
+                        NativeAuthorityEvidence.Denied
+                    },
+                )
+            }
+        }
+    }
+    if (
+        selectedAdminEvidence == NativeAuthorityEvidence.Denied ||
+        NativeAuthorityEvidence.Denied in generalWriteEvidence
+    ) {
+        return false
+    }
 
     val deletion = action.isRecordDeletion()
     val scopedCapabilities = setOf("canedit", "canupdate", "candelete")
         .filter(capabilityFields::containsKey)
-    if (scopedCapabilities.isEmpty()) return true
     val currentEvidence = if (deletion) {
         if ("candelete" !in scopedCapabilities) {
             NativeAuthorityEvidence.Absent
@@ -1429,10 +1457,13 @@ private fun NativeRecord.permits(
         -> false
         NativeAuthorityEvidence.Absent,
         NativeAuthorityEvidence.Unscoped,
-        -> when (
-            authorityContext?.authorityEvidence(action, resource)
-        ) {
-            NativeAuthorityEvidence.Allowed -> true
+        -> when {
+            selectedAdminEvidence == NativeAuthorityEvidence.Allowed -> true
+            authorityContext?.authorityEvidence(action, resource) == NativeAuthorityEvidence.Allowed -> true
+            scopedCapabilities.isNotEmpty() -> false
+            deletion -> false
+            action.intent in setOf(ActionIntent.update, ActionIntent.execute) ->
+                NativeAuthorityEvidence.Allowed in generalWriteEvidence
             else -> false
         }
     }

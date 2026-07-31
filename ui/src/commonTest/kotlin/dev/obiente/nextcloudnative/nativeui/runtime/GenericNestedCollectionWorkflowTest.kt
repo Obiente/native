@@ -119,6 +119,7 @@ class GenericNestedCollectionWorkflowTest {
                 COLLECTION_PARAMETER to COLLECTION_ID,
                 "title" to "First entry",
                 "complete" to "false",
+                "canEdit" to "true",
             ),
             bindingContext = childDestination.pathParameterValues,
         )
@@ -187,6 +188,7 @@ class GenericNestedCollectionWorkflowTest {
                 dynamicField(COLLECTION_PARAMETER, "Collection", FieldKind.string, readOnly = true),
                 dynamicField("title", "Title", FieldKind.string),
                 dynamicField("complete", "Complete", FieldKind.boolean),
+                dynamicField("canEdit", "Can edit", FieldKind.boolean, readOnly = true),
             ),
         )
         val actions = listOf(
