@@ -181,7 +181,11 @@ class NativeCollectionActionsTest {
         val records = listOf("11", "12").map { recordId ->
             NativeRecord(
                 id = recordId,
-                values = mapOf("id" to recordId),
+                values = mapOf(
+                    "id" to recordId,
+                    "canEdit" to "true",
+                    "canDelete" to "true",
+                ),
                 bindingContext = mapOf("id" to "house-7"),
             )
         }
@@ -805,6 +809,208 @@ class NativeCollectionActionsTest {
         )
     }
 
+    @Test
+    fun `mixed record authority filters batch selection and withholds reorder`() {
+        val resource = resource("items")
+        val read = readAction(resource.id, "/groups/{groupId}/items", listOf("groupId"))
+        val batch = action(
+            id = "batch-items",
+            resourceId = resource.id,
+            method = HttpMethod.POST,
+            path = "/groups/{groupId}/items/batch",
+            pathFields = listOf("groupId"),
+            bodyFields = listOf("itemIds"),
+            bodySchema = batchBody("itemIds" to integerArraySchema()),
+            intent = ActionIntent.execute,
+            effect = ActionEffect.batch,
+            risk = ActionRisk.mutating,
+        )
+        val reorder = action(
+            id = "reorder-items",
+            resourceId = resource.id,
+            method = HttpMethod.POST,
+            path = "/groups/{groupId}/items/reorder",
+            pathFields = listOf("groupId"),
+            bodyFields = listOf("entries"),
+            bodySchema = reorderBody("entries", "id", "sortOrder"),
+            intent = ActionIntent.execute,
+            effect = ActionEffect.reorder,
+            risk = ActionRisk.mutating,
+        )
+        val mixed = listOf(
+            NativeRecord("1", mapOf("id" to "1", "canEdit" to "true", "canDelete" to "true")),
+            NativeRecord("2", mapOf("id" to "2", "canEdit" to "false", "canDelete" to "true")),
+            NativeRecord("3", mapOf("id" to "3", "canEdit" to "true", "canDelete" to "true")),
+        )
+
+        val capabilities = nativeCollectionActions(
+            schema(resource, read, batch, reorder),
+            read,
+            resource,
+            mixed,
+            mapOf("groupId" to "7"),
+            collectionComplete = true,
+        )
+
+        assertNull(capabilities.reorder)
+        val batchPlan = assertNotNull(capabilities.batches.singleOrNull())
+        assertEquals(setOf("1", "3"), batchPlan.selectableRecordIds)
+        assertEquals("[1,3]", batchPlan.request(listOf("1", "3")).values["itemIds"])
+        assertFailsWith<IllegalArgumentException> {
+            batchPlan.request(listOf("2"))
+        }
+    }
+
+    @Test
+    fun `destructive batch requires delete authority for every selectable record`() {
+        val resource = resource("items")
+        val read = readAction(resource.id, "/groups/{groupId}/items", listOf("groupId"))
+        val batch = action(
+            id = "delete-items",
+            resourceId = resource.id,
+            method = HttpMethod.POST,
+            path = "/groups/{groupId}/items/batch/delete",
+            pathFields = listOf("groupId"),
+            bodyFields = listOf("itemIds"),
+            bodySchema = batchBody("itemIds" to integerArraySchema()),
+            intent = ActionIntent.execute,
+            effect = ActionEffect.batch,
+            risk = ActionRisk.destructive,
+            requiresConfirmation = true,
+        )
+        val records = listOf(
+            NativeRecord("1", mapOf("id" to "1", "canEdit" to "true", "canDelete" to "false")),
+            NativeRecord("2", mapOf("id" to "2", "canEdit" to "false", "canDelete" to "true")),
+        )
+
+        val plan = assertNotNull(
+            nativeCollectionActions(
+                schema(resource, read, batch),
+                read,
+                resource,
+                records,
+                mapOf("groupId" to "7"),
+                collectionComplete = false,
+            ).batches.singleOrNull(),
+        )
+        assertEquals(setOf("2"), plan.selectableRecordIds)
+        assertEquals("[2]", plan.request(listOf("2"), confirmed = true).values["itemIds"])
+        assertFailsWith<IllegalArgumentException> {
+            plan.request(listOf("1"), confirmed = true)
+        }
+    }
+
+    @Test
+    fun `parent authority uses edit semantics for batch and reorder and delete semantics for destructive batch`() {
+        val resource = ResourceSpec(
+            id = "items",
+            name = "Items",
+            confidence = Confidence.verified,
+        )
+        val parent = ResourceSpec(
+            id = "groups",
+            name = "Groups",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec(
+                    id = "permissions",
+                    label = "Permissions",
+                    kind = FieldKind.objectValue,
+                    readOnly = true,
+                    required = false,
+                ),
+            ),
+        )
+        val read = readAction(resource.id, "/groups/{groupId}/items", listOf("groupId"))
+        val batch = action(
+            id = "batch-items",
+            resourceId = resource.id,
+            method = HttpMethod.POST,
+            path = "/groups/{groupId}/items/batch",
+            pathFields = listOf("groupId"),
+            bodyFields = listOf("itemIds"),
+            bodySchema = batchBody("itemIds" to integerArraySchema()),
+            intent = ActionIntent.execute,
+            effect = ActionEffect.batch,
+            risk = ActionRisk.mutating,
+        )
+        val destructiveBatch = action(
+            id = "delete-items",
+            resourceId = resource.id,
+            method = HttpMethod.POST,
+            path = "/groups/{groupId}/items/batch/delete",
+            pathFields = listOf("groupId"),
+            bodyFields = listOf("itemIds"),
+            bodySchema = batchBody("itemIds" to integerArraySchema()),
+            intent = ActionIntent.execute,
+            effect = ActionEffect.batch,
+            risk = ActionRisk.destructive,
+            requiresConfirmation = true,
+        )
+        val reorder = action(
+            id = "reorder-items",
+            resourceId = resource.id,
+            method = HttpMethod.POST,
+            path = "/groups/{groupId}/items/reorder",
+            pathFields = listOf("groupId"),
+            bodyFields = listOf("entries"),
+            bodySchema = reorderBody("entries", "id", "sortOrder"),
+            intent = ActionIntent.execute,
+            effect = ActionEffect.reorder,
+            risk = ActionRisk.mutating,
+        )
+        val nativeSchema = schema(resource, read, batch, destructiveBatch, reorder).copy(
+            resources = listOf(resource, parent),
+        )
+        val records = listOf("1", "2").map { id ->
+            NativeRecord(id = id, values = mapOf("id" to id))
+        }
+
+        fun capabilities(canEdit: Boolean, canDelete: Boolean): NativeCollectionActionCapabilities {
+            fun permission(id: String, allowed: Boolean) = NativeStructuredEntry(
+                key = id,
+                label = id,
+                value = NativeStructuredValue.Scalar(
+                    value = allowed.toString(),
+                    kind = NativeStructuredScalarKind.boolean,
+                ),
+            )
+            return nativeCollectionActions(
+                schema = nativeSchema,
+                activeReadAction = read,
+                resource = resource,
+                records = records,
+                navigationContext = mapOf("groupId" to "7"),
+                collectionComplete = true,
+                authorityContext = NativeRecordAuthorityContext(
+                    parentResource = parent,
+                    parentRecord = NativeRecord(
+                        id = "7",
+                        values = emptyMap(),
+                        structuredValues = mapOf(
+                            "permissions" to NativeStructuredValue.ObjectValue(
+                                entries = listOf(
+                                    permission("canEditItems", canEdit),
+                                    permission("canDeleteItems", canDelete),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        }
+
+        val editAllowed = capabilities(canEdit = true, canDelete = false)
+        assertNotNull(editAllowed.reorder)
+        assertNotNull(editAllowed.batches.singleOrNull { plan -> plan.action.id == batch.id })
+        assertNull(editAllowed.batches.singleOrNull { plan -> plan.action.id == destructiveBatch.id })
+
+        val editDenied = capabilities(canEdit = false, canDelete = true)
+        assertNull(editDenied.reorder)
+        assertNull(editDenied.batches.singleOrNull { plan -> plan.action.id == batch.id })
+        assertNotNull(editDenied.batches.singleOrNull { plan -> plan.action.id == destructiveBatch.id })
+    }
+
     private fun schema(
         resource: ResourceSpec,
         vararg actions: ActionSpec,
@@ -820,6 +1026,22 @@ class NativeCollectionActionsTest {
         id = id,
         name = id.replaceFirstChar(Char::uppercaseChar),
         confidence = Confidence.verified,
+        fields = listOf(
+            FieldSpec(
+                id = "canEdit",
+                label = "Can edit",
+                kind = FieldKind.boolean,
+                readOnly = true,
+                required = false,
+            ),
+            FieldSpec(
+                id = "canDelete",
+                label = "Can delete",
+                kind = FieldKind.boolean,
+                readOnly = true,
+                required = false,
+            ),
+        ),
     )
 
     private fun readAction(
@@ -875,7 +1097,11 @@ class NativeCollectionActionsTest {
     private fun records(vararg ids: String): List<NativeRecord> = ids.map { id ->
         NativeRecord(
             id = id,
-            values = mapOf("id" to id),
+            values = mapOf(
+                "id" to id,
+                "canEdit" to "true",
+                "canDelete" to "true",
+            ),
             bindingContext = mapOf("groupId" to "7"),
         )
     }

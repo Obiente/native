@@ -50,8 +50,9 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -99,6 +100,12 @@ data class NextcloudCollectionDestination(
         }
     }
 }
+
+internal fun NextcloudCollectionDestination.accessibilityDescription(): String =
+    "Open destination $label"
+
+internal fun NextcloudCollectionDestination.automationTestTag(): String =
+    "collection-destination:$accessibilityId:$id"
 
 /**
  * Immutable collection navigation state. Selection callbacks remain in the host instead of the
@@ -534,8 +541,9 @@ private fun NextcloudCollectionNavigationRail(
                         modifier = Modifier
                             .heightIn(min = NextcloudCollectionMinimumTouchTargetDp.dp)
                             .semantics {
-                                contentDescription = "Open destination ${destination.accessibilityId}"
+                                contentDescription = destination.accessibilityDescription()
                             }
+                            .testTag(destination.automationTestTag())
                             .focusRequester(focusRequester)
                             .onFocusChanged { focusState ->
                                 if (focusState.isFocused) focusedDestinationId = destination.id
@@ -653,8 +661,9 @@ private fun NextcloudCollectionDestinationList(
                     .fillMaxWidth()
                     .heightIn(min = NextcloudCollectionMinimumTouchTargetDp.dp)
                     .semantics {
-                        contentDescription = "Open destination ${destination.accessibilityId}"
+                        contentDescription = destination.accessibilityDescription()
                     }
+                    .testTag(destination.automationTestTag())
                     .focusRequester(focusRequester)
                     .onFocusChanged { focusState ->
                         if (focusState.isFocused) focusedDestinationId = destination.id

@@ -368,13 +368,19 @@ class NextcloudCollectionNavigatorTest {
 
     @Test
     fun `destination and policy reject impossible values`() {
+        val preferences = NextcloudCollectionDestination(
+            id = "preferences-layout",
+            label = "Preferences",
+            accessibilityId = "prefs-get-user-prefs",
+        )
         assertEquals(
             "prefs-get-user-prefs",
-            NextcloudCollectionDestination(
-                id = "preferences-layout",
-                label = "Preferences",
-                accessibilityId = "prefs-get-user-prefs",
-            ).accessibilityId,
+            preferences.accessibilityId,
+        )
+        assertEquals("Open destination Preferences", preferences.accessibilityDescription())
+        assertEquals(
+            "collection-destination:prefs-get-user-prefs:preferences-layout",
+            preferences.automationTestTag(),
         )
         assertFailsWith<IllegalArgumentException> {
             NextcloudCollectionDestination("", "Today")
@@ -406,5 +412,28 @@ class NextcloudCollectionNavigatorTest {
                 -1,
             )
         }
+    }
+
+    @Test
+    fun `automation tags remain unique when destinations share a source action`() {
+        val first = NextcloudCollectionDestination(
+            id = "active-items",
+            label = "Active",
+            accessibilityId = "items-index",
+        )
+        val second = NextcloudCollectionDestination(
+            id = "archived-items",
+            label = "Archived",
+            accessibilityId = "items-index",
+        )
+
+        NextcloudCollectionNavigationModel.create(
+            destinations = listOf(first, second),
+            selectedDestinationId = first.id,
+        )
+
+        assertEquals("collection-destination:items-index:active-items", first.automationTestTag())
+        assertEquals("collection-destination:items-index:archived-items", second.automationTestTag())
+        assertTrue(first.automationTestTag() != second.automationTestTag())
     }
 }

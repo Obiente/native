@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicDiscoveryInput
 import dev.obiente.nextcloudnative.nativeui.model.EndpointPolicy
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.OpenApiTrust
+import dev.obiente.nextcloudnative.nativeui.model.validationErrors
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 import kotlinx.serialization.json.Json
@@ -149,6 +150,43 @@ class DynamicMultipartContractTest {
     }
 
     @Test
+    fun `optional multipart file operations are withheld without fileless transport support`() {
+        val descriptor = compile(OPTIONAL_MULTIPART_CONTRACT, OpenApiTrust.sameOriginAdvertisement)
+
+        assertTrue(descriptor.actions.none { it.id == "update-attachment" })
+        assertTrue(descriptor.forms.none { it.actionId == "update-attachment" })
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `runtime rejects hand built optional multipart file contracts before decoding a selection`() {
+        val descriptor = compile(SIGNED_DESCRIPTION_CONTRACT, OpenApiTrust.sameOriginAdvertisement)
+        val requiredAction = descriptor.actions.single { it.id == "upload-document" }
+        val requiredBody = assertNotNull(requiredAction.binding.body)
+        val schema = requiredBody.schema as JsonObject
+        val optionalAction = requiredAction.copy(
+            binding = requiredAction.binding.copy(
+                body = requiredBody.copy(schema = JsonObject(schema - "required")),
+            ),
+        )
+        val optionalDescriptor = descriptor.copy(
+            actions = descriptor.actions.map { action ->
+                if (action.id == optionalAction.id) optionalAction else action
+            },
+        )
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            buildDynamicApiRequest(
+                descriptor = optionalDescriptor,
+                action = optionalAction,
+                values = emptyMap(),
+            )
+        }
+
+        assertEquals("Optional multipart file fields are not supported.", failure.message)
+    }
+
+    @Test
     fun `wildcard response with exact binary schema is not compiled as a JSON layout`() {
         val descriptor = compile(BINARY_PREVIEW_CONTRACT, OpenApiTrust.sameOriginAdvertisement)
         val preview = descriptor.actions.single { it.id == "get-preview" }
@@ -277,6 +315,43 @@ class DynamicMultipartContractTest {
                       }
                     },
                     "responses": { "204": { "description": "Uploaded" } }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val OPTIONAL_MULTIPART_CONTRACT = """
+            {
+              "openapi": "3.0.3",
+              "paths": {
+                "/apps/example/api/attachments/{id}": {
+                  "post": {
+                    "operationId": "update-attachment",
+                    "parameters": [
+                      {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer" }
+                      }
+                    ],
+                    "requestBody": {
+                      "required": true,
+                      "content": {
+                        "multipart/form-data": {
+                          "schema": {
+                            "type": "object",
+                            "required": ["caption"],
+                            "properties": {
+                              "attachment": { "type": "string", "format": "binary" },
+                              "caption": { "type": "string" }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "responses": { "204": { "description": "Updated" } }
                   }
                 }
               }

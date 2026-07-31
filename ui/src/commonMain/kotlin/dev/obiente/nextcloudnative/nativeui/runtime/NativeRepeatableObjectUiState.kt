@@ -5,7 +5,10 @@ import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputFieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputRow
 import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputScalarKind
 import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputSpec
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 internal fun initialNativeRepeatableObjectDraft(
     fields: List<FieldSpec>,
@@ -62,25 +65,112 @@ internal fun encodeNativeRepeatableObjectDraft(
     values: Map<String, List<RepeatableObjectInputRow>>,
     specs: Map<String, RepeatableObjectInputSpec>,
 ): List<String>? {
-    if (values.keys != specs.keys) return null
-    val encoded = runCatching {
-        values.mapValues { (fieldId, rows) -> specs.getValue(fieldId).encode(rows) }
-    }.getOrNull() ?: return null
-    return encodeNativeRecordFormDraft(encoded)
+    if (
+        values.keys != specs.keys ||
+        values.size > MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_FIELDS
+    ) {
+        return null
+    }
+    val encoded = values.mapValues { (fieldId, rows) ->
+        encodeNativeRepeatableObjectDraftRows(rows, specs.getValue(fieldId)) ?: return null
+    }
+    var totalLength = 0
+    val saved = ArrayList<String>(encoded.size * 2)
+    encoded.entries.sortedBy(Map.Entry<String, String>::key).forEach { (fieldId, draft) ->
+        if (
+            fieldId.isBlank() ||
+            fieldId.length > MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_FIELD_ID_LENGTH ||
+            draft.length > MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_LENGTH
+        ) {
+            return null
+        }
+        totalLength += fieldId.length + draft.length
+        if (totalLength > MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_LENGTH) return null
+        saved += fieldId
+        saved += draft
+    }
+    return saved
 }
 
 internal fun decodeNativeRepeatableObjectDraft(
     saved: List<String>,
     specs: Map<String, RepeatableObjectInputSpec>,
 ): Map<String, List<RepeatableObjectInputRow>>? {
-    val encoded = decodeNativeRecordFormDraft(saved) ?: return null
+    if (
+        saved.size % 2 != 0 ||
+        saved.size / 2 > MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_FIELDS
+    ) {
+        return null
+    }
+    val encoded = linkedMapOf<String, String>()
+    var totalLength = 0
+    saved.chunked(2).forEach { (fieldId, draft) ->
+        if (
+            fieldId.isBlank() ||
+            fieldId in encoded ||
+            fieldId.length > MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_FIELD_ID_LENGTH ||
+            draft.length > MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_LENGTH
+        ) {
+            return null
+        }
+        totalLength += fieldId.length + draft.length
+        if (totalLength > MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_LENGTH) return null
+        encoded[fieldId] = draft
+    }
     if (encoded.keys != specs.keys) return null
     return buildMap {
         encoded.forEach { (fieldId, value) ->
-            val rows = specs.getValue(fieldId).decodeNativeRepeatableObjectRows(value)
+            val rows = decodeNativeRepeatableObjectDraftRows(value, specs.getValue(fieldId))
                 ?: return null
             put(fieldId, rows)
         }
+    }
+}
+
+private fun encodeNativeRepeatableObjectDraftRows(
+    rows: List<RepeatableObjectInputRow>,
+    spec: RepeatableObjectInputSpec,
+): String? {
+    if (rows.size > spec.maximumItems) return null
+    val declaredFieldIds = spec.fields.mapTo(linkedSetOf(), RepeatableObjectInputFieldSpec::id)
+    if (
+        rows.any { row ->
+            row.values.keys.any { fieldId -> fieldId !in declaredFieldIds } ||
+                row.values.values.any { value ->
+                    value.length > MAX_NATIVE_REPEATABLE_OBJECT_SCALAR_LENGTH
+                }
+        }
+    ) {
+        return null
+    }
+    return JsonArray(
+        rows.map { row ->
+            JsonObject(row.values.mapValues { (_, value) -> JsonPrimitive(value) })
+        },
+    ).toString()
+}
+
+private fun decodeNativeRepeatableObjectDraftRows(
+    encoded: String,
+    spec: RepeatableObjectInputSpec,
+): List<RepeatableObjectInputRow>? {
+    val rows = runCatching { Json.parseToJsonElement(encoded) }.getOrNull() as? JsonArray
+        ?: return null
+    if (rows.size > spec.maximumItems) return null
+    val declaredFieldIds = spec.fields.mapTo(linkedSetOf(), RepeatableObjectInputFieldSpec::id)
+    return rows.map { element ->
+        val row = element as? JsonObject ?: return null
+        if (row.keys.any { fieldId -> fieldId !in declaredFieldIds }) return null
+        val values = row.mapValues { (_, value) ->
+            val primitive = value as? JsonPrimitive
+                ?: return null
+            primitive.takeIf(JsonPrimitive::isString)?.content
+                ?.takeIf { draft ->
+                    draft.length <= MAX_NATIVE_REPEATABLE_OBJECT_SCALAR_LENGTH
+                }
+                ?: return null
+        }
+        RepeatableObjectInputRow(values)
     }
 }
 
@@ -109,3 +199,6 @@ private fun RepeatableObjectInputSpec.decodeNativeRepeatableObjectRows(
 }.getOrNull()
 
 private const val MAX_NATIVE_REPEATABLE_OBJECT_SCALAR_LENGTH = 4_096
+private const val MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_FIELDS = 64
+private const val MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_FIELD_ID_LENGTH = 256
+private const val MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_LENGTH = 256 * 1_024

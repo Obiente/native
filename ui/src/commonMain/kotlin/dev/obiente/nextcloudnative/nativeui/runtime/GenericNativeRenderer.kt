@@ -383,6 +383,8 @@ fun GenericNativeAppScreen(
         resource,
         readyRecords,
         datasetContext.bindingValues,
+        datasetContext.parentResourceId,
+        datasetContext.parentRecord,
         onLoadMore,
         presentedSurface,
         nestedBoard,
@@ -403,6 +405,7 @@ fun GenericNativeAppScreen(
                 records = readyRecords,
                 navigationContext = datasetContext.bindingValues,
                 collectionComplete = onLoadMore == null,
+                authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
             )
         } else {
             NativeCollectionActionCapabilities(
@@ -1135,7 +1138,10 @@ private fun GenericCollectionBatchDialog(
     onActionSucceeded: (ActionSpec) -> Unit,
     onOutcomeUnknown: (ActionSpec) -> Unit,
 ) {
-    val recordIds = remember(records) { records.map(NativeRecord::id) }
+    val selectableRecords = remember(records, plan.selectableRecordIds) {
+        records.filter { record -> record.id in plan.selectableRecordIds }
+    }
+    val recordIds = remember(selectableRecords) { selectableRecords.map(NativeRecord::id) }
     var selectedRecordIds by rememberSaveable(plan.action.id, recordIds) {
         mutableStateOf(emptyList<String>())
     }
@@ -1357,7 +1363,7 @@ private fun GenericCollectionBatchDialog(
                             }
                         }
                     }
-                    items(records, key = NativeRecord::id) { record ->
+                    items(selectableRecords, key = NativeRecord::id) { record ->
                         val selected = record.id in selectedRecordIds
                         val canToggle = selected ||
                             selectedRecordIds.size < plan.maximumSelectionSize

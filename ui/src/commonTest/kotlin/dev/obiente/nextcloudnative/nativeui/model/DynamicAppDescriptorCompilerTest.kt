@@ -1380,6 +1380,97 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
+    fun `repeatable mutation objects exclude nested read only fields from fields and required set`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Generic recipients","version":"1"},
+              "paths":{
+                "/apps/example/api/recipients":{
+                  "post":{
+                    "operationId":"recipients-create",
+                    "summary":"Create recipients",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["recipients"],
+                      "properties":{
+                        "recipients":{
+                          "type":"array",
+                          "items":{
+                            "type":"object",
+                            "additionalProperties":false,
+                            "required":["serverId","uid"],
+                            "properties":{
+                              "serverId":{"type":"integer","readOnly":true},
+                              "uid":{"type":"string","title":"Recipient"}
+                            }
+                          }
+                        }
+                      }
+                    }}}},
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        val action = descriptor.actions.single { it.id == "recipients-create" }
+        val form = descriptor.forms.single { it.actionId == action.id }
+        val repeatable = assertNotNull(form.fields.single().repeatableObjectInput)
+
+        assertEquals(listOf("uid"), repeatable.fields.map(RepeatableObjectInputFieldSpec::id))
+        assertTrue(repeatable.fields.single().required)
+        assertEquals(
+            """[{"uid":"alice"}]""",
+            repeatable.encode(listOf(RepeatableObjectInputRow(mapOf("uid" to "alice")))),
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `mutation is withheld when a repeatable object contains only read only fields`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Server snapshots","version":"1"},
+              "paths":{
+                "/apps/example/api/snapshots":{
+                  "post":{
+                    "operationId":"snapshots-create",
+                    "summary":"Create snapshots",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["snapshots"],
+                      "properties":{
+                        "snapshots":{
+                          "type":"array",
+                          "items":{
+                            "type":"object",
+                            "additionalProperties":false,
+                            "required":["serverId"],
+                            "properties":{
+                              "serverId":{"type":"integer","readOnly":true}
+                            }
+                          }
+                        }
+                      }
+                    }}}},
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        assertTrue(descriptor.actions.none { it.id == "snapshots-create" })
+        assertTrue(descriptor.forms.none { it.actionId == "snapshots-create" })
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
     fun `ambiguous replacement remains withheld without exact trusted get recovery`() {
         val document = """
             {

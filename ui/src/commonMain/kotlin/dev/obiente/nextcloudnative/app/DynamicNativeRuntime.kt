@@ -1052,6 +1052,9 @@ private fun buildDynamicMultipartBody(
     require(required.all(properties::containsKey)) {
         "The multipart request has invalid required fields."
     }
+    require(fileFieldName in required) {
+        "Optional multipart file fields are not supported."
+    }
     required.forEach { property ->
         require(!values[property].isNullOrBlank()) { "$property is required." }
     }

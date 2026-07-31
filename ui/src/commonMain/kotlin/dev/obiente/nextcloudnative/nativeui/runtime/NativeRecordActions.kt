@@ -1358,7 +1358,7 @@ private fun Confidence.isSafeRecordActionConfidence(): Boolean =
  * or unscoped. A declared capability whose current-record value is absent or unparseable is unknown
  * and cannot authorize a write. Explicit denials also cannot be overridden by parent authority.
  */
-private fun NativeRecord.permits(
+internal fun NativeRecord.permits(
     action: ActionSpec,
     resource: ResourceSpec,
     authorityContext: NativeRecordAuthorityContext?,

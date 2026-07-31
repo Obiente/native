@@ -691,6 +691,12 @@ private class KotlinCompilerState(
         resultRecoveryActionId: String?,
     ) {
         val declaredBody = body(operation)
+        if ("requestBody" in operation && declaredBody == null) {
+            return
+        }
+        if (declaredBody?.isUnsupportedOptionalFileMultipartBody() == true) {
+            return
+        }
         val actionId = uniqueId(actions.keys, operationId.stableId())
         operationActionIds.putIfAbsent(operationId, actionId)
         val fallbackForOperationId = operation.string(READ_FALLBACK_FOR_OPERATION_EXTENSION)
@@ -1164,6 +1170,7 @@ private class KotlinCompilerState(
         // serialization depends on exact media encoding/style/explode metadata that the descriptor
         // does not retain, so those bodies must not acquire a JSON-oriented editor format.
         val jsonBody = contentType.substringBefore(';').trim().equals("application/json", ignoreCase = true)
+        if (jsonBody && declaredSchema.hasUnnormalizableReadOnlyRepeatableObjectProperty()) return null
         val schema = if (jsonBody) {
             declaredSchema.withDynamicFormFormats()
         } else {
@@ -1174,6 +1181,23 @@ private class KotlinCompilerState(
             required = request.boolean("required") ?: false,
             schema = schema,
         )
+    }
+
+    private fun JsonElement.hasUnnormalizableReadOnlyRepeatableObjectProperty(): Boolean {
+        val objectSchema = this as? JsonObject ?: return false
+        val properties = objectSchema.objectValue("properties") ?: return false
+        return properties.values.any { element ->
+            val array = resolveFieldSchema(element) as? JsonObject ?: return@any false
+            if (array.string("type") != "array") return@any false
+            val item = array["items"]?.let(::resolveLocal) as? JsonObject ?: return@any false
+            if (item.string("type") != "object") return@any false
+            val nestedProperties = item.objectValue("properties") ?: return@any false
+            val containsReadOnly = nestedProperties.values.any nestedField@{ nestedElement ->
+                val nested = resolveFieldSchema(nestedElement) as? JsonObject ?: return@nestedField false
+                nested.boolean("readOnly") == true
+            }
+            containsReadOnly && normalizeRepeatableObjectArraySchema(array) == null
+        }
     }
 
     private fun inferredSignedDescriptionMultipartBody(
@@ -1269,17 +1293,39 @@ private class KotlinCompilerState(
         if (schema.string("type") != "object") return false
         val properties = schema.objectValue("properties") ?: return false
         if (properties.isEmpty() || properties.size > MAX_INFERRED_MULTIPART_TEXT_FIELDS + 1) return false
-        var binaryFields = 0
+        var binaryFieldName: String? = null
         properties.forEach { (name, propertyElement) ->
             if (!name.isSafeInferredMultipartFieldName()) return false
             val property = resolveLocal(propertyElement) as? JsonObject ?: return false
             if (property.string("type") == "string" && property.string("format") == "binary") {
-                binaryFields += 1
+                if (binaryFieldName != null) return false
+                binaryFieldName = name
             } else if (property.string("type") !in INFERRED_MULTIPART_SCALAR_TYPES) {
                 return false
             }
         }
-        return binaryFields == 1
+        val required = (schema["required"] as? JsonArray)
+            .orEmpty()
+            .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+        val exactBinaryFieldName = binaryFieldName ?: return false
+        return exactBinaryFieldName in required
+    }
+
+    private fun HttpBody.isUnsupportedOptionalFileMultipartBody(): Boolean {
+        if (!contentType.substringBefore(';').trim().equals("multipart/form-data", ignoreCase = true)) {
+            return false
+        }
+        val objectSchema = schema as? JsonObject ?: return false
+        val properties = objectSchema.objectValue("properties") ?: return false
+        val binaryFields = properties.entries.filter { (_, element) ->
+            val property = resolveLocal(element) as? JsonObject ?: return@filter false
+            property.string("type") == "string" && property.string("format") == "binary"
+        }
+        if (binaryFields.size != 1) return false
+        val required = (objectSchema["required"] as? JsonArray)
+            .orEmpty()
+            .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+        return binaryFields.single().key !in required
     }
 
     private fun JsonElement.withDynamicFormFormats(): JsonElement {
@@ -1310,31 +1356,53 @@ private class KotlinCompilerState(
         if (item.string("type") != "object") return null
         val properties = item.objectValue("properties") ?: return null
         val description = array.string("description")
-        val normalizedProperties = JsonObject(
-            properties.mapValues { (fieldId, element) ->
-                val scalar = resolveFieldSchema(element) as? JsonObject ?: return null
-                val recoveredEnum = if (
-                    allowSignedDescriptionEnumInference &&
-                    scalar.string("type") == "string" &&
-                    scalar["enum"] == null
-                ) {
-                    description?.exactSignedDescriptionEnum(fieldId)
-                } else {
-                    null
-                }
-                if (recoveredEnum == null) {
-                    scalar
-                } else {
-                    JsonObject(
-                        scalar + (
-                            DESCRIPTION_ENUM_EXTENSION to
-                                JsonArray(recoveredEnum.map(::JsonPrimitive))
-                            ),
-                    )
-                }
-            },
-        )
-        val normalizedItem = JsonObject(item + ("properties" to normalizedProperties))
+        val readOnlyFieldIds = mutableSetOf<String>()
+        val normalizedProperties = linkedMapOf<String, JsonElement>()
+        properties.forEach { (fieldId, element) ->
+            val scalar = resolveFieldSchema(element) as? JsonObject ?: return null
+            if (scalar.boolean("readOnly") == true) {
+                readOnlyFieldIds += fieldId
+                return@forEach
+            }
+            val recoveredEnum = if (
+                allowSignedDescriptionEnumInference &&
+                scalar.string("type") == "string" &&
+                scalar["enum"] == null
+            ) {
+                description?.exactSignedDescriptionEnum(fieldId)
+            } else {
+                null
+            }
+            normalizedProperties[fieldId] = if (recoveredEnum == null) {
+                scalar
+            } else {
+                JsonObject(
+                    scalar + (
+                        DESCRIPTION_ENUM_EXTENSION to
+                            JsonArray(recoveredEnum.map(::JsonPrimitive))
+                        ),
+                )
+            }
+        }
+        if (normalizedProperties.isEmpty()) return null
+        val normalizedItemValues = item.toMutableMap().apply {
+            put("properties", JsonObject(normalizedProperties))
+            val required = item["required"] as? JsonArray
+            if (required != null && readOnlyFieldIds.isNotEmpty()) {
+                put(
+                    "required",
+                    JsonArray(
+                        required.filterNot { element ->
+                            val fieldId = (element as? JsonPrimitive)
+                                ?.takeIf(JsonPrimitive::isString)
+                                ?.contentOrNull
+                            fieldId != null && fieldId in readOnlyFieldIds
+                        },
+                    ),
+                )
+            }
+        }
+        val normalizedItem = JsonObject(normalizedItemValues)
         val normalized = JsonObject(
             array +
                 ("items" to normalizedItem) +

@@ -151,7 +151,7 @@ internal data class NativeCollectionBatchActionPlan(
     val maximumSelectionSize: Int,
     private val selectionSchema: NativeCollectionIdentityArraySchema,
     private val fieldSchemas: Map<String, NativeCollectionBatchValueSchema>,
-    private val availableRecordIds: Set<String>,
+    val selectableRecordIds: Set<String>,
     private val bindingValues: Map<String, String>,
 ) {
     val requiresConfirmation: Boolean
@@ -168,7 +168,7 @@ internal data class NativeCollectionBatchActionPlan(
         require(selectedRecordIds.distinct().size == selectedRecordIds.size) {
             "A batch selection contains duplicate record identities."
         }
-        require(selectedRecordIds.all(availableRecordIds::contains)) {
+        require(selectedRecordIds.all(selectableRecordIds::contains)) {
             "A batch selection must contain only active collection records."
         }
         require(values.keys.all(fieldSchemas::containsKey)) {
@@ -206,6 +206,7 @@ internal fun nativeCollectionActions(
     records: List<NativeRecord>,
     navigationContext: Map<String, String>,
     collectionComplete: Boolean,
+    authorityContext: NativeRecordAuthorityContext? = null,
 ): NativeCollectionActionCapabilities {
     val empty = NativeCollectionActionCapabilities(emptyList(), null, emptyList())
     val authoritativeResource = schema.resources
@@ -249,6 +250,16 @@ internal fun nativeCollectionActions(
         recordIds.size in 2..MAX_COLLECTION_REORDER_RECORDS
     ) {
         candidates.mapNotNull { action ->
+            val permittedRecordIds = records
+                .filter { record ->
+                    record.permitsNativeCollectionMutation(
+                        action,
+                        authoritativeResource,
+                        authorityContext,
+                    )
+                }
+                .mapTo(linkedSetOf(), NativeRecord::id)
+            if (permittedRecordIds != recordIds) return@mapNotNull null
             action.nativeCollectionReorderPlan(
                 activeReadAction = activeReadAction,
                 resource = authoritativeResource,
@@ -261,10 +272,19 @@ internal fun nativeCollectionActions(
     }
 
     val batches = candidates.mapNotNull { action ->
+        val permittedRecordIds = records
+            .filter { record ->
+                record.permitsNativeCollectionMutation(
+                    action,
+                    authoritativeResource,
+                    authorityContext,
+                )
+            }
+            .mapTo(linkedSetOf(), NativeRecord::id)
         action.nativeCollectionBatchPlan(
             schema = schema,
             resource = authoritativeResource,
-            recordIds = recordIds,
+            recordIds = permittedRecordIds,
             context = context,
         )
     }
@@ -278,6 +298,30 @@ internal fun nativeCollectionActions(
         reorder = reorder,
         batches = batches,
     )
+}
+
+private fun NativeRecord.permitsNativeCollectionMutation(
+    action: ActionSpec,
+    resource: ResourceSpec,
+    authorityContext: NativeRecordAuthorityContext?,
+): Boolean {
+    // Batch and reorder are transport shapes rather than underlying permission categories.
+    // Ordinary collection mutations require edit authority, while destructive batches affect each
+    // selected record as a deletion would and therefore require delete authority.
+    val permissionAction = when {
+        action.effect == ActionEffect.batch && action.risk == ActionRisk.destructive ->
+            action.copy(
+                intent = ActionIntent.delete,
+                effect = ActionEffect.delete,
+            )
+        action.effect in setOf(ActionEffect.batch, ActionEffect.reorder) ->
+            action.copy(
+                intent = ActionIntent.update,
+                effect = ActionEffect.update,
+            )
+        else -> action
+    }
+    return permits(permissionAction, resource, authorityContext)
 }
 
 private fun NativeAppSchema.hasExactActiveCollection(
@@ -484,7 +528,12 @@ private fun ActionSpec.nativeCollectionBatchPlan(
         MAX_COLLECTION_BATCH_SELECTION,
         selectionSchema.maximumItems ?: MAX_COLLECTION_BATCH_SELECTION,
     )
-    if (minimumSelectionSize > maximumSelectionSize) return null
+    if (
+        minimumSelectionSize > maximumSelectionSize ||
+        recordIds.size < minimumSelectionSize
+    ) {
+        return null
+    }
     val bindings = binding.resolveNativeCollectionBindings(context) ?: return null
     return NativeCollectionBatchActionPlan(
         action = this,
@@ -494,7 +543,7 @@ private fun ActionSpec.nativeCollectionBatchPlan(
         maximumSelectionSize = maximumSelectionSize,
         selectionSchema = selectionSchema,
         fieldSchemas = fieldSchemas,
-        availableRecordIds = recordIds,
+        selectableRecordIds = recordIds,
         bindingValues = bindings,
     )
 }
