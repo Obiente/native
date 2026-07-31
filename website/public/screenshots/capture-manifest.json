@@ -170,6 +170,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicDescriptorValidation.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicFormFormats.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicNavigationPlanner.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicStructuredForm.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/NativeSchema.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/SemanticConceptTokens.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/NativeRuntimePreviewApp.kt",
@@ -180,6 +181,8 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeAudioLibrary.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeBoardActions.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeBoardDragPlacement.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeCollectionActionUiState.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeCollectionActions.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeDatasetSemantics.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeFormMutationRecovery.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailActions.kt",
@@ -187,6 +190,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecipePresentations.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecipeScaling.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecordActions.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRepeatableObjectUiState.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeSemanticPresentations.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeTaskSemantics.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/RuntimeState.kt",
@@ -205,7 +209,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "d7878f14d5c4722d3ff38ac548021d440744291c0d3d57c6a76064db149126cb",
+    "captureSourceSha256": "b1303912bb4f05349bb118dfb87d13506d41320cc6a8d7821844ae044d7ba72f",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {
@@ -276,7 +280,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "5eb5ee8183bcf9fe1ca89f3da73e922bb1415bb63ae4ad0dd42bdd7b23ab16fc"
+            "sha256": "ddbe82d0dc42a3902f41897231147402d7e3b6d0c0b51a15ce69ff1d2cf40202"
         },
         {
             "scenario": "adaptive-dynamic-data-mobile",
@@ -290,7 +294,35 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "cf114035ff299bdc3b2b855143e27f503855f0e6f2a88f3a5df02c750591cfbb"
+            "sha256": "304a7dea161c51ec61978764db46d69fbf9194476fe7ae05b8c900b645fe59c7"
+        },
+        {
+            "scenario": "adaptive-dynamic-collection-mobile",
+            "file": "adaptive-dynamic-collection-mobile.png",
+            "width": 1080,
+            "height": 1800,
+            "density": 2.625,
+            "feature": "Dynamic apps",
+            "surface": "Nested collection actions",
+            "state": "Synthetic visual QA",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "849dbda0b56d984944f77b7d547d03b9bf3aaf0ac6de2d96ce6138445d65f796"
+        },
+        {
+            "scenario": "adaptive-dynamic-context-menu-mobile",
+            "file": "adaptive-dynamic-context-menu-mobile.png",
+            "width": 1080,
+            "height": 1800,
+            "density": 2.625,
+            "feature": "Dynamic apps",
+            "surface": "Context workspace menu",
+            "state": "Synthetic visual QA",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "e483aa2640fc4df5c905c1a79af01c522cc2fa8c7ffc511433bd730329551080"
         },
         {
             "scenario": "photo-timeline-revalidation-error-mobile",
