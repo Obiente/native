@@ -23,6 +23,32 @@ private const val MAX_SIGNED_DESCRIPTION_ENUM_VALUES = 16
 private const val MAX_SIGNED_DESCRIPTION_ENUM_VALUE_LENGTH = 128
 
 private val INFERRED_MULTIPART_SCALAR_TYPES = setOf("string", "integer", "number", "boolean")
+private val EDITABLE_DYNAMIC_STRING_ARRAY_SCHEMA_KEYS = setOf(
+    "\$comment",
+    "default",
+    "deprecated",
+    "description",
+    "example",
+    "examples",
+    "items",
+    "nullable",
+    "readOnly",
+    "title",
+    "type",
+    "writeOnly",
+)
+private val EDITABLE_DYNAMIC_STRING_ARRAY_ITEM_SCHEMA_KEYS = setOf(
+    "\$comment",
+    "deprecated",
+    "description",
+    "example",
+    "examples",
+    "nullable",
+    "readOnly",
+    "title",
+    "type",
+    "writeOnly",
+)
 private val FIELD_COMPOSITION_ANNOTATION_KEYS = setOf(
     "default",
     "deprecated",
@@ -1171,6 +1197,7 @@ private class KotlinCompilerState(
         // does not retain, so those bodies must not acquire a JSON-oriented editor format.
         val jsonBody = contentType.substringBefore(';').trim().equals("application/json", ignoreCase = true)
         if (jsonBody && declaredSchema.hasUnnormalizableReadOnlyRepeatableObjectProperty()) return null
+        if (jsonBody && declaredSchema.hasUnsupportedDynamicStringArrayProperty()) return null
         val schema = if (jsonBody) {
             declaredSchema.withDynamicFormFormats()
         } else {
@@ -1199,6 +1226,24 @@ private class KotlinCompilerState(
             containsReadOnly && normalizeRepeatableObjectArraySchema(array) == null
         }
     }
+
+    private fun JsonElement.hasUnsupportedDynamicStringArrayProperty(): Boolean {
+        val objectSchema = this as? JsonObject ?: return false
+        val properties = objectSchema.objectValue("properties") ?: return false
+        return properties.values.any { element ->
+            val array = resolveFieldSchema(element) as? JsonObject ?: return@any false
+            val item = array["items"]?.let(::resolveLocal) as? JsonObject ?: return@any false
+            array.string("type") == "array" &&
+                item.string("type") == "string" &&
+                !array.isExactEditableDynamicStringArraySchema(item)
+        }
+    }
+
+    private fun JsonObject.isExactEditableDynamicStringArraySchema(item: JsonObject): Boolean =
+        keys.all(EDITABLE_DYNAMIC_STRING_ARRAY_SCHEMA_KEYS::contains) &&
+            item.keys.all(EDITABLE_DYNAMIC_STRING_ARRAY_ITEM_SCHEMA_KEYS::contains) &&
+            ("nullable" !in this || boolean("nullable") == false) &&
+            ("nullable" !in item || item.boolean("nullable") == false)
 
     private fun inferredSignedDescriptionMultipartBody(
         operation: JsonObject,
@@ -1337,7 +1382,11 @@ private class KotlinCompilerState(
                 val type = propertySchema.string("type")
                 val itemType = (propertySchema["items"]?.let(::resolveLocal) as? JsonObject)?.string("type")
                 when {
-                    type == "array" && itemType == "string" ->
+                    type == "array" && itemType == "string" &&
+                        propertySchema.isExactEditableDynamicStringArraySchema(
+                            propertySchema["items"]?.let(::resolveLocal) as? JsonObject
+                                ?: return@mapValues property,
+                        ) ->
                         JsonObject(propertySchema + ("format" to JsonPrimitive(DYNAMIC_STRING_ARRAY_FORMAT)))
                     type == "array" && itemType == "integer" ->
                         JsonObject(propertySchema + ("format" to JsonPrimitive(DYNAMIC_INTEGER_ARRAY_FORMAT)))

@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputScalarKin
 import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputSpec
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -56,8 +57,28 @@ internal fun updateNativeRepeatableObjectValue(
             put(field.id, value)
         }
     }
+    val updatedNullFieldIds = rows[rowIndex].nullFieldIds - field.id
     return rows.toMutableList().apply {
-        this[rowIndex] = RepeatableObjectInputRow(updatedValues)
+        this[rowIndex] = RepeatableObjectInputRow(updatedValues, updatedNullFieldIds)
+    }
+}
+
+internal fun updateNativeRepeatableObjectNull(
+    rows: List<RepeatableObjectInputRow>,
+    rowIndex: Int,
+    field: RepeatableObjectInputFieldSpec,
+    explicitNull: Boolean,
+): List<RepeatableObjectInputRow> {
+    if (rowIndex !in rows.indices || !field.nullable) return rows
+    val row = rows[rowIndex]
+    val updatedValues = if (explicitNull) row.values - field.id else row.values
+    val updatedNullFieldIds = if (explicitNull) {
+        row.nullFieldIds + field.id
+    } else {
+        row.nullFieldIds - field.id
+    }
+    return rows.toMutableList().apply {
+        this[rowIndex] = RepeatableObjectInputRow(updatedValues, updatedNullFieldIds)
     }
 }
 
@@ -136,6 +157,11 @@ private fun encodeNativeRepeatableObjectDraftRows(
     if (
         rows.any { row ->
             row.values.keys.any { fieldId -> fieldId !in declaredFieldIds } ||
+                row.nullFieldIds.any { fieldId -> fieldId !in declaredFieldIds } ||
+                row.values.keys.any(row.nullFieldIds::contains) ||
+                row.nullFieldIds.any { fieldId ->
+                    spec.fields.single { field -> field.id == fieldId }.nullable.not()
+                } ||
                 row.values.values.any { value ->
                     value.length > MAX_NATIVE_REPEATABLE_OBJECT_SCALAR_LENGTH
                 }
@@ -145,7 +171,12 @@ private fun encodeNativeRepeatableObjectDraftRows(
     }
     return JsonArray(
         rows.map { row ->
-            JsonObject(row.values.mapValues { (_, value) -> JsonPrimitive(value) })
+            JsonObject(
+                buildMap {
+                    row.values.forEach { (fieldId, value) -> put(fieldId, JsonPrimitive(value)) }
+                    row.nullFieldIds.forEach { fieldId -> put(fieldId, JsonNull) }
+                },
+            )
         },
     ).toString()
 }
@@ -161,16 +192,24 @@ private fun decodeNativeRepeatableObjectDraftRows(
     return rows.map { element ->
         val row = element as? JsonObject ?: return null
         if (row.keys.any { fieldId -> fieldId !in declaredFieldIds }) return null
-        val values = row.mapValues { (_, value) ->
-            val primitive = value as? JsonPrimitive
-                ?: return null
-            primitive.takeIf(JsonPrimitive::isString)?.content
-                ?.takeIf { draft ->
-                    draft.length <= MAX_NATIVE_REPEATABLE_OBJECT_SCALAR_LENGTH
-                }
-                ?: return null
+        val values = linkedMapOf<String, String>()
+        val nullFieldIds = linkedSetOf<String>()
+        row.forEach { (fieldId, value) ->
+            if (value is JsonNull) {
+                val field = spec.fields.single { field -> field.id == fieldId }
+                if (!field.nullable) return null
+                nullFieldIds += fieldId
+            } else {
+                val primitive = value as? JsonPrimitive ?: return null
+                val draft = primitive.takeIf(JsonPrimitive::isString)?.content
+                    ?.takeIf { candidate ->
+                        candidate.length <= MAX_NATIVE_REPEATABLE_OBJECT_SCALAR_LENGTH
+                    }
+                    ?: return null
+                values[fieldId] = draft
+            }
         }
-        RepeatableObjectInputRow(values)
+        RepeatableObjectInputRow(values, nullFieldIds)
     }
 }
 
@@ -188,12 +227,17 @@ private fun RepeatableObjectInputSpec.decodeNativeRepeatableObjectRows(
 ): List<RepeatableObjectInputRow>? = runCatching {
     canonicalJson(encoded).mapIndexed { rowIndex, element ->
         val item = element as JsonObject
+        val nullFieldIds = item.entries
+            .filter { (_, value) -> value is JsonNull }
+            .mapTo(linkedSetOf()) { (fieldId, _) -> fieldId }
         RepeatableObjectInputRow(
-            fields.mapNotNull { field ->
+            values = fields.mapNotNull { field ->
                 item[field.id]?.let { value ->
+                    if (value is JsonNull) return@let null
                     field.id to field.wireValue(value, rowIndex)
                 }
             }.toMap(),
+            nullFieldIds = nullFieldIds,
         )
     }
 }.getOrNull()

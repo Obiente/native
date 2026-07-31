@@ -1561,7 +1561,14 @@ private fun GenericCollectionReorderDialog(
 ) {
     val recordsById = remember(records) { records.associateBy(NativeRecord::id) }
     val initialOrder = remember(records) { records.map(NativeRecord::id) }
-    var orderedRecordIds by remember(plan.action.id, initialOrder) {
+    val reorderDraftSaver = remember(initialOrder) {
+        nativeCollectionReorderDraftSaver(initialOrder)
+    }
+    var orderedRecordIds by rememberSaveable(
+        plan.action.id,
+        initialOrder,
+        stateSaver = reorderDraftSaver,
+    ) {
         mutableStateOf(initialOrder)
     }
     var error by remember(plan.action.id) { mutableStateOf<String?>(null) }
@@ -1726,6 +1733,15 @@ private fun GenericCollectionReorderDialog(
         },
     )
 }
+
+private fun nativeCollectionReorderDraftSaver(
+    plannedRecordIds: List<String>,
+) = Saver<List<String>, List<String>>(
+    save = { orderedRecordIds -> encodeNativeCollectionReorderDraft(orderedRecordIds) },
+    restore = { savedRecordIds ->
+        restoreNativeCollectionReorderDraft(savedRecordIds, plannedRecordIds)
+    },
+)
 
 private sealed interface PendingNativeRecordActionForm {
     val action: ActionSpec
@@ -7590,11 +7606,12 @@ private fun GenericRepeatableObjectField(
                             rowIndex = rowIndex,
                             itemFieldId = itemField.id,
                         )
+                        val explicitNull = itemField.id in row.nullFieldIds
                         GenericFormField(
                             field = itemField.toNativeRepeatableObjectFieldSpec(),
                             value = row.values[itemField.id].orEmpty(),
                             error = null,
-                            enabled = enabled,
+                            enabled = enabled && !explicitNull,
                             filePicker = null,
                             automationFieldId = automationFieldId,
                             onValueChange = { value ->
@@ -7608,6 +7625,35 @@ private fun GenericRepeatableObjectField(
                                 )
                             },
                         )
+                        if (itemField.nullable) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .semantics {
+                                        contentDescription = "Send ${itemField.label} as null"
+                                    },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(
+                                    checked = explicitNull,
+                                    enabled = enabled,
+                                    onCheckedChange = { checked ->
+                                        onRowsChange(
+                                            updateNativeRepeatableObjectNull(
+                                                rows = rows,
+                                                rowIndex = rowIndex,
+                                                field = itemField,
+                                                explicitNull = checked,
+                                            ),
+                                        )
+                                    },
+                                )
+                                Text(
+                                    "Send ${itemField.label} as null",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                        }
                     }
                 }
             }

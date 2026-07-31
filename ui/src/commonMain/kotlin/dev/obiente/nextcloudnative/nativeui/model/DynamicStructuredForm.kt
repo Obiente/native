@@ -42,11 +42,21 @@ data class RepeatableObjectInputSpec(
         val fieldsById = fields.associateBy(RepeatableObjectInputFieldSpec::id)
         return JsonArray(
             rows.mapIndexed { index, row ->
-                require(row.values.keys.all(fieldsById::containsKey)) {
+                require(
+                    row.values.keys.all(fieldsById::containsKey) &&
+                        row.nullFieldIds.all(fieldsById::containsKey) &&
+                        row.values.keys.none(row.nullFieldIds::contains),
+                ) {
                     "Item ${index + 1} contains an undeclared field."
                 }
                 JsonObject(
                     fields.mapNotNull { field ->
+                        if (field.id in row.nullFieldIds) {
+                            require(field.nullable) {
+                                "Item ${index + 1}: ${field.label} cannot be null."
+                            }
+                            return@mapNotNull field.id to JsonNull
+                        }
                         val supplied = row.values[field.id]
                         if (supplied == null || supplied.isBlank()) {
                             require(!field.required) {
@@ -71,12 +81,16 @@ data class RepeatableObjectInputSpec(
         val rows = array.mapIndexed { index, element ->
             val item = element as? JsonObject
                 ?: error("Item ${index + 1} must be an object.")
+            val nullFieldIds = item.entries
+                .filter { (_, value) -> value is JsonNull }
+                .mapTo(linkedSetOf()) { (fieldId, _) -> fieldId }
             RepeatableObjectInputRow(
-                item.mapValues { (fieldId, value) ->
+                values = item.filterValues { value -> value !is JsonNull }.mapValues { (fieldId, value) ->
                     fields.singleOrNull { field -> field.id == fieldId }
                         ?.wireValue(value, index)
                         ?: error("Item ${index + 1} contains an undeclared field.")
                 },
+                nullFieldIds = nullFieldIds,
             )
         }
         return canonicalJson(rows)
@@ -86,6 +100,7 @@ data class RepeatableObjectInputSpec(
 @Serializable
 data class RepeatableObjectInputRow(
     val values: Map<String, String> = emptyMap(),
+    val nullFieldIds: Set<String> = emptySet(),
 )
 
 @Serializable
@@ -164,12 +179,7 @@ data class RepeatableObjectInputFieldSpec(
     }
 
     internal fun wireValue(value: JsonElement, rowIndex: Int): String {
-        if (value is JsonNull) {
-            require(nullable && !required) {
-                "Item ${rowIndex + 1}: $label cannot be null."
-            }
-            return ""
-        }
+        require(value !is JsonNull) { "Item ${rowIndex + 1}: $label requires explicit null state." }
         val primitive = value as? JsonPrimitive
             ?: error("Item ${rowIndex + 1}: $label must be a scalar value.")
         return when (kind) {

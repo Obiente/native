@@ -9,6 +9,7 @@ import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputSpec
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class NativeRepeatableObjectUiStateTest {
     private val spec = RepeatableObjectInputSpec(
@@ -100,6 +101,56 @@ class NativeRepeatableObjectUiStateTest {
 
         assertEquals(values, saved?.let { decodeNativeRepeatableObjectDraft(it, specs) })
         assertNull(decodeNativeRepeatableObjectDraft(listOf("entries", "not-json"), specs))
+    }
+
+    @Test
+    fun `nullable structured value preserves and edits explicit null state`() {
+        val nullableSpec = RepeatableObjectInputSpec(
+            minimumItems = 1,
+            maximumItems = 1,
+            fields = listOf(
+                RepeatableObjectInputFieldSpec(
+                    id = "note",
+                    label = "Note",
+                    kind = RepeatableObjectInputScalarKind.String,
+                    required = false,
+                    nullable = true,
+                ),
+            ),
+        )
+        val nullableField = field.copy(repeatableObjectInput = nullableSpec)
+        val initial = initialNativeRepeatableObjectDraft(
+            fields = listOf(nullableField),
+            initialValues = mapOf("entries" to """[{"note":null}]"""),
+        )
+        val rows = initial?.get("entries").orEmpty()
+
+        assertEquals(setOf("note"), rows.single().nullFieldIds)
+        assertTrue(rows.single().values.isEmpty())
+
+        val specs = mapOf("entries" to nullableSpec)
+        assertEquals(
+            initial,
+            encodeNativeRepeatableObjectDraft(initial.orEmpty(), specs)
+                ?.let { decodeNativeRepeatableObjectDraft(it, specs) },
+        )
+
+        val withoutNull = updateNativeRepeatableObjectNull(
+            rows = rows,
+            rowIndex = 0,
+            field = nullableSpec.fields.single(),
+            explicitNull = false,
+        )
+        assertTrue(withoutNull.single().nullFieldIds.isEmpty())
+
+        val typed = updateNativeRepeatableObjectValue(
+            rows = rows,
+            rowIndex = 0,
+            field = nullableSpec.fields.single(),
+            value = "Keep this",
+        )
+        assertEquals(mapOf("note" to "Keep this"), typed.single().values)
+        assertTrue(typed.single().nullFieldIds.isEmpty())
     }
 
     @Test

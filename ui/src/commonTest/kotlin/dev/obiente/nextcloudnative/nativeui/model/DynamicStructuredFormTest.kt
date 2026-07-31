@@ -8,6 +8,38 @@ import kotlinx.serialization.json.Json
 
 class DynamicStructuredFormTest {
     @Test
+    fun `repeatable nullable fields preserve explicit null distinctly from absence`() {
+        val spec = RepeatableObjectInputSpec(
+            minimumItems = 1,
+            maximumItems = 1,
+            fields = listOf(
+                RepeatableObjectInputFieldSpec(
+                    id = "note",
+                    label = "Note",
+                    kind = RepeatableObjectInputScalarKind.String,
+                    required = false,
+                    nullable = true,
+                ),
+            ),
+        )
+
+        assertEquals(
+            """[{"note":null}]""",
+            spec.encode(
+                listOf(RepeatableObjectInputRow(nullFieldIds = setOf("note"))),
+            ),
+        )
+        assertEquals(
+            """[{}]""",
+            spec.encode(listOf(RepeatableObjectInputRow())),
+        )
+        assertEquals(
+            """[{"note":null}]""",
+            spec.canonicalJson("""[{"note":null}]""").toString(),
+        )
+    }
+
+    @Test
     fun `repeatable decimal values preserve exact JSON precision and exact bounds`() {
         val unbounded = decimalSpec()
 

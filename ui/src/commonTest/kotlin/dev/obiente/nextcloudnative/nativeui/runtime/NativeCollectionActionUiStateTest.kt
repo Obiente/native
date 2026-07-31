@@ -92,6 +92,44 @@ class NativeCollectionActionUiStateTest {
     }
 
     @Test
+    fun `reorder draft restores a complete permutation of the current planned identities`() {
+        val currentPlan = listOf("first", "second", "third")
+        val savedDraft = mutableListOf("third", "first", "second")
+
+        val encoded = requireNotNull(encodeNativeCollectionReorderDraft(savedDraft))
+        savedDraft.clear()
+
+        assertEquals(listOf("third", "first", "second"), encoded)
+        assertEquals(
+            listOf("third", "first", "second"),
+            restoreNativeCollectionReorderDraft(encoded, currentPlan),
+        )
+    }
+
+    @Test
+    fun `reorder draft restoration rejects stale duplicate and oversized identities`() {
+        val currentPlan = listOf("first", "second", "third")
+
+        listOf(
+            listOf("first", "second"),
+            listOf("first", "second", "removed"),
+            listOf("first", "first", "third"),
+            listOf("first", "second", " "),
+        ).forEach { invalidDraft ->
+            assertEquals(
+                currentPlan,
+                restoreNativeCollectionReorderDraft(invalidDraft, currentPlan),
+            )
+        }
+        assertEquals(
+            null,
+            encodeNativeCollectionReorderDraft(
+                List(501) { index -> "record-$index" },
+            ),
+        )
+    }
+
+    @Test
     fun `batch fields map only planner metadata to generic field controls`() {
         assertEquals(
             dev.obiente.nextcloudnative.nativeui.model.FieldSpec(

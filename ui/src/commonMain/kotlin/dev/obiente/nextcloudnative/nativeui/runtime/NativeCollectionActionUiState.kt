@@ -44,6 +44,36 @@ internal fun moveNativeCollectionRecord(
     }
 }
 
+/**
+ * Returns a bounded snapshot that is safe to place in Android saved instance state.
+ *
+ * Reorder plans are already capped at 500 records, but the saver repeats that boundary so a
+ * malformed or stale restored value cannot inflate the activity state independently of a plan.
+ */
+internal fun encodeNativeCollectionReorderDraft(
+    orderedRecordIds: List<String>,
+): List<String>? = orderedRecordIds
+    .takeIf { recordIds ->
+        recordIds.size in 2..MAX_SAVED_COLLECTION_REORDER_RECORDS &&
+            recordIds.distinct().size == recordIds.size &&
+            recordIds.all { recordId ->
+                recordId.isNotBlank() &&
+                    recordId.length <= MAX_SAVED_COLLECTION_REORDER_ID_LENGTH &&
+                    recordId.none(Char::isISOControl)
+            }
+    }
+    ?.toList()
+
+/** Restores only a complete permutation of the identities in the current reorder plan. */
+internal fun restoreNativeCollectionReorderDraft(
+    savedRecordIds: List<String>,
+    plannedRecordIds: List<String>,
+): List<String> {
+    val planned = encodeNativeCollectionReorderDraft(plannedRecordIds) ?: return plannedRecordIds
+    val saved = encodeNativeCollectionReorderDraft(savedRecordIds) ?: return planned
+    return saved.takeIf { recordIds -> recordIds.toSet() == planned.toSet() } ?: planned
+}
+
 internal fun NativeCollectionBatchInputField.toNativeCollectionFieldSpec(): FieldSpec =
     FieldSpec(
         id = id,
@@ -111,6 +141,9 @@ private val NATIVE_COLLECTION_BATCH_BOOLEAN_OPTIONS = listOf(
     "true",
     "false",
 )
+
+private const val MAX_SAVED_COLLECTION_REORDER_RECORDS = 500
+private const val MAX_SAVED_COLLECTION_REORDER_ID_LENGTH = 256
 
 private fun String.toNativeCollectionIntegerArray(): String {
     val values = lineSequence()

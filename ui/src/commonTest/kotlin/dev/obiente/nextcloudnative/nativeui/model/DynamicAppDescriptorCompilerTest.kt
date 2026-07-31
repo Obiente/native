@@ -1471,6 +1471,59 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
+    fun `constrained string array mutations are withheld while unconstrained arrays remain editable`() {
+        fun operation(operationId: String, arrayConstraints: String, itemConstraints: String = "") = """
+            "post":{
+              "operationId":"$operationId",
+              "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                "type":"object",
+                "required":["values"],
+                "properties":{
+                  "values":{
+                    "type":"array"$arrayConstraints,
+                    "items":{"type":"string"$itemConstraints}
+                  }
+                }
+              }}}},
+              "responses":{"204":{"description":"Updated"}}
+            }
+        """.trimIndent()
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"String arrays","version":"1"},
+              "paths":{
+                "/apps/example/api/plain":{${operation("plain-values", "")}},
+                "/apps/example/api/minimum":{${operation("minimum-values", ",\"minItems\":2")}},
+                "/apps/example/api/maximum":{${operation("maximum-values", ",\"maxItems\":2")}},
+                "/apps/example/api/unique":{${operation("unique-values", ",\"uniqueItems\":true")}},
+                "/apps/example/api/enumerated":{
+                  ${operation("enumerated-values", "", ",\"enum\":[\"one\",\"two\"]")}
+                }
+              }
+            }
+        """.trimIndent()
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        val plain = descriptor.actions.single { it.id == "plain-values" }
+        assertEquals(
+            DYNAMIC_STRING_ARRAY_FORMAT,
+            descriptor.forms.single { it.actionId == plain.id }.fields.single().format,
+        )
+        assertTrue(
+            descriptor.actions.none { action ->
+                action.id in setOf(
+                    "minimum-values",
+                    "maximum-values",
+                    "unique-values",
+                    "enumerated-values",
+                )
+            },
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
     fun `ambiguous replacement remains withheld without exact trusted get recovery`() {
         val document = """
             {
