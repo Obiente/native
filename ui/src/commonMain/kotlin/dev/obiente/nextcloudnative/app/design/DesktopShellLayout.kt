@@ -18,6 +18,18 @@ enum class NextcloudNavigationStyle {
     ExpandedSidebar,
 }
 
+/**
+ * Identifies who owns the expanded navigation column in a desktop workspace.
+ *
+ * Root destinations use the global Nextcloud navigation. Once a user enters an app or another
+ * deep workspace, the compact global rail remains available while that workspace can use the
+ * expanded column for its own destinations. This prevents two competing full-width sidebars.
+ */
+enum class NextcloudDesktopWorkspaceKind {
+    Root,
+    AppWorkspace,
+}
+
 data class NextcloudRootShellLayout(
     val navigationStyle: NextcloudNavigationStyle,
     val navigationWidthDp: Int,
@@ -37,6 +49,7 @@ fun resolveNextcloudRootShellLayout(
     presentation: NextcloudPresentation,
     availableWidthDp: Int,
     destination: NextcloudDestination,
+    desktopWorkspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
 ): NextcloudRootShellLayout = when (presentation) {
     NextcloudPresentation.Adaptive -> {
         if (availableWidthDp < NextcloudWorkspaceBreakpoints.AdaptiveRailDp) {
@@ -62,7 +75,8 @@ fun resolveNextcloudRootShellLayout(
     }
 
     NextcloudPresentation.Desktop -> {
-        val expanded = availableWidthDp >= NextcloudWorkspaceBreakpoints.DesktopSidebarDp
+        val expanded = desktopWorkspaceKind == NextcloudDesktopWorkspaceKind.Root &&
+            availableWidthDp >= NextcloudWorkspaceBreakpoints.DesktopSidebarDp
         NextcloudRootShellLayout(
             navigationStyle = if (expanded) {
                 NextcloudNavigationStyle.ExpandedSidebar

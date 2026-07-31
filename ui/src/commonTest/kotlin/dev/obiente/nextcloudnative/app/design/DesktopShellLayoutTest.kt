@@ -66,6 +66,20 @@ class DesktopShellLayoutTest {
     }
 
     @Test
+    fun `desktop app workspace reserves the expanded column for contextual navigation`() {
+        val layout = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 1_440,
+            destination = NextcloudDestination.Apps,
+            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
+        )
+
+        assertEquals(NextcloudNavigationStyle.CompactRail, layout.navigationStyle)
+        assertEquals(76, layout.navigationWidthDp)
+        assertTrue(layout.supportsAuxiliaryPane)
+    }
+
+    @Test
     fun `desktop shell persists while app and detail screens are open`() {
         assertTrue(
             shouldUseNextcloudRootShell(

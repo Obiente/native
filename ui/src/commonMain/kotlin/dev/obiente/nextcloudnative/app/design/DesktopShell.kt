@@ -84,6 +84,7 @@ fun NextcloudDesktopShell(
     selected: NextcloudDestination,
     onSelected: (NextcloudDestination) -> Unit,
     identity: NextcloudDesktopIdentity?,
+    workspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
@@ -93,6 +94,7 @@ fun NextcloudDesktopShell(
             presentation = NextcloudPresentation.Desktop,
             availableWidthDp = maxWidth.value.toInt(),
             destination = selected,
+            desktopWorkspaceKind = workspaceKind,
         )
         val margin = layout.workspaceMarginDp.dp
         LaunchedEffect(focusRequester) {

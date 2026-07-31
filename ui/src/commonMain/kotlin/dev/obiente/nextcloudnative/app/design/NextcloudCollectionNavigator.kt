@@ -84,12 +84,19 @@ enum class NextcloudCollectionNavigationMove {
     Last,
 }
 
+enum class NextcloudCollectionDestinationSection {
+    Primary,
+    Manage,
+}
+
 @Immutable
 data class NextcloudCollectionDestination(
     val id: String,
     val label: String,
     val count: Int? = null,
     val accessibilityId: String = id,
+    val supportingText: String? = null,
+    val section: NextcloudCollectionDestinationSection = NextcloudCollectionDestinationSection.Primary,
 ) {
     init {
         require(id.isNotBlank()) { "Collection destination IDs must not be blank." }
@@ -97,6 +104,9 @@ data class NextcloudCollectionDestination(
         require(count == null || count >= 0) { "Collection destination counts must not be negative." }
         require(accessibilityId.isNotBlank()) {
             "Collection destination accessibility IDs must not be blank."
+        }
+        require(supportingText == null || supportingText.isNotBlank()) {
+            "Collection destination supporting text must be null or non-blank."
         }
     }
 }
@@ -243,8 +253,9 @@ internal fun resolveNextcloudCollectionDestinationLabelMaxLines(
 fun NextcloudCollectionWorkspaceScaffold(
     model: NextcloudCollectionNavigationModel,
     mode: NextcloudCollectionNavigationMode,
-    title: String,
-    subtitle: String?,
+    workspaceLabel: String,
+    contentTitle: String,
+    contentSubtitle: String?,
     onBack: () -> Unit,
     hasHierarchyBack: Boolean,
     onDestinationSelected: (NextcloudCollectionDestination) -> Unit,
@@ -257,8 +268,9 @@ fun NextcloudCollectionWorkspaceScaffold(
     when (mode) {
         NextcloudCollectionNavigationMode.Drawer -> NextcloudCollectionDrawerScaffold(
             model = model,
-            title = title,
-            subtitle = subtitle,
+            workspaceLabel = workspaceLabel,
+            contentTitle = contentTitle,
+            contentSubtitle = contentSubtitle,
             onBack = onBack,
             hasHierarchyBack = hasHierarchyBack,
             onDestinationSelected = onDestinationSelected,
@@ -270,8 +282,8 @@ fun NextcloudCollectionWorkspaceScaffold(
         )
 
         NextcloudCollectionNavigationMode.Hidden -> NextcloudCollectionMainPane(
-            title = title,
-            subtitle = subtitle,
+            title = contentTitle,
+            subtitle = contentSubtitle,
             onBack = onBack,
             leadingControl = resolveNextcloudCollectionLeadingControl(mode, hasHierarchyBack),
             onOpenNavigation = null,
@@ -288,8 +300,8 @@ fun NextcloudCollectionWorkspaceScaffold(
                 destinationIcon = destinationIcon,
             )
             NextcloudCollectionMainPane(
-                title = title,
-                subtitle = subtitle,
+                title = contentTitle,
+                subtitle = contentSubtitle,
                 onBack = onBack,
                 leadingControl = resolveNextcloudCollectionLeadingControl(mode, hasHierarchyBack),
                 onOpenNavigation = null,
@@ -303,13 +315,13 @@ fun NextcloudCollectionWorkspaceScaffold(
         NextcloudCollectionNavigationMode.Sidebar -> Row(modifier.fillMaxSize()) {
             NextcloudCollectionNavigationSidebar(
                 model = model,
-                label = title,
+                label = workspaceLabel,
                 onDestinationSelected = onDestinationSelected,
                 destinationIcon = destinationIcon,
             )
             NextcloudCollectionMainPane(
-                title = title,
-                subtitle = subtitle,
+                title = contentTitle,
+                subtitle = contentSubtitle,
                 onBack = onBack,
                 leadingControl = resolveNextcloudCollectionLeadingControl(mode, hasHierarchyBack),
                 onOpenNavigation = null,
@@ -325,8 +337,9 @@ fun NextcloudCollectionWorkspaceScaffold(
 @Composable
 private fun NextcloudCollectionDrawerScaffold(
     model: NextcloudCollectionNavigationModel,
-    title: String,
-    subtitle: String?,
+    workspaceLabel: String,
+    contentTitle: String,
+    contentSubtitle: String?,
     onBack: () -> Unit,
     hasHierarchyBack: Boolean,
     onDestinationSelected: (NextcloudCollectionDestination) -> Unit,
@@ -348,17 +361,29 @@ private fun NextcloudCollectionDrawerScaffold(
         gesturesEnabled = true,
         drawerContent = {
             ModalDrawerSheet(modifier = Modifier.width(NextcloudCollectionDrawerWidthDp.dp)) {
-                Text(
-                    text = title,
-                    modifier = Modifier
-                        .padding(
-                            horizontal = NextcloudSpacing.Large,
-                            vertical = NextcloudSpacing.Medium,
+                Column(
+                    modifier = Modifier.padding(
+                        horizontal = NextcloudSpacing.Large,
+                        vertical = NextcloudSpacing.Medium,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                ) {
+                    Text(
+                        text = workspaceLabel,
+                        modifier = Modifier.semantics { heading() },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (!contentTitle.equals(workspaceLabel, ignoreCase = true)) {
+                        Text(
+                            text = contentTitle,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        .semantics { heading() },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                    }
+                }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 NextcloudCollectionDestinationList(
                     model = model,
@@ -379,8 +404,8 @@ private fun NextcloudCollectionDrawerScaffold(
         modifier = modifier,
     ) {
         NextcloudCollectionMainPane(
-            title = title,
-            subtitle = subtitle,
+            title = contentTitle,
+            subtitle = contentSubtitle,
             onBack = {
                 if (drawerState.isOpen) {
                     coroutineScope.launch { drawerState.close() }
@@ -390,7 +415,10 @@ private fun NextcloudCollectionDrawerScaffold(
             },
             leadingControl = leadingControl,
             onOpenNavigation = { coroutineScope.launch { drawerState.open() } },
-            showHierarchyBack = hasHierarchyBack,
+            showHierarchyBack = shouldShowNextcloudCollectionTrailingNavigation(
+                mode = NextcloudCollectionNavigationMode.Drawer,
+                hasHierarchyBack = hasHierarchyBack,
+            ),
             compactHeader = compactHeader,
             headerActions = headerActions,
             content = content,
@@ -639,48 +667,71 @@ private fun NextcloudCollectionDestinationList(
         state = listState,
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
     ) {
-        items(
-            items = model.destinations,
-            key = NextcloudCollectionDestination::id,
-        ) { destination ->
-            val focusRequester = rememberNextcloudCollectionFocusRequester(
-                destinationId = destination.id,
-                registry = focusRequesters,
-            )
-            NavigationDrawerItem(
-                label = {
-                    Text(
-                        text = destination.label,
-                        maxLines = labelMaxLines,
-                        overflow = TextOverflow.Ellipsis,
+        NextcloudCollectionDestinationSection.entries.forEach { section ->
+            val sectionDestinations = model.destinations.filter { destination ->
+                destination.section == section
+            }
+            if (sectionDestinations.isNotEmpty()) {
+                if (section == NextcloudCollectionDestinationSection.Manage) {
+                    item(key = "destination-section-manage") {
+                        Text(
+                            text = "Manage",
+                            modifier = Modifier.padding(
+                                start = NextcloudSpacing.Medium,
+                                top = NextcloudSpacing.Large,
+                                end = NextcloudSpacing.Medium,
+                                bottom = NextcloudSpacing.XSmall,
+                            ),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                items(
+                    items = sectionDestinations,
+                    key = NextcloudCollectionDestination::id,
+                ) { destination ->
+                    val focusRequester = rememberNextcloudCollectionFocusRequester(
+                        destinationId = destination.id,
+                        registry = focusRequesters,
                     )
-                },
-                selected = destination.id == model.selectedDestinationId,
-                onClick = { onDestinationSelected(destination) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = NextcloudCollectionMinimumTouchTargetDp.dp)
-                    .semantics {
-                        contentDescription = destination.accessibilityDescription()
-                    }
-                    .testTag(destination.automationTestTag())
-                    .focusRequester(focusRequester)
-                    .onFocusChanged { focusState ->
-                        if (focusState.isFocused) focusedDestinationId = destination.id
-                    },
-                icon = destinationIcon(destination)?.let { imageVector ->
-                    {
-                        Icon(imageVector, contentDescription = null, modifier = Modifier.size(24.dp))
-                    }
-                },
-                badge = destination.count?.let { count ->
-                    {
-                        Badge {
-                            Text(count.toString())
-                        }
-                    }
-                },
-            )
+                    NavigationDrawerItem(
+                        label = {
+                            Text(
+                                text = destination.label,
+                                maxLines = labelMaxLines,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        selected = destination.id == model.selectedDestinationId,
+                        onClick = { onDestinationSelected(destination) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = NextcloudCollectionMinimumTouchTargetDp.dp)
+                            .semantics {
+                                contentDescription = destination.accessibilityDescription()
+                            }
+                            .testTag(destination.automationTestTag())
+                            .focusRequester(focusRequester)
+                            .onFocusChanged { focusState ->
+                                if (focusState.isFocused) focusedDestinationId = destination.id
+                            },
+                        icon = destinationIcon(destination)?.let { imageVector ->
+                            {
+                                Icon(imageVector, contentDescription = null, modifier = Modifier.size(24.dp))
+                            }
+                        },
+                        badge = destination.count?.let { count ->
+                            {
+                                Badge {
+                                    Text(count.toString())
+                                }
+                            }
+                        },
+                    )
+                }
+            }
         }
     }
 }
