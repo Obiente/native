@@ -10074,6 +10074,9 @@ private fun AppUpdateSettingsCard(
                         "Version ${release.versionName} is available.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                    TextButton(onClick = { services.openExternalUrl(release.releaseNotesUrl) }) {
+                        Text("Read release notes")
+                    }
                     when (releaseState) {
                         is AppUpdateInstallState.Downloading -> {
                             val progress =

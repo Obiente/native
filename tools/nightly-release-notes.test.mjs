@@ -44,7 +44,10 @@ test("nightly notes are useful, traceable, and omit internal fragments", () => {
 
   assert.match(notes, /## Current development highlights/);
   assert.match(notes, /cumulative and are not limited to changes since the previous nightly/);
-  assert.match(notes, /Direct installs now report when a verified update is available\./);
+  assert.match(
+    notes,
+    /Direct installs now report when a verified update is available \(issue #237\)\./,
+  );
   assert.doesNotMatch(notes, /Release automation now emits richer nightly descriptions/);
   assert.match(notes, /\| Android \| \.apk \| Available \|/);
   assert.match(notes, /\| Linux \| \.deb and \.rpm \| Available \|/);

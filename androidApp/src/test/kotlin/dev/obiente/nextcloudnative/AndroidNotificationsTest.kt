@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import android.app.NotificationManager
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import dev.obiente.nextcloudnative.app.ActivityNotificationDestination
@@ -68,6 +69,30 @@ class AndroidNotificationsTest {
         assertFalse(isAppUpdateReviewIntentAction("dev.obiente.nextcloudnative.notification.open"))
         assertTrue(NOTIFICATION_ACTIVITY_FLAGS and Intent.FLAG_ACTIVITY_CLEAR_TOP != 0)
         assertTrue(NOTIFICATION_ACTIVITY_FLAGS and Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
+        assertTrue(
+            notificationDeliveryAllowed(
+                sdk = 33,
+                runtimePermissionGranted = true,
+                appNotificationsEnabled = true,
+                channelImportance = NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+        assertFalse(
+            notificationDeliveryAllowed(
+                sdk = 33,
+                runtimePermissionGranted = true,
+                appNotificationsEnabled = true,
+                channelImportance = NotificationManager.IMPORTANCE_NONE,
+            ),
+        )
+        assertFalse(
+            notificationDeliveryAllowed(
+                sdk = 33,
+                runtimePermissionGranted = true,
+                appNotificationsEnabled = false,
+                channelImportance = NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
     }
 
     @Test

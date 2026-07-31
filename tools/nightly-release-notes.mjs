@@ -85,7 +85,7 @@ export function composeNightlyReleaseNotes({
 
   const highlights = renderFragments(fragments, {
     headingLevel: 3,
-    includeContext: false,
+    includeContext: true,
     includeInternal: false,
   });
   const shortSha = sourceSha.slice(0, 8);

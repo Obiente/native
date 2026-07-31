@@ -41,10 +41,8 @@ internal class AndroidPlatformCapabilities(
             )
             return true
         }
-        val permissions = capability.permissions(Build.VERSION.SDK_INT)
-        if (permissions.isEmpty()) return false
-        val host = activity ?: return false
         if (state(capability) == PlatformCapabilityState.Blocked) {
+            val host = activity ?: return false
             host.startActivity(
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                     data = Uri.fromParts("package", context.packageName, null)
@@ -52,6 +50,9 @@ internal class AndroidPlatformCapabilities(
             )
             return true
         }
+        val permissions = capability.permissions(Build.VERSION.SDK_INT)
+        if (permissions.isEmpty()) return false
+        activity ?: return false
         val request = requestPermissions ?: return false
         preferences.edit().putBoolean(capability.requestedKey(), true).apply()
         return request(permissions.toTypedArray())
@@ -78,6 +79,12 @@ internal class AndroidPlatformCapabilities(
             }
         }
         if (hasPermission) {
+            if (
+                capability == PlatformCapability.Notifications &&
+                !notificationDeliveryAllowed(context, CHANNEL_APP_UPDATES)
+            ) {
+                return PlatformCapabilityState.Blocked
+            }
             return PlatformCapabilityState.Granted
         }
         val wasRequested = preferences.getBoolean(capability.requestedKey(), false)

@@ -74,6 +74,7 @@ internal class DesktopAppUpdater(
 ) {
     private val mutableCheckResult = MutableStateFlow<AppUpdateCheckResult?>(null)
     private val mutableInstallState = MutableStateFlow<AppUpdateInstallState>(AppUpdateInstallState.Idle)
+    private val channelStateLock = Any()
     private val updateMutex = Mutex()
     @Volatile private var activeCall: Call? = null
     @Volatile private var cancellationRequested = false
@@ -102,12 +103,13 @@ internal class DesktopAppUpdater(
         )
     }
 
-    fun updateChannel(): AndroidUpdateChannel =
-        parseAndroidUpdateChannel(preferences.get(KEY_UPDATE_CHANNEL, null))
+    fun updateChannel(): AndroidUpdateChannel = synchronized(channelStateLock) {
+        storedUpdateChannel()
+    }
 
-    fun saveUpdateChannel(channel: AndroidUpdateChannel): Boolean {
+    fun saveUpdateChannel(channel: AndroidUpdateChannel): Boolean = synchronized(channelStateLock) {
         if (!canSelectAppUpdateChannel(support(), channel)) return false
-        if (channel != updateChannel()) mutableCheckResult.value = null
+        if (channel != storedUpdateChannel()) mutableCheckResult.value = null
         preferences.put(KEY_UPDATE_CHANNEL, channel.storageValue)
         return true
     }
@@ -164,13 +166,27 @@ internal class DesktopAppUpdater(
                 failure.message ?: "The update check failed.",
             )
         }
-        mutableCheckResult.value = result
-        return result
+        return synchronized(channelStateLock) {
+            if (channel != storedUpdateChannel()) {
+                AppUpdateCheckResult.Failed(
+                    support,
+                    "The update channel changed. Check again using the saved channel.",
+                )
+            } else {
+                mutableCheckResult.value = result
+                result
+            }
+        }
     }
 
     suspend fun beginUpdate(release: AppUpdateRelease): AppUpdateInstallResult {
         val desktopRelease = release as? DesktopDirectRelease
             ?: return AppUpdateInstallResult.Rejected("This is not a desktop update package.")
+        if (desktopRelease.updateChannel != updateChannel()) {
+            return AppUpdateInstallResult.Rejected(
+                "The update channel changed. Check again before downloading this package.",
+            )
+        }
         if (!updateMutex.tryLock()) {
             return AppUpdateInstallResult.Rejected("An app update is already in progress.")
         }
@@ -278,6 +294,9 @@ internal class DesktopAppUpdater(
         activeCall?.cancel()
         return true
     }
+
+    private fun storedUpdateChannel(): AndroidUpdateChannel =
+        parseAndroidUpdateChannel(preferences.get(KEY_UPDATE_CHANNEL, null))
 
     private companion object {
         const val KEY_UPDATE_CHANNEL = "app-update-channel"

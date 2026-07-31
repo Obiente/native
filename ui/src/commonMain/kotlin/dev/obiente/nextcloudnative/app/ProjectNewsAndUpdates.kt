@@ -164,6 +164,7 @@ data class DesktopUpdateAsset(
 )
 
 data class DesktopDirectRelease(
+    val updateChannel: AndroidUpdateChannel,
     override val versionName: String,
     override val versionCode: Long,
     val packageVersion: String,
@@ -378,6 +379,7 @@ fun parseDesktopDirectRelease(
             candidate.architecture == architecture
     } ?: error("No $format update is available for $platform $architecture.")
     return DesktopDirectRelease(
+        updateChannel = expectedChannel,
         versionName = manifest.versionName,
         versionCode = manifest.versionCode,
         packageVersion = manifest.packageVersion,

@@ -68,6 +68,7 @@ class DesktopUpdateManifestTest {
 
         assertEquals(manifest.versionName, release.versionName)
         assertEquals(manifest.versionCode, release.versionCode)
+        assertEquals(AndroidUpdateChannel.Nightly, release.updateChannel)
         assertEquals("rpm", release.asset.format)
         assertEquals("windows", manifest.assets.single { it.format == "msi" }.platform)
         assertTrue(isNewerAppRelease(manifest.versionCode - 1, release))

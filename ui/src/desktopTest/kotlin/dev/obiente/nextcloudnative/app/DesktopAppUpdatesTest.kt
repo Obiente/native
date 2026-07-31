@@ -3,11 +3,13 @@ package dev.obiente.nextcloudnative.app
 import java.nio.file.Files
 import java.util.UUID
 import java.util.prefs.Preferences
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertIs
 
 class DesktopAppUpdatesTest {
     @Test
@@ -111,5 +113,50 @@ class DesktopAppUpdatesTest {
         assertFalse(isTrustedDesktopReleaseAssetRedirect("https://github.com/redirected.rpm"))
         assertFalse(isTrustedDesktopReleaseAssetRedirect("http://release-assets.githubusercontent.com/file.rpm"))
         assertFalse(isTrustedDesktopReleaseAssetRedirect("https://release-assets.githubusercontent.com/"))
+    }
+
+    @Test
+    fun desktopReleaseCannotCrossTheSavedUpdateChannel() {
+        val node = Preferences.userRoot().node("desktop-update-channel-test-${UUID.randomUUID()}")
+        val directory = Files.createTempDirectory("desktop-update-channel-test").toFile()
+        try {
+            val updater = DesktopAppUpdater(
+                preferences = node,
+                buildIdentity = DesktopUpdateBuildIdentity(
+                    versionName = "0.1.0-alpha.1",
+                    versionCode = 1,
+                    packageVersion = "0.1.0",
+                    releaseBuild = true,
+                    directPackageUpdates = true,
+                ),
+                target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
+                updateDirectory = directory,
+                openInstaller = {},
+            )
+            val alphaRelease = DesktopDirectRelease(
+                updateChannel = AndroidUpdateChannel.Alpha,
+                versionName = "0.1.0-alpha.2",
+                versionCode = 2,
+                packageVersion = "0.1.1",
+                asset = DesktopUpdateAsset(
+                    platform = "linux",
+                    format = "rpm",
+                    architecture = "x86_64",
+                    url = "https://github.com/Obiente/nc-native/releases/download/" +
+                        "v0.1.0-alpha.2/nextcloudnative.rpm",
+                    size = 1,
+                    sha256 = "a".repeat(64),
+                ),
+                releaseNotesUrl = "https://github.com/Obiente/nc-native/releases/tag/v0.1.0-alpha.2",
+            )
+
+            assertTrue(updater.saveUpdateChannel(AndroidUpdateChannel.Nightly))
+            val result = runBlocking { updater.beginUpdate(alphaRelease) }
+            val rejected = assertIs<AppUpdateInstallResult.Rejected>(result)
+            assertTrue(rejected.message.contains("channel changed", ignoreCase = true))
+        } finally {
+            node.removeNode()
+            directory.deleteRecursively()
+        }
     }
 }

@@ -173,12 +173,9 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
     }
 
     fun post(event: NextcloudNotificationEvent): Boolean {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) return false
         ensureChannels()
         val policy = event.notificationPolicy()
+        if (!notificationDeliveryAllowed(context, policy.channelId)) return false
         val builder = NotificationCompat.Builder(context, policy.channelId)
             .setSmallIcon(R.drawable.ic_notification)
             .setColor(0xFF8F5EAD.toInt())
@@ -274,6 +271,36 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
 
 internal val NOTIFICATION_ACTIVITY_FLAGS: Int =
     Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+
+internal fun notificationDeliveryAllowed(context: Context, channelId: String): Boolean {
+    val runtimePermissionGranted = Build.VERSION.SDK_INT < 33 ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+        PackageManager.PERMISSION_GRANTED
+    val appNotificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+    val channelImportance = if (Build.VERSION.SDK_INT >= 26) {
+        context.getSystemService(NotificationManager::class.java)
+            .getNotificationChannel(channelId)
+            ?.importance
+    } else {
+        null
+    }
+    return notificationDeliveryAllowed(
+        sdk = Build.VERSION.SDK_INT,
+        runtimePermissionGranted = runtimePermissionGranted,
+        appNotificationsEnabled = appNotificationsEnabled,
+        channelImportance = channelImportance,
+    )
+}
+
+internal fun notificationDeliveryAllowed(
+    sdk: Int,
+    runtimePermissionGranted: Boolean,
+    appNotificationsEnabled: Boolean,
+    channelImportance: Int?,
+): Boolean =
+    runtimePermissionGranted &&
+        appNotificationsEnabled &&
+        (sdk < 26 || channelImportance == null || channelImportance != NotificationManager.IMPORTANCE_NONE)
 
 private fun notificationChannels(): List<NotificationChannel> = if (Build.VERSION.SDK_INT < 26) emptyList() else listOf(
     NotificationChannel(CHANNEL_CALLS, "Calls", NotificationManager.IMPORTANCE_HIGH).apply {
