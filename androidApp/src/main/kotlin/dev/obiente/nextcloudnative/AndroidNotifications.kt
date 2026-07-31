@@ -83,6 +83,7 @@ internal sealed interface NextcloudNotificationEvent {
         override val id: Int,
         override val accountKey: String,
         val versionName: String,
+        val versionCode: Long,
     ) : NextcloudNotificationEvent
 }
 
@@ -251,7 +252,13 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
             is NextcloudNotificationEvent.AppUpdateAvailable -> builder
                 .setContentTitle("Nextcloud Native update available")
                 .setContentText("Version ${event.versionName} is ready to review")
-                .setContentIntent(openAppIntent(ACTION_REVIEW_APP_UPDATE, event.id))
+                .setContentIntent(
+                    openAppIntent(
+                        action = ACTION_REVIEW_APP_UPDATE,
+                        requestCode = event.id,
+                        appUpdateReviewEventId = event.versionCode,
+                    ),
+                )
         }
         return try {
             NotificationManagerCompat.from(context).notify(event.accountKey, event.id, builder.build())
@@ -261,11 +268,20 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
         }
     }
 
-    private fun openAppIntent(action: String, requestCode: Int): PendingIntent = PendingIntent.getActivity(
+    private fun openAppIntent(
+        action: String,
+        requestCode: Int,
+        appUpdateReviewEventId: Long? = null,
+    ): PendingIntent = PendingIntent.getActivity(
         context,
         requestCode,
         Intent(context, MainActivity::class.java)
             .setAction("dev.obiente.nextcloudnative.notification.$action")
+            .apply {
+                appUpdateReviewEventId?.let { eventId ->
+                    putExtra(EXTRA_APP_UPDATE_REVIEW_EVENT_ID, eventId)
+                }
+            }
             .addFlags(NOTIFICATION_ACTIVITY_FLAGS),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
@@ -360,3 +376,5 @@ internal const val CHANNEL_REMINDERS = "nextcloud_reminders"
 internal const val CHANNEL_ACTIVITY = "nextcloud_activity"
 internal const val CHANNEL_APP_UPDATES = "nextcloud_app_updates"
 internal const val ACTION_REVIEW_APP_UPDATE = "review-app-update"
+internal const val EXTRA_APP_UPDATE_REVIEW_EVENT_ID =
+    "dev.obiente.nextcloudnative.notification.app-update-review-event-id"

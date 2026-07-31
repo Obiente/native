@@ -60,6 +60,7 @@ class AndroidNotificationsTest {
             id = 9,
             accountKey = "device",
             versionName = "0.2.0-alpha.1",
+            versionCode = 21,
         ).notificationPolicy()
 
         assertEquals(CHANNEL_APP_UPDATES, update.channelId)
@@ -68,17 +69,48 @@ class AndroidNotificationsTest {
         assertFalse(isAppUpdateReviewIntentAction(null))
         assertFalse(isAppUpdateReviewIntentAction("dev.obiente.nextcloudnative.notification.open"))
         assertEquals(
-            1L,
-            initialAppUpdateReviewRequest(
+            AppUpdateReviewState(requestCount = 1L, lastEventId = 21L),
+            nextAppUpdateReviewState(
                 restoredRequest = null,
+                restoredEventId = null,
                 intentAction = "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE",
+                intentEventId = 21L,
             ),
         )
         assertEquals(
-            4L,
-            initialAppUpdateReviewRequest(
+            AppUpdateReviewState(requestCount = 5L, lastEventId = 21L),
+            nextAppUpdateReviewState(
                 restoredRequest = 4L,
+                restoredEventId = 20L,
                 intentAction = "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE",
+                intentEventId = 21L,
+            ),
+        )
+        assertEquals(
+            AppUpdateReviewState(requestCount = 4L, lastEventId = 21L),
+            nextAppUpdateReviewState(
+                restoredRequest = 4L,
+                restoredEventId = 21L,
+                intentAction = "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE",
+                intentEventId = 21L,
+            ),
+        )
+        assertEquals(
+            AppUpdateReviewState(requestCount = 4L, lastEventId = 20L),
+            nextAppUpdateReviewState(
+                restoredRequest = 4L,
+                restoredEventId = 20L,
+                intentAction = "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE",
+                intentEventId = null,
+            ),
+        )
+        assertEquals(
+            AppUpdateReviewState(requestCount = 1L, lastEventId = null),
+            nextAppUpdateReviewState(
+                restoredRequest = null,
+                restoredEventId = null,
+                intentAction = "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE",
+                intentEventId = null,
             ),
         )
         assertTrue(NOTIFICATION_ACTIVITY_FLAGS and Intent.FLAG_ACTIVITY_CLEAR_TOP != 0)

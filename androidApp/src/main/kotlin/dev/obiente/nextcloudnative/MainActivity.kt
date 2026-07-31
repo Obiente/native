@@ -22,6 +22,7 @@ import dev.obiente.nextcloudnative.app.ThemePreference
 
 class MainActivity : ComponentActivity() {
     private var appUpdateReviewRequest by mutableLongStateOf(0L)
+    private var lastAppUpdateReviewEventId: Long? = null
     private var platformCapabilityRefreshRequest by mutableLongStateOf(0L)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -29,10 +30,15 @@ class MainActivity : ComponentActivity() {
         val restoredAppUpdateReviewRequest = savedInstanceState
             ?.takeIf { it.containsKey(KEY_APP_UPDATE_REVIEW_REQUEST) }
             ?.getLong(KEY_APP_UPDATE_REVIEW_REQUEST)
-        appUpdateReviewRequest = initialAppUpdateReviewRequest(
+        val restoredAppUpdateReviewEventId = savedInstanceState
+            ?.takeIf { it.containsKey(KEY_APP_UPDATE_REVIEW_EVENT_ID) }
+            ?.getLong(KEY_APP_UPDATE_REVIEW_EVENT_ID)
+        applyAppUpdateReviewState(nextAppUpdateReviewState(
             restoredRequest = restoredAppUpdateReviewRequest,
+            restoredEventId = restoredAppUpdateReviewEventId,
             intentAction = intent?.action,
-        )
+            intentEventId = intent.appUpdateReviewEventId(),
+        ))
         SessionTestBootstrap.importIfPresent(applicationContext)
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         AndroidAppUpdateWork.schedule(
@@ -119,17 +125,29 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putLong(KEY_APP_UPDATE_REVIEW_REQUEST, appUpdateReviewRequest)
+        lastAppUpdateReviewEventId?.let { eventId ->
+            outState.putLong(KEY_APP_UPDATE_REVIEW_EVENT_ID, eventId)
+        }
         super.onSaveInstanceState(outState)
     }
 
     private fun receiveNotificationIntent(intent: Intent?) {
-        if (isAppUpdateReviewIntentAction(intent?.action)) {
-            appUpdateReviewRequest += 1
-        }
+        applyAppUpdateReviewState(nextAppUpdateReviewState(
+            restoredRequest = appUpdateReviewRequest,
+            restoredEventId = lastAppUpdateReviewEventId,
+            intentAction = intent?.action,
+            intentEventId = intent.appUpdateReviewEventId(),
+        ))
+    }
+
+    private fun applyAppUpdateReviewState(state: AppUpdateReviewState) {
+        appUpdateReviewRequest = state.requestCount
+        lastAppUpdateReviewEventId = state.lastEventId
     }
 
     private companion object {
         const val KEY_APP_UPDATE_REVIEW_REQUEST = "app-update-review-request"
+        const val KEY_APP_UPDATE_REVIEW_EVENT_ID = "app-update-review-event-id"
         val DarkWindowBackground = Color(0xFF0D0F13)
         val LightWindowBackground = Color(0xFFF7F6FA)
     }
@@ -138,5 +156,28 @@ class MainActivity : ComponentActivity() {
 internal fun isAppUpdateReviewIntentAction(action: String?): Boolean =
     action == "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE"
 
-internal fun initialAppUpdateReviewRequest(restoredRequest: Long?, intentAction: String?): Long =
-    restoredRequest ?: if (isAppUpdateReviewIntentAction(intentAction)) 1L else 0L
+internal data class AppUpdateReviewState(
+    val requestCount: Long,
+    val lastEventId: Long?,
+)
+
+internal fun nextAppUpdateReviewState(
+    restoredRequest: Long?,
+    restoredEventId: Long?,
+    intentAction: String?,
+    intentEventId: Long?,
+): AppUpdateReviewState {
+    val isReview = isAppUpdateReviewIntentAction(intentAction)
+    val isNewReview = isReview && when {
+        intentEventId != null -> intentEventId != restoredEventId
+        else -> restoredRequest == null
+    }
+    return AppUpdateReviewState(
+        requestCount = (restoredRequest ?: 0L) + if (isNewReview) 1L else 0L,
+        lastEventId = if (isNewReview && intentEventId != null) intentEventId else restoredEventId,
+    )
+}
+
+private fun Intent?.appUpdateReviewEventId(): Long? =
+    this?.takeIf { it.hasExtra(EXTRA_APP_UPDATE_REVIEW_EVENT_ID) }
+        ?.getLongExtra(EXTRA_APP_UPDATE_REVIEW_EVENT_ID, 0L)

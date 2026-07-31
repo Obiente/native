@@ -90,6 +90,7 @@ internal class AndroidAppUpdateNotifier(context: Context) {
                 id = APP_UPDATE_NOTIFICATION_ID,
                 accountKey = "device",
                 versionName = update.release.versionName,
+                versionCode = update.release.versionCode,
             ),
         )
         if (posted) preferences.edit().putLong(key, update.release.versionCode).apply()
