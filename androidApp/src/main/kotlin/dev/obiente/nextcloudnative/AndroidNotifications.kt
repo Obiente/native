@@ -173,6 +173,10 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
     }
 
     fun post(event: NextcloudNotificationEvent): Boolean {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) return false
         ensureChannels()
         val policy = event.notificationPolicy()
         if (!notificationDeliveryAllowed(context, policy.channelId)) return false
@@ -249,8 +253,12 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
                 .setContentText("Version ${event.versionName} is ready to review")
                 .setContentIntent(openAppIntent(ACTION_REVIEW_APP_UPDATE, event.id))
         }
-        NotificationManagerCompat.from(context).notify(event.accountKey, event.id, builder.build())
-        return true
+        return try {
+            NotificationManagerCompat.from(context).notify(event.accountKey, event.id, builder.build())
+            true
+        } catch (_: SecurityException) {
+            false
+        }
     }
 
     private fun openAppIntent(action: String, requestCode: Int): PendingIntent = PendingIntent.getActivity(
