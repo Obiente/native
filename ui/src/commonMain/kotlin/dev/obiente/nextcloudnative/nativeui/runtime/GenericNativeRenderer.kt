@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -28,6 +30,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -75,8 +78,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
@@ -106,6 +112,10 @@ import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputFieldSpec
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputRow
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputScalarKind
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputSpec
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import kotlinx.coroutines.delay
@@ -187,11 +197,23 @@ fun GenericNativeAppScreen(
     var pendingRecordFormActionToken by rememberSaveable(schema.app.id, view.id) {
         mutableStateOf<String?>(null)
     }
+    var pendingRecordCommandFormActionToken by rememberSaveable(schema.app.id, view.id) {
+        mutableStateOf<String?>(null)
+    }
     var pendingRecordDeleteAction by remember(schema, view.id) {
         mutableStateOf<PendingNativeRecordDeleteAction?>(null)
     }
     var pendingRecordCommandAction by remember(schema, view.id) {
         mutableStateOf<PendingNativeRecordCommandAction?>(null)
+    }
+    var pendingCollectionCommandActionId by rememberSaveable(schema.app.id, view.id) {
+        mutableStateOf<String?>(null)
+    }
+    var pendingCollectionBatchActionId by rememberSaveable(schema.app.id, view.id) {
+        mutableStateOf<String?>(null)
+    }
+    var pendingCollectionReorderActionId by rememberSaveable(schema.app.id, view.id) {
+        mutableStateOf<String?>(null)
     }
     val recordCommandsInFlight = remember(schema, view.id) { mutableSetOf<String>() }
     val recordCommandScope = rememberCoroutineScope()
@@ -230,6 +252,17 @@ fun GenericNativeAppScreen(
             recordId = record.id,
         ).encode()
     }
+    val openRecordCommandForm: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit =
+        commandForm@{ record, plan ->
+            if (formMutationRecovery?.blocksSubmission == true) return@commandForm
+            val actionResource = presentedResource ?: return@commandForm
+            pendingRecordCommandFormActionToken = RestorableNativeRecordFormAction(
+                actionId = plan.action.id,
+                resourceId = actionResource.id,
+                kind = NativeRecordFormActionKind.Edit,
+                recordId = record.id,
+            ).encode()
+        }
     val openRecordDelete: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit = { record, plan ->
         pendingRecordDeleteAction = PendingNativeRecordDeleteAction(
             plan = plan,
@@ -293,6 +326,78 @@ fun GenericNativeAppScreen(
             ).encode()
         }
     }
+    val collectionActionCapabilities = remember(
+        schema,
+        view.sourceActionId,
+        resource,
+        readyRecords,
+        datasetContext.bindingValues,
+        onLoadMore,
+        presentedSurface,
+        nestedBoard,
+        state is NativeScreenState.Ready,
+    ) {
+        val activeReadAction = schema.action(view.sourceActionId)
+        if (
+            state is NativeScreenState.Ready &&
+            resource != null &&
+            activeReadAction != null &&
+            nestedBoard == null &&
+            presentedSurface !in setOf(GenericNativeSurface.Detail, GenericNativeSurface.Form)
+        ) {
+            nativeCollectionActions(
+                schema = schema,
+                activeReadAction = activeReadAction,
+                resource = resource,
+                records = readyRecords,
+                navigationContext = datasetContext.bindingValues,
+                collectionComplete = onLoadMore == null,
+            )
+        } else {
+            NativeCollectionActionCapabilities(
+                commands = emptyList(),
+                reorder = null,
+                batches = emptyList(),
+            )
+        }
+    }
+    val collectionBatchPlans = collectionActionCapabilities.batches
+        .takeIf { readyRecords.isNotEmpty() }
+        .orEmpty()
+    val pendingCollectionCommandAction = pendingCollectionCommandActionId?.let { actionId ->
+        collectionActionCapabilities.commands.singleOrNull { plan -> plan.action.id == actionId }
+    }
+    val pendingCollectionBatchAction = pendingCollectionBatchActionId?.let { actionId ->
+        collectionBatchPlans.singleOrNull { plan -> plan.action.id == actionId }
+    }
+    val pendingCollectionReorderAction = pendingCollectionReorderActionId?.let { actionId ->
+        collectionActionCapabilities.reorder
+            ?.takeIf { plan -> plan.action.id == actionId }
+    }
+    LaunchedEffect(
+        pendingCollectionCommandActionId,
+        collectionActionCapabilities.commands.map { plan -> plan.action.id },
+    ) {
+        if (pendingCollectionCommandActionId != null && pendingCollectionCommandAction == null) {
+            pendingCollectionCommandActionId = null
+        }
+    }
+    LaunchedEffect(
+        pendingCollectionBatchActionId,
+        collectionBatchPlans.map { plan -> plan.action.id },
+    ) {
+        if (pendingCollectionBatchActionId != null && pendingCollectionBatchAction == null) {
+            pendingCollectionBatchActionId = null
+        }
+    }
+    LaunchedEffect(
+        pendingCollectionReorderActionId,
+        collectionActionCapabilities.reorder?.action?.id,
+    ) {
+        if (pendingCollectionReorderActionId != null && pendingCollectionReorderAction == null) {
+            pendingCollectionReorderActionId = null
+        }
+    }
     val pendingRecordFormAction = pendingRecordFormActionToken
         ?.let(::decodeRestorableNativeRecordFormAction)
         ?.let pending@{ saved ->
@@ -311,6 +416,7 @@ fun GenericNativeAppScreen(
                 resource = actionResource,
                 record = record,
                 navigationContext = datasetContext.bindingValues,
+                authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
             ).let { capabilities ->
                 when (saved.kind) {
                     NativeRecordFormActionKind.Create -> capabilities.create
@@ -337,8 +443,56 @@ fun GenericNativeAppScreen(
                 mutationRecoveryOwner = mutationRecoveryOwner,
             )
         }
+    val pendingRecordCommandFormAction = pendingRecordCommandFormActionToken
+        ?.let(::decodeRestorableNativeRecordFormAction)
+        ?.let pending@{ saved ->
+            val actionResource = presentedResource
+                ?.takeIf { resourceSpec -> resourceSpec.id == saved.resourceId }
+                ?: schema.resource(saved.resourceId)
+                ?: return@pending null
+            val recordId = saved.recordId ?: return@pending null
+            val record = presentedRecords.firstOrNull { candidate -> candidate.id == recordId }
+                ?: return@pending null
+            val plan = nativeRecordActions(
+                schema = schema,
+                resource = actionResource,
+                record = record,
+                navigationContext = datasetContext.bindingValues,
+                authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
+            ).commandForms.singleOrNull { candidate -> candidate.action.id == saved.actionId }
+                ?: return@pending null
+            val mutationRecoveryOwner = nativeFormMutationRecoveryOwner(
+                appId = schema.app.id,
+                viewId = view.id,
+                actionId = plan.action.id,
+                resourceId = actionResource.id,
+                intent = plan.action.intent,
+                recordId = record.id,
+            ) ?: return@pending null
+            PendingNativeRecordCommandFormAction(
+                plan = plan,
+                itemLabel = nativeRecordPresentation(actionResource, record).title,
+                resource = schema.resource(plan.action.resourceId) ?: return@pending null,
+                datasetContext = datasetContext,
+                restoreKey = pendingRecordCommandFormActionToken.orEmpty(),
+                mutationRecoveryOwner = mutationRecoveryOwner,
+            )
+        }
+    val persistentCollectionCreate = openCollectionCreate?.takeIf {
+        state is NativeScreenState.Ready &&
+            presentedRecords.isNotEmpty() &&
+            presentedSurface in setOf(
+                GenericNativeSurface.List,
+                GenericNativeSurface.Grid,
+                GenericNativeSurface.Table,
+            )
+    }
     Surface(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .semantics {
+                contentDescription = "Dynamic surface action ${view.sourceActionId}"
+            },
         color = MaterialTheme.colorScheme.background,
         contentColor = MaterialTheme.colorScheme.onBackground,
     ) {
@@ -362,7 +516,10 @@ fun GenericNativeAppScreen(
                     executor = actionExecutor,
                     filePicker = filePicker,
                     onActionSucceeded = onActionSucceeded,
-                    onActionOutcomeUnknown = inlineActionSucceeded,
+                    // A standalone form has no authoritative collection to refresh in place.
+                    // Return to its caller so that surface can reload and verify an ambiguous
+                    // mutation result before the user retries it.
+                    onActionOutcomeUnknown = onActionSucceeded,
                     mutationReconciliationGeneration = mutationReconciliationGeneration,
                 )
             state is NativeScreenState.Ready &&
@@ -370,6 +527,7 @@ fun GenericNativeAppScreen(
                 view.compositeDataGrid == null &&
                 nestedBoard == null -> {
                 GenericRendererEmpty(
+                    resourceId = presentedResource.id,
                     resourceName = presentedResource.name,
                     createLabel = collectionCreatePlan?.action?.label,
                     onCreate = openCollectionCreate,
@@ -387,6 +545,7 @@ fun GenericNativeAppScreen(
                     onEditRecord = openRecordEdit,
                     onDeleteRecord = openRecordDelete,
                     onCommandRecord = executeRecordCommand,
+                    onCommandFormRecord = openRecordCommandForm,
                     imageLoader = imageLoader,
                 )
                 GenericNativeSurface.Grid -> GenericRecordGrid(presentedResource, presentedRecords, onSelectRecord)
@@ -444,32 +603,27 @@ fun GenericNativeAppScreen(
                 GenericNativeSurface.Form -> Unit
             }
             }
-                if (
-                    state is NativeScreenState.Ready &&
-                    presentedRecords.isNotEmpty() &&
-                    showCollectionCreateAction &&
-                    presentedSurface in setOf(
-                        GenericNativeSurface.List,
-                        GenericNativeSurface.Grid,
-                        GenericNativeSurface.Table,
-                    ) &&
-                    openCollectionCreate != null
-                ) {
-                    Button(
-                        onClick = openCollectionCreate,
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(NextcloudSpacing.Large)
-                            .heightIn(min = 48.dp),
-                    ) {
-                        Icon(
-                            NextcloudIcons.Add,
-                            contentDescription = collectionCreatePlan.action.label,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Text("Create", modifier = Modifier.padding(start = NextcloudSpacing.Small))
-                    }
-                }
+            }
+            if (
+                state is NativeScreenState.Ready &&
+                (
+                    persistentCollectionCreate != null ||
+                    collectionActionCapabilities.commands.isNotEmpty() ||
+                        collectionBatchPlans.isNotEmpty() ||
+                        collectionActionCapabilities.reorder != null
+                    )
+            ) {
+                GenericCollectionActionBar(
+                    resourceId = requireNotNull(resource).id,
+                    createLabel = collectionCreatePlan?.action?.label,
+                    onCreate = persistentCollectionCreate,
+                    commands = collectionActionCapabilities.commands,
+                    batches = collectionBatchPlans,
+                    reorder = collectionActionCapabilities.reorder,
+                    onCommand = { plan -> pendingCollectionCommandActionId = plan.action.id },
+                    onBatch = { plan -> pendingCollectionBatchActionId = plan.action.id },
+                    onReorder = { plan -> pendingCollectionReorderActionId = plan.action.id },
+                )
             }
             if (state is NativeScreenState.Ready && onLoadMore != null) {
                 Surface(
@@ -509,10 +663,11 @@ fun GenericNativeAppScreen(
         }
     }
     pendingRecordFormAction?.let { pending ->
-        GenericRecordFormActionDialog(
+        GenericRecordActionFormDialog(
             pending = pending,
             schema = schema,
             actionExecutor = actionExecutor,
+            filePicker = filePicker,
             mutationRecovery = formMutationRecovery,
             onMutationStarted = { owner ->
                 activeFormMutationOwners += owner
@@ -531,6 +686,34 @@ fun GenericNativeAppScreen(
             onDismiss = { pendingRecordFormActionToken = null },
             onActionSucceeded = { action ->
                 pendingRecordFormActionToken = null
+                inlineActionSucceeded?.invoke(action)
+            },
+        )
+    }
+    pendingRecordCommandFormAction?.let { pending ->
+        GenericRecordActionFormDialog(
+            pending = pending,
+            schema = schema,
+            actionExecutor = actionExecutor,
+            filePicker = filePicker,
+            mutationRecovery = formMutationRecovery,
+            onMutationStarted = { owner ->
+                activeFormMutationOwners += owner
+                formMutationRecoveryToken = owner.begin(mutationReconciliationGeneration).encode()
+            },
+            onMutationFinished = { owner, result ->
+                activeFormMutationOwners -= owner
+                val current = decodeNativeFormMutationRecoveryState(formMutationRecoveryToken)
+                if (current?.owner == owner) {
+                    formMutationRecoveryToken = current.afterExecutionResult(
+                        result = result,
+                        currentReconciliationGeneration = mutationReconciliationGeneration,
+                    )?.encode()
+                }
+            },
+            onDismiss = { pendingRecordCommandFormActionToken = null },
+            onActionSucceeded = { action ->
+                pendingRecordCommandFormActionToken = null
                 inlineActionSucceeded?.invoke(action)
             },
         )
@@ -563,16 +746,865 @@ fun GenericNativeAppScreen(
             },
         )
     }
+    pendingCollectionCommandAction?.let { plan ->
+        GenericCollectionCommandDialog(
+            plan = plan,
+            resourceName = resource?.name ?: view.title,
+            resourceId = requireNotNull(resource).id,
+            actionExecutor = actionExecutor,
+            onDismiss = { pendingCollectionCommandActionId = null },
+            onActionSucceeded = { action ->
+                pendingCollectionCommandActionId = null
+                inlineActionSucceeded?.invoke(action)
+            },
+            onOutcomeUnknown = { action ->
+                inlineActionSucceeded?.invoke(action)
+            },
+        )
+    }
+    pendingCollectionBatchAction?.let { plan ->
+        GenericCollectionBatchDialog(
+            plan = plan,
+            resource = requireNotNull(resource),
+            records = readyRecords,
+            schema = schema,
+            datasetContext = datasetContext,
+            actionExecutor = actionExecutor,
+            onDismiss = { pendingCollectionBatchActionId = null },
+            onActionSucceeded = { action ->
+                pendingCollectionBatchActionId = null
+                inlineActionSucceeded?.invoke(action)
+            },
+            onOutcomeUnknown = { action ->
+                inlineActionSucceeded?.invoke(action)
+            },
+        )
+    }
+    pendingCollectionReorderAction?.let { plan ->
+        GenericCollectionReorderDialog(
+            plan = plan,
+            resource = requireNotNull(resource),
+            records = readyRecords,
+            actionExecutor = actionExecutor,
+            onDismiss = { pendingCollectionReorderActionId = null },
+            onActionSucceeded = { action ->
+                pendingCollectionReorderActionId = null
+                inlineActionSucceeded?.invoke(action)
+            },
+            onOutcomeUnknown = { action ->
+                inlineActionSucceeded?.invoke(action)
+            },
+        )
+    }
+}
+
+@Composable
+private fun GenericCollectionActionBar(
+    resourceId: String,
+    createLabel: String?,
+    onCreate: (() -> Unit)?,
+    commands: List<NativeCollectionCommandActionPlan>,
+    batches: List<NativeCollectionBatchActionPlan>,
+    reorder: NativeCollectionReorderActionPlan?,
+    onCommand: (NativeCollectionCommandActionPlan) -> Unit,
+    onBatch: (NativeCollectionBatchActionPlan) -> Unit,
+    onReorder: (NativeCollectionReorderActionPlan) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val hasSecondaryActions = commands.isNotEmpty() || batches.isNotEmpty() || reorder != null
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        BoxWithConstraints {
+            val compactActions = maxWidth < 520.dp
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
+                horizontalArrangement = Arrangement.spacedBy(
+                    NextcloudSpacing.Small,
+                    alignment = Alignment.End,
+                ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                onCreate?.let { create ->
+                    Button(
+                        onClick = create,
+                        modifier = Modifier
+                            .then(
+                                when {
+                                    hasSecondaryActions -> Modifier.weight(1f)
+                                    else -> Modifier.fillMaxWidth()
+                                },
+                            )
+                            .heightIn(min = 48.dp)
+                            .semantics {
+                                contentDescription = "Create $resourceId"
+                            },
+                    ) {
+                        Icon(NextcloudIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text(
+                            createLabel?.takeIf(String::isNotBlank) ?: "Create item",
+                            modifier = Modifier.padding(start = NextcloudSpacing.Small),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (hasSecondaryActions) Box {
+                    OutlinedButton(
+                        onClick = { expanded = true },
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .semantics {
+                                contentDescription = "Open collection actions for $resourceId"
+                            },
+                    ) {
+                        Icon(
+                            NextcloudIcons.More,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        if (!compactActions) {
+                            Text(
+                                "More actions",
+                                modifier = Modifier.padding(start = NextcloudSpacing.Small),
+                            )
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                        modifier = Modifier.semantics {
+                            contentDescription = "Collection actions for $resourceId"
+                        },
+                    ) {
+                        commands.forEach { plan ->
+                            DropdownMenuItem(
+                                modifier = Modifier.semantics(mergeDescendants = true) {
+                                    contentDescription = "Run collection action ${plan.action.id}"
+                                },
+                                text = {
+                                    Text(
+                                        plan.action.label,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                },
+                                onClick = {
+                                    expanded = false
+                                    onCommand(plan)
+                                },
+                            )
+                        }
+                        batches.forEach { plan ->
+                            DropdownMenuItem(
+                                modifier = Modifier.semantics(mergeDescendants = true) {
+                                    contentDescription = "Open batch action ${plan.action.id}"
+                                },
+                                text = {
+                                    Text(
+                                        plan.action.label,
+                                        color = if (plan.action.risk == ActionRisk.destructive) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        },
+                                    )
+                                },
+                                onClick = {
+                                    expanded = false
+                                    onBatch(plan)
+                                },
+                            )
+                        }
+                        reorder?.let { plan ->
+                            DropdownMenuItem(
+                                modifier = Modifier.semantics(mergeDescendants = true) {
+                                    contentDescription = "Reorder collection for $resourceId"
+                                },
+                                text = { Text(plan.action.label) },
+                                onClick = {
+                                    expanded = false
+                                    onReorder(plan)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GenericCollectionCommandDialog(
+    plan: NativeCollectionCommandActionPlan,
+    resourceName: String,
+    resourceId: String,
+    actionExecutor: NativeActionExecutor,
+    onDismiss: () -> Unit,
+    onActionSucceeded: (ActionSpec) -> Unit,
+    onOutcomeUnknown: (ActionSpec) -> Unit,
+) {
+    var error by remember(plan.action.id) { mutableStateOf<String?>(null) }
+    var failureOutcome by remember(plan.action.id) {
+        mutableStateOf<NativeActionFailureOutcome?>(null)
+    }
+    var executing by remember(plan.action.id) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val outcomeUnknown = failureOutcome?.requiresMutationReconciliation() == true
+
+    AlertDialog(
+        onDismissRequest = { if (!executing) onDismiss() },
+        title = {
+            Text(
+                if (outcomeUnknown) {
+                    "${plan.action.label} result unknown"
+                } else {
+                    "${plan.action.label} $resourceName?"
+                },
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+                Text(
+                    "This changes the entire collection and cannot be undone. Continue?",
+                )
+                error?.let { message ->
+                    Text(
+                        message,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (outcomeUnknown) {
+                    Text(
+                        "The collection is being refreshed to check the server result. " +
+                            "Review the refreshed data before trying this action again.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !executing, onClick = onDismiss) {
+                Text(if (outcomeUnknown) "Close" else "Cancel")
+            }
+        },
+        confirmButton = {
+            if (!outcomeUnknown) {
+                Button(
+                    enabled = !executing,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Confirm collection action ${plan.action.id} for $resourceId"
+                    },
+                    onClick = {
+                        val request = runCatching {
+                            plan.request(confirmed = true)
+                        }.getOrElse { failure ->
+                            error = failure.message ?: "The collection action could not be submitted."
+                            return@Button
+                        }
+                        executing = true
+                        error = null
+                        failureOutcome = null
+                        scope.launch {
+                            when (val result = actionExecutor.execute(request)) {
+                                is NativeActionExecutionResult.Success ->
+                                    onActionSucceeded(plan.action)
+                                is NativeActionExecutionResult.Failure -> {
+                                    error = result.message
+                                    failureOutcome = result.outcome
+                                    if (result.outcome.requiresMutationReconciliation()) {
+                                        onOutcomeUnknown(plan.action)
+                                    }
+                                }
+                            }
+                            executing = false
+                        }
+                    },
+                ) {
+                    if (executing) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text(plan.action.label)
+                    }
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun GenericCollectionBatchDialog(
+    plan: NativeCollectionBatchActionPlan,
+    resource: ResourceSpec,
+    records: List<NativeRecord>,
+    schema: NativeAppSchema,
+    datasetContext: NativeDatasetContext,
+    actionExecutor: NativeActionExecutor,
+    onDismiss: () -> Unit,
+    onActionSucceeded: (ActionSpec) -> Unit,
+    onOutcomeUnknown: (ActionSpec) -> Unit,
+) {
+    val recordIds = remember(records) { records.map(NativeRecord::id) }
+    var selectedRecordIds by remember(plan.action.id, recordIds) {
+        mutableStateOf(emptyList<String>())
+    }
+    var values by remember(plan.action.id) {
+        mutableStateOf(initialNativeCollectionBatchDraft(plan.fields))
+    }
+    var error by remember(plan.action.id) { mutableStateOf<String?>(null) }
+    var failureOutcome by remember(plan.action.id) {
+        mutableStateOf<NativeActionFailureOutcome?>(null)
+    }
+    var awaitingConfirmation by remember(plan.action.id) { mutableStateOf(false) }
+    var executing by remember(plan.action.id) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val outcomeUnknown = failureOutcome?.requiresMutationReconciliation() == true
+
+    fun request(confirmed: Boolean): NativeActionRequest.Submit? = runCatching {
+        plan.request(
+            selectedRecordIds = selectedRecordIds,
+            values = nativeCollectionBatchRequestValues(plan.fields, values),
+            confirmed = confirmed,
+        )
+    }.getOrElse { failure ->
+        error = failure.message ?: "The selected items could not be submitted."
+        null
+    }
+
+    fun submit(confirmed: Boolean) {
+        val actionRequest = request(confirmed) ?: return
+        executing = true
+        error = null
+        failureOutcome = null
+        scope.launch {
+            when (val result = actionExecutor.execute(actionRequest)) {
+                is NativeActionExecutionResult.Success -> onActionSucceeded(plan.action)
+                is NativeActionExecutionResult.Failure -> {
+                    error = result.message
+                    failureOutcome = result.outcome
+                    awaitingConfirmation = false
+                    if (result.outcome.requiresMutationReconciliation()) {
+                        onOutcomeUnknown(plan.action)
+                    }
+                }
+            }
+            executing = false
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!executing) onDismiss() },
+        title = {
+            Text(
+                when {
+                    outcomeUnknown -> "${plan.action.label} result unknown"
+                    awaitingConfirmation -> "Confirm ${plan.action.label.lowercase()}"
+                    else -> plan.action.label
+                },
+            )
+        },
+        text = {
+            if (awaitingConfirmation) {
+                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+                    Text(
+                        "${plan.action.label} will change ${selectedRecordIds.size} selected " +
+                            "${if (selectedRecordIds.size == 1) "item" else "items"}. Continue?",
+                    )
+                    if (plan.action.risk == ActionRisk.destructive) {
+                        Text(
+                            "This action changes server data and may not be reversible.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    error?.let { message ->
+                        Text(
+                            message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                ) {
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column {
+                                Text(
+                                    "${selectedRecordIds.size} of ${plan.maximumSelectionSize} selected",
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                                if (plan.minimumSelectionSize > 1) {
+                                    Text(
+                                        "Select at least ${plan.minimumSelectionSize}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            Row {
+                                TextButton(
+                                    enabled = !executing && selectedRecordIds.isNotEmpty(),
+                                    onClick = {
+                                        selectedRecordIds = emptyList()
+                                        error = null
+                                    },
+                                ) {
+                                    Text("Clear")
+                                }
+                                TextButton(
+                                    enabled = !executing && selectedRecordIds.size < minOf(
+                                        recordIds.size,
+                                        plan.maximumSelectionSize,
+                                    ),
+                                    onClick = {
+                                        selectedRecordIds = recordIds.take(plan.maximumSelectionSize)
+                                        error = null
+                                    },
+                                ) {
+                                    Text(
+                                        if (recordIds.size <= plan.maximumSelectionSize) {
+                                            "Select all"
+                                        } else {
+                                            "Select ${plan.maximumSelectionSize}"
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    items(records, key = NativeRecord::id) { record ->
+                        val selected = record.id in selectedRecordIds
+                        val canToggle = selected ||
+                            selectedRecordIds.size < plan.maximumSelectionSize
+                        val itemLabel = nativeRecordPresentation(resource, record).title
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .semantics {
+                                    contentDescription = "Select $itemLabel"
+                                }
+                                .clickable(enabled = canToggle && !executing) {
+                                    selectedRecordIds = toggleNativeCollectionSelection(
+                                        selectedRecordIds = selectedRecordIds,
+                                        recordId = record.id,
+                                        availableRecordIds = recordIds,
+                                        maximumSelectionSize = plan.maximumSelectionSize,
+                                    )
+                                    error = null
+                                }
+                                .padding(horizontal = NextcloudSpacing.Small),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = selected,
+                                enabled = canToggle && !executing,
+                                onCheckedChange = null,
+                            )
+                            Text(
+                                itemLabel,
+                                modifier = Modifier.padding(start = NextcloudSpacing.Small),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    items(plan.fields, key = NativeCollectionBatchInputField::id) { field ->
+                        val rendererField = field.toNativeCollectionFieldSpec()
+                        val relationship = remember(field, rendererField, resource, schema) {
+                            nativeRelationRelationship(rendererField, resource, schema)
+                                ?.takeIf { relation ->
+                                    relation.parentResourceId == field.relatedResourceId
+                                }
+                        }
+                        if (relationship != null) {
+                            val relatedResourceId = requireNotNull(field.relatedResourceId)
+                            val relationOptions = nativeRelationOptions(
+                                field = rendererField,
+                                formResource = resource,
+                                schema = schema,
+                                context = datasetContext,
+                            )
+                            GenericRelationshipField(
+                                field = rendererField,
+                                value = values[field.id].orEmpty(),
+                                options = relationOptions,
+                                choicesLoaded = datasetContext.relatedRecords.containsKey(relatedResourceId),
+                                choiceSourceHasRecords =
+                                    datasetContext.relatedRecords[relatedResourceId].orEmpty().isNotEmpty(),
+                                choiceUnavailableReason = nativeRelationChoiceUnavailableReason(
+                                    rendererField,
+                                    resource,
+                                    schema,
+                                    datasetContext,
+                                ),
+                                paging = datasetContext.relatedRecordPaging[relatedResourceId],
+                                error = null,
+                                enabled = !executing && !outcomeUnknown,
+                                onValueChange = { value ->
+                                    values = values + (field.id to value)
+                                    error = null
+                                },
+                            )
+                        } else {
+                            GenericFormField(
+                                field = rendererField,
+                                value = values[field.id].orEmpty(),
+                                error = null,
+                                enabled = !executing && !outcomeUnknown,
+                                filePicker = null,
+                                onValueChange = { value ->
+                                    values = values + (field.id to value)
+                                    error = null
+                                },
+                            )
+                        }
+                    }
+                    error?.let { message ->
+                        item {
+                            Text(
+                                message,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                    if (outcomeUnknown) {
+                        item {
+                            Text(
+                                "The collection is being refreshed to check the server result. " +
+                                    "Review the refreshed data before trying this action again.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                enabled = !executing,
+                onClick = {
+                    if (awaitingConfirmation) {
+                        awaitingConfirmation = false
+                        error = null
+                    } else {
+                        onDismiss()
+                    }
+                },
+            ) {
+                Text(
+                    when {
+                        outcomeUnknown -> "Close"
+                        awaitingConfirmation -> "Back"
+                        else -> "Cancel"
+                    },
+                )
+            }
+        },
+        confirmButton = {
+            if (!outcomeUnknown) {
+                Button(
+                    enabled = !executing,
+                    modifier = Modifier.semantics {
+                        contentDescription = if (awaitingConfirmation) {
+                            "Confirm batch action ${plan.action.id} for ${resource.id}"
+                        } else {
+                            "Submit batch action ${plan.action.id} for ${resource.id}"
+                        }
+                    },
+                    onClick = {
+                        when {
+                            awaitingConfirmation -> submit(confirmed = true)
+                            plan.requiresConfirmation -> {
+                                if (request(confirmed = true) != null) {
+                                    error = null
+                                    awaitingConfirmation = true
+                                }
+                            }
+                            else -> submit(confirmed = false)
+                        }
+                    },
+                ) {
+                    if (executing) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text(if (awaitingConfirmation) "Confirm" else plan.action.label)
+                    }
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun GenericCollectionReorderDialog(
+    plan: NativeCollectionReorderActionPlan,
+    resource: ResourceSpec,
+    records: List<NativeRecord>,
+    actionExecutor: NativeActionExecutor,
+    onDismiss: () -> Unit,
+    onActionSucceeded: (ActionSpec) -> Unit,
+    onOutcomeUnknown: (ActionSpec) -> Unit,
+) {
+    val recordsById = remember(records) { records.associateBy(NativeRecord::id) }
+    val initialOrder = remember(records) { records.map(NativeRecord::id) }
+    var orderedRecordIds by remember(plan.action.id, initialOrder) {
+        mutableStateOf(initialOrder)
+    }
+    var error by remember(plan.action.id) { mutableStateOf<String?>(null) }
+    var failureOutcome by remember(plan.action.id) {
+        mutableStateOf<NativeActionFailureOutcome?>(null)
+    }
+    var executing by remember(plan.action.id) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val outcomeUnknown = failureOutcome?.requiresMutationReconciliation() == true
+
+    AlertDialog(
+        onDismissRequest = { if (!executing) onDismiss() },
+        title = {
+            Text(
+                if (outcomeUnknown) {
+                    "${plan.action.label} result unknown"
+                } else {
+                    plan.action.label
+                },
+            )
+        },
+        text = {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp)
+                    .semantics {
+                        contentDescription = "Reorder collection list for ${resource.id}"
+                    },
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+            ) {
+                item {
+                    Text(
+                        "Move every item into the required order, then save.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                itemsIndexed(
+                    items = orderedRecordIds,
+                    key = { _, recordId -> recordId },
+                ) { index, recordId ->
+                    val record = recordsById[recordId] ?: return@itemsIndexed
+                    val itemLabel = nativeRecordPresentation(resource, record).title
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(NextcloudRadii.Card),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(NextcloudSpacing.Small),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "${index + 1}. $itemLabel",
+                                modifier = Modifier.weight(1f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            TextButton(
+                                enabled = !executing && index > 0,
+                                modifier = Modifier.semantics {
+                                    contentDescription = "Move $itemLabel up"
+                                },
+                                onClick = {
+                                    orderedRecordIds = moveNativeCollectionRecord(
+                                        orderedRecordIds = orderedRecordIds,
+                                        recordId = recordId,
+                                        offset = -1,
+                                    )
+                                    error = null
+                                },
+                            ) {
+                                Text("Up")
+                            }
+                            TextButton(
+                                enabled = !executing && index < orderedRecordIds.lastIndex,
+                                modifier = Modifier.semantics {
+                                    contentDescription = "Move $itemLabel down"
+                                },
+                                onClick = {
+                                    orderedRecordIds = moveNativeCollectionRecord(
+                                        orderedRecordIds = orderedRecordIds,
+                                        recordId = recordId,
+                                        offset = 1,
+                                    )
+                                    error = null
+                                },
+                            ) {
+                                Text("Down")
+                            }
+                        }
+                    }
+                }
+                error?.let { message ->
+                    item {
+                        Text(
+                            message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                if (outcomeUnknown) {
+                    item {
+                        Text(
+                            "The collection is being refreshed to check the server result. " +
+                                "Review the refreshed order before trying this action again.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !executing, onClick = onDismiss) {
+                Text(if (outcomeUnknown) "Close" else "Cancel")
+            }
+        },
+        confirmButton = {
+            if (!outcomeUnknown) {
+                Button(
+                    enabled = !executing && orderedRecordIds != initialOrder,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Save reordered collection ${resource.id}"
+                    },
+                    onClick = {
+                        val request = runCatching {
+                            plan.requestInOrder(orderedRecordIds)
+                        }.getOrElse { failure ->
+                            error = failure.message ?: "The new order could not be submitted."
+                            return@Button
+                        }
+                        executing = true
+                        error = null
+                        failureOutcome = null
+                        scope.launch {
+                            when (val result = actionExecutor.execute(request)) {
+                                is NativeActionExecutionResult.Success ->
+                                    onActionSucceeded(plan.action)
+                                is NativeActionExecutionResult.Failure -> {
+                                    error = result.message
+                                    failureOutcome = result.outcome
+                                    if (result.outcome.requiresMutationReconciliation()) {
+                                        onOutcomeUnknown(plan.action)
+                                    }
+                                }
+                            }
+                            executing = false
+                        }
+                    },
+                ) {
+                    if (executing) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Save order")
+                    }
+                }
+            }
+        },
+    )
+}
+
+private sealed interface PendingNativeRecordActionForm {
+    val action: ActionSpec
+    val fields: List<FieldSpec>
+    val initialValues: Map<String, String>
+    val itemLabel: String
+    val resource: ResourceSpec
+    val datasetContext: NativeDatasetContext
+    val restoreKey: String
+    val mutationRecoveryOwner: NativeFormMutationRecoveryOwner
+    val operationLabel: String
+
+    fun request(
+        scalarInputValues: Map<String, String>,
+        repeatableObjectValues: Map<String, List<RepeatableObjectInputRow>>,
+        confirmed: Boolean,
+    ): NativeActionRequest.Submit
 }
 
 private data class PendingNativeRecordFormAction(
     val plan: NativeRecordFormActionPlan,
-    val itemLabel: String,
-    val resource: ResourceSpec,
-    val datasetContext: NativeDatasetContext,
-    val restoreKey: String,
-    val mutationRecoveryOwner: NativeFormMutationRecoveryOwner,
-)
+    override val itemLabel: String,
+    override val resource: ResourceSpec,
+    override val datasetContext: NativeDatasetContext,
+    override val restoreKey: String,
+    override val mutationRecoveryOwner: NativeFormMutationRecoveryOwner,
+) : PendingNativeRecordActionForm {
+    override val action: ActionSpec
+        get() = plan.action
+    override val fields: List<FieldSpec>
+        get() = plan.fields
+    override val initialValues: Map<String, String>
+        get() = plan.initialValues
+    override val operationLabel: String
+        get() = when (plan.kind) {
+            NativeRecordFormActionKind.Create -> "Create"
+            NativeRecordFormActionKind.Edit -> "Edit"
+        }
+
+    override fun request(
+        scalarInputValues: Map<String, String>,
+        repeatableObjectValues: Map<String, List<RepeatableObjectInputRow>>,
+        confirmed: Boolean,
+    ): NativeActionRequest.Submit = plan.requestWithStructuredInput(
+        scalarInputValues = scalarInputValues,
+        repeatableObjectValues = repeatableObjectValues,
+        confirmed = confirmed,
+    )
+}
+
+private data class PendingNativeRecordCommandFormAction(
+    val plan: NativeRecordCommandFormActionPlan,
+    override val itemLabel: String,
+    override val resource: ResourceSpec,
+    override val datasetContext: NativeDatasetContext,
+    override val restoreKey: String,
+    override val mutationRecoveryOwner: NativeFormMutationRecoveryOwner,
+) : PendingNativeRecordActionForm {
+    override val action: ActionSpec
+        get() = plan.action
+    override val fields: List<FieldSpec>
+        get() = plan.fields
+    override val initialValues: Map<String, String>
+        get() = plan.initialValues
+    override val operationLabel: String
+        get() = plan.action.label
+
+    override fun request(
+        scalarInputValues: Map<String, String>,
+        repeatableObjectValues: Map<String, List<RepeatableObjectInputRow>>,
+        confirmed: Boolean,
+    ): NativeActionRequest.Submit = plan.requestWithStructuredInput(
+        scalarInputValues = scalarInputValues,
+        repeatableObjectValues = repeatableObjectValues,
+        confirmed = confirmed,
+    )
+}
 
 internal data class RestorableNativeRecordFormAction(
     val actionId: String,
@@ -676,6 +1708,13 @@ private fun nativeRecordFormDraftSaver(declaredFieldIds: Set<String>) = Saver<Ma
     },
 )
 
+private fun nativeRepeatableObjectDraftSaver(
+    specs: Map<String, RepeatableObjectInputSpec>,
+) = Saver<Map<String, List<RepeatableObjectInputRow>>, List<String>>(
+    save = { draft -> encodeNativeRepeatableObjectDraft(draft, specs) },
+    restore = { saved -> decodeNativeRepeatableObjectDraft(saved, specs) },
+)
+
 private const val MAX_SAVED_FORM_FIELDS = 64
 private const val MAX_SAVED_FORM_ID_LENGTH = 256
 private const val MAX_SAVED_FORM_VALUE_LENGTH = 64 * 1024
@@ -695,36 +1734,80 @@ private data class PendingNativeRecordCommandAction(
 )
 
 @Composable
-private fun GenericRecordFormActionDialog(
-    pending: PendingNativeRecordFormAction,
+private fun GenericRecordActionFormDialog(
+    pending: PendingNativeRecordActionForm,
     schema: NativeAppSchema,
     actionExecutor: NativeActionExecutor,
+    filePicker: NativeFileFieldPicker?,
     mutationRecovery: NativeFormMutationRecoveryState?,
     onMutationStarted: (NativeFormMutationRecoveryOwner) -> Unit,
     onMutationFinished: (NativeFormMutationRecoveryOwner, NativeActionExecutionResult) -> Unit,
     onDismiss: () -> Unit,
     onActionSucceeded: (ActionSpec) -> Unit,
 ) {
-    val plan = pending.plan
-    val draftSaver = remember(plan.fields) {
-        nativeRecordFormDraftSaver(plan.fields.mapTo(linkedSetOf(), FieldSpec::id))
+    val scalarFields = remember(pending.fields) {
+        pending.fields.filter { field -> field.repeatableObjectInput == null }
+    }
+    val displayFields = remember(pending.fields, pending.resource, schema) {
+        nativeFormDisplayFields(
+            fields = pending.fields,
+            relationFieldIds = pending.fields
+                .filter { field -> nativeRelationFieldRequiresChoice(field, pending.resource, schema) }
+                .mapTo(linkedSetOf(), FieldSpec::id),
+        )
+    }
+    val structuredSpecs = remember(pending.fields) {
+        pending.fields.mapNotNull { field ->
+            field.repeatableObjectInput?.let { spec -> field.id to spec }
+        }.toMap()
+    }
+    val draftSaver = remember(scalarFields) {
+        nativeRecordFormDraftSaver(scalarFields.mapTo(linkedSetOf(), FieldSpec::id))
     }
     var values by rememberSaveable(pending.restoreKey, stateSaver = draftSaver) {
-        mutableStateOf(plan.initialValues)
+        mutableStateOf(
+            pending.initialValues.filterKeys { fieldId ->
+                fieldId !in structuredSpecs
+            },
+        )
     }
-    var error by remember(pending) { mutableStateOf<String?>(null) }
+    val initialStructuredDraft = remember(pending.restoreKey, structuredSpecs, pending.initialValues) {
+        initialNativeRepeatableObjectDraft(pending.fields, pending.initialValues)
+    }
+    val emptyStructuredDraft = remember(pending.restoreKey, structuredSpecs) {
+        requireNotNull(initialNativeRepeatableObjectDraft(pending.fields, emptyMap()))
+    }
+    val structuredDraftSaver = remember(structuredSpecs) {
+        nativeRepeatableObjectDraftSaver(structuredSpecs)
+    }
+    var repeatableObjectValues by rememberSaveable(
+        "${pending.restoreKey}:structured",
+        stateSaver = structuredDraftSaver,
+    ) {
+        mutableStateOf(initialStructuredDraft ?: emptyStructuredDraft)
+    }
+    var structuredDraftSafe by rememberSaveable(pending.restoreKey) {
+        mutableStateOf(initialStructuredDraft != null)
+    }
+    var error by remember(pending) {
+        mutableStateOf(
+            if (initialStructuredDraft == null) {
+                "The existing structured value could not be edited safely."
+            } else {
+                null
+            },
+        )
+    }
     var awaitingConfirmation by rememberSaveable(pending.restoreKey) { mutableStateOf(false) }
     var submitting by remember(pending) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val operation = when (plan.kind) {
-        NativeRecordFormActionKind.Create -> "Create"
-        NativeRecordFormActionKind.Edit -> "Edit"
-    }
+    val operation = pending.operationLabel
 
     fun submit(confirmed: Boolean) {
         val request = runCatching {
-            plan.request(
-                inputValues = values,
+            pending.request(
+                scalarInputValues = values,
+                repeatableObjectValues = repeatableObjectValues,
                 confirmed = confirmed,
             )
         }.getOrElse { failure ->
@@ -738,7 +1821,7 @@ private fun GenericRecordFormActionDialog(
             val result = actionExecutor.execute(request)
             onMutationFinished(pending.mutationRecoveryOwner, result)
             when (result) {
-                is NativeActionExecutionResult.Success -> onActionSucceeded(plan.action)
+                is NativeActionExecutionResult.Success -> onActionSucceeded(pending.action)
                 is NativeActionExecutionResult.Failure -> {
                     error = result.message
                     awaitingConfirmation = false
@@ -769,7 +1852,7 @@ private fun GenericRecordFormActionDialog(
             if (awaitingConfirmation) {
                 Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
                     Text(
-                        "${plan.action.label} will change server data for ${pending.itemLabel}. Continue?",
+                        "${pending.action.label} will change server data for ${pending.itemLabel}. Continue?",
                     )
                     error?.let { message ->
                         Text(
@@ -784,23 +1867,54 @@ private fun GenericRecordFormActionDialog(
                     modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                 ) {
-                    if (plan.fields.isEmpty()) {
+                    if (pending.fields.isEmpty()) {
                         Text("No additional information is needed.")
                     } else {
-                        plan.fields.forEach { field ->
-                            val relationOptions = remember(field, pending, schema) {
-                                nativeRelationOptions(
+                        displayFields.forEach { field ->
+                            val repeatableSpec = field.repeatableObjectInput
+                            if (repeatableSpec != null) {
+                                GenericRepeatableObjectField(
                                     field = field,
-                                    formResource = pending.resource,
-                                    schema = schema,
-                                    context = pending.datasetContext,
+                                    spec = repeatableSpec,
+                                    rows = repeatableObjectValues[field.id].orEmpty(),
+                                    enabled = !submitting && formRetryAllowed && structuredDraftSafe,
+                                    onRowsChange = { rows ->
+                                        repeatableObjectValues = repeatableObjectValues +
+                                            (field.id to rows)
+                                        error = null
+                                    },
                                 )
+                                return@forEach
                             }
+                            val relationOptions = nativeRelationOptions(
+                                field = field,
+                                formResource = pending.resource,
+                                schema = schema,
+                                context = pending.datasetContext,
+                            )
                             if (nativeRelationFieldRequiresChoice(field, pending.resource, schema)) {
                                 GenericRelationshipField(
                                     field = field,
                                     value = values[field.id].orEmpty(),
                                     options = relationOptions,
+                                    choicesLoaded = nativeRelationChoicesLoaded(
+                                        field,
+                                        pending.resource,
+                                        schema,
+                                        pending.datasetContext,
+                                    ),
+                                    choiceSourceHasRecords = nativeRelationChoiceSourceHasRecords(
+                                        field,
+                                        pending.resource,
+                                        schema,
+                                        pending.datasetContext,
+                                    ),
+                                    choiceUnavailableReason = nativeRelationChoiceUnavailableReason(
+                                        field,
+                                        pending.resource,
+                                        schema,
+                                        pending.datasetContext,
+                                    ),
                                     paging = nativeRelationPaging(
                                         field,
                                         pending.resource,
@@ -820,7 +1934,7 @@ private fun GenericRecordFormActionDialog(
                                     value = values[field.id].orEmpty(),
                                     error = null,
                                     enabled = !submitting && formRetryAllowed,
-                                    filePicker = null,
+                                    filePicker = filePicker,
                                     onValueChange = { value ->
                                         values = values + (field.id to value)
                                         error = null
@@ -835,6 +1949,21 @@ private fun GenericRecordFormActionDialog(
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
                         )
+                    }
+                    if (!structuredDraftSafe && structuredSpecs.isNotEmpty()) {
+                        OutlinedButton(
+                            enabled = !submitting && formRetryAllowed,
+                            onClick = {
+                                repeatableObjectValues = emptyStructuredDraft
+                                structuredDraftSafe = true
+                                error = null
+                            },
+                            modifier = Modifier.semantics {
+                                contentDescription = "Reset structured fields for ${pending.action.id}"
+                            },
+                        ) {
+                            Text("Reset structured items")
+                        }
                     }
                     if (outcomeUnknown) {
                         Text(
@@ -871,13 +2000,17 @@ private fun GenericRecordFormActionDialog(
         confirmButton = {
             if (formRetryAllowed) {
                 Button(
-                    enabled = !submitting,
+                    enabled = !submitting && structuredDraftSafe,
                     onClick = {
                         when {
                             awaitingConfirmation -> submit(confirmed = true)
-                            plan.action.requiresConfirmation -> {
+                            pending.action.requiresConfirmation -> {
                                 val validation = runCatching {
-                                    plan.request(inputValues = values, confirmed = true)
+                                    pending.request(
+                                        scalarInputValues = values,
+                                        repeatableObjectValues = repeatableObjectValues,
+                                        confirmed = true,
+                                    )
                                 }.exceptionOrNull()
                                 if (validation == null) {
                                     error = null
@@ -954,6 +2087,9 @@ private fun GenericRecordDeleteActionDialog(
             if (!outcomeUnknown) {
                 Button(
                     enabled = !deleting,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Confirm record delete ${pending.plan.action.id}"
+                    },
                     onClick = {
                         val request = pending.plan.request(confirmed = true)
                         deleting = true
@@ -1419,6 +2555,7 @@ private fun GenericRendererLoading(title: String) {
 
 @Composable
 private fun GenericRendererEmpty(
+    resourceId: String,
     resourceName: String,
     createLabel: String? = null,
     onCreate: (() -> Unit)? = null,
@@ -1434,7 +2571,11 @@ private fun GenericRendererEmpty(
         if (onCreate != null) {
             Button(
                 onClick = onCreate,
-                modifier = Modifier.heightIn(min = 48.dp),
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics {
+                        contentDescription = "Create $resourceId"
+                    },
             ) {
                 Icon(NextcloudIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Text(
@@ -1667,6 +2808,7 @@ private fun GenericRecordCollection(
     onEditRecord: (NativeRecord, NativeRecordFormActionPlan) -> Unit,
     onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
+    onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
     imageLoader: NativeImageLoader?,
 ) {
     val authoritativeRecordsKey = NativeAuthoritativeRecordsKey(records)
@@ -1687,12 +2829,14 @@ private fun GenericRecordCollection(
             rows = tasks,
             authoritativeRecordsKey = authoritativeRecordsKey,
             navigationContext = datasetContext.bindingValues,
+            authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
             actionExecutor = actionExecutor,
             onSelectRecord = onSelectRecord,
             onActionSucceeded = onInlineActionSucceeded,
             onEditRecord = onEditRecord,
             onDeleteRecord = onDeleteRecord,
             onCommandRecord = onCommandRecord,
+            onCommandFormRecord = onCommandFormRecord,
         )
         return
     }
@@ -1734,11 +2878,13 @@ private fun GenericRecordCollection(
                             resource = resource,
                             record = record,
                             navigationContext = datasetContext.bindingValues,
+                            authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
                         ),
                         record = record,
                         onEditRecord = onEditRecord,
                         onDeleteRecord = onDeleteRecord,
                         onCommandRecord = onCommandRecord,
+                        onCommandFormRecord = onCommandFormRecord,
                     )
                 },
             )
@@ -2023,12 +3169,14 @@ private fun GenericTaskCollection(
     rows: List<Pair<NativeRecord, NativeGroupwarePresentation>>,
     authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
     navigationContext: Map<String, String>,
+    authorityContext: NativeRecordAuthorityContext?,
     actionExecutor: NativeActionExecutor,
     onSelectRecord: ((NativeRecord) -> Unit)?,
     onActionSucceeded: ((ActionSpec) -> Unit)?,
     onEditRecord: (NativeRecord, NativeRecordFormActionPlan) -> Unit,
     onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
+    onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val currentAuthoritativeRecordsKey by rememberUpdatedState(authoritativeRecordsKey)
@@ -2057,12 +3205,13 @@ private fun GenericTaskCollection(
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
         items(rows, key = { (record, _) -> record.id }) { (record, task) ->
-            val actions = remember(schema, resource, record, navigationContext) {
+            val actions = remember(schema, resource, record, navigationContext, authorityContext) {
                 nativeRecordActions(
                     schema = schema,
                     resource = resource,
                     record = record,
                     navigationContext = navigationContext,
+                    authorityContext = authorityContext,
                 )
             }
             val completion = actions.completion
@@ -2083,6 +3232,7 @@ private fun GenericTaskCollection(
                 onEditRecord = onEditRecord,
                 onDeleteRecord = onDeleteRecord,
                 onCommandRecord = onCommandRecord,
+                onCommandFormRecord = onCommandFormRecord,
             )
             var actionsExpanded by rememberSaveable(record.id) { mutableStateOf(false) }
             Card(
@@ -2116,6 +3266,9 @@ private fun GenericTaskCollection(
                             Checkbox(
                                 checked = completed,
                                 enabled = !completing && !reconciling,
+                                modifier = Modifier.semantics {
+                                    contentDescription = "Toggle completion for ${task.title}"
+                                },
                                 onCheckedChange = { requested ->
                                     completionErrors.remove(record.id)
                                     completionInProgress[record.id] = true
@@ -2241,11 +3394,13 @@ internal fun nativeRecordCardActions(
     onEditRecord: (NativeRecord, NativeRecordFormActionPlan) -> Unit,
     onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
+    onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit = { _, _ -> },
 ): List<NextcloudCardAction> = buildList {
     capabilities.edit?.let { plan ->
         add(
             NextcloudCardAction(
                 label = "Edit",
+                semanticId = plan.action.id,
                 onClick = { onEditRecord(record, plan) },
             ),
         )
@@ -2255,8 +3410,19 @@ internal fun nativeRecordCardActions(
         add(
             NextcloudCardAction(
                 label = ui.label,
+                semanticId = plan.action.id,
                 destructive = ui.destructive,
                 onClick = { onCommandRecord(record, plan) },
+            ),
+        )
+    }
+    capabilities.commandForms.forEach { plan ->
+        add(
+            NextcloudCardAction(
+                label = plan.action.label,
+                semanticId = plan.action.id,
+                destructive = plan.action.risk == ActionRisk.destructive,
+                onClick = { onCommandFormRecord(record, plan) },
             ),
         )
     }
@@ -2264,6 +3430,7 @@ internal fun nativeRecordCardActions(
         add(
             NextcloudCardAction(
                 label = "Delete",
+                semanticId = plan.action.id,
                 destructive = true,
                 onClick = { onDeleteRecord(record, plan) },
             ),
@@ -3804,16 +4971,23 @@ private fun GenericCollectionCard(
         }
     }
     Card(
-        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
-            onOpen = onSelectRecord?.let { select -> { select(record) } },
-            onShowActions = if (secondaryActions.isNotEmpty()) {
-                { actionsExpanded = true }
-            } else {
-                null
-            },
-            openLabel = "Open ${presentation.title}",
-            actionsLabel = "Show actions for ${presentation.title}",
-        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics {
+                if (onSelectRecord != null) {
+                    contentDescription = "Open ${presentation.title}"
+                }
+            }
+            .nextcloudCardInteractions(
+                onOpen = onSelectRecord?.let { select -> { select(record) } },
+                onShowActions = if (secondaryActions.isNotEmpty()) {
+                    { actionsExpanded = true }
+                } else {
+                    null
+                },
+                openLabel = "Open ${presentation.title}",
+                actionsLabel = "Show actions for ${presentation.title}",
+            ),
         colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
         shape = RoundedCornerShape(NextcloudRadii.Card),
         content = content,
@@ -3923,7 +5097,10 @@ private fun GenericRecordDetail(
         1.0
     }
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(NextcloudSpacing.Large),
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(NextcloudSpacing.Large),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
     ) {
         if (recipe != null) {
@@ -4013,7 +5190,10 @@ private fun GenericFinanceStatisticsDashboard(
     dashboard: NativeFinanceDashboardPresentation,
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(NextcloudSpacing.Large),
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(NextcloudSpacing.Large),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
@@ -4664,7 +5844,7 @@ private fun GenericResourceIcon(
     recordColorArgb: Int? = null,
     large: Boolean = false,
 ) {
-    val icon = recordIconKey?.let(NextcloudIcons::semantic)
+    val icon = recordIconKey?.let(NextcloudIcons::semanticOrFallback)
         ?: nativeResourceIconAppId(resource)?.let(NextcloudIcons::app)
         ?: when {
         resource.fields.any { it.kind == FieldKind.image } -> NextcloudIcons.Image
@@ -4779,7 +5959,15 @@ private fun GenericNativeForm(
             },
         )
     }
-    val coordinator = remember(formSchema, view, executor) { NativeActionCoordinator(formSchema, view, executor) }
+    val currentExecutor = rememberUpdatedState(executor)
+    val stableExecutor = remember {
+        NativeActionExecutor { request ->
+            currentExecutor.value.execute(request)
+        }
+    }
+    val coordinator = remember(formSchema, view) {
+        NativeActionCoordinator(formSchema, view, stableExecutor)
+    }
     val bindingRecord = remember(
         initialRecord,
         datasetContext.parentResourceId,
@@ -4829,7 +6017,16 @@ private fun GenericNativeForm(
     val submitting = executionState is NativeActionExecutionState.Running
     val awaitingReconciliation = executionState is NativeActionExecutionState.AwaitingReconciliation
     val submissionBlocked = submitting || awaitingReconciliation
-    val fields = editableNativeFields(formResource, action).filterNot { field -> field.id in autoBoundValues }
+    val fields = editableNativeFields(formResource, action)
+        .filterNot { field -> field.id in autoBoundValues }
+        .let { editableFields ->
+            nativeFormDisplayFields(
+                fields = editableFields,
+                relationFieldIds = editableFields
+                    .filter { field -> nativeRelationFieldRequiresChoice(field, formResource, schema) }
+                    .mapTo(linkedSetOf(), FieldSpec::id),
+            )
+        }
     val uneditableBodyFieldIds = uneditableNativeBodyFieldIds(
         action = action,
         editableFields = fields,
@@ -4852,169 +6049,232 @@ private fun GenericNativeForm(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(NextcloudSpacing.Large),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
-            Text(nativeFormTitle(view, resource, action), style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "${formResource.name} · Fields marked required must be completed",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        autoBinding.error?.let { error ->
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                shape = RoundedCornerShape(NextcloudRadii.Card),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Text(error, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-        }
-        if (fields.isNotEmpty()) {
-            GenericSectionHeading("Details", "Information sent with this action")
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = NextcloudTheme.colors.appTile,
-                shape = RoundedCornerShape(NextcloudRadii.Card),
-            ) {
-                Column(
-                    modifier = Modifier.padding(NextcloudSpacing.Large),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                ) {
-                    fields.forEach { field ->
-                        val relationOptions = remember(field, schema, datasetContext) {
-                            nativeRelationOptions(field, formResource, schema, datasetContext)
-                        }
-                        if (nativeRelationFieldRequiresChoice(field, formResource, schema)) {
-                            GenericRelationshipField(
-                                field = field,
-                                value = draft.values[field.id].orEmpty(),
-                                options = relationOptions,
-                                paging = nativeRelationPaging(field, formResource, schema, datasetContext),
-                                error = validationErrors[field.id],
-                                enabled = !submissionBlocked,
-                                onValueChange = { value ->
-                                    coordinator.clearStatus()
-                                    draft = draft.update(field.id, value)
-                                },
-                            )
-                        } else {
-                            GenericFormField(
-                                field = field,
-                                value = draft.values[field.id].orEmpty(),
-                                error = validationErrors[field.id],
-                                enabled = !submissionBlocked,
-                                filePicker = filePicker,
-                                onValueChange = { value ->
-                                    coordinator.clearStatus()
-                                    draft = draft.update(field.id, value)
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        } else if (!hasUneditableBodyFields) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = NextcloudTheme.colors.appTile,
-                shape = RoundedCornerShape(NextcloudRadii.Card),
-            ) {
-                Text(
-                    "No additional information is needed for this action.",
-                    modifier = Modifier.padding(NextcloudSpacing.Large),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        } else {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                shape = RoundedCornerShape(NextcloudRadii.Card),
-            ) {
-                Text(
-                    "This action needs structured information that cannot be edited safely yet.",
-                    modifier = Modifier.padding(NextcloudSpacing.Large),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-        }
-        GenericSectionHeading("Action", "Review the details before continuing")
-        GenericActionStatus(executionState, coordinator::clearStatus)
-        Button(
-            enabled =
-                autoBinding.error == null &&
-                    !hasUneditableBodyFields &&
-                    !submissionBlocked &&
-                    (!settingsWrite || hasChanges),
-            onClick = {
-                scope.launch {
-                    coordinator.submit(
-                        values = draft.values,
-                        reconciliationGeneration = mutationReconciliationGeneration,
-                    )
-                }
+        modifier = Modifier
+            .fillMaxSize()
+            .semantics {
+                contentDescription = "${nativeFormTitle(view, resource, action)}; form action ${action.id}"
             },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(NextcloudSpacing.Large),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
         ) {
-            if (submitting) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-            } else {
-                Text(nativeFormSubmitLabel(resource, action))
-            }
-        }
-        if (settingsWrite) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+                Text(nativeFormTitle(view, resource, action), style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    if (hasChanges) "Unsaved changes" else "Settings are up to date",
-                    style = MaterialTheme.typography.bodySmall,
+                    "${formResource.name} · Required fields are marked with *",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (hasChanges) {
-                    TextButton(
-                        enabled = !submissionBlocked,
-                        onClick = {
-                            coordinator.clearStatus()
-                            draft = initialDraft
-                        },
+            }
+            autoBinding.error?.let { error ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("Reset changes")
+                        Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Text(error, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
-        }
-        if (action.risk == ActionRisk.destructive) {
-            Surface(
-                color = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                shape = MaterialTheme.shapes.small,
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    verticalAlignment = Alignment.CenterVertically,
+            if (fields.isNotEmpty()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = NextcloudTheme.colors.appTile,
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
                 ) {
-                    Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Column(
+                        modifier = Modifier.padding(NextcloudSpacing.Large),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+                    ) {
+                        fields.forEach { field ->
+                            val relationOptions =
+                                nativeRelationOptions(field, formResource, schema, datasetContext)
+                            if (nativeRelationFieldRequiresChoice(field, formResource, schema)) {
+                                GenericRelationshipField(
+                                    field = field,
+                                    value = draft.values[field.id].orEmpty(),
+                                    options = relationOptions,
+                                    choicesLoaded = nativeRelationChoicesLoaded(
+                                        field,
+                                        formResource,
+                                        schema,
+                                        datasetContext,
+                                    ),
+                                    choiceSourceHasRecords = nativeRelationChoiceSourceHasRecords(
+                                        field,
+                                        formResource,
+                                        schema,
+                                        datasetContext,
+                                    ),
+                                    choiceUnavailableReason = nativeRelationChoiceUnavailableReason(
+                                        field,
+                                        formResource,
+                                        schema,
+                                        datasetContext,
+                                    ),
+                                    paging = nativeRelationPaging(field, formResource, schema, datasetContext),
+                                    error = validationErrors[field.id],
+                                    enabled = !submissionBlocked,
+                                    onValueChange = { value ->
+                                        coordinator.clearStatus()
+                                        draft = draft.update(field.id, value)
+                                    },
+                                )
+                            } else {
+                                GenericFormField(
+                                    field = field,
+                                    value = draft.values[field.id].orEmpty(),
+                                    error = validationErrors[field.id],
+                                    enabled = !submissionBlocked,
+                                    filePicker = filePicker,
+                                    onValueChange = { value ->
+                                        coordinator.clearStatus()
+                                        draft = draft.update(field.id, value)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            } else if (!hasUneditableBodyFields) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = NextcloudTheme.colors.appTile,
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                ) {
                     Text(
-                        "This destructive action always requires confirmation.",
-                        style = MaterialTheme.typography.bodySmall,
+                        "No additional information is needed for this action.",
+                        modifier = Modifier.padding(NextcloudSpacing.Large),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            } else {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                ) {
+                    Text(
+                        "This action needs structured information that cannot be edited safely yet.",
+                        modifier = Modifier.padding(NextcloudSpacing.Large),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 3.dp,
+            shadowElevation = 6.dp,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(
+                        horizontal = NextcloudSpacing.Large,
+                        vertical = NextcloudSpacing.Medium,
+                    ),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                GenericActionStatus(executionState, coordinator::clearStatus)
+                if (action.risk == ActionRisk.destructive) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        shape = MaterialTheme.shapes.small,
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Text(
+                                "You will be asked to confirm this destructive action.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+                Button(
+                    enabled =
+                        autoBinding.error == null &&
+                            !hasUneditableBodyFields &&
+                            !submissionBlocked &&
+                            (!settingsWrite || hasChanges),
+                    onClick = {
+                        scope.launch {
+                            coordinator.submit(
+                                values = draft.values,
+                                reconciliationGeneration = mutationReconciliationGeneration,
+                            )
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 52.dp)
+                        .semantics {
+                            contentDescription = "Submit form action ${action.id}"
+                        },
+                ) {
+                    if (submitting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .size(20.dp)
+                                .semantics {
+                                    contentDescription = "Action status running ${action.id}"
+                                },
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text(
+                            nativeFormSubmitLabel(resource, action),
+                            modifier = Modifier.semantics {
+                                contentDescription = "Activate form action ${action.id}"
+                            },
+                        )
+                    }
+                }
+                if (settingsWrite) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (hasChanges) "Unsaved changes" else "Settings are up to date",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (hasChanges) {
+                            TextButton(
+                                enabled = !submissionBlocked,
+                                onClick = {
+                                    coordinator.clearStatus()
+                                    draft = initialDraft
+                                },
+                            ) {
+                                Text("Reset changes")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -5360,11 +6620,32 @@ internal fun nativeRelationOptionWindow(
     )
 }
 
+internal fun retainSelectedNativeRelationOptions(
+    retained: List<NativeRelationOption>,
+    available: List<NativeRelationOption>,
+    selectedValues: Collection<String>,
+): List<NativeRelationOption> {
+    val selected = selectedValues.asSequence()
+        .filter(String::isNotBlank)
+        .distinct()
+        .take(NATIVE_RELATION_RETAINED_SELECTION_LIMIT)
+        .toSet()
+    if (selected.isEmpty()) return emptyList()
+    return (available + retained).asSequence()
+        .filter { option -> option.value in selected }
+        .distinctBy(NativeRelationOption::value)
+        .take(NATIVE_RELATION_RETAINED_SELECTION_LIMIT)
+        .toList()
+}
+
 @Composable
 private fun GenericRelationshipField(
     field: FieldSpec,
     value: String,
     options: List<NativeRelationOption>,
+    choicesLoaded: Boolean,
+    choiceSourceHasRecords: Boolean,
+    choiceUnavailableReason: NativeRelationChoiceUnavailableReason?,
     paging: NativeRelatedRecordPaging?,
     error: String?,
     enabled: Boolean,
@@ -5376,18 +6657,54 @@ private fun GenericRelationshipField(
         options.isEmpty() && clearChoice == null && paging == null ->
             GenericUnavailableRelationField(displayField, error)
         field.format in setOf(DYNAMIC_INTEGER_ARRAY_FORMAT, DYNAMIC_STRING_ARRAY_FORMAT) ->
-            GenericRelationMultiPicker(displayField, value, options, paging, error, enabled, onValueChange)
-        else -> GenericRelationPicker(
-            field = displayField,
-            value = value,
-            options = options,
-            clearChoice = clearChoice,
-            paging = paging,
-            error = error,
-            enabled = enabled,
-            onValueChange = onValueChange,
-        )
+            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+                GenericRelationMultiPicker(
+                    displayField,
+                    value,
+                    options,
+                    choicesLoaded,
+                    choiceSourceHasRecords,
+                    choiceUnavailableReason,
+                    paging,
+                    error,
+                    enabled,
+                    onValueChange,
+                )
+                if (options.isEmpty() && choiceSourceHasRecords) {
+                    GenericRelationUnavailableReason(displayField, choiceUnavailableReason)
+                }
+            }
+        else -> Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+            GenericRelationPicker(
+                field = displayField,
+                value = value,
+                options = options,
+                clearChoice = clearChoice,
+                choicesLoaded = choicesLoaded,
+                choiceSourceHasRecords = choiceSourceHasRecords,
+                choiceUnavailableReason = choiceUnavailableReason,
+                paging = paging,
+                error = error,
+                enabled = enabled,
+                onValueChange = onValueChange,
+            )
+            if (options.isEmpty() && choiceSourceHasRecords) {
+                GenericRelationUnavailableReason(displayField, choiceUnavailableReason)
+            }
+        }
     }
+}
+
+@Composable
+private fun GenericRelationUnavailableReason(
+    field: FieldSpec,
+    reason: NativeRelationChoiceUnavailableReason?,
+) {
+    Text(
+        reason.nativeRelationUnavailableMessage(field),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 private fun nativeRelationPaging(
@@ -5406,7 +6723,12 @@ private fun GenericUnavailableRelationField(field: FieldSpec, error: String?) {
         OutlinedButton(
             onClick = {},
             enabled = false,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 52.dp)
+                .semantics {
+                    contentDescription = "Choose ${field.id}"
+                },
         ) {
             Text("No verified choices available", modifier = Modifier.weight(1f))
         }
@@ -5441,6 +6763,9 @@ private fun GenericRelationPicker(
     value: String,
     options: List<NativeRelationOption>,
     clearChoice: NativeRelationOption?,
+    choicesLoaded: Boolean,
+    choiceSourceHasRecords: Boolean,
+    choiceUnavailableReason: NativeRelationChoiceUnavailableReason?,
     paging: NativeRelatedRecordPaging?,
     error: String?,
     enabled: Boolean,
@@ -5448,8 +6773,21 @@ private fun GenericRelationPicker(
 ) {
     var expanded by remember(field.id) { mutableStateOf(false) }
     var query by rememberSaveable(field.id) { mutableStateOf("") }
-    val selected = options.firstOrNull { option -> option.value == value }
-    val optionWindow = nativeRelationOptionWindow(options, query)
+    var retainedSelection by remember(field.id) {
+        mutableStateOf<List<NativeRelationOption>>(emptyList())
+    }
+    LaunchedEffect(value, options) {
+        retainedSelection = retainSelectedNativeRelationOptions(
+            retained = retainedSelection,
+            available = options,
+            selectedValues = listOf(value),
+        )
+    }
+    val displayedOptions = remember(options, retainedSelection) {
+        (options + retainedSelection).distinctBy(NativeRelationOption::value)
+    }
+    val selected = displayedOptions.firstOrNull { option -> option.value == value }
+    val optionWindow = nativeRelationOptionWindow(displayedOptions, query)
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
         Text(
             requiredFieldLabel(field),
@@ -5464,7 +6802,22 @@ private fun GenericRelationPicker(
             OutlinedButton(
                 onClick = { expanded = true },
                 enabled = enabled,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 52.dp)
+                    .semantics {
+                        contentDescription = buildString {
+                            append("Choose ${field.id}")
+                            append("; relation loaded ")
+                            append(choicesLoaded)
+                            append("; relation options ")
+                            append(options.size)
+                            if (options.isEmpty()) {
+                                append("; relation reason ")
+                                append(choiceUnavailableReason?.name ?: "unknown")
+                            }
+                        }
+                    },
             ) {
                 Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
                     Text(
@@ -5480,6 +6833,11 @@ private fun GenericRelationPicker(
                         )
                     }
                 }
+                Icon(
+                    NextcloudIcons.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
             }
             DropdownMenu(
                 expanded = expanded,
@@ -5488,18 +6846,25 @@ private fun GenericRelationPicker(
                     query = ""
                 },
             ) {
-                if (options.size > NATIVE_RELATION_SEARCH_THRESHOLD) {
+                if (displayedOptions.size > NATIVE_RELATION_SEARCH_THRESHOLD) {
                     OutlinedTextField(
                         value = query,
                         onValueChange = { query = it.take(NATIVE_RELATION_MAX_QUERY_LENGTH) },
                         modifier = Modifier.padding(
                             horizontal = NextcloudSpacing.Small,
                             vertical = NextcloudSpacing.XSmall,
-                        ).widthIn(min = 280.dp),
+                        ).widthIn(min = 280.dp).semantics {
+                            contentDescription = "Search relations for ${field.id}"
+                        },
                         label = { Text("Search ${field.label.lowercase()}") },
                         singleLine = true,
                     )
-                    GenericRelationSearchGuidance(options.size, query, optionWindow)
+                    GenericRelationSearchGuidance(
+                        totalOptionCount = displayedOptions.size,
+                        discardedChoiceCount = paging?.discardedChoiceCount ?: 0,
+                        query = query,
+                        window = optionWindow,
+                    )
                 }
                 clearChoice?.let { choice ->
                     DropdownMenuItem(
@@ -5523,8 +6888,37 @@ private fun GenericRelationPicker(
                     )
                     if (optionWindow.options.isNotEmpty()) HorizontalDivider()
                 }
+                if (optionWindow.options.isEmpty() && paging?.loading != true) {
+                    DropdownMenuItem(
+                        modifier = Modifier.semantics {
+                            contentDescription = when {
+                                !choicesLoaded -> "Relation choices unavailable for ${field.id}"
+                                choiceSourceHasRecords ->
+                                    "No usable relation choices for ${field.id} " +
+                                        "reason ${choiceUnavailableReason?.name ?: "unknown"}"
+                                else -> "No relation choices for ${field.id}"
+                            }
+                        },
+                        text = {
+                            Text(
+                                when {
+                                    !choicesLoaded -> "${field.label} choices could not be loaded."
+                                    choiceSourceHasRecords ->
+                                        choiceUnavailableReason.nativeRelationUnavailableMessage(field)
+                                    else -> "No ${field.label.lowercase()} choices are available."
+                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                        enabled = false,
+                        onClick = {},
+                    )
+                }
                 optionWindow.options.forEach { option ->
                     DropdownMenuItem(
+                        modifier = Modifier.semantics {
+                            contentDescription = "Choose ${field.id} relation ${option.label}"
+                        },
                         text = {
                             Column {
                                 Text(option.label)
@@ -5553,11 +6947,31 @@ private fun GenericRelationPicker(
     }
 }
 
+private fun NativeRelationChoiceUnavailableReason?.nativeRelationUnavailableMessage(
+    field: FieldSpec,
+): String = when (this) {
+    NativeRelationChoiceUnavailableReason.unsafeIdentity ->
+        "The server returned ${field.label.lowercase()} records without a verified selectable identity."
+    NativeRelationChoiceUnavailableReason.ambiguousBinding ->
+        "The server returned ${field.label.lowercase()} records with conflicting identity data."
+    NativeRelationChoiceUnavailableReason.scopeMismatch ->
+        "The available ${field.label.lowercase()} records belong to a different parent."
+    NativeRelationChoiceUnavailableReason.invalidValue ->
+        "The available ${field.label.lowercase()} records do not contain a safe selectable value."
+    NativeRelationChoiceUnavailableReason.duplicateValue ->
+        "The available ${field.label.lowercase()} records contain duplicate selectable values."
+    else ->
+        "The available ${field.label.lowercase()} records cannot be selected safely."
+}
+
 @Composable
 private fun GenericRelationMultiPicker(
     field: FieldSpec,
     value: String,
     options: List<NativeRelationOption>,
+    choicesLoaded: Boolean,
+    choiceSourceHasRecords: Boolean,
+    choiceUnavailableReason: NativeRelationChoiceUnavailableReason?,
     paging: NativeRelatedRecordPaging?,
     error: String?,
     enabled: Boolean,
@@ -5568,8 +6982,21 @@ private fun GenericRelationMultiPicker(
     val selectedValues = remember(value, field.format) {
         value.nativeRelationSelectedValues(field.format)
     }
-    val optionWindow = nativeRelationOptionWindow(options, query)
-    val selectedLabels = options.filter { option -> option.value in selectedValues }
+    var retainedSelections by remember(field.id) {
+        mutableStateOf<List<NativeRelationOption>>(emptyList())
+    }
+    LaunchedEffect(selectedValues, options) {
+        retainedSelections = retainSelectedNativeRelationOptions(
+            retained = retainedSelections,
+            available = options,
+            selectedValues = selectedValues,
+        )
+    }
+    val displayedOptions = remember(options, retainedSelections) {
+        (options + retainedSelections).distinctBy(NativeRelationOption::value)
+    }
+    val optionWindow = nativeRelationOptionWindow(displayedOptions, query)
+    val selectedLabels = displayedOptions.filter { option -> option.value in selectedValues }
         .joinToString(", ", transform = NativeRelationOption::label)
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
         Text(requiredFieldLabel(field), style = MaterialTheme.typography.labelLarge)
@@ -5577,13 +7004,34 @@ private fun GenericRelationMultiPicker(
             OutlinedButton(
                 onClick = { expanded = true },
                 enabled = enabled,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 52.dp)
+                    .semantics {
+                        contentDescription = buildString {
+                            append("Choose ${field.id}")
+                            append("; relation loaded ")
+                            append(choicesLoaded)
+                            append("; relation options ")
+                            append(options.size)
+                            if (options.isEmpty()) {
+                                append("; relation reason ")
+                                append(choiceUnavailableReason?.name ?: "unknown")
+                            }
+                        }
+                    },
             ) {
                 Text(
                     selectedLabels.ifBlank { "Choose ${field.label.lowercase()}" },
                     modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.Start,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                )
+                Icon(
+                    NextcloudIcons.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
                 )
             }
             DropdownMenu(
@@ -5593,22 +7041,58 @@ private fun GenericRelationMultiPicker(
                     query = ""
                 },
             ) {
-                if (options.size > NATIVE_RELATION_SEARCH_THRESHOLD) {
+                if (displayedOptions.size > NATIVE_RELATION_SEARCH_THRESHOLD) {
                     OutlinedTextField(
                         value = query,
                         onValueChange = { query = it.take(NATIVE_RELATION_MAX_QUERY_LENGTH) },
                         modifier = Modifier.padding(
                             horizontal = NextcloudSpacing.Small,
                             vertical = NextcloudSpacing.XSmall,
-                        ).widthIn(min = 280.dp),
+                        ).widthIn(min = 280.dp).semantics {
+                            contentDescription = "Search relations for ${field.id}"
+                        },
                         label = { Text("Search ${field.label.lowercase()}") },
                         singleLine = true,
                     )
-                    GenericRelationSearchGuidance(options.size, query, optionWindow)
+                    GenericRelationSearchGuidance(
+                        totalOptionCount = displayedOptions.size,
+                        discardedChoiceCount = paging?.discardedChoiceCount ?: 0,
+                        query = query,
+                        window = optionWindow,
+                    )
+                }
+                if (optionWindow.options.isEmpty() && paging?.loading != true) {
+                    DropdownMenuItem(
+                        modifier = Modifier.semantics {
+                            contentDescription = when {
+                                !choicesLoaded -> "Relation choices unavailable for ${field.id}"
+                                choiceSourceHasRecords ->
+                                    "No usable relation choices for ${field.id} " +
+                                        "reason ${choiceUnavailableReason?.name ?: "unknown"}"
+                                else -> "No relation choices for ${field.id}"
+                            }
+                        },
+                        text = {
+                            Text(
+                                when {
+                                    !choicesLoaded -> "${field.label} choices could not be loaded."
+                                    choiceSourceHasRecords ->
+                                        choiceUnavailableReason.nativeRelationUnavailableMessage(field)
+                                    else -> "No ${field.label.lowercase()} choices are available."
+                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                        enabled = false,
+                        onClick = {},
+                    )
                 }
                 optionWindow.options.forEach { option ->
                     val selected = option.value in selectedValues
                     DropdownMenuItem(
+                        modifier = Modifier.semantics {
+                            contentDescription = "Choose ${field.id} relation ${option.label}"
+                        },
                         leadingIcon = {
                             Checkbox(checked = selected, onCheckedChange = null)
                         },
@@ -5648,43 +7132,59 @@ private fun GenericRelationPagingItem(paging: NativeRelatedRecordPaging?) {
     paging ?: return
     if (paging.loading) {
         DropdownMenuItem(
-            text = { Text("Loading more choices...") },
+            text = { Text("Loading choices...") },
             onClick = {},
             enabled = false,
         )
         return
     }
-    DropdownMenuItem(
-        text = {
-            Column {
-                Text(
-                    when {
-                        paging.loadMore == null -> "More choices unavailable"
-                        paging.error == null -> "Load more choices"
-                        else -> "Try loading more choices"
-                    },
-                )
-                paging.error?.let { message ->
+    paging.loadMore?.let { loadMore ->
+        DropdownMenuItem(
+            text = { Text(if (paging.error == null) "Load more choices" else "Try loading more choices") },
+            onClick = loadMore,
+        )
+    }
+    paging.returnToFirstPage?.let { returnToFirstPage ->
+        DropdownMenuItem(
+            text = {
+                Column {
+                    Text("Return to first choices")
                     Text(
-                        message,
+                        "${paging.discardedChoiceCount} earlier choices were released to keep memory bounded.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            }
-        },
-        onClick = { paging.loadMore?.invoke() },
-        enabled = paging.loadMore != null,
-    )
+            },
+            onClick = returnToFirstPage,
+        )
+    }
+    paging.error?.let { message ->
+        DropdownMenuItem(
+            text = {
+                Text(
+                    message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            },
+            onClick = {},
+            enabled = false,
+        )
+    }
 }
 
 @Composable
 private fun GenericRelationSearchGuidance(
     totalOptionCount: Int,
+    discardedChoiceCount: Int,
     query: String,
     window: NativeRelationOptionWindow,
 ) {
     val message = when {
+        query.isBlank() && discardedChoiceCount > 0 ->
+            "Showing ${window.options.size} of $totalOptionCount current choices. " +
+                "$discardedChoiceCount earlier choices can be restored below."
         query.isBlank() ->
             "Showing the first ${window.options.size} of $totalOptionCount choices. Search to narrow the list."
         window.hasMore ->
@@ -5722,7 +7222,47 @@ private fun List<String>.toNativeRelationArray(format: String?): String = when (
 
 private const val NATIVE_RELATION_SEARCH_THRESHOLD = 8
 private const val NATIVE_RELATION_MAX_QUERY_LENGTH = 120
+private const val NATIVE_ENUM_SEARCH_THRESHOLD = 8
+private const val NATIVE_ENUM_MAX_QUERY_LENGTH = 120
+internal const val NATIVE_RELATION_RETAINED_SELECTION_LIMIT = 64
 internal const val NATIVE_RELATION_OPTION_WINDOW_SIZE = 40
+
+/**
+ * Presents contract fields in a human task order without changing their wire names or request
+ * bindings. The ordering is deliberately semantic and app-neutral: identify the record first,
+ * describe it next, then show supporting choices and advanced controls.
+ */
+internal fun nativeFormDisplayFields(
+    fields: List<FieldSpec>,
+    relationFieldIds: Set<String> = emptySet(),
+): List<FieldSpec> =
+    fields.withIndex()
+        .sortedWith(
+            compareBy<IndexedValue<FieldSpec>>(
+                { (_, field) -> field.nativeFormDisplayPriority(field.id in relationFieldIds) },
+                IndexedValue<FieldSpec>::index,
+            ),
+        )
+        .map(IndexedValue<FieldSpec>::value)
+
+private fun FieldSpec.nativeFormDisplayPriority(relation: Boolean): Int {
+    val semanticId = id.lowercase().filter(Char::isLetterOrDigit)
+    return when {
+        semanticId in setOf("name", "title", "subject", "label", "displayname") -> 0
+        kind == FieldKind.longText ||
+            semanticId in setOf("description", "content", "body", "notes", "summary") -> 10
+        kind == FieldKind.file || kind == FieldKind.image -> 15
+        isNativeVisualIconField() -> 30
+        semanticId in setOf("color", "colour") -> 31
+        kind == FieldKind.enumeration -> 40
+        kind in setOf(FieldKind.date, FieldKind.dateTime) -> 45
+        relation -> 50
+        kind == FieldKind.boolean -> 60
+        hasNativeRecurrenceRuleSemantics() -> 70
+        repeatableObjectInput != null || kind == FieldKind.objectValue -> 80
+        else -> 20
+    }
+}
 
 internal fun nativeFormTitle(view: ViewSpec, resource: ResourceSpec, action: ActionSpec): String =
     if (action.isSettingsWrite(resource)) "Settings" else view.title
@@ -5759,12 +7299,155 @@ private fun GenericSectionHeading(title: String, supporting: String) {
 }
 
 @Composable
+private fun GenericRepeatableObjectField(
+    field: FieldSpec,
+    spec: RepeatableObjectInputSpec,
+    rows: List<RepeatableObjectInputRow>,
+    enabled: Boolean,
+    onRowsChange: (List<RepeatableObjectInputRow>) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(requiredFieldLabel(field), style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "${rows.size} of ${spec.maximumItems} items",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            OutlinedButton(
+                enabled = enabled && rows.size < spec.maximumItems,
+                onClick = {
+                    onRowsChange(addNativeRepeatableObjectRow(rows, spec))
+                },
+                modifier = Modifier.semantics {
+                    contentDescription = "Add ${field.id} row"
+                },
+            ) {
+                Icon(NextcloudIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("Add item", modifier = Modifier.padding(start = NextcloudSpacing.XSmall))
+            }
+        }
+        if (rows.isEmpty()) {
+            Text(
+                "No items added.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        rows.forEachIndexed { rowIndex, row ->
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics {
+                        contentDescription = "${field.id} row ${rowIndex + 1}"
+                    },
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                ),
+                shape = RoundedCornerShape(NextcloudRadii.Card),
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "Item ${rowIndex + 1}",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        TextButton(
+                            enabled = enabled && rows.size > spec.minimumItems,
+                            onClick = {
+                                onRowsChange(
+                                    removeNativeRepeatableObjectRow(
+                                        rows = rows,
+                                        index = rowIndex,
+                                        spec = spec,
+                                    ),
+                                )
+                            },
+                            modifier = Modifier.semantics {
+                                contentDescription = "Remove ${field.id} row ${rowIndex + 1}"
+                            },
+                        ) {
+                            Text("Remove")
+                        }
+                    }
+                    spec.fields.forEach { itemField ->
+                        val automationFieldId = nativeRepeatableObjectAutomationFieldId(
+                            fieldId = field.id,
+                            rowIndex = rowIndex,
+                            itemFieldId = itemField.id,
+                        )
+                        GenericFormField(
+                            field = itemField.toNativeRepeatableObjectFieldSpec(),
+                            value = row.values[itemField.id].orEmpty(),
+                            error = null,
+                            enabled = enabled,
+                            filePicker = null,
+                            automationFieldId = automationFieldId,
+                            onValueChange = { value ->
+                                onRowsChange(
+                                    updateNativeRepeatableObjectValue(
+                                        rows = rows,
+                                        rowIndex = rowIndex,
+                                        field = itemField,
+                                        value = value,
+                                    ),
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+internal fun nativeRepeatableObjectAutomationFieldId(
+    fieldId: String,
+    rowIndex: Int,
+    itemFieldId: String,
+): String = "$fieldId row ${rowIndex + 1} $itemFieldId"
+
+internal fun RepeatableObjectInputFieldSpec.toNativeRepeatableObjectFieldSpec(): FieldSpec =
+    FieldSpec(
+        id = id,
+        label = label,
+        kind = when (kind) {
+            RepeatableObjectInputScalarKind.String -> FieldKind.string
+            RepeatableObjectInputScalarKind.Integer -> FieldKind.integer
+            RepeatableObjectInputScalarKind.Decimal -> FieldKind.decimal
+            RepeatableObjectInputScalarKind.Boolean -> FieldKind.boolean
+            RepeatableObjectInputScalarKind.Enumeration -> FieldKind.enumeration
+        },
+        required = required,
+        readOnly = false,
+        format = format,
+        enumValues = enumValues,
+    )
+
+@Composable
 private fun GenericFormField(
     field: FieldSpec,
     value: String,
     error: String?,
     enabled: Boolean,
     filePicker: NativeFileFieldPicker?,
+    automationFieldId: String = field.id,
     onValueChange: (String) -> Unit,
 ) {
     when {
@@ -5787,6 +7470,9 @@ private fun GenericFormField(
                         Switch(
                             checked = checked,
                             enabled = enabled,
+                            modifier = Modifier.semantics {
+                                contentDescription = "Toggle $automationFieldId.$key"
+                            },
                             onCheckedChange = { onValueChange(updateNativeBooleanMap(value, key, it)) },
                         )
                     }
@@ -5805,24 +7491,43 @@ private fun GenericFormField(
             Column(modifier = Modifier.weight(1f)) {
                 Text(requiredFieldLabel(field), style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "Turn this option on or off",
+                    if (value == "true") "On" else "Off",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
-            Switch(checked = value == "true", enabled = enabled, onCheckedChange = { onValueChange(it.toString()) })
+            Switch(
+                checked = value == "true",
+                enabled = enabled,
+                modifier = Modifier.semantics {
+                    contentDescription = "Toggle $automationFieldId"
+                },
+                onCheckedChange = { onValueChange(it.toString()) },
+            )
         }
 
         field.hasNativeRecurrenceRuleSemantics() ->
-            GenericRecurrenceRuleField(field, value, error, enabled, onValueChange)
-        field.kind == FieldKind.enumeration -> GenericEnumField(field, value, error, enabled, onValueChange)
+            GenericRecurrenceRuleField(
+                field,
+                value,
+                error,
+                enabled,
+                automationFieldId,
+                onValueChange,
+            )
+        field.kind == FieldKind.enumeration ->
+            GenericEnumField(field, value, error, enabled, automationFieldId, onValueChange)
         field.kind == FieldKind.file -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             OutlinedTextField(
                 value = value,
                 onValueChange = onValueChange,
                 enabled = enabled,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics {
+                        contentDescription = "Field $automationFieldId"
+                    },
                 label = { Text(requiredFieldLabel(field)) },
                 supportingText = error?.let { message -> { Text(message) } },
                 isError = error != null,
@@ -5832,7 +7537,11 @@ private fun GenericFormField(
                 OutlinedButton(
                     enabled = enabled,
                     onClick = { picker.requestFile(field, onValueChange) },
-                    modifier = Modifier.heightIn(min = 48.dp),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .semantics {
+                            contentDescription = "Choose file for $automationFieldId"
+                        },
                 ) {
                     Icon(NextcloudIcons.File, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text(if (value.isBlank()) "Choose file" else "Choose another file")
@@ -5842,16 +7551,28 @@ private fun GenericFormField(
 
         else -> {
             val multiLine = field.kind == FieldKind.longText ||
-                field.format in setOf(DYNAMIC_STRING_LIST_FORMAT, DYNAMIC_STRING_ARRAY_FORMAT)
+                field.format in setOf(
+                    DYNAMIC_INTEGER_ARRAY_FORMAT,
+                    DYNAMIC_STRING_LIST_FORMAT,
+                    DYNAMIC_STRING_ARRAY_FORMAT,
+                )
             OutlinedTextField(
                 value = value,
                 onValueChange = onValueChange,
                 enabled = enabled,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics {
+                        contentDescription = "Field $automationFieldId"
+                    },
                 label = { Text(requiredFieldLabel(field)) },
                 supportingText = when {
                     error != null -> ({ Text(error) })
-                    field.format in setOf(DYNAMIC_STRING_LIST_FORMAT, DYNAMIC_STRING_ARRAY_FORMAT) ->
+                    field.format in setOf(
+                        DYNAMIC_INTEGER_ARRAY_FORMAT,
+                        DYNAMIC_STRING_LIST_FORMAT,
+                        DYNAMIC_STRING_ARRAY_FORMAT,
+                    ) ->
                         ({ Text("One value per line") })
                     else -> null
                 },
@@ -5866,7 +7587,12 @@ private fun GenericFormField(
                 },
                 keyboardOptions = KeyboardOptions(
                     keyboardType = when (field.kind) {
-                        FieldKind.integer -> KeyboardType.Number
+                        FieldKind.integer ->
+                            if (field.format == DYNAMIC_INTEGER_ARRAY_FORMAT) {
+                                KeyboardType.Text
+                            } else {
+                                KeyboardType.Number
+                            }
                         FieldKind.decimal, FieldKind.currency -> KeyboardType.Decimal
                         else -> KeyboardType.Text
                     },
@@ -5882,6 +7608,7 @@ private fun GenericRecurrenceRuleField(
     value: String,
     error: String?,
     enabled: Boolean,
+    automationFieldId: String,
     onValueChange: (String) -> Unit,
 ) {
     var expanded by remember(field.id) { mutableStateOf(false) }
@@ -5896,9 +7623,19 @@ private fun GenericRecurrenceRuleField(
             OutlinedButton(
                 onClick = { expanded = true },
                 enabled = enabled,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .semantics {
+                        contentDescription = "Choose $automationFieldId"
+                    },
             ) {
-                Text(selectedLabel, modifier = Modifier.weight(1f))
+                Text(selectedLabel, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+                Icon(
+                    NextcloudIcons.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 NATIVE_RECURRENCE_PRESETS.forEach { (label, rule) ->
@@ -5925,7 +7662,11 @@ private fun GenericRecurrenceRuleField(
                 value = value,
                 onValueChange = onValueChange,
                 enabled = enabled,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics {
+                        contentDescription = "Field $automationFieldId"
+                    },
                 label = { Text("RFC 5545 recurrence rule") },
                 placeholder = { Text("FREQ=WEEKLY;INTERVAL=2") },
                 singleLine = true,
@@ -5960,20 +7701,39 @@ private fun GenericEnumField(
     value: String,
     error: String?,
     enabled: Boolean,
+    automationFieldId: String,
     onValueChange: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var query by rememberSaveable(field.id) { mutableStateOf("") }
+    val options = field.enumValues.orEmpty()
+    val visibleOptions = remember(options, query) {
+        val normalizedQuery = query.trim().lowercase()
+        if (normalizedQuery.isBlank()) {
+            options
+        } else {
+            options.filter { option ->
+                normalizedQuery in option.lowercase() ||
+                    normalizedQuery in option.dynamicSettingLabel().lowercase()
+            }
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
         Text(requiredFieldLabel(field), style = MaterialTheme.typography.labelLarge)
         Box(modifier = Modifier.fillMaxWidth()) {
             OutlinedButton(
                 onClick = { expanded = true },
                 enabled = enabled && !field.enumValues.isNullOrEmpty(),
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .semantics {
+                        contentDescription = "Choose $automationFieldId"
+                    },
             ) {
                 value.takeIf(String::isNotBlank)
                     ?.takeIf { field.isNativeVisualIconField() }
-                    ?.let(NextcloudIcons::semantic)
+                    ?.let(NextcloudIcons::semanticOrFallback)
                     ?.let { icon ->
                         Icon(
                             icon,
@@ -5989,16 +7749,49 @@ private fun GenericEnumField(
                 }
                 Text(
                     value.takeIf(String::isNotBlank)?.dynamicSettingLabel() ?: "Choose an option",
+                    modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.Start,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                Icon(
+                    NextcloudIcons.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                field.enumValues.orEmpty().forEach { option ->
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = {
+                    expanded = false
+                    query = ""
+                },
+            ) {
+                if (options.size > NATIVE_ENUM_SEARCH_THRESHOLD) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it.take(NATIVE_ENUM_MAX_QUERY_LENGTH) },
+                        modifier = Modifier
+                            .padding(
+                                horizontal = NextcloudSpacing.Small,
+                                vertical = NextcloudSpacing.XSmall,
+                            )
+                            .widthIn(min = 280.dp)
+                            .semantics {
+                                contentDescription = "Search options for $automationFieldId"
+                            },
+                        label = { Text("Search ${field.label.lowercase()}") },
+                        singleLine = true,
+                    )
+                }
+                visibleOptions.forEach { option ->
                     val optionIcon = option.takeIf { field.isNativeVisualIconField() }
-                        ?.let(NextcloudIcons::semantic)
+                        ?.let(NextcloudIcons::semanticOrFallback)
                     val optionColor = option.nativeFormColorOrNull(field)
                     DropdownMenuItem(
+                        modifier = Modifier.semantics {
+                            contentDescription = "Choose $automationFieldId option $option"
+                        },
                         leadingIcon = if (optionIcon != null || optionColor != null) {
                             {
                                 optionIcon?.let { icon ->
@@ -6012,8 +7805,16 @@ private fun GenericEnumField(
                         text = { Text(option.dynamicSettingLabel()) },
                         onClick = {
                             expanded = false
+                            query = ""
                             onValueChange(option)
                         },
+                    )
+                }
+                if (visibleOptions.isEmpty()) {
+                    DropdownMenuItem(
+                        text = { Text("No matching options") },
+                        onClick = {},
+                        enabled = false,
                     )
                 }
             }
@@ -6064,12 +7865,29 @@ private fun GenericActionStatus(state: NativeActionExecutionState, onDismiss: ()
             state is NativeActionExecutionState.ValidationFailed ||
             state is NativeActionExecutionState.AwaitingReconciliation
     val dismissible = state !is NativeActionExecutionState.AwaitingReconciliation
+    val statusDescription = when (state) {
+        is NativeActionExecutionState.ValidationFailed -> buildString {
+            append("Action status validation failed")
+            state.fieldErrors.keys.sorted().takeIf(List<String>::isNotEmpty)?.let { fields ->
+                append(" fields ")
+                append(fields.joinToString(" "))
+            }
+        }
+        is NativeActionExecutionState.AwaitingReconciliation -> "Action status awaiting reconciliation"
+        is NativeActionExecutionState.Succeeded -> "Action status succeeded"
+        is NativeActionExecutionState.Failed -> "Action status failed"
+        NativeActionExecutionState.Idle,
+        is NativeActionExecutionState.AwaitingConfirmation,
+        is NativeActionExecutionState.Running,
+        -> error("Only visible action states have a status description.")
+    }
     Surface(
-        modifier = if (dismissible) {
-            Modifier.fillMaxWidth().clickable(onClick = onDismiss)
-        } else {
-            Modifier.fillMaxWidth()
-        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (dismissible) Modifier.clickable(onClick = onDismiss) else Modifier)
+            .semantics {
+                contentDescription = statusDescription
+            },
         color = if (failure) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
         contentColor = if (failure) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
         shape = MaterialTheme.shapes.small,
@@ -6186,7 +8004,6 @@ internal fun nativeRecordIconKey(resource: ResourceSpec, record: NativeRecord): 
             ?.lowercase()
             ?.replace('_', '-')
             ?.replace(' ', '-')
-            ?.takeIf { key -> NextcloudIcons.semantic(key) != null }
             ?: return null
     }.distinct()
     return resolved.singleOrNull()

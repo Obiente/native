@@ -120,8 +120,28 @@ class NativeFormMutationRecoveryTest {
     }
 
     @Test
-    fun `recovery owners exist only for identifiable create and update mutations`() {
+    fun `recovery owners exist only for identifiable create update and command mutations`() {
         assertNotNull(createOwner())
+        assertNotNull(
+            nativeFormMutationRecoveryOwner(
+                appId = "example-app",
+                viewId = "item-detail",
+                actionId = "items.copy",
+                resourceId = "items",
+                intent = ActionIntent.execute,
+                recordId = "item-42",
+            ),
+        )
+        assertNull(
+            nativeFormMutationRecoveryOwner(
+                appId = "example-app",
+                viewId = "item-detail",
+                actionId = "items.copy",
+                resourceId = "items",
+                intent = ActionIntent.execute,
+                recordId = null,
+            ),
+        )
         assertNull(
             nativeFormMutationRecoveryOwner(
                 appId = "example-app",

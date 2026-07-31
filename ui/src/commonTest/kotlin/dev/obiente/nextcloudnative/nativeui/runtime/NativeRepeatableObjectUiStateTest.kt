@@ -1,0 +1,114 @@
+package dev.obiente.nextcloudnative.nativeui.runtime
+
+import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputFieldSpec
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputRow
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputScalarKind
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputSpec
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+
+class NativeRepeatableObjectUiStateTest {
+    private val spec = RepeatableObjectInputSpec(
+        minimumItems = 1,
+        maximumItems = 2,
+        fields = listOf(
+            RepeatableObjectInputFieldSpec(
+                id = "label",
+                label = "Label",
+                kind = RepeatableObjectInputScalarKind.String,
+                required = true,
+            ),
+            RepeatableObjectInputFieldSpec(
+                id = "enabled",
+                label = "Enabled",
+                kind = RepeatableObjectInputScalarKind.Boolean,
+                required = true,
+            ),
+        ),
+    )
+    private val field = FieldSpec(
+        id = "entries",
+        label = "Entries",
+        kind = FieldKind.objectValue,
+        required = true,
+        readOnly = false,
+        repeatableObjectInput = spec,
+    )
+
+    @Test
+    fun `initial rows satisfy the minimum and initialize required booleans`() {
+        assertEquals(
+            mapOf(
+                "entries" to listOf(
+                    RepeatableObjectInputRow(mapOf("enabled" to "false")),
+                ),
+            ),
+            initialNativeRepeatableObjectDraft(listOf(field), emptyMap()),
+        )
+    }
+
+    @Test
+    fun `add and remove remain inside schema bounds`() {
+        val initial = listOf(RepeatableObjectInputRow())
+        val two = addNativeRepeatableObjectRow(initial, spec)
+
+        assertEquals(2, two.size)
+        assertEquals(two, addNativeRepeatableObjectRow(two, spec))
+        assertEquals(initial, removeNativeRepeatableObjectRow(two, 1, spec))
+        assertEquals(initial, removeNativeRepeatableObjectRow(initial, 0, spec))
+    }
+
+    @Test
+    fun `row updates preserve identities and remove blank scalar values`() {
+        val initial = listOf(RepeatableObjectInputRow(mapOf("enabled" to "false")))
+        val withLabel = updateNativeRepeatableObjectValue(
+            rows = initial,
+            rowIndex = 0,
+            field = spec.fields.first(),
+            value = "Milk",
+        )
+
+        assertEquals(
+            mapOf("enabled" to "false", "label" to "Milk"),
+            withLabel.single().values,
+        )
+        assertEquals(
+            mapOf("enabled" to "false"),
+            updateNativeRepeatableObjectValue(
+                rows = withLabel,
+                rowIndex = 0,
+                field = spec.fields.first(),
+                value = "",
+            ).single().values,
+        )
+    }
+
+    @Test
+    fun `structured drafts round trip without exposing raw JSON state`() {
+        val values = mapOf(
+            "entries" to listOf(
+                RepeatableObjectInputRow(
+                    mapOf("label" to "Milk", "enabled" to "true"),
+                ),
+            ),
+        )
+        val specs = mapOf("entries" to spec)
+        val saved = encodeNativeRepeatableObjectDraft(values, specs)
+
+        assertEquals(values, saved?.let { decodeNativeRepeatableObjectDraft(it, specs) })
+        assertNull(decodeNativeRepeatableObjectDraft(listOf("entries", "not-json"), specs))
+    }
+
+    @Test
+    fun `invalid initial structured value fails closed`() {
+        assertNull(
+            initialNativeRepeatableObjectDraft(
+                fields = listOf(field),
+                initialValues = mapOf("entries" to """[{"unknown":"value"}]"""),
+            ),
+        )
+    }
+}

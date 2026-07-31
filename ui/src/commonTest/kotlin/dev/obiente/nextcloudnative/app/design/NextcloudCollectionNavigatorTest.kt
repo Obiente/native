@@ -61,7 +61,7 @@ class NextcloudCollectionNavigatorTest {
     }
 
     @Test
-    fun `compact root uses menu while nested routes use back`() {
+    fun `compact drawer keeps menu in the leading slot at every depth`() {
         assertEquals(
             NextcloudCollectionLeadingControl.Menu,
             resolveNextcloudCollectionLeadingControl(
@@ -70,7 +70,7 @@ class NextcloudCollectionNavigatorTest {
             ),
         )
         assertEquals(
-            NextcloudCollectionLeadingControl.Back,
+            NextcloudCollectionLeadingControl.Menu,
             resolveNextcloudCollectionLeadingControl(
                 mode = NextcloudCollectionNavigationMode.Drawer,
                 hasHierarchyBack = true,
@@ -92,15 +92,15 @@ class NextcloudCollectionNavigatorTest {
     }
 
     @Test
-    fun `nested compact route keeps back and exposes drawer access`() {
+    fun `nested compact route keeps drawer access in its stable leading slot`() {
         assertEquals(
-            NextcloudCollectionLeadingControl.Back,
+            NextcloudCollectionLeadingControl.Menu,
             resolveNextcloudCollectionLeadingControl(
                 mode = NextcloudCollectionNavigationMode.Drawer,
                 hasHierarchyBack = true,
             ),
         )
-        assertTrue(
+        assertFalse(
             shouldShowNextcloudCollectionTrailingNavigation(
                 mode = NextcloudCollectionNavigationMode.Drawer,
                 hasHierarchyBack = true,
@@ -368,6 +368,14 @@ class NextcloudCollectionNavigatorTest {
 
     @Test
     fun `destination and policy reject impossible values`() {
+        assertEquals(
+            "prefs-get-user-prefs",
+            NextcloudCollectionDestination(
+                id = "preferences-layout",
+                label = "Preferences",
+                accessibilityId = "prefs-get-user-prefs",
+            ).accessibilityId,
+        )
         assertFailsWith<IllegalArgumentException> {
             NextcloudCollectionDestination("", "Today")
         }
@@ -376,6 +384,13 @@ class NextcloudCollectionNavigatorTest {
         }
         assertFailsWith<IllegalArgumentException> {
             NextcloudCollectionDestination("today", "Today", -1)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudCollectionDestination(
+                id = "today",
+                label = "Today",
+                accessibilityId = " ",
+            )
         }
         assertFailsWith<IllegalArgumentException> {
             resolveNextcloudCollectionNavigationMode(

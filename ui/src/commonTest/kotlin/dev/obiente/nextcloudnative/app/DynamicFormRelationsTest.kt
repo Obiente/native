@@ -53,7 +53,91 @@ class DynamicFormRelationsTest {
     }
 
     @Test
-    fun `relation cache preserves later records while retaining a strict per scope bound`() {
+    fun `generic relation route identity prefers its uniquely qualified retained parent`() {
+        val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
+        val schema = schema(
+            form = form,
+            relationship = ResourceRelationshipSpec(
+                "categories",
+                "entries",
+                "id",
+                "categoryId",
+                Confidence.verified,
+            ),
+            reads = listOf(
+                action(
+                    "category-index",
+                    "categories",
+                    "/api/houses/{id}/categories",
+                    requiredPathNames = listOf("id"),
+                ),
+            ),
+        )
+
+        val request = dynamicFormRelationLoadRequests(
+            schema = schema,
+            formView = form,
+            availableValues = mapOf(
+                "id" to "selected-list-7",
+                "houseId" to "retained-house-3",
+            ),
+        ).single()
+
+        assertEquals(mapOf("id" to "retained-house-3"), request.cacheKey.bindingValues)
+        assertEquals(
+            mapOf(
+                "id" to "retained-house-3",
+                "houseId" to "retained-house-3",
+                "page" to "2",
+            ),
+            dynamicFormRelationRuntimeValues(
+                request = request,
+                availableValues = mapOf(
+                    "id" to "selected-list-7",
+                    "houseId" to "retained-house-3",
+                ),
+                additionalValues = mapOf("page" to "2"),
+            ),
+        )
+    }
+
+    @Test
+    fun `ambiguous qualified aliases never fall back to an unrelated direct identity`() {
+        val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
+        val schema = schema(
+            form = form,
+            relationship = ResourceRelationshipSpec(
+                "categories",
+                "entries",
+                "id",
+                "categoryId",
+                Confidence.verified,
+            ),
+            reads = listOf(
+                action(
+                    "category-index",
+                    "categories",
+                    "/api/houses/{id}/categories",
+                    requiredPathNames = listOf("id"),
+                ),
+            ),
+        )
+
+        assertTrue(
+            dynamicFormRelationLoadRequests(
+                schema = schema,
+                formView = form,
+                availableValues = mapOf(
+                    "id" to "selected-list-7",
+                    "houseId" to "retained-house-3",
+                    "housesId" to "conflicting-house-4",
+                ),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
+    fun `oversized relation response keeps its later choices within the strict scope bound`() {
         val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
         val schema = schema(
             form = form,
@@ -86,10 +170,12 @@ class DynamicFormRelationsTest {
             .getValue("categories")
 
         assertEquals(MAX_DYNAMIC_FORM_RELATION_RECORDS, cached.size)
-        assertTrue(cached.any { record -> record.id == "category-75" })
+        assertTrue(cached.none { record -> record.id == "category-200" })
+        assertTrue(cached.any { record -> record.id == "category-201" })
         assertTrue(cached.any { record -> record.id == "category-500" })
-        assertTrue(cached.none { record -> record.id == "category-501" })
-        assertTrue(state.reachedSafetyLimit(request))
+        assertTrue(cached.any { record -> record.id == "category-501" })
+        assertTrue(cached.any { record -> record.id == "category-700" })
+        assertEquals(200, state.discardedRecordCount(request))
     }
 
     @Test
@@ -137,6 +223,66 @@ class DynamicFormRelationsTest {
         val finalPage = secondPage.appendPageSucceeded(request, records(96..107))
         assertEquals(107, finalPage.relatedRecords(listOf(request)).getValue("categories").size)
         assertEquals(null, finalPage.continuation(request))
+    }
+
+    @Test
+    fun `relation pagination remains reachable beyond the bounded cache window`() {
+        val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
+        val schema = schema(
+            form = form,
+            relationship = ResourceRelationshipSpec(
+                "categories",
+                "entries",
+                "id",
+                "categoryId",
+                Confidence.verified,
+            ),
+            reads = listOf(
+                action(
+                    "category-index",
+                    "categories",
+                    "/api/categories",
+                    requiredPathNames = emptyList(),
+                ),
+            ),
+        )
+        val request = dynamicFormRelationLoadRequests(schema, form, emptyMap()).single()
+        val pagination = DynamicPaginationSpec(
+            parameterName = "page",
+            mode = DynamicPaginationMode.PageNumber,
+            expectedPageSize = 50,
+        )
+        val firstPage = DynamicFormRelationCacheState().loadSucceeded(
+            request = request,
+            records = records(1..50),
+            pagination = pagination,
+        )
+        val beyondFormerLimit = (2..11).fold(firstPage) { state, pageNumber ->
+            val first = ((pageNumber - 1) * 50) + 1
+            state.appendPageSucceeded(request, records(first..(first + 49)))
+        }
+        val cached = beyondFormerLimit.relatedRecords(listOf(request)).getValue("categories")
+
+        assertEquals(MAX_DYNAMIC_FORM_RELATION_RECORDS, cached.size)
+        assertTrue(cached.none { record -> record.id == "category-50" })
+        assertTrue(cached.any { record -> record.id == "category-51" })
+        assertTrue(cached.any { record -> record.id == "category-501" })
+        assertTrue(cached.any { record -> record.id == "category-550" })
+        assertEquals("12", beyondFormerLimit.continuation(request)?.nextRequestValue)
+        assertEquals(50, beyondFormerLimit.discardedRecordCount(request))
+
+        val restarted = beyondFormerLimit.loadSucceeded(
+            request = request,
+            records = records(1..50),
+            pagination = pagination,
+        )
+        assertTrue(
+            restarted.relatedRecords(listOf(request))
+                .getValue("categories")
+                .any { record -> record.id == "category-1" },
+        )
+        assertEquals(0, restarted.discardedRecordCount(request))
+        assertEquals("2", restarted.continuation(request)?.nextRequestValue)
     }
 
     @Test

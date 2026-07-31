@@ -78,6 +78,7 @@ private val SUPPORTED_DYNAMIC_INTEGER_ITEM_KEYS = setOf(
     "examples",
     "exclusiveMaximum",
     "exclusiveMinimum",
+    "format",
     "maximum",
     "minimum",
     "multipleOf",
@@ -100,6 +101,8 @@ private fun JsonElement?.dynamicIntegerArrayConstraints(): DynamicIntegerArrayCo
     val items = schema["items"] as? JsonObject ?: return null
     if ((items["type"] as? JsonPrimitive)?.contentOrNull != "integer") return null
     if (items.keys.any { it !in SUPPORTED_DYNAMIC_INTEGER_ITEM_KEYS }) return null
+    val itemFormat = (items["format"] as? JsonPrimitive)?.contentOrNull
+    if ("format" in items && itemFormat !in setOf("int32", "int64")) return null
 
     val minItems = schema.exactNonNegativeInt("minItems") ?: if ("minItems" in schema) return null else 0
     val declaredMaxItems = schema.exactNonNegativeInt("maxItems")

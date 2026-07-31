@@ -200,8 +200,14 @@ data class NativeDatasetContext(
 data class NativeRelatedRecordPaging(
     val loading: Boolean = false,
     val error: String? = null,
+    val discardedChoiceCount: Int = 0,
     val loadMore: (() -> Unit)? = null,
-)
+    val returnToFirstPage: (() -> Unit)? = null,
+) {
+    init {
+        require(discardedChoiceCount >= 0)
+    }
+}
 
 internal data class HydratedNativeDataset(
     val resource: ResourceSpec,

@@ -184,6 +184,28 @@ class DynamicDescriptorMapperTest {
     }
 
     @Test
+    fun infersSelfReferentialPluralIdPickersWithoutTreatingIdentityAsARelation() {
+        val roles = resource(
+            "roles",
+            fields("id", "name") +
+                field("roleIds", FieldKind.integer, format = DYNAMIC_INTEGER_ARRAY_FORMAT),
+        )
+        val descriptor = DynamicAppDescriptor(
+            descriptorVersion = DYNAMIC_APP_DESCRIPTOR_VERSION,
+            app = AppIdentity("example", "Example", "1"),
+            endpointPolicy = EndpointPolicy("https://cloud.example.test", listOf("/api")),
+            resources = listOf(roles),
+        )
+
+        assertEquals(
+            listOf(
+                ResourceRelationshipSpec("roles", "roles", "id", "roleIds", Confidence.high),
+            ),
+            descriptor.toNativeAppSchema().relationships,
+        )
+    }
+
+    @Test
     fun ambiguousForeignKeyResourceNamesDoNotCreateRelationshipEvidence() {
         val category = resource("category", fields("id", "name"))
         val categories = resource("categories", fields("id", "name"))

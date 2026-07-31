@@ -86,6 +86,34 @@ enum class MarketingCaptureScenario(
         MarketingCapturePurpose.StateCoverage,
         "mobile", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f,
     ),
+    AdaptiveAppCollectionMobile(
+        "adaptive-dynamic-collection-mobile",
+        "adaptive-dynamic-collection-mobile.png",
+        NextcloudPresentation.Adaptive,
+        "Dynamic apps",
+        "Nested collection actions",
+        "Synthetic visual QA",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile",
+        "phone-portrait",
+        width = 1_080,
+        height = 1_800,
+        density = 2.625f,
+    ),
+    AdaptiveAppContextMenuMobile(
+        "adaptive-dynamic-context-menu-mobile",
+        "adaptive-dynamic-context-menu-mobile.png",
+        NextcloudPresentation.Adaptive,
+        "Dynamic apps",
+        "Context workspace menu",
+        "Synthetic visual QA",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile",
+        "phone-portrait",
+        width = 1_080,
+        height = 1_800,
+        density = 2.625f,
+    ),
     PhotoTimelineRevalidationErrorMobile(
         "photo-timeline-revalidation-error-mobile",
         "photo-timeline-revalidation-error-mobile.png",
@@ -670,7 +698,9 @@ internal fun MarketingMediaBackupScenario() {
 internal fun MarketingAdaptiveAppScenario(scenario: MarketingCaptureScenario) {
     require(
         scenario == MarketingCaptureScenario.AdaptiveApp ||
-            scenario == MarketingCaptureScenario.AdaptiveAppMobile,
+            scenario == MarketingCaptureScenario.AdaptiveAppMobile ||
+            scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile ||
+            scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
     ) {
         "${scenario.id} is not an adaptive data capture."
     }

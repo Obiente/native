@@ -1277,6 +1277,152 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
+    fun `signed idempotent ambiguous replacement uses exact read recovery and typed object rows`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Generic shares","version":"1"},
+              "paths":{
+                "/apps/example/api/entities/{entityId}/share":{
+                  "parameters":[
+                    {"name":"entityId","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"entity-shares-read",
+                    "summary":"Read entity shares",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{
+                        "uid":{"type":"string"},
+                        "permission":{"type":"string"}
+                      }}
+                    }}}}}
+                  },
+                  "put":{
+                    "operationId":"entity-share",
+                    "summary":"Share entity",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["shares"],
+                      "properties":{
+                        "shares":{
+                          "type":"array",
+                          "minItems":1,
+                          "maxItems":8,
+                          "description":"Recipients with permission ('view' or 'edit').",
+                          "items":{
+                            "type":"object",
+                            "additionalProperties":false,
+                            "required":["uid","permission"],
+                            "properties":{
+                              "uid":{"type":"string","title":"Recipient","minLength":1},
+                              "permission":{"type":"string","title":"Permission"}
+                            }
+                          }
+                        }
+                      }
+                    }}}},
+                    "responses":{"200":{"description":"Updated"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val input = exampleInput(document)
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            input.copy(
+                advertisedOpenApi = input.advertisedOpenApi?.copy(
+                    trust = OpenApiTrust.nextcloudSignedAppPackage,
+                ),
+            ),
+        )
+
+        val actionEvidence = "actions=${descriptor.actions.map(DynamicAction::id)}; " +
+            "warnings=${descriptor.warnings}"
+        val read = assertNotNull(
+            descriptor.actions.singleOrNull { it.id == "entity-shares-read" },
+            actionEvidence,
+        )
+        val replacement = assertNotNull(
+            descriptor.actions.singleOrNull { it.id == "entity-share" },
+            actionEvidence,
+        )
+        assertEquals(read.id, replacement.resultRecoveryActionId)
+        val form = assertNotNull(
+            descriptor.forms.singleOrNull { it.actionId == replacement.id },
+            "Missing replacement form; $actionEvidence; forms=${descriptor.forms.map(DynamicForm::actionId)}",
+        )
+        val field = assertNotNull(
+            form.fields.singleOrNull(),
+            "Expected one replacement field; fields=${form.fields}",
+        )
+        assertEquals(DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT, field.format)
+        val structured = assertNotNull(field.repeatableObjectInput)
+        assertEquals(1, structured.minimumItems)
+        assertEquals(8, structured.maximumItems)
+        assertEquals(listOf("uid", "permission"), structured.fields.map { it.id })
+        assertEquals(
+            listOf("view", "edit"),
+            structured.fields.single { it.id == "permission" }.enumValues,
+        )
+        assertEquals(
+            """[{"uid":"alice","permission":"edit"}]""",
+            structured.encode(
+                listOf(
+                    RepeatableObjectInputRow(
+                        mapOf("uid" to "alice", "permission" to "edit"),
+                    ),
+                ),
+            ),
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+        assertTrue(descriptor.warnings.none { it.code == "ignored-ambiguous-result-write" })
+    }
+
+    @Test
+    fun `ambiguous replacement remains withheld without exact trusted get recovery`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Unsafe share","version":"1"},
+              "paths":{
+                "/apps/example/api/entities/{entityId}/share":{
+                  "parameters":[
+                    {"name":"entityId","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "put":{
+                    "operationId":"entity-share",
+                    "summary":"Share entity",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["shares"],
+                      "properties":{"shares":{"type":"array","items":{
+                        "type":"object",
+                        "properties":{"uid":{"type":"string"}}
+                      }}}
+                    }}}},
+                    "responses":{"200":{"description":"Updated"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val input = exampleInput(document)
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            input.copy(
+                advertisedOpenApi = input.advertisedOpenApi?.copy(
+                    trust = OpenApiTrust.nextcloudSignedAppPackage,
+                ),
+            ),
+        )
+
+        assertTrue(descriptor.actions.isEmpty())
+        assertTrue(descriptor.forms.isEmpty())
+        assertTrue(descriptor.warnings.any { it.code == "ignored-ambiguous-result-write" })
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
     fun exposesBodylessAndQueryDrivenMutationsAsConfirmedNativeActions() {
         val withDeleteAndQuery = OPEN_API
             .replace(
@@ -1329,6 +1475,75 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
+    fun `single member allOf preserves referenced enum metadata for editable fields`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Composed enum contract","version":"1"},
+              "components":{"schemas":{
+                "Palette":{"type":"string","enum":["red","blue"]},
+                "OtherPalette":{"type":"string","enum":["green","yellow"]}
+              }},
+              "paths":{
+                "/apps/example/api/items":{
+                  "get":{
+                    "operationId":"items-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{
+                        "id":{"type":"integer"},
+                        "color":{
+                          "nullable":true,
+                          "allOf":[{"${'$'}ref":"#/components/schemas/Palette"}]
+                        },
+                        "ambiguous":{
+                          "allOf":[
+                            {"${'$'}ref":"#/components/schemas/Palette"},
+                            {"${'$'}ref":"#/components/schemas/OtherPalette"}
+                          ]
+                        }
+                      }}
+                    }}}}}
+                  },
+                  "post":{
+                    "operationId":"items-create",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{
+                        "color":{"type":"string"},
+                        "ambiguous":{"type":"string"}
+                      }
+                    }}}},
+                    "responses":{"200":{"description":"Created"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val resource = descriptor.resources.single()
+        val fields = resource.fields.associateBy(DynamicField::id)
+        val color = fields.getValue("color")
+        val ambiguous = fields.getValue("ambiguous")
+
+        assertEquals(FieldKind.enumeration, color.kind)
+        assertEquals(listOf("red", "blue"), color.enumValues)
+        assertTrue(color.nullable)
+        assertEquals(FieldKind.string, ambiguous.kind)
+        assertNull(ambiguous.enumValues)
+
+        val nativeColor = descriptor.toNativeAppSchema()
+            .resources
+            .single()
+            .fields
+            .single { field -> field.id == "color" }
+        assertFalse(nativeColor.readOnly)
+        assertEquals(FieldKind.enumeration, nativeColor.kind)
+        assertEquals(listOf("red", "blue"), nativeColor.enumValues)
+    }
+
+    @Test
     fun `only exact declared integer arrays receive the generic integer array format`() {
         val document = """
             {
@@ -1341,7 +1556,7 @@ class DynamicAppDescriptorCompilerTest {
                     "requestBody":{"required":true,"content":{"application/json":{"schema":{
                       "type":"object",
                       "properties":{
-                        "integerIds":{"type":"array","items":{"type":"integer"}},
+                        "integerIds":{"type":"array","items":{"type":"integer","format":"int64"}},
                         "textIds":{"type":"array","items":{"type":"string"}},
                         "decimalIds":{"type":"array","items":{"type":"number"}},
                         "objectIds":{"type":"array","items":{"type":"object"}},

@@ -28,6 +28,7 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
                     readOnly = false,
                     format = input.format ?: existing.format,
                     enumValues = input.enumValues ?: existing.enumValues,
+                    repeatableObjectInput = input.repeatableObjectInput ?: existing.repeatableObjectInput,
                 )
             }
         }
@@ -102,6 +103,7 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
             inputSchema = formsByActionId[action.id]?.toNativeInputSchema(),
             evidence = action.provenance.map(Provenance::toEvidence),
             effect = action.effect,
+            resultRecoveryActionId = action.resultRecoveryActionId,
         )
     }
     val linkedRelationships = links.mapNotNull { link ->
@@ -124,11 +126,10 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
         childResource.fields.mapNotNull { childField ->
             val parentBase = childField.id.foreignKeyBase() ?: return@mapNotNull null
             val parentResource = resources.filter { candidate ->
-                candidate.id != childResource.id &&
-                    parentBase in setOf(
-                        candidate.id.relationBase(),
-                        candidate.label.relationBase(),
-                    )
+                parentBase in setOf(
+                    candidate.id.relationBase(),
+                    candidate.label.relationBase(),
+                )
             }.singleOrNull() ?: return@mapNotNull null
             val parentIdentity = parentResource.fields
                 .filter { field -> field.id.lowercase() in setOf("databaseid", "id", "uuid", "token") }
@@ -331,6 +332,7 @@ private fun FormField.toNativeField(): FieldSpec = FieldSpec(
     readOnly = false,
     format = format,
     enumValues = enumValues,
+    repeatableObjectInput = repeatableObjectInput,
 )
 
 private fun DynamicLayout.toNativeComponent(

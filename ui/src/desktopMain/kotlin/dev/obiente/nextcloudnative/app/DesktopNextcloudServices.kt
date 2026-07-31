@@ -1196,6 +1196,12 @@ class DesktopNextcloudServices(
         request: NextcloudApiRequest,
     ): NextcloudApiResponse = withContext(Dispatchers.IO) {
         val safeRequest = request.requireSafe()
+        safeRequest.multipartBody?.let { multipart ->
+            return@withContext executeNextcloudMultipartUpload(
+                session,
+                multipart.toUploadRequest(safeRequest),
+            )
+        }
         val accountId = desktopFileCacheAccountId(session)
         val cacheIdentity = safeRequest.dynamicReadCacheIdentity()
         if (safeRequest.method != NextcloudApiMethod.GET) {

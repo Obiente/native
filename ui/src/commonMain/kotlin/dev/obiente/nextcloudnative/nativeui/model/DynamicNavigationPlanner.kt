@@ -394,6 +394,12 @@ fun DynamicAppDescriptor.planDynamicNavigation(
     val rootForms = forms.mapNotNull { form ->
         val action = actionsById[form.actionId] ?: return@mapNotNull null
         if (action.binding.method == HttpMethod.GET || action.binding.pathParameters.isNotEmpty()) return@mapNotNull null
+        if (
+            action.effect == ActionEffect.upload &&
+            !action.isVerifiedCompiledUploadForm(form)
+        ) {
+            return@mapNotNull null
+        }
         if (rootResourceIds.none { root -> root.sameResourceAs(form.resourceId) }) return@mapNotNull null
         DynamicNavigationFormAction(
             formId = form.id,
@@ -448,6 +454,23 @@ fun DynamicAppDescriptor.planDynamicNavigation(
         .mapNotNull { form ->
             val action = actionsById[form.actionId] ?: return@mapNotNull null
             if (action.binding.method == HttpMethod.GET) return@mapNotNull null
+            if (
+                action.effect == ActionEffect.upload &&
+                !action.isVerifiedCompiledUploadForm(form)
+            ) {
+                return@mapNotNull null
+            }
+            if (
+                action.intent == ActionIntent.update &&
+                !action.resourceId.sameResourceAs(selectedRecord.resourceId) &&
+                !hasUnambiguousContextBoundSingletonUpdate(
+                    action = action,
+                    form = form,
+                    context = selectedRecord,
+                )
+            ) {
+                return@mapNotNull null
+            }
             val values = action.resolveContextualFormValues(
                 form = form,
                 context = selectedRecord,
@@ -471,12 +494,109 @@ fun DynamicAppDescriptor.planDynamicNavigation(
     )
 }
 
+private fun DynamicAction.isVerifiedCompiledUploadForm(form: DynamicForm): Boolean {
+    val body = binding.body ?: return false
+    val properties = (body.schema as? JsonObject)
+        ?.get("properties") as? JsonObject
+        ?: return false
+    val fileField = form.fields.singleOrNull { field -> field.kind == FieldKind.file }
+        ?: return false
+    val fileSchema = properties[fileField.fieldId] as? JsonObject ?: return false
+    return intent == ActionIntent.execute &&
+        effect == ActionEffect.upload &&
+        risk == ActionRisk.mutating &&
+        hasVerifiedDynamicContractEvidence() &&
+        form.hasVerifiedDynamicContractEvidence() &&
+        form.resourceId.sameResourceAs(resourceId) &&
+        fileSchema["type"] == JsonPrimitive("string") &&
+        fileSchema["format"] == JsonPrimitive("binary") &&
+        body.contentType.substringBefore(';').trim().lowercase().startsWith("multipart/")
+}
+
+/**
+ * A scoped singleton write may target the active child surface while its trusted context record is
+ * the selected parent. The exact active detail layout must prove one read surface for the action's
+ * resource; this is deliberately separate from ordinary same-record update authorization.
+ */
+private fun DynamicAppDescriptor.hasUnambiguousContextBoundSingletonUpdate(
+    action: DynamicAction,
+    form: DynamicForm,
+    context: DynamicResourceRecordContext,
+): Boolean {
+    if (
+        action.risk != ActionRisk.mutating ||
+        !action.hasVerifiedDynamicContractEvidence() ||
+        !form.hasVerifiedDynamicContractEvidence() ||
+        !form.resourceId.sameResourceAs(action.resourceId)
+    ) {
+        return false
+    }
+    val currentLayoutId = context.currentLayoutId ?: return false
+    val activeLayout = layouts.singleOrNull { layout ->
+        layout.id == currentLayoutId &&
+            layout.kind == LayoutKind.detail &&
+            layout.resourceId.sameResourceAs(action.resourceId) &&
+            layout.hasVerifiedDynamicContractEvidence()
+    } ?: return false
+    val readActionId = activeLayout.sourceActionId ?: return false
+    val activeRead = actions.singleOrNull { candidate ->
+        candidate.id == readActionId &&
+            candidate.resourceId.sameResourceAs(action.resourceId) &&
+            candidate.binding.method == HttpMethod.GET &&
+            candidate.intent in setOf(ActionIntent.read, ActionIntent.list) &&
+            candidate.risk == ActionRisk.readOnly &&
+            candidate.hasVerifiedDynamicContractEvidence()
+    } ?: return false
+    if (activeRead.id == action.id) return false
+    if (!activeRead.binding.isExactContextBoundSingletonRoute(action.binding)) return false
+    return resources.count { resource ->
+        resource.id.sameResourceAs(action.resourceId)
+    } == 1
+}
+
+private fun DynamicHttpBinding.isExactContextBoundSingletonRoute(
+    writeBinding: DynamicHttpBinding,
+): Boolean =
+    path == writeBinding.path &&
+        pathParameters.map(HttpParameter::name).toSet() ==
+        writeBinding.pathParameters.map(HttpParameter::name).toSet() &&
+        queryParameters.filter(HttpParameter::required).map(HttpParameter::name).toSet() ==
+        writeBinding.queryParameters.filter(HttpParameter::required).map(HttpParameter::name).toSet()
+
+private fun DynamicAction.hasVerifiedDynamicContractEvidence(): Boolean =
+    confidence == Confidence.verified ||
+        (
+            confidence == Confidence.high &&
+                provenance.any { evidence ->
+                    evidence.kind == ProvenanceKind.verifiedAppPackage
+                }
+            )
+
+private fun DynamicForm.hasVerifiedDynamicContractEvidence(): Boolean =
+    confidence == Confidence.verified ||
+        (
+            confidence == Confidence.high &&
+                provenance.any { evidence ->
+                    evidence.kind == ProvenanceKind.verifiedAppPackage
+                }
+            )
+
+private fun DynamicLayout.hasVerifiedDynamicContractEvidence(): Boolean =
+    confidence == Confidence.verified ||
+        (
+            confidence == Confidence.high &&
+                provenance.any { evidence ->
+                    evidence.kind == ProvenanceKind.verifiedAppPackage
+                }
+            )
+
 /**
  * Applies exact record-level capability fields before exposing a mutation form.
  *
  * A relationship-proven child create is governed by the child action contract, not by whether the
  * selected parent itself is editable. For same-record writes, however, a declared capability whose
- * value is absent or malformed is unknown and therefore cannot authorize the form.
+ * value is absent or malformed is unknown and therefore cannot authorize the form. Once any
+ * edit/delete capability is declared, each mutation category needs its own affirmative evidence.
  */
 private fun DynamicResourceRecordContext.permitsContextualForm(
     action: DynamicAction,
@@ -510,13 +630,18 @@ private fun DynamicResourceRecordContext.permitsContextualForm(
         -> false
         else -> action.intent == ActionIntent.delete
     }
+    val scopedCapabilities = setOf("canedit", "canupdate", "candelete")
+        .filter(capabilityFields::containsKey)
+    if (scopedCapabilities.isEmpty()) return true
     return if (deletion) {
-        "candelete" !in capabilityFields || declaredCapability("candelete") == true
+        "candelete" in scopedCapabilities && declaredCapability("candelete") == true
     } else {
-        val editCapabilities = setOf("canedit", "canupdate").filter(capabilityFields::containsKey)
+        val editCapabilities = setOf("canedit", "canupdate").filter(scopedCapabilities::contains)
         action.intent !in setOf(ActionIntent.update, ActionIntent.execute) ||
-            editCapabilities.isEmpty() ||
-            editCapabilities.all { id -> declaredCapability(id) == true }
+            (
+                editCapabilities.isNotEmpty() &&
+                    editCapabilities.all { id -> declaredCapability(id) == true }
+                )
     }
 }
 

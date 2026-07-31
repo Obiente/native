@@ -22,6 +22,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestination
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationMode
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationModel
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionWorkspaceScaffold
+import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
@@ -35,6 +40,7 @@ import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
+import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.ResourceRelationshipSpec
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
@@ -148,6 +154,7 @@ private val marketingDynamicCreateAction = ActionSpec(
         operationId = "createSyntheticWorkItem",
         bodyFieldNames = listOf("title", "status", "groupId", "sendReminders", "rrule"),
         requiredBodyFieldNames = listOf("title", "status"),
+        bodyContentType = "application/json",
     ),
     intent = ActionIntent.create,
     risk = ActionRisk.mutating,
@@ -245,25 +252,150 @@ internal fun MarketingDynamicUiScenario(
 ) {
     require(
         scenario == MarketingCaptureScenario.AdaptiveApp ||
-            scenario == MarketingCaptureScenario.AdaptiveAppMobile,
+            scenario == MarketingCaptureScenario.AdaptiveAppMobile ||
+            scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile ||
+            scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
     ) {
         "${scenario.id} is not a synthetic dynamic UI capture."
     }
     val desktop = scenario.presentation == NextcloudPresentation.Desktop
     Column(modifier = Modifier.fillMaxSize()) {
         MarketingDynamicContractHeader(fixture, compact = !desktop)
-        if (desktop) {
+        if (scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile) {
+            MarketingDynamicContextMenuCapture(
+                fixture = fixture,
+                modifier = Modifier.weight(1f),
+            )
+        } else if (desktop) {
             MarketingDynamicDesktopCapture(fixture, Modifier.weight(1f))
+        } else if (scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile) {
+            GenericNativeAppScreen(
+                schema = marketingDynamicUiSchema,
+                view = marketingDynamicListView,
+                state = NativeScreenState.Ready(marketingDynamicWorkItemRecords),
+                actionExecutor = marketingCaptureActionExecutor,
+                modifier = Modifier.weight(1f),
+                datasetContext = marketingDynamicDatasetContext,
+                showCollectionCreateAction = true,
+            )
         } else {
             GenericNativeAppScreen(
                 schema = marketingDynamicUiSchema,
                 view = marketingDynamicFormView,
-                state = NativeScreenState.Ready(listOf(marketingDynamicWorkItemRecords.first())),
+                state = NativeScreenState.Ready(emptyList()),
                 actionExecutor = marketingCaptureActionExecutor,
                 modifier = Modifier.weight(1f),
                 datasetContext = marketingDynamicDatasetContext,
             )
         }
+    }
+}
+
+private val marketingContextMenuViews = listOf(
+    ViewSpec(
+        id = "context.tasks",
+        title = "Tasks",
+        resourceId = "context-tasks",
+        component = NativeComponent.taskList,
+        sourceActionId = "context.tasks.list",
+        confidence = Confidence.verified,
+    ),
+    ViewSpec(
+        id = "context.notes",
+        title = "Notes",
+        resourceId = "context-notes",
+        component = NativeComponent.collectionList,
+        sourceActionId = "context.notes.list",
+        confidence = Confidence.verified,
+    ),
+    ViewSpec(
+        id = "context.media",
+        title = "Media",
+        resourceId = "context-media",
+        component = NativeComponent.mediaGrid,
+        sourceActionId = "context.media.list",
+        confidence = Confidence.verified,
+    ),
+    ViewSpec(
+        id = "context.members",
+        title = "Members",
+        resourceId = "context-members",
+        component = NativeComponent.contactList,
+        sourceActionId = "context.members.list",
+        confidence = Confidence.verified,
+    ),
+    ViewSpec(
+        id = "context.activity",
+        title = "Activity",
+        resourceId = "context-activity",
+        component = NativeComponent.timeline,
+        sourceActionId = "context.activity.list",
+        confidence = Confidence.verified,
+    ),
+    ViewSpec(
+        id = "context.preferences",
+        title = "Preferences",
+        resourceId = "context-preferences",
+        component = NativeComponent.dataTable,
+        sourceActionId = "context.preferences.read",
+        confidence = Confidence.verified,
+    ),
+)
+
+private val marketingContextMenuSchema = marketingDynamicUiSchema.copy(
+    resources = marketingContextMenuViews.map { view ->
+        ResourceSpec(
+            id = view.resourceId,
+            name = view.title,
+            confidence = Confidence.verified,
+            fields = emptyList(),
+        )
+    },
+    views = marketingContextMenuViews,
+    actions = emptyList(),
+    relationships = emptyList(),
+)
+
+private val marketingContextMenuDestinations = marketingContextMenuViews.map { view ->
+    DynamicNavigationDestination(
+        layoutId = view.id,
+        label = view.title,
+        resourceId = view.resourceId,
+        actionId = view.sourceActionId,
+        pathParameterValues = mapOf("workspaceId" to "synthetic-workspace"),
+    ) to NextcloudCollectionDestination(
+        id = view.id,
+        label = view.title,
+        accessibilityId = view.sourceActionId,
+    )
+}
+
+@Composable
+private fun MarketingDynamicContextMenuCapture(
+    fixture: MarketingDynamicUiFixture,
+    modifier: Modifier,
+) {
+    val navigationModel = NextcloudCollectionNavigationModel.create(
+        destinations = marketingContextMenuDestinations.map { (_, destination) -> destination },
+        selectedDestinationId = null,
+    )
+    NextcloudCollectionWorkspaceScaffold(
+        model = navigationModel,
+        mode = NextcloudCollectionNavigationMode.Drawer,
+        title = fixture.appName,
+        subtitle = "Garden renewal",
+        onBack = {},
+        hasHierarchyBack = true,
+        onDestinationSelected = {},
+        destinationIcon = { NextcloudIcons.Apps },
+        modifier = modifier,
+    ) {
+        DynamicContextDestinationMenu(
+            recordLabel = "Garden renewal",
+            destinations = marketingContextMenuDestinations,
+            schema = marketingContextMenuSchema,
+            onDestinationSelected = { _, _ -> },
+        )
     }
 }
 
@@ -293,6 +425,7 @@ private fun MarketingDynamicDesktopCapture(
                 actionExecutor = marketingCaptureActionExecutor,
                 modifier = Modifier.weight(1f),
                 datasetContext = marketingDynamicDatasetContext,
+                showCollectionCreateAction = true,
             )
             Box(modifier = Modifier.fillMaxWidth().height(280.dp)) {
                 GenericNativeAppScreen(
@@ -315,7 +448,7 @@ private fun MarketingDynamicDesktopCapture(
             GenericNativeAppScreen(
                 schema = marketingDynamicUiSchema,
                 view = marketingDynamicFormView,
-                state = NativeScreenState.Ready(listOf(marketingDynamicWorkItemRecords.first())),
+                state = NativeScreenState.Ready(emptyList()),
                 actionExecutor = marketingCaptureActionExecutor,
                 modifier = Modifier.weight(1f),
                 datasetContext = marketingDynamicDatasetContext,

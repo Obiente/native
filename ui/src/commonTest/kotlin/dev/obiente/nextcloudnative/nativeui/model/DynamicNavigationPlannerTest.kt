@@ -170,6 +170,181 @@ class DynamicNavigationPlannerTest {
     }
 
     @Test
+    fun `verified file upload form is contextual only with complete trusted route bindings`() {
+        val listPhotos = action(
+            "list-photos",
+            "photos",
+            ActionIntent.list,
+            "houseId",
+        ).copy(confidence = Confidence.verified)
+        val uploadPhoto = action(
+            "upload-photo",
+            "photos",
+            ActionIntent.execute,
+            "houseId",
+            method = HttpMethod.POST,
+            body = HttpBody(
+                contentType = "multipart/form-data",
+                required = true,
+                schema = buildJsonObject {
+                    put("type", JsonPrimitive("object"))
+                    put(
+                        "properties",
+                        buildJsonObject {
+                            put(
+                                "image",
+                                buildJsonObject {
+                                    put("type", JsonPrimitive("string"))
+                                    put("format", JsonPrimitive("binary"))
+                                },
+                            )
+                        },
+                    )
+                },
+            ),
+        ).copy(
+            effect = ActionEffect.upload,
+            confidence = Confidence.verified,
+        )
+        val uploadForm = form(
+            id = "upload-photo.form",
+            title = "Upload",
+            resourceId = "photos",
+            actionId = uploadPhoto.id,
+        ).copy(
+            fields = listOf(
+                FormField(
+                    fieldId = "image",
+                    label = "Image",
+                    kind = FieldKind.file,
+                    required = true,
+                ),
+            ),
+            confidence = Confidence.verified,
+        )
+        val photoLayout = layout("photos", listPhotos.id).copy(
+            confidence = Confidence.verified,
+        )
+        val descriptor = hierarchyDescriptor().copy(
+            resources = listOf(
+                resource("houses").copy(confidence = Confidence.verified),
+                resource("photos").copy(confidence = Confidence.verified),
+            ),
+            layouts = listOf(photoLayout),
+            links = emptyList(),
+            forms = listOf(uploadForm),
+            actions = listOf(listPhotos, uploadPhoto),
+        )
+        val trustedContext = DynamicResourceRecordContext(
+            resourceId = "houses",
+            recordId = "house-7",
+            parameterValues = mapOf("houseId" to "house-7"),
+            currentLayoutId = photoLayout.id,
+        )
+
+        assertEquals(
+            mapOf("houseId" to "house-7"),
+            descriptor.planDynamicNavigation(trustedContext)
+                .contextualFormActions
+                .single { action -> action.actionId == uploadPhoto.id }
+                .pathParameterValues,
+        )
+        assertTrue(
+            descriptor.planDynamicNavigation(
+                trustedContext.copy(
+                    parameterValues = emptyMap(),
+                    actionSafeIdentity = false,
+                ),
+            ).contextualFormActions.isEmpty(),
+        )
+        assertTrue(
+            descriptor.copy(forms = listOf(uploadForm.copy(confidence = Confidence.high)))
+                .planDynamicNavigation(trustedContext)
+                .contextualFormActions
+                .isEmpty(),
+        )
+    }
+
+    @Test
+    fun `cross-resource singleton update requires one verified active detail read surface`() {
+        val readPreferences = action(
+            "read-preferences",
+            "preferences",
+            ActionIntent.read,
+            "houseId",
+        ).copy(confidence = Confidence.verified)
+        val updatePreferences = action(
+            "update-preferences",
+            "preferences",
+            ActionIntent.update,
+            "houseId",
+            method = HttpMethod.PATCH,
+        ).copy(confidence = Confidence.verified)
+        val preferencesLayout = layout("preferences", readPreferences.id).copy(
+            id = "preferences.detail",
+            kind = LayoutKind.detail,
+            confidence = Confidence.verified,
+        )
+        val preferencesForm = form(
+            id = "update-preferences.form",
+            title = "Preferences",
+            resourceId = "preferences",
+            actionId = updatePreferences.id,
+        ).copy(
+            fields = listOf(
+                FormField(
+                    fieldId = "enabled",
+                    label = "Enabled",
+                    kind = FieldKind.boolean,
+                    required = true,
+                ),
+            ),
+            confidence = Confidence.verified,
+        )
+        val descriptor = hierarchyDescriptor().copy(
+            resources = listOf(
+                resource("houses").copy(confidence = Confidence.verified),
+                resource("preferences").copy(
+                    collection = false,
+                    confidence = Confidence.verified,
+                ),
+            ),
+            layouts = listOf(preferencesLayout),
+            links = emptyList(),
+            forms = listOf(preferencesForm),
+            actions = listOf(readPreferences, updatePreferences),
+        )
+        val activePreferences = DynamicResourceRecordContext(
+            resourceId = "houses",
+            recordId = "house-7",
+            parameterValues = mapOf("houseId" to "house-7"),
+            currentLayoutId = preferencesLayout.id,
+        )
+
+        assertEquals(
+            listOf(updatePreferences.id),
+            descriptor.planDynamicNavigation(activePreferences)
+                .contextualFormActions
+                .map(DynamicNavigationFormAction::actionId),
+        )
+        assertTrue(
+            descriptor.copy(
+                layouts = listOf(preferencesLayout.copy(kind = LayoutKind.list)),
+            ).planDynamicNavigation(activePreferences)
+                .contextualFormActions
+                .isEmpty(),
+        )
+        assertTrue(
+            descriptor.planDynamicNavigation(
+                activePreferences.copy(
+                    parameterValues = emptyMap(),
+                    actionSafeIdentity = false,
+                ),
+            ).contextualFormActions.isEmpty(),
+        )
+    }
+
+    @Test
     fun `ephemeral map identity can open read children but cannot authorize forms`() {
         val plan = hierarchyDescriptor().planDynamicNavigation(
             DynamicResourceRecordContext(
@@ -287,6 +462,42 @@ class DynamicNavigationPlannerTest {
         assertEquals(
             setOf("create-bill.form"),
             contextualFormIds(emptyMap()),
+        )
+
+        fun descriptorWithScopedCapabilities(vararg fieldIds: String): DynamicAppDescriptor =
+            descriptor.copy(
+                resources = descriptor.resources.map { resource ->
+                    resource.takeUnless { it.id == "projects" }
+                        ?: resource.copy(
+                            fields = capabilityFields.filter { field -> field.id in fieldIds },
+                        )
+                },
+            )
+
+        fun scopedContextualFormIds(
+            scopedDescriptor: DynamicAppDescriptor,
+            fieldValues: Map<String, String?>,
+        ): Set<String> = scopedDescriptor
+            .planDynamicNavigation(baseContext.copy(fieldValues = fieldValues))
+            .contextualFormActions
+            .mapTo(mutableSetOf(), DynamicNavigationFormAction::formId)
+
+        val deleteOnly = descriptorWithScopedCapabilities("canDelete")
+        assertEquals(
+            setOf("create-bill.form", "delete-project.form"),
+            scopedContextualFormIds(deleteOnly, mapOf("canDelete" to "true")),
+        )
+
+        val editOnly = descriptorWithScopedCapabilities("canEdit")
+        assertEquals(
+            setOf("create-bill.form", "edit-project.form"),
+            scopedContextualFormIds(editOnly, mapOf("canEdit" to "true")),
+        )
+
+        val noScopedCapabilities = descriptorWithScopedCapabilities()
+        assertEquals(
+            setOf("create-bill.form", "delete-project.form", "edit-project.form"),
+            scopedContextualFormIds(noScopedCapabilities, emptyMap()),
         )
     }
 

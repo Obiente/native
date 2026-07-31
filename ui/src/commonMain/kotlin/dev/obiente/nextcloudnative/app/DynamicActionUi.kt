@@ -4,7 +4,13 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionEffect
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
+import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
+import dev.obiente.nextcloudnative.nativeui.model.Confidence
+import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
+import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
+import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
+import dev.obiente.nextcloudnative.nativeui.model.sameDynamicResourceAs
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 
 internal data class PendingDynamicDirectAction(
@@ -56,6 +62,97 @@ internal fun dynamicActionUiMode(
     DynamicActionUiMode.ConfirmDirectly
 } else {
     DynamicActionUiMode.NavigateToForm
+}
+
+/**
+ * Places only planner-issued contextual forms on the active native surface.
+ *
+ * Ordinary updates and deletes still require the selected-record path. The two cross-resource
+ * cases are narrow: a verified file upload may target its active collection, and a verified
+ * singleton update may target its one active read-only detail surface.
+ */
+internal fun dynamicContextualFormTargetsActiveSurface(
+    action: ActionSpec,
+    formView: ViewSpec,
+    activeView: ViewSpec,
+    activeReadAction: ActionSpec?,
+    plannedBindingValues: Map<String, String>,
+    selectedRecordResourceId: String,
+    selectedCollectionState: String?,
+    hasEditableFileField: Boolean,
+    uniqueTargetResource: Boolean,
+): Boolean {
+    val targetsCurrentRecord = action.resourceId.sameDynamicResourceAs(selectedRecordResourceId)
+    val targetsCurrentView = action.resourceId.sameDynamicResourceAs(activeView.resourceId)
+    val createsCurrentViewResource = action.intent == ActionIntent.create &&
+        targetsCurrentView &&
+        selectedCollectionState == null
+    val editsSelectedRecord = action.intent in setOf(ActionIntent.update, ActionIntent.delete) &&
+        targetsCurrentRecord &&
+        (targetsCurrentView || activeView.component == NativeComponent.detail)
+    if (createsCurrentViewResource || editsSelectedRecord) return true
+    if (
+        !targetsCurrentView ||
+        !uniqueTargetResource ||
+        formView.resourceId != action.resourceId ||
+        !formView.hasVerifiedNativeContractEvidence() ||
+        !action.hasVerifiedNativeContractEvidence() ||
+        !action.hasCompleteDynamicFormBindings(plannedBindingValues)
+    ) {
+        return false
+    }
+    val verifiedActiveRead = activeReadAction?.takeIf { read ->
+        read.resourceId.sameDynamicResourceAs(action.resourceId) &&
+            read.binding.method == HttpMethod.GET &&
+            read.risk == ActionRisk.readOnly &&
+            read.hasVerifiedNativeContractEvidence()
+    } ?: return false
+    return when {
+        action.intent == ActionIntent.execute &&
+            action.effect == ActionEffect.upload &&
+            action.risk == ActionRisk.mutating &&
+            hasEditableFileField &&
+            verifiedActiveRead.intent in setOf(ActionIntent.list, ActionIntent.read) -> true
+        action.intent == ActionIntent.update &&
+            action.risk == ActionRisk.mutating &&
+            activeView.component == NativeComponent.detail &&
+            verifiedActiveRead.intent in setOf(ActionIntent.read, ActionIntent.list) &&
+            verifiedActiveRead.binding.isExactNativeSingletonRoute(action.binding) &&
+            selectedCollectionState == null -> true
+        else -> false
+    }
+}
+
+private fun ApiBinding.isExactNativeSingletonRoute(writeBinding: ApiBinding): Boolean =
+    path == writeBinding.path &&
+        pathParameterNames.toSet() == writeBinding.pathParameterNames.toSet() &&
+        requiredQueryParameterNames.toSet() == writeBinding.requiredQueryParameterNames.toSet()
+
+private fun ActionSpec.hasVerifiedNativeContractEvidence(): Boolean =
+    confidence == Confidence.verified ||
+        (
+            confidence == Confidence.high &&
+                evidence.any { item ->
+                    item.source == EvidenceSource.verifiedAppPackage
+                }
+            )
+
+private fun ViewSpec.hasVerifiedNativeContractEvidence(): Boolean =
+    confidence == Confidence.verified ||
+        (
+            confidence == Confidence.high &&
+                evidence.any { item ->
+                    item.source == EvidenceSource.verifiedAppPackage
+                }
+            )
+
+private fun ActionSpec.hasCompleteDynamicFormBindings(values: Map<String, String>): Boolean {
+    val requiredNames = (
+        binding.pathParameterNames +
+            binding.requiredPathParameterNames +
+            binding.requiredQueryParameterNames
+        ).distinct()
+    return requiredNames.all { name -> values[name]?.isNotBlank() == true }
 }
 
 internal fun dynamicHeaderActionLabel(action: ActionSpec, fallback: String): String = when (action.effect) {

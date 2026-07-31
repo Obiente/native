@@ -7,12 +7,22 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
+import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
+import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputFieldSpec
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputRow
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputScalarKind
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputSpec
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ResourceRelationshipSpec
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -55,7 +65,7 @@ class NativeRecordActionsTest {
                 method = HttpMethod.DELETE,
                 pathNames = listOf("recordId"),
                 confirmation = true,
-            ),
+            ).withRecordPath(""),
             action(
                 id = "set-state",
                 intent = ActionIntent.update,
@@ -162,7 +172,7 @@ class NativeRecordActionsTest {
                 method = HttpMethod.DELETE,
                 pathNames = listOf("recordId"),
                 confirmation = true,
-            ),
+            ).withRecordPath(""),
             action(
                 id = "set-state",
                 intent = ActionIntent.update,
@@ -235,6 +245,457 @@ class NativeRecordActionsTest {
             ),
         )
         assertEquals(listOf(ActionEffect.archive), writablePlans.commands.map { command -> command.effect })
+    }
+
+    @Test
+    fun `presentation-only observed fields cannot become mutation authority`() {
+        val canonicalResource = resource(
+            fields = listOf(
+                field("id", "ID", FieldKind.string, readOnly = true),
+                field("title", "Title", FieldKind.string),
+            ),
+        )
+        val presentationResource = canonicalResource.copy(
+            fields = canonicalResource.fields +
+                field("canEdit", "Can edit", FieldKind.boolean, readOnly = true),
+        )
+        val edit = action(
+            id = "change",
+            intent = ActionIntent.update,
+            method = HttpMethod.PATCH,
+            pathNames = listOf("recordId"),
+            bodyNames = listOf("title"),
+        )
+        val record = NativeRecord(
+            id = "item-9",
+            values = mapOf("id" to "item-9", "title" to "Prepare room"),
+        )
+
+        val observedOnly = nativeRecordActions(
+            schema = schema(canonicalResource, listOf(edit)),
+            resource = presentationResource,
+            record = record,
+        )
+
+        assertTrue(
+            observedOnly.edit != null,
+            "A renderer-local observed field must not become authoritative permission evidence.",
+        )
+
+        val declaredResource = canonicalResource.copy(fields = presentationResource.fields)
+        val declaredMissing = nativeRecordActions(
+            schema = schema(declaredResource, listOf(edit)),
+            resource = presentationResource,
+            record = record,
+        )
+        val declaredAllowed = nativeRecordActions(
+            schema = schema(declaredResource, listOf(edit)),
+            resource = presentationResource,
+            record = record.copy(values = record.values + ("canEdit" to "true")),
+        )
+
+        assertNull(
+            declaredMissing.edit,
+            "A contract-declared capability with missing evidence must continue to fail closed.",
+        )
+        assertTrue(declaredAllowed.edit != null)
+    }
+
+    @Test
+    fun `partial record capability surfaces authorize only their declared mutation category`() {
+        val fields = listOf(
+            field("id", "ID", FieldKind.string, readOnly = true),
+            field("title", "Title", FieldKind.string),
+            field("done", "Done", FieldKind.boolean),
+        )
+        val edit = action(
+            id = "change",
+            intent = ActionIntent.update,
+            method = HttpMethod.PATCH,
+            pathNames = listOf("recordId"),
+            bodyNames = listOf("title"),
+        )
+        val delete = action(
+            id = "remove",
+            intent = ActionIntent.delete,
+            risk = ActionRisk.destructive,
+            method = HttpMethod.DELETE,
+            pathNames = listOf("recordId"),
+            confirmation = true,
+        ).withRecordPath("")
+        val complete = action(
+            id = "set-state",
+            intent = ActionIntent.update,
+            method = HttpMethod.PATCH,
+            pathNames = listOf("recordId"),
+            bodyNames = listOf("done"),
+            requiredBodyNames = listOf("done"),
+        )
+        val archive = action(
+            id = "archive",
+            intent = ActionIntent.execute,
+            effect = ActionEffect.archive,
+            method = HttpMethod.POST,
+            pathNames = listOf("recordId"),
+        ).withRecordPath("archive")
+        val actions = listOf(edit, delete, complete, archive)
+        val baseRecord = NativeRecord(
+            id = "item-9",
+            values = mapOf("id" to "item-9", "title" to "Prepare room", "done" to "false"),
+        )
+        val deleteOnlyResource = resource(
+            fields = fields + field("canDelete", "Can delete", FieldKind.boolean, readOnly = true),
+        )
+        val deleteOnly = nativeRecordActions(
+            schema(deleteOnlyResource, actions),
+            deleteOnlyResource,
+            baseRecord.copy(values = baseRecord.values + ("canDelete" to "true")),
+        )
+
+        assertNull(deleteOnly.edit)
+        assertNull(deleteOnly.completion)
+        assertTrue(deleteOnly.commands.isEmpty())
+        assertTrue(deleteOnly.delete != null)
+
+        val editOnlyResource = resource(
+            fields = fields + field("canEdit", "Can edit", FieldKind.boolean, readOnly = true),
+        )
+        val editOnly = nativeRecordActions(
+            schema(editOnlyResource, actions),
+            editOnlyResource,
+            baseRecord.copy(values = baseRecord.values + ("canEdit" to "true")),
+        )
+
+        assertTrue(editOnly.edit != null)
+        assertTrue(editOnly.completion != null)
+        assertEquals(listOf(ActionEffect.archive), editOnly.commands.map { command -> command.effect })
+        assertNull(editOnly.delete)
+    }
+
+    @Test
+    fun `parent authority uniquely authorizes list note and photo deletion`() {
+        listOf("lists", "notes", "photos").forEach { resourceId ->
+            val identityName = resourceId.dropLast(1) + "Id"
+            val child = resource(
+                id = resourceId,
+                fields = listOf(
+                    field("id", "ID", FieldKind.integer, readOnly = true),
+                    field("title", "Title", FieldKind.string),
+                    field("canEdit", "Can edit", FieldKind.boolean, readOnly = true),
+                ),
+            )
+            val parent = resource(
+                id = "houses",
+                fields = listOf(
+                    field("id", "ID", FieldKind.integer, readOnly = true),
+                    field("isAdmin", "Is admin", FieldKind.boolean, readOnly = true),
+                    field("permissions", "Permissions", FieldKind.objectValue, readOnly = true),
+                ),
+            )
+            val delete = action(
+                id = "$resourceId-delete",
+                intent = ActionIntent.delete,
+                effect = ActionEffect.delete,
+                risk = ActionRisk.destructive,
+                method = HttpMethod.DELETE,
+                pathNames = listOf("houseId", identityName),
+                confirmation = true,
+            ).let { action ->
+                action.copy(
+                    resourceId = child.id,
+                    binding = action.binding.copy(
+                        path = "/api/houses/{houseId}/$resourceId/{$identityName}",
+                    ),
+                )
+            }
+            val selected = NativeRecord(
+                id = "23",
+                values = mapOf("id" to "23", "title" to "Selected", "canEdit" to "true"),
+            )
+            val permissionId = "canDelete" + resourceId.replaceFirstChar(Char::uppercase)
+            val parentRecord = NativeRecord(
+                id = "4",
+                values = mapOf("id" to "4", "isAdmin" to "false"),
+                structuredValues = mapOf(
+                    "permissions" to NativeStructuredValue.ObjectValue(
+                        entries = listOf(
+                            NativeStructuredEntry(
+                                key = permissionId,
+                                label = permissionId,
+                                value = NativeStructuredValue.Scalar(
+                                    value = "true",
+                                    kind = NativeStructuredScalarKind.boolean,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            val nativeSchema = schema(child, listOf(delete)).copy(
+                resources = listOf(child, parent),
+            )
+            val authority = NativeRecordAuthorityContext(parent, parentRecord)
+
+            val plan = nativeRecordActions(
+                schema = nativeSchema,
+                resource = child,
+                record = selected,
+                navigationContext = mapOf("id" to "4"),
+                authorityContext = authority,
+            ).delete
+
+            assertEquals(
+                mapOf("houseId" to "4", identityName to "23"),
+                requireNotNull(plan) { resourceId }.request(confirmed = true).values,
+            )
+            assertNull(
+                nativeRecordActions(
+                    schema = nativeSchema,
+                    resource = child,
+                    record = selected,
+                    navigationContext = mapOf("id" to "4"),
+                ).delete,
+                "$resourceId canEdit must not authorize deletion without parent evidence.",
+            )
+        }
+    }
+
+    @Test
+    fun `parent authority fails closed for false absent malformed and ambiguous permissions`() {
+        val child = resource(
+            id = "notes",
+            fields = listOf(
+                field("id", "ID", FieldKind.integer, readOnly = true),
+                field("canEdit", "Can edit", FieldKind.boolean, readOnly = true),
+            ),
+        )
+        val parent = resource(
+            id = "houses",
+            fields = listOf(
+                field("id", "ID", FieldKind.integer, readOnly = true),
+                field("isAdmin", "Is admin", FieldKind.boolean, readOnly = true),
+                field("permissions", "Permissions", FieldKind.objectValue, readOnly = true),
+            ),
+        )
+        val delete = action(
+            id = "notes-delete",
+            intent = ActionIntent.delete,
+            effect = ActionEffect.delete,
+            risk = ActionRisk.destructive,
+            method = HttpMethod.DELETE,
+            pathNames = listOf("houseId", "noteId"),
+            confirmation = true,
+        ).let { action ->
+            action.copy(
+                resourceId = child.id,
+                binding = action.binding.copy(
+                    path = "/api/houses/{houseId}/notes/{noteId}",
+                ),
+            )
+        }
+        val selected = NativeRecord(
+            id = "23",
+            values = mapOf("id" to "23", "canEdit" to "true"),
+        )
+        val nativeSchema = schema(child, listOf(delete)).copy(resources = listOf(child, parent))
+
+        fun deleteWith(
+            entries: List<NativeStructuredEntry>?,
+            isAdmin: String = "false",
+            omittedEntries: Int = 0,
+        ) =
+            nativeRecordActions(
+                schema = nativeSchema,
+                resource = child,
+                record = selected,
+                navigationContext = mapOf("id" to "4"),
+                authorityContext = NativeRecordAuthorityContext(
+                    parentResource = parent,
+                    parentRecord = NativeRecord(
+                        id = "4",
+                        values = mapOf("id" to "4", "isAdmin" to isAdmin),
+                        structuredValues = entries?.let { values ->
+                            mapOf(
+                                "permissions" to NativeStructuredValue.ObjectValue(
+                                    entries = values,
+                                    omittedEntries = omittedEntries,
+                                ),
+                            )
+                        }.orEmpty(),
+                    ),
+                ),
+            ).delete
+
+        fun permission(
+            id: String,
+            value: String?,
+            kind: NativeStructuredScalarKind = NativeStructuredScalarKind.boolean,
+        ) = NativeStructuredEntry(
+            key = id,
+            label = id,
+            value = NativeStructuredValue.Scalar(value, kind),
+        )
+
+        assertNull(deleteWith(listOf(permission("canDeleteNotes", "false"))))
+        assertNull(deleteWith(listOf(permission("canEditNotes", "true"))))
+        assertNull(
+            deleteWith(
+                listOf(
+                    permission("canDeleteNotes", "true"),
+                    permission("canRemoveNotes", "true"),
+                ),
+            ),
+        )
+        assertNull(
+            deleteWith(
+                listOf(permission("canDeleteNotes", "true", NativeStructuredScalarKind.string)),
+            ),
+        )
+        assertNull(
+            deleteWith(
+                entries = listOf(permission("canDeleteNotes", "true")),
+                omittedEntries = 1,
+            ),
+        )
+        assertNull(deleteWith(entries = null))
+        assertTrue(deleteWith(entries = emptyList(), isAdmin = "true") != null)
+    }
+
+    @Test
+    fun `selected note command binds a proven parent alias from generic navigation id`() {
+        val notes = resource(
+            id = "notes",
+            fields = listOf(
+                field("id", "ID", FieldKind.integer, readOnly = true),
+                field("deletedAt", "Deleted at", FieldKind.dateTime, readOnly = true),
+            ),
+        )
+        val restore = action(
+            id = "note-restore",
+            intent = ActionIntent.execute,
+            effect = ActionEffect.restore,
+            method = HttpMethod.POST,
+            pathNames = listOf("houseId", "noteId"),
+        ).let { action ->
+            action.copy(
+                resourceId = notes.id,
+                binding = action.binding.copy(
+                    path = "/api/houses/{houseId}/notes/{noteId}/restore",
+                ),
+            )
+        }
+        val note = NativeRecord(
+            id = "23",
+            values = mapOf("id" to "23", "deletedAt" to "2026-07-30T12:00:00Z"),
+        )
+
+        val plan = nativeRecordActions(
+            schema = schema(notes, listOf(restore)),
+            resource = notes,
+            record = note,
+            navigationContext = mapOf("id" to "4"),
+        ).commands.single()
+
+        assertEquals(
+            mapOf("houseId" to "4", "noteId" to "23"),
+            plan.request().values,
+        )
+    }
+
+    @Test
+    fun `sparse records cannot authorize replacement put edit forms`() {
+        val resource = resource(
+            fields = listOf(
+                field("id", "ID", FieldKind.string, readOnly = true),
+                field("title", "Title", FieldKind.string),
+                field("description", "Description", FieldKind.longText),
+            ),
+        )
+        val replace = action(
+            id = "replace",
+            intent = ActionIntent.update,
+            method = HttpMethod.PUT,
+            pathNames = listOf("recordId"),
+            bodyNames = listOf("title", "description"),
+            requiredBodyNames = listOf("title"),
+        )
+        val sparseRecord = NativeRecord(
+            id = "item-9",
+            values = mapOf("id" to "item-9", "title" to "Visible title"),
+        )
+
+        assertNull(
+            nativeRecordActions(schema(resource, listOf(replace)), resource, sparseRecord).edit,
+        )
+
+        val patch = replace.copy(
+            id = "patch",
+            binding = replace.binding.copy(method = HttpMethod.PATCH, operationId = "patch"),
+        )
+        assertTrue(
+            nativeRecordActions(schema(resource, listOf(patch)), resource, sparseRecord).edit != null,
+        )
+
+        val completeRecord = sparseRecord.copy(
+            values = sparseRecord.values + ("description" to "Authoritative description"),
+        )
+        assertEquals(
+            mapOf("title" to "Visible title", "description" to "Authoritative description"),
+            nativeRecordActions(
+                schema(resource, listOf(replace)),
+                resource,
+                completeRecord,
+            ).edit?.initialValues,
+        )
+    }
+
+    @Test
+    fun `record delete must consume the selected item identity`() {
+        val resource = resource(
+            id = "tasks",
+            fields = listOf(field("id", "ID", FieldKind.string, readOnly = true)),
+        )
+        val collectionDelete = action(
+            id = "delete-task-collection",
+            intent = ActionIntent.delete,
+            risk = ActionRisk.destructive,
+            method = HttpMethod.DELETE,
+            pathNames = listOf("projectId"),
+            confirmation = true,
+        ).let { action ->
+            action.copy(
+                resourceId = resource.id,
+                binding = action.binding.copy(path = "/api/projects/{projectId}/tasks"),
+            )
+        }
+        val itemDelete = collectionDelete.copy(
+            id = "delete-task",
+            binding = collectionDelete.binding.copy(
+                path = "/api/projects/{projectId}/tasks/{taskId}",
+                operationId = "delete-task",
+                pathParameterNames = listOf("projectId", "taskId"),
+                requiredPathParameterNames = listOf("projectId", "taskId"),
+            ),
+        )
+        val record = NativeRecord(
+            id = "task-9",
+            values = mapOf("id" to "task-9"),
+            bindingContext = mapOf("projectId" to "project-4"),
+        )
+
+        assertNull(
+            nativeRecordActions(
+                schema(resource, listOf(collectionDelete)),
+                resource,
+                record,
+            ).delete,
+        )
+        assertEquals(
+            mapOf("projectId" to "project-4", "taskId" to "task-9"),
+            requireNotNull(
+                nativeRecordActions(schema(resource, listOf(itemDelete)), resource, record).delete,
+            ).request(confirmed = true).values,
+        )
     }
 
     @Test
@@ -353,7 +814,7 @@ class NativeRecordActionsTest {
         val resource = resource(
             fields = listOf(
                 field("id", "ID", FieldKind.string, readOnly = true),
-                field("destinationId", "Destination", FieldKind.string, readOnly = true),
+                field("destinationId", "Destination", FieldKind.string),
             ),
         )
         val archive = action(
@@ -372,6 +833,7 @@ class NativeRecordActionsTest {
             bodyNames = listOf("destinationId"),
             requiredBodyNames = listOf("destinationId"),
         ).withRecordPath("copy")
+            .withScalarBodySchema("destinationId", "string")
         val record = NativeRecord(
             id = "record-20",
             values = mapOf(
@@ -380,28 +842,25 @@ class NativeRecordActionsTest {
             ),
         )
 
-        val commands = nativeRecordActions(
+        val capabilities = nativeRecordActions(
             schema(resource, listOf(copy, archive)),
             resource,
             record,
-        ).commands
+        )
 
         assertEquals(
-            listOf(ActionEffect.archive, ActionEffect.copy),
-            commands.map(NativeRecordCommandActionPlan::effect),
+            listOf(ActionEffect.archive),
+            capabilities.commands.map(NativeRecordCommandActionPlan::effect),
         )
         assertEquals(
             mapOf("recordId" to "record-20"),
-            commands.first().request().values,
+            capabilities.commands.single().request().values,
         )
         assertEquals(
-            mapOf(
-                "recordId" to "record-20",
-                "destinationId" to "destination-4",
-            ),
-            commands.last().request().values,
+            listOf(ActionEffect.copy),
+            capabilities.commandForms.map(NativeRecordCommandFormActionPlan::effect),
         )
-        assertFalse(commands.any(NativeRecordCommandActionPlan::requiresConfirmation))
+        assertFalse(capabilities.commands.any(NativeRecordCommandActionPlan::requiresConfirmation))
     }
 
     @Test
@@ -646,7 +1105,7 @@ class NativeRecordActionsTest {
                     method = HttpMethod.DELETE,
                     pathNames = listOf("recordId"),
                     confirmation = true,
-                ),
+                ).withRecordPath(""),
             ),
         )
         val record = NativeRecord(
@@ -678,6 +1137,474 @@ class NativeRecordActionsTest {
         assertEquals(record, deleteTarget?.first)
         assertEquals(capabilities.delete, deleteTarget?.second)
         assertNull(commandTarget)
+    }
+
+    @Test
+    fun `body bearing record commands remain distinct from edit and bind exact context`() {
+        val resource = resource(
+            fields = listOf(
+                field("id", "ID", FieldKind.string, readOnly = true),
+                field("targetListId", "Destination", FieldKind.integer),
+                field(
+                    "roleIds",
+                    "Roles",
+                    FieldKind.integer,
+                    format = DYNAMIC_INTEGER_ARRAY_FORMAT,
+                ),
+                field(
+                    "visibility",
+                    "Visibility",
+                    FieldKind.enumeration,
+                    enumValues = listOf("private", "shared"),
+                ),
+            ),
+        )
+        val copy = action(
+            id = "copy-record",
+            intent = ActionIntent.execute,
+            effect = ActionEffect.copy,
+            method = HttpMethod.POST,
+            pathNames = listOf("containerId", "recordId"),
+            bodyNames = listOf("targetListId"),
+            requiredBodyNames = listOf("targetListId"),
+        ).let { action ->
+            action.copy(
+                binding = action.binding.copy(
+                    path = "/api/containers/{containerId}/records/{recordId}/copy",
+                ),
+            )
+        }.withScalarBodySchema("targetListId", "integer")
+        val assign = action(
+            id = "set-record-roles",
+            intent = ActionIntent.update,
+            effect = ActionEffect.assign,
+            method = HttpMethod.PUT,
+            pathNames = listOf("containerId", "recordId"),
+            bodyNames = listOf("roleIds"),
+            requiredBodyNames = listOf("roleIds"),
+        ).let { action ->
+            action.copy(
+                binding = action.binding.copy(
+                    path = "/api/containers/{containerId}/records/{recordId}/roles",
+                    bodySchema = Json.parseToJsonElement(
+                        """
+                        {
+                          "type": "object",
+                          "properties": {
+                            "roleIds": {
+                              "type": "array",
+                              "format": "$DYNAMIC_INTEGER_ARRAY_FORMAT",
+                              "items": { "type": "integer" }
+                            }
+                          },
+                          "required": ["roleIds"]
+                        }
+                        """.trimIndent(),
+                    ),
+                ),
+            )
+        }
+        val execute = action(
+            id = "set-record-visibility",
+            intent = ActionIntent.execute,
+            effect = ActionEffect.execute,
+            method = HttpMethod.POST,
+            pathNames = listOf("containerId", "recordId"),
+            bodyNames = listOf("visibility"),
+            requiredBodyNames = listOf("visibility"),
+        ).let { action ->
+            action.copy(
+                binding = action.binding.copy(
+                    path = "/api/containers/{containerId}/records/{recordId}/visibility",
+                ),
+            )
+        }.withScalarBodySchema(
+            fieldId = "visibility",
+            type = "string",
+            enumValues = listOf("private", "shared"),
+        )
+        val record = NativeRecord(
+            id = "record-9",
+            values = mapOf(
+                "id" to "record-9",
+                "roleIds" to "[2,7]",
+            ),
+            bindingContext = mapOf("containerId" to "container-4"),
+        )
+
+        val plans = nativeRecordActions(
+            schema = schema(resource, listOf(copy, assign, execute)),
+            resource = resource,
+            record = record,
+            navigationContext = mapOf("containerId" to "container-4"),
+        )
+
+        assertNull(plans.edit)
+        assertEquals(
+            listOf("copy-record", "set-record-roles", "set-record-visibility"),
+            plans.commandForms.map { it.action.id },
+        )
+        val copyPlan = plans.commandForms.single { it.action.id == "copy-record" }
+        assertEquals(listOf("targetListId"), copyPlan.fields.map(FieldSpec::id))
+        assertTrue(copyPlan.initialValues.isEmpty())
+        assertEquals(
+            mapOf(
+                "containerId" to "container-4",
+                "recordId" to "record-9",
+                "targetListId" to "12",
+            ),
+            copyPlan.request(mapOf("targetListId" to "12")).values,
+        )
+        val assignPlan = plans.commandForms.single { it.action.id == "set-record-roles" }
+        assertEquals(mapOf("roleIds" to "[2,7]"), assignPlan.initialValues)
+        assertEquals(
+            mapOf(
+                "containerId" to "container-4",
+                "recordId" to "record-9",
+                "roleIds" to "[3,8]",
+            ),
+            assignPlan.request(mapOf("roleIds" to "[3,8]")).values,
+        )
+        listOf("""["3"]""", "[3.5]", """{"roleIds":[3]}""").forEach { invalid ->
+            assertFailsWith<IllegalArgumentException>(invalid) {
+                assignPlan.request(mapOf("roleIds" to invalid))
+            }
+        }
+        val executePlan = plans.commandForms.single { it.action.id == "set-record-visibility" }
+        assertEquals(
+            "shared",
+            executePlan.request(mapOf("visibility" to "shared")).values["visibility"],
+        )
+        assertFailsWith<IllegalArgumentException> {
+            executePlan.request(mapOf("visibility" to "public"))
+        }
+    }
+
+    @Test
+    fun `record command form encodes exact typed repeatable object rows`() {
+        val structured = RepeatableObjectInputSpec(
+            minimumItems = 1,
+            maximumItems = 4,
+            fields = listOf(
+                RepeatableObjectInputFieldSpec(
+                    id = "uid",
+                    label = "Recipient",
+                    kind = RepeatableObjectInputScalarKind.String,
+                    required = true,
+                    minimumLength = 1,
+                ),
+                RepeatableObjectInputFieldSpec(
+                    id = "permission",
+                    label = "Permission",
+                    kind = RepeatableObjectInputScalarKind.Enumeration,
+                    required = true,
+                    enumValues = listOf("view", "edit"),
+                ),
+            ),
+        )
+        val resource = resource(
+            fields = listOf(
+                field("id", "ID", FieldKind.integer, readOnly = true),
+                field(
+                    id = "shares",
+                    label = "Shares",
+                    kind = FieldKind.objectValue,
+                    format = DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT,
+                    repeatableObjectInput = structured,
+                ),
+            ),
+        )
+        val assign = action(
+            id = "replace-shares",
+            intent = ActionIntent.update,
+            effect = ActionEffect.update,
+            method = HttpMethod.PUT,
+            pathNames = listOf("recordId"),
+            bodyNames = listOf("shares"),
+            requiredBodyNames = listOf("shares"),
+        ).withRecordPath("shares").let { action ->
+            action.copy(
+                resultRecoveryActionId = "read-shares",
+                binding = action.binding.copy(
+                    bodySchema = Json.parseToJsonElement(
+                        """
+                        {
+                          "type":"object",
+                          "required":["shares"],
+                          "properties":{
+                            "shares":{
+                              "type":"array",
+                              "format":"$DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT",
+                              "minItems":1,
+                              "maxItems":4,
+                              "items":{
+                                "type":"object",
+                                "additionalProperties":false,
+                                "required":["uid","permission"],
+                                "properties":{
+                                  "uid":{"type":"string","title":"Recipient","minLength":1},
+                                  "permission":{
+                                    "type":"string",
+                                    "title":"Permission",
+                                    "enum":["view","edit"]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                        """.trimIndent(),
+                    ),
+                ),
+            )
+        }
+        val record = NativeRecord(
+            id = "7",
+            values = mapOf("id" to "7"),
+        )
+
+        val plan = nativeRecordActions(
+            schema(resource, listOf(assign)),
+            resource,
+            record,
+        ).commandForms.single()
+        val request = plan.requestWithStructuredInput(
+            scalarInputValues = emptyMap(),
+            repeatableObjectValues = mapOf(
+                "shares" to listOf(
+                    RepeatableObjectInputRow(
+                        mapOf("uid" to "alice", "permission" to "edit"),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(
+            """[{"uid":"alice","permission":"edit"}]""",
+            request.values["shares"],
+        )
+        assertFailsWith<IllegalArgumentException> {
+            plan.requestWithStructuredInput(
+                scalarInputValues = mapOf("shares" to "[]"),
+                repeatableObjectValues = emptyMap(),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            plan.requestWithStructuredInput(
+                scalarInputValues = emptyMap(),
+                repeatableObjectValues = mapOf(
+                    "shares" to listOf(
+                        RepeatableObjectInputRow(
+                            mapOf("uid" to "alice", "permission" to "owner"),
+                        ),
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `record command forms fail closed for unsafe ambiguous or unconfirmed actions`() {
+        val resource = resource(
+            fields = listOf(
+                field("targetId", "Destination", FieldKind.string),
+                field("payload", "Payload", FieldKind.objectValue),
+            ),
+        )
+        val safe = action(
+            id = "copy-record",
+            intent = ActionIntent.execute,
+            effect = ActionEffect.copy,
+            method = HttpMethod.POST,
+            pathNames = listOf("recordId"),
+            bodyNames = listOf("targetId"),
+            requiredBodyNames = listOf("targetId"),
+        ).withRecordPath("copy")
+            .withScalarBodySchema("targetId", "string")
+        val record = NativeRecord("record-4", emptyMap())
+
+        fun commandForms(action: ActionSpec, target: ResourceSpec = resource) =
+            nativeRecordActions(schema(target, listOf(action)), target, record).commandForms
+
+        assertEquals(listOf("copy-record"), commandForms(safe).map { it.action.id })
+        assertTrue(
+            commandForms(
+                safe.withScalarBodySchema("targetId", "integer"),
+            ).isEmpty(),
+        )
+        val bounded = safe.withScalarBodySchema(
+            fieldId = "targetId",
+            type = "string",
+            minimumLength = 3,
+            maximumLength = 12,
+        )
+        val boundedPlan = commandForms(bounded).single()
+        assertFailsWith<IllegalArgumentException> {
+            boundedPlan.request(mapOf("targetId" to "x"))
+        }
+        assertEquals(
+            "record-8",
+            boundedPlan.request(mapOf("targetId" to "record-8")).values["targetId"],
+        )
+        assertTrue(
+            nativeRecordActions(
+                schema(resource, listOf(safe, safe.copy(id = "copy-record-again"))),
+                resource,
+                record,
+            ).commandForms.isEmpty(),
+        )
+        assertTrue(
+            commandForms(
+                safe.copy(
+                    binding = safe.binding.copy(
+                        path = "/api/records/copy",
+                    ),
+                ),
+            ).isEmpty(),
+        )
+        assertTrue(
+            commandForms(
+                safe.copy(
+                    binding = safe.binding.copy(
+                        path = "/api/records/{recordId}/{undeclaredScope}/copy",
+                    ),
+                ),
+            ).isEmpty(),
+        )
+        assertTrue(
+            commandForms(
+                safe.copy(
+                    binding = safe.binding.copy(
+                        bodyFieldNames = listOf("recordId", "targetId"),
+                    ),
+                ),
+            ).isEmpty(),
+        )
+        assertTrue(commandForms(safe.copy(confidence = Confidence.medium)).isEmpty())
+        assertTrue(
+            commandForms(
+                safe.copy(
+                    binding = safe.binding.copy(allowsObservedBodyFields = true),
+                ),
+            ).isEmpty(),
+        )
+        val unsupported = safe.copy(
+            binding = safe.binding.copy(
+                bodyFieldNames = listOf("payload"),
+                requiredBodyFieldNames = listOf("payload"),
+            ),
+        )
+        assertTrue(commandForms(unsupported).isEmpty())
+
+        val unconfirmedDestructive = safe.copy(
+            risk = ActionRisk.destructive,
+            requiresConfirmation = false,
+        )
+        assertTrue(commandForms(unconfirmedDestructive).isEmpty())
+        val confirmedDestructive = unconfirmedDestructive.copy(requiresConfirmation = true)
+        val destructivePlan = commandForms(confirmedDestructive).single()
+        assertFailsWith<IllegalArgumentException> {
+            destructivePlan.request(mapOf("targetId" to "record-8"))
+        }
+        assertTrue(
+            destructivePlan.request(
+                inputValues = mapOf("targetId" to "record-8"),
+                confirmed = true,
+            ).confirmed,
+        )
+    }
+
+    @Test
+    fun `related action resource can form a command only from exact selected record identity`() {
+        val members = resource(
+            id = "members",
+            fields = listOf(field("id", "ID", FieldKind.integer, readOnly = true)),
+        )
+        val roles = resource(
+            id = "roles",
+            fields = listOf(
+                field(
+                    "roleIds",
+                    "Roles",
+                    FieldKind.integer,
+                    format = DYNAMIC_INTEGER_ARRAY_FORMAT,
+                ),
+            ),
+        )
+        val setRoles = action(
+            id = "set-member-roles",
+            intent = ActionIntent.update,
+            effect = ActionEffect.assign,
+            method = HttpMethod.PUT,
+            pathNames = listOf("houseId", "memberId"),
+            bodyNames = listOf("roleIds"),
+            requiredBodyNames = listOf("roleIds"),
+        ).let { action ->
+            action.copy(
+                resourceId = roles.id,
+                binding = action.binding.copy(
+                    path = "/api/houses/{houseId}/members/{memberId}/roles",
+                    bodySchema = Json.parseToJsonElement(
+                        """
+                        {
+                          "type": "object",
+                          "properties": {
+                            "roleIds": {
+                              "type": "array",
+                              "format": "$DYNAMIC_INTEGER_ARRAY_FORMAT",
+                              "items": { "type": "integer" }
+                            }
+                          },
+                          "required": ["roleIds"]
+                        }
+                        """.trimIndent(),
+                    ),
+                ),
+            )
+        }
+        val schema = NativeAppSchema(
+            schemaVersion = "1",
+            app = AppIdentity("synthetic", "Synthetic", "1"),
+            confidence = Confidence.verified,
+            resources = listOf(members, roles),
+            actions = listOf(setRoles),
+        )
+        val member = NativeRecord(
+            id = "23",
+            values = mapOf("id" to "23"),
+        )
+
+        val plan = requireNotNull(
+            nativeRecordActions(
+                schema = schema,
+                resource = members,
+                record = member,
+                navigationContext = mapOf("id" to "4"),
+            ).commandForms.singleOrNull(),
+        )
+
+        assertEquals(setRoles.id, plan.action.id)
+        assertEquals(listOf("roleIds"), plan.fields.map(FieldSpec::id))
+        assertEquals(
+            mapOf("houseId" to "4", "memberId" to "23", "roleIds" to "[2,5]"),
+            plan.request(mapOf("roleIds" to "[2,5]")).values,
+        )
+        assertTrue(
+            nativeRecordActions(
+                schema = schema.copy(
+                    actions = listOf(
+                        setRoles.copy(
+                            binding = setRoles.binding.copy(
+                                path = "/api/houses/{houseId}/members/current/roles",
+                            ),
+                        ),
+                    ),
+                ),
+                resource = members,
+                record = member,
+                navigationContext = mapOf("id" to "4"),
+            ).commandForms.isEmpty(),
+        )
     }
 
     @Test
@@ -857,7 +1784,7 @@ class NativeRecordActionsTest {
             method = HttpMethod.DELETE,
             pathNames = listOf("recordId"),
             confirmation = true,
-        )
+        ).withRecordPath("")
         val unsafeRecord = NativeRecord(
             id = "response-row",
             values = mapOf("title" to "Observed only"),
@@ -970,7 +1897,7 @@ class NativeRecordActionsTest {
             method = HttpMethod.DELETE,
             pathNames = listOf("recordId"),
             confirmation = true,
-        )
+        ).withRecordPath("")
         val plan = requireNotNull(
             nativeRecordActions(
                 schema(resource, listOf(delete)),
@@ -1435,13 +2362,17 @@ class NativeRecordActionsTest {
         kind: FieldKind,
         readOnly: Boolean = false,
         enumValues: List<String>? = null,
+        format: String? = null,
+        repeatableObjectInput: RepeatableObjectInputSpec? = null,
     ) = FieldSpec(
         id = id,
         label = label,
         kind = kind,
         required = false,
         readOnly = readOnly,
+        format = format,
         enumValues = enumValues,
+        repeatableObjectInput = repeatableObjectInput,
     )
 
     private fun action(
@@ -1461,7 +2392,14 @@ class NativeRecordActionsTest {
         resourceId = "records",
         binding = ApiBinding(
             method = method,
-            path = "/api/records",
+            path = buildString {
+                append("/api/records")
+                pathNames.forEach { name ->
+                    append("/{")
+                    append(name)
+                    append('}')
+                }
+            },
             operationId = id,
             pathParameterNames = pathNames,
             requiredPathParameterNames = pathNames,
@@ -1478,6 +2416,44 @@ class NativeRecordActionsTest {
     )
 
     private fun ActionSpec.withRecordPath(operation: String): ActionSpec = copy(
-        binding = binding.copy(path = "/api/records/{recordId}/$operation"),
+        binding = binding.copy(
+            path = "/api/records/{recordId}" +
+                operation.takeIf(String::isNotBlank)?.let { suffix -> "/$suffix" }.orEmpty(),
+        ),
     )
+
+    private fun ActionSpec.withScalarBodySchema(
+        fieldId: String,
+        type: String,
+        enumValues: List<String>? = null,
+        minimumLength: Int? = null,
+        maximumLength: Int? = null,
+    ): ActionSpec {
+        val property = JsonObject(
+            buildMap {
+                put("type", JsonPrimitive(type))
+                enumValues?.let { values ->
+                    put("enum", JsonArray(values.map(::JsonPrimitive)))
+                }
+                minimumLength?.let { value -> put("minLength", JsonPrimitive(value)) }
+                maximumLength?.let { value -> put("maxLength", JsonPrimitive(value)) }
+            },
+        )
+        return copy(
+            binding = binding.copy(
+                bodySchema = JsonObject(
+                    buildMap {
+                        put("type", JsonPrimitive("object"))
+                        put(
+                            "properties",
+                            JsonObject(mapOf(fieldId to property)),
+                        )
+                        if (fieldId in binding.requiredBodyFieldNames) {
+                            put("required", JsonArray(listOf(JsonPrimitive(fieldId))))
+                        }
+                    },
+                ),
+            ),
+        )
+    }
 }

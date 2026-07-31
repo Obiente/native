@@ -173,6 +173,7 @@ data class NextcloudApiRequest(
     val ocsApiRequest: Boolean = false,
     val maximumResponseBytes: Long = DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES,
     val cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
+    val multipartBody: NextcloudMultipartBody? = null,
 )
 
 data class NextcloudApiResponse(
@@ -1297,6 +1298,15 @@ fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
         "Dynamic API response limit is outside the allowed range."
     }
     require(contentType == null || contentType.length <= 160) { "Dynamic API content type is invalid." }
+    multipartBody?.let { multipart ->
+        require(method in setOf(NextcloudApiMethod.POST, NextcloudApiMethod.PUT, NextcloudApiMethod.PATCH)) {
+            "Multipart uploads require POST, PUT, or PATCH."
+        }
+        require(body == null && contentType == null) {
+            "A typed multipart body cannot be combined with a raw request body or content type."
+        }
+        multipart.requireSafe()
+    }
     return this
 }
 

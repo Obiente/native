@@ -11,6 +11,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 /**
@@ -22,6 +24,7 @@ import androidx.compose.ui.unit.dp
  */
 data class NextcloudCardAction(
     val label: String,
+    val semanticId: String? = null,
     val destructive: Boolean = false,
     val enabled: Boolean = true,
     val onClick: () -> Unit,
@@ -67,9 +70,17 @@ fun NextcloudCardOverflow(
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { onExpandedChange(false) },
+            modifier = Modifier.semantics {
+                contentDescription = "Record actions for $itemLabel"
+            },
         ) {
             actions.forEach { action ->
                 DropdownMenuItem(
+                    modifier = action.semanticId?.let { semanticId ->
+                        Modifier.semantics(mergeDescendants = true) {
+                            contentDescription = "Run record action $semanticId"
+                        }
+                    } ?: Modifier.semantics(mergeDescendants = true) {},
                     text = {
                         Text(
                             action.label,

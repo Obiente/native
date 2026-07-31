@@ -7,6 +7,8 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
+import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
+import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -90,6 +92,234 @@ class DynamicActionUiTest {
     }
 
     @Test
+    fun `verified upload targets only its active read surface with complete bindings`() {
+        val upload = action(
+            "upload-image",
+            ActionIntent.execute,
+            ActionRisk.mutating,
+            HttpMethod.POST,
+        ).copy(
+            resourceId = "photos",
+            effect = ActionEffect.upload,
+            confidence = Confidence.verified,
+            binding = ApiBinding(
+                method = HttpMethod.POST,
+                path = "/houses/{houseId}/photos",
+                operationId = "upload-image",
+                pathParameterNames = listOf("houseId"),
+                requiredPathParameterNames = listOf("houseId"),
+                bodyFieldNames = listOf("image"),
+                requiredBodyFieldNames = listOf("image"),
+                bodyContentType = "multipart/form-data",
+            ),
+        )
+        val form = view(
+            id = "upload-image.form",
+            resourceId = "photos",
+            component = NativeComponent.form,
+            sourceActionId = upload.id,
+        )
+        val active = view(
+            id = "photos.grid",
+            resourceId = "photos",
+            component = NativeComponent.mediaGrid,
+            sourceActionId = "list-photos",
+        )
+        val read = action(
+            "list-photos",
+            ActionIntent.list,
+            ActionRisk.readOnly,
+            HttpMethod.GET,
+        ).copy(
+            resourceId = "photos",
+            confidence = Confidence.verified,
+        )
+
+        assertTrue(
+            dynamicContextualFormTargetsActiveSurface(
+                action = upload,
+                formView = form,
+                activeView = active,
+                activeReadAction = read,
+                plannedBindingValues = mapOf("houseId" to "house-7"),
+                selectedRecordResourceId = "houses",
+                selectedCollectionState = null,
+                hasEditableFileField = true,
+                uniqueTargetResource = true,
+            ),
+        )
+        assertFalse(
+            dynamicContextualFormTargetsActiveSurface(
+                action = upload,
+                formView = form,
+                activeView = active,
+                activeReadAction = read,
+                plannedBindingValues = emptyMap(),
+                selectedRecordResourceId = "houses",
+                selectedCollectionState = null,
+                hasEditableFileField = true,
+                uniqueTargetResource = true,
+            ),
+        )
+        assertFalse(
+            dynamicContextualFormTargetsActiveSurface(
+                action = upload,
+                formView = form,
+                activeView = active,
+                activeReadAction = read,
+                plannedBindingValues = mapOf("houseId" to "house-7"),
+                selectedRecordResourceId = "houses",
+                selectedCollectionState = null,
+                hasEditableFileField = false,
+                uniqueTargetResource = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `context bound singleton update requires its unique active verified detail read`() {
+        val update = action(
+            "update-preferences",
+            ActionIntent.update,
+            ActionRisk.mutating,
+            HttpMethod.PATCH,
+        ).copy(
+            resourceId = "preferences",
+            confidence = Confidence.verified,
+            binding = ApiBinding(
+                method = HttpMethod.PATCH,
+                path = "/houses/{houseId}/preferences",
+                operationId = "update-preferences",
+                pathParameterNames = listOf("houseId"),
+                requiredPathParameterNames = listOf("houseId"),
+                bodyFieldNames = listOf("enabled"),
+                requiredBodyFieldNames = listOf("enabled"),
+                bodyContentType = "application/json",
+            ),
+        )
+        val form = view(
+            id = "preferences.form",
+            resourceId = "preferences",
+            component = NativeComponent.form,
+            sourceActionId = update.id,
+        )
+        val active = view(
+            id = "preferences.detail",
+            resourceId = "preferences",
+            component = NativeComponent.detail,
+            sourceActionId = "read-preferences",
+        )
+        val read = action(
+            "read-preferences",
+            ActionIntent.read,
+            ActionRisk.readOnly,
+            HttpMethod.GET,
+        ).copy(
+            resourceId = "preferences",
+            confidence = Confidence.verified,
+            binding = ApiBinding(
+                method = HttpMethod.GET,
+                path = "/houses/{houseId}/preferences",
+                operationId = "read-preferences",
+                pathParameterNames = listOf("houseId"),
+                requiredPathParameterNames = listOf("houseId"),
+            ),
+        )
+
+        assertTrue(
+            dynamicContextualFormTargetsActiveSurface(
+                action = update,
+                formView = form,
+                activeView = active,
+                activeReadAction = read,
+                plannedBindingValues = mapOf("houseId" to "house-7"),
+                selectedRecordResourceId = "houses",
+                selectedCollectionState = null,
+                hasEditableFileField = false,
+                uniqueTargetResource = true,
+            ),
+        )
+        assertFalse(
+            dynamicContextualFormTargetsActiveSurface(
+                action = update,
+                formView = form,
+                activeView = active.copy(component = NativeComponent.collectionList),
+                activeReadAction = read,
+                plannedBindingValues = mapOf("houseId" to "house-7"),
+                selectedRecordResourceId = "houses",
+                selectedCollectionState = null,
+                hasEditableFileField = false,
+                uniqueTargetResource = true,
+            ),
+        )
+        assertFalse(
+            dynamicContextualFormTargetsActiveSurface(
+                action = update,
+                formView = form,
+                activeView = active,
+                activeReadAction = read.copy(resourceId = "other"),
+                plannedBindingValues = mapOf("houseId" to "house-7"),
+                selectedRecordResourceId = "houses",
+                selectedCollectionState = null,
+                hasEditableFileField = false,
+                uniqueTargetResource = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `ordinary record update visibility still follows selected record identity`() {
+        val update = action(
+            "update-recipe",
+            ActionIntent.update,
+            ActionRisk.mutating,
+            HttpMethod.PATCH,
+        )
+        val detail = view(
+            id = "recipe.detail",
+            resourceId = "recipes",
+            component = NativeComponent.detail,
+            sourceActionId = "read-recipe",
+            confidence = Confidence.high,
+        )
+
+        assertTrue(
+            dynamicContextualFormTargetsActiveSurface(
+                action = update,
+                formView = detail.copy(
+                    id = "recipe.form",
+                    component = NativeComponent.form,
+                    sourceActionId = update.id,
+                ),
+                activeView = detail,
+                activeReadAction = null,
+                plannedBindingValues = emptyMap(),
+                selectedRecordResourceId = "recipes",
+                selectedCollectionState = null,
+                hasEditableFileField = false,
+                uniqueTargetResource = true,
+            ),
+        )
+        assertFalse(
+            dynamicContextualFormTargetsActiveSurface(
+                action = update,
+                formView = detail.copy(
+                    id = "recipe.form",
+                    component = NativeComponent.form,
+                    sourceActionId = update.id,
+                ),
+                activeView = detail.copy(resourceId = "other"),
+                activeReadAction = null,
+                plannedBindingValues = emptyMap(),
+                selectedRecordResourceId = "other",
+                selectedCollectionState = null,
+                hasEditableFileField = false,
+                uniqueTargetResource = true,
+            ),
+        )
+    }
+
+    @Test
     fun `state collection reads are recognized without app or operation identifiers`() {
         val trash = action(
             "arbitrary-read",
@@ -138,5 +368,20 @@ class DynamicActionUiTest {
         risk = risk,
         requiresConfirmation = risk == ActionRisk.destructive,
         confidence = Confidence.high,
+    )
+
+    private fun view(
+        id: String,
+        resourceId: String,
+        component: NativeComponent,
+        sourceActionId: String,
+        confidence: Confidence = Confidence.verified,
+    ) = ViewSpec(
+        id = id,
+        title = id,
+        resourceId = resourceId,
+        component = component,
+        sourceActionId = sourceActionId,
+        confidence = confidence,
     )
 }

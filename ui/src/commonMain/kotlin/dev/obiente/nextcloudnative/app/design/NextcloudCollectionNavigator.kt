@@ -51,6 +51,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -87,11 +88,15 @@ data class NextcloudCollectionDestination(
     val id: String,
     val label: String,
     val count: Int? = null,
+    val accessibilityId: String = id,
 ) {
     init {
         require(id.isNotBlank()) { "Collection destination IDs must not be blank." }
         require(label.isNotBlank()) { "Collection destination labels must not be blank." }
         require(count == null || count >= 0) { "Collection destination counts must not be negative." }
+        require(accessibilityId.isNotBlank()) {
+            "Collection destination accessibility IDs must not be blank."
+        }
     }
 }
 
@@ -200,7 +205,7 @@ fun resolveNextcloudCollectionLeadingControl(
     mode: NextcloudCollectionNavigationMode,
     hasHierarchyBack: Boolean,
 ): NextcloudCollectionLeadingControl = when {
-    mode == NextcloudCollectionNavigationMode.Drawer && !hasHierarchyBack ->
+    mode == NextcloudCollectionNavigationMode.Drawer ->
         NextcloudCollectionLeadingControl.Menu
 
     else -> NextcloudCollectionLeadingControl.Back
@@ -209,7 +214,7 @@ fun resolveNextcloudCollectionLeadingControl(
 fun shouldShowNextcloudCollectionTrailingNavigation(
     mode: NextcloudCollectionNavigationMode,
     hasHierarchyBack: Boolean,
-): Boolean = mode == NextcloudCollectionNavigationMode.Drawer && hasHierarchyBack
+): Boolean = false
 
 internal fun resolveNextcloudCollectionDestinationLabelMaxLines(
     mode: NextcloudCollectionNavigationMode,
@@ -378,6 +383,7 @@ private fun NextcloudCollectionDrawerScaffold(
             },
             leadingControl = leadingControl,
             onOpenNavigation = { coroutineScope.launch { drawerState.open() } },
+            showHierarchyBack = hasHierarchyBack,
             compactHeader = compactHeader,
             headerActions = headerActions,
             content = content,
@@ -392,6 +398,7 @@ private fun NextcloudCollectionMainPane(
     onBack: () -> Unit,
     leadingControl: NextcloudCollectionLeadingControl,
     onOpenNavigation: (() -> Unit)?,
+    showHierarchyBack: Boolean = false,
     compactHeader: Boolean,
     headerActions: @Composable () -> Unit,
     modifier: Modifier = Modifier,
@@ -404,6 +411,7 @@ private fun NextcloudCollectionMainPane(
             onBack = onBack,
             leadingControl = leadingControl,
             onOpenNavigation = onOpenNavigation,
+            showHierarchyBack = showHierarchyBack,
             compact = compactHeader,
             actions = headerActions,
         )
@@ -420,6 +428,7 @@ private fun NextcloudCollectionHeader(
     onBack: () -> Unit,
     leadingControl: NextcloudCollectionLeadingControl,
     onOpenNavigation: (() -> Unit)?,
+    showHierarchyBack: Boolean,
     compact: Boolean,
     actions: @Composable () -> Unit,
 ) {
@@ -445,6 +454,14 @@ private fun NextcloudCollectionHeader(
                 Icon(NextcloudIcons.Menu, contentDescription = "Open sections")
             }
         }
+        if (showHierarchyBack) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.size(NextcloudCollectionMinimumTouchTargetDp.dp),
+            ) {
+                Icon(NextcloudIcons.Back, contentDescription = "Back")
+            }
+        }
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -468,20 +485,6 @@ private fun NextcloudCollectionHeader(
             }
         }
         actions()
-        if (
-            onOpenNavigation != null &&
-            shouldShowNextcloudCollectionTrailingNavigation(
-                mode = NextcloudCollectionNavigationMode.Drawer,
-                hasHierarchyBack = leadingControl == NextcloudCollectionLeadingControl.Back,
-            )
-        ) {
-            IconButton(
-                onClick = onOpenNavigation,
-                modifier = Modifier.size(NextcloudCollectionMinimumTouchTargetDp.dp),
-            ) {
-                Icon(NextcloudIcons.Menu, contentDescription = "Open sections")
-            }
-        }
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
@@ -530,6 +533,9 @@ private fun NextcloudCollectionNavigationRail(
                         onClick = { onDestinationSelected(destination) },
                         modifier = Modifier
                             .heightIn(min = NextcloudCollectionMinimumTouchTargetDp.dp)
+                            .semantics {
+                                contentDescription = "Open destination ${destination.accessibilityId}"
+                            }
                             .focusRequester(focusRequester)
                             .onFocusChanged { focusState ->
                                 if (focusState.isFocused) focusedDestinationId = destination.id
@@ -646,6 +652,9 @@ private fun NextcloudCollectionDestinationList(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = NextcloudCollectionMinimumTouchTargetDp.dp)
+                    .semantics {
+                        contentDescription = "Open destination ${destination.accessibilityId}"
+                    }
                     .focusRequester(focusRequester)
                     .onFocusChanged { focusState ->
                         if (focusState.isFocused) focusedDestinationId = destination.id

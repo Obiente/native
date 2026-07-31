@@ -169,6 +169,7 @@ data class FormField(
     val required: Boolean,
     val format: String? = null,
     val enumValues: List<String>? = null,
+    val repeatableObjectInput: RepeatableObjectInputSpec? = null,
 )
 
 @Serializable
@@ -191,6 +192,8 @@ data class DynamicAction(
      * from mutation request bodies and therefore cannot authorize record identities for writes.
      */
     val responseFieldIds: List<String> = emptyList(),
+    /** Exact same-route GET action used to reconcile an idempotent replacement result. */
+    val resultRecoveryActionId: String? = null,
     val capabilityIds: List<String> = emptyList(),
     val permissionIds: List<String> = emptyList(),
     val confidence: Confidence,

@@ -5,6 +5,8 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeRelationOptionWindow
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeRelationOptions
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeFormDisplayFields
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeRecordActions
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeRecordPresentation
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeScalarRelationClearChoice
 import kotlin.test.Test
@@ -18,6 +20,8 @@ class MarketingDynamicUiCaptureScenarioTest {
     fun `synthetic dynamic visual QA is paired across desktop and phone`() {
         val desktop = MarketingCaptureScenario.AdaptiveApp
         val phone = MarketingCaptureScenario.AdaptiveAppMobile
+        val phoneCollection = MarketingCaptureScenario.AdaptiveAppCollectionMobile
+        val phoneContextMenu = MarketingCaptureScenario.AdaptiveAppContextMenuMobile
 
         assertEquals(NextcloudPresentation.Desktop, desktop.presentation)
         assertEquals(NextcloudPresentation.Adaptive, phone.presentation)
@@ -29,6 +33,11 @@ class MarketingDynamicUiCaptureScenarioTest {
         assertEquals(MarketingCapturePurpose.StateCoverage, phone.purpose)
         assertEquals(1_440 to 900, desktop.width to desktop.height)
         assertEquals(1_080 to 1_800, phone.width to phone.height)
+        assertEquals(NextcloudPresentation.Adaptive, phoneCollection.presentation)
+        assertEquals("Nested collection actions", phoneCollection.surface)
+        assertEquals(1_080 to 1_800, phoneCollection.width to phoneCollection.height)
+        assertEquals(NextcloudPresentation.Adaptive, phoneContextMenu.presentation)
+        assertEquals("Context workspace menu", phoneContextMenu.surface)
     }
 
     @Test
@@ -68,8 +77,15 @@ class MarketingDynamicUiCaptureScenarioTest {
         )
         val window = nativeRelationOptionWindow(options, query = "")
         val create = assertNotNull(marketingDynamicUiSchema.action("work-items.create"))
+        val collectionCreate = assertNotNull(
+            nativeRecordActions(
+                schema = marketingDynamicUiSchema,
+                resource = resource,
+            ).create,
+        )
 
         assertEquals(ActionIntent.create, create.intent)
+        assertEquals(create.id, collectionCreate.action.id)
         assertEquals(
             listOf(
                 FieldKind.string,
@@ -113,6 +129,19 @@ class MarketingDynamicUiCaptureScenarioTest {
         assertTrue(marketingDynamicWorkItemRecords.all { record ->
             nativeRecordPresentation(resource, record).colorArgb != null
         })
+    }
+
+    @Test
+    fun `semantic forms present identity content choices and advanced controls in task order`() {
+        val editableFields = marketingDynamicWorkItemsResource.fields.filterNot { it.readOnly }
+
+        assertEquals(
+            listOf("title", "status", "groupId", "sendReminders", "rrule"),
+            nativeFormDisplayFields(
+                fields = editableFields,
+                relationFieldIds = setOf("groupId"),
+            ).map { field -> field.id },
+        )
     }
 
     @Test

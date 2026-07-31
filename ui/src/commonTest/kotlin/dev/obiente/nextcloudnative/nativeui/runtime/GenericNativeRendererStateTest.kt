@@ -1738,7 +1738,7 @@ class GenericNativeRendererStateTest {
     }
 
     @Test
-    fun `record icon tokens fail closed and never become title or subtitle`() {
+    fun `record icon tokens reject unsafe or ambiguous values and retain safe unknowns`() {
         val resource = ResourceSpec(
             id = "collections",
             name = "Collections",
@@ -1776,6 +1776,16 @@ class GenericNativeRendererStateTest {
                 NativeRecord(
                     "collection-3",
                     mapOf("icon" to "heart", "symbol" to "heart"),
+                ),
+            ),
+        )
+        assertEquals(
+            NativeRecordPresentation("collection-4", null, "server-specific"),
+            nativeRecordPresentation(
+                resource,
+                NativeRecord(
+                    "collection-4",
+                    mapOf("icon" to "server_specific"),
                 ),
             ),
         )
@@ -2186,7 +2196,13 @@ class GenericNativeRendererStateTest {
               "properties":{
                 "ids":{
                   "type":"array",
-                  "items":{"type":"integer","minimum":2,"maximum":10,"multipleOf":2},
+                  "items":{
+                    "type":"integer",
+                    "format":"int64",
+                    "minimum":2,
+                    "maximum":10,
+                    "multipleOf":2
+                  },
                   "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT",
                   "minItems":2,
                   "maxItems":3,
@@ -2263,6 +2279,32 @@ class GenericNativeRendererStateTest {
         assertEquals(
             setOf("ids"),
             uneditableNativeBodyFieldIds(unsupported, editableNativeFields(resource, unsupported), emptyMap()),
+        )
+
+        val unsupportedItemFormat = action.copy(
+            binding = action.binding.copy(
+                bodySchema = Json.parseToJsonElement(
+                    """{
+                      "type":"object",
+                      "properties":{
+                        "ids":{
+                          "type":"array",
+                          "items":{"type":"integer","format":"uint64"},
+                          "format":"$DYNAMIC_INTEGER_ARRAY_FORMAT"
+                        }
+                      }
+                    }""",
+                ),
+            ),
+        )
+        assertTrue(editableNativeFields(resource, unsupportedItemFormat).isEmpty())
+        assertEquals(
+            setOf("ids"),
+            uneditableNativeBodyFieldIds(
+                unsupportedItemFormat,
+                editableNativeFields(resource, unsupportedItemFormat),
+                emptyMap(),
+            ),
         )
     }
 

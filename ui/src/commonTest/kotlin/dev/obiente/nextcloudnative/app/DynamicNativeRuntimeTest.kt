@@ -8,6 +8,7 @@ import dev.obiente.nextcloudnative.nativeui.model.AuthRequirement
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_APP_DESCRIPTOR_VERSION
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
+import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
 import dev.obiente.nextcloudnative.nativeui.model.DynamicField
@@ -29,6 +30,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
 import dev.obiente.nextcloudnative.nativeui.runtime.actionBindingValues
+import dev.obiente.nextcloudnative.nativeui.runtime.safeActionBindingValues
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -43,6 +45,90 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DynamicNativeRuntimeTest {
+    @Test
+    fun `nested collection read qualifies a generic parent identity from its declared response`() {
+        val action = readAction().copy(
+            resourceId = "categories",
+            responseFieldIds = listOf("id", "houseId", "name"),
+            binding = readAction().binding.copy(
+                path = "/apps/example/api/houses/{id}/categories",
+                pathParameters = listOf(
+                    HttpParameter(
+                        name = "id",
+                        required = true,
+                        schema = JsonObject(mapOf("type" to JsonPrimitive("integer"))),
+                        source = ParameterSource.runtimeContext,
+                    ),
+                ),
+            ),
+        )
+
+        val context = dynamicReadBindingContext(
+            action = action,
+            values = mapOf("id" to "house-7"),
+            runtimeContext = emptyMap(),
+        )
+
+        assertEquals(mapOf("houseId" to "house-7"), context)
+        val category = NativeRecord(
+            id = "category-11",
+            values = mapOf(
+                "id" to "category-11",
+                "houseId" to "house-7",
+                "name" to "Fruit",
+            ),
+            bindingContext = context,
+        )
+        assertEquals("category-11", category.actionBindingValues()["id"])
+        assertEquals("house-7", category.actionBindingValues()["houseId"])
+        assertNull(
+            category.copy(
+                values = category.values + ("houseId" to "different-house"),
+            ).safeActionBindingValues(),
+        )
+    }
+
+    @Test
+    fun `generic identity is not requalified without exact nested response evidence`() {
+        val base = readAction()
+        val parameter = HttpParameter(
+            name = "id",
+            required = true,
+            schema = JsonObject(mapOf("type" to JsonPrimitive("string"))),
+            source = ParameterSource.runtimeContext,
+        )
+        val terminal = base.copy(
+            responseFieldIds = listOf("id", "houseId"),
+            binding = base.binding.copy(
+                path = "/apps/example/api/categories/{id}",
+                pathParameters = listOf(parameter),
+            ),
+        )
+        val undeclaredParent = terminal.copy(
+            responseFieldIds = listOf("id", "name"),
+            binding = terminal.binding.copy(path = "/apps/example/api/houses/{id}/categories"),
+        )
+        val ambiguousParent = terminal.copy(
+            responseFieldIds = listOf("id", "houseId", "housesId"),
+            binding = terminal.binding.copy(path = "/apps/example/api/houses/{id}/categories"),
+        )
+        val unrelatedNestedResource = terminal.copy(
+            resourceId = "items",
+            binding = terminal.binding.copy(path = "/apps/example/api/houses/{id}/categories"),
+        )
+
+        listOf(terminal, undeclaredParent, ambiguousParent, unrelatedNestedResource).forEach { action ->
+            assertEquals(
+                mapOf("id" to "value-7"),
+                dynamicReadBindingContext(
+                    action = action,
+                    values = mapOf("id" to "value-7"),
+                    runtimeContext = emptyMap(),
+                ),
+            )
+        }
+    }
+
     @Test
     fun `last known contracts allow reads but fail closed for mutations`() {
         assertTrue(DynamicContractVersionStatus.LastKnownReadOnly.allows(readAction().risk))
@@ -406,6 +492,95 @@ class DynamicNativeRuntimeTest {
         assertEquals(JsonPrimitive("Weekly shop"), body["description"])
         assertFalse("houseId" in body)
         assertFalse("undeclared" in body)
+    }
+
+    @Test
+    fun `blank optional nullable strings are omitted without erasing intentional empty strings`() {
+        val action = createAction(
+            bodySchema =
+                """
+                {
+                  "type": "object",
+                  "required": ["title"],
+                  "properties": {
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "color": {"type": "string", "nullable": true}
+                  }
+                }
+                """.trimIndent(),
+        )
+        val descriptor = descriptor(action)
+        val sharedValues = mapOf(
+            "projectId" to "7",
+            "limit" to "25",
+            "title" to "Sandbox note",
+            "content" to "",
+            "color" to "",
+        )
+        val request = buildDynamicApiRequest(
+            descriptor = descriptor,
+            action = action,
+            values = sharedValues,
+            runtimeContext = mapOf("owner" to "sandbox"),
+        )
+        val body = json.parseToJsonElement(requireNotNull(request.body).decodeToString()) as JsonObject
+
+        assertEquals(setOf("title", "content"), body.keys)
+        assertEquals(JsonPrimitive("Sandbox note"), body["title"])
+        assertEquals(JsonPrimitive(""), body["content"])
+        assertFalse("color" in body)
+
+        val coloredRequest = buildDynamicApiRequest(
+            descriptor = descriptor,
+            action = action,
+            values = sharedValues + ("color" to "#A1B2C3"),
+            runtimeContext = mapOf("owner" to "sandbox"),
+        )
+        val coloredBody = json.parseToJsonElement(
+            requireNotNull(coloredRequest.body).decodeToString(),
+        ) as JsonObject
+        assertEquals(JsonPrimitive("#A1B2C3"), coloredBody["color"])
+
+        assertFailsWith<IllegalArgumentException> {
+            buildDynamicApiRequest(
+                descriptor = descriptor,
+                action = action,
+                values = sharedValues + ("title" to ""),
+                runtimeContext = mapOf("owner" to "sandbox"),
+            )
+        }
+    }
+
+    @Test
+    fun `openapi 31 nullable string union also omits a blank optional value`() {
+        val action = createAction(
+            bodySchema =
+                """
+                {
+                  "type": "object",
+                  "required": ["title"],
+                  "properties": {
+                    "title": {"type": "string"},
+                    "color": {"type": ["string", "null"]}
+                  }
+                }
+                """.trimIndent(),
+        )
+        val request = buildDynamicApiRequest(
+            descriptor = descriptor(action),
+            action = action,
+            values = mapOf(
+                "projectId" to "7",
+                "limit" to "25",
+                "title" to "Sandbox note",
+                "color" to "",
+            ),
+            runtimeContext = mapOf("owner" to "sandbox"),
+        )
+        val body = json.parseToJsonElement(requireNotNull(request.body).decodeToString()) as JsonObject
+
+        assertEquals(setOf("title"), body.keys)
     }
 
     @Test
@@ -986,7 +1161,7 @@ class DynamicNativeRuntimeTest {
                 "categoryId":{"type":"integer","nullable":true},
                 "amount":{"type":"number","nullable":true},
                 "enabled":{"type":"boolean"},
-                "description":{"type":"string","nullable":true}
+                "description":{"type":"string"}
               }
             }""",
         )
@@ -2221,6 +2396,103 @@ class DynamicNativeRuntimeTest {
             mapOf("id" to "73", "mailboxId" to "73"),
             remapReadFallbackValues(preferred, fallback, mapOf("id" to "73")),
         )
+    }
+
+    @Test
+    fun `typed object rows are canonicalized and exact get recovery is executable`() {
+        val provenance = listOf(
+            Provenance(
+                ProvenanceKind.verifiedAppPackage,
+                "signed package",
+                "Verified signed contract",
+            ),
+        )
+        val pathParameter = HttpParameter(
+            name = "itemId",
+            required = true,
+            schema = json.parseToJsonElement("""{"type":"integer"}"""),
+            source = ParameterSource.resourceField,
+        )
+        val path = "/ocs/v2.php/apps/example/api/items/{itemId}/share"
+        val read = readAction().copy(
+            id = "item-shares.read",
+            intent = ActionIntent.read,
+            binding = readAction().binding.copy(
+                path = path,
+                pathParameters = listOf(pathParameter),
+                queryParameters = emptyList(),
+                body = null,
+            ),
+            provenance = provenance,
+        )
+        val bodySchema = json.parseToJsonElement(
+            """
+            {
+              "type":"object",
+              "required":["shares"],
+              "properties":{
+                "shares":{
+                  "type":"array",
+                  "format":"$DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT",
+                  "minItems":1,
+                  "maxItems":4,
+                  "items":{
+                    "type":"object",
+                    "additionalProperties":false,
+                    "required":["uid","permission"],
+                    "properties":{
+                      "uid":{"type":"string","minLength":1},
+                      "permission":{"type":"string","enum":["view","edit"]}
+                    }
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+        val replacement = read.copy(
+            id = "item-share",
+            label = "Share item",
+            intent = ActionIntent.update,
+            risk = ActionRisk.mutating,
+            resultRecoveryActionId = read.id,
+            binding = read.binding.copy(
+                method = HttpMethod.PUT,
+                body = HttpBody("application/json", true, bodySchema),
+            ),
+        )
+        val descriptor = descriptor(replacement).copy(actions = listOf(read, replacement))
+
+        val request = buildDynamicApiRequest(
+            descriptor,
+            replacement,
+            values = mapOf(
+                "itemId" to "7",
+                "shares" to """[ { "permission":"edit", "uid":"alice" } ]""",
+            ),
+        )
+        assertEquals(
+            """{"shares":[{"uid":"alice","permission":"edit"}]}""",
+            requireNotNull(request.body).decodeToString(),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            buildDynamicApiRequest(
+                descriptor,
+                replacement,
+                values = mapOf(
+                    "itemId" to "7",
+                    "shares" to """[{"uid":"alice","permission":"owner"}]""",
+                ),
+            )
+        }
+
+        val recovery = buildDynamicResultRecoveryRequest(
+            descriptor = descriptor,
+            mutation = replacement,
+            values = mapOf("itemId" to "7"),
+        )
+        assertEquals("/ocs/v2.php/apps/example/api/items/7/share", recovery?.relativePath)
+        assertEquals(NextcloudApiMethod.GET, recovery?.method)
     }
 
     @Test

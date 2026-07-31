@@ -10,6 +10,7 @@ import kotlinx.serialization.json.contentOrNull
 internal enum class NativeFormMutationKind {
     Create,
     Update,
+    Command,
 }
 
 internal enum class NativeFormMutationRecoveryPhase {
@@ -37,7 +38,10 @@ internal data class NativeFormMutationRecoveryOwner(
         }
         require(recordId?.length?.let { length -> length <= NATIVE_FORM_RECOVERY_ID_LIMIT } != false)
         require(kind != NativeFormMutationKind.Create || recordId == null)
-        require(kind != NativeFormMutationKind.Update || !recordId.isNullOrBlank())
+        require(
+            kind !in setOf(NativeFormMutationKind.Update, NativeFormMutationKind.Command) ||
+                !recordId.isNullOrBlank(),
+        )
     }
 }
 
@@ -121,6 +125,7 @@ internal fun nativeFormMutationRecoveryOwner(
     val kind = when (intent) {
         ActionIntent.create -> NativeFormMutationKind.Create
         ActionIntent.update -> NativeFormMutationKind.Update
+        ActionIntent.execute -> NativeFormMutationKind.Command
         else -> return null
     }
     return runCatching {

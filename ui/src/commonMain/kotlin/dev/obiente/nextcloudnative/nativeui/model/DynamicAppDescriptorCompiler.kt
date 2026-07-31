@@ -13,6 +13,50 @@ private const val READ_FALLBACK_OPERATION_IDS_EXTENSION =
     "x-nextcloud-native-read-fallback-operation-ids"
 private const val READ_FALLBACK_FOR_OPERATION_EXTENSION =
     "x-nextcloud-native-fallback-for-operation-id"
+private const val DESCRIPTION_INFERRED_MULTIPART_EXTENSION =
+    "x-nextcloud-native-description-inferred-multipart"
+private const val MAX_MULTIPART_DESCRIPTION_CHARACTERS = 2_048
+private const val MAX_INFERRED_MULTIPART_TEXT_FIELDS = 16
+private const val MAX_SIGNED_DESCRIPTION_ENUM_CHARACTERS = 2_048
+private const val MAX_SIGNED_DESCRIPTION_ENUM_FIELD_LENGTH = 128
+private const val MAX_SIGNED_DESCRIPTION_ENUM_VALUES = 16
+private const val MAX_SIGNED_DESCRIPTION_ENUM_VALUE_LENGTH = 128
+
+private val INFERRED_MULTIPART_SCALAR_TYPES = setOf("string", "integer", "number", "boolean")
+private val FIELD_COMPOSITION_ANNOTATION_KEYS = setOf(
+    "default",
+    "deprecated",
+    "description",
+    "example",
+    "examples",
+    "nullable",
+    "readOnly",
+    "title",
+    "writeOnly",
+)
+private val MULTIPART_FILE_FIELD_DESCRIPTION = Regex(
+    """\bmultipart/form-data\b.{0,320}?\b(image|photo|audio|video|binary|file)\s+file\b.{0,160}?\bfield\s+named\s+\*\*([A-Za-z][A-Za-z0-9_.-]{0,63})\*\*""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+)
+private val ADDITIONAL_MULTIPART_FIELDS_DESCRIPTION = Regex(
+    """\boptional\s+([A-Za-z][A-Za-z0-9_.-]*(?:\s*(?:,\s*|\s+and\s+)[A-Za-z][A-Za-z0-9_.-]*)*)\s+may\s+be\s+sent\s+as\s+additional\s+form\s+fields?\b""",
+    RegexOption.IGNORE_CASE,
+)
+
+private fun String.isSafeInferredMultipartFieldName(): Boolean =
+    length in 1..64 &&
+        first().isAsciiLetter() &&
+        all { character ->
+            character.isAsciiLetter() || character.isDigit() || character in "_.-"
+        }
+
+private fun Char.isAsciiLetter(): Boolean = this in 'A'..'Z' || this in 'a'..'z'
+
+private fun String.parseInferredMultipartFieldList(): List<String> =
+    replace(Regex("""\s+and\s+""", RegexOption.IGNORE_CASE), ",")
+        .split(',')
+        .map(String::trim)
+        .filter(String::isNotEmpty)
 
 /** Common Kotlin compiler used until the Rust compiler is linked into each platform app. */
 class DynamicAppDescriptorCompiler {
@@ -97,6 +141,12 @@ class DynamicAppDescriptorCompiler {
             input = input,
             document = document,
             source = source,
+            allowSignedDescriptionMultipartInference =
+                advertised.trust == OpenApiTrust.nextcloudSignedAppPackage ||
+                    advertised.trust == OpenApiTrust.nextcloudSignedCompatibleAppPackage,
+            allowSignedDescriptionEnumInference =
+                advertised.trust == OpenApiTrust.nextcloudSignedAppPackage ||
+                    advertised.trust == OpenApiTrust.nextcloudSignedCompatibleAppPackage,
         )
         if (sanitized.ignoredCount > 0) {
             state.warnings += DynamicWarning(
@@ -155,11 +205,13 @@ class DynamicAppDescriptorCompiler {
                     method != HttpMethod.GET &&
                     operation.requiresAmbiguousResultRecoveryPolicy(path, operationId)
                 ) {
-                    state.warnings += DynamicWarning(
-                        code = "ignored-ambiguous-result-write",
-                        message = "Ignored documented $methodName $path because generic send, share, and merge mutations require an operation-specific ambiguous-result recovery policy.",
-                    )
-                    return@operationLoop
+                    if (state.exactIdempotentResultRecoveryActionId(path, method) == null) {
+                        state.warnings += DynamicWarning(
+                            code = "ignored-ambiguous-result-write",
+                            message = "Ignored documented $methodName $path because generic send, share, and merge mutations require an exact verified read recovery surface.",
+                        )
+                        return@operationLoop
+                    }
                 }
                 state.addOperation(
                     path = path,
@@ -169,6 +221,7 @@ class DynamicAppDescriptorCompiler {
                     inheritedParameters = inheritedParameters,
                     routeResourceIdentity = routeResourceIdentity,
                     readRouteResourceIdentities = readRouteResourceIdentities,
+                    resultRecoveryActionId = state.exactIdempotentResultRecoveryActionId(path, method),
                 )
             }
         }
@@ -547,6 +600,8 @@ private class KotlinCompilerState(
     private val input: DynamicDiscoveryInput,
     private val document: JsonObject,
     private val source: Provenance,
+    private val allowSignedDescriptionMultipartInference: Boolean,
+    private val allowSignedDescriptionEnumInference: Boolean,
 ) {
     private val resources = linkedMapOf<String, KotlinResourceBuilder>()
     private val actions = linkedMapOf<String, DynamicAction>()
@@ -555,7 +610,46 @@ private class KotlinCompilerState(
     private val permissions = linkedMapOf<String, PermissionSpec>()
     private val operationActionIds = linkedMapOf<String, String>()
     private val fallbackOperationIds = linkedMapOf<String, List<String>>()
+    private val readActionIdsByExactContractPath = linkedMapOf<String, MutableList<String>>()
     val warnings = mutableListOf<DynamicWarning>()
+
+    /**
+     * An ambiguous semantic write is recoverable only when PUT makes the operation idempotent and a
+     * trusted, already-compiled GET reads the exact same route without additional required query
+     * input. The returned action ID is retained as executable recovery evidence.
+     */
+    fun exactIdempotentResultRecoveryActionId(
+        path: String,
+        method: HttpMethod,
+    ): String? {
+        if (
+            method != HttpMethod.PUT ||
+            source.kind !in setOf(
+                ProvenanceKind.verifiedAppPackage,
+                ProvenanceKind.appStoreLinkedSourceTag,
+            )
+        ) {
+            return null
+        }
+        return readActionIdsByExactContractPath[path]
+            .orEmpty()
+            .mapNotNull(actions::get)
+            .singleOrNull { candidate ->
+                candidate.binding.method == HttpMethod.GET &&
+                candidate.binding.body == null &&
+                candidate.binding.queryParameters.none(HttpParameter::required) &&
+                candidate.intent in setOf(ActionIntent.read, ActionIntent.list) &&
+                candidate.risk == ActionRisk.readOnly &&
+                !candidate.fallbackOnly &&
+                candidate.provenance.any { provenance ->
+                    provenance.kind in setOf(
+                        ProvenanceKind.verifiedAppPackage,
+                        ProvenanceKind.appStoreLinkedSourceTag,
+                    )
+                }
+            }
+            ?.id
+    }
 
     /**
      * One REST route is one resource even when its read and write operations use different tags.
@@ -565,7 +659,7 @@ private class KotlinCompilerState(
      */
     fun routeResourceIdentity(path: String, pathItem: JsonObject): KotlinRouteResourceIdentity? {
         val operation = pathItem["get"] as? JsonObject ?: return null
-        if (operation.hasSuccessfulBinaryResponse()) return null
+        if (hasSuccessfulBinaryResponse(operation)) return null
         val operationId = operation.string("operationId")
             ?.takeIf(String::isNotBlank)
             ?: "get-${path.stableId()}"
@@ -594,6 +688,7 @@ private class KotlinCompilerState(
         inheritedParameters: JsonArray?,
         routeResourceIdentity: KotlinRouteResourceIdentity?,
         readRouteResourceIdentities: Map<String, KotlinRouteResourceIdentity>,
+        resultRecoveryActionId: String?,
     ) {
         val declaredBody = body(operation)
         val actionId = uniqueId(actions.keys, operationId.stableId())
@@ -613,7 +708,7 @@ private class KotlinCompilerState(
             filteredCollectionResourceId = filteredCollectionResourceId,
         )
         val response = responseSchema(operation)
-        val binaryRead = method == HttpMethod.GET && operation.hasSuccessfulBinaryResponse()
+        val binaryRead = method == HttpMethod.GET && hasSuccessfulBinaryResponse(operation)
         val (itemSchema, responseCollection) = responseItemSchema(response)
         val preliminaryCollection =
             responseCollection ||
@@ -691,6 +786,14 @@ private class KotlinCompilerState(
             )
             permissionId
         }
+        // The exact contract path used by an idempotent replacement may have been normalized on
+        // its collection GET (for example `{entityId}` -> `{id}`). Once the original contract path
+        // has proven the recovery relationship, use that GET's executable path binding for the PUT
+        // as well. This keeps validation and post-write recovery exact without guessing an alias at
+        // runtime.
+        val recoveryPathBinding = resultRecoveryActionId
+            ?.let(actions::get)
+            ?.binding
         val action = DynamicAction(
             id = actionId,
             label = label,
@@ -700,8 +803,8 @@ private class KotlinCompilerState(
             requiresConfirmation = risk == ActionRisk.destructive,
             binding = DynamicHttpBinding(
                 method = method,
-                path = boundPath,
-                pathParameters = pathParameters,
+                path = recoveryPathBinding?.path ?: boundPath,
+                pathParameters = recoveryPathBinding?.pathParameters ?: pathParameters,
                 queryParameters = queryParameters,
                 body = body,
                 auth = auth,
@@ -721,8 +824,12 @@ private class KotlinCompilerState(
             confidence = Confidence.high,
             provenance = listOf(source),
             effect = effect,
+            resultRecoveryActionId = resultRecoveryActionId,
         )
         actions[actionId] = action
+        if (method == HttpMethod.GET) {
+            readActionIdsByExactContractPath.getOrPut(path) { mutableListOf() } += actionId
+        }
 
         if (method == HttpMethod.GET) {
             if (fallbackForOperationId == null && !binaryRead) {
@@ -908,6 +1015,37 @@ private class KotlinCompilerState(
             ?.let(::resolveLocal)
     }
 
+    /**
+     * Exact binary response schemas remain media capabilities even when an OpenAPI generator emits
+     * the wildcard content type. Local references are resolved before classification so those
+     * bytes cannot accidentally enter the JSON record parser.
+     */
+    private fun hasSuccessfulBinaryResponse(operation: JsonObject): Boolean {
+        val responseMedia = operation.objectValue("responses")
+            ?.entries
+            ?.filter { (status, _) -> status.startsWith('2') }
+            ?.mapNotNull { (_, responseElement) ->
+                (resolveLocal(responseElement) as? JsonObject)?.objectValue("content")
+            }
+            ?.flatMap { content -> content.entries }
+            .orEmpty()
+        if (responseMedia.isEmpty()) return false
+        return responseMedia.all { (declaredType, mediaElement) ->
+            val type = declaredType.substringBefore(';').trim().lowercase()
+            if (type.contains("json")) return@all false
+            val media = resolveLocal(mediaElement) as? JsonObject
+            val schema = media?.get("schema")?.let(::resolveLocal) as? JsonObject
+            val exactBinarySchema = schema?.let { declared ->
+                declared.string("type") == "string" && declared.string("format") == "binary"
+            } == true
+            exactBinarySchema ||
+                type.startsWith("image/") ||
+                type.startsWith("audio/") ||
+                type.startsWith("video/") ||
+                type == "application/octet-stream"
+        }
+    }
+
     private fun responseItemSchema(schema: JsonElement?): Pair<JsonObject?, Boolean> {
         val value = schema?.let(::resolveLocal) as? JsonObject ?: return null to false
         if (value.string("type") == "array") {
@@ -956,7 +1094,7 @@ private class KotlinCompilerState(
             .entries
             .sortedBy(Map.Entry<String, JsonElement>::key)
             .mapNotNull { (id, element) ->
-                val field = resolveLocal(element) as? JsonObject ?: return@mapNotNull null
+                val field = resolveFieldSchema(element) as? JsonObject ?: return@mapNotNull null
                 DynamicField(
                     id = id,
                     label = field.string("title") ?: id.humanize(),
@@ -965,7 +1103,7 @@ private class KotlinCompilerState(
                     readOnly = field.boolean("readOnly") ?: false,
                     nullable = field.boolean("nullable") ?: false,
                     multiple = field.string("type") == "array",
-                    format = field.string("format"),
+                    format = field.dynamicEditorFormat(),
                     enumValues = field.stringArray("enum"),
                     confidence = Confidence.high,
                     provenance = listOf(source),
@@ -1006,13 +1144,20 @@ private class KotlinCompilerState(
         }
 
     private fun body(operation: JsonObject): HttpBody? {
-        val request = operation["requestBody"]?.let(::resolveLocal) as? JsonObject ?: return null
-        val content = request.objectValue("content") ?: return null
+        val request = operation["requestBody"]?.let(::resolveLocal) as? JsonObject
+        val content = request?.objectValue("content")
+        inferredSignedDescriptionMultipartBody(operation, request, content)?.let { return it }
+        request ?: return null
+        content ?: return null
         val contentType = listOf(
+            "multipart/form-data",
             "application/json",
             "application/x-www-form-urlencoded",
-            "multipart/form-data",
-        ).firstOrNull(content::containsKey) ?: content.keys.firstOrNull() ?: return null
+        ).firstOrNull { candidate ->
+            val media = content[candidate] as? JsonObject ?: return@firstOrNull false
+            val schema = media["schema"]?.let(::resolveLocal)
+            candidate != "multipart/form-data" || isExactDynamicMultipartSchema(schema)
+        } ?: content.keys.firstOrNull() ?: return null
         val media = content[contentType] as? JsonObject ?: return null
         val declaredSchema = media["schema"]?.let(::resolveLocal) ?: return null
         // The generic array editors produce a typed JSON value. Form and multipart array
@@ -1031,25 +1176,171 @@ private class KotlinCompilerState(
         )
     }
 
+    private fun inferredSignedDescriptionMultipartBody(
+        operation: JsonObject,
+        request: JsonObject?,
+        content: JsonObject?,
+    ): HttpBody? {
+        if (!allowSignedDescriptionMultipartInference) return null
+        val description = operation.string("description")
+            ?.takeIf { it.length in 1..MAX_MULTIPART_DESCRIPTION_CHARACTERS }
+            ?: return null
+        val fileMatches = MULTIPART_FILE_FIELD_DESCRIPTION.findAll(description).toList()
+        if (fileMatches.size != 1) return null
+        val fileFieldName = fileMatches.single().groupValues[2]
+        if (!fileFieldName.isSafeInferredMultipartFieldName()) return null
+        val declaredJson = content?.entries
+            ?.singleOrNull { (type, _) ->
+                type.substringBefore(';').trim().equals("application/json", ignoreCase = true)
+            }
+            ?.value as? JsonObject
+        if (content != null && (content.size != 1 || declaredJson == null)) return null
+        val declaredJsonSchema = declaredJson
+            ?.get("schema")
+            ?.let(::resolveLocal) as? JsonObject
+        val declaredProperties = declaredJsonSchema?.objectValue("properties").orEmpty()
+        if (fileFieldName in declaredProperties) return null
+
+        val additionalMatches = ADDITIONAL_MULTIPART_FIELDS_DESCRIPTION.findAll(description).toList()
+        if (additionalMatches.size > 1) return null
+        val additionalFields = additionalMatches.singleOrNull()
+            ?.groupValues
+            ?.get(1)
+            ?.parseInferredMultipartFieldList()
+            ?: emptyList()
+        if (additionalFields.size > MAX_INFERRED_MULTIPART_TEXT_FIELDS) return null
+        if (
+            additionalFields.any { !it.isSafeInferredMultipartFieldName() } ||
+            additionalFields.distinct().size != additionalFields.size
+        ) {
+            return null
+        }
+
+        if (declaredJsonSchema == null) {
+            if (request != null || content != null || additionalFields.isNotEmpty()) return null
+        } else {
+            if (declaredJsonSchema.string("type") != "object") return null
+            if (additionalFields.toSet() != declaredProperties.keys) return null
+            if (declaredProperties.values.any { element ->
+                    val property = resolveLocal(element) as? JsonObject ?: return@any true
+                    property.string("type") !in INFERRED_MULTIPART_SCALAR_TYPES ||
+                        property.string("format") == "binary"
+                }
+            ) {
+                return null
+            }
+        }
+
+        val mediaWord = fileMatches.single().groupValues[1].lowercase()
+        val fileProperty = buildMap<String, JsonElement> {
+            put("type", JsonPrimitive("string"))
+            put("format", JsonPrimitive("binary"))
+            when (mediaWord) {
+                "image", "photo" -> put("contentMediaType", JsonPrimitive("image/*"))
+                "audio" -> put("contentMediaType", JsonPrimitive("audio/*"))
+                "video" -> put("contentMediaType", JsonPrimitive("video/*"))
+            }
+            put(DESCRIPTION_INFERRED_MULTIPART_EXTENSION, JsonPrimitive(true))
+        }
+        val properties = JsonObject(
+            declaredProperties + (fileFieldName to JsonObject(fileProperty)),
+        )
+        val declaredRequired = (declaredJsonSchema?.get("required") as? JsonArray)
+            .orEmpty()
+            .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            .filter(declaredProperties::containsKey)
+        val schema = JsonObject(
+            buildMap {
+                put("type", JsonPrimitive("object"))
+                put("properties", properties)
+                put("required", JsonArray((declaredRequired + fileFieldName).distinct().map(::JsonPrimitive)))
+                put(DESCRIPTION_INFERRED_MULTIPART_EXTENSION, JsonPrimitive(true))
+            },
+        )
+        return HttpBody(
+            contentType = "multipart/form-data",
+            required = request?.boolean("required") ?: true,
+            schema = schema,
+        )
+    }
+
+    private fun isExactDynamicMultipartSchema(element: JsonElement?): Boolean {
+        val schema = element as? JsonObject ?: return false
+        if (schema.string("type") != "object") return false
+        val properties = schema.objectValue("properties") ?: return false
+        if (properties.isEmpty() || properties.size > MAX_INFERRED_MULTIPART_TEXT_FIELDS + 1) return false
+        var binaryFields = 0
+        properties.forEach { (name, propertyElement) ->
+            if (!name.isSafeInferredMultipartFieldName()) return false
+            val property = resolveLocal(propertyElement) as? JsonObject ?: return false
+            if (property.string("type") == "string" && property.string("format") == "binary") {
+                binaryFields += 1
+            } else if (property.string("type") !in INFERRED_MULTIPART_SCALAR_TYPES) {
+                return false
+            }
+        }
+        return binaryFields == 1
+    }
+
     private fun JsonElement.withDynamicFormFormats(): JsonElement {
         val schema = this as? JsonObject ?: return this
         val properties = schema["properties"] as? JsonObject ?: return schema
         val formattedProperties = JsonObject(
             properties.mapValues { (_, property) ->
-                val propertySchema = resolveLocal(property) as? JsonObject ?: return@mapValues property
+                val propertySchema = resolveFieldSchema(property) as? JsonObject ?: return@mapValues property
                 val type = propertySchema.string("type")
-                val itemType = (propertySchema["items"] as? JsonObject)?.string("type")
+                val itemType = (propertySchema["items"]?.let(::resolveLocal) as? JsonObject)?.string("type")
                 when {
                     type == "array" && itemType == "string" ->
                         JsonObject(propertySchema + ("format" to JsonPrimitive(DYNAMIC_STRING_ARRAY_FORMAT)))
                     type == "array" && itemType == "integer" ->
                         JsonObject(propertySchema + ("format" to JsonPrimitive(DYNAMIC_INTEGER_ARRAY_FORMAT)))
+                    type == "array" && itemType == "object" ->
+                        normalizeRepeatableObjectArraySchema(propertySchema) ?: propertySchema
                     type == "array" -> propertySchema
                     else -> property
                 }
             },
         )
         return JsonObject(schema + ("properties" to formattedProperties))
+    }
+
+    private fun normalizeRepeatableObjectArraySchema(array: JsonObject): JsonObject? {
+        val item = array["items"]?.let(::resolveLocal) as? JsonObject ?: return null
+        if (item.string("type") != "object") return null
+        val properties = item.objectValue("properties") ?: return null
+        val description = array.string("description")
+        val normalizedProperties = JsonObject(
+            properties.mapValues { (fieldId, element) ->
+                val scalar = resolveFieldSchema(element) as? JsonObject ?: return null
+                val recoveredEnum = if (
+                    allowSignedDescriptionEnumInference &&
+                    scalar.string("type") == "string" &&
+                    scalar["enum"] == null
+                ) {
+                    description?.exactSignedDescriptionEnum(fieldId)
+                } else {
+                    null
+                }
+                if (recoveredEnum == null) {
+                    scalar
+                } else {
+                    JsonObject(
+                        scalar + (
+                            DESCRIPTION_ENUM_EXTENSION to
+                                JsonArray(recoveredEnum.map(::JsonPrimitive))
+                            ),
+                    )
+                }
+            },
+        )
+        val normalizedItem = JsonObject(item + ("properties" to normalizedProperties))
+        val normalized = JsonObject(
+            array +
+                ("items" to normalizedItem) +
+                ("format" to JsonPrimitive(DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT)),
+        )
+        return normalized.takeIf { it.repeatableObjectInputSpec() != null }
     }
 
     private fun bindDocumentedPathDefaults(
@@ -1129,22 +1420,26 @@ private class KotlinCompilerState(
             .toSet()
         val properties = schema.objectValue("properties") ?: return null
         return properties.entries.sortedBy(Map.Entry<String, JsonElement>::key).mapNotNull { (id, element) ->
-            val field = resolveLocal(element) as? JsonObject ?: return@mapNotNull null
+            val field = resolveFieldSchema(element) as? JsonObject ?: return@mapNotNull null
             if (field.boolean("readOnly") == true) return@mapNotNull null
             if (field.string("type") == "array" && !supportsTypedArrays) return@mapNotNull null
+            val repeatableObjectInput = field.repeatableObjectInputSpec()
             FormField(
                 fieldId = id,
                 label = field.string("title") ?: id.humanize(),
                 kind = fieldKind(id, field),
                 required = id in required,
-                format = field.string("format"),
+                format = repeatableObjectInput
+                    ?.let { DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT }
+                    ?: field.dynamicEditorFormat(),
                 enumValues = field.stringArray("enum"),
+                repeatableObjectInput = repeatableObjectInput,
             )
         }
     }
 
     private fun formField(parameter: HttpParameter): FormField? {
-        val schema = resolveLocal(parameter.schema) as? JsonObject ?: return null
+        val schema = resolveFieldSchema(parameter.schema) as? JsonObject ?: return null
         return FormField(
             fieldId = parameter.name,
             label = schema.string("title") ?: parameter.name.humanize(),
@@ -1153,6 +1448,27 @@ private class KotlinCompilerState(
             format = schema.string("format"),
             enumValues = schema.stringArray("enum"),
         )
+    }
+
+    /**
+     * Resolves the exact scalar/field shape behind a single-member OpenAPI `allOf` wrapper.
+     *
+     * OpenAPI generators commonly express a nullable enum property as
+     * `{ "nullable": true, "allOf": [{ "$ref": "..." }] }`. This is not an enum union: one
+     * referenced schema supplies the value shape while the wrapper supplies annotations. Multiple
+     * members or structural wrapper keywords remain unresolved so downstream UI inference fails
+     * closed instead of inventing a combined type or option set.
+     */
+    private fun resolveFieldSchema(element: JsonElement, depth: Int = 0): JsonElement {
+        require(depth <= 24) { "OpenAPI field composition depth exceeded" }
+        val resolved = resolveLocal(element) as? JsonObject ?: return resolveLocal(element)
+        val allOf = resolved["allOf"] as? JsonArray ?: return resolved
+        val member = allOf.singleOrNull() ?: return resolved
+        val wrapper = resolved.filterKeys { key -> key != "allOf" }
+        if (wrapper.keys.any { key -> key !in FIELD_COMPOSITION_ANNOTATION_KEYS }) return resolved
+        val inherited = resolveFieldSchema(member, depth + 1) as? JsonObject ?: return resolved
+        if ("allOf" in inherited) return resolved
+        return JsonObject(inherited + wrapper)
     }
 
     private fun resolveLocal(element: JsonElement, depth: Int = 0): JsonElement {
@@ -1499,25 +1815,54 @@ private val AMBIGUOUS_RESULT_MUTATION_WORDS = setOf(
 )
 
 /**
- * Binary reads are valid API capabilities, but they are not record/detail layouts. Their bytes are
- * consumed by native artwork/media loaders instead of being sent through the JSON record parser.
+ * Recovers only the narrow signed prose shape `field ('first' or 'second')`.
+ *
+ * The field name must occur exactly once as a complete word, the parenthesized expression must
+ * immediately follow it, and every alternative must be a quoted bounded scalar. General prose,
+ * examples, comma lists, and unquoted words remain non-authoritative.
  */
-private fun JsonObject.hasSuccessfulBinaryResponse(): Boolean {
-    val responseContent = objectValue("responses")
-        ?.entries
-        ?.filter { (status, _) -> status.startsWith('2') }
-        ?.mapNotNull { (_, response) -> (response as? JsonObject)?.objectValue("content") }
-        .orEmpty()
-    if (responseContent.isEmpty()) return false
-    val contentTypes = responseContent.flatMap { it.keys }.map { it.substringBefore(';').lowercase() }
-    return contentTypes.isNotEmpty() &&
-        contentTypes.none { type -> type.contains("json") } &&
-        contentTypes.all { type ->
-            type.startsWith("image/") ||
-                type.startsWith("audio/") ||
-                type.startsWith("video/") ||
-                type == "application/octet-stream"
+private fun String.exactSignedDescriptionEnum(fieldId: String): List<String>? {
+    if (
+        length !in 1..MAX_SIGNED_DESCRIPTION_ENUM_CHARACTERS ||
+        fieldId.isBlank() ||
+        fieldId.length > MAX_SIGNED_DESCRIPTION_ENUM_FIELD_LENGTH
+    ) {
+        return null
+    }
+    val occurrences = indices.filter { index ->
+        index + fieldId.length <= length &&
+            regionMatches(index, fieldId, 0, fieldId.length, ignoreCase = true) &&
+            (index == 0 || !this[index - 1].isLetterOrDigit()) &&
+            (index + fieldId.length == length || !this[index + fieldId.length].isLetterOrDigit())
+    }
+    val start = occurrences.singleOrNull() ?: return null
+    val tail = substring(start + fieldId.length).trimStart()
+    if (!tail.startsWith('(')) return null
+    val close = tail.indexOf(')')
+    if (close <= 1) return null
+    val expression = tail.substring(1, close)
+    val tokens = expression.split(Regex("""\s+or\s+""", RegexOption.IGNORE_CASE))
+    if (tokens.size !in 2..MAX_SIGNED_DESCRIPTION_ENUM_VALUES) return null
+    val values = tokens.mapNotNull { token ->
+        val quoted = token.trim()
+        if (
+            quoted.length < 3 ||
+            quoted.first() !in setOf('\'', '"') ||
+            quoted.last() != quoted.first()
+        ) {
+            return@mapNotNull null
         }
+        quoted.substring(1, quoted.lastIndex).takeIf { value ->
+            value.length in 1..MAX_SIGNED_DESCRIPTION_ENUM_VALUE_LENGTH &&
+                value.all { character ->
+                    character.isLetterOrDigit() || character in setOf('-', '_', '.', ' ')
+                }
+        }
+    }
+    return values.takeIf {
+        it.size == tokens.size &&
+            it.distinct().size == it.size
+    }
 }
 
 /**
@@ -1995,6 +2340,7 @@ private fun fieldKind(id: String, schema: JsonObject): FieldKind {
     val value = if (schema.string("type") == "array") schema["items"] as? JsonObject ?: schema else schema
     val lowerId = id.lowercase()
     return when {
+        value.string("type") == "string" && value.string("format") == "binary" -> FieldKind.file
         value.string("type") == "string" && value.string("format") == "date" -> FieldKind.date
         value.string("type") == "string" && value.string("format") == "date-time" -> FieldKind.dateTime
         value.string("type") == "integer" -> FieldKind.integer
@@ -2013,6 +2359,27 @@ private fun fieldKind(id: String, schema: JsonObject): FieldKind {
         value.string("type") == "string" -> FieldKind.string
         else -> FieldKind.unknown
     }
+}
+
+private fun JsonObject.dynamicEditorFormat(): String? {
+    val format = string("format")
+    if (format != "binary") return format
+    return string("contentMediaType")
+        ?.trim()
+        ?.lowercase()
+        ?.takeIf(String::isSafeDynamicUploadMimeFilter)
+        ?: format
+}
+
+private fun String.isSafeDynamicUploadMimeFilter(): Boolean {
+    if (length !in 3..160 || count { it == '/' } != 1) return false
+    val type = substringBefore('/')
+    val subtype = substringAfter('/')
+    if (type.isEmpty() || subtype.isEmpty() || type == "*") return false
+    fun String.safeToken(): Boolean = all { character ->
+        character.isAsciiLetter() || character.isDigit() || character in "!#$&+-.^_"
+    }
+    return type.safeToken() && (subtype == "*" || subtype.safeToken())
 }
 
 private fun DynamicField.layoutRole(index: Int): LayoutFieldRole = when {

@@ -86,6 +86,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -120,10 +122,10 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.DynamicResourceRecordContext
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
+import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
-import dev.obiente.nextcloudnative.nativeui.model.isSecondaryTechnicalDestination
 import dev.obiente.nextcloudnative.nativeui.model.planDynamicNavigation
 import dev.obiente.nextcloudnative.nativeui.model.preferredSemanticContextualChild
 import dev.obiente.nextcloudnative.nativeui.model.singleSafeContextualChild
@@ -138,6 +140,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRelatedRecordPaging
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeImageLoader
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeFileFieldPicker
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeAudioRecordPlayer
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeAudioTrack
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
@@ -341,7 +344,7 @@ private data class DynamicFormRelationLoadResult(
 internal data class DynamicFormRelationCacheState(
     val recordsByKey: Map<DynamicFormRelationCacheKey, List<NativeRecord>> = emptyMap(),
     val continuationsByKey: Map<DynamicFormRelationCacheKey, DynamicFormRelationContinuation> = emptyMap(),
-    val safetyLimitedKeys: Set<DynamicFormRelationCacheKey> = emptySet(),
+    val discardedRecordCountsByKey: Map<DynamicFormRelationCacheKey, Int> = emptyMap(),
     val failedKeys: Set<DynamicFormRelationCacheKey> = emptySet(),
 ) {
     fun pendingRequests(
@@ -376,28 +379,25 @@ internal data class DynamicFormRelationCacheState(
         records: List<NativeRecord>,
         pagination: DynamicPaginationSpec? = null,
     ): DynamicFormRelationCacheState {
-        val boundedRecords = records.distinctBy(NativeRecord::id).take(MAX_DYNAMIC_FORM_RELATION_RECORDS)
+        val distinctRecords = records.distinctBy(NativeRecord::id)
+        val discardedRecordCount =
+            (distinctRecords.size - MAX_DYNAMIC_FORM_RELATION_RECORDS).coerceAtLeast(0)
+        val boundedRecords = distinctRecords.takeLast(MAX_DYNAMIC_FORM_RELATION_RECORDS)
         val continuation = pagination?.nextDynamicFormRelationContinuation(
             lastPage = records,
             loadedRecordCount = records.size,
         )
-        val safetyLimited =
-            records.size > boundedRecords.size ||
-                (boundedRecords.size >= MAX_DYNAMIC_FORM_RELATION_RECORDS && continuation != null)
         return copy(
             recordsByKey = recordsByKey.putBounded(request.cacheKey, boundedRecords),
-            continuationsByKey = if (safetyLimited || continuation == null) {
+            continuationsByKey = if (continuation == null) {
                 continuationsByKey - request.cacheKey
             } else {
                 continuationsByKey.putBounded(request.cacheKey, continuation)
             },
-            safetyLimitedKeys = if (safetyLimited) {
-                (safetyLimitedKeys + request.cacheKey)
-                    .toList()
-                    .takeLast(MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES)
-                    .toSet()
+            discardedRecordCountsByKey = if (discardedRecordCount == 0) {
+                discardedRecordCountsByKey - request.cacheKey
             } else {
-                safetyLimitedKeys - request.cacheKey
+                discardedRecordCountsByKey.putBounded(request.cacheKey, discardedRecordCount)
             },
             failedKeys = failedKeys - request.cacheKey,
         )
@@ -412,30 +412,31 @@ internal data class DynamicFormRelationCacheState(
         val currentIds = current.mapTo(hashSetOf(), NativeRecord::id)
         val novelRecords = page.distinctBy(NativeRecord::id)
             .filterNot { record -> record.id in currentIds }
-        val merged = (current + novelRecords).take(MAX_DYNAMIC_FORM_RELATION_RECORDS)
+        val unboundedWindow = current + novelRecords
+        val discardedFromWindow =
+            (unboundedWindow.size - MAX_DYNAMIC_FORM_RELATION_RECORDS).coerceAtLeast(0)
+        val merged = unboundedWindow.takeLast(MAX_DYNAMIC_FORM_RELATION_RECORDS)
         val nextContinuation = activeContinuation.spec.nextDynamicFormRelationContinuation(
             lastPage = page,
             loadedRecordCount = activeContinuation.loadedRecordCount + page.size,
             novelRecordCount = novelRecords.size,
             nextPageNumber = activeContinuation.nextPageNumber + 1,
         )
-        val safetyLimited =
-            current.size + novelRecords.size > merged.size ||
-                (merged.size >= MAX_DYNAMIC_FORM_RELATION_RECORDS && nextContinuation != null)
+        val discardedRecordCount =
+            ((discardedRecordCountsByKey[request.cacheKey] ?: 0).toLong() + discardedFromWindow)
+                .coerceAtMost(Int.MAX_VALUE.toLong())
+                .toInt()
         return copy(
             recordsByKey = recordsByKey.putBounded(request.cacheKey, merged),
-            continuationsByKey = if (safetyLimited || nextContinuation == null) {
+            continuationsByKey = if (nextContinuation == null) {
                 continuationsByKey - request.cacheKey
             } else {
                 continuationsByKey.putBounded(request.cacheKey, nextContinuation)
             },
-            safetyLimitedKeys = if (safetyLimited) {
-                (safetyLimitedKeys + request.cacheKey)
-                    .toList()
-                    .takeLast(MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES)
-                    .toSet()
+            discardedRecordCountsByKey = if (discardedRecordCount == 0) {
+                discardedRecordCountsByKey - request.cacheKey
             } else {
-                safetyLimitedKeys - request.cacheKey
+                discardedRecordCountsByKey.putBounded(request.cacheKey, discardedRecordCount)
             },
         )
     }
@@ -444,15 +445,15 @@ internal data class DynamicFormRelationCacheState(
         request: DynamicFormRelationLoadRequest,
     ): DynamicFormRelationContinuation? = continuationsByKey[request.cacheKey]
 
-    fun reachedSafetyLimit(request: DynamicFormRelationLoadRequest): Boolean =
-        request.cacheKey in safetyLimitedKeys
+    fun discardedRecordCount(request: DynamicFormRelationLoadRequest): Int =
+        discardedRecordCountsByKey[request.cacheKey] ?: 0
 
     fun loadFailed(
         request: DynamicFormRelationLoadRequest,
     ): DynamicFormRelationCacheState = copy(
         recordsByKey = recordsByKey - request.cacheKey,
         continuationsByKey = continuationsByKey - request.cacheKey,
-        safetyLimitedKeys = safetyLimitedKeys - request.cacheKey,
+        discardedRecordCountsByKey = discardedRecordCountsByKey - request.cacheKey,
         failedKeys = (failedKeys + request.cacheKey)
             .toList()
             .takeLast(MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES)
@@ -484,21 +485,31 @@ private suspend fun loadInitialDynamicFormRelationRecords(
     descriptor: DynamicAppDescriptor,
     request: DynamicFormRelationLoadRequest,
     values: Map<String, String>,
+    cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
 ): DynamicFormRelationLoadResult {
     val action = descriptor.actions.singleOrNull { action -> action.id == request.plan.actionId }
         ?: error("This relation has no declared load action.")
+    val boundValues = dynamicFormRelationRuntimeValues(request, values)
     return DynamicFormRelationLoadResult(
         records = loadDynamicRecords(
             services = services,
             session = session,
             descriptor = descriptor,
             actionId = action.id,
-            values = values,
-            runtimeContext = values,
+            values = boundValues,
+            runtimeContext = boundValues,
+            cachePolicy = cachePolicy,
         ),
         pagination = action.dynamicPaginationSpec(),
     )
 }
+
+internal fun dynamicFormRelationRuntimeValues(
+    request: DynamicFormRelationLoadRequest,
+    availableValues: Map<String, String>,
+    additionalValues: Map<String, String> = emptyMap(),
+): Map<String, String> =
+    availableValues + request.cacheKey.bindingValues + additionalValues
 
 internal fun dynamicFormRelationLoadRequests(
     schema: NativeAppSchema,
@@ -517,10 +528,7 @@ internal fun dynamicFormRelationLoadRequests(
             action.binding.requiredQueryParameterNames
         ).distinct()
     if (bindingNames.size > MAX_DYNAMIC_FORM_RELATION_BINDINGS) return@mapNotNull null
-    val bindingValues = bindingNames.mapNotNull { name ->
-        availableValues[name]?.takeIf(String::isNotBlank)?.let { value -> name to value }
-    }.sortedBy { (name, _) -> name }
-        .toMap()
+    val bindingValues = dynamicFormRelationBindingValues(action, availableValues)
     DynamicFormRelationLoadRequest(
         plan = plan,
         cacheKey = DynamicFormRelationCacheKey(
@@ -541,6 +549,7 @@ private fun <K, V> Map<K, V>.putBounded(key: K, value: V): Map<K, V> =
 private const val MAX_DYNAMIC_FORM_RELATION_BINDINGS = 32
 private const val MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES = 16
 internal const val MAX_DYNAMIC_FORM_RELATION_RECORDS = 500
+private const val DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS = 500L
 
 private class PhotoTimelineUiState {
     val timeline = mutableStateOf(PhotoTimelineState(pageSize = MAX_PHOTO_TIMELINE_PAGE_SIZE))
@@ -732,6 +741,8 @@ fun NextcloudNativeMarketingCapture(
                     }
                     MarketingCaptureScenario.AdaptiveApp,
                     MarketingCaptureScenario.AdaptiveAppMobile,
+                    MarketingCaptureScenario.AdaptiveAppCollectionMobile,
+                    MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
                     -> MarketingAdaptiveAppScenario(scenario)
                     MarketingCaptureScenario.PhotoTimelineRevalidationErrorMobile,
                     MarketingCaptureScenario.PhotoTimelineReturnToNewestErrorMobile,
@@ -1524,7 +1535,10 @@ private fun AppsScreen(
                 OutlinedTextField(
                     value = search,
                     onValueChange = { search = it },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.XLarge, vertical = 14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = NextcloudSpacing.XLarge, vertical = 14.dp)
+                        .semantics { contentDescription = "Search apps" },
                     leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
                     placeholder = { Text("Find an app") },
                     singleLine = true,
@@ -1551,6 +1565,7 @@ private fun AppsScreen(
                                 supportingText = if (app.id in nativeAppIds) nativeSubtitle(app.id) else nativeFamily(app.id),
                                 onClick = { onOpenApp(app) },
                                 modifier = Modifier.fillMaxWidth().height(140.dp),
+                                accessibilityId = app.id,
                             )
                         }
                     }
@@ -1879,7 +1894,23 @@ private fun DynamicDiscoveredAppScreen(
     var selectedPathParameterValues by remember(descriptor) {
         mutableStateOf(restoredPathParameterValues)
     }
-    var navigationHistory by remember(descriptor) { mutableStateOf(restoredNavigation.history) }
+    var contextualMenuRecordToken by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        descriptor.app.id,
+    ) {
+        mutableStateOf<String?>(null)
+    }
+    var contextualMenuOpen by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        descriptor.app.id,
+    ) {
+        mutableStateOf(false)
+    }
+    var navigationHistory by remember(descriptor) {
+        mutableStateOf(restoreDynamicNavigationHistory(restoredNavigation.history))
+    }
     var viewState by remember(descriptor) { mutableStateOf<NativeScreenState>(NativeScreenState.Loading) }
     var recordsByResourceId by remember(descriptor) {
         mutableStateOf<Map<String, List<NativeRecord>>>(emptyMap())
@@ -1907,6 +1938,11 @@ private fun DynamicDiscoveredAppScreen(
         mutableStateOf<Map<DynamicFormRelationCacheKey, String>>(emptyMap())
     }
     var loadAttempt by remember(descriptor) { mutableStateOf(0) }
+    val dynamicReadCachePolicy = if (loadAttempt == 0) {
+        NextcloudApiCachePolicy.PreferCache
+    } else {
+        NextcloudApiCachePolicy.ForceNetwork
+    }
     var mutationReconciliationGeneration by rememberSaveable(
         session.serverUrl,
         session.loginName,
@@ -1920,6 +1956,47 @@ private fun DynamicDiscoveredAppScreen(
     val dynamicRecoveryScope = rememberCoroutineScope()
     val dynamicPaginationScope = rememberCoroutineScope()
     val formRelationPageScope = rememberCoroutineScope()
+    val selectedDynamicUploadFiles = remember(descriptor) {
+        mutableMapOf<String, LocalUploadFile>()
+    }
+    DisposableEffect(services, descriptor) {
+        onDispose {
+            selectedDynamicUploadFiles.values.forEach(services::releaseLocalUploadFile)
+            selectedDynamicUploadFiles.clear()
+        }
+    }
+    val dynamicFilePicker = remember(services, descriptor) {
+        NativeFileFieldPicker { field, onSelected ->
+            dynamicRecoveryScope.launch {
+                val acceptedMimeType = field.format
+                    ?.takeIf { format ->
+                        format != "binary" &&
+                            runCatching {
+                                requireSafeUploadPickerRequest(
+                                    listOf(format),
+                                    DEFAULT_LOCAL_UPLOAD_LIMIT_BYTES,
+                                )
+                            }.isSuccess
+                    }
+                    ?: "*/*"
+                when (
+                    val selection = services.chooseLocalUploadFile(
+                        acceptedMimeTypes = listOf(acceptedMimeType),
+                        maximumBytes = DEFAULT_LOCAL_UPLOAD_LIMIT_BYTES,
+                    )
+                ) {
+                    is LocalUploadSelectionResult.Selected -> {
+                        selectedDynamicUploadFiles.put(field.id, selection.file)
+                            ?.let(services::releaseLocalUploadFile)
+                        onSelected(encodeDynamicLocalUploadSelection(selection.file))
+                    }
+                    LocalUploadSelectionResult.Cancelled -> Unit
+                    is LocalUploadSelectionResult.Rejected -> Unit
+                    is LocalUploadSelectionResult.Unavailable -> Unit
+                }
+            }
+        }
+    }
     val dynamicAssetCache = remember(session.serverUrl, session.loginName, descriptor.app.id) {
         DynamicArtworkMemoryCache<ImageBitmap>(
             maximumBytes = MAX_DYNAMIC_ARTWORK_DECODED_BYTES,
@@ -2022,7 +2099,7 @@ private fun DynamicDiscoveredAppScreen(
                 selectedRecord = selectedRecord,
                 selectedRecordResourceId = selectedRecordResourceId,
                 pathParameterValues = selectedPathParameterValues,
-                history = navigationHistory,
+                history = saveDynamicNavigationHistory(navigationHistory),
             ),
         )
     }
@@ -2037,6 +2114,13 @@ private fun DynamicDiscoveredAppScreen(
         loadAttempt,
     ) {
         val view = selectedView ?: return@LaunchedEffect
+        if (loadAttempt > 0) {
+            // Some app controllers acknowledge a mutation just before the corresponding GET
+            // projection becomes visible. Debounce the forced authoritative reload so that an
+            // immediately stale response cannot be promoted to a fresh process-level snapshot.
+            delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
+            currentCoroutineContext().ensureActive()
+        }
         val cacheKey = dynamicScreenCacheKey(
             session = session,
             appId = descriptor.app.id,
@@ -2062,6 +2146,7 @@ private fun DynamicDiscoveredAppScreen(
                                     descriptor = descriptor,
                                     request = request,
                                     values = values,
+                                    cachePolicy = dynamicReadCachePolicy,
                                 )
                             }.getOrElse { failure ->
                                 if (failure is CancellationException) throw failure
@@ -2109,6 +2194,7 @@ private fun DynamicDiscoveredAppScreen(
                     actionId = prefillView.sourceActionId,
                     values = values,
                     runtimeContext = values,
+                    cachePolicy = dynamicReadCachePolicy,
                 )
                 currentCoroutineContext().ensureActive()
                 records
@@ -2182,6 +2268,7 @@ private fun DynamicDiscoveredAppScreen(
                                 actionId = actionId,
                                 values = values,
                                 runtimeContext = values,
+                                cachePolicy = dynamicReadCachePolicy,
                             )
                         }
                     }.awaitAll()
@@ -2229,6 +2316,7 @@ private fun DynamicDiscoveredAppScreen(
                 actionId = view.sourceActionId,
                 values = values,
                 runtimeContext = values,
+                cachePolicy = dynamicReadCachePolicy,
             )
             currentCoroutineContext().ensureActive()
             records
@@ -2351,17 +2439,21 @@ private fun DynamicDiscoveredAppScreen(
         formRelationRequests.mapNotNull { request ->
             val continuation = formRelationCache.continuation(request)
             val loading = request.cacheKey in loadingFormRelationPageKeys
-            val safetyLimitMessage = if (formRelationCache.reachedSafetyLimit(request)) {
-                "More choices exist, but automatic relation loading stopped at the safety limit."
-            } else {
-                null
+            val discardedRecordCount = formRelationCache.discardedRecordCount(request)
+            val error = formRelationPageErrors[request.cacheKey]
+            if (
+                continuation == null &&
+                error == null &&
+                !loading &&
+                discardedRecordCount == 0
+            ) {
+                return@mapNotNull null
             }
-            val error = formRelationPageErrors[request.cacheKey] ?: safetyLimitMessage
-            if (continuation == null && error == null && !loading) return@mapNotNull null
             request.plan.resourceId to NativeRelatedRecordPaging(
                 loading = loading,
                 error = error,
-                loadMore = continuation?.takeUnless { loading || safetyLimitMessage != null }?.let {
+                discardedChoiceCount = discardedRecordCount,
+                loadMore = continuation?.takeUnless { loading }?.let {
                     {
                         if (request.cacheKey !in loadingFormRelationPageKeys) {
                             loadingFormRelationPageKeys += request.cacheKey
@@ -2372,8 +2464,13 @@ private fun DynamicDiscoveredAppScreen(
                                     loadingFormRelationPageKeys -= request.cacheKey
                                     return@launch
                                 }
-                                val pageValues = formRelationValues +
-                                    (active.spec.parameterName to active.nextRequestValue)
+                                val pageValues = dynamicFormRelationRuntimeValues(
+                                    request = request,
+                                    availableValues = formRelationValues,
+                                    additionalValues = mapOf(
+                                        active.spec.parameterName to active.nextRequestValue,
+                                    ),
+                                )
                                 runCatching {
                                     loadDynamicRecords(
                                         services = services,
@@ -2382,6 +2479,7 @@ private fun DynamicDiscoveredAppScreen(
                                         actionId = request.plan.actionId,
                                         values = pageValues,
                                         runtimeContext = pageValues,
+                                        cachePolicy = dynamicReadCachePolicy,
                                     )
                                 }.onSuccess { page ->
                                     formRelationCache = formRelationCache.appendPageSucceeded(request, page)
@@ -2391,6 +2489,40 @@ private fun DynamicDiscoveredAppScreen(
                                     formRelationPageErrors = formRelationPageErrors.putBounded(
                                         request.cacheKey,
                                         failure.message ?: "Could not load more choices.",
+                                    )
+                                }
+                                loadingFormRelationPageKeys -= request.cacheKey
+                            }
+                        }
+                    }
+                },
+                returnToFirstPage = discardedRecordCount.takeIf { count -> count > 0 && !loading }?.let {
+                    {
+                        if (request.cacheKey !in loadingFormRelationPageKeys) {
+                            loadingFormRelationPageKeys += request.cacheKey
+                            formRelationPageErrors -= request.cacheKey
+                            formRelationPageScope.launch {
+                                runCatching {
+                                    loadInitialDynamicFormRelationRecords(
+                                        services = services,
+                                        session = session,
+                                        descriptor = descriptor,
+                                        request = request,
+                                        values = formRelationValues,
+                                        cachePolicy = dynamicReadCachePolicy,
+                                    )
+                                }.onSuccess { result ->
+                                    formRelationCache = formRelationCache.loadSucceeded(
+                                        request = request,
+                                        records = result.records,
+                                        pagination = result.pagination,
+                                    )
+                                    formRelationPageErrors -= request.cacheKey
+                                }.onFailure { failure ->
+                                    if (failure is CancellationException) throw failure
+                                    formRelationPageErrors = formRelationPageErrors.putBounded(
+                                        request.cacheKey,
+                                        failure.message ?: "Could not return to the first choices.",
                                     )
                                 }
                                 loadingFormRelationPageKeys -= request.cacheKey
@@ -2507,23 +2639,13 @@ private fun DynamicDiscoveredAppScreen(
             }
         }
     }
-    val secondaryNavigationDestinations = remember(
-        descriptor,
-        recordContext,
-        navigationDestinations,
-    ) {
-        val context = recordContext ?: return@remember emptyList()
-        navigationDestinations.filter { (destination, _) ->
-            descriptor.isSecondaryTechnicalDestination(context, destination)
-        }
-    }
-    val primaryNavigationDestinations = remember(
-        navigationDestinations,
-        secondaryNavigationDestinations,
-    ) {
-        val secondaryViewIds = secondaryNavigationDestinations.mapTo(hashSetOf()) { (_, view) -> view.id }
-        navigationDestinations.filterNot { (_, view) -> view.id in secondaryViewIds }
-    }
+    // Every verified read destination belongs in the adaptive, scrollable navigator. Keeping
+    // technical or trash collections in the small header popup makes them unreachable on compact
+    // screens once the menu exceeds the viewport. Semantic ranking still controls the preferred
+    // automatic child; it must not hide an explicitly verified user destination.
+    val primaryNavigationDestinations = navigationDestinations
+    val secondaryNavigationDestinations =
+        emptyList<Pair<DynamicNavigationDestination, ViewSpec>>()
     val selectedCollectionState = remember(schema, selectedView.sourceActionId) {
         dynamicCollectionState(schema.action(selectedView.sourceActionId))
     }
@@ -2543,18 +2665,31 @@ private fun DynamicDiscoveredAppScreen(
             val currentResourceId = selectedRecordResourceId.orEmpty()
             navigationPlan.contextualFormActions.filter { action ->
                 val spec = schema.action(action.actionId)
-                val targetsCurrentRecord = action.resourceId.sameDynamicResourceAs(currentResourceId)
-                val targetsCurrentView = action.resourceId.sameDynamicResourceAs(selectedView.resourceId)
-                val createsCurrentViewResource = spec?.intent == ActionIntent.create &&
-                    targetsCurrentView &&
-                    selectedCollectionState == null
-                val editsSelectedRecord = spec?.intent in setOf(ActionIntent.update, ActionIntent.delete) &&
-                    targetsCurrentRecord &&
-                    (targetsCurrentView || selectedView.component == NativeComponent.detail)
-                // Create actions belong to the active collection tab. Update and
-                // delete actions belong to the selected record and stay visible
-                // on its detail surface, not on unrelated child collections.
-                createsCurrentViewResource || editsSelectedRecord
+                    ?: return@filter false
+                val formView = schema.views.singleOrNull { candidate ->
+                    candidate.id == action.formId &&
+                        candidate.resourceId.sameDynamicResourceAs(spec.resourceId)
+                } ?: return@filter false
+                val activeReadAction = schema.actions.singleOrNull { candidate ->
+                    candidate.id == selectedView.sourceActionId
+                }
+                val actionResource = schema.resources.singleOrNull { candidate ->
+                    candidate.id.sameDynamicResourceAs(spec.resourceId)
+                }
+                dynamicContextualFormTargetsActiveSurface(
+                    action = spec,
+                    formView = formView,
+                    activeView = selectedView,
+                    activeReadAction = activeReadAction,
+                    plannedBindingValues = action.pathParameterValues,
+                    selectedRecordResourceId = currentResourceId,
+                    selectedCollectionState = selectedCollectionState,
+                    hasEditableFileField = actionResource
+                        ?.let { resource -> editableNativeFields(resource, spec) }
+                        ?.any { field -> field.kind == FieldKind.file }
+                        ?: false,
+                    uniqueTargetResource = actionResource != null,
+                )
             }
         }
         planned.mapNotNull { action ->
@@ -2614,6 +2749,7 @@ private fun DynamicDiscoveredAppScreen(
                             actionId = pagingView.sourceActionId,
                             values = values,
                             runtimeContext = values,
+                            cachePolicy = dynamicReadCachePolicy,
                         )
                     }.onSuccess { pageRecords ->
                         if (selectedViewId != pagingView.id) return@onSuccess
@@ -2656,16 +2792,30 @@ private fun DynamicDiscoveredAppScreen(
     }
 
     fun rememberCurrentLocation() {
-        navigationHistory = navigationHistory + DynamicNavigationSnapshot(
-            viewId = selectedView.id,
-            resourceId = selectedView.resourceId,
-            record = selectedRecord,
-            recordResourceId = selectedRecordResourceId,
-            pathParameterValues = selectedPathParameterValues,
-        )
+        navigationHistory = (
+            navigationHistory +
+                DynamicNavigationSnapshot(
+                    viewId = selectedView.id,
+                    resourceId = selectedView.resourceId,
+                    record = selectedRecord,
+                    recordResourceId = selectedRecordResourceId,
+                    pathParameterValues = selectedPathParameterValues,
+                )
+        ).takeLast(MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY)
     }
 
     fun navigateWithinDynamicApp() {
+        val activeContextToken = selectedRecord?.dynamicContextNavigationToken(
+            selectedRecordResourceId.orEmpty(),
+        )
+        if (activeContextToken != null && activeContextToken == contextualMenuRecordToken) {
+            if (!contextualMenuOpen) {
+                contextualMenuOpen = true
+                return
+            }
+            contextualMenuOpen = false
+            contextualMenuRecordToken = null
+        }
         navigationHistory.lastOrNull()?.let { previous ->
             navigationHistory = navigationHistory.dropLast(1)
             selectedViewId = previous.viewId
@@ -2763,6 +2913,7 @@ private fun DynamicDiscoveredAppScreen(
         view: ViewSpec,
     ) {
         actionMenuExpanded = false
+        contextualMenuOpen = false
         val selection = planDynamicCollectionDestinationSelection(
             isTopLevelDestination = selectedRecord == null,
             destinationPathParameterValues = destination.pathParameterValues,
@@ -2779,9 +2930,8 @@ private fun DynamicDiscoveredAppScreen(
         selectedViewId = view.id
     }
 
-    val hasInternalBack = navigationHistory.isNotEmpty() || selectedRecord != null || selectedViewId != initialViewId
     val hasCollectionHierarchyBack = navigationHistory.isNotEmpty() || selectedRecord != null
-    PlatformBackHandler(enabled = hasInternalBack, onBack = ::navigateWithinDynamicApp)
+    PlatformBackHandler(enabled = true, onBack = ::navigateWithinDynamicApp)
     val showFallbackRecordDetail = shouldShowDynamicRecordFallbackDetail(
         viewResourceId = selectedView.resourceId,
         viewComponent = selectedView.component,
@@ -2803,6 +2953,7 @@ private fun DynamicDiscoveredAppScreen(
                         label = destination.label
                             .dynamicUiLabel(descriptor.app.name)
                             .ifBlank { view.dynamicNavigationLabel(descriptor.app.name) },
+                        accessibilityId = destination.actionId,
                     )
                 }
         }
@@ -2834,12 +2985,24 @@ private fun DynamicDiscoveredAppScreen(
             selectedView,
             schema.resource(selectedRecordResourceId.orEmpty())?.name,
         ) ?: selectedView.dynamicRootSubtitle(descriptor.app.name)
+        val activeContextToken = selectedRecord?.dynamicContextNavigationToken(
+            selectedRecordResourceId.orEmpty(),
+        )
+        val showContextDestinationMenu = contextualMenuOpen &&
+            contextualMenuRecordToken == activeContextToken &&
+            shouldShowDynamicContextDestinationMenu(
+                collectionDestinationEntries.map { (_, destination) -> destination.id },
+            )
 
         NextcloudCollectionWorkspaceScaffold(
             model = collectionNavigationModel,
             mode = collectionNavigationMode,
             title = descriptor.app.name,
-            subtitle = collectionSubtitle,
+            subtitle = if (showContextDestinationMenu) {
+                selectedRecord?.dynamicContextLabel()
+            } else {
+                collectionSubtitle
+            },
             onBack = ::navigateWithinDynamicApp,
             hasHierarchyBack = hasCollectionHierarchyBack,
             onDestinationSelected = { selected ->
@@ -2857,83 +3020,110 @@ private fun DynamicDiscoveredAppScreen(
                     ?.dynamicCollectionNavigationIcon()
             },
             headerActions = {
-                primaryCreateAction?.let { (action, view) ->
-                    val actionSpec = schema.action(action.actionId)
-                    val label = actionSpec?.let { spec ->
-                        dynamicHeaderActionLabel(spec, view.dynamicActionLabel())
-                    } ?: view.dynamicActionLabel()
-                    IconButton(onClick = { selectDynamicAction(action, view) }) {
-                        Icon(NextcloudIcons.Add, contentDescription = label)
-                    }
-                }
-                Box {
-                    IconButton(onClick = { actionMenuExpanded = true }) {
-                        Icon(NextcloudIcons.More, contentDescription = "More options")
-                    }
-                    DropdownMenu(
-                        expanded = actionMenuExpanded,
-                        onDismissRequest = { actionMenuExpanded = false },
-                    ) {
-                        overflowActionViews.forEach { (action, view) ->
-                            val actionSpec = schema.action(action.actionId)
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        actionSpec?.let { spec ->
-                                            dynamicHeaderActionLabel(spec, view.dynamicActionLabel())
-                                        } ?: view.dynamicActionLabel(),
-                                    )
-                                },
-                                onClick = { selectDynamicAction(action, view) },
-                            )
-                        }
-                        if (
-                            overflowActionViews.isNotEmpty() &&
-                            secondaryNavigationDestinations.isNotEmpty()
-                        ) {
-                            HorizontalDivider()
-                        }
-                        secondaryNavigationDestinations.forEach { (destination, view) ->
-                            val baseLabel = destination.label.dynamicUiLabel(descriptor.app.name)
-                            val duplicate = secondaryNavigationDestinations.count { (candidate, _) ->
-                                candidate.label.dynamicUiLabel(descriptor.app.name)
-                                    .equals(baseLabel, ignoreCase = true)
-                            } > 1
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        dynamicSecondaryDestinationLabel(
-                                            destinationLabel = baseLabel,
-                                            resourceLabel = schema.resource(view.resourceId)?.name
-                                                ?: view.resourceId,
-                                            duplicate = duplicate,
-                                        ),
-                                    )
-                                },
-                                onClick = {
-                                    selectCollectionDestination(destination, view)
-                                },
-                            )
-                        }
-                        if (
-                            overflowActionViews.isNotEmpty() ||
-                            secondaryNavigationDestinations.isNotEmpty()
-                        ) {
-                            HorizontalDivider()
-                        }
-                        DropdownMenuItem(
-                            text = { Text("Contract info") },
-                            onClick = {
-                                actionMenuExpanded = false
-                                contractInfoExpanded = true
+                if (!showContextDestinationMenu) {
+                    primaryCreateAction?.let { (action, view) ->
+                        val actionSpec = schema.action(action.actionId)
+                        val label = actionSpec?.let { spec ->
+                            dynamicHeaderActionLabel(spec, view.dynamicActionLabel())
+                        } ?: view.dynamicActionLabel()
+                        IconButton(
+                            onClick = { selectDynamicAction(action, view) },
+                            modifier = Modifier.semantics {
+                                contentDescription = "$label; action ${action.actionId}"
                             },
-                        )
+                        ) {
+                            Icon(
+                                NextcloudIcons.Add,
+                                contentDescription = null,
+                            )
+                        }
+                    }
+                    Box {
+                        IconButton(onClick = { actionMenuExpanded = true }) {
+                            Icon(NextcloudIcons.More, contentDescription = "More options")
+                        }
+                        DropdownMenu(
+                            expanded = actionMenuExpanded,
+                            onDismissRequest = { actionMenuExpanded = false },
+                        ) {
+                            overflowActionViews.forEach { (action, view) ->
+                                val actionSpec = schema.action(action.actionId)
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            actionSpec?.let { spec ->
+                                                dynamicHeaderActionLabel(
+                                                    spec,
+                                                    view.dynamicActionLabel(),
+                                                )
+                                            } ?: view.dynamicActionLabel(),
+                                        )
+                                    },
+                                    onClick = { selectDynamicAction(action, view) },
+                                )
+                            }
+                            if (
+                                overflowActionViews.isNotEmpty() &&
+                                secondaryNavigationDestinations.isNotEmpty()
+                            ) {
+                                HorizontalDivider()
+                            }
+                            secondaryNavigationDestinations.forEach { (destination, view) ->
+                                val baseLabel = destination.label.dynamicUiLabel(descriptor.app.name)
+                                val duplicate = secondaryNavigationDestinations.count {
+                                        (candidate, _) ->
+                                    candidate.label.dynamicUiLabel(descriptor.app.name)
+                                        .equals(baseLabel, ignoreCase = true)
+                                } > 1
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            dynamicSecondaryDestinationLabel(
+                                                destinationLabel = baseLabel,
+                                                resourceLabel = schema.resource(view.resourceId)?.name
+                                                    ?: view.resourceId,
+                                                duplicate = duplicate,
+                                            ),
+                                        )
+                                    },
+                                    modifier = Modifier.semantics {
+                                        contentDescription =
+                                            "Open destination ${destination.actionId}"
+                                    },
+                                    onClick = {
+                                        selectCollectionDestination(destination, view)
+                                    },
+                                )
+                            }
+                            if (
+                                overflowActionViews.isNotEmpty() ||
+                                secondaryNavigationDestinations.isNotEmpty()
+                            ) {
+                                HorizontalDivider()
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Contract info") },
+                                onClick = {
+                                    actionMenuExpanded = false
+                                    contractInfoExpanded = true
+                                },
+                            )
+                        }
                     }
                 }
             },
             modifier = Modifier.fillMaxSize(),
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
+            if (showContextDestinationMenu) {
+                DynamicContextDestinationMenu(
+                    recordLabel = requireNotNull(selectedRecord).dynamicContextLabel(),
+                    destinations = collectionDestinationEntries,
+                    schema = schema,
+                    onDestinationSelected = { destination, view ->
+                        selectCollectionDestination(destination, view)
+                    },
+                )
+            } else Column(modifier = Modifier.fillMaxSize()) {
             if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback) {
             Surface(
                 modifier = Modifier.fillMaxWidth().padding(
@@ -3016,6 +3206,7 @@ private fun DynamicDiscoveredAppScreen(
                     relatedRecordPaging = relatedRecordPaging,
                 ),
                 mutationReconciliationGeneration = mutationReconciliationGeneration,
+                filePicker = dynamicFilePicker,
             onSelectRecord = selectedView.takeIf {
                 it.component != NativeComponent.detail && it.component != NativeComponent.form
             }?.let {
@@ -3058,12 +3249,26 @@ private fun DynamicDiscoveredAppScreen(
                         parentResourceId = selectedParentResourceId,
                         destinations = nextPlan.contextualChildDestinations,
                     )
-                    val nextViewId = compositeTarget?.id
-                        ?: primaryContentTarget?.layoutId
-                        ?: preferredCollectionChild?.layoutId
-                        ?: detailTarget?.id
-                        ?: directChild?.layoutId
-                        ?: selectedViewId
+                    val contextualSurfaceIds = buildSet {
+                        nextPlan.contextualChildDestinations.mapTo(this) { destination ->
+                            destination.layoutId
+                        }
+                        compositeTarget?.id?.let(::add)
+                        detailTarget?.id?.let(::add)
+                    }
+                    val showDestinationMenu = shouldShowDynamicContextDestinationMenu(
+                        contextualSurfaceIds.toList(),
+                    )
+                    val nextViewId = if (showDestinationMenu) {
+                        selectedViewId
+                    } else {
+                        compositeTarget?.id
+                            ?: primaryContentTarget?.layoutId
+                            ?: preferredCollectionChild?.layoutId
+                            ?: detailTarget?.id
+                            ?: directChild?.layoutId
+                            ?: selectedViewId
+                    }
                     val explicitTargetParameters = primaryContentTarget?.pathParameterValues
                         ?: preferredCollectionChild?.pathParameterValues
                         ?: directChild?.pathParameterValues
@@ -3075,13 +3280,23 @@ private fun DynamicDiscoveredAppScreen(
                             .associate(Map.Entry<String, String>::toPair)
                     selectedRecord = record
                     selectedRecordResourceId = selectedParentResourceId
-                    selectedPathParameterValues = resolveDynamicRecordSelectionParameters(
-                        currentViewId = selectedViewId.orEmpty(),
-                        nextViewId = nextViewId.orEmpty(),
-                        currentParameters = selectedPathParameterValues,
-                        explicitTargetParameters = explicitTargetParameters,
-                        fallbackTargetParameters = fallbackTargetParameters,
-                    )
+                    contextualMenuRecordToken = if (showDestinationMenu) {
+                        record.dynamicContextNavigationToken(selectedParentResourceId)
+                    } else {
+                        null
+                    }
+                    contextualMenuOpen = showDestinationMenu
+                    selectedPathParameterValues = if (showDestinationMenu) {
+                        inheritedParameters
+                    } else {
+                        resolveDynamicRecordSelectionParameters(
+                            currentViewId = selectedViewId.orEmpty(),
+                            nextViewId = nextViewId.orEmpty(),
+                            currentParameters = selectedPathParameterValues,
+                            explicitTargetParameters = explicitTargetParameters,
+                            fallbackTargetParameters = fallbackTargetParameters,
+                        )
+                    }
                     selectedViewId = nextViewId
                 }
                 },
@@ -3685,8 +3900,7 @@ private fun ContractInfoSection(label: String, value: String) {
 
 private fun List<String>.safeContractList(): String = ifEmpty { listOf("none") }.joinToString(", ")
 
-@Serializable
-private data class DynamicNavigationSnapshot(
+internal data class DynamicNavigationSnapshot(
     val viewId: String,
     val resourceId: String,
     val record: NativeRecord?,
@@ -3695,13 +3909,106 @@ private data class DynamicNavigationSnapshot(
 )
 
 @Serializable
+internal data class SavedDynamicNavigationSnapshot(
+    val viewId: String,
+    val resourceId: String,
+    val recordId: String? = null,
+    val recordResourceId: String? = null,
+    val pathParameterValues: Map<String, String> = emptyMap(),
+)
+
+@Serializable
 private data class DynamicAppNavigationState(
     val selectedViewId: String? = null,
     val selectedRecord: NativeRecord? = null,
     val selectedRecordResourceId: String? = null,
     val pathParameterValues: Map<String, String> = emptyMap(),
-    val history: List<DynamicNavigationSnapshot> = emptyList(),
+    val history: List<SavedDynamicNavigationSnapshot> = emptyList(),
 )
+
+internal fun saveDynamicNavigationHistory(
+    history: List<DynamicNavigationSnapshot>,
+): List<SavedDynamicNavigationSnapshot> = history
+    .takeLast(MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY)
+    .mapNotNull(DynamicNavigationSnapshot::toSavedDynamicNavigationSnapshot)
+
+internal fun restoreDynamicNavigationHistory(
+    history: List<SavedDynamicNavigationSnapshot>,
+): List<DynamicNavigationSnapshot> = history
+    .takeLast(MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY)
+    .mapNotNull(SavedDynamicNavigationSnapshot::toDynamicNavigationSnapshot)
+
+private fun DynamicNavigationSnapshot.toSavedDynamicNavigationSnapshot(): SavedDynamicNavigationSnapshot? {
+    if (!viewId.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)) return null
+    if (!resourceId.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)) return null
+    val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters() ?: return null
+    val savedRecordId = record?.id?.let { value ->
+        value.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_RECORD_ID_CHARS) }
+            ?: return null
+    }
+    val savedRecordResourceId = recordResourceId?.let { value ->
+        value.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS) }
+            ?: return null
+    }?.takeIf { savedRecordId != null }
+    return SavedDynamicNavigationSnapshot(
+        viewId = viewId,
+        resourceId = resourceId,
+        recordId = savedRecordId,
+        recordResourceId = savedRecordResourceId,
+        pathParameterValues = savedParameters,
+    )
+}
+
+private fun SavedDynamicNavigationSnapshot.toDynamicNavigationSnapshot(): DynamicNavigationSnapshot? {
+    if (!viewId.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)) return null
+    if (!resourceId.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)) return null
+    val restoredParameters = pathParameterValues.toSavedDynamicNavigationParameters() ?: return null
+    val restoredRecordId = recordId?.let { value ->
+        value.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_RECORD_ID_CHARS) }
+            ?: return null
+    }
+    val restoredRecordResourceId = recordResourceId?.let { value ->
+        value.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS) }
+            ?: return null
+    }?.takeIf { restoredRecordId != null }
+    return DynamicNavigationSnapshot(
+        viewId = viewId,
+        resourceId = resourceId,
+        record = restoredRecordId?.let { recordId ->
+            NativeRecord(
+                id = recordId,
+                values = emptyMap(),
+                // A persisted identity can reload a detail route, but only the authoritative
+                // read response may authorize a mutation after process restoration.
+                actionSafeIdentity = false,
+            )
+        },
+        recordResourceId = restoredRecordResourceId,
+        pathParameterValues = restoredParameters,
+    )
+}
+
+private fun Map<String, String>.toSavedDynamicNavigationParameters(): Map<String, String>? {
+    if (size > MAX_SAVED_DYNAMIC_NAVIGATION_PARAMETERS) return null
+    if (any { (key, value) ->
+            !key.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_PARAMETER_NAME_CHARS) ||
+                !value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_PARAMETER_VALUE_CHARS)
+        }
+    ) {
+        return null
+    }
+    return toMap()
+}
+
+private fun String.isSafeSavedDynamicNavigationValue(maximumChars: Int): Boolean =
+    isNotBlank() && length <= maximumChars && none(Char::isISOControl)
+
+internal const val MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY = 16
+private const val MAX_SAVED_DYNAMIC_NAVIGATION_PARAMETERS = 8
+private const val MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS = 128
+private const val MAX_SAVED_DYNAMIC_RECORD_ID_CHARS = 256
+private const val MAX_SAVED_DYNAMIC_NAVIGATION_PARAMETER_NAME_CHARS = 64
+private const val MAX_SAVED_DYNAMIC_NAVIGATION_PARAMETER_VALUE_CHARS = 256
 
 internal data class DynamicCollectionDestinationSelectionPlan(
     val pathParameterValues: Map<String, String>,
@@ -3799,14 +4106,81 @@ private fun String.isMailNavigationAncestor(): Boolean = dynamicResourceWords().
     )
 }
 
-private fun NativeRecord.dynamicContextSubtitle(view: ViewSpec, resourceName: String?): String {
-    val title = listOf("name", "title", "displayName", "subject", "what", "merchant", "label", "description")
+internal fun shouldShowDynamicContextDestinationMenu(destinationIds: List<String>): Boolean =
+    destinationIds.filter(String::isNotBlank).distinct().size >= 2
+
+private fun NativeRecord.dynamicContextNavigationToken(resourceId: String): String =
+    "$resourceId\u0000$id"
+
+private fun NativeRecord.dynamicContextLabel(): String =
+    listOf("name", "title", "displayName", "subject", "what", "merchant", "label", "description")
         .firstNotNullOfOrNull { key ->
             (displayValues[key] ?: values[key])?.takeIf(String::isNotBlank)
         }
         ?: id
+
+private fun NativeRecord.dynamicContextSubtitle(view: ViewSpec, resourceName: String?): String {
+    val title = dynamicContextLabel()
     val section = view.dynamicNavigationLabel(resourceName.orEmpty()).takeIf(String::isNotBlank)
     return listOfNotNull(title, section?.takeUnless { it.equals(title, ignoreCase = true) }).joinToString(" · ")
+}
+
+@Composable
+internal fun DynamicContextDestinationMenu(
+    recordLabel: String,
+    destinations: List<Pair<DynamicNavigationDestination, NextcloudCollectionDestination>>,
+    schema: NativeAppSchema,
+    onDestinationSelected: (DynamicNavigationDestination, ViewSpec) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(
+                start = NextcloudSpacing.XLarge,
+                top = NextcloudSpacing.Large,
+                end = NextcloudSpacing.XLarge,
+                bottom = NextcloudSpacing.Medium,
+            ),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+        ) {
+            Text(
+                "Choose a section",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "Go directly to the part of $recordLabel you need.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(150.dp),
+            contentPadding = PaddingValues(
+                start = NextcloudSpacing.XLarge,
+                top = NextcloudSpacing.Small,
+                end = NextcloudSpacing.XLarge,
+                bottom = NextcloudSpacing.XXLarge,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        ) {
+            items(destinations, key = { (_, destination) -> destination.id }) { (planned, destination) ->
+                val view = schema.views.singleOrNull { candidate -> candidate.id == destination.id }
+                    ?: return@items
+                val resourceLabel = schema.resource(view.resourceId)?.name
+                    ?.takeUnless { name -> name.equals(destination.label, ignoreCase = true) }
+                NextcloudAppTile(
+                    title = destination.label,
+                    icon = view.dynamicCollectionNavigationIcon(),
+                    supportingText = resourceLabel,
+                    onClick = { onDestinationSelected(planned, view) },
+                    modifier = Modifier.fillMaxWidth().height(140.dp),
+                    accessibilityId = destination.accessibilityId,
+                    accessibilityDescription = "Open destination ${destination.accessibilityId}",
+                )
+            }
+        }
+    }
 }
 
 private fun ViewSpec.dynamicRootSubtitle(appName: String): String = when (component) {

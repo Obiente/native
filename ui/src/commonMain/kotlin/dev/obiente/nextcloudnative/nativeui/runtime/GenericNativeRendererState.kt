@@ -52,6 +52,18 @@ internal data class NativeRelationOption(
     val supportingText: String? = null,
 )
 
+internal enum class NativeRelationChoiceUnavailableReason {
+    relationship,
+    parentResource,
+    source,
+    sourceEmpty,
+    unsafeIdentity,
+    ambiguousBinding,
+    scopeMismatch,
+    invalidValue,
+    duplicateValue,
+}
+
 /**
  * Builds human-readable choices for a writable relationship field from the accepted schema graph.
  *
@@ -110,12 +122,77 @@ internal fun nativeRelationOptions(
     )
 }
 
+internal fun nativeRelationChoiceUnavailableReason(
+    field: FieldSpec,
+    formResource: ResourceSpec,
+    schema: NativeAppSchema,
+    context: NativeDatasetContext,
+): NativeRelationChoiceUnavailableReason? {
+    val relationship = nativeRelationRelationship(field, formResource, schema)
+        ?: return NativeRelationChoiceUnavailableReason.relationship
+    val parentResource = schema.resources.singleOrNull { resource ->
+        resource.id == relationship.parentResourceId &&
+            resource.confidence.isAcceptedNativeRelationshipConfidence()
+    } ?: return NativeRelationChoiceUnavailableReason.parentResource
+    val parentRecords = context.relatedRecords.entries
+        .singleOrNull { (resourceId, _) -> resourceId == parentResource.id }
+        ?.value
+        ?: return NativeRelationChoiceUnavailableReason.source
+    if (parentRecords.isEmpty()) return NativeRelationChoiceUnavailableReason.sourceEmpty
+    val actionSafe = parentRecords.filter { record ->
+        record.actionSafeIdentity && record.actionBindingProvenanceValid
+    }
+    if (actionSafe.isEmpty()) return NativeRelationChoiceUnavailableReason.unsafeIdentity
+    val bound = actionSafe.mapNotNull { record ->
+        record.safeActionBindingValues()?.let { bindings -> record to bindings }
+    }
+    if (bound.isEmpty()) return NativeRelationChoiceUnavailableReason.ambiguousBinding
+    val currentBindings = context.parentRecord?.safeActionBindingValues()
+    val scoped = bound.filter { (_, bindings) ->
+        bindings.shareNativeRelationshipScopeWith(
+            currentBindings,
+            field.id,
+            relationship.parentFieldId,
+        )
+    }
+    if (scoped.isEmpty()) return NativeRelationChoiceUnavailableReason.scopeMismatch
+    val values = scoped.mapNotNull { (_, bindings) ->
+        bindings[relationship.parentFieldId]
+            ?.takeIf(String::isSafeNativeRelationOptionValue)
+    }
+    if (values.isEmpty()) return NativeRelationChoiceUnavailableReason.invalidValue
+    if (values.groupingBy { value -> value }.eachCount().any { (_, count) -> count > 1 }) {
+        return NativeRelationChoiceUnavailableReason.duplicateValue
+    }
+    return null
+}
+
 internal fun nativeRelationFieldRequiresChoice(
     field: FieldSpec,
     formResource: ResourceSpec,
     schema: NativeAppSchema,
 ): Boolean = nativeRelationRelationship(field, formResource, schema) != null ||
     field.isOpaqueNativeRelationshipIdentity()
+
+internal fun nativeRelationChoicesLoaded(
+    field: FieldSpec,
+    formResource: ResourceSpec,
+    schema: NativeAppSchema,
+    context: NativeDatasetContext,
+): Boolean = nativeRelationRelationship(field, formResource, schema)
+    ?.parentResourceId
+    ?.let(context.relatedRecords::containsKey)
+    ?: false
+
+internal fun nativeRelationChoiceSourceHasRecords(
+    field: FieldSpec,
+    formResource: ResourceSpec,
+    schema: NativeAppSchema,
+    context: NativeDatasetContext,
+): Boolean = nativeRelationRelationship(field, formResource, schema)
+    ?.parentResourceId
+    ?.let { resourceId -> context.relatedRecords[resourceId].orEmpty().isNotEmpty() }
+    ?: false
 
 internal fun nativeRelationRelationship(
     field: FieldSpec,

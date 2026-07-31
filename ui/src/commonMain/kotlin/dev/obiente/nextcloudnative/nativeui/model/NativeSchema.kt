@@ -62,6 +62,7 @@ data class FieldSpec(
     val readOnly: Boolean,
     val format: String? = null,
     val enumValues: List<String>? = null,
+    val repeatableObjectInput: RepeatableObjectInputSpec? = null,
 )
 
 @Serializable
@@ -145,6 +146,8 @@ data class ActionSpec(
     val inputSchema: JsonElement? = null,
     val evidence: List<Evidence> = emptyList(),
     val effect: ActionEffect = ActionEffect.unspecified,
+    /** Exact same-route GET action that can reconcile an unknown idempotent replacement result. */
+    val resultRecoveryActionId: String? = null,
 )
 
 @Serializable

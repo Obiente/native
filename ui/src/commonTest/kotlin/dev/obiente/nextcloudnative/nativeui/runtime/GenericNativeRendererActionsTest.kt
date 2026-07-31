@@ -4,6 +4,8 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionEffect
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputFieldSpec
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputScalarKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -12,6 +14,56 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GenericNativeRendererActionsTest {
+    @Test
+    fun `repeatable object fields retain typed controls and schema stable automation identity`() {
+        val enumeration = RepeatableObjectInputFieldSpec(
+            id = "role",
+            label = "Role",
+            kind = RepeatableObjectInputScalarKind.Enumeration,
+            required = true,
+            enumValues = listOf("viewer", "editor"),
+        ).toNativeRepeatableObjectFieldSpec()
+        val enabled = RepeatableObjectInputFieldSpec(
+            id = "enabled",
+            label = "Enabled",
+            kind = RepeatableObjectInputScalarKind.Boolean,
+            required = false,
+        ).toNativeRepeatableObjectFieldSpec()
+        val quantity = RepeatableObjectInputFieldSpec(
+            id = "quantity",
+            label = "Quantity",
+            kind = RepeatableObjectInputScalarKind.Integer,
+            required = true,
+        ).toNativeRepeatableObjectFieldSpec()
+        val amount = RepeatableObjectInputFieldSpec(
+            id = "amount",
+            label = "Amount",
+            kind = RepeatableObjectInputScalarKind.Decimal,
+            required = true,
+        ).toNativeRepeatableObjectFieldSpec()
+        val note = RepeatableObjectInputFieldSpec(
+            id = "note",
+            label = "Note",
+            kind = RepeatableObjectInputScalarKind.String,
+            required = false,
+        ).toNativeRepeatableObjectFieldSpec()
+
+        assertEquals(FieldKind.enumeration, enumeration.kind)
+        assertEquals(listOf("viewer", "editor"), enumeration.enumValues)
+        assertEquals(FieldKind.boolean, enabled.kind)
+        assertEquals(FieldKind.integer, quantity.kind)
+        assertEquals(FieldKind.decimal, amount.kind)
+        assertEquals(FieldKind.string, note.kind)
+        assertEquals(
+            "assignments row 2 role",
+            nativeRepeatableObjectAutomationFieldId(
+                fieldId = "assignments",
+                rowIndex = 1,
+                itemFieldId = "role",
+            ),
+        )
+    }
+
     @Test
     fun `pending form identity and bounded draft round trip through saveable primitives`() {
         val identity = RestorableNativeRecordFormAction(
@@ -56,6 +108,52 @@ class GenericNativeRendererActionsTest {
         assertTrue(broadSearch.options.size <= NATIVE_RELATION_OPTION_WINDOW_SIZE)
         assertTrue(broadSearch.hasMore)
         assertTrue(broadSearch.options.all { option -> option.supportingText == "Group 17" })
+    }
+
+    @Test
+    fun `paged relation window retains selected labels within a separate strict bound`() {
+        val firstWindow = (1..500).map { index ->
+            NativeRelationOption(
+                value = "choice-$index",
+                label = "Choice $index",
+                supportingText = null,
+            )
+        }
+        val retained = retainSelectedNativeRelationOptions(
+            retained = emptyList(),
+            available = firstWindow,
+            selectedValues = listOf("choice-10", "choice-490"),
+        )
+        val laterWindow = (501..1_000).map { index ->
+            NativeRelationOption(
+                value = "choice-$index",
+                label = "Choice $index",
+                supportingText = null,
+            )
+        }
+
+        assertEquals(
+            listOf("choice-10", "choice-490"),
+            retainSelectedNativeRelationOptions(
+                retained = retained,
+                available = laterWindow,
+                selectedValues = listOf("choice-10", "choice-490"),
+            ).map(NativeRelationOption::value),
+        )
+        assertTrue(
+            retainSelectedNativeRelationOptions(
+                retained = firstWindow,
+                available = laterWindow,
+                selectedValues = (1..100).map { index -> "choice-$index" },
+            ).size <= NATIVE_RELATION_RETAINED_SELECTION_LIMIT,
+        )
+        assertTrue(
+            retainSelectedNativeRelationOptions(
+                retained = retained,
+                available = laterWindow,
+                selectedValues = emptyList(),
+            ).isEmpty(),
+        )
     }
 
     @Test
