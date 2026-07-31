@@ -64,8 +64,8 @@ kotlin {
             implementation("org.jetbrains.compose.material:material-icons-extended:1.7.3")
             // 0.43.0 requires compileSdk 37. Keep the renderer on the newest
             // release that remains compatible with this project's SDK 36 toolchain.
-            implementation("com.mikepenz:multiplatform-markdown-renderer:0.41.0")
-            implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.41.0")
+            implementation("com.mikepenz:multiplatform-markdown-renderer:0.42.0")
+            implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.42.0")
             implementation("com.mohamedrejeb.richeditor:richeditor-compose:1.0.0")
             implementation("com.fleeksoft.ksoup:ksoup:0.2.6")
             implementation(libs.kotlinx.serialization.json)
