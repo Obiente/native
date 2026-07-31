@@ -18,6 +18,7 @@ import dev.obiente.nextcloudnative.app.PlatformCapabilityStatus
 internal class AndroidPlatformCapabilities(
     private val context: Context,
     private val activity: Activity?,
+    private val requestPermissions: ((Array<String>) -> Boolean)?,
 ) {
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
@@ -51,9 +52,9 @@ internal class AndroidPlatformCapabilities(
             )
             return true
         }
+        val request = requestPermissions ?: return false
         preferences.edit().putBoolean(capability.requestedKey(), true).apply()
-        ActivityCompat.requestPermissions(host, permissions.toTypedArray(), capability.requestCode())
-        return true
+        return request(permissions.toTypedArray())
     }
 
     private fun state(capability: PlatformCapability): PlatformCapabilityState {
@@ -140,7 +141,6 @@ private fun PlatformCapability.description(): String = when (this) {
     PlatformCapability.AllFilesAccess -> "Optional access for syncing arbitrary folders such as an Obsidian vault."
 }
 
-private fun PlatformCapability.requestCode(): Int = 8400 + ordinal
 private fun PlatformCapability.requestedKey(): String = "capability_requested_${name.lowercase()}"
 
 private const val PREFERENCES = "platform_capabilities"

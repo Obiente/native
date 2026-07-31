@@ -697,6 +697,7 @@ fun NextcloudNativeApp(
     services: NextcloudPlatformServices,
     presentation: NextcloudPresentation = NextcloudPresentation.Adaptive,
     appUpdateReviewRequest: Long = 0L,
+    platformCapabilityRefreshRequest: Long = 0L,
 ) {
     var themePreference by remember { mutableStateOf(services.loadThemePreference()) }
     var handledAppUpdateReviewRequest by rememberSaveable { mutableStateOf(0L) }
@@ -734,6 +735,7 @@ fun NextcloudNativeApp(
                 if (pendingAppUpdateReviewRequest != null) {
                     LoggedOutAppUpdateReviewScreen(
                         services = services,
+                        platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
                         onContinueToSignIn = {
                             handledAppUpdateReviewRequest = pendingAppUpdateReviewRequest
                         },
@@ -753,6 +755,7 @@ fun NextcloudNativeApp(
                     session = requireNotNull(session),
                     presentation = presentation,
                     appUpdateReviewRequest = pendingAppUpdateReviewRequest ?: 0L,
+                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
                     onAppUpdateReviewHandled = { request ->
                         handledAppUpdateReviewRequest = maxOf(handledAppUpdateReviewRequest, request)
                     },
@@ -934,6 +937,7 @@ private fun AuthenticatedApp(
     session: NextcloudSession,
     presentation: NextcloudPresentation,
     appUpdateReviewRequest: Long,
+    platformCapabilityRefreshRequest: Long,
     onAppUpdateReviewHandled: (Long) -> Unit,
     themePreference: ThemePreference,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
@@ -1187,6 +1191,7 @@ private fun AuthenticatedApp(
                     session = session,
                     serverInfo = serverInfo,
                     themePreference = themePreference,
+                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
                     onThemePreferenceChanged = onThemePreferenceChanged,
                     onAdminApps = { screen = Screen.AdminApps },
                     onOfflineCenter = { screen = Screen.OfflineCenter },
@@ -9760,6 +9765,7 @@ private fun ProjectNewsArticleScreen(
 @Composable
 private fun LoggedOutAppUpdateReviewScreen(
     services: NextcloudPlatformServices,
+    platformCapabilityRefreshRequest: Long,
     onContinueToSignIn: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -9776,7 +9782,12 @@ private fun LoggedOutAppUpdateReviewScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            item { AppUpdateSettingsCard(services) }
+            item {
+                AppUpdateSettingsCard(
+                    services = services,
+                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
+                )
+            }
             item {
                 OutlinedButton(onClick = onContinueToSignIn) {
                     Text("Continue to sign in")
@@ -9787,7 +9798,10 @@ private fun LoggedOutAppUpdateReviewScreen(
 }
 
 @Composable
-private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
+private fun AppUpdateSettingsCard(
+    services: NextcloudPlatformServices,
+    platformCapabilityRefreshRequest: Long,
+) {
     val scope = rememberCoroutineScope()
     val support = remember(services) { services.appUpdateSupport() }
     var updateChannel by remember(services) {
@@ -9805,9 +9819,35 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
     var updatePreferences by remember(services) {
         mutableStateOf(services.loadAppUpdatePreferences())
     }
+    val notificationCapability = remember(services, platformCapabilityRefreshRequest) {
+        services.platformCapabilities().firstOrNull { status ->
+            status.capability == PlatformCapability.Notifications
+        }
+    }
+    val notificationPermissionGranted =
+        notificationCapability?.state == PlatformCapabilityState.Granted
+    var notificationEnablePending by remember(services) { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }
     var installing by remember { mutableStateOf(false) }
     var installMessage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(notificationCapability?.state, notificationEnablePending) {
+        if (notificationEnablePending && notificationPermissionGranted) {
+            val updated = updatePreferences.copy(notifications = true)
+            if (services.saveAppUpdatePreferences(updated)) {
+                updatePreferences = updated
+            }
+            notificationEnablePending = false
+            installMessage = null
+        } else if (
+            notificationEnablePending &&
+            notificationCapability?.state in setOf(
+                PlatformCapabilityState.Blocked,
+                PlatformCapabilityState.Unsupported,
+            )
+        ) {
+            notificationEnablePending = false
+        }
+    }
     fun beginInstall(release: AppUpdateRelease) {
         installing = true
         installMessage = null
@@ -9972,12 +10012,37 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                     )
                     UpdatePreferenceRow(
                         label = "Notify when available",
-                        description = "Post one Android notification for each newly discovered version.",
-                        checked = updatePreferences.notifications,
+                        description = when (notificationCapability?.state) {
+                            PlatformCapabilityState.Granted ->
+                                "Post one Android notification for each newly discovered version."
+                            PlatformCapabilityState.NeedsPermission ->
+                                "Allow Android notifications to be notified about newly discovered versions."
+                            PlatformCapabilityState.Blocked ->
+                                "Notifications are blocked. Turn them on in Android app settings to use this option."
+                            PlatformCapabilityState.Unsupported ->
+                                "Android notifications are unavailable on this device."
+                            PlatformCapabilityState.AvailableWithoutPermission, null ->
+                                "Android notification permission status is unavailable."
+                        },
+                        checked = updatePreferences.notifications && notificationPermissionGranted,
                         enabled = updatePreferences.automaticChecks,
                         onCheckedChange = { enabled ->
-                            val updated = updatePreferences.copy(notifications = enabled)
-                            if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
+                            if (!enabled) {
+                                notificationEnablePending = false
+                                val updated = updatePreferences.copy(notifications = false)
+                                if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
+                            } else if (notificationPermissionGranted) {
+                                val updated = updatePreferences.copy(notifications = true)
+                                if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
+                            } else if (
+                                notificationCapability != null &&
+                                services.requestPlatformCapability(PlatformCapability.Notifications)
+                            ) {
+                                notificationEnablePending = true
+                                installMessage = "Allow notifications in Android to finish enabling update alerts."
+                            } else {
+                                installMessage = "Android could not open notification permission settings."
+                            }
                         },
                     )
                 }
@@ -10158,6 +10223,7 @@ private fun SettingsScreen(
     session: NextcloudSession,
     serverInfo: NextcloudServerInfo?,
     themePreference: ThemePreference,
+    platformCapabilityRefreshRequest: Long,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
     onAdminApps: () -> Unit,
     onOfflineCenter: () -> Unit,
@@ -10168,7 +10234,9 @@ private fun SettingsScreen(
     val scope = rememberCoroutineScope()
     var loggingOut by remember { mutableStateOf(false) }
     var capabilityRefresh by remember { mutableStateOf(0) }
-    val platformCapabilities = remember(services, capabilityRefresh) { services.platformCapabilities() }
+    val platformCapabilities = remember(services, capabilityRefresh, platformCapabilityRefreshRequest) {
+        services.platformCapabilities()
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         ProductHeader(title = "Settings", showSettings = false)
         LazyColumn(
@@ -10410,7 +10478,10 @@ private fun SettingsScreen(
                         )
                     }
                 }
-                AppUpdateSettingsCard(services)
+                AppUpdateSettingsCard(
+                    services = services,
+                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
+                )
             }
             item {
                 SectionTitle("Administration")

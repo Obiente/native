@@ -22,6 +22,7 @@ import dev.obiente.nextcloudnative.app.ThemePreference
 
 class MainActivity : ComponentActivity() {
     private var appUpdateReviewRequest by mutableLongStateOf(0L)
+    private var platformCapabilityRefreshRequest by mutableLongStateOf(0L)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,6 +45,11 @@ class MainActivity : ComponentActivity() {
                 localUploadPicker.complete(uri)
             },
         )
+        val platformPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions(),
+        ) {
+            platformCapabilityRefreshRequest += 1
+        }
         setContent {
             // Keep the composition and its loaded screen state alive across rotations while still
             // observing the new window configuration so adaptive layouts recompose immediately.
@@ -54,6 +60,10 @@ class MainActivity : ComponentActivity() {
                     context = this,
                     fileSyncRootPicker = fileSyncRootPicker,
                     localUploadPicker = localUploadPicker,
+                    requestPlatformPermissions = { permissions ->
+                        platformPermissionLauncher.launch(permissions)
+                        true
+                    },
                     onThemePreferenceChanged = { preference ->
                         themePreference.value = preference
                     },
@@ -85,8 +95,14 @@ class MainActivity : ComponentActivity() {
             NextcloudNativeApp(
                 services = services,
                 appUpdateReviewRequest = appUpdateReviewRequest,
+                platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
             )
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        platformCapabilityRefreshRequest += 1
     }
 
     override fun onNewIntent(intent: Intent) {

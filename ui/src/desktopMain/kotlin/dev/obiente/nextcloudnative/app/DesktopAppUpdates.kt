@@ -25,6 +25,7 @@ internal data class DesktopUpdateBuildIdentity(
     val versionCode: Long,
     val packageVersion: String,
     val releaseBuild: Boolean,
+    val directPackageUpdates: Boolean,
 )
 
 internal data class DesktopUpdateTarget(
@@ -39,6 +40,8 @@ internal fun currentDesktopUpdateBuildIdentity(): DesktopUpdateBuildIdentity =
         versionCode = System.getProperty(DESKTOP_VERSION_CODE_PROPERTY, "0").toLongOrNull() ?: 0L,
         packageVersion = System.getProperty(DESKTOP_PACKAGE_VERSION_PROPERTY, "0.0.0"),
         releaseBuild = System.getProperty(DESKTOP_RELEASE_BUILD_PROPERTY, "false").toBooleanStrictOrNull() == true,
+        directPackageUpdates =
+            System.getProperty(DESKTOP_DIRECT_PACKAGE_UPDATES_PROPERTY, "false").toBooleanStrictOrNull() == true,
     )
 
 internal fun detectDesktopUpdateTarget(
@@ -76,7 +79,10 @@ internal class DesktopAppUpdater(
     @Volatile private var cancellationRequested = false
 
     fun support(): AppUpdateSupport {
-        val canUpdate = buildIdentity.releaseBuild && target != null && buildIdentity.versionCode > 0
+        val canUpdate = buildIdentity.releaseBuild &&
+            buildIdentity.directPackageUpdates &&
+            target != null &&
+            buildIdentity.versionCode > 0
         return AppUpdateSupport(
             channel = if (canUpdate) {
                 AppDistributionChannel.DirectDesktopPackage
@@ -90,7 +96,8 @@ internal class DesktopAppUpdater(
                 "This Linux package checks the selected release channel, matches downloads to its advertised " +
                     "checksum, and uses your system installer."
             } else {
-                "Development and unsupported desktop packages are updated through their distribution workflow."
+                "Development, distribution-managed, and unsupported desktop packages are updated through " +
+                    "their distribution workflow."
             },
         )
     }
@@ -449,3 +456,4 @@ internal const val DESKTOP_VERSION_NAME_PROPERTY = "dev.obiente.nextcloudnative.
 internal const val DESKTOP_VERSION_CODE_PROPERTY = "dev.obiente.nextcloudnative.versionCode"
 internal const val DESKTOP_PACKAGE_VERSION_PROPERTY = "dev.obiente.nextcloudnative.packageVersion"
 internal const val DESKTOP_RELEASE_BUILD_PROPERTY = "dev.obiente.nextcloudnative.releaseBuild"
+internal const val DESKTOP_DIRECT_PACKAGE_UPDATES_PROPERTY = "dev.obiente.nextcloudnative.directPackageUpdates"

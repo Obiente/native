@@ -59,6 +59,7 @@ node --test tools/nightly-release-notes.test.mjs
 bash tools/test-desktop-package-version.sh
 bash tools/test-android-update-manifest-assets.sh
 bash tools/test-nightly-release-workflow.sh
+bash tools/test-update-channel-promotion.sh
 bash tools/test-linux-package-metadata.sh
 bash tools/test-desktop-update-manifest.sh
 

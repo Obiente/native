@@ -253,6 +253,7 @@ internal class AndroidNextcloudServices(
     context: Context,
     private val fileSyncRootPicker: AndroidFileSyncRootPicker? = null,
     private val localUploadPicker: AndroidLocalUploadPicker? = null,
+    private val requestPlatformPermissions: ((Array<String>) -> Boolean)? = null,
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
 ) : NextcloudPlatformServices {
     private val appContext = context.applicationContext
@@ -282,7 +283,11 @@ internal class AndroidNextcloudServices(
     private val fileSyncEngine = AndroidFileSyncEngine(appContext)
     private val mediaSyncFolderDetector = AndroidMediaSyncFolderDetector(appContext)
     private val externalFileHandoff = AndroidExternalFileHandoff(appContext)
-    private val platformCapabilities = AndroidPlatformCapabilities(appContext, context as? Activity)
+    private val platformCapabilities = AndroidPlatformCapabilities(
+        context = appContext,
+        activity = context as? Activity,
+        requestPermissions = requestPlatformPermissions,
+    )
     private val projectContent = AndroidProjectContentClient(appContext, context as? Activity)
     private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext)
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)

@@ -241,16 +241,19 @@ jobs:
         include:
           - runner: ubuntu-latest
             platform: linux
+            direct_updates: "true"
             tasks: ":ui:packageDeb :ui:packageRpm"
             paths: |
               ui/build/compose/binaries/main/deb/*.deb
               ui/build/compose/binaries/main/rpm/*.rpm
           - runner: windows-latest
             platform: windows
+            direct_updates: "false"
             tasks: ":ui:packageMsi"
             paths: ui/build/compose/binaries/main/msi/*.msi
           - runner: macos-15-intel
             platform: macos
+            direct_updates: "false"
             tasks: ":ui:packageDmg"
             paths: ui/build/compose/binaries/main/dmg/*.dmg
     runs-on: ${{ matrix.runner }}
@@ -280,6 +283,7 @@ jobs:
             -PncVersionName="${{ needs.source.outputs.version }}" \
             -PncVersionCode="${{ needs.source.outputs.version-code }}" \
             -PncDesktopReleaseBuild=true \
+            -PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}" \
             ${{ matrix.tasks }}
           status=$?
           if [[ "${status}" -ne 0 ]]; then

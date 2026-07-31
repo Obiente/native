@@ -38,6 +38,7 @@ class DesktopAppUpdatesTest {
                     versionCode = 20_002_921,
                     packageVersion = "1.0.2921",
                     releaseBuild = true,
+                    directPackageUpdates = true,
                 ),
                 target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
                 updateDirectory = directory,
@@ -45,7 +46,7 @@ class DesktopAppUpdatesTest {
             )
             val development = DesktopAppUpdater(
                 preferences = node,
-                buildIdentity = DesktopUpdateBuildIdentity("development", 0, "0.1.0", false),
+                buildIdentity = DesktopUpdateBuildIdentity("development", 0, "0.1.0", false, false),
                 target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
                 updateDirectory = directory,
                 openInstaller = {},
@@ -57,6 +58,22 @@ class DesktopAppUpdatesTest {
             assertFalse(release.support().explanation.contains("signed", ignoreCase = true))
             assertEquals(AppDistributionChannel.Development, development.support().channel)
             assertFalse(development.support().canCheckDirectUpdates)
+            val distributionManaged = DesktopAppUpdater(
+                preferences = node,
+                buildIdentity = DesktopUpdateBuildIdentity(
+                    versionName = "0.1.0-alpha.1",
+                    versionCode = 1,
+                    packageVersion = "0.1.0",
+                    releaseBuild = true,
+                    directPackageUpdates = false,
+                ),
+                target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
+                updateDirectory = directory,
+                openInstaller = {},
+            )
+            assertEquals(AppDistributionChannel.Development, distributionManaged.support().channel)
+            assertFalse(distributionManaged.support().canCheckDirectUpdates)
+            assertTrue(distributionManaged.support().explanation.contains("distribution-managed"))
             assertEquals(6L * 60L * 60L * 1_000L, DESKTOP_APP_UPDATE_CHECK_INTERVAL_MILLIS)
         } finally {
             node.removeNode()

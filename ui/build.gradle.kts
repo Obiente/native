@@ -7,6 +7,7 @@ val ncMacosPackageVersion = providers.gradleProperty("ncMacosPackageVersion").ge
 val ncVersionName = providers.gradleProperty("ncVersionName").get()
 val ncVersionCode = providers.gradleProperty("ncVersionCode").get()
 val ncDesktopReleaseBuild = providers.gradleProperty("ncDesktopReleaseBuild").orElse("false").get()
+val ncDirectDesktopPackageUpdates = providers.gradleProperty("ncDirectDesktopPackageUpdates").orElse("false").get()
 val linuxAppStreamMetadata = rootProject.layout.projectDirectory
     .file("release/linux/dev.obiente.nextcloudnative.metainfo.xml")
 val linuxJpackageTemplates = rootProject.layout.projectDirectory.dir("release/linux/jpackage")
@@ -151,6 +152,7 @@ compose.desktop {
             "-Ddev.obiente.nextcloudnative.versionCode=$ncVersionCode",
             "-Ddev.obiente.nextcloudnative.packageVersion=$ncDesktopPackageVersion",
             "-Ddev.obiente.nextcloudnative.releaseBuild=$ncDesktopReleaseBuild",
+            "-Ddev.obiente.nextcloudnative.directPackageUpdates=$ncDirectDesktopPackageUpdates",
         )
 
         nativeDistributions {

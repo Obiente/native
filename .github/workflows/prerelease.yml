@@ -127,16 +127,19 @@ jobs:
         include:
           - runner: ubuntu-latest
             artifact: nextcloud-native-linux
+            direct_updates: "true"
             tasks: ":ui:packageDeb :ui:packageRpm"
             paths: |
               ui/build/compose/binaries/main/deb/*.deb
               ui/build/compose/binaries/main/rpm/*.rpm
           - runner: windows-latest
             artifact: nextcloud-native-windows
+            direct_updates: "false"
             tasks: ":ui:packageMsi"
             paths: ui/build/compose/binaries/main/msi/*.msi
           - runner: macos-15-intel
             artifact: nextcloud-native-macos
+            direct_updates: "false"
             tasks: ":ui:packageDmg"
             paths: ui/build/compose/binaries/main/dmg/*.dmg
     runs-on: ${{ matrix.runner }}
@@ -164,6 +167,7 @@ jobs:
             -PncVersionName="${GITHUB_REF_NAME#v}" \
             -PncVersionCode="${{ needs.authorize-signing.outputs.version-code }}" \
             -PncDesktopReleaseBuild=true \
+            -PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}" \
             ${{ matrix.tasks }}
           status=$?
           if [[ "${status}" -ne 0 ]]; then

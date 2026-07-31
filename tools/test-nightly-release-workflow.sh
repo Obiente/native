@@ -41,6 +41,8 @@ require_text "$nightly" 'source_sequence="$(git rev-list --count "${SOURCE_SHA}"
 require_text "$nightly" '-PncDesktopPackageVersion="${NIGHTLY_DESKTOP_VERSION}"'
 require_text "$nightly" '-PncMacosPackageVersion="${NIGHTLY_DESKTOP_VERSION}"'
 require_text "$nightly" '-PncDesktopReleaseBuild=true'
+require_text "$nightly" '-PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}"'
+require_text "$nightly" 'direct_updates: "true"'
 require_text "$nightly" 'name: nextcloud-native-${{ matrix.platform }}'
 require_text "$nightly" 'name: nextcloud-native-android'
 require_text "$nightly" 'tools/stage-nightly-assets.sh artifacts dist'
@@ -92,6 +94,7 @@ require_text "$prerelease" 'tools/derive-desktop-package-version.sh'
 require_text "$prerelease" 'source_sequence="$(git rev-list --count "${GITHUB_SHA}")"'
 require_text "$prerelease" '-PncDesktopPackageVersion="${RELEASE_DESKTOP_VERSION}"'
 require_text "$prerelease" '-PncMacosPackageVersion="${RELEASE_DESKTOP_VERSION}"'
+require_text "$prerelease" '-PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}"'
 require_text "$prerelease" 'Require protected Android signing secrets'
 require_text "$prerelease" 'if [[ -z "${!secret_name}" ]]; then'
 require_text "$prerelease" 'tools/verify-android-artifact-metadata.sh'
@@ -109,11 +112,20 @@ require_text "$prerelease" 'canonical-release-assets'
 require_text "$prerelease" 'if: needs.stage-assets.outputs.already-published != '\''true'\'''
 require_text "$promotion" 'channel-prerelease)'
 require_text "$promotion" 'channel-nightly)'
-require_text "$promotion" 'current_code >= candidate_codes[$name]'
+require_text "$promotion" 'if .versionCode >= $candidate then "keep" else "replace" end'
+if grep -Eq '\(\([^)]*current_code|\(\([^)]*candidate_codes' "$promotion"; then
+    echo "Update pointer version codes must not reach shell arithmetic." >&2
+    exit 1
+fi
 require_text "$promotion" 'pointer_state'
 require_text "$promotion" '--clobber'
 require_text "$promotion" 'test "$release_state" = $'\''false\ttrue\t'\''"$immutable_tag"'
 bash -n "$promotion"
+
+for workflow in "$nightly" "$prerelease"; do
+    [[ "$(grep -Fc 'direct_updates: "true"' "$workflow")" -eq 1 ]]
+    [[ "$(grep -Fc 'direct_updates: "false"' "$workflow")" -eq 2 ]]
+done
 
 if grep -Fq 'cmp "${asset}" "${RUNNER_TEMP}/existing/${name}"' "$nightly"; then
     echo "Draft recovery must retain previously staged package assets." >&2

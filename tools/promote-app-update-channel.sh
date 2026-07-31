@@ -117,18 +117,27 @@ mkdir -p "$temporary/publish"
 for name in "${!candidates[@]}"; do
     current="$temporary/existing/$name"
     if [[ -f "$current" ]]; then
-        kind="desktop"
-        [[ "$name" == "update-manifest.json" ]] && kind="android"
-        current_code="$(
+        current_state="$(
             jq -er \
                 --arg channel "$expected_channel" \
-                'select(.schemaVersion == 1 and .channel == $channel) | .versionCode' \
+                --argjson candidate "${candidate_codes[$name]}" \
+                '
+                  select(.schemaVersion == 1 and .channel == $channel) |
+                  select(.versionCode | type == "number" and . > 0 and floor == .) |
+                  [
+                    (if .versionCode >= $candidate then "keep" else "replace" end),
+                    (.versionCode | tostring)
+                  ] |
+                  @tsv
+                ' \
                 "$current"
         )"
-        if (( current_code >= candidate_codes[$name] )); then
+        IFS=$'\t' read -r promotion_action current_code <<<"$current_state"
+        if [[ "$promotion_action" == "keep" ]]; then
             printf '%s pointer already has version code %s.\n' "$name" "$current_code"
             continue
         fi
+        [[ "$promotion_action" == "replace" ]]
     fi
     cp "${candidates[$name]}" "$temporary/publish/$name"
 done
