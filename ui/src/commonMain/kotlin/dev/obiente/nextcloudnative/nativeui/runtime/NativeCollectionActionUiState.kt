@@ -50,7 +50,8 @@ internal fun NativeCollectionBatchInputField.toNativeCollectionFieldSpec(): Fiel
         label = id.nativeCollectionFieldLabel(),
         kind = when {
             enumValues != null -> FieldKind.enumeration
-            kind == NativeCollectionBatchInputKind.Boolean -> FieldKind.boolean
+            kind == NativeCollectionBatchInputKind.Boolean && required -> FieldKind.boolean
+            kind == NativeCollectionBatchInputKind.Boolean -> FieldKind.enumeration
             kind == NativeCollectionBatchInputKind.Integer ||
                 kind == NativeCollectionBatchInputKind.IntegerArray -> FieldKind.integer
             kind == NativeCollectionBatchInputKind.Decimal -> FieldKind.decimal
@@ -63,13 +64,17 @@ internal fun NativeCollectionBatchInputField.toNativeCollectionFieldSpec(): Fiel
             NativeCollectionBatchInputKind.StringArray -> DYNAMIC_STRING_ARRAY_FORMAT
             else -> null
         },
-        enumValues = enumValues,
+        enumValues = when {
+            kind == NativeCollectionBatchInputKind.Boolean && !required ->
+                NATIVE_COLLECTION_BATCH_BOOLEAN_OPTIONS
+            else -> enumValues
+        },
     )
 
 internal fun initialNativeCollectionBatchDraft(
     fields: List<NativeCollectionBatchInputField>,
 ): Map<String, String> = fields
-    .filter { field -> field.kind == NativeCollectionBatchInputKind.Boolean }
+    .filter { field -> field.required && field.kind == NativeCollectionBatchInputKind.Boolean }
     .associate { field -> field.id to "false" }
 
 internal fun nativeCollectionBatchRequestValues(
@@ -78,6 +83,13 @@ internal fun nativeCollectionBatchRequestValues(
 ): Map<String, String> = buildMap {
     fields.forEach { field ->
         val value = draft[field.id] ?: return@forEach
+        if (
+            field.kind == NativeCollectionBatchInputKind.Boolean &&
+            !field.required &&
+            value == NATIVE_COLLECTION_BATCH_UNCHANGED_VALUE
+        ) {
+            return@forEach
+        }
         if (value.isBlank() && !field.required) return@forEach
         put(
             field.id,
@@ -91,6 +103,14 @@ internal fun nativeCollectionBatchRequestValues(
         )
     }
 }
+
+internal const val NATIVE_COLLECTION_BATCH_UNCHANGED_VALUE = "unchanged"
+
+private val NATIVE_COLLECTION_BATCH_BOOLEAN_OPTIONS = listOf(
+    NATIVE_COLLECTION_BATCH_UNCHANGED_VALUE,
+    "true",
+    "false",
+)
 
 private fun String.toNativeCollectionIntegerArray(): String {
     val values = lineSequence()

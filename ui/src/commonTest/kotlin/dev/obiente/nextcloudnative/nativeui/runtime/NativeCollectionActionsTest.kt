@@ -585,6 +585,80 @@ class NativeCollectionActionsTest {
     }
 
     @Test
+    fun `batch planner withholds nullable inputs until explicit null is representable`() {
+        val resource = resource("items")
+        val read = readAction(resource.id, "/groups/{groupId}/items", listOf("groupId"))
+        val optionalNullable = action(
+            id = "update-selected",
+            resourceId = resource.id,
+            method = HttpMethod.PATCH,
+            path = "/groups/{groupId}/items/batch",
+            pathFields = listOf("groupId"),
+            bodyFields = listOf("itemIds", "note"),
+            bodySchema = batchBody(
+                "itemIds" to integerArraySchema(),
+                "note" to buildJsonObject {
+                    put("type", "string")
+                    put("nullable", true)
+                },
+            ),
+            intent = ActionIntent.execute,
+            effect = ActionEffect.batch,
+            risk = ActionRisk.mutating,
+        )
+        val optionalPlan = assertNotNull(
+            nativeCollectionActions(
+                schema(resource, read, optionalNullable),
+                read,
+                resource,
+                records("1", "2"),
+                mapOf("groupId" to "7"),
+                collectionComplete = false,
+            ).batches.singleOrNull(),
+        )
+
+        assertTrue(optionalPlan.fields.isEmpty())
+        assertEquals(
+            mapOf("groupId" to "7", "itemIds" to "[1]"),
+            optionalPlan.request(listOf("1")).values,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            optionalPlan.request(listOf("1"), values = mapOf("note" to "null"))
+        }
+
+        val requiredNullableBody = buildJsonObject {
+            put("type", "object")
+            putJsonArray("required") { add(JsonPrimitive("note")) }
+            putJsonObject("properties") {
+                put("itemIds", integerArraySchema())
+                putJsonObject("note") {
+                    put("type", "string")
+                    put("nullable", true)
+                }
+            }
+        }
+        val requiredNullable = optionalNullable.copy(
+            id = "require-nullable-note",
+            binding = optionalNullable.binding.copy(
+                operationId = "require-nullable-note",
+                requiredBodyFieldNames = listOf("note"),
+                bodySchema = requiredNullableBody,
+            ),
+        )
+
+        assertTrue(
+            nativeCollectionActions(
+                schema(resource, read, requiredNullable),
+                read,
+                resource,
+                records("1", "2"),
+                mapOf("groupId" to "7"),
+                collectionComplete = false,
+            ).batches.isEmpty(),
+        )
+    }
+
+    @Test
     fun `batch planner rejects foreign or ambiguous selection arrays`() {
         val resource = resource("items")
         val read = readAction(resource.id, "/houses/{houseId}/items", listOf("houseId"))

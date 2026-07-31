@@ -121,6 +121,24 @@ class NativeCollectionActionUiStateTest {
                 enumValues = null,
             ).toNativeCollectionFieldSpec().format,
         )
+        assertEquals(
+            dev.obiente.nextcloudnative.nativeui.model.FieldSpec(
+                id = "enabled",
+                label = "Enabled",
+                kind = FieldKind.enumeration,
+                required = false,
+                readOnly = false,
+                format = null,
+                enumValues = listOf("unchanged", "true", "false"),
+            ),
+            NativeCollectionBatchInputField(
+                id = "enabled",
+                kind = NativeCollectionBatchInputKind.Boolean,
+                required = false,
+                nullable = false,
+                enumValues = null,
+            ).toNativeCollectionFieldSpec(),
+        )
     }
 
     @Test
@@ -186,7 +204,7 @@ class NativeCollectionActionUiStateTest {
     }
 
     @Test
-    fun `boolean batch fields receive an explicit false draft`() {
+    fun `only required boolean batch fields receive an explicit false draft`() {
         assertEquals(
             mapOf("enabled" to "false"),
             initialNativeCollectionBatchDraft(
@@ -199,6 +217,13 @@ class NativeCollectionActionUiStateTest {
                         enumValues = null,
                     ),
                     NativeCollectionBatchInputField(
+                        id = "archived",
+                        kind = NativeCollectionBatchInputKind.Boolean,
+                        required = false,
+                        nullable = false,
+                        enumValues = null,
+                    ),
+                    NativeCollectionBatchInputField(
                         id = "title",
                         kind = NativeCollectionBatchInputKind.String,
                         required = true,
@@ -206,6 +231,37 @@ class NativeCollectionActionUiStateTest {
                         enumValues = null,
                     ),
                 ),
+            ),
+        )
+    }
+
+    @Test
+    fun `optional boolean batch draft preserves an explicit unchanged state`() {
+        val field = NativeCollectionBatchInputField(
+            id = "archived",
+            kind = NativeCollectionBatchInputKind.Boolean,
+            required = false,
+            nullable = false,
+            enumValues = null,
+        )
+        val initial = initialNativeCollectionBatchDraft(listOf(field))
+
+        assertEquals(emptyMap(), initial)
+        assertEquals(emptyMap(), nativeCollectionBatchRequestValues(listOf(field), initial))
+
+        val enabled = initial + (field.id to "true")
+        assertEquals(mapOf("archived" to "true"), enabled)
+        assertEquals(mapOf("archived" to "true"), nativeCollectionBatchRequestValues(listOf(field), enabled))
+
+        val disabled = enabled + (field.id to "false")
+        assertEquals(mapOf("archived" to "false"), disabled)
+        assertEquals(mapOf("archived" to "false"), nativeCollectionBatchRequestValues(listOf(field), disabled))
+
+        assertEquals(
+            emptyMap(),
+            nativeCollectionBatchRequestValues(
+                fields = listOf(field),
+                draft = mapOf("archived" to "unchanged"),
             ),
         )
     }

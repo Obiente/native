@@ -137,6 +137,8 @@ import dev.obiente.nextcloudnative.nativeui.runtime.GenericNativeAppScreen
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoader
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoadResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRelatedRecordPaging
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeImageLoader
@@ -515,11 +517,37 @@ internal fun dynamicFormRelationLoadRequests(
     schema: NativeAppSchema,
     formView: ViewSpec,
     availableValues: Map<String, String>,
-): List<DynamicFormRelationLoadRequest> = dynamicFormRelationLoadPlans(
+): List<DynamicFormRelationLoadRequest> = dynamicRelationLoadRequests(
     schema = schema,
-    formView = formView,
+    plans = dynamicFormRelationLoadPlans(
+        schema = schema,
+        formView = formView,
+        availableValues = availableValues,
+    ),
     availableValues = availableValues,
-).mapNotNull { plan ->
+)
+
+internal fun dynamicCollectionBatchRelationLoadRequests(
+    schema: NativeAppSchema,
+    childResourceId: String,
+    relatedFieldIds: Set<String>,
+    availableValues: Map<String, String>,
+): List<DynamicFormRelationLoadRequest> = dynamicRelationLoadRequests(
+    schema = schema,
+    plans = dynamicRelationLoadPlans(
+        schema = schema,
+        childResourceId = childResourceId,
+        editableFieldIds = relatedFieldIds,
+        availableValues = availableValues,
+    ),
+    availableValues = availableValues,
+)
+
+private fun dynamicRelationLoadRequests(
+    schema: NativeAppSchema,
+    plans: List<DynamicFormRelationLoadPlan>,
+    availableValues: Map<String, String>,
+): List<DynamicFormRelationLoadRequest> = plans.mapNotNull { plan ->
     val action = schema.action(plan.actionId) ?: return@mapNotNull null
     val bindingNames = (
         action.binding.pathParameterNames +
@@ -1959,6 +1987,15 @@ private fun DynamicDiscoveredAppScreen(
     val selectedDynamicUploadFiles = remember(descriptor) {
         mutableMapOf<String, LocalUploadFile>()
     }
+    fun releaseSelectedDynamicUploadFile(file: LocalUploadFile) {
+        val selectedField = selectedDynamicUploadFiles.entries
+            .firstOrNull { (_, selected) -> selected.selectionId == file.selectionId }
+            ?.key
+        if (selectedField != null) {
+            selectedDynamicUploadFiles.remove(selectedField)
+            services.releaseLocalUploadFile(file)
+        }
+    }
     DisposableEffect(services, descriptor) {
         onDispose {
             selectedDynamicUploadFiles.values.forEach(services::releaseLocalUploadFile)
@@ -2541,7 +2578,92 @@ private fun DynamicDiscoveredAppScreen(
             descriptor = descriptor,
             runtimeContext = runtimeValues,
             versionStatus = discovery.versionStatus,
+            onMultipartUploadSucceeded = ::releaseSelectedDynamicUploadFile,
         )
+    }
+    val collectionBatchRelationLoader = remember(services, session, descriptor, schema) {
+        NativeCollectionBatchRelationLoader { request ->
+            val action = schema.action(request.actionId)
+                ?.takeIf { candidate ->
+                    candidate.resourceId.sameDynamicResourceAs(request.resourceId) &&
+                        request.relatedResourceIdsByField.keys.all { fieldId ->
+                            fieldId in candidate.binding.bodyFieldNames ||
+                                fieldId in candidate.binding.queryParameterNames
+                        }
+                }
+            if (action == null) {
+                NativeCollectionBatchRelationLoadResult(
+                    recordsByResourceId = emptyMap(),
+                    errorsByResourceId = request.relatedResourceIdsByField.values
+                        .distinct()
+                        .associateWith { "The batch relation contract is unavailable." },
+                )
+            } else {
+                val requestedResourceIds = request.relatedResourceIdsByField.values.toSet()
+                val loadRequests = dynamicCollectionBatchRelationLoadRequests(
+                    schema = schema,
+                    childResourceId = request.resourceId,
+                    relatedFieldIds = request.relatedResourceIdsByField.keys,
+                    availableValues = request.bindingValues,
+                ).associateBy { candidate -> candidate.plan.resourceId }
+                val outcomes = coroutineScope {
+                    requestedResourceIds.map { relatedResourceId ->
+                        async {
+                            val relationRequest = loadRequests[relatedResourceId]
+                                ?: return@async Triple(
+                                    relatedResourceId,
+                                    null,
+                                    "No verified, fully bound relation read is available.",
+                                )
+                            runCatching {
+                                loadInitialDynamicFormRelationRecords(
+                                    services = services,
+                                    session = session,
+                                    descriptor = descriptor,
+                                    request = relationRequest,
+                                    values = request.bindingValues,
+                                    cachePolicy = if (request.forceRefresh) {
+                                        NextcloudApiCachePolicy.ForceNetwork
+                                    } else {
+                                        NextcloudApiCachePolicy.PreferCache
+                                    },
+                                )
+                            }.fold(
+                                onSuccess = { result ->
+                                    val boundedRecords = DynamicFormRelationCacheState()
+                                        .loadSucceeded(
+                                            request = relationRequest,
+                                            records = result.records,
+                                            pagination = result.pagination,
+                                        )
+                                        .relatedRecords(listOf(relationRequest))[relatedResourceId]
+                                        .orEmpty()
+                                    Triple(relatedResourceId, boundedRecords, null)
+                                },
+                                onFailure = { failure ->
+                                    if (failure is CancellationException) throw failure
+                                    Triple(
+                                        relatedResourceId,
+                                        null,
+                                        (failure.message ?: "Could not load choices.").take(
+                                            MAX_DYNAMIC_BATCH_RELATION_ERROR_LENGTH,
+                                        ),
+                                    )
+                                },
+                            )
+                        }
+                    }.awaitAll()
+                }
+                NativeCollectionBatchRelationLoadResult(
+                    recordsByResourceId = outcomes.mapNotNull { (resourceId, records, _) ->
+                        records?.let { resourceId to it }
+                    }.toMap(),
+                    errorsByResourceId = outcomes.mapNotNull { (resourceId, _, error) ->
+                        error?.let { resourceId to it }
+                    }.toMap(),
+                )
+            }
+        }
     }
     val recordContext = selectedRecord?.let { record ->
         val visitedStates = buildSet {
@@ -3206,6 +3328,7 @@ private fun DynamicDiscoveredAppScreen(
                     relatedRecordPaging = relatedRecordPaging,
                 ),
                 mutationReconciliationGeneration = mutationReconciliationGeneration,
+                collectionBatchRelationLoader = collectionBatchRelationLoader,
                 filePicker = dynamicFilePicker,
             onSelectRecord = selectedView.takeIf {
                 it.component != NativeComponent.detail && it.component != NativeComponent.form
@@ -10328,3 +10451,5 @@ private fun formatBytes(bytes: Long?): String = when {
     bytes < 1_073_741_824 -> "${bytes / 1_048_576} MB"
     else -> "${bytes / 1_073_741_824} GB"
 }
+
+private const val MAX_DYNAMIC_BATCH_RELATION_ERROR_LENGTH = 1_024

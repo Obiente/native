@@ -120,6 +120,35 @@ class NativeFormMutationRecoveryTest {
     }
 
     @Test
+    fun `collection batch recovery survives recreation without enabling a duplicate submission`() {
+        val owner = assertNotNull(
+            nativeCollectionBatchMutationRecoveryOwner(
+                appId = "example-app",
+                viewId = "item-list",
+                actionId = "items.batch-move",
+                resourceId = "items",
+            ),
+        )
+        assertEquals(NativeFormMutationKind.CollectionBatch, owner.kind)
+        assertNull(owner.recordId)
+        val encoded = assertNotNull(owner.begin(reconciliationGeneration = 6).encode())
+
+        val restored = assertNotNull(
+            resolveNativeFormMutationRecoveryState(
+                encoded = encoded,
+                currentReconciliationGeneration = 6,
+                ownerStillExecuting = { false },
+            ),
+        )
+        assertEquals(owner, restored.owner)
+        assertEquals(NativeFormMutationRecoveryPhase.AwaitingReconciliation, restored.phase)
+        assertTrue(restored.blocksSubmission)
+        assertEquals(owner.actionId, restored.authoritativeReconciliationActionId)
+        assertNotNull(restored.afterAuthoritativeReconciliation(currentGeneration = 6))
+        assertNull(restored.afterAuthoritativeReconciliation(currentGeneration = 7))
+    }
+
+    @Test
     fun `recovery owners exist only for identifiable create update and command mutations`() {
         assertNotNull(createOwner())
         assertNotNull(

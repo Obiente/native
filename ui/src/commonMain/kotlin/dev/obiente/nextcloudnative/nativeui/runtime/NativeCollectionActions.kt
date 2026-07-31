@@ -450,10 +450,22 @@ private fun ActionSpec.nativeCollectionBatchPlan(
             }
     }
     val (selectionFieldId, selectionSchema) = selectionCandidates.singleOrNull() ?: return null
-    val fieldSchemas = properties
+    val declaredFieldSchemas = properties
         .filterKeys { fieldId -> fieldId != selectionFieldId }
         .mapValues { (_, schema) -> NativeCollectionBatchValueSchema.create(schema) ?: return null }
     val schemaRequired = binding.bodySchema.requiredNativeCollectionProperties() ?: return null
+    if (declaredFieldSchemas.any { (fieldId, fieldSchema) ->
+            fieldId in schemaRequired && fieldSchema.nullable
+        }
+    ) {
+        // The generic batch draft cannot distinguish an explicit JSON null from omission. A
+        // required nullable field therefore cannot be submitted without inventing a value.
+        return null
+    }
+    // Optional nullable inputs remain omitted until the generic batch draft has an explicit null
+    // state. Keeping them out of both the UI and accepted request values prevents a blank value
+    // from being misrepresented as either an empty scalar or an absent clear operation.
+    val fieldSchemas = declaredFieldSchemas.filterValues { fieldSchema -> !fieldSchema.nullable }
     val fields = fieldSchemas.map { (fieldId, fieldSchema) ->
         NativeCollectionBatchInputField(
             id = fieldId,

@@ -7,6 +7,8 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicDiscoveryInput
 import dev.obiente.nextcloudnative.nativeui.model.EndpointPolicy
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.OpenApiTrust
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -91,6 +93,35 @@ class DynamicMultipartContractTest {
             listOf(MultipartTextField("caption", "A safe caption"), MultipartTextField("folderId", "7")),
             multipart.textFields.sortedBy(MultipartTextField::name),
         )
+    }
+
+    @Test
+    fun `multipart picker capability is retained for rejection retry and released after success`() {
+        val selected = localUploadFile(
+            selectionId = "0123456789abcdef",
+            displayName = "pantry test.png",
+            mimeType = "image/png",
+            sizeBytes = 1234,
+        )
+        val released = mutableListOf<LocalUploadFile>()
+        val rejected = NativeActionExecutionResult.Failure(
+            message = "The server rejected the upload.",
+            outcome = NativeActionFailureOutcome.Rejected,
+        )
+
+        repeat(2) {
+            releaseMultipartUploadAfterSuccess(rejected, selected, released::add)
+        }
+
+        assertTrue(released.isEmpty())
+
+        releaseMultipartUploadAfterSuccess(
+            NativeActionExecutionResult.Success("Uploaded."),
+            selected,
+            released::add,
+        )
+
+        assertEquals(listOf(selected), released)
     }
 
     @Test

@@ -136,6 +136,56 @@ fun interface NativeImageLoader {
     suspend fun load(relativePath: String): ImageBitmap?
 }
 
+data class NativeCollectionBatchRelationLoadRequest(
+    val actionId: String,
+    val resourceId: String,
+    val relatedResourceIdsByField: Map<String, String>,
+    val bindingValues: Map<String, String>,
+    val forceRefresh: Boolean,
+) {
+    init {
+        require(actionId.isNotBlank() && resourceId.isNotBlank())
+        require(relatedResourceIdsByField.isNotEmpty())
+        require(relatedResourceIdsByField.size <= MAX_NATIVE_COLLECTION_BATCH_RELATIONS)
+        require(relatedResourceIdsByField.all { (fieldId, relatedResourceId) ->
+            fieldId.isNotBlank() && relatedResourceId.isNotBlank()
+        })
+        require(bindingValues.size <= MAX_NATIVE_COLLECTION_BATCH_RELATION_BINDINGS)
+    }
+}
+
+data class NativeCollectionBatchRelationLoadResult(
+    val recordsByResourceId: Map<String, List<NativeRecord>>,
+    val errorsByResourceId: Map<String, String> = emptyMap(),
+) {
+    init {
+        require(recordsByResourceId.size <= MAX_NATIVE_COLLECTION_BATCH_RELATIONS)
+        require(errorsByResourceId.size <= MAX_NATIVE_COLLECTION_BATCH_RELATIONS)
+        require(recordsByResourceId.values.all { records ->
+            records.size <= MAX_NATIVE_COLLECTION_BATCH_RELATION_RECORDS &&
+                records.map(NativeRecord::id).distinct().size == records.size
+        })
+        require(errorsByResourceId.values.all { message ->
+            message.isNotBlank() && message.length <= MAX_NATIVE_COLLECTION_BATCH_RELATION_ERROR_LENGTH
+        })
+    }
+}
+
+fun interface NativeCollectionBatchRelationLoader {
+    suspend fun load(
+        request: NativeCollectionBatchRelationLoadRequest,
+    ): NativeCollectionBatchRelationLoadResult
+}
+
+internal fun NativeDatasetContext.withCollectionBatchRelationRecords(
+    recordsByResourceId: Map<String, List<NativeRecord>>,
+): NativeDatasetContext = copy(
+    // A batch picker is scoped to its own verified load. Ambient records may belong to another
+    // parent or an earlier form and therefore must never satisfy this dialog accidentally.
+    relatedRecords = recordsByResourceId,
+    relatedRecordPaging = emptyMap(),
+)
+
 /**
  * Drop-in renderer for a compiler- or adapter-produced [NativeAppSchema].
  *
@@ -166,6 +216,7 @@ fun GenericNativeAppScreen(
     audioPlayer: NativeAudioRecordPlayer? = null,
     mediaArtworkResolver: NativeMediaArtworkResolver? = null,
     mutationReconciliationGeneration: Int = 0,
+    collectionBatchRelationLoader: NativeCollectionBatchRelationLoader? = null,
 ) {
     val resource = schema.resource(view.resourceId)
     val boardMoveReconciliation = remember(schema.app.id, view.id, resource?.id) {
@@ -218,7 +269,7 @@ fun GenericNativeAppScreen(
     val recordCommandsInFlight = remember(schema, view.id) { mutableSetOf<String>() }
     val recordCommandScope = rememberCoroutineScope()
     val inlineActionSucceeded = onInlineActionSucceeded ?: onActionSucceeded
-    val activeFormMutationOwners = remember(schema.app.id) {
+    val activeMutationOwners = remember(schema.app.id) {
         mutableSetOf<NativeFormMutationRecoveryOwner>()
     }
     var formMutationRecoveryToken by rememberSaveable(schema.app.id) {
@@ -227,7 +278,7 @@ fun GenericNativeAppScreen(
     val formMutationRecovery = resolveNativeFormMutationRecoveryState(
         encoded = formMutationRecoveryToken,
         currentReconciliationGeneration = mutationReconciliationGeneration,
-        ownerStillExecuting = activeFormMutationOwners::contains,
+        ownerStillExecuting = activeMutationOwners::contains,
     )
     val normalizedFormMutationRecoveryToken = formMutationRecovery?.encode()
     LaunchedEffect(normalizedFormMutationRecoveryToken, formMutationRecoveryToken) {
@@ -389,6 +440,14 @@ fun GenericNativeAppScreen(
         if (pendingCollectionBatchActionId != null && pendingCollectionBatchAction == null) {
             pendingCollectionBatchActionId = null
         }
+    }
+    val pendingCollectionBatchRecoveryOwner = pendingCollectionBatchAction?.let { plan ->
+        nativeCollectionBatchMutationRecoveryOwner(
+            appId = schema.app.id,
+            viewId = view.id,
+            actionId = plan.action.id,
+            resourceId = requireNotNull(resource).id,
+        )
     }
     LaunchedEffect(
         pendingCollectionReorderActionId,
@@ -621,7 +680,11 @@ fun GenericNativeAppScreen(
                     batches = collectionBatchPlans,
                     reorder = collectionActionCapabilities.reorder,
                     onCommand = { plan -> pendingCollectionCommandActionId = plan.action.id },
-                    onBatch = { plan -> pendingCollectionBatchActionId = plan.action.id },
+                    onBatch = { plan ->
+                        if (formMutationRecovery?.blocksSubmission != true) {
+                            pendingCollectionBatchActionId = plan.action.id
+                        }
+                    },
                     onReorder = { plan -> pendingCollectionReorderActionId = plan.action.id },
                 )
             }
@@ -670,11 +733,11 @@ fun GenericNativeAppScreen(
             filePicker = filePicker,
             mutationRecovery = formMutationRecovery,
             onMutationStarted = { owner ->
-                activeFormMutationOwners += owner
+                activeMutationOwners += owner
                 formMutationRecoveryToken = owner.begin(mutationReconciliationGeneration).encode()
             },
             onMutationFinished = { owner, result ->
-                activeFormMutationOwners -= owner
+                activeMutationOwners -= owner
                 val current = decodeNativeFormMutationRecoveryState(formMutationRecoveryToken)
                 if (current?.owner == owner) {
                     formMutationRecoveryToken = current.afterExecutionResult(
@@ -698,11 +761,11 @@ fun GenericNativeAppScreen(
             filePicker = filePicker,
             mutationRecovery = formMutationRecovery,
             onMutationStarted = { owner ->
-                activeFormMutationOwners += owner
+                activeMutationOwners += owner
                 formMutationRecoveryToken = owner.begin(mutationReconciliationGeneration).encode()
             },
             onMutationFinished = { owner, result ->
-                activeFormMutationOwners -= owner
+                activeMutationOwners -= owner
                 val current = decodeNativeFormMutationRecoveryState(formMutationRecoveryToken)
                 if (current?.owner == owner) {
                     formMutationRecoveryToken = current.afterExecutionResult(
@@ -763,6 +826,7 @@ fun GenericNativeAppScreen(
         )
     }
     pendingCollectionBatchAction?.let { plan ->
+        val recoveryOwner = pendingCollectionBatchRecoveryOwner ?: return@let
         GenericCollectionBatchDialog(
             plan = plan,
             resource = requireNotNull(resource),
@@ -770,6 +834,23 @@ fun GenericNativeAppScreen(
             schema = schema,
             datasetContext = datasetContext,
             actionExecutor = actionExecutor,
+            relationLoader = collectionBatchRelationLoader,
+            mutationRecovery = formMutationRecovery,
+            mutationRecoveryOwner = recoveryOwner,
+            onMutationStarted = { owner ->
+                activeMutationOwners += owner
+                formMutationRecoveryToken = owner.begin(mutationReconciliationGeneration).encode()
+            },
+            onMutationFinished = { owner, result ->
+                activeMutationOwners -= owner
+                val current = decodeNativeFormMutationRecoveryState(formMutationRecoveryToken)
+                if (current?.owner == owner) {
+                    formMutationRecoveryToken = current.afterExecutionResult(
+                        result = result,
+                        currentReconciliationGeneration = mutationReconciliationGeneration,
+                    )?.encode()
+                }
+            },
             onDismiss = { pendingCollectionBatchActionId = null },
             onActionSucceeded = { action ->
                 pendingCollectionBatchActionId = null
@@ -1045,15 +1126,20 @@ private fun GenericCollectionBatchDialog(
     schema: NativeAppSchema,
     datasetContext: NativeDatasetContext,
     actionExecutor: NativeActionExecutor,
+    relationLoader: NativeCollectionBatchRelationLoader?,
+    mutationRecovery: NativeFormMutationRecoveryState?,
+    mutationRecoveryOwner: NativeFormMutationRecoveryOwner,
+    onMutationStarted: (NativeFormMutationRecoveryOwner) -> Unit,
+    onMutationFinished: (NativeFormMutationRecoveryOwner, NativeActionExecutionResult) -> Unit,
     onDismiss: () -> Unit,
     onActionSucceeded: (ActionSpec) -> Unit,
     onOutcomeUnknown: (ActionSpec) -> Unit,
 ) {
     val recordIds = remember(records) { records.map(NativeRecord::id) }
-    var selectedRecordIds by remember(plan.action.id, recordIds) {
+    var selectedRecordIds by rememberSaveable(plan.action.id, recordIds) {
         mutableStateOf(emptyList<String>())
     }
-    var values by remember(plan.action.id) {
+    var values by rememberSaveable(plan.action.id) {
         mutableStateOf(initialNativeCollectionBatchDraft(plan.fields))
     }
     var error by remember(plan.action.id) { mutableStateOf<String?>(null) }
@@ -1063,7 +1149,89 @@ private fun GenericCollectionBatchDialog(
     var awaitingConfirmation by remember(plan.action.id) { mutableStateOf(false) }
     var executing by remember(plan.action.id) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val outcomeUnknown = failureOutcome?.requiresMutationReconciliation() == true
+    val outcomeUnknown =
+        failureOutcome?.requiresMutationReconciliation() == true ||
+            (
+                mutationRecovery?.owner == mutationRecoveryOwner &&
+                    mutationRecovery.phase == NativeFormMutationRecoveryPhase.AwaitingReconciliation
+                )
+    val submissionBlocked = mutationRecovery != null
+    val verifiedRelationsByField = remember(plan.fields, resource, schema) {
+        plan.fields.mapNotNull { field ->
+            val relatedResourceId = field.relatedResourceId ?: return@mapNotNull null
+            val rendererField = field.toNativeCollectionFieldSpec()
+            nativeRelationRelationship(rendererField, resource, schema)
+                ?.takeIf { relationship -> relationship.parentResourceId == relatedResourceId }
+                ?.let { field.id to relatedResourceId }
+        }.toMap()
+    }
+    val relationAvailableValues = remember(datasetContext) {
+        buildMap {
+            datasetContext.parentRecord?.values?.forEach { (fieldId, value) ->
+                value?.takeIf(String::isNotBlank)?.let { put(fieldId, it) }
+            }
+            datasetContext.parentRecord?.bindingContext?.forEach { (fieldId, value) ->
+                value.takeIf(String::isNotBlank)?.let { put(fieldId, it) }
+            }
+            putAll(datasetContext.bindingValues.filterValues(String::isNotBlank))
+        }
+    }
+    val relationRequest = verifiedRelationsByField.takeIf { relations -> relations.isNotEmpty() }?.let { relations ->
+        NativeCollectionBatchRelationLoadRequest(
+            actionId = plan.action.id,
+            resourceId = resource.id,
+            relatedResourceIdsByField = relations,
+            bindingValues = relationAvailableValues,
+            forceRefresh = false,
+        )
+    }
+    var relationLoadAttempt by rememberSaveable(plan.action.id) { mutableStateOf(0) }
+    var relationRecords by remember(plan.action.id, relationRequest) {
+        mutableStateOf<Map<String, List<NativeRecord>>>(emptyMap())
+    }
+    var relationErrors by remember(plan.action.id, relationRequest) {
+        mutableStateOf<Map<String, String>>(emptyMap())
+    }
+    var relationsLoading by remember(plan.action.id, relationRequest) {
+        mutableStateOf(relationRequest != null)
+    }
+    LaunchedEffect(relationLoader, relationRequest, relationLoadAttempt) {
+        val request = relationRequest ?: run {
+            relationsLoading = false
+            return@LaunchedEffect
+        }
+        relationsLoading = true
+        relationErrors = emptyMap()
+        val requestedResourceIds = request.relatedResourceIdsByField.values.toSet()
+        val outcome = relationLoader?.let { loader ->
+            runCatching {
+                loader.load(request.copy(forceRefresh = relationLoadAttempt > 0))
+            }
+        }
+        val result = outcome?.getOrNull()
+        relationRecords = result?.recordsByResourceId.orEmpty()
+            .filterKeys(requestedResourceIds::contains)
+        relationErrors = requestedResourceIds.mapNotNull { resourceId ->
+            when {
+                outcome == null -> resourceId to "No verified choice loader is available."
+                outcome.isFailure -> resourceId to (
+                    outcome.exceptionOrNull()?.message?.takeIf(String::isNotBlank)
+                        ?: "Could not load choices."
+                    )
+                result?.errorsByResourceId?.get(resourceId) != null ->
+                    resourceId to requireNotNull(result.errorsByResourceId[resourceId])
+                resourceId !in relationRecords -> resourceId to "Could not load verified choices."
+                else -> null
+            }
+        }.toMap()
+        relationsLoading = false
+    }
+    val relationContext = datasetContext.withCollectionBatchRelationRecords(relationRecords)
+    val requiredRelationUnavailable = plan.fields.any { field ->
+        field.required && field.relatedResourceId?.let { relatedResourceId ->
+            relationsLoading || relatedResourceId in relationErrors || relatedResourceId !in relationRecords
+        } == true
+    }
 
     fun request(confirmed: Boolean): NativeActionRequest.Submit? = runCatching {
         plan.request(
@@ -1077,12 +1245,16 @@ private fun GenericCollectionBatchDialog(
     }
 
     fun submit(confirmed: Boolean) {
+        if (submissionBlocked || requiredRelationUnavailable) return
         val actionRequest = request(confirmed) ?: return
         executing = true
         error = null
         failureOutcome = null
+        onMutationStarted(mutationRecoveryOwner)
         scope.launch {
-            when (val result = actionExecutor.execute(actionRequest)) {
+            val result = actionExecutor.execute(actionRequest)
+            onMutationFinished(mutationRecoveryOwner, result)
+            when (result) {
                 is NativeActionExecutionResult.Success -> onActionSucceeded(plan.action)
                 is NativeActionExecutionResult.Failure -> {
                     error = result.message
@@ -1156,7 +1328,7 @@ private fun GenericCollectionBatchDialog(
                             }
                             Row {
                                 TextButton(
-                                    enabled = !executing && selectedRecordIds.isNotEmpty(),
+                                    enabled = !executing && !submissionBlocked && selectedRecordIds.isNotEmpty(),
                                     onClick = {
                                         selectedRecordIds = emptyList()
                                         error = null
@@ -1165,7 +1337,7 @@ private fun GenericCollectionBatchDialog(
                                     Text("Clear")
                                 }
                                 TextButton(
-                                    enabled = !executing && selectedRecordIds.size < minOf(
+                                    enabled = !executing && !submissionBlocked && selectedRecordIds.size < minOf(
                                         recordIds.size,
                                         plan.maximumSelectionSize,
                                     ),
@@ -1197,7 +1369,7 @@ private fun GenericCollectionBatchDialog(
                                 .semantics {
                                     contentDescription = "Select $itemLabel"
                                 }
-                                .clickable(enabled = canToggle && !executing) {
+                                .clickable(enabled = canToggle && !executing && !submissionBlocked) {
                                     selectedRecordIds = toggleNativeCollectionSelection(
                                         selectedRecordIds = selectedRecordIds,
                                         recordId = record.id,
@@ -1211,7 +1383,7 @@ private fun GenericCollectionBatchDialog(
                         ) {
                             Checkbox(
                                 checked = selected,
-                                enabled = canToggle && !executing,
+                                enabled = canToggle && !executing && !submissionBlocked,
                                 onCheckedChange = null,
                             )
                             Text(
@@ -1236,35 +1408,55 @@ private fun GenericCollectionBatchDialog(
                                 field = rendererField,
                                 formResource = resource,
                                 schema = schema,
-                                context = datasetContext,
+                                context = relationContext,
                             )
+                            val relationError = relationErrors[relatedResourceId]
                             GenericRelationshipField(
                                 field = rendererField,
                                 value = values[field.id].orEmpty(),
                                 options = relationOptions,
-                                choicesLoaded = datasetContext.relatedRecords.containsKey(relatedResourceId),
+                                choicesLoaded = relationRecords.containsKey(relatedResourceId),
                                 choiceSourceHasRecords =
-                                    datasetContext.relatedRecords[relatedResourceId].orEmpty().isNotEmpty(),
-                                choiceUnavailableReason = nativeRelationChoiceUnavailableReason(
-                                    rendererField,
-                                    resource,
-                                    schema,
-                                    datasetContext,
-                                ),
-                                paging = datasetContext.relatedRecordPaging[relatedResourceId],
-                                error = null,
-                                enabled = !executing && !outcomeUnknown,
+                                    relationRecords[relatedResourceId].orEmpty().isNotEmpty(),
+                                choiceUnavailableReason = when {
+                                    relationsLoading || relationError != null ->
+                                        NativeRelationChoiceUnavailableReason.source
+                                    else -> nativeRelationChoiceUnavailableReason(
+                                        rendererField,
+                                        resource,
+                                        schema,
+                                        relationContext,
+                                    )
+                                },
+                                paging = null,
+                                error = relationError,
+                                enabled = !executing && !outcomeUnknown && !submissionBlocked &&
+                                    !relationsLoading && relationError == null,
                                 onValueChange = { value ->
                                     values = values + (field.id to value)
                                     error = null
                                 },
                             )
+                            if (relationsLoading) {
+                                Text(
+                                    "Loading choices...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else if (relationError != null) {
+                                TextButton(
+                                    enabled = !executing && !submissionBlocked,
+                                    onClick = { relationLoadAttempt += 1 },
+                                ) {
+                                    Text("Retry choices")
+                                }
+                            }
                         } else {
                             GenericFormField(
                                 field = rendererField,
                                 value = values[field.id].orEmpty(),
                                 error = null,
-                                enabled = !executing && !outcomeUnknown,
+                                enabled = !executing && !outcomeUnknown && !submissionBlocked,
                                 filePicker = null,
                                 onValueChange = { value ->
                                     values = values + (field.id to value)
@@ -1319,7 +1511,7 @@ private fun GenericCollectionBatchDialog(
         confirmButton = {
             if (!outcomeUnknown) {
                 Button(
-                    enabled = !executing,
+                    enabled = !executing && !submissionBlocked && !requiredRelationUnavailable,
                     modifier = Modifier.semantics {
                         contentDescription = if (awaitingConfirmation) {
                             "Confirm batch action ${plan.action.id} for ${resource.id}"
@@ -8250,3 +8442,7 @@ private fun FieldSpec.isNativeVisualIconField(): Boolean =
         kind in setOf(FieldKind.string, FieldKind.enumeration)
 
 private const val MAX_NATIVE_RECORD_ICON_KEY_LENGTH = 64
+private const val MAX_NATIVE_COLLECTION_BATCH_RELATIONS = 16
+private const val MAX_NATIVE_COLLECTION_BATCH_RELATION_BINDINGS = 32
+private const val MAX_NATIVE_COLLECTION_BATCH_RELATION_RECORDS = 500
+private const val MAX_NATIVE_COLLECTION_BATCH_RELATION_ERROR_LENGTH = 1_024

@@ -30,9 +30,29 @@ internal fun dynamicFormRelationLoadPlans(
     val editableFieldIds = (
         formAction.binding.bodyFieldNames + formAction.binding.queryParameterNames
     ).toSet()
+    return dynamicRelationLoadPlans(
+        schema = schema,
+        childResourceId = formView.resourceId,
+        editableFieldIds = editableFieldIds,
+        availableValues = availableValues,
+    )
+}
+
+/**
+ * Selects verified relationship reads for an explicitly declared set of editable fields. This is
+ * shared by ordinary forms and collection-batch dialogs; callers cannot request an unrelated
+ * resource because the accepted schema relationship remains the source of every load plan.
+ */
+internal fun dynamicRelationLoadPlans(
+    schema: NativeAppSchema,
+    childResourceId: String,
+    editableFieldIds: Set<String>,
+    availableValues: Map<String, String>,
+): List<DynamicFormRelationLoadPlan> {
+    if (editableFieldIds.isEmpty()) return emptyList()
     val parentResourceIds = schema.relationships.asSequence()
         .filter { relationship ->
-            relationship.childResourceId == formView.resourceId &&
+            relationship.childResourceId == childResourceId &&
                 relationship.childFieldId in editableFieldIds &&
                 relationship.confidence in setOf(Confidence.high, Confidence.verified)
         }

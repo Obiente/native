@@ -499,6 +499,7 @@ class DynamicNextcloudActionExecutor(
     private val descriptor: DynamicAppDescriptor,
     private val runtimeContext: Map<String, String> = emptyMap(),
     private val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
+    private val onMultipartUploadSucceeded: (LocalUploadFile) -> Unit = {},
 ) : NativeActionExecutor {
     init {
         descriptor.requireValid()
@@ -532,7 +533,7 @@ class DynamicNextcloudActionExecutor(
             )
         }
         return runCatching {
-            val response = executeDynamicAction(
+            val execution = executeDynamicAction(
                 services,
                 session,
                 descriptor,
@@ -541,7 +542,13 @@ class DynamicNextcloudActionExecutor(
                 runtimeContext,
                 observedInputSchema,
             )
-            response.toDynamicActionExecutionResult(action)
+            execution.response.toDynamicActionExecutionResult(action).also { result ->
+                releaseMultipartUploadAfterSuccess(
+                    result = result,
+                    file = execution.multipartFile,
+                    release = onMultipartUploadSucceeded,
+                )
+            }
         }.getOrElse { failure ->
             NativeActionExecutionResult.Failure(failure.message ?: "The dynamic action failed.")
         }
@@ -920,6 +927,19 @@ private fun String.toSafeDynamicErrorMessage(): String? {
     return compact.removeSuffix(".") + "."
 }
 
+private data class DynamicActionExecution(
+    val response: NextcloudApiResponse,
+    val multipartFile: LocalUploadFile?,
+)
+
+internal fun releaseMultipartUploadAfterSuccess(
+    result: NativeActionExecutionResult,
+    file: LocalUploadFile?,
+    release: (LocalUploadFile) -> Unit,
+) {
+    if (result is NativeActionExecutionResult.Success && file != null) release(file)
+}
+
 private suspend fun executeDynamicAction(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
@@ -928,7 +948,7 @@ private suspend fun executeDynamicAction(
     values: Map<String, String>,
     runtimeContext: Map<String, String>,
     observedInputSchema: JsonElement? = null,
-): NextcloudApiResponse {
+): DynamicActionExecution {
     val request = buildDynamicApiRequest(
         descriptor,
         action,
@@ -936,11 +956,10 @@ private suspend fun executeDynamicAction(
         runtimeContext,
         observedInputSchema,
     )
-    return try {
-        services.executeNextcloudApi(session, request)
-    } finally {
-        request.multipartBody?.file?.let(services::releaseLocalUploadFile)
-    }
+    return DynamicActionExecution(
+        response = services.executeNextcloudApi(session, request),
+        multipartFile = request.multipartBody?.file,
+    )
 }
 
 internal fun buildDynamicApiRequest(

@@ -12,8 +12,12 @@ import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
 import dev.obiente.nextcloudnative.nativeui.model.ResourceRelationshipSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoadResult
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
+import dev.obiente.nextcloudnative.nativeui.runtime.withCollectionBatchRelationRecords
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -50,6 +54,89 @@ class DynamicFormRelationsTest {
             listOf(DynamicFormRelationLoadPlan("categories", "category-index")),
             dynamicFormRelationLoadPlans(schema, form, mapOf("workspaceId" to "7")),
         )
+    }
+
+    @Test
+    fun `collection batch relationships get an exact verified load request independent of form view`() {
+        val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
+        val schema = schema(
+            form = form,
+            relationship = ResourceRelationshipSpec(
+                "categories",
+                "entries",
+                "id",
+                "categoryId",
+                Confidence.verified,
+            ),
+            reads = listOf(
+                action(
+                    "category-index",
+                    "categories",
+                    "/api/workspaces/{workspaceId}/categories",
+                    requiredPathNames = listOf("workspaceId"),
+                ),
+            ),
+        )
+
+        val request = dynamicCollectionBatchRelationLoadRequests(
+            schema = schema,
+            childResourceId = "entries",
+            relatedFieldIds = setOf("categoryId"),
+            availableValues = mapOf("workspaceId" to "workspace-7"),
+        ).single()
+
+        assertEquals("categories", request.plan.resourceId)
+        assertEquals("category-index", request.plan.actionId)
+        assertEquals(mapOf("workspaceId" to "workspace-7"), request.cacheKey.bindingValues)
+        assertTrue(
+            dynamicCollectionBatchRelationLoadRequests(
+                schema = schema,
+                childResourceId = "entries",
+                relatedFieldIds = setOf("unrelatedId"),
+                availableValues = mapOf("workspaceId" to "workspace-7"),
+            ).isEmpty(),
+        )
+        assertTrue(
+            dynamicCollectionBatchRelationLoadRequests(
+                schema = schema,
+                childResourceId = "entries",
+                relatedFieldIds = setOf("categoryId"),
+                availableValues = emptyMap(),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
+    fun `collection batch relation scope replaces ambient records and enforces its memory bound`() {
+        val stale = NativeRecord("stale", mapOf("id" to "stale", "name" to "Wrong house"))
+        val fresh = NativeRecord("fresh", mapOf("id" to "fresh", "name" to "Current house"))
+        val context = NativeDatasetContext(
+            bindingValues = mapOf("houseId" to "house-7"),
+            relatedRecords = mapOf(
+                "categories" to listOf(stale),
+                "unrelated" to listOf(stale),
+            ),
+            relatedRecordPaging = mapOf(
+                "categories" to dev.obiente.nextcloudnative.nativeui.runtime.NativeRelatedRecordPaging(),
+            ),
+        )
+
+        val scoped = context.withCollectionBatchRelationRecords(
+            mapOf("categories" to listOf(fresh)),
+        )
+
+        assertEquals(mapOf("categories" to listOf(fresh)), scoped.relatedRecords)
+        assertTrue(scoped.relatedRecordPaging.isEmpty())
+        assertEquals(context.bindingValues, scoped.bindingValues)
+        assertFailsWith<IllegalArgumentException> {
+            NativeCollectionBatchRelationLoadResult(
+                recordsByResourceId = mapOf(
+                    "categories" to (1..501).map { index ->
+                        NativeRecord("category-$index", mapOf("id" to "category-$index"))
+                    },
+                ),
+            )
+        }
     }
 
     @Test

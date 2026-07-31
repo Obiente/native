@@ -9,7 +9,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 
 /**
@@ -149,15 +148,15 @@ data class RepeatableObjectInputFieldSpec(
                 JsonPrimitive(parsed)
             }
             RepeatableObjectInputScalarKind.Decimal -> {
-                val parsed = value.toDoubleOrNull()?.takeIf(Double::isFinite)
-                    ?: error("$prefix must be a finite number.")
-                minimum?.toDoubleOrNull()?.let { lower ->
+                val parsed = value.toExactJsonDecimalOrNull()
+                    ?: error("$prefix must be an exact JSON number.")
+                minimum?.toExactJsonDecimalOrNull()?.let { lower ->
                     require(parsed >= lower) { "$prefix is below the allowed minimum." }
                 }
-                maximum?.toDoubleOrNull()?.let { upper ->
+                maximum?.toExactJsonDecimalOrNull()?.let { upper ->
                     require(parsed <= upper) { "$prefix exceeds the allowed maximum." }
                 }
-                JsonPrimitive(parsed)
+                parsed.primitive
             }
             RepeatableObjectInputScalarKind.Boolean ->
                 JsonPrimitive(value.toBooleanStrictOrNull() ?: error("$prefix must be true or false."))
@@ -180,7 +179,8 @@ data class RepeatableObjectInputFieldSpec(
             RepeatableObjectInputScalarKind.Integer ->
                 primitive.takeUnless(JsonPrimitive::isString)?.longOrNull?.toString()
             RepeatableObjectInputScalarKind.Decimal ->
-                primitive.takeUnless(JsonPrimitive::isString)?.doubleOrNull?.toString()
+                primitive.takeUnless(JsonPrimitive::isString)?.contentOrNull
+                    ?.takeIf { value -> value.toExactJsonDecimalOrNull() != null }
             RepeatableObjectInputScalarKind.Boolean ->
                 primitive.takeUnless(JsonPrimitive::isString)?.booleanOrNull?.toString()
         } ?: error("Item ${rowIndex + 1}: $label has the wrong scalar type.")
@@ -296,9 +296,11 @@ private fun JsonElement.toRepeatableObjectInputField(
                 require(minimum == null || maximum == null || minimum.toLong() <= maximum.toLong())
             }
             "number" -> {
-                require(minimum?.toDoubleOrNull()?.isFinite() == true || minimum == null)
-                require(maximum?.toDoubleOrNull()?.isFinite() == true || maximum == null)
-                require(minimum == null || maximum == null || minimum.toDouble() <= maximum.toDouble())
+                val exactMinimum = minimum?.toExactJsonDecimalOrNull()
+                val exactMaximum = maximum?.toExactJsonDecimalOrNull()
+                require(exactMinimum != null || minimum == null)
+                require(exactMaximum != null || maximum == null)
+                require(exactMinimum == null || exactMaximum == null || exactMinimum <= exactMaximum)
             }
             else -> require("minimum" !in schema && "maximum" !in schema)
         }
@@ -360,6 +362,74 @@ private fun String.isSafeRepeatableObjectFieldId(): Boolean =
 
 private fun String.isSafeRepeatableObjectScalar(): Boolean =
     length in 1..MAX_REPEATABLE_OBJECT_SCALAR_LENGTH && none(Char::isISOControl)
+
+/**
+ * A bounded, platform-neutral decimal representation used to compare JSON numbers without first
+ * rounding them through binary floating point. The original primitive is retained for emission so
+ * monetary, scientific, and large integer-like decimal values reach the server byte-for-byte.
+ */
+private data class ExactJsonDecimal(
+    val primitive: JsonPrimitive,
+    val negative: Boolean,
+    val digits: String,
+    val exponent: Int,
+) : Comparable<ExactJsonDecimal> {
+    override fun compareTo(other: ExactJsonDecimal): Int {
+        if (digits == "0" && other.digits == "0") return 0
+        if (negative != other.negative) return if (negative) -1 else 1
+        val magnitude = compareMagnitude(other)
+        return if (negative) -magnitude else magnitude
+    }
+
+    private fun compareMagnitude(other: ExactJsonDecimal): Int {
+        val decimalLength = digits.length.toLong() + exponent
+        val otherDecimalLength = other.digits.length.toLong() + other.exponent
+        if (decimalLength != otherDecimalLength) return decimalLength.compareTo(otherDecimalLength)
+        val width = maxOf(digits.length, other.digits.length)
+        repeat(width) { index ->
+            val left = digits.getOrElse(index) { '0' }
+            val right = other.digits.getOrElse(index) { '0' }
+            if (left != right) return left.compareTo(right)
+        }
+        return 0
+    }
+}
+
+private fun String.toExactJsonDecimalOrNull(): ExactJsonDecimal? {
+    if (isEmpty() || length > MAX_REPEATABLE_OBJECT_SCALAR_LENGTH) return null
+    val primitive = runCatching { Json.parseToJsonElement(this) as? JsonPrimitive }.getOrNull()
+        ?.takeUnless(JsonPrimitive::isString)
+        ?.takeIf { parsed -> parsed.contentOrNull == this }
+        ?: return null
+    val negative = startsWith('-')
+    val unsigned = if (negative) substring(1) else this
+    val exponentMarker = unsigned.indexOfFirst { character -> character == 'e' || character == 'E' }
+    val significand = if (exponentMarker < 0) unsigned else unsigned.substring(0, exponentMarker)
+    val declaredExponent = if (exponentMarker < 0) {
+        0
+    } else {
+        unsigned.substring(exponentMarker + 1).toIntOrNull() ?: return null
+    }
+    val decimalMarker = significand.indexOf('.')
+    val fractionLength = if (decimalMarker < 0) 0 else significand.length - decimalMarker - 1
+    val rawDigits = significand.replace(".", "")
+    val firstSignificant = rawDigits.indexOfFirst { character -> character != '0' }
+    if (firstSignificant < 0) {
+        return ExactJsonDecimal(primitive, negative = false, digits = "0", exponent = 0)
+    }
+    val withoutLeadingZeros = rawDigits.substring(firstSignificant)
+    val trailingZeros = withoutLeadingZeros.reversed().indexOfFirst { character -> character != '0' }
+        .let { count -> if (count < 0) withoutLeadingZeros.length else count }
+    val digits = withoutLeadingZeros.dropLast(trailingZeros)
+    val exponent = declaredExponent.toLong() - fractionLength + trailingZeros
+    if (exponent !in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) return null
+    return ExactJsonDecimal(
+        primitive = primitive,
+        negative = negative,
+        digits = digits,
+        exponent = exponent.toInt(),
+    )
+}
 
 private fun String.structuredHumanize(): String =
     replace(Regex("([a-z0-9])([A-Z])"), "$1 $2")

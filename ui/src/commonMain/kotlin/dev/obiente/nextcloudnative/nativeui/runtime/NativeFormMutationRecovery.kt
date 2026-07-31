@@ -11,6 +11,7 @@ internal enum class NativeFormMutationKind {
     Create,
     Update,
     Command,
+    CollectionBatch,
 }
 
 internal enum class NativeFormMutationRecoveryPhase {
@@ -19,7 +20,7 @@ internal enum class NativeFormMutationRecoveryPhase {
 }
 
 /**
- * Stable contract identity for one generic create/update submission.
+ * Stable contract identity for one generic form or collection-batch submission.
  *
  * The owner deliberately contains only schema identities and the canonical target record. It is
  * independent of any installed app vocabulary and is safe to persist in saved state.
@@ -37,13 +38,32 @@ internal data class NativeFormMutationRecoveryOwner(
             require(value.isNotBlank() && value.length <= NATIVE_FORM_RECOVERY_ID_LIMIT)
         }
         require(recordId?.length?.let { length -> length <= NATIVE_FORM_RECOVERY_ID_LIMIT } != false)
-        require(kind != NativeFormMutationKind.Create || recordId == null)
+        require(
+            kind !in setOf(NativeFormMutationKind.Create, NativeFormMutationKind.CollectionBatch) ||
+                recordId == null,
+        )
         require(
             kind !in setOf(NativeFormMutationKind.Update, NativeFormMutationKind.Command) ||
                 !recordId.isNullOrBlank(),
         )
     }
 }
+
+internal fun nativeCollectionBatchMutationRecoveryOwner(
+    appId: String,
+    viewId: String,
+    actionId: String,
+    resourceId: String,
+): NativeFormMutationRecoveryOwner? = runCatching {
+    NativeFormMutationRecoveryOwner(
+        appId = appId,
+        viewId = viewId,
+        actionId = actionId,
+        resourceId = resourceId,
+        kind = NativeFormMutationKind.CollectionBatch,
+        recordId = null,
+    )
+}.getOrNull()
 
 internal data class NativeFormMutationRecoveryState(
     val owner: NativeFormMutationRecoveryOwner,
