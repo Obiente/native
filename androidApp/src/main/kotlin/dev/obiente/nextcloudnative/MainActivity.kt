@@ -26,7 +26,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        receiveNotificationIntent(intent)
+        val restoredAppUpdateReviewRequest = savedInstanceState
+            ?.takeIf { it.containsKey(KEY_APP_UPDATE_REVIEW_REQUEST) }
+            ?.getLong(KEY_APP_UPDATE_REVIEW_REQUEST)
+        appUpdateReviewRequest = initialAppUpdateReviewRequest(
+            restoredRequest = restoredAppUpdateReviewRequest,
+            intentAction = intent?.action,
+        )
         SessionTestBootstrap.importIfPresent(applicationContext)
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         AndroidAppUpdateWork.schedule(
@@ -111,6 +117,11 @@ class MainActivity : ComponentActivity() {
         receiveNotificationIntent(intent)
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putLong(KEY_APP_UPDATE_REVIEW_REQUEST, appUpdateReviewRequest)
+        super.onSaveInstanceState(outState)
+    }
+
     private fun receiveNotificationIntent(intent: Intent?) {
         if (isAppUpdateReviewIntentAction(intent?.action)) {
             appUpdateReviewRequest += 1
@@ -118,6 +129,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
+        const val KEY_APP_UPDATE_REVIEW_REQUEST = "app-update-review-request"
         val DarkWindowBackground = Color(0xFF0D0F13)
         val LightWindowBackground = Color(0xFFF7F6FA)
     }
@@ -125,3 +137,6 @@ class MainActivity : ComponentActivity() {
 
 internal fun isAppUpdateReviewIntentAction(action: String?): Boolean =
     action == "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE"
+
+internal fun initialAppUpdateReviewRequest(restoredRequest: Long?, intentAction: String?): Long =
+    restoredRequest ?: if (isAppUpdateReviewIntentAction(intentAction)) 1L else 0L

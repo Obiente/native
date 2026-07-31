@@ -68,7 +68,16 @@ internal class AndroidPlatformCapabilities(
         }
         if (capability == PlatformCapability.BackgroundSync) return PlatformCapabilityState.Granted
         val permissions = capability.permissions(Build.VERSION.SDK_INT)
-        if (permissions.isEmpty()) return PlatformCapabilityState.Granted
+        if (permissions.isEmpty()) {
+            return if (
+                capability == PlatformCapability.Notifications &&
+                !notificationDeliveryAllowed(context, CHANNEL_APP_UPDATES)
+            ) {
+                PlatformCapabilityState.Blocked
+            } else {
+                PlatformCapabilityState.Granted
+            }
+        }
         val hasPermission = if (capability == PlatformCapability.MediaLibrary) {
             hasMediaLibraryAccess(Build.VERSION.SDK_INT) { permission ->
                 ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED

@@ -259,6 +259,13 @@ internal class DesktopAppUpdater(
             return AppUpdateInstallResult.Cancelled(canResume = false)
         } catch (cancelled: CancellationException) {
             activeCall?.cancel()
+            File(updateDirectory, "${desktopRelease.asset.url.substringAfterLast('/')}.part").delete()
+            mutableInstallState.value = AppUpdateInstallState.Cancelled(
+                desktopRelease.versionName,
+                desktopRelease.versionCode,
+                downloadedBytes = 0,
+                canResume = false,
+            )
             throw cancelled
         } catch (failure: Exception) {
             File(updateDirectory, "${desktopRelease.asset.url.substringAfterLast('/')}.part").delete()

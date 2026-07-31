@@ -79,6 +79,7 @@ internal class AndroidProjectContentClient(
     private val newsImageDirectory = File(appContext.cacheDir, "project-content/news-images")
     private val updateDirectory = File(appContext.cacheDir, "app-updates")
     private val updateMutex = Mutex()
+    private val updateChannelStateLock = Any()
     private val mutableUpdateCheckResult = MutableStateFlow<AppUpdateCheckResult?>(null)
     private val mutableUpdateState = MutableStateFlow<AppUpdateInstallState>(AppUpdateInstallState.Idle)
     @Volatile private var activeUpdateCall: Call? = null
@@ -199,12 +200,13 @@ internal class AndroidProjectContentClient(
         return bytes
     }
 
-    fun updateChannel(): AndroidUpdateChannel =
-        parseAndroidUpdateChannel(preferences.getString(KEY_UPDATE_CHANNEL, null))
+    fun updateChannel(): AndroidUpdateChannel = synchronized(updateChannelStateLock) {
+        storedUpdateChannel()
+    }
 
-    fun saveUpdateChannel(channel: AndroidUpdateChannel): Boolean {
+    fun saveUpdateChannel(channel: AndroidUpdateChannel): Boolean = synchronized(updateChannelStateLock) {
         if (!canSelectAppUpdateChannel(support(), channel)) return false
-        if (channel != updateChannel()) mutableUpdateCheckResult.value = null
+        if (channel != storedUpdateChannel()) mutableUpdateCheckResult.value = null
         preferences.edit().putString(KEY_UPDATE_CHANNEL, channel.storageValue).apply()
         return true
     }
@@ -256,8 +258,17 @@ internal class AndroidProjectContentClient(
                 failure.message ?: "The update check failed.",
             )
         }
-        mutableUpdateCheckResult.value = result
-        return result
+        return synchronized(updateChannelStateLock) {
+            if (channel != storedUpdateChannel()) {
+                AppUpdateCheckResult.Failed(
+                    support,
+                    "The update channel changed. Check again using the saved channel.",
+                )
+            } else {
+                mutableUpdateCheckResult.value = result
+                result
+            }
+        }
     }
 
     suspend fun beginUpdate(release: AppUpdateRelease): AppUpdateInstallResult {
@@ -600,6 +611,9 @@ internal class AndroidProjectContentClient(
         const val NEWS_CACHE_TTL_MILLIS = 6 * 60 * 60 * 1_000L
         const val UPDATE_PROGRESS_STEP_BYTES = 256L * 1024L
     }
+
+    private fun storedUpdateChannel(): AndroidUpdateChannel =
+        parseAndroidUpdateChannel(preferences.getString(KEY_UPDATE_CHANNEL, null))
 }
 
 internal data class AndroidInstallSource(
