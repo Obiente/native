@@ -241,16 +241,19 @@ jobs:
         include:
           - runner: ubuntu-latest
             platform: linux
+            direct_updates: "true"
             tasks: ":ui:packageDeb :ui:packageRpm"
             paths: |
               ui/build/compose/binaries/main/deb/*.deb
               ui/build/compose/binaries/main/rpm/*.rpm
           - runner: windows-latest
             platform: windows
+            direct_updates: "false"
             tasks: ":ui:packageMsi"
             paths: ui/build/compose/binaries/main/msi/*.msi
           - runner: macos-15-intel
             platform: macos
+            direct_updates: "false"
             tasks: ":ui:packageDmg"
             paths: ui/build/compose/binaries/main/dmg/*.dmg
     runs-on: ${{ matrix.runner }}
@@ -277,6 +280,10 @@ jobs:
           ./gradlew --no-daemon \
             -PncDesktopPackageVersion="${NIGHTLY_DESKTOP_VERSION}" \
             -PncMacosPackageVersion="${NIGHTLY_DESKTOP_VERSION}" \
+            -PncVersionName="${{ needs.source.outputs.version }}" \
+            -PncVersionCode="${{ needs.source.outputs.version-code }}" \
+            -PncDesktopReleaseBuild=true \
+            -PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}" \
             ${{ matrix.tasks }}
           status=$?
           if [[ "${status}" -ne 0 ]]; then
@@ -425,34 +432,16 @@ jobs:
           echo "already-published=false" >>"${GITHUB_OUTPUT}"
           test "${STAGED_SUCCESSFUL_PLATFORMS}" -gt 0
           write_release_notes() {
-            platform_count="$1"
-            available_platforms="$2"
-            printf 'Automated nightly from the tested main branch.\n\nSource CI: %s\n' \
-              "${SOURCE_RUN_URL}" >"${RUNNER_TEMP}/release-notes.md"
-            if [[ "${platform_count}" -lt 4 ]]; then
-              {
-                printf '\n## Build availability\n\n'
-                printf '| Platform | Status |\n'
-                printf '| --- | --- |\n'
-                for platform in android linux windows macos; do
-                  case "${platform}" in
-                    android) label="Android" ;;
-                    linux) label="Linux" ;;
-                    windows) label="Windows" ;;
-                    macos) label="macOS" ;;
-                  esac
-                  if [[ ",${available_platforms}," == *",${platform},"* ]]; then
-                    printf '| %s | Available |\n' "${label}"
-                  else
-                    printf '| %s | Unavailable |\n' "${label}"
-                  fi
-                done
-              } >>"${RUNNER_TEMP}/release-notes.md"
-            fi
+            available_platforms="$1"
+            node tools/nightly-release-notes.mjs \
+              --repository "${GITHUB_REPOSITORY}" \
+              --tag "${NIGHTLY_TAG}" \
+              --source-sha "${NIGHTLY_SHA}" \
+              --source-run-url "${SOURCE_RUN_URL}" \
+              --available "${available_platforms}" \
+              --output "${RUNNER_TEMP}/release-notes.md"
           }
-          write_release_notes \
-            "${STAGED_SUCCESSFUL_PLATFORMS}" \
-            "${STAGED_AVAILABLE_PLATFORMS}"
+          write_release_notes "${STAGED_AVAILABLE_PLATFORMS}"
           mapfile -d '' assets < <(find dist -maxdepth 1 -type f -print0 | sort -z)
 
           if [[ -n "${existing_release}" ]]; then
@@ -530,7 +519,7 @@ jobs:
           echo "successful=${canonical_successful}" >>"${GITHUB_OUTPUT}"
           echo "available=${canonical_available}" >>"${GITHUB_OUTPUT}"
 
-          write_release_notes "${canonical_successful}" "${canonical_available}"
+          write_release_notes "${canonical_available}"
           gh release edit "${NIGHTLY_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
@@ -540,6 +529,34 @@ jobs:
             --title "Nextcloud Native ${NIGHTLY_VERSION}"
 
           if [[ "${canonical_successful}" -ge 3 ]]; then
+            if tools/has-direct-linux-update-assets.sh "${canonical}"; then
+              tools/create-desktop-update-manifest.sh \
+                "${canonical}/desktop-update-manifest.json" \
+                nightly-v1 \
+                "${NIGHTLY_TAG}" \
+                "${NIGHTLY_VERSION}" \
+                "${NIGHTLY_VERSION_CODE}" \
+                "${{ needs.source.outputs.desktop-version }}" \
+                "${canonical}"
+              tools/verify-desktop-update-manifest-assets.sh \
+                "${canonical}/desktop-update-manifest.json" \
+                "${canonical}" \
+                "${GITHUB_REPOSITORY}" \
+                "${NIGHTLY_TAG}" \
+                nightly-v1 \
+                "${NIGHTLY_VERSION}" \
+                "${NIGHTLY_VERSION_CODE}" \
+                "${{ needs.source.outputs.desktop-version }}"
+              gh release upload "${NIGHTLY_TAG}" \
+                "${canonical}/desktop-update-manifest.json" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --clobber
+            elif [[ -f "${canonical}/desktop-update-manifest.json" ]]; then
+              gh release delete-asset "${NIGHTLY_TAG}" desktop-update-manifest.json \
+                --repo "${GITHUB_REPOSITORY}" \
+                --yes
+              rm "${canonical}/desktop-update-manifest.json"
+            fi
             mapfile -d '' canonical_apks < <(
               find "${canonical}" -maxdepth 1 -type f \
                 -name 'nextcloud-native-*-android.apk' -print0
@@ -616,7 +633,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
-      group: android-nightly-channel
+      group: app-nightly-channel
       cancel-in-progress: false
     permissions:
       contents: write
@@ -626,7 +643,7 @@ jobs:
         with:
           ref: ${{ needs.source.outputs.sha }}
 
-      - name: Advance the Android nightly channel
+      - name: Advance the app nightly channel
         env:
           GH_TOKEN: ${{ github.token }}
           NIGHTLY_SHA: ${{ needs.source.outputs.sha }}
@@ -634,17 +651,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p channel
-          if gh release download "${NIGHTLY_TAG}" \
+          gh release download "${NIGHTLY_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --pattern update-manifest.json \
-            --dir channel; then
-            tools/promote-android-update-channel.sh \
-              "${GITHUB_REPOSITORY}" \
-              channel-nightly \
-              "${NIGHTLY_TAG}" \
-              "${NIGHTLY_SHA}" \
-              channel/update-manifest.json
-          else
-            echo "This nightly has no Android package; the Android channel was not changed." \
-              >>"${GITHUB_STEP_SUMMARY}"
-          fi
+            --pattern '*update-manifest.json' \
+            --dir channel
+          android_manifest="-"
+          desktop_manifest="-"
+          [[ -f channel/update-manifest.json ]] && android_manifest=channel/update-manifest.json
+          [[ -f channel/desktop-update-manifest.json ]] && desktop_manifest=channel/desktop-update-manifest.json
+          tools/promote-app-update-channel.sh \
+            "${GITHUB_REPOSITORY}" \
+            channel-nightly \
+            "${NIGHTLY_TAG}" \
+            "${NIGHTLY_SHA}" \
+            "${android_manifest}" \
+            "${desktop_manifest}" \
+            1

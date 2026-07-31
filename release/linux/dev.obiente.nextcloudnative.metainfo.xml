@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.obiente.nextcloudnative</id>
+  <name>Nextcloud Native</name>
+  <summary>One native client for your complete Nextcloud account</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <developer id="dev.obiente">
+    <name>Obiente</name>
+  </developer>
+  <launchable type="desktop-id">nextcloudnative-NextcloudNative.desktop</launchable>
+  <provides>
+    <binary>NextcloudNative</binary>
+  </provides>
+  <url type="homepage">https://nc-native.obiente.dev/</url>
+  <url type="bugtracker">https://github.com/Obiente/nc-native/issues</url>
+  <url type="vcs-browser">https://github.com/Obiente/nc-native</url>
+  <categories>
+    <category>Network</category>
+    <category>FileTransfer</category>
+    <category>Utility</category>
+  </categories>
+  <description>
+    <p>
+      Nextcloud Native brings files, photos, media, collaboration, and installed
+      Nextcloud apps together in one coherent native desktop client.
+    </p>
+    <p>
+      It uses native controls and verified server capabilities instead of embedding
+      the web interface. Account data stays between this app and the Nextcloud
+      servers you choose.
+    </p>
+    <ul>
+      <li>Browse files, photos, media, activity, and collaboration apps.</li>
+      <li>Use native controls without embedding the web interface.</li>
+      <li>Adapt installed Nextcloud apps to reusable native workflows.</li>
+    </ul>
+  </description>
+  <screenshots>
+    <screenshot type="default">
+      <image type="source">https://nc-native.obiente.dev/screenshots/desktop-home.png</image>
+      <caption>A native desktop workspace for a complete Nextcloud account</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source">https://nc-native.obiente.dev/screenshots/photo-folder-browser-desktop.png</image>
+      <caption>Native photo and folder browsing</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source">https://nc-native.obiente.dev/screenshots/transfer-desktop-active.png</image>
+      <caption>Visible file transfer and synchronization progress</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source">https://nc-native.obiente.dev/screenshots/deck-board-desktop.png</image>
+      <caption>A native Nextcloud Deck board</caption>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.1.0-alpha.1" date="2026-07-25" type="development">
+      <description>
+        <p>First testing release of the native Android and desktop clients.</p>
+      </description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1" />
+</component>

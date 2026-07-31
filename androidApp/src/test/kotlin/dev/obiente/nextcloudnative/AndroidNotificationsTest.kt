@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative
 
+import android.app.NotificationManager
+import android.content.Intent
 import androidx.core.app.NotificationCompat
 import dev.obiente.nextcloudnative.app.ActivityNotificationDestination
 import dev.obiente.nextcloudnative.app.DynamicActivityNotificationPlan
@@ -50,6 +52,105 @@ class AndroidNotificationsTest {
         assertTrue(call.ongoing)
         assertTrue(transfer.ongoing)
         assertFalse(completed.ongoing)
+    }
+
+    @Test
+    fun appUpdatesUseTheirOwnChannelAndOpenTheReviewedUpdateFlow() {
+        val update = NextcloudNotificationEvent.AppUpdateAvailable(
+            id = 9,
+            accountKey = "device",
+            versionName = "0.2.0-alpha.1",
+            versionCode = 21,
+        ).notificationPolicy()
+
+        assertEquals(CHANNEL_APP_UPDATES, update.channelId)
+        assertEquals(NotificationCompat.CATEGORY_STATUS, update.category)
+        assertTrue(isAppUpdateReviewIntentAction("dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE"))
+        assertFalse(isAppUpdateReviewIntentAction(null))
+        assertFalse(isAppUpdateReviewIntentAction("dev.obiente.nextcloudnative.notification.open"))
+        assertEquals(
+            AppUpdateReviewState(requestCount = 1L, lastEventId = 21L),
+            nextAppUpdateReviewState(
+                restoredRequest = null,
+                restoredEventId = null,
+                intentAction = "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE",
+                intentEventId = 21L,
+            ),
+        )
+        assertEquals(
+            AppUpdateReviewState(requestCount = 5L, lastEventId = 21L),
+            nextAppUpdateReviewState(
+                restoredRequest = 4L,
+                restoredEventId = 20L,
+                intentAction = "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE",
+                intentEventId = 21L,
+            ),
+        )
+        assertEquals(
+            AppUpdateReviewState(requestCount = 4L, lastEventId = 21L),
+            nextAppUpdateReviewState(
+                restoredRequest = 4L,
+                restoredEventId = 21L,
+                intentAction = "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE",
+                intentEventId = 21L,
+            ),
+        )
+        assertEquals(
+            AppUpdateReviewState(requestCount = 4L, lastEventId = 20L),
+            nextAppUpdateReviewState(
+                restoredRequest = 4L,
+                restoredEventId = 20L,
+                intentAction = "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE",
+                intentEventId = null,
+            ),
+        )
+        assertEquals(
+            AppUpdateReviewState(requestCount = 1L, lastEventId = null),
+            nextAppUpdateReviewState(
+                restoredRequest = null,
+                restoredEventId = null,
+                intentAction = "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE",
+                intentEventId = null,
+            ),
+        )
+        assertTrue(NOTIFICATION_ACTIVITY_FLAGS and Intent.FLAG_ACTIVITY_CLEAR_TOP != 0)
+        assertTrue(NOTIFICATION_ACTIVITY_FLAGS and Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
+        assertTrue(
+            notificationDeliveryAllowed(
+                sdk = 33,
+                runtimePermissionGranted = true,
+                appNotificationsEnabled = true,
+                channelImportance = NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+        assertFalse(
+            notificationDeliveryAllowed(
+                sdk = 33,
+                runtimePermissionGranted = true,
+                appNotificationsEnabled = true,
+                channelImportance = NotificationManager.IMPORTANCE_NONE,
+            ),
+        )
+        assertTrue(
+            notificationPermissionAllowed(
+                runtimePermissionGranted = true,
+                appNotificationsEnabled = true,
+            ),
+        )
+        assertFalse(
+            notificationPermissionAllowed(
+                runtimePermissionGranted = true,
+                appNotificationsEnabled = false,
+            ),
+        )
+        assertFalse(
+            notificationDeliveryAllowed(
+                sdk = 33,
+                runtimePermissionGranted = true,
+                appNotificationsEnabled = false,
+                channelImportance = NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
     }
 
     @Test

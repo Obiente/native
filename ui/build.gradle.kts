@@ -1,8 +1,38 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.util.Base64
 
 val desktopArchitecture = System.getProperty("os.arch").lowercase()
 val ncDesktopPackageVersion = providers.gradleProperty("ncDesktopPackageVersion").get()
 val ncMacosPackageVersion = providers.gradleProperty("ncMacosPackageVersion").get()
+val ncVersionName = providers.gradleProperty("ncVersionName").get()
+val ncVersionCode = providers.gradleProperty("ncVersionCode").get()
+val ncDesktopReleaseBuild = providers.gradleProperty("ncDesktopReleaseBuild").orElse("false").get()
+val ncDirectDesktopPackageUpdates = providers.gradleProperty("ncDirectDesktopPackageUpdates").orElse("false").get()
+val linuxAppStreamMetadata = rootProject.layout.projectDirectory
+    .file("release/linux/dev.obiente.nextcloudnative.metainfo.xml")
+val linuxJpackageTemplates = rootProject.layout.projectDirectory.dir("release/linux/jpackage")
+val generatedJpackageResources = layout.buildDirectory.dir("generated/jpackage-resources")
+val debPackageDirectory = layout.buildDirectory.dir("compose/binaries/main/deb")
+val rpmPackageDirectory = layout.buildDirectory.dir("compose/binaries/main/rpm")
+val debPackageSucceededMarker = layout.buildDirectory.file("compose/tmp/packageDeb.succeeded")
+val rpmPackageSucceededMarker = layout.buildDirectory.file("compose/tmp/packageRpm.succeeded")
+
+val prepareLinuxJpackageResources by tasks.registering {
+    inputs.file(linuxAppStreamMetadata)
+    inputs.dir(linuxJpackageTemplates)
+    outputs.dir(generatedJpackageResources)
+    doLast {
+        val output = generatedJpackageResources.get().asFile
+        output.deleteRecursively()
+        val linuxOutput = output.resolve("linux").apply { mkdirs() }
+        val metadataBase64 = Base64.getEncoder()
+            .encodeToString(linuxAppStreamMetadata.asFile.readBytes())
+        linuxJpackageTemplates.asFile.listFiles().orEmpty().forEach { template ->
+            val content = template.readText().replace("APPSTREAM_XML_BASE64", metadataBase64)
+            linuxOutput.resolve(template.name).writeText(content)
+        }
+    }
+}
 val javafxClassifier = when {
     System.getProperty("os.name").startsWith("Mac", ignoreCase = true) &&
         desktopArchitecture in setOf("aarch64", "arm64") -> "mac-aarch64"
@@ -117,14 +147,27 @@ android {
 compose.desktop {
     application {
         mainClass = "dev.obiente.nextcloudnative.nativeui.preview.MainKt"
+        jvmArgs += listOf(
+            "-Ddev.obiente.nextcloudnative.versionName=$ncVersionName",
+            "-Ddev.obiente.nextcloudnative.versionCode=$ncVersionCode",
+            "-Ddev.obiente.nextcloudnative.packageVersion=$ncDesktopPackageVersion",
+            "-Ddev.obiente.nextcloudnative.releaseBuild=$ncDesktopReleaseBuild",
+            "-Ddev.obiente.nextcloudnative.directPackageUpdates=$ncDirectDesktopPackageUpdates",
+        )
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
             packageName = "NextcloudNative"
             packageVersion = ncDesktopPackageVersion
-
+            description = "One native client for your complete Nextcloud account"
+            vendor = "Obiente"
+            copyright = "Copyright 2026 Obiente"
+            licenseFile.set(rootProject.file("LICENSE"))
             linux {
                 iconFile.set(project.file("src/desktopMain/resources/nextcloud-native.png"))
+                shortcut = true
+                appCategory = "Network"
+                rpmLicenseType = "AGPL-3.0-or-later"
             }
             windows {
                 iconFile.set(project.file("src/desktopMain/resources/nextcloud-native.ico"))
@@ -133,6 +176,52 @@ compose.desktop {
                 packageVersion = ncMacosPackageVersion
             }
         }
+    }
+}
+
+val enrichDebAppStream by tasks.registering(Exec::class) {
+    inputs.file(linuxAppStreamMetadata)
+    doNotTrackState("Post-processes the packageDeb artifact in place.")
+    onlyIf { debPackageSucceededMarker.get().asFile.isFile }
+    commandLine(
+        "bash",
+        rootProject.file("tools/enrich-deb-appstream.sh"),
+        debPackageDirectory.get().asFile,
+        linuxAppStreamMetadata.asFile,
+        rootProject.file("LICENSE"),
+    )
+}
+
+val repackageRpmWithMetadata by tasks.registering(Exec::class) {
+    dependsOn(prepareLinuxJpackageResources)
+    inputs.dir(generatedJpackageResources)
+    inputs.file(rootProject.file("tools/repackage-rpm-with-metadata.sh"))
+    doNotTrackState("Rebuilds the packageRpm artifact with jpackage resource overrides.")
+    onlyIf { rpmPackageSucceededMarker.get().asFile.isFile }
+    commandLine(
+        "bash",
+        rootProject.file("tools/repackage-rpm-with-metadata.sh"),
+        rpmPackageDirectory.get().asFile,
+        layout.buildDirectory.file("compose/tmp/packageRpm.args.txt").get().asFile,
+        layout.buildDirectory.dir("compose/tmp/resources").get().asFile,
+        generatedJpackageResources.get().asFile.resolve("linux"),
+        File(System.getProperty("java.home"), "bin/jpackage"),
+        layout.buildDirectory.dir("compose/binaries/main/app/NextcloudNative").get().asFile,
+    )
+}
+
+tasks.matching { task -> task.name in setOf("packageDeb", "packageRpm") }.configureEach {
+    val marker = if (name == "packageDeb") debPackageSucceededMarker else rpmPackageSucceededMarker
+    doFirst { marker.get().asFile.delete() }
+    doLast {
+        marker.get().asFile.parentFile.mkdirs()
+        marker.get().asFile.writeText("succeeded\n")
+    }
+    if (name == "packageDeb") {
+        finalizedBy(enrichDebAppStream)
+    } else {
+        dependsOn(prepareLinuxJpackageResources, "createDistributable")
+        finalizedBy(repackageRpmWithMetadata)
     }
 }
 

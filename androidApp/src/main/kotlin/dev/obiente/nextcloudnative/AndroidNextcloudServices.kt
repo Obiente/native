@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContract
@@ -93,6 +94,8 @@ import dev.obiente.nextcloudnative.app.AndroidUpdateChannel
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallState
+import dev.obiente.nextcloudnative.app.AppUpdatePreferences
+import dev.obiente.nextcloudnative.app.AppUpdateRelease
 import dev.obiente.nextcloudnative.app.AppUpdateSupport
 import dev.obiente.nextcloudnative.app.ProjectNewsResult
 import dev.obiente.nextcloudnative.app.ProjectNewsImage
@@ -251,9 +254,11 @@ internal class AndroidNextcloudServices(
     context: Context,
     private val fileSyncRootPicker: AndroidFileSyncRootPicker? = null,
     private val localUploadPicker: AndroidLocalUploadPicker? = null,
+    private val requestPlatformPermissions: ((Array<String>) -> Boolean)? = null,
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
 ) : NextcloudPlatformServices {
     private val appContext = context.applicationContext
+    private val activity = context as? Activity
     private val preferences = appContext.getSharedPreferences("nextcloud_native", Context.MODE_PRIVATE)
     private val sessionCipher = SessionCipher()
     private val httpClient = OkHttpClient()
@@ -280,8 +285,12 @@ internal class AndroidNextcloudServices(
     private val fileSyncEngine = AndroidFileSyncEngine(appContext)
     private val mediaSyncFolderDetector = AndroidMediaSyncFolderDetector(appContext)
     private val externalFileHandoff = AndroidExternalFileHandoff(appContext)
-    private val platformCapabilities = AndroidPlatformCapabilities(appContext, context as? Activity)
-    private val projectContent = AndroidProjectContentClient(appContext, context as? Activity)
+    private val platformCapabilities = AndroidPlatformCapabilities(
+        context = appContext,
+        activity = activity,
+        requestPermissions = requestPlatformPermissions,
+    )
+    private val projectContent = AndroidProjectContentClient(appContext, activity)
     private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext)
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
 
@@ -310,16 +319,70 @@ internal class AndroidNextcloudServices(
 
     override fun loadAppUpdateChannel(): AndroidUpdateChannel = projectContent.updateChannel()
 
-    override fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean =
-        projectContent.saveUpdateChannel(channel)
+    override fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean {
+        val saved = projectContent.saveUpdateChannel(channel)
+        if (saved) AndroidAppUpdateWork.schedule(appContext, projectContent.updatePreferences())
+        return saved
+    }
 
-    override suspend fun checkForAppUpdate(channel: AndroidUpdateChannel): AppUpdateCheckResult =
-        withContext(Dispatchers.IO) { projectContent.checkForUpdate(channel) }
+    override fun loadAppUpdatePreferences(): AppUpdatePreferences =
+        projectContent.updatePreferences()
+
+    override fun saveAppUpdatePreferences(preferences: AppUpdatePreferences): Boolean {
+        projectContent.saveUpdatePreferences(preferences)
+        AndroidAppUpdateWork.schedule(appContext, preferences)
+        return true
+    }
+
+    override fun appUpdateNotificationDeliveryAllowed(): Boolean =
+        notificationDeliveryAllowed(appContext, CHANNEL_APP_UPDATES)
+
+    override fun requestAppUpdateNotificationDelivery(): Boolean {
+        if (!notificationPermissionAllowed(appContext)) {
+            return platformCapabilities.request(PlatformCapability.Notifications)
+        }
+        val host = activity ?: return false
+        host.startActivity(
+            Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, appContext.packageName)
+                putExtra(Settings.EXTRA_CHANNEL_ID, CHANNEL_APP_UPDATES)
+            },
+        )
+        return true
+    }
+
+    override fun observeAppUpdateCheckResult(): Flow<AppUpdateCheckResult?> =
+        projectContent.observeUpdateCheckResult()
+
+    override suspend fun checkForAppUpdate(
+        channel: AndroidUpdateChannel,
+        automatic: Boolean,
+    ): AppUpdateCheckResult = withContext(Dispatchers.IO) {
+        val updatePreferences = projectContent.updatePreferences()
+        if (
+            automatic &&
+            !automaticAndroidUpdateCheckAllowed(
+                preferences = updatePreferences,
+                networkMetered = isAndroidActiveNetworkMetered(appContext),
+            )
+        ) {
+            return@withContext AppUpdateCheckResult.Unavailable(projectContent.support())
+        }
+        val result = projectContent.checkForUpdate(channel)
+        if (automatic && result is AppUpdateCheckResult.Available) {
+            AndroidAppUpdateNotifier(appContext).notifyIfNeeded(
+                channel = channel,
+                update = result,
+                enabled = updatePreferences.notifications,
+            )
+        }
+        result
+    }
 
     override fun observeAppUpdateInstallState(): Flow<AppUpdateInstallState> =
         projectContent.observeUpdateState()
 
-    override suspend fun beginAppUpdate(release: AndroidDirectRelease): AppUpdateInstallResult =
+    override suspend fun beginAppUpdate(release: AppUpdateRelease): AppUpdateInstallResult =
         withContext(Dispatchers.IO) { projectContent.beginUpdate(release) }
 
     override fun cancelAppUpdate(): Boolean = projectContent.cancelUpdate()
