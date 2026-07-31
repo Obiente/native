@@ -145,6 +145,7 @@ const val MAX_MEDIA_PREVIEW_THUMBNAIL_BYTES = 256 * 1_024
 data class FileSyncPairSummary(
     val id: String,
     val localDisplayName: String,
+    val localRootPath: String? = null,
     val remoteRootPath: String,
     val configuration: FileSyncConfiguration,
     val readyCount: Int,
@@ -159,6 +160,7 @@ data class FileSyncPairSummary(
     init {
         require(id.isSafeFileSyncCenterText(256))
         require(localDisplayName.isSafeFileSyncCenterText(256))
+        require(localRootPath == null || localRootPath.isSafeFileSyncCenterText(2_048))
         if (remoteRootPath.isNotEmpty()) requireValidSyncPath(remoteRootPath)
         require(listOf(readyCount, runningCount, failedCount, skippedCount, completedCount).all { it >= 0 })
         require(conflicts.size <= 20_000)
@@ -216,11 +218,13 @@ sealed interface FileSyncCenterActionResult {
 
 fun FileSyncPair.toCenterSummary(
     localDisplayName: String,
+    localRootPath: String? = null,
     scheduleDescription: String? = null,
 ): FileSyncPairSummary =
     FileSyncPairSummary(
         id = id,
         localDisplayName = localDisplayName,
+        localRootPath = localRootPath,
         remoteRootPath = remoteRootPath,
         configuration = configuration,
         readyCount = workItems.count { it.state == FileSyncExecutionState.Ready },

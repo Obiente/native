@@ -30,6 +30,20 @@ enum class FileSyncPowerPolicy {
     Charging,
 }
 
+/**
+ * One ordered transfer-priority group. The first matching rule wins.
+ *
+ * Patterns use portable path globs: `*` and `?` match inside one path segment and `**` matches
+ * across directories. A pattern without `/` matches a name at any depth. Matching is deliberately
+ * case-insensitive so camera extensions such as `.RAF` and `.raf` share one policy on every
+ * platform; path identity itself remains case-preserving and platform-specific.
+ */
+data class FileSyncPriorityRule(val pattern: String) {
+    init {
+        requireValidFileSyncGlob(pattern)
+    }
+}
+
 enum class SyncEntryKind { File, Directory }
 
 data class LocalSyncEntry(
@@ -110,10 +124,109 @@ data class FileSyncConfiguration(
     val deviceLabel: String,
     val networkPolicy: FileSyncNetworkPolicy = FileSyncNetworkPolicy.AnyConnection,
     val powerPolicy: FileSyncPowerPolicy = FileSyncPowerPolicy.BatteryNotLow,
+    val selectedPaths: List<String> = emptyList(),
+    val ignoredPatterns: List<String> = emptyList(),
+    val priorityRules: List<FileSyncPriorityRule> = emptyList(),
 ) {
     init {
         require(deviceLabel.isNotBlank())
+        require(selectedPaths.size <= MAX_FILE_SYNC_SELECTION_PATHS)
+        require(ignoredPatterns.size <= MAX_FILE_SYNC_FILTER_PATTERNS)
+        require(priorityRules.size <= MAX_FILE_SYNC_PRIORITY_RULES)
+        selectedPaths.forEach(::requireValidSyncPath)
+        ignoredPatterns.forEach(::requireValidFileSyncGlob)
+        require(selectedPaths.distinct() == selectedPaths) { "Selective sync paths must be unique." }
+        require(ignoredPatterns.distinct() == ignoredPatterns) { "Ignore patterns must be unique." }
+        require(priorityRules.distinct() == priorityRules) { "Priority rules must be unique." }
     }
+}
+
+/** True when [relativePath] belongs to the configured selective-sync view and is not ignored. */
+fun FileSyncConfiguration.includesSyncPath(
+    relativePath: String,
+    kind: SyncEntryKind,
+): Boolean {
+    requireValidSyncPath(relativePath)
+    val pathSegments = relativePath.split('/')
+    val pathAndParents = pathSegments.indices.map { endIndex ->
+        pathSegments.take(endIndex + 1).joinToString("/")
+    }
+    if (ignoredPatterns.any { pattern ->
+            pathAndParents.any { candidate -> fileSyncGlobMatches(pattern, candidate) }
+        }
+    ) {
+        return false
+    }
+    if (selectedPaths.isEmpty()) return true
+    return selectedPaths.any { selected ->
+        relativePath == selected ||
+            relativePath.startsWith("$selected/") ||
+            (kind == SyncEntryKind.Directory && selected.startsWith("$relativePath/"))
+    }
+}
+
+/** Zero-based ordered priority group, with unmatched files after every configured group. */
+fun FileSyncConfiguration.fileSyncPriority(relativePath: String): Int {
+    requireValidSyncPath(relativePath)
+    return priorityRules.indexOfFirst { fileSyncGlobMatches(it.pattern, relativePath) }
+        .takeIf { it >= 0 }
+        ?: priorityRules.size
+}
+
+fun fileSyncGlobMatches(pattern: String, relativePath: String): Boolean {
+    requireValidFileSyncGlob(pattern)
+    requireValidSyncPath(relativePath)
+    val patternSegments = pattern.lowercase().split('/')
+    val pathSegments = relativePath.lowercase().split('/')
+    if (patternSegments.size == 1) {
+        return pathSegments.any { segment -> matchFileSyncSegment(patternSegments.single(), segment) }
+    }
+    val memo = mutableMapOf<Pair<Int, Int>, Boolean>()
+    fun match(patternIndex: Int, pathIndex: Int): Boolean = memo.getOrPut(patternIndex to pathIndex) {
+        when {
+            patternIndex == patternSegments.size -> pathIndex == pathSegments.size
+            patternSegments[patternIndex] == "**" ->
+                match(patternIndex + 1, pathIndex) ||
+                    (pathIndex < pathSegments.size && match(patternIndex, pathIndex + 1))
+            pathIndex == pathSegments.size -> false
+            else -> matchFileSyncSegment(patternSegments[patternIndex], pathSegments[pathIndex]) &&
+                match(patternIndex + 1, pathIndex + 1)
+        }
+    }
+    return match(0, 0)
+}
+
+private fun matchFileSyncSegment(pattern: String, value: String): Boolean {
+    var previous = BooleanArray(value.length + 1)
+    previous[0] = true
+    pattern.forEach { token ->
+        val current = BooleanArray(value.length + 1)
+        when (token) {
+            '*' -> {
+                current[0] = previous[0]
+                for (index in 1..value.length) {
+                    current[index] = previous[index] || current[index - 1]
+                }
+            }
+            '?' -> {
+                for (index in 1..value.length) current[index] = previous[index - 1]
+            }
+            else -> {
+                for (index in 1..value.length) {
+                    current[index] = previous[index - 1] && token == value[index - 1]
+                }
+            }
+        }
+        previous = current
+    }
+    return previous[value.length]
+}
+
+internal fun requireValidFileSyncGlob(pattern: String) {
+    require(pattern.isNotBlank() && pattern.length <= MAX_FILE_SYNC_GLOB_LENGTH)
+    require(!pattern.startsWith('/') && !pattern.endsWith('/'))
+    require('\\' !in pattern && pattern.none(Char::isISOControl))
+    require(pattern.split('/').all { it.isNotBlank() && it != "." && it != ".." })
 }
 
 sealed interface FileSyncOperation {
@@ -390,6 +503,10 @@ private fun requireUniqueSyncPaths(paths: List<String>, source: String) {
 }
 
 private const val SHA_256_HEX_LENGTH = 64
+internal const val MAX_FILE_SYNC_SELECTION_PATHS = 256
+internal const val MAX_FILE_SYNC_FILTER_PATTERNS = 256
+internal const val MAX_FILE_SYNC_PRIORITY_RULES = 64
+internal const val MAX_FILE_SYNC_GLOB_LENGTH = 1_024
 
 internal fun requireValidSyncPath(path: String) {
     require(path.isNotBlank() && !path.startsWith('/') && !path.endsWith('/'))

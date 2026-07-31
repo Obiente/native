@@ -32,7 +32,9 @@ internal class DesktopFileSyncLocalTree(root: File) {
         require(!Files.isSymbolicLink(this.root)) { "A symbolic link cannot be used as a sync root." }
     }
 
-    fun scan(): List<DesktopLocalSyncDocument> {
+    fun scan(
+        includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
+    ): List<DesktopLocalSyncDocument> {
         recoverOwnedStagingFiles()
         val result = ArrayList<DesktopLocalSyncDocument>()
         Files.walkFileTree(
@@ -44,7 +46,11 @@ internal class DesktopFileSyncLocalTree(root: File) {
                     require(!Files.isSymbolicLink(dir)) {
                         "Folder sync stopped because ${relative(dir)} is a symbolic link."
                     }
-                    if (dir != root) add(dir, attrs, SyncEntryKind.Directory)
+                    if (dir != root) {
+                        val relative = relative(dir)
+                        if (!includes(relative, SyncEntryKind.Directory)) return FileVisitResult.SKIP_SUBTREE
+                        add(dir, attrs, SyncEntryKind.Directory)
+                    }
                     return FileVisitResult.CONTINUE
                 }
 
@@ -55,7 +61,7 @@ internal class DesktopFileSyncLocalTree(root: File) {
                     require(attrs.isRegularFile) {
                         "Folder sync stopped because ${relative(file)} is not a regular file."
                     }
-                    add(file, attrs, SyncEntryKind.File)
+                    if (includes(relative(file), SyncEntryKind.File)) add(file, attrs, SyncEntryKind.File)
                     return FileVisitResult.CONTINUE
                 }
 

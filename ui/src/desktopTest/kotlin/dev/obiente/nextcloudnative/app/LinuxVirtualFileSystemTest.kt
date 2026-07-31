@@ -1,0 +1,208 @@
+package dev.obiente.nextcloudnative.app
+
+import jnr.ffi.Runtime
+import kotlin.test.Test
+import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import ru.serce.jnrfuse.ErrorCodes
+import ru.serce.jnrfuse.struct.FileStat
+import ru.serce.jnrfuse.struct.FuseFileInfo
+
+class LinuxVirtualFileSystemTest {
+    @Test
+    fun `open read seek and release use one generation pinned handle`() {
+        val bytes = "nextcloud virtual file".encodeToByteArray()
+        var opened = 0
+        var closed = 0
+        val backend = fixtureBackend(bytes) { opened += 1; { closed += 1 } }
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        val runtime = Runtime.getSystemRuntime()
+        val fileInfo = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val output = runtime.memoryManager.allocateDirect(8)
+
+        assertEquals(0, fileSystem.open("/Photos/example.raf", fileInfo))
+        assertEquals(1, opened)
+        assertEquals(7, fileSystem.read("/Photos/example.raf", output, 7L, 10L, fileInfo))
+        val read = ByteArray(7).also { destination -> output.get(0L, destination, 0, destination.size) }
+        assertContentEquals(bytes.copyOfRange(10, 17), read)
+        assertEquals(0, fileSystem.release("/Photos/example.raf", fileInfo))
+        assertEquals(1, closed)
+    }
+
+    @Test
+    fun `metadata is visible without hydrating file content`() {
+        var opened = 0
+        val backend = fixtureBackend("content".encodeToByteArray()) { opened += 1; {} }
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        val stat = FileStat(Runtime.getSystemRuntime())
+
+        assertEquals(0, fileSystem.getattr("/Photos/example.raf", stat))
+        assertEquals(7L, stat.st_size.longValue())
+        assertTrue(FileStat.S_ISREG(stat.st_mode.intValue()))
+        assertEquals(0, opened)
+        assertEquals(-ErrorCodes.EINVAL(), fileSystem.getattr("/Photos/../secret", stat))
+    }
+
+    @Test
+    fun `created files stage random writes and become remote on flush`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        val runtime = Runtime.getSystemRuntime()
+        val fileInfo = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val input = runtime.memoryManager.allocateDirect(8)
+        input.put(0L, "RAF-data".encodeToByteArray(), 0, 8)
+
+        assertEquals(0, fileSystem.create("/Photos/new.raf", 0L, fileInfo))
+        assertEquals(8, fileSystem.write("/Photos/new.raf", input, 8L, 0L, fileInfo))
+        assertEquals(0, fileSystem.getattr("/Photos/new.raf", FileStat(runtime)))
+        assertEquals(null, backend.resolve("Photos/new.raf"))
+
+        assertEquals(0, fileSystem.fsync("/Photos/new.raf", 0, fileInfo))
+        assertContentEquals("RAF-data".encodeToByteArray(), backend.fileBytes("Photos/new.raf"))
+        assertEquals(0, fileSystem.release("/Photos/new.raf", fileInfo))
+    }
+
+    @Test
+    fun `directory and namespace mutations validate parents`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+
+        assertEquals(-ErrorCodes.ENOENT(), fileSystem.mkdir("/Missing/Child", 0L))
+        assertEquals(0, fileSystem.mkdir("/Photos/Trips", 0L))
+        assertEquals(0, fileSystem.rename("/Photos/Trips", "/Archive"))
+        assertTrue(backend.resolve("Archive")?.directory == true)
+        assertEquals(0, fileSystem.rmdir("/Archive"))
+        assertEquals(null, backend.resolve("Archive"))
+    }
+
+    private fun fixtureBackend(
+        bytes: ByteArray,
+        onOpen: () -> () -> Unit,
+    ): LinuxVirtualFileBackend {
+        val root = LinuxVirtualFileNode("", "Nextcloud", true, 0L, "root")
+        val photos = LinuxVirtualFileNode("Photos", "Photos", true, 0L, "folder-etag")
+        val file = LinuxVirtualFileNode(
+            "Photos/example.raf",
+            "example.raf",
+            false,
+            bytes.size.toLong(),
+            "file-etag",
+        )
+        return object : LinuxVirtualFileBackend {
+            override fun resolve(path: String): LinuxVirtualFileNode? = when (path.trim('/')) {
+                "" -> root
+                "Photos" -> photos
+                "Photos/example.raf" -> file
+                else -> null
+            }
+
+            override fun list(path: String): List<LinuxVirtualFileNode> = when (path.trim('/')) {
+                "" -> listOf(photos)
+                "Photos" -> listOf(file)
+                else -> emptyList()
+            }
+
+            override fun open(node: LinuxVirtualFileNode): LinuxVirtualFileReadHandle {
+                val close = onOpen()
+                return object : LinuxVirtualFileReadHandle {
+                    override val size: Long = bytes.size.toLong()
+
+                    override fun read(offset: Long, length: Int): ByteArray =
+                        bytes.copyOfRange(offset.toInt(), offset.toInt() + length)
+
+                    override fun close() = close()
+                }
+            }
+
+            override fun openWrite(
+                path: String,
+                existing: LinuxVirtualFileNode?,
+                truncate: Boolean,
+            ): LinuxVirtualFileWriteHandle = error("Write access is not used by this read fixture.")
+
+            override fun createDirectory(path: String) = error("Not used by this read fixture.")
+            override fun delete(node: LinuxVirtualFileNode) = error("Not used by this read fixture.")
+            override fun move(node: LinuxVirtualFileNode, destinationPath: String) =
+                error("Not used by this read fixture.")
+        }
+    }
+
+    private class MutableFixtureBackend : LinuxVirtualFileBackend {
+        private val nodes = linkedMapOf(
+            "" to LinuxVirtualFileNode("", "Nextcloud", true, 0L, "root"),
+            "Photos" to LinuxVirtualFileNode("Photos", "Photos", true, 0L, "photos-etag"),
+        )
+        private val contents = linkedMapOf<String, ByteArray>()
+
+        override fun resolve(path: String): LinuxVirtualFileNode? = nodes[path.trim('/')]
+
+        override fun list(path: String): List<LinuxVirtualFileNode> {
+            val parent = path.trim('/')
+            return nodes.values.filter { node ->
+                node.path.isNotEmpty() && node.path.substringBeforeLast('/', "") == parent
+            }
+        }
+
+        override fun open(node: LinuxVirtualFileNode): LinuxVirtualFileReadHandle = error("Not used.")
+
+        override fun openWrite(
+            path: String,
+            existing: LinuxVirtualFileNode?,
+            truncate: Boolean,
+        ): LinuxVirtualFileWriteHandle {
+            var stagedBytes = if (truncate) byteArrayOf() else contents[path]?.copyOf() ?: byteArrayOf()
+            return object : LinuxVirtualFileWriteHandle {
+                override val size: Long get() = stagedBytes.size.toLong()
+
+                override fun read(offset: Long, length: Int): ByteArray =
+                    stagedBytes.copyOfRange(offset.toInt(), offset.toInt() + length)
+
+                override fun write(offset: Long, bytes: ByteArray): Int {
+                    val required = offset.toInt() + bytes.size
+                    if (required > stagedBytes.size) stagedBytes = stagedBytes.copyOf(required)
+                    bytes.copyInto(stagedBytes, offset.toInt())
+                    return bytes.size
+                }
+
+                override fun truncate(size: Long) {
+                    stagedBytes = stagedBytes.copyOf(size.toInt())
+                }
+
+                override fun flush() {
+                    contents[path] = stagedBytes.copyOf()
+                    nodes[path] = LinuxVirtualFileNode(
+                        path,
+                        path.substringAfterLast('/'),
+                        false,
+                        stagedBytes.size.toLong(),
+                        "etag-${stagedBytes.size}",
+                    )
+                }
+
+                override fun close() = Unit
+            }
+        }
+
+        override fun createDirectory(path: String) {
+            nodes[path] = LinuxVirtualFileNode(path, path.substringAfterLast('/'), true, 0L, "dir-etag")
+        }
+
+        override fun delete(node: LinuxVirtualFileNode) {
+            nodes.remove(node.path)
+            contents.remove(node.path)
+        }
+
+        override fun move(node: LinuxVirtualFileNode, destinationPath: String) {
+            nodes.remove(node.path)
+            val content = contents.remove(node.path)
+            nodes[destinationPath] = node.copy(
+                path = destinationPath,
+                name = destinationPath.substringAfterLast('/'),
+            )
+            if (content != null) contents[destinationPath] = content
+        }
+
+        fun fileBytes(path: String): ByteArray = requireNotNull(contents[path])
+    }
+}

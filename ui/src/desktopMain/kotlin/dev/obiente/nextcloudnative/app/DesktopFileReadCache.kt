@@ -6,6 +6,7 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.util.prefs.Preferences
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -13,6 +14,14 @@ internal data class DesktopCachedFileContent(
     val bytes: ByteArray,
     val mimeType: String?,
     val etag: String,
+)
+
+internal data class DesktopVirtualFileCacheSummary(
+    val policy: VirtualFileCachePolicy,
+    val cachedBytes: Long,
+    val reclaimableBytes: Long,
+    val entryCount: Int,
+    val availableFreeBytes: Long,
 )
 
 /**
@@ -27,6 +36,8 @@ internal class DesktopFileReadCache(
     private val maximumContentBytes: Long = DEFAULT_MAXIMUM_CONTENT_BYTES,
     private val maximumEntryBytes: Long = DEFAULT_MAXIMUM_ENTRY_BYTES,
 ) {
+    private val preferences = Preferences.userRoot()
+        .node("dev/obiente/nextcloudnative/virtual-file-cache")
     init {
         require(maximumContentBytes > 0L)
         require(maximumEntryBytes in 1L..maximumContentBytes)
@@ -88,6 +99,19 @@ internal class DesktopFileReadCache(
         val bytes = blob.readBytes()
         if (bytes.size.toLong() != record.size) return null
         if (sha256Hex(bytes) != record.sha256) return null
+        val current = load(accountId)
+        save(
+            accountId,
+            current.copy(
+                content = current.content.map { cached ->
+                    if (cached.path == normalized) {
+                        cached.copy(lastAccessedAtEpochMillis = System.currentTimeMillis())
+                    } else {
+                        cached
+                    }
+                },
+            ),
+        )
         return DesktopCachedFileContent(bytes, record.mimeType, record.etag)
     }
 
@@ -125,11 +149,77 @@ internal class DesktopFileReadCache(
                     blobName = blobName,
                     sha256 = sha256Hex(content.bytes),
                     storedAtEpochMillis = nowEpochMillis,
+                    lastAccessedAtEpochMillis = nowEpochMillis,
                 ),
         ).bounded()
         save(accountId, index)
-        return index.content.any { cached -> cached.path == normalized && cached.blobName == blobName }
+        applyEviction(accountId, requestedBytesToFree = 0L, nowEpochMillis = nowEpochMillis)
+        return load(accountId).content.any { cached ->
+            cached.path == normalized && cached.blobName == blobName
+        }
     }
+
+    @Synchronized
+    fun loadPolicy(): VirtualFileCachePolicy = VirtualFileCachePolicy(
+        automaticCleanup = preferences.getBoolean(KEY_AUTOMATIC_CLEANUP, true),
+        maximumCacheBytes = preferences.getLong(
+            KEY_MAXIMUM_CACHE_BYTES,
+            DEFAULT_VIRTUAL_FILE_CACHE_BYTES,
+        ).optionalPositiveOrDefault(DEFAULT_VIRTUAL_FILE_CACHE_BYTES),
+        minimumFreeSpaceBytes = preferences.getLong(
+            KEY_MINIMUM_FREE_BYTES,
+            DEFAULT_VIRTUAL_FILE_MINIMUM_FREE_BYTES,
+        ).coerceAtLeast(0L),
+        unusedFileAgeMillis = preferences.getLong(
+            KEY_UNUSED_FILE_AGE,
+            DEFAULT_VIRTUAL_FILE_UNUSED_AGE_MILLIS,
+        ).optionalPositiveOrDefault(DEFAULT_VIRTUAL_FILE_UNUSED_AGE_MILLIS),
+    )
+
+    private fun Long.optionalPositiveOrDefault(defaultValue: Long): Long? = when {
+        this == UNLIMITED_SENTINEL -> null
+        this > 0L -> this
+        else -> defaultValue
+    }
+
+    @Synchronized
+    fun savePolicy(policy: VirtualFileCachePolicy) {
+        preferences.putBoolean(KEY_AUTOMATIC_CLEANUP, policy.automaticCleanup)
+        preferences.putLong(KEY_MAXIMUM_CACHE_BYTES, policy.maximumCacheBytes ?: UNLIMITED_SENTINEL)
+        preferences.putLong(KEY_MINIMUM_FREE_BYTES, policy.minimumFreeSpaceBytes)
+        preferences.putLong(KEY_UNUSED_FILE_AGE, policy.unusedFileAgeMillis ?: UNLIMITED_SENTINEL)
+        root.listFiles().orEmpty()
+            .filter { it.isDirectory && it.name.isSha256Hex() }
+            .forEach { applyEviction(it.name, requestedBytesToFree = 0L) }
+    }
+
+    @Synchronized
+    fun virtualFileSummary(
+        accountId: String,
+        nowEpochMillis: Long = System.currentTimeMillis(),
+    ): DesktopVirtualFileCacheSummary {
+        val entries = load(accountId).content.toVirtualFileEntries(accountId)
+        val plan = planVirtualFileEviction(
+            entries = entries,
+            policy = loadPolicy(),
+            availableFreeBytes = root.usableSpace.coerceAtLeast(0L),
+            nowEpochMillis = nowEpochMillis,
+        )
+        return DesktopVirtualFileCacheSummary(
+            policy = loadPolicy(),
+            cachedBytes = plan.cachedBytes,
+            reclaimableBytes = plan.reclaimableBytes,
+            entryCount = entries.size,
+            availableFreeBytes = root.usableSpace.coerceAtLeast(0L),
+        )
+    }
+
+    @Synchronized
+    fun freeUpVirtualFiles(
+        accountId: String,
+        requestedBytesToFree: Long,
+        nowEpochMillis: Long = System.currentTimeMillis(),
+    ): VirtualFileEvictionPlan = applyEviction(accountId, requestedBytesToFree, nowEpochMillis)
 
     @Synchronized
     fun invalidate(accountId: String, path: String) {
@@ -162,11 +252,17 @@ internal class DesktopFileReadCache(
         require(boundedListings.sumOf { it.files.size } <= MAX_TOTAL_METADATA_ENTRIES) {
             "The Files metadata cache exceeds its entry limit."
         }
+        val policyBudget = if (loadPolicy().automaticCleanup) {
+            loadPolicy().maximumCacheBytes ?: maximumContentBytes
+        } else {
+            maximumContentBytes
+        }
+        val effectiveMaximum = minOf(maximumContentBytes, policyBudget)
         var retainedBytes = 0L
         val retainedContent = content
-            .sortedByDescending(CachedContentV1::storedAtEpochMillis)
+            .sortedByDescending(CachedContentV1::lastAccessedAtEpochMillis)
             .filter { entry ->
-                if (retainedBytes + entry.size > maximumContentBytes) {
+                if (retainedBytes + entry.size > effectiveMaximum) {
                     false
                 } else {
                     retainedBytes += entry.size
@@ -201,6 +297,47 @@ internal class DesktopFileReadCache(
             .forEach(File::delete)
     }
 
+    private fun applyEviction(
+        accountId: String,
+        requestedBytesToFree: Long,
+        nowEpochMillis: Long = System.currentTimeMillis(),
+    ): VirtualFileEvictionPlan {
+        require(requestedBytesToFree >= 0L)
+        val current = load(accountId)
+        val plan = planVirtualFileEviction(
+            entries = current.content.toVirtualFileEntries(accountId),
+            policy = loadPolicy(),
+            availableFreeBytes = root.usableSpace.coerceAtLeast(0L),
+            nowEpochMillis = nowEpochMillis,
+            requestedBytesToFree = requestedBytesToFree,
+        )
+        val byPath = current.content.associateBy(CachedContentV1::path)
+        val removed = plan.evictions.mapNotNullTo(mutableSetOf()) { eviction ->
+            val record = byPath[eviction.key.relativePath] ?: return@mapNotNullTo null
+            if ("sha256:${record.sha256}" != eviction.expectedLocalRevision) return@mapNotNullTo null
+            val blob = File(accountDirectory(accountId), record.blobName)
+            if (!blob.exists() || blob.delete()) record.path else null
+        }
+        if (removed.isNotEmpty()) {
+            save(accountId, current.copy(content = current.content.filterNot { it.path in removed }))
+        }
+        return plan
+    }
+
+    private fun List<CachedContentV1>.toVirtualFileEntries(accountId: String): List<VirtualFileCacheEntry> =
+        map { record ->
+            VirtualFileCacheEntry(
+                key = FileOfflineKey(accountId, record.path),
+                remoteRevision = record.etag,
+                localRevision = "sha256:${record.sha256}",
+                sizeBytes = record.size,
+                cachedAtEpochMillis = record.storedAtEpochMillis,
+                lastAccessedAtEpochMillis = record.lastAccessedAtEpochMillis,
+                retention = VirtualFileRetention.Automatic,
+                activity = VirtualFileActivity.Idle,
+            )
+        }
+
     private fun accountDirectory(accountId: String): File {
         require(accountId.isSha256Hex())
         return File(root, accountId)
@@ -233,6 +370,7 @@ internal class DesktopFileReadCache(
             require(content.blobName.removeSuffix(".blob").isSha256Hex())
             require(content.sha256.isSha256Hex())
             require(content.storedAtEpochMillis >= 0L)
+            require(content.lastAccessedAtEpochMillis >= content.storedAtEpochMillis)
         }
     }
 
@@ -270,8 +408,13 @@ internal class DesktopFileReadCache(
         const val MAX_FILE_NAME_LENGTH = 1_024
         const val MAX_ETAG_LENGTH = 4_096
         const val MAX_MIME_TYPE_LENGTH = 512
-        const val DEFAULT_MAXIMUM_ENTRY_BYTES = 16L * 1024L * 1024L
-        const val DEFAULT_MAXIMUM_CONTENT_BYTES = 128L * 1024L * 1024L
+        const val DEFAULT_MAXIMUM_ENTRY_BYTES = 512L * 1024L * 1024L
+        const val DEFAULT_MAXIMUM_CONTENT_BYTES = 256L * 1024L * 1024L * 1024L
+        const val KEY_AUTOMATIC_CLEANUP = "automatic-cleanup"
+        const val KEY_MAXIMUM_CACHE_BYTES = "maximum-cache-bytes"
+        const val KEY_MINIMUM_FREE_BYTES = "minimum-free-bytes"
+        const val KEY_UNUSED_FILE_AGE = "unused-file-age"
+        const val UNLIMITED_SENTINEL = -1L
     }
 }
 
@@ -335,6 +478,7 @@ private data class CachedContentV1(
     val blobName: String,
     val sha256: String,
     val storedAtEpochMillis: Long,
+    val lastAccessedAtEpochMillis: Long = storedAtEpochMillis,
 )
 
 private val cacheJson = Json {

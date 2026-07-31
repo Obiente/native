@@ -27,7 +27,10 @@ private val pngSignature = byteArrayOf(
     0x0a,
 )
 
-internal val preservedMarketingCaptureFiles: Set<String> = emptySet()
+internal val preservedMarketingCaptureFiles: Set<String> = setOf(
+    // Captured by the native X11 tray harness rather than the headless Compose scene renderer.
+    "file-sync-tray-linux.png",
+)
 
 internal fun declaredCaptureFiles(manifestPath: Path): Set<String> {
     if (!Files.exists(manifestPath, LinkOption.NOFOLLOW_LINKS)) return emptySet()

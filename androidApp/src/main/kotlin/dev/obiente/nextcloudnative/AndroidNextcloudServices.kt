@@ -50,6 +50,13 @@ import dev.obiente.nextcloudnative.app.FileSyncCenterSnapshot
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
+import dev.obiente.nextcloudnative.app.VirtualFileCachePolicy
+import dev.obiente.nextcloudnative.app.VirtualFilePlatformIntegration
+import dev.obiente.nextcloudnative.app.VirtualFileProviderState
+import dev.obiente.nextcloudnative.app.VirtualFileStorageActionResult
+import dev.obiente.nextcloudnative.app.VirtualFileStorageSnapshot
+import dev.obiente.nextcloudnative.app.VirtualFileStorageSupport
+import dev.obiente.nextcloudnative.app.formatVirtualFileBytes
 import dev.obiente.nextcloudnative.app.MediaSyncFolderDiscovery
 import dev.obiente.nextcloudnative.app.MAX_MEDIA_BACKUP_STATUS_PATHS
 import dev.obiente.nextcloudnative.app.MediaBackupStatus
@@ -267,6 +274,7 @@ internal class AndroidNextcloudServices(
     )
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
+    private val virtualFileCache = AndroidVirtualFileCache(appContext)
     private val dynamicApiReadCache = DynamicApiResponseCache(File(appContext.cacheDir, "dynamic-api-v1"))
     private val nativeMediaPreviewCache = AndroidNativeMediaPreviewCache(
         File(appContext.cacheDir, "native-media-previews-v1"),
@@ -286,6 +294,7 @@ internal class AndroidNextcloudServices(
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
 
     override val supportsFileOfflineStorage: Boolean = true
+    override val supportsVirtualFileStorage: Boolean = true
     override val supportsRecursiveFileOfflineStorage: Boolean = true
     override val supportsBidirectionalFileSync: Boolean = fileSyncRootPicker != null
     override val externalFileHandoffSupport: ExternalFileHandoffSupport = ExternalFileHandoffSupport.Available(
@@ -650,6 +659,98 @@ internal class AndroidNextcloudServices(
         key: FileOfflineKey,
     ): FileOfflineCenterActionResult = withContext(Dispatchers.IO) {
         fileOfflineRepository.removeCenterItem(session, userId, key)
+    }
+
+    override suspend fun loadVirtualFileStorage(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageSnapshot = withContext(Dispatchers.IO) {
+        val cache = virtualFileCache.summary(session)
+        val offline = fileOfflineRepository.loadCenter(session)
+        val documentWritebacks = androidDocumentPendingWritebacks(appContext, session)
+        if (documentWritebacks.isNotEmpty()) {
+            val webDav = NextcloudDocumentWebDav(cloudMutationsAllowed = appContext.cloudMutationGate())
+            documentWritebacks.forEach { pending ->
+                runCatching {
+                    webDav.replaceFileAtomically(
+                        session = session,
+                        userId = userId,
+                        path = pending.remotePath,
+                        source = pending.staging,
+                        expectedEtag = pending.expectedRemoteEtag,
+                    )
+                }.onSuccess { pending.complete() }
+            }
+        }
+        val pendingWritebacks = androidDocumentPendingWritebackCount(appContext, session)
+        VirtualFileStorageSnapshot(
+            support = VirtualFileStorageSupport.Available,
+            integration = VirtualFilePlatformIntegration.AndroidDocumentsProvider,
+            policy = cache.policy,
+            cachedBytes = cache.cachedBytes,
+            reclaimableBytes = cache.reclaimableBytes,
+            pinnedBytes = offline.storageUsage?.usedBytes ?: 0L,
+            hydratedFileCount = cache.entryCount,
+            pinnedFileCount = offline.items.count {
+                it.availability == FileOfflineAvailability.Available
+            },
+            availableFreeBytes = cache.availableFreeBytes,
+            storageCapacityBytes = appContext.cacheDir.totalSpace.takeIf { it > 0L },
+            limitations = listOf(
+                "System Files hydrates remote content on open and reuses complete cached generations.",
+                "Pinned offline files are durable and are never removed by automatic cache cleanup.",
+            ) + if (pendingWritebacks > 0) {
+                listOf("$pendingWritebacks System Files edit(s) are retained with recovery metadata after failed writeback.")
+            } else {
+                emptyList()
+            },
+            providerState = VirtualFileProviderState.Active,
+            providerLocation = "System Files / Nextcloud Native",
+            pendingWritebackCount = pendingWritebacks,
+        )
+    }
+
+    override suspend fun activateVirtualFileProvider(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Completed(
+        "Nextcloud Native is already available in System Files.",
+    )
+
+    override suspend fun deactivateVirtualFileProvider(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Rejected(
+        "Android manages the System Files provider while this account is signed in.",
+    )
+
+    override suspend fun saveVirtualFileCachePolicy(
+        session: NextcloudSession,
+        userId: String,
+        policy: VirtualFileCachePolicy,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        virtualFileCache.savePolicy(policy)
+        VirtualFileStorageActionResult.Completed("Virtual file storage rules saved.")
+    }
+
+    override suspend fun freeUpVirtualFileSpace(
+        session: NextcloudSession,
+        userId: String,
+        requestedBytes: Long,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        require(requestedBytes >= 0L)
+        val before = virtualFileCache.summary(session).cachedBytes
+        virtualFileCache.freeUp(session, requestedBytes)
+        val after = virtualFileCache.summary(session).cachedBytes
+        val freed = (before - after).coerceAtLeast(0L)
+        VirtualFileStorageActionResult.Completed(
+            message = if (freed > 0L) {
+                "Freed ${formatVirtualFileBytes(freed)} of disposable virtual file content."
+            } else {
+                "No disposable virtual file content could be freed. Pinned and active files were kept."
+            },
+            freedBytes = freed,
+        )
     }
 
     override suspend fun chooseFileSyncLocalRoot(initialRootHint: String?): FileSyncLocalRoot? =

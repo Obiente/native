@@ -101,6 +101,9 @@ kotlin {
             implementation(libs.jse.spi.opus)
             implementation(libs.jse.spi.mp3)
             implementation(libs.jse.spi.aac)
+            implementation("com.github.serceman:jnr-fuse:0.5.8")
+            implementation("net.java.dev.jna:jna:5.19.1")
+            implementation("net.java.dev.jna:jna-platform:5.19.1")
         }
     }
 }
@@ -151,6 +154,20 @@ tasks.register<JavaExec>("captureMarketingScreenshots") {
     )
     mainClass.set(
         "dev.obiente.nextcloudnative.nativeui.preview.MarketingCaptureMainKt",
+    )
+    workingDir(rootProject.projectDir)
+}
+
+tasks.register<JavaExec>("captureFileSyncTrayVisualQa") {
+    group = "verification"
+    description = "Captures the custom desktop tray popup with isolated synthetic sync activity."
+    dependsOn(desktopCaptureCompilation.compileTaskProvider)
+    classpath(
+        desktopCaptureCompilation.output.allOutputs,
+        desktopCaptureCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set(
+        "dev.obiente.nextcloudnative.nativeui.preview.FileSyncTrayVisualQaMainKt",
     )
     workingDir(rootProject.projectDir)
 }
