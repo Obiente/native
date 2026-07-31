@@ -34,6 +34,11 @@ fun retainedAppUpdateCheckResult(
 ): AppUpdateCheckResult? =
     previousResult.takeIf { previousChannel == selectedChannel }
 
+internal fun unhandledAppUpdateReviewRequest(
+    requested: Long,
+    handled: Long,
+): Long? = requested.takeIf { it > 0L && it > handled }
+
 fun appUpdateChannelPresentation(
     support: AppUpdateSupport,
     selectedChannel: AndroidUpdateChannel,
@@ -51,7 +56,7 @@ fun appUpdateChannelPresentation(
             AppUpdateChannelOptionPresentation(
                 channel = channel,
                 label = channel.label(),
-                description = channel.description(),
+                description = channel.description(support.channel),
                 selected = channel == selectedChannel,
                 enabled = selectorEnabled && channel.available,
                 availabilityLabel = if (channel.available) null else "Coming later",
@@ -67,11 +72,19 @@ private fun AndroidUpdateChannel.label(): String = when (this) {
     AndroidUpdateChannel.Stable -> "Stable"
 }
 
-private fun AndroidUpdateChannel.description(): String = when (this) {
+private fun AndroidUpdateChannel.description(distribution: AppDistributionChannel): String = when (this) {
     AndroidUpdateChannel.Alpha ->
-        "Signed prerelease builds for broader testing. Updates arrive with reviewed alpha releases."
+        if (distribution == AppDistributionChannel.DirectApk) {
+            "Signed prerelease APKs for broader testing. Updates arrive with reviewed alpha releases."
+        } else {
+            "Prerelease builds for broader testing. Updates arrive with reviewed alpha releases."
+        }
     AndroidUpdateChannel.Nightly ->
-        "The latest signed build from main. It changes frequently and may be less stable."
+        if (distribution == AppDistributionChannel.DirectApk) {
+            "The latest signed APK from main. It changes frequently and may be less stable."
+        } else {
+            "The latest build from main. It changes frequently and may be less stable."
+        }
     AndroidUpdateChannel.Beta ->
         "Feature-complete testing builds with fewer changes between updates."
     AndroidUpdateChannel.Stable ->

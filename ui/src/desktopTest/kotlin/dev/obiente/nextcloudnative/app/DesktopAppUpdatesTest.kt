@@ -53,10 +53,33 @@ class DesktopAppUpdatesTest {
 
             assertEquals(AppDistributionChannel.DirectDesktopPackage, release.support().channel)
             assertTrue(release.support().canCheckDirectUpdates)
+            assertTrue(release.support().explanation.contains("checksum"))
+            assertFalse(release.support().explanation.contains("signed", ignoreCase = true))
             assertEquals(AppDistributionChannel.Development, development.support().channel)
             assertFalse(development.support().canCheckDirectUpdates)
+            assertEquals(6L * 60L * 60L * 1_000L, DESKTOP_APP_UPDATE_CHECK_INTERVAL_MILLIS)
         } finally {
             node.removeNode()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun completedUpdatePackagesAreEvictedWithoutTouchingPartialsOrUnrelatedFiles() {
+        val directory = Files.createTempDirectory("desktop-update-cleanup-test").toFile()
+        try {
+            val rpm = directory.resolve("nextcloud-native-old.rpm").apply { writeText("rpm") }
+            val deb = directory.resolve("nextcloud-native-old.deb").apply { writeText("deb") }
+            val partial = directory.resolve("nextcloud-native-new.rpm.part").apply { writeText("partial") }
+            val unrelated = directory.resolve("README.txt").apply { writeText("keep") }
+
+            assertEquals(2, cleanupCompletedDesktopUpdatePackages(directory))
+            assertFalse(rpm.exists())
+            assertFalse(deb.exists())
+            assertTrue(partial.isFile)
+            assertTrue(unrelated.isFile)
+            assertEquals(0, cleanupCompletedDesktopUpdatePackages(directory))
+        } finally {
             directory.deleteRecursively()
         }
     }

@@ -4,6 +4,7 @@ import java.awt.Desktop
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
@@ -86,7 +87,8 @@ internal class DesktopAppUpdater(
             currentVersionCode = buildIdentity.versionCode,
             canCheckDirectUpdates = canUpdate,
             explanation = if (canUpdate) {
-                "This Linux package checks the selected signed release channel and uses your system installer."
+                "This Linux package checks the selected release channel, matches downloads to its advertised " +
+                    "checksum, and uses your system installer."
             } else {
                 "Development and unsupported desktop packages are updated through their distribution workflow."
             },
@@ -174,7 +176,10 @@ internal class DesktopAppUpdater(
             check(desktopRelease.asset.platform == selectedTarget.platform)
             check(desktopRelease.asset.format == selectedTarget.format)
             check(desktopRelease.asset.architecture == selectedTarget.architecture)
-            updateDirectory.mkdirs()
+            check(updateDirectory.isDirectory || updateDirectory.mkdirs()) {
+                "Could not create the desktop app-update cache."
+            }
+            cleanupCompletedDesktopUpdatePackages(updateDirectory)
             val packageFile = File(updateDirectory, desktopRelease.asset.url.substringAfterLast('/'))
             val temporary = File(updateDirectory, "${packageFile.name}.part")
             temporary.delete()
@@ -228,7 +233,7 @@ internal class DesktopAppUpdater(
                 downloadedBytes = 0,
                 canResume = false,
             )
-            return AppUpdateInstallResult.Cancelled
+            return AppUpdateInstallResult.Cancelled(canResume = false)
         } catch (cancelled: CancellationException) {
             activeCall?.cancel()
             throw cancelled
@@ -241,7 +246,7 @@ internal class DesktopAppUpdater(
                     downloadedBytes = 0,
                     canResume = false,
                 )
-                return AppUpdateInstallResult.Cancelled
+                return AppUpdateInstallResult.Cancelled(canResume = false)
             }
             mutableInstallState.value = AppUpdateInstallState.Failed(
                 desktopRelease.versionName,
@@ -274,6 +279,26 @@ internal class DesktopAppUpdater(
         const val KEY_UPDATE_NOTIFICATIONS = "update-notifications"
     }
 }
+
+internal fun cleanupCompletedDesktopUpdatePackages(directory: File): Int {
+    if (!directory.isDirectory) return 0
+    var removed = 0
+    directory.listFiles().orEmpty().forEach { candidate ->
+        val extension = candidate.extension.lowercase()
+        if (
+            extension in DESKTOP_UPDATE_PACKAGE_EXTENSIONS &&
+            Files.isRegularFile(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)
+        ) {
+            check(candidate.delete()) { "Could not clear an older desktop update package." }
+            removed += 1
+        }
+    }
+    return removed
+}
+
+internal val DESKTOP_APP_UPDATE_CHECK_INTERVAL_MILLIS: Long = TimeUnit.HOURS.toMillis(6)
+
+private val DESKTOP_UPDATE_PACKAGE_EXTENSIONS = setOf("deb", "rpm", "msi", "dmg", "pkg")
 
 internal fun buildDesktopUpdateHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS)

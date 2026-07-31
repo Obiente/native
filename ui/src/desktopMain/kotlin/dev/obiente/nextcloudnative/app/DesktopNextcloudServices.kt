@@ -490,6 +490,9 @@ class DesktopNextcloudServices(
         return true
     }
 
+    override fun appUpdateAutomaticCheckIntervalMillis(): Long =
+        DESKTOP_APP_UPDATE_CHECK_INTERVAL_MILLIS
+
     override fun observeAppUpdateCheckResult(): Flow<AppUpdateCheckResult?> =
         appUpdater.observeCheckResult()
 

@@ -57,7 +57,7 @@
   <releases>
     <release version="0.1.0-alpha.1" date="2026-07-25" type="development">
       <description>
-        <p>First signed testing release of the native Android and desktop clients.</p>
+        <p>First testing release of the native Android and desktop clients.</p>
       </description>
     </release>
   </releases>

@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -698,25 +699,63 @@ fun NextcloudNativeApp(
     appUpdateReviewRequest: Long = 0L,
 ) {
     var themePreference by remember { mutableStateOf(services.loadThemePreference()) }
+    var handledAppUpdateReviewRequest by rememberSaveable { mutableStateOf(0L) }
     val darkTheme = isNextcloudDarkTheme(themePreference)
+    val pendingAppUpdateReviewRequest = unhandledAppUpdateReviewRequest(
+        requested = appUpdateReviewRequest,
+        handled = handledAppUpdateReviewRequest,
+    )
+
+    LaunchedEffect(services) {
+        if (services.loadAppUpdatePreferences().automaticChecks) {
+            services.checkForAppUpdate(automatic = true)
+        }
+        val intervalMillis = services.appUpdateAutomaticCheckIntervalMillis()
+            ?: return@LaunchedEffect
+        require(intervalMillis > 0L) { "The automatic app-update interval must be positive." }
+        while (true) {
+            delay(intervalMillis)
+            if (services.loadAppUpdatePreferences().automaticChecks) {
+                services.checkForAppUpdate(automatic = true)
+            }
+        }
+    }
+
+    LaunchedEffect(services, pendingAppUpdateReviewRequest) {
+        if (pendingAppUpdateReviewRequest != null) {
+            services.checkForAppUpdate(automatic = false)
+        }
+    }
 
     NextcloudNativeTheme(darkTheme = darkTheme) {
         NextcloudAppBackground {
             var session by remember { mutableStateOf(services.loadSession()) }
             if (session == null) {
-                LoginScreen(
-                    services = services,
-                    onLoggedIn = { authenticated ->
-                        services.saveSession(authenticated)
-                        session = authenticated
-                    },
-                )
+                if (pendingAppUpdateReviewRequest != null) {
+                    LoggedOutAppUpdateReviewScreen(
+                        services = services,
+                        onContinueToSignIn = {
+                            handledAppUpdateReviewRequest = pendingAppUpdateReviewRequest
+                        },
+                    )
+                } else {
+                    LoginScreen(
+                        services = services,
+                        onLoggedIn = { authenticated ->
+                            services.saveSession(authenticated)
+                            session = authenticated
+                        },
+                    )
+                }
             } else {
                 AuthenticatedApp(
                     services = services,
                     session = requireNotNull(session),
                     presentation = presentation,
-                    appUpdateReviewRequest = appUpdateReviewRequest,
+                    appUpdateReviewRequest = pendingAppUpdateReviewRequest ?: 0L,
+                    onAppUpdateReviewHandled = { request ->
+                        handledAppUpdateReviewRequest = maxOf(handledAppUpdateReviewRequest, request)
+                    },
                     themePreference = themePreference,
                     onThemePreferenceChanged = { selected ->
                         services.saveThemePreference(selected)
@@ -895,6 +934,7 @@ private fun AuthenticatedApp(
     session: NextcloudSession,
     presentation: NextcloudPresentation,
     appUpdateReviewRequest: Long,
+    onAppUpdateReviewHandled: (Long) -> Unit,
     themePreference: ThemePreference,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
     onLoggedOut: () -> Unit,
@@ -950,17 +990,11 @@ private fun AuthenticatedApp(
         services.observeAppUpdateCheckResult()
     }.collectAsState(null)
 
-    LaunchedEffect(services) {
-        val updatePreferences = services.loadAppUpdatePreferences()
-        if (updatePreferences.automaticChecks) {
-            services.checkForAppUpdate(automatic = true)
-        }
-    }
-
     LaunchedEffect(appUpdateReviewRequest) {
         if (appUpdateReviewRequest > 0) {
             screen = Screen.Root
             destination = NextcloudDestination.Settings
+            onAppUpdateReviewHandled(appUpdateReviewRequest)
         }
     }
 
@@ -1542,7 +1576,11 @@ private fun AppUpdateAvailableBanner(
             Column(modifier = Modifier.weight(1f)) {
                 Text("Nextcloud Native ${release.versionName} is available", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Review the verified package before installing.",
+                    if (release is AndroidDirectRelease) {
+                        "Review the certificate-verified APK before installing."
+                    } else {
+                        "Review the downloaded package before opening the system installer."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -9720,6 +9758,35 @@ private fun ProjectNewsArticleScreen(
 }
 
 @Composable
+private fun LoggedOutAppUpdateReviewScreen(
+    services: NextcloudPlatformServices,
+    onContinueToSignIn: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
+        ProductHeader(title = "App update", showSettings = false)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+        ) {
+            item {
+                Text(
+                    "Review this app update without connecting a Nextcloud account.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            item { AppUpdateSettingsCard(services) }
+            item {
+                OutlinedButton(onClick = onContinueToSignIn) {
+                    Text("Continue to sign in")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
     val scope = rememberCoroutineScope()
     val support = remember(services) { services.appUpdateSupport() }
@@ -9748,8 +9815,12 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
             installMessage = when (val install = services.beginAppUpdate(release)) {
                 AppUpdateInstallResult.ConfirmationOpened ->
                     "The system installer opened the update confirmation."
-                AppUpdateInstallResult.Cancelled ->
-                    "Download paused. You can resume it without starting over."
+                is AppUpdateInstallResult.Cancelled ->
+                    if (install.canResume) {
+                        "Download paused. You can resume it without starting over."
+                    } else {
+                        "Download stopped. The next attempt will start from the beginning."
+                    }
                 is AppUpdateInstallResult.PermissionRequired -> install.message
                 is AppUpdateInstallResult.Rejected -> install.message
             }
@@ -9872,11 +9943,20 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
             if (channelPresentation.selectorVisible) {
                 UpdatePreferenceRow(
                     label = "Check automatically",
-                    description = "Check the selected channel in the background without downloading packages.",
+                    description = if (support.channel == AppDistributionChannel.DirectDesktopPackage) {
+                        "Check the selected channel periodically while Nextcloud Native is running."
+                    } else {
+                        "Check the selected channel in the background without downloading packages."
+                    },
                     checked = updatePreferences.automaticChecks,
                     onCheckedChange = { enabled ->
                         val updated = updatePreferences.copy(automaticChecks = enabled)
-                        if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
+                        if (services.saveAppUpdatePreferences(updated)) {
+                            updatePreferences = updated
+                            if (enabled) {
+                                scope.launch { services.checkForAppUpdate(automatic = true) }
+                            }
+                        }
                     },
                 )
                 if (support.channel == AppDistributionChannel.DirectApk) {
@@ -9947,7 +10027,11 @@ private fun AppUpdateSettingsCard(services: NextcloudPlatformServices) {
                         is AppUpdateInstallState.Verifying -> {
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                             Text(
-                                "Download complete. Verifying package and signing certificate...",
+                                if (release is AndroidDirectRelease) {
+                                    "Download complete. Verifying package and signing certificate..."
+                                } else {
+                                    "Download complete. Checking the package checksum..."
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -10039,7 +10123,16 @@ private fun UpdatePreferenceRow(
     onCheckedChange: (Boolean) -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Switch,
+                onValueChange = onCheckedChange,
+            )
+            .semantics(mergeDescendants = true) {}
+            .padding(vertical = NextcloudSpacing.Small),
         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -10054,7 +10147,7 @@ private fun UpdatePreferenceRow(
         Switch(
             checked = checked,
             enabled = enabled,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = null,
         )
     }
 }

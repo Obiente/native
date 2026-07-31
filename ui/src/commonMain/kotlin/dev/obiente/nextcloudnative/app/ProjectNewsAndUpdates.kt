@@ -223,7 +223,7 @@ sealed interface AppUpdateCheckResult {
 
 sealed interface AppUpdateInstallResult {
     data object ConfirmationOpened : AppUpdateInstallResult
-    data object Cancelled : AppUpdateInstallResult
+    data class Cancelled(val canResume: Boolean) : AppUpdateInstallResult
     data class PermissionRequired(val message: String) : AppUpdateInstallResult
     data class Rejected(val message: String) : AppUpdateInstallResult
 }

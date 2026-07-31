@@ -384,7 +384,9 @@ internal class AndroidProjectContentClient(
                 downloadedBytes = retainedBytes,
                 canResume = retainedBytes in 1 until release.apkSize,
             )
-            AppUpdateInstallResult.Cancelled
+            AppUpdateInstallResult.Cancelled(
+                canResume = retainedBytes in 1 until release.apkSize,
+            )
         } catch (cancelled: CancellationException) {
             activeUpdateCall?.cancel()
             val retainedBytes = settleUpdatePartial(
