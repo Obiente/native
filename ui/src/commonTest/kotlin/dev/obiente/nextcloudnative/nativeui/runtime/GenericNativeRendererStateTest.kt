@@ -33,6 +33,55 @@ import kotlin.test.assertTrue
 
 class GenericNativeRendererStateTest {
     @Test
+    fun collectionSearchMatchesMeaningfulRecordContentAndIgnoresTechnicalFields() {
+        val resource = ResourceSpec(
+            id = "entries",
+            name = "Entries",
+            confidence = Confidence.high,
+            fields = listOf(
+                field("id", FieldKind.integer),
+                field("title", FieldKind.string),
+                field("description", FieldKind.string),
+                field("categoryId", FieldKind.integer),
+                field("sortOrder", FieldKind.integer),
+            ),
+        )
+        val record = NativeRecord(
+            id = "server-record-91",
+            values = mapOf(
+                "id" to "91",
+                "title" to "Weekend groceries",
+                "description" to "Fresh fruit and bread",
+                "categoryId" to "742",
+                "sortOrder" to "1200",
+            ),
+            displayValues = mapOf("description" to "Fresh fruit and bread"),
+        )
+
+        assertTrue(nativeRecordMatchesCollectionQuery(resource, record, "weekend bread"))
+        assertTrue(nativeRecordMatchesCollectionQuery(resource, record, "FRUIT"))
+        assertFalse(nativeRecordMatchesCollectionQuery(resource, record, "742"))
+        assertFalse(nativeRecordMatchesCollectionQuery(resource, record, "1200"))
+        assertFalse(nativeRecordMatchesCollectionQuery(resource, record, "server-record-91"))
+    }
+
+    @Test
+    fun formHidesOptionalServerOrderingButKeepsRequiredOrderingInputs() {
+        val visible = nativeFormDisplayFields(
+            listOf(
+                field("title", FieldKind.string, required = true),
+                field("sortOrder", FieldKind.integer),
+                field("position", FieldKind.integer),
+                field("displayIndex", FieldKind.integer),
+                field("rank", FieldKind.integer, required = true),
+                field("quantity", FieldKind.integer),
+            ),
+        )
+
+        assertEquals(listOf("title", "rank", "quantity"), visible.map(FieldSpec::id))
+    }
+
+    @Test
     fun formColorOptionsProduceOrdinaryOpaqueArgbValues() {
         val colorField = FieldSpec(
             id = "color",

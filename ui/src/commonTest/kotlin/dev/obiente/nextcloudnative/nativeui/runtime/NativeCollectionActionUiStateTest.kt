@@ -92,6 +92,34 @@ class NativeCollectionActionUiStateTest {
     }
 
     @Test
+    fun `direct drag movement can cross multiple rows without losing identities`() {
+        assertEquals(
+            listOf("second", "third", "fourth", "first"),
+            moveNativeCollectionRecordToIndex(
+                orderedRecordIds = listOf("first", "second", "third", "fourth"),
+                recordId = "first",
+                targetIndex = 3,
+            ),
+        )
+        assertEquals(
+            listOf("fourth", "first", "second", "third"),
+            moveNativeCollectionRecordToIndex(
+                orderedRecordIds = listOf("first", "second", "third", "fourth"),
+                recordId = "fourth",
+                targetIndex = 0,
+            ),
+        )
+        assertEquals(
+            listOf("first", "second"),
+            moveNativeCollectionRecordToIndex(
+                orderedRecordIds = listOf("first", "second"),
+                recordId = "missing",
+                targetIndex = 1,
+            ),
+        )
+    }
+
+    @Test
     fun `reorder draft restores a complete permutation of the current planned identities`() {
         val currentPlan = listOf("first", "second", "third")
         val savedDraft = mutableListOf("third", "first", "second")

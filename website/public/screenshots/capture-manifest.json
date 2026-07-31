@@ -34,6 +34,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicMutationRefresh.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeMemoryCache.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntime.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicRecordImagePreview.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExifOrientation.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExistingFileShareEditDraft.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExistingFileShareManager.kt",
@@ -209,7 +210,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "63ba7406572b71015c8cd07a89ee35c575fc626b506508fdfc923e68888cc56d",
+    "captureSourceSha256": "322bb64603f49da1306a7750045e63b47a62e20cefadafebb6560fd35474bbc4",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {
@@ -280,7 +281,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "ddbe82d0dc42a3902f41897231147402d7e3b6d0c0b51a15ce69ff1d2cf40202"
+            "sha256": "8aba3ae82b211387439723435fb8af40a0486310e0ec35ded04caa2908ded902"
         },
         {
             "scenario": "adaptive-dynamic-data-mobile",
@@ -294,7 +295,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "304a7dea161c51ec61978764db46d69fbf9194476fe7ae05b8c900b645fe59c7"
+            "sha256": "153aebca72b92210570f440f454f7d51f6f98f5f71a9249ba42ad3ec89fcad30"
         },
         {
             "scenario": "adaptive-dynamic-collection-mobile",
@@ -308,7 +309,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "849dbda0b56d984944f77b7d547d03b9bf3aaf0ac6de2d96ce6138445d65f796"
+            "sha256": "e05ed47483587d9b4eeaf2ccd7beb04c855be957fb5979401e0e639feb438f25"
         },
         {
             "scenario": "adaptive-dynamic-context-menu-mobile",
@@ -322,7 +323,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "e483aa2640fc4df5c905c1a79af01c522cc2fa8c7ffc511433bd730329551080"
+            "sha256": "67d639ef91ab1fb4322ac71e54a3eebf4550a9bef11c772a7b312662cef24151"
         },
         {
             "scenario": "photo-timeline-revalidation-error-mobile",

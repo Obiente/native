@@ -23,12 +23,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -65,6 +69,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -74,6 +79,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.boundsInWindow
@@ -99,6 +105,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragHandle
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 import dev.obiente.nextcloudnative.app.design.resolveBoardDragVerticalLane
 import dev.obiente.nextcloudnative.nativeui.model.ActionEffect
@@ -119,6 +126,7 @@ import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputSpec
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -134,6 +142,15 @@ fun interface NativeFileFieldPicker {
 
 fun interface NativeImageLoader {
     suspend fun load(relativePath: String): ImageBitmap?
+}
+
+data class NativeRecordImagePreview(
+    val image: ImageBitmap,
+    val contentDescription: String,
+)
+
+fun interface NativeRecordImageLoader {
+    suspend fun load(resource: ResourceSpec, record: NativeRecord): NativeRecordImagePreview?
 }
 
 data class NativeCollectionBatchRelationLoadRequest(
@@ -210,6 +227,7 @@ fun GenericNativeAppScreen(
     onInlineActionSucceeded: ((ActionSpec) -> Unit)? = null,
     showCollectionCreateAction: Boolean = false,
     imageLoader: NativeImageLoader? = null,
+    recordImageLoader: NativeRecordImageLoader? = null,
     onLoadMore: (() -> Unit)? = null,
     loadingMore: Boolean = false,
     loadMoreError: String? = null,
@@ -245,6 +263,68 @@ fun GenericNativeAppScreen(
         nestedBoard != null -> GenericNativeSurface.Board
         else -> view.genericSurface(presentedResource, presentedRecords)
     }
+    val searchableCollection = state is NativeScreenState.Ready &&
+        presentedRecords.size > 1 &&
+        presentedSurface in setOf(
+            GenericNativeSurface.List,
+            GenericNativeSurface.Grid,
+            GenericNativeSurface.Table,
+        )
+    val collectionSearchContextKey = remember(datasetContext) {
+        buildString {
+            append(datasetContext.parentResourceId.orEmpty())
+            append('\u0000')
+            append(datasetContext.parentRecord?.id.orEmpty())
+            datasetContext.bindingValues.toSortedMap().forEach { (key, value) ->
+                append('\u0000')
+                append(key)
+                append('=')
+                append(value)
+            }
+        }
+    }
+    var collectionQuery by rememberSaveable(
+        schema.app.id,
+        view.id,
+        collectionSearchContextKey,
+    ) { mutableStateOf("") }
+    val visiblePresentedRecords = remember(
+        presentedResource,
+        presentedRecords,
+        collectionQuery,
+        searchableCollection,
+    ) {
+        if (!searchableCollection || collectionQuery.isBlank() || presentedResource == null) {
+            presentedRecords
+        } else {
+            presentedRecords.filter { record ->
+                nativeRecordMatchesCollectionQuery(
+                    resource = presentedResource,
+                    record = record,
+                    query = collectionQuery,
+                )
+            }
+        }
+    }
+    LaunchedEffect(
+        collectionQuery,
+        visiblePresentedRecords.size,
+        presentedRecords.size,
+        onLoadMore,
+        loadingMore,
+        loadMoreError,
+    ) {
+        if (
+            searchableCollection &&
+            collectionQuery.isNotBlank() &&
+            visiblePresentedRecords.isEmpty() &&
+            onLoadMore != null &&
+            !loadingMore &&
+            loadMoreError == null
+        ) {
+            onLoadMore()
+        }
+    }
     var pendingRecordFormActionToken by rememberSaveable(schema.app.id, view.id) {
         mutableStateOf<String?>(null)
     }
@@ -261,9 +341,6 @@ fun GenericNativeAppScreen(
         mutableStateOf<String?>(null)
     }
     var pendingCollectionBatchActionId by rememberSaveable(schema.app.id, view.id) {
-        mutableStateOf<String?>(null)
-    }
-    var pendingCollectionReorderActionId by rememberSaveable(schema.app.id, view.id) {
         mutableStateOf<String?>(null)
     }
     val recordCommandsInFlight = remember(schema, view.id) { mutableSetOf<String>() }
@@ -424,10 +501,6 @@ fun GenericNativeAppScreen(
     val pendingCollectionBatchAction = pendingCollectionBatchActionId?.let { actionId ->
         collectionBatchPlans.singleOrNull { plan -> plan.action.id == actionId }
     }
-    val pendingCollectionReorderAction = pendingCollectionReorderActionId?.let { actionId ->
-        collectionActionCapabilities.reorder
-            ?.takeIf { plan -> plan.action.id == actionId }
-    }
     LaunchedEffect(
         pendingCollectionCommandActionId,
         collectionActionCapabilities.commands.map { plan -> plan.action.id },
@@ -451,14 +524,6 @@ fun GenericNativeAppScreen(
             actionId = plan.action.id,
             resourceId = requireNotNull(resource).id,
         )
-    }
-    LaunchedEffect(
-        pendingCollectionReorderActionId,
-        collectionActionCapabilities.reorder?.action?.id,
-    ) {
-        if (pendingCollectionReorderActionId != null && pendingCollectionReorderAction == null) {
-            pendingCollectionReorderActionId = null
-        }
     }
     val pendingRecordFormAction = pendingRecordFormActionToken
         ?.let(::decodeRestorableNativeRecordFormAction)
@@ -559,6 +624,35 @@ fun GenericNativeAppScreen(
         contentColor = MaterialTheme.colorScheme.onBackground,
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
+            if (
+                state is NativeScreenState.Ready &&
+                (
+                    searchableCollection ||
+                    persistentCollectionCreate != null ||
+                        collectionActionCapabilities.commands.isNotEmpty() ||
+                        collectionBatchPlans.isNotEmpty()
+                    )
+            ) {
+                GenericCollectionCommandBar(
+                    resourceName = presentedResource?.name ?: resource?.name.orEmpty(),
+                    searchQuery = collectionQuery,
+                    onSearchQueryChanged = if (searchableCollection) {
+                        { query -> collectionQuery = query }
+                    } else {
+                        null
+                    },
+                    createLabel = collectionCreatePlan?.action?.label,
+                    onCreate = persistentCollectionCreate,
+                    commands = collectionActionCapabilities.commands,
+                    batches = collectionBatchPlans,
+                    onCommand = { plan -> pendingCollectionCommandActionId = plan.action.id },
+                    onBatch = { plan ->
+                        if (formMutationRecovery?.blocksSubmission != true) {
+                            pendingCollectionBatchActionId = plan.action.id
+                        }
+                    },
+                )
+            }
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when {
             presentedResource == null -> GenericRendererError("This view references an unknown resource.")
@@ -595,11 +689,29 @@ fun GenericNativeAppScreen(
                     onCreate = openCollectionCreate,
                 )
             }
+            state is NativeScreenState.Ready &&
+                searchableCollection &&
+                visiblePresentedRecords.isEmpty() -> {
+                if (loadingMore || onLoadMore != null || loadMoreError != null) {
+                    GenericRendererSearchPagingState(
+                        query = collectionQuery,
+                        loading = loadingMore || (onLoadMore != null && loadMoreError == null),
+                        error = loadMoreError,
+                        onRetry = onLoadMore,
+                        onClear = { collectionQuery = "" },
+                    )
+                } else {
+                    GenericRendererNoSearchResults(
+                        query = collectionQuery,
+                        onClear = { collectionQuery = "" },
+                    )
+                }
+            }
             state is NativeScreenState.Ready -> when (presentedSurface) {
                 GenericNativeSurface.List -> GenericRecordCollection(
                     schema = schema,
                     resource = presentedResource,
-                    records = presentedRecords,
+                    records = visiblePresentedRecords,
                     datasetContext = datasetContext,
                     actionExecutor = actionExecutor,
                     onSelectRecord = onSelectRecord,
@@ -609,8 +721,23 @@ fun GenericNativeAppScreen(
                     onCommandRecord = executeRecordCommand,
                     onCommandFormRecord = openRecordCommandForm,
                     imageLoader = imageLoader,
+                    reorder = collectionActionCapabilities.reorder.takeIf {
+                        collectionQuery.isBlank()
+                    },
+                    authoritativeRecordsKey = NativeAuthoritativeRecordsKey(presentedRecords),
+                    onLoadMore = onLoadMore,
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
                 )
-                GenericNativeSurface.Grid -> GenericRecordGrid(presentedResource, presentedRecords, onSelectRecord)
+                GenericNativeSurface.Grid -> GenericRecordGrid(
+                    presentedResource,
+                    visiblePresentedRecords,
+                    onSelectRecord,
+                    recordImageLoader,
+                    onLoadMore,
+                    loadingMore,
+                    loadMoreError,
+                )
                 GenericNativeSurface.Board -> GenericRecordBoard(
                     schema = schema,
                     resource = presentedResource,
@@ -638,17 +765,23 @@ fun GenericNativeAppScreen(
                     imageLoader,
                     audioPlayer,
                     mediaArtworkResolver,
+                    onLoadMore,
+                    loadingMore,
+                    loadMoreError,
                 )
                 GenericNativeSurface.Insights -> GenericInsightCollection(presentedResource, presentedRecords, onSelectRecord)
                 GenericNativeSurface.Table -> GenericTableCollection(
                     schema,
                     view,
                     presentedResource,
-                    presentedRecords,
+                    visiblePresentedRecords,
                     datasetContext,
                     actionExecutor,
                     onSelectRecord,
                     onInlineActionSucceeded,
+                    onLoadMore,
+                    loadingMore,
+                    loadMoreError,
                 )
                 GenericNativeSurface.Detail -> GenericRecordDetail(
                     schema = schema,
@@ -665,66 +798,6 @@ fun GenericNativeAppScreen(
                 GenericNativeSurface.Form -> Unit
             }
             }
-            }
-            if (
-                state is NativeScreenState.Ready &&
-                (
-                    persistentCollectionCreate != null ||
-                    collectionActionCapabilities.commands.isNotEmpty() ||
-                        collectionBatchPlans.isNotEmpty() ||
-                        collectionActionCapabilities.reorder != null
-                    )
-            ) {
-                GenericCollectionActionBar(
-                    resourceId = requireNotNull(resource).id,
-                    createLabel = collectionCreatePlan?.action?.label,
-                    onCreate = persistentCollectionCreate,
-                    commands = collectionActionCapabilities.commands,
-                    batches = collectionBatchPlans,
-                    reorder = collectionActionCapabilities.reorder,
-                    onCommand = { plan -> pendingCollectionCommandActionId = plan.action.id },
-                    onBatch = { plan ->
-                        if (formMutationRecovery?.blocksSubmission != true) {
-                            pendingCollectionBatchActionId = plan.action.id
-                        }
-                    },
-                    onReorder = { plan -> pendingCollectionReorderActionId = plan.action.id },
-                )
-            }
-            if (state is NativeScreenState.Ready && onLoadMore != null) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shape = RoundedCornerShape(NextcloudRadii.Pill),
-                    shadowElevation = 4.dp,
-                ) {
-                    Column(
-                        modifier = Modifier.padding(
-                            horizontal = NextcloudSpacing.Medium,
-                            vertical = NextcloudSpacing.Small,
-                        ),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-                    ) {
-                        loadMoreError?.let { message ->
-                            Text(
-                                message,
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        Button(onClick = onLoadMore, enabled = !loadingMore) {
-                            if (loadingMore) {
-                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                                Text("Loading...", modifier = Modifier.padding(start = NextcloudSpacing.Small))
-                            } else {
-                                Text(if (loadMoreError == null) "Load more" else "Try again")
-                            }
-                        }
-                    }
-                }
             }
         }
     }
@@ -864,67 +937,38 @@ fun GenericNativeAppScreen(
             },
         )
     }
-    pendingCollectionReorderAction?.let { plan ->
-        GenericCollectionReorderDialog(
-            plan = plan,
-            resource = requireNotNull(resource),
-            records = readyRecords,
-            actionExecutor = actionExecutor,
-            onDismiss = { pendingCollectionReorderActionId = null },
-            onActionSucceeded = { action ->
-                pendingCollectionReorderActionId = null
-                inlineActionSucceeded?.invoke(action)
-            },
-            onOutcomeUnknown = { action ->
-                inlineActionSucceeded?.invoke(action)
-            },
-        )
-    }
 }
 
 @Composable
-private fun GenericCollectionActionBar(
-    resourceId: String,
+private fun GenericCollectionCommandBar(
+    resourceName: String,
+    searchQuery: String,
+    onSearchQueryChanged: ((String) -> Unit)?,
     createLabel: String?,
     onCreate: (() -> Unit)?,
     commands: List<NativeCollectionCommandActionPlan>,
     batches: List<NativeCollectionBatchActionPlan>,
-    reorder: NativeCollectionReorderActionPlan?,
     onCommand: (NativeCollectionCommandActionPlan) -> Unit,
     onBatch: (NativeCollectionBatchActionPlan) -> Unit,
-    onReorder: (NativeCollectionReorderActionPlan) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val hasSecondaryActions = commands.isNotEmpty() || batches.isNotEmpty() || reorder != null
+    val hasSecondaryActions = commands.isNotEmpty() || batches.isNotEmpty()
+    val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         BoxWithConstraints {
             val compactActions = maxWidth < 520.dp
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
-                horizontalArrangement = Arrangement.spacedBy(
-                    NextcloudSpacing.Small,
-                    alignment = Alignment.End,
-                ),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            val actions: @Composable () -> Unit = {
                 onCreate?.let { create ->
                     Button(
                         onClick = create,
                         modifier = Modifier
-                            .then(
-                                when {
-                                    hasSecondaryActions -> Modifier.weight(1f)
-                                    else -> Modifier.fillMaxWidth()
-                                },
-                            )
-                            .heightIn(min = 48.dp)
+                            .heightIn(min = 40.dp)
                             .semantics {
-                                contentDescription = "Create $resourceId"
+                                contentDescription = createLabel?.takeIf(String::isNotBlank)
+                                    ?: "Create ${resourceName.ifBlank { "item" }}"
                             },
                     ) {
                         Icon(NextcloudIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -940,9 +984,9 @@ private fun GenericCollectionActionBar(
                     OutlinedButton(
                         onClick = { expanded = true },
                         modifier = Modifier
-                            .heightIn(min = 48.dp)
+                            .heightIn(min = 40.dp)
                             .semantics {
-                                contentDescription = "Open collection actions for $resourceId"
+                                contentDescription = "More ${resourceName.ifBlank { "collection" }} actions"
                             },
                     ) {
                         Icon(
@@ -961,18 +1005,22 @@ private fun GenericCollectionActionBar(
                         expanded = expanded,
                         onDismissRequest = { expanded = false },
                         modifier = Modifier.semantics {
-                            contentDescription = "Collection actions for $resourceId"
+                            contentDescription = "${resourceName.ifBlank { "Collection" }} actions"
                         },
                     ) {
                         commands.forEach { plan ->
                             DropdownMenuItem(
                                 modifier = Modifier.semantics(mergeDescendants = true) {
-                                    contentDescription = "Run collection action ${plan.action.id}"
+                                    contentDescription = plan.action.label
                                 },
                                 text = {
                                     Text(
                                         plan.action.label,
-                                        color = MaterialTheme.colorScheme.error,
+                                        color = if (plan.action.risk == ActionRisk.destructive) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        },
                                     )
                                 },
                                 onClick = {
@@ -984,7 +1032,7 @@ private fun GenericCollectionActionBar(
                         batches.forEach { plan ->
                             DropdownMenuItem(
                                 modifier = Modifier.semantics(mergeDescendants = true) {
-                                    contentDescription = "Open batch action ${plan.action.id}"
+                                    contentDescription = plan.action.label
                                 },
                                 text = {
                                     Text(
@@ -1002,20 +1050,165 @@ private fun GenericCollectionActionBar(
                                 },
                             )
                         }
-                        reorder?.let { plan ->
-                            DropdownMenuItem(
-                                modifier = Modifier.semantics(mergeDescendants = true) {
-                                    contentDescription = "Reorder collection for $resourceId"
-                                },
-                                text = { Text(plan.action.label) },
-                                onClick = {
-                                    expanded = false
-                                    onReorder(plan)
-                                },
-                            )
+                    }
+                }
+            }
+            if (compactActions && onSearchQueryChanged != null) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(
+                        horizontal = NextcloudSpacing.Medium,
+                        vertical = NextcloudSpacing.Small,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                ) {
+                    GenericCollectionSearchField(
+                        resourceName = resourceName,
+                        query = searchQuery,
+                        onQueryChanged = onSearchQueryChanged,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (onCreate != null || hasSecondaryActions) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            actions()
                         }
                     }
                 }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            horizontal = NextcloudSpacing.Large,
+                            vertical = NextcloudSpacing.Small,
+                        ),
+                    horizontalArrangement = Arrangement.spacedBy(
+                        NextcloudSpacing.Small,
+                        alignment = if (dense) Alignment.End else Alignment.Start,
+                    ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    onSearchQueryChanged?.let { onQueryChanged ->
+                        GenericCollectionSearchField(
+                            resourceName = resourceName,
+                            query = searchQuery,
+                            onQueryChanged = onQueryChanged,
+                            modifier = Modifier.weight(1f).widthIn(max = 560.dp),
+                        )
+                    }
+                    actions()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GenericCollectionSearchField(
+    resourceName: String,
+    query: String,
+    onQueryChanged: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChanged,
+        modifier = modifier,
+        singleLine = true,
+        leadingIcon = {
+            Icon(
+                NextcloudIcons.Search,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+            )
+        },
+        placeholder = {
+            Text(
+                "Search ${resourceName.ifBlank { "items" }.lowercase()}",
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+    )
+}
+
+internal fun nativeRecordMatchesCollectionQuery(
+    resource: ResourceSpec,
+    record: NativeRecord,
+    query: String,
+): Boolean {
+    val terms = query.trim().split(Regex("\\s+")).filter(String::isNotBlank)
+    if (terms.isEmpty()) return true
+    val presentation = nativeRecordPresentation(resource, record)
+    val searchableText = buildList {
+        add(presentation.title)
+        presentation.subtitle?.let(::add)
+        addAll(record.displayValues.values)
+        resource.fields
+            .filterNot { field -> field.id.isTechnicalCollectionSearchField() }
+            .mapNotNullTo(this) { field -> record.values[field.id] }
+    }.joinToString(" ").lowercase()
+    return terms.all { term -> term.lowercase() in searchableText }
+}
+
+private fun String.isTechnicalCollectionSearchField(): Boolean {
+    val words = replace(Regex("([a-z])([A-Z])"), "$1 $2")
+        .lowercase()
+        .split(Regex("[^a-z0-9]+"))
+        .filter(String::isNotBlank)
+    return words.any { word ->
+        word in setOf("id", "uuid", "etag", "order", "position", "sort", "token")
+    }
+}
+
+@Composable
+private fun GenericRendererNoSearchResults(
+    query: String,
+    onClear: () -> Unit,
+) {
+    GenericCenteredState {
+        GenericStateIcon(NextcloudIcons.Search)
+        Text("No matching items", style = MaterialTheme.typography.titleLarge)
+        Text(
+            "Nothing matches \"$query\".",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        TextButton(onClick = onClear) { Text("Clear search") }
+    }
+}
+
+@Composable
+private fun GenericRendererSearchPagingState(
+    query: String,
+    loading: Boolean,
+    error: String?,
+    onRetry: (() -> Unit)?,
+    onClear: () -> Unit,
+) {
+    GenericCenteredState {
+        GenericStateIcon(NextcloudIcons.Search)
+        Text(
+            if (loading) "Searching more items" else "Could not finish searching",
+            style = MaterialTheme.typography.titleLarge,
+        )
+        Text(
+            error ?: "Looking through the rest of the collection for \"$query\".",
+            color = if (error == null) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (loading) {
+            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                onRetry?.let { retry -> TextButton(onClick = retry) { Text("Try again") } }
+                TextButton(onClick = onClear) { Text("Clear search") }
             }
         }
     }
@@ -1548,200 +1741,6 @@ private fun GenericCollectionBatchDialog(
         },
     )
 }
-
-@Composable
-private fun GenericCollectionReorderDialog(
-    plan: NativeCollectionReorderActionPlan,
-    resource: ResourceSpec,
-    records: List<NativeRecord>,
-    actionExecutor: NativeActionExecutor,
-    onDismiss: () -> Unit,
-    onActionSucceeded: (ActionSpec) -> Unit,
-    onOutcomeUnknown: (ActionSpec) -> Unit,
-) {
-    val recordsById = remember(records) { records.associateBy(NativeRecord::id) }
-    val initialOrder = remember(records) { records.map(NativeRecord::id) }
-    val reorderDraftSaver = remember(initialOrder) {
-        nativeCollectionReorderDraftSaver(initialOrder)
-    }
-    var orderedRecordIds by rememberSaveable(
-        plan.action.id,
-        initialOrder,
-        stateSaver = reorderDraftSaver,
-    ) {
-        mutableStateOf(initialOrder)
-    }
-    var error by remember(plan.action.id) { mutableStateOf<String?>(null) }
-    var failureOutcome by remember(plan.action.id) {
-        mutableStateOf<NativeActionFailureOutcome?>(null)
-    }
-    var executing by remember(plan.action.id) { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val outcomeUnknown = failureOutcome?.requiresMutationReconciliation() == true
-
-    AlertDialog(
-        onDismissRequest = { if (!executing) onDismiss() },
-        title = {
-            Text(
-                if (outcomeUnknown) {
-                    "${plan.action.label} result unknown"
-                } else {
-                    plan.action.label
-                },
-            )
-        },
-        text = {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 520.dp)
-                    .semantics {
-                        contentDescription = "Reorder collection list for ${resource.id}"
-                    },
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-            ) {
-                item {
-                    Text(
-                        "Move every item into the required order, then save.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                itemsIndexed(
-                    items = orderedRecordIds,
-                    key = { _, recordId -> recordId },
-                ) { index, recordId ->
-                    val record = recordsById[recordId] ?: return@itemsIndexed
-                    val itemLabel = nativeRecordPresentation(resource, record).title
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(NextcloudSpacing.Small),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                "${index + 1}. $itemLabel",
-                                modifier = Modifier.weight(1f),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            TextButton(
-                                enabled = !executing && index > 0,
-                                modifier = Modifier.semantics {
-                                    contentDescription = "Move $itemLabel up"
-                                },
-                                onClick = {
-                                    orderedRecordIds = moveNativeCollectionRecord(
-                                        orderedRecordIds = orderedRecordIds,
-                                        recordId = recordId,
-                                        offset = -1,
-                                    )
-                                    error = null
-                                },
-                            ) {
-                                Text("Up")
-                            }
-                            TextButton(
-                                enabled = !executing && index < orderedRecordIds.lastIndex,
-                                modifier = Modifier.semantics {
-                                    contentDescription = "Move $itemLabel down"
-                                },
-                                onClick = {
-                                    orderedRecordIds = moveNativeCollectionRecord(
-                                        orderedRecordIds = orderedRecordIds,
-                                        recordId = recordId,
-                                        offset = 1,
-                                    )
-                                    error = null
-                                },
-                            ) {
-                                Text("Down")
-                            }
-                        }
-                    }
-                }
-                error?.let { message ->
-                    item {
-                        Text(
-                            message,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-                if (outcomeUnknown) {
-                    item {
-                        Text(
-                            "The collection is being refreshed to check the server result. " +
-                                "Review the refreshed order before trying this action again.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(enabled = !executing, onClick = onDismiss) {
-                Text(if (outcomeUnknown) "Close" else "Cancel")
-            }
-        },
-        confirmButton = {
-            if (!outcomeUnknown) {
-                Button(
-                    enabled = !executing && orderedRecordIds != initialOrder,
-                    modifier = Modifier.semantics {
-                        contentDescription = "Save reordered collection ${resource.id}"
-                    },
-                    onClick = {
-                        val request = runCatching {
-                            plan.requestInOrder(orderedRecordIds)
-                        }.getOrElse { failure ->
-                            error = failure.message ?: "The new order could not be submitted."
-                            return@Button
-                        }
-                        executing = true
-                        error = null
-                        failureOutcome = null
-                        scope.launch {
-                            when (val result = actionExecutor.execute(request)) {
-                                is NativeActionExecutionResult.Success ->
-                                    onActionSucceeded(plan.action)
-                                is NativeActionExecutionResult.Failure -> {
-                                    error = result.message
-                                    failureOutcome = result.outcome
-                                    if (result.outcome.requiresMutationReconciliation()) {
-                                        onOutcomeUnknown(plan.action)
-                                    }
-                                }
-                            }
-                            executing = false
-                        }
-                    },
-                ) {
-                    if (executing) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text("Save order")
-                    }
-                }
-            }
-        },
-    )
-}
-
-private fun nativeCollectionReorderDraftSaver(
-    plannedRecordIds: List<String>,
-) = Saver<List<String>, List<String>>(
-    save = { orderedRecordIds -> encodeNativeCollectionReorderDraft(orderedRecordIds) },
-    restore = { savedRecordIds ->
-        restoreNativeCollectionReorderDraft(savedRecordIds, plannedRecordIds)
-    },
-)
 
 private sealed interface PendingNativeRecordActionForm {
     val action: ActionSpec
@@ -2443,6 +2442,9 @@ private fun GenericRecordTable(
     actionExecutor: NativeActionExecutor,
     onSelectRecord: ((NativeRecord) -> Unit)?,
     onInlineActionSucceeded: ((ActionSpec) -> Unit)?,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
     modifier: Modifier = Modifier,
 ) {
     val composite = view.compositeDataGrid
@@ -2475,6 +2477,14 @@ private fun GenericRecordTable(
     val frozenField = fields.firstOrNull { it.id == projection.frozenFieldId }
     val scrollingFields = fields.filterNot { it.id == frozenField?.id }
     val horizontalState = rememberScrollState()
+    val verticalState = rememberLazyListState()
+    NativeCollectionAutoPager(
+        listState = verticalState,
+        itemCount = projectedRecords.size,
+        onLoadMore = onLoadMore,
+        loadingMore = loadingMore,
+        loadMoreError = loadMoreError,
+    )
     Column(
         modifier = modifier.fillMaxSize().padding(
             start = NextcloudSpacing.Large,
@@ -2497,7 +2507,10 @@ private fun GenericRecordTable(
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        LazyColumn(modifier = Modifier.weight(1f)) {
+        LazyColumn(
+            state = verticalState,
+            modifier = Modifier.weight(1f),
+        ) {
             items(projectedRecords, key = NativeRecord::id) { record ->
                 Row(
                     modifier = Modifier
@@ -2556,6 +2569,11 @@ private fun GenericRecordTable(
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
+            NativeCollectionPagingFooter(
+                loadingMore = loadingMore,
+                loadMoreError = loadMoreError,
+                onRetry = onLoadMore,
+            )
         }
     }
     activeEdit?.let { plan ->
@@ -2621,6 +2639,9 @@ private fun GenericTableCollection(
     actionExecutor: NativeActionExecutor,
     onSelectRecord: ((NativeRecord) -> Unit)?,
     onInlineActionSucceeded: ((ActionSpec) -> Unit)?,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
 ) {
     val composite = view.compositeDataGrid
     val columnResource = composite?.let { schema.resource(it.columnResourceId) }
@@ -2650,6 +2671,9 @@ private fun GenericTableCollection(
                     onSelectRecord = onSelectRecord,
                     actionExecutor = actionExecutor,
                     onInlineActionSucceeded = onInlineActionSucceeded,
+                    onLoadMore = onLoadMore,
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
                     modifier = Modifier.weight(1f),
                 )
             } else {
@@ -2662,6 +2686,9 @@ private fun GenericTableCollection(
                     actionExecutor,
                     onSelectRecord,
                     onInlineActionSucceeded,
+                    onLoadMore,
+                    loadingMore,
+                    loadMoreError,
                     Modifier.weight(1f),
                 )
             }
@@ -2858,25 +2885,189 @@ private fun GenericRecordList(
     onSelectRecord: ((NativeRecord) -> Unit)?,
     modifier: Modifier = Modifier,
     secondaryActions: (NativeRecord) -> List<NextcloudCardAction> = { emptyList() },
+    reorder: NativeCollectionReorderActionPlan? = null,
+    actionExecutor: NativeActionExecutor? = null,
+    onActionSucceeded: ((ActionSpec) -> Unit)? = null,
+    onLoadMore: (() -> Unit)? = null,
+    loadingMore: Boolean = false,
+    loadMoreError: String? = null,
 ) {
+    val authoritativeOrder = remember(records) { records.map(NativeRecord::id) }
+    var orderedRecordIds by remember(reorder?.action?.id, resource.id) {
+        mutableStateOf(authoritativeOrder)
+    }
+    var draggingRecordId by remember(reorder?.action?.id, resource.id) {
+        mutableStateOf<String?>(null)
+    }
+    var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
+    var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
+    var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
+    val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
+    val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+    val recordsById = remember(records) { records.associateBy(NativeRecord::id) }
+    val displayedRecords = remember(recordsById, orderedRecordIds, reorder) {
+        if (reorder == null) records else orderedRecordIds.mapNotNull(recordsById::get)
+    }
+    val submitReorder: () -> Unit = submit@{
+        val plan = reorder ?: return@submit
+        val executor = actionExecutor ?: return@submit
+        val submittedOrder = orderedRecordIds
+        if (submittedOrder == authoritativeOrder) return@submit
+        val request = runCatching { plan.requestInOrder(submittedOrder) }.getOrElse { failure ->
+            reorderError = failure.message ?: "The new order could not be submitted."
+            orderedRecordIds = authoritativeOrder
+            return@submit
+        }
+        reorderExecuting = true
+        reorderError = null
+        scope.launch {
+            when (val result = executor.execute(request)) {
+                is NativeActionExecutionResult.Success -> onActionSucceeded?.invoke(plan.action)
+                is NativeActionExecutionResult.Failure -> {
+                    reorderError = result.message
+                    orderedRecordIds = authoritativeOrder
+                    if (result.outcome.requiresMutationReconciliation()) {
+                        onActionSucceeded?.invoke(plan.action)
+                    }
+                }
+            }
+            reorderExecuting = false
+        }
+    }
+    LaunchedEffect(authoritativeOrder, reorder?.action?.id) {
+        if (draggingRecordId == null && !reorderExecuting) {
+            orderedRecordIds = authoritativeOrder
+            reorderError = null
+        }
+    }
+    NativeCollectionAutoPager(
+        listState = listState,
+        itemCount = displayedRecords.size,
+        onLoadMore = onLoadMore,
+        loadingMore = loadingMore,
+        loadMoreError = loadMoreError,
+    )
     LazyColumn(
         modifier = modifier,
+        state = listState,
         contentPadding = PaddingValues(
             start = NextcloudSpacing.Large,
             top = NextcloudSpacing.Medium,
             end = NextcloudSpacing.Large,
-            bottom = NextcloudSpacing.XXLarge,
+            bottom = NextcloudSpacing.Large,
         ),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        verticalArrangement = Arrangement.spacedBy(
+            if (LocalNextcloudWorkspaceCapabilities.current.usesDenseControls) 1.dp
+            else NextcloudSpacing.Small,
+        ),
     ) {
-        items(records, key = NativeRecord::id) { record ->
+        reorderError?.let { message ->
+            item(key = "collection-reorder-error") {
+                Text(
+                    message,
+                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        itemsIndexed(displayedRecords, key = { _, record -> record.id }) { index, record ->
+            if (LocalNextcloudWorkspaceCapabilities.current.usesDenseControls && index > 0) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
+            val dragging = draggingRecordId == record.id
             GenericCollectionCard(
                 resource = resource,
                 record = record,
                 onSelectRecord = onSelectRecord,
                 secondaryActions = secondaryActions(record),
+                modifier = Modifier
+                    .onGloballyPositioned { coordinates ->
+                        rowBounds[record.id] = coordinates.boundsInWindow()
+                    }
+                    .graphicsLayer { alpha = if (dragging) 0.56f else 1f },
+                leadingContent = reorder?.takeUnless { reorderExecuting }?.let {
+                    {
+                        NextcloudBoardDragHandle(
+                            itemLabel = nativeRecordPresentation(resource, record).title,
+                            dragActive = dragging,
+                            onDragStart = { position ->
+                                draggingRecordId = record.id
+                                dragPosition = position
+                                reorderError = null
+                            },
+                            onDrag = { delta ->
+                                val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
+                                dragPosition = position
+                                val targetId = orderedRecordIds.firstOrNull { id ->
+                                    rowBounds[id]?.let { bounds -> position.y in bounds.top..bounds.bottom } == true
+                                }
+                                val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
+                                if (targetIndex >= 0 && targetId != draggingRecordId) {
+                                    orderedRecordIds = moveNativeCollectionRecordToIndex(
+                                        orderedRecordIds = orderedRecordIds,
+                                        recordId = record.id,
+                                        targetIndex = targetIndex,
+                                    )
+                                }
+                            },
+                            onDragEnd = {
+                                draggingRecordId = null
+                                dragPosition = null
+                                submitReorder()
+                            },
+                            onDragCancel = {
+                                draggingRecordId = null
+                                dragPosition = null
+                                orderedRecordIds = authoritativeOrder
+                            },
+                        )
+                    }
+                },
+                busy = reorderExecuting,
             )
         }
+        NativeCollectionPagingFooter(
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+            onRetry = onLoadMore,
+        )
+    }
+}
+
+@Composable
+private fun NativeCollectionAutoPager(
+    listState: LazyListState,
+    itemCount: Int,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
+) {
+    LaunchedEffect(listState, itemCount, onLoadMore, loadingMore, loadMoreError) {
+        if (onLoadMore == null || loadingMore || loadMoreError != null) return@LaunchedEffect
+        snapshotFlow {
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val total = listState.layoutInfo.totalItemsCount
+            total > 0 && lastVisible >= total - 3
+        }.distinctUntilChanged().collect { nearEnd ->
+            if (nearEnd) onLoadMore()
+        }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.NativeCollectionPagingFooter(
+    loadingMore: Boolean,
+    loadMoreError: String?,
+    onRetry: (() -> Unit)?,
+) {
+    if (!loadingMore && loadMoreError == null) return
+    item(key = "collection-paging-footer") {
+        NativeCollectionPagingStatus(
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+            onRetry = onRetry,
+        )
     }
 }
 
@@ -2889,6 +3080,9 @@ private fun GenericEditableTableRecordList(
     onSelectRecord: ((NativeRecord) -> Unit)?,
     actionExecutor: NativeActionExecutor,
     onInlineActionSucceeded: ((ActionSpec) -> Unit)?,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
     modifier: Modifier = Modifier,
 ) {
     val fields = remember(projection) {
@@ -2905,8 +3099,17 @@ private fun GenericEditableTableRecordList(
     var savingEdit by remember { mutableStateOf(false) }
     val editedValues = remember(schema, projection) { mutableStateMapOf<NativeCellAddress, String>() }
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+    NativeCollectionAutoPager(
+        listState = listState,
+        itemCount = records.size,
+        onLoadMore = onLoadMore,
+        loadingMore = loadingMore,
+        loadMoreError = loadMoreError,
+    )
 
     LazyColumn(
+        state = listState,
         modifier = modifier,
         contentPadding = PaddingValues(
             start = NextcloudSpacing.Large,
@@ -2950,6 +3153,11 @@ private fun GenericEditableTableRecordList(
                 },
             )
         }
+        NativeCollectionPagingFooter(
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+            onRetry = onLoadMore,
+        )
     }
 
     activeEdit?.let { plan ->
@@ -3024,8 +3232,12 @@ private fun GenericRecordCollection(
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
     onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
     imageLoader: NativeImageLoader?,
+    reorder: NativeCollectionReorderActionPlan?,
+    authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
 ) {
-    val authoritativeRecordsKey = NativeAuthoritativeRecordsKey(records)
     val recipes = remember(resource, records) {
         nativeRecipeCollectionPresentations(resource, records)
     }
@@ -3051,6 +3263,10 @@ private fun GenericRecordCollection(
             onDeleteRecord = onDeleteRecord,
             onCommandRecord = onCommandRecord,
             onCommandFormRecord = onCommandFormRecord,
+            reorder = reorder,
+            onLoadMore = onLoadMore,
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
         )
         return
     }
@@ -3101,6 +3317,12 @@ private fun GenericRecordCollection(
                         onCommandFormRecord = onCommandFormRecord,
                     )
                 },
+                reorder = reorder,
+                actionExecutor = actionExecutor,
+                onActionSucceeded = onInlineActionSucceeded,
+                onLoadMore = onLoadMore,
+                loadingMore = loadingMore,
+                loadMoreError = loadMoreError,
             )
         }
     }
@@ -3391,8 +3613,54 @@ private fun GenericTaskCollection(
     onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
     onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
+    reorder: NativeCollectionReorderActionPlan?,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
 ) {
     val scope = rememberCoroutineScope()
+    val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
+    val listState = rememberLazyListState()
+    val authoritativeOrder = remember(rows) { rows.map { (record, _) -> record.id } }
+    val rowsById = remember(rows) { rows.associateBy { (record, _) -> record.id } }
+    var orderedRecordIds by remember(reorder?.action?.id, resource.id) {
+        mutableStateOf(authoritativeOrder)
+    }
+    var draggingRecordId by remember(reorder?.action?.id, resource.id) {
+        mutableStateOf<String?>(null)
+    }
+    var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
+    var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
+    var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
+    val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
+    val displayedRows = remember(rowsById, orderedRecordIds, reorder) {
+        if (reorder == null) rows else orderedRecordIds.mapNotNull(rowsById::get)
+    }
+    val submitReorder: () -> Unit = submit@{
+        val plan = reorder ?: return@submit
+        val submittedOrder = orderedRecordIds
+        if (submittedOrder == authoritativeOrder) return@submit
+        val request = runCatching { plan.requestInOrder(submittedOrder) }.getOrElse { failure ->
+            reorderError = failure.message ?: "The new order could not be submitted."
+            orderedRecordIds = authoritativeOrder
+            return@submit
+        }
+        reorderExecuting = true
+        reorderError = null
+        scope.launch {
+            when (val result = actionExecutor.execute(request)) {
+                is NativeActionExecutionResult.Success -> onActionSucceeded?.invoke(plan.action)
+                is NativeActionExecutionResult.Failure -> {
+                    reorderError = result.message
+                    orderedRecordIds = authoritativeOrder
+                    if (result.outcome.requiresMutationReconciliation()) {
+                        onActionSucceeded?.invoke(plan.action)
+                    }
+                }
+            }
+            reorderExecuting = false
+        }
+    }
     val currentAuthoritativeRecordsKey by rememberUpdatedState(authoritativeRecordsKey)
     val completionOverrides = remember(schema, resource.id) {
         mutableStateMapOf<String, NativeCompletionOverride>()
@@ -3408,17 +3676,44 @@ private fun GenericTaskCollection(
             .reconcileNativeCompletionFailures(authoritativeRecordsKey)
             .forEach(completionErrors::remove)
     }
+    LaunchedEffect(authoritativeOrder, reorder?.action?.id) {
+        if (draggingRecordId == null && !reorderExecuting) {
+            orderedRecordIds = authoritativeOrder
+            reorderError = null
+        }
+    }
+    NativeCollectionAutoPager(
+        listState = listState,
+        itemCount = displayedRows.size,
+        onLoadMore = onLoadMore,
+        loadingMore = loadingMore,
+        loadMoreError = loadMoreError,
+    )
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
+        state = listState,
         contentPadding = PaddingValues(
             start = NextcloudSpacing.Large,
             top = NextcloudSpacing.Medium,
             end = NextcloudSpacing.Large,
-            bottom = NextcloudSpacing.XXLarge,
+            bottom = NextcloudSpacing.Large,
         ),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        verticalArrangement = Arrangement.spacedBy(if (dense) 1.dp else NextcloudSpacing.Small),
     ) {
-        items(rows, key = { (record, _) -> record.id }) { (record, task) ->
+        reorderError?.let { message ->
+            item(key = "task-reorder-error") {
+                Text(
+                    message,
+                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        itemsIndexed(displayedRows, key = { _, (record, _) -> record.id }) { index, (record, task) ->
+            if (dense && index > 0) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
             val actions = remember(schema, resource, record, navigationContext, authorityContext) {
                 nativeRecordActions(
                     schema = schema,
@@ -3449,8 +3744,15 @@ private fun GenericTaskCollection(
                 onCommandFormRecord = onCommandFormRecord,
             )
             var actionsExpanded by rememberSaveable(record.id) { mutableStateOf(false) }
-            Card(
-                modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+            val dragging = draggingRecordId == record.id
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onGloballyPositioned { coordinates ->
+                        rowBounds[record.id] = coordinates.boundsInWindow()
+                    }
+                    .graphicsLayer { alpha = if (dragging) 0.56f else 1f }
+                    .nextcloudCardInteractions(
                     onOpen = onSelectRecord?.let { callback -> { callback(record) } },
                     onShowActions = if (secondaryActions.isNotEmpty()) {
                         { actionsExpanded = true }
@@ -3460,14 +3762,55 @@ private fun GenericTaskCollection(
                     openLabel = "Open ${task.title}",
                     actionsLabel = "Show actions for ${task.title}",
                 ),
-                colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-                shape = RoundedCornerShape(NextcloudRadii.Card),
+                color = if (dense) MaterialTheme.colorScheme.background else NextcloudTheme.colors.appTile,
+                shape = RoundedCornerShape(if (dense) 0.dp else NextcloudRadii.Card),
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                    modifier = Modifier.fillMaxWidth().padding(
+                        horizontal = if (dense) NextcloudSpacing.Medium else NextcloudSpacing.Large,
+                        vertical = if (dense) NextcloudSpacing.Small else NextcloudSpacing.Large,
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(
+                        if (dense) NextcloudSpacing.Small else NextcloudSpacing.Medium,
+                    ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    reorder?.takeUnless { reorderExecuting }?.let {
+                        NextcloudBoardDragHandle(
+                            itemLabel = task.title,
+                            dragActive = dragging,
+                            onDragStart = { position ->
+                                draggingRecordId = record.id
+                                dragPosition = position
+                                reorderError = null
+                            },
+                            onDrag = { delta ->
+                                val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
+                                dragPosition = position
+                                val targetId = orderedRecordIds.firstOrNull { id ->
+                                    rowBounds[id]?.let { bounds -> position.y in bounds.top..bounds.bottom } == true
+                                }
+                                val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
+                                if (targetIndex >= 0 && targetId != draggingRecordId) {
+                                    orderedRecordIds = moveNativeCollectionRecordToIndex(
+                                        orderedRecordIds = orderedRecordIds,
+                                        recordId = record.id,
+                                        targetIndex = targetIndex,
+                                    )
+                                }
+                            },
+                            onDragEnd = {
+                                draggingRecordId = null
+                                dragPosition = null
+                                submitReorder()
+                            },
+                            onDragCancel = {
+                                draggingRecordId = null
+                                dragPosition = null
+                                orderedRecordIds = authoritativeOrder
+                            },
+                        )
+                    }
                     Surface(
                         color = if (completed) {
                             MaterialTheme.colorScheme.primaryContainer
@@ -3581,6 +3924,9 @@ private fun GenericTaskCollection(
                             )
                         }
                     }
+                    if (reorderExecuting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    }
                     if (secondaryActions.isNotEmpty()) {
                         NextcloudCardOverflow(
                             itemLabel = task.title,
@@ -3599,6 +3945,11 @@ private fun GenericTaskCollection(
                 }
             }
         }
+        NativeCollectionPagingFooter(
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+            onRetry = onLoadMore,
+        )
     }
 }
 
@@ -3933,14 +4284,26 @@ private fun GenericMediaLibraryCollection(
     imageLoader: NativeImageLoader?,
     audioPlayer: NativeAudioRecordPlayer?,
     mediaArtworkResolver: NativeMediaArtworkResolver?,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
 ) {
     val mediaItems = remember(resource, records) {
         records.map { record -> record to nativeMediaPresentation(resource, record) }
     }
     val trackList = mediaItems.count { (_, item) -> item.kind == NativeMediaItemKind.Track } > mediaItems.size / 2
     if (trackList) {
+        val listState = rememberLazyListState()
+        NativeCollectionAutoPager(
+            listState = listState,
+            itemCount = mediaItems.size,
+            onLoadMore = onLoadMore,
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+        )
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
+            state = listState,
             contentPadding = PaddingValues(
                 start = NextcloudSpacing.Large,
                 top = NextcloudSpacing.Small,
@@ -4034,10 +4397,23 @@ private fun GenericMediaLibraryCollection(
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
+            NativeCollectionPagingFooter(
+                loadingMore = loadingMore,
+                loadMoreError = loadMoreError,
+                onRetry = onLoadMore,
+            )
         }
     } else {
+        val gridState = rememberLazyGridState()
+        NativeCollectionGridAutoPager(
+            gridState = gridState,
+            onLoadMore = onLoadMore,
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+        )
         LazyVerticalGrid(
             columns = GridCells.Adaptive(168.dp),
+            state = gridState,
             contentPadding = PaddingValues(NextcloudSpacing.Large),
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
@@ -4086,6 +4462,18 @@ private fun GenericMediaLibraryCollection(
                             )
                         }
                     }
+                }
+            }
+            if (loadingMore || loadMoreError != null) {
+                item(
+                    key = "media-grid-paging-footer",
+                    span = { GridItemSpan(maxLineSpan) },
+                ) {
+                    NativeCollectionPagingStatus(
+                        loadingMore = loadingMore,
+                        loadMoreError = loadMoreError,
+                        onRetry = onLoadMore,
+                    )
                 }
             }
         }
@@ -5140,15 +5528,25 @@ private fun GenericCollectionCard(
     record: NativeRecord,
     onSelectRecord: ((NativeRecord) -> Unit)?,
     secondaryActions: List<NextcloudCardAction> = emptyList(),
+    modifier: Modifier = Modifier,
+    leadingContent: (@Composable () -> Unit)? = null,
+    busy: Boolean = false,
 ) {
     val presentation = nativeRecordPresentation(resource, record)
+    val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
     var actionsExpanded by rememberSaveable(record.id) { mutableStateOf(false) }
-    val content: @Composable ColumnScope.() -> Unit = {
+    val content: @Composable () -> Unit = {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+            modifier = Modifier.fillMaxWidth().padding(
+                horizontal = if (dense) NextcloudSpacing.Medium else NextcloudSpacing.Large,
+                vertical = if (dense) NextcloudSpacing.Small else NextcloudSpacing.Large,
+            ),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            horizontalArrangement = Arrangement.spacedBy(
+                if (dense) NextcloudSpacing.Small else NextcloudSpacing.Medium,
+            ),
         ) {
+            leadingContent?.invoke()
             GenericResourceIcon(resource, presentation.iconKey, presentation.colorArgb)
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
@@ -5167,6 +5565,9 @@ private fun GenericCollectionCard(
                     )
                 }
             }
+            if (busy) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            }
             if (secondaryActions.isNotEmpty()) {
                 NextcloudCardOverflow(
                     itemLabel = presentation.title,
@@ -5184,8 +5585,8 @@ private fun GenericCollectionCard(
             }
         }
     }
-    Card(
-        modifier = Modifier
+    Surface(
+        modifier = modifier
             .fillMaxWidth()
             .semantics {
                 if (onSelectRecord != null) {
@@ -5202,8 +5603,8 @@ private fun GenericCollectionCard(
                 openLabel = "Open ${presentation.title}",
                 actionsLabel = "Show actions for ${presentation.title}",
             ),
-        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-        shape = RoundedCornerShape(NextcloudRadii.Card),
+        color = if (dense) MaterialTheme.colorScheme.background else NextcloudTheme.colors.appTile,
+        shape = RoundedCornerShape(if (dense) 0.dp else NextcloudRadii.Card),
         content = content,
     )
 }
@@ -5213,43 +5614,178 @@ private fun GenericRecordGrid(
     resource: ResourceSpec,
     records: List<NativeRecord>,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    recordImageLoader: NativeRecordImageLoader?,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
 ) {
+    val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
+    val gridState = rememberLazyGridState()
+    NativeCollectionGridAutoPager(
+        gridState = gridState,
+        onLoadMore = onLoadMore,
+        loadingMore = loadingMore,
+        loadMoreError = loadMoreError,
+    )
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(168.dp),
-        contentPadding = PaddingValues(NextcloudSpacing.Large),
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        state = gridState,
+        columns = GridCells.Adaptive(if (dense) 220.dp else 152.dp),
+        contentPadding = PaddingValues(if (dense) NextcloudSpacing.XLarge else NextcloudSpacing.Medium),
+        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
         items(records, key = NativeRecord::id) { record ->
             val presentation = nativeRecordPresentation(resource, record)
             val interaction = onSelectRecord?.let { callback -> Modifier.clickable { callback(record) } } ?: Modifier
+            val noteLike = resource.fields.any { field -> field.kind == FieldKind.longText } &&
+                presentation.colorArgb != null
+            var recordImage by remember(resource.id, record.id, recordImageLoader) {
+                mutableStateOf<NativeRecordImagePreview?>(null)
+            }
+            LaunchedEffect(resource.id, record.id, recordImageLoader) {
+                recordImage = recordImageLoader?.let { loader ->
+                    runCatching { loader.load(resource, record) }.getOrNull()
+                }
+            }
+            val recordColor = presentation.colorArgb?.let(::Color)
+            val containerColor = recordColor ?: NextcloudTheme.colors.appTile
+            val contentColor = when {
+                recordColor == null -> MaterialTheme.colorScheme.onSurface
+                recordColor.luminance() > 0.42f -> Color(0xFF16131A)
+                else -> Color.White
+            }
             Card(
-                modifier = interaction.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-                shape = RoundedCornerShape(NextcloudRadii.Card),
+                modifier = interaction.fillMaxWidth().heightIn(min = if (dense) 92.dp else 112.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = containerColor,
+                    contentColor = contentColor,
+                ),
+                shape = RoundedCornerShape(NextcloudRadii.Medium),
             ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                ) {
-                    GenericResourceIcon(resource, presentation.iconKey, presentation.colorArgb)
-                    Text(
-                        presentation.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    presentation.subtitle?.let {
+                if (recordImage != null) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Image(
+                            bitmap = requireNotNull(recordImage).image,
+                            contentDescription = requireNotNull(recordImage).contentDescription,
+                            modifier = Modifier.fillMaxWidth().aspectRatio(4f / 3f),
+                            contentScale = ContentScale.Crop,
+                        )
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                presentation.title,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            presentation.subtitle?.let { subtitle ->
+                                Text(
+                                    subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(
+                            if (dense) NextcloudSpacing.Medium else NextcloudSpacing.Large,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        if (!noteLike) {
+                            GenericResourceIcon(resource, presentation.iconKey, presentation.colorArgb)
+                        }
                         Text(
-                            it,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            presentation.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        presentation.subtitle?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = contentColor.copy(alpha = 0.78f),
+                                maxLines = if (noteLike) 4 else 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
+            }
+        }
+        if (loadingMore || loadMoreError != null) {
+            item(
+                key = "collection-grid-paging-footer",
+                span = { GridItemSpan(maxLineSpan) },
+            ) {
+                NativeCollectionPagingStatus(
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
+                    onRetry = onLoadMore,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NativeCollectionGridAutoPager(
+    gridState: LazyGridState,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
+) {
+    LaunchedEffect(gridState, onLoadMore, loadingMore, loadMoreError) {
+        if (onLoadMore == null || loadingMore || loadMoreError != null) return@LaunchedEffect
+        snapshotFlow {
+            val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val total = gridState.layoutInfo.totalItemsCount
+            total > 0 && lastVisible >= total - 4
+        }.distinctUntilChanged().collect { nearEnd ->
+            if (nearEnd) onLoadMore()
+        }
+    }
+}
+
+@Composable
+private fun NativeCollectionPagingStatus(
+    loadingMore: Boolean,
+    loadMoreError: String?,
+    onRetry: (() -> Unit)?,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (loadingMore) {
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            Text(
+                "Loading more...",
+                modifier = Modifier.padding(start = NextcloudSpacing.Small),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else if (loadMoreError != null) {
+            Text(
+                loadMoreError,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            onRetry?.let { retry ->
+                TextButton(onClick = retry) { Text("Try again") }
             }
         }
     }
@@ -6058,6 +6594,7 @@ private fun GenericResourceIcon(
     recordColorArgb: Int? = null,
     large: Boolean = false,
 ) {
+    val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
     val icon = recordIconKey?.let(NextcloudIcons::semanticOrFallback)
         ?: nativeResourceIconAppId(resource)?.let(NextcloudIcons::app)
         ?: when {
@@ -6072,8 +6609,19 @@ private fun GenericResourceIcon(
             icon,
             contentDescription = null,
             tint = recordColorArgb?.let(::Color) ?: NextcloudTheme.colors.appIcon,
-            modifier = Modifier.padding(if (large) NextcloudSpacing.Medium else NextcloudSpacing.Small)
-                .size(if (large) 30.dp else 24.dp),
+            modifier = Modifier.padding(
+                when {
+                    large -> NextcloudSpacing.Medium
+                    dense -> 6.dp
+                    else -> NextcloudSpacing.Small
+                },
+            ).size(
+                when {
+                    large -> 30.dp
+                    dense -> 20.dp
+                    else -> 24.dp
+                },
+            ),
         )
     }
 }
@@ -6249,6 +6797,7 @@ private fun GenericNativeForm(
     val hasUneditableBodyFields = uneditableBodyFieldIds.isNotEmpty()
     val settingsWrite = action.isSettingsWrite(resource)
     val hasChanges = draft.hasChangesFrom(initialDraft)
+    val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
 
     LaunchedEffect(executionState) {
         when (executionState) {
@@ -6266,25 +6815,34 @@ private fun GenericNativeForm(
         modifier = Modifier
             .fillMaxSize()
             .semantics {
-                contentDescription = "${nativeFormTitle(view, resource, action)}; form action ${action.id}"
+                contentDescription = nativeFormTitle(view, resource, action)
             },
     ) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(NextcloudSpacing.Large),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
-                Text(nativeFormTitle(view, resource, action), style = MaterialTheme.typography.headlineSmall)
-                Text(
-                    "${formResource.name} · Required fields are marked with *",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 760.dp)
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+                    .verticalScroll(rememberScrollState())
+                    .padding(
+                        horizontal = if (dense) NextcloudSpacing.XLarge else NextcloudSpacing.Large,
+                        vertical = NextcloudSpacing.Large,
+                    ),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+                    Text(
+                        "Details",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "Fields marked with * are required.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             autoBinding.error?.let { error ->
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
@@ -6305,12 +6863,14 @@ private fun GenericNativeForm(
             if (fields.isNotEmpty()) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(NextcloudRadii.Medium),
                 ) {
                     Column(
-                        modifier = Modifier.padding(NextcloudSpacing.Large),
-                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+                        modifier = Modifier.padding(
+                            if (dense) NextcloudSpacing.Medium else NextcloudSpacing.Large,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                     ) {
                         fields.forEach { field ->
                             val relationOptions =
@@ -6389,6 +6949,7 @@ private fun GenericNativeForm(
                     )
                 }
             }
+            }
         }
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -6396,17 +6957,20 @@ private fun GenericNativeForm(
             tonalElevation = 3.dp,
             shadowElevation = 6.dp,
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .imePadding()
-                    .padding(
-                        horizontal = NextcloudSpacing.Large,
-                        vertical = NextcloudSpacing.Medium,
-                    ),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            ) {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 760.dp)
+                        .fillMaxWidth()
+                        .align(Alignment.Center)
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(
+                            horizontal = NextcloudSpacing.Large,
+                            vertical = NextcloudSpacing.Medium,
+                        ),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                ) {
                 GenericActionStatus(executionState, coordinator::clearStatus)
                 if (action.risk == ActionRisk.destructive) {
                     Surface(
@@ -6442,10 +7006,10 @@ private fun GenericNativeForm(
                         }
                     },
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .then(if (dense) Modifier.align(Alignment.End) else Modifier.fillMaxWidth())
                         .heightIn(min = 52.dp)
                         .semantics {
-                            contentDescription = "Submit form action ${action.id}"
+                            contentDescription = nativeFormSubmitLabel(resource, action)
                         },
                 ) {
                     if (submitting) {
@@ -6453,16 +7017,13 @@ private fun GenericNativeForm(
                             modifier = Modifier
                                 .size(20.dp)
                                 .semantics {
-                                    contentDescription = "Action status running ${action.id}"
+                                    contentDescription = "Saving changes"
                                 },
                             strokeWidth = 2.dp,
                         )
                     } else {
                         Text(
                             nativeFormSubmitLabel(resource, action),
-                            modifier = Modifier.semantics {
-                                contentDescription = "Activate form action ${action.id}"
-                            },
                         )
                     }
                 }
@@ -6489,6 +7050,7 @@ private fun GenericNativeForm(
                             }
                         }
                     }
+                }
                 }
             }
         }
@@ -7450,7 +8012,9 @@ internal fun nativeFormDisplayFields(
     fields: List<FieldSpec>,
     relationFieldIds: Set<String> = emptySet(),
 ): List<FieldSpec> =
-    fields.withIndex()
+    fields
+        .filterNot(FieldSpec::isServerManagedOptionalOrderingField)
+        .withIndex()
         .sortedWith(
             compareBy<IndexedValue<FieldSpec>>(
                 { (_, field) -> field.nativeFormDisplayPriority(field.id in relationFieldIds) },
@@ -7458,6 +8022,18 @@ internal fun nativeFormDisplayFields(
             ),
         )
         .map(IndexedValue<FieldSpec>::value)
+
+private fun FieldSpec.isServerManagedOptionalOrderingField(): Boolean {
+    if (required) return false
+    val semanticId = id
+        .replace(Regex("([a-z])([A-Z])"), "$1 $2")
+        .lowercase()
+        .split(Regex("[^a-z0-9]+"))
+        .filter(String::isNotBlank)
+    return semanticId.isNotEmpty() && semanticId.all { word ->
+        word in setOf("display", "index", "order", "ordering", "position", "rank", "sort")
+    }
+}
 
 private fun FieldSpec.nativeFormDisplayPriority(relation: Boolean): Int {
     val semanticId = id.lowercase().filter(Char::isLetterOrDigit)

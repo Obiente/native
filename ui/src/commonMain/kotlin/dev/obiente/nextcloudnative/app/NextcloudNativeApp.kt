@@ -96,6 +96,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudAppBackground
 import dev.obiente.nextcloudnative.app.design.NextcloudAppTile
 import dev.obiente.nextcloudnative.app.design.NextcloudBottomNavigation
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestination
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestinationSection
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationHost
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationModel
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionWorkspaceScaffold
@@ -104,6 +105,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import dev.obiente.nextcloudnative.app.design.NextcloudNavigationRail
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
+import dev.obiente.nextcloudnative.app.design.NextcloudDesktopWorkspaceKind
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudWorkspaceCapabilities
@@ -142,6 +144,8 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelatio
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRelatedRecordPaging
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeImageLoader
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecordImageLoader
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecordImagePreview
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeFileFieldPicker
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeAudioRecordPlayer
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeAudioTrack
@@ -757,6 +761,7 @@ fun NextcloudNativeMarketingCapture(
                         RootShell(
                             presentation = scenario.presentation,
                             selected = NextcloudDestination.Home,
+                            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
                             onSelected = {},
                             identity = NextcloudDesktopIdentity(
                                 displayName = fixture.displayName,
@@ -1477,6 +1482,11 @@ private fun AuthenticatedApp(
         RootShell(
             presentation = presentation,
             selected = destination,
+            desktopWorkspaceKind = if (screen == Screen.Root) {
+                NextcloudDesktopWorkspaceKind.Root
+            } else {
+                NextcloudDesktopWorkspaceKind.AppWorkspace
+            },
             onSelected = {
                 destination = it
                 screen = Screen.Root
@@ -1493,6 +1503,7 @@ private fun AuthenticatedApp(
 private fun RootShell(
     presentation: NextcloudPresentation,
     selected: NextcloudDestination,
+    desktopWorkspaceKind: NextcloudDesktopWorkspaceKind,
     onSelected: (NextcloudDestination) -> Unit,
     identity: NextcloudDesktopIdentity?,
     content: @Composable () -> Unit,
@@ -1503,6 +1514,7 @@ private fun RootShell(
                 selected = selected,
                 onSelected = onSelected,
                 identity = identity,
+                workspaceKind = desktopWorkspaceKind,
                 content = content,
             )
         } else {
@@ -2453,6 +2465,37 @@ private fun DynamicDiscoveredAppScreen(
     val runtimeValues = selectedRuntimeValues
         ?.let { values -> safeActionBindingValues(values, selectedPathParameterValues) }
         .orEmpty()
+    val recordImageLoader = remember(
+        services,
+        session,
+        discovery,
+        runtimeValues,
+        dynamicAssetCache,
+    ) {
+        NativeRecordImageLoader { resource, record ->
+            val previewRequest = nativeRecordImageRequest(
+                discovery = discovery,
+                resource = resource,
+                record = record,
+                runtimeContext = runtimeValues,
+            ) ?: return@NativeRecordImageLoader null
+            dynamicAssetCache.getOrLoad("record:${previewRequest.cacheKey}") {
+                services.executeNextcloudApi(session, previewRequest.request)
+                    .acceptedDynamicRecordImageBytes()
+                    ?.let { bytes ->
+                        decodePlatformImageSampled(
+                            bytes,
+                            MAX_DYNAMIC_ARTWORK_DIMENSION,
+                        )?.image
+                    }
+            }?.let { image ->
+                NativeRecordImagePreview(
+                    image = image,
+                    contentDescription = previewRequest.contentDescription,
+                )
+            }
+        }
+    }
     val datasetBindingValues = dynamicDatasetBindingValues(
         component = selectedView.component,
         declaredParameterNames = schema.action(selectedView.sourceActionId)
@@ -2847,8 +2890,6 @@ private fun DynamicDiscoveredAppScreen(
     var directActionFailureState by remember(descriptor) {
         mutableStateOf<DynamicDirectActionFailurePolicy?>(null)
     }
-    var contractInfoExpanded by remember(descriptor) { mutableStateOf(false) }
-    val contractInfo = remember(discovery, recordContext) { discovery.toContractInfo(recordContext) }
     val dynamicActionScope = rememberCoroutineScope()
 
     val activePagination = paginationState?.takeIf { pagination -> pagination.viewId == selectedView.id }
@@ -2926,6 +2967,17 @@ private fun DynamicDiscoveredAppScreen(
         ).takeLast(MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY)
     }
 
+    fun restoreLatestLocation(): Boolean {
+        val previous = navigationHistory.lastOrNull() ?: return false
+        navigationHistory = navigationHistory.dropLast(1)
+        selectedViewId = previous.viewId
+        selectedRecord = previous.record
+        selectedRecordResourceId = previous.recordResourceId
+        selectedPathParameterValues = previous.pathParameterValues
+        contextualMenuOpen = false
+        return true
+    }
+
     fun navigateWithinDynamicApp() {
         val activeContextToken = selectedRecord?.dynamicContextNavigationToken(
             selectedRecordResourceId.orEmpty(),
@@ -2938,14 +2990,7 @@ private fun DynamicDiscoveredAppScreen(
             contextualMenuOpen = false
             contextualMenuRecordToken = null
         }
-        navigationHistory.lastOrNull()?.let { previous ->
-            navigationHistory = navigationHistory.dropLast(1)
-            selectedViewId = previous.viewId
-            selectedRecord = previous.record
-            selectedRecordResourceId = previous.recordResourceId
-            selectedPathParameterValues = previous.pathParameterValues
-            return
-        }
+        if (restoreLatestLocation()) return
         val contextResource = selectedRecordResourceId
         if (selectedRecord != null && contextResource != null && selectedView.resourceId != contextResource) {
             selectedViewId = schema.views.firstOrNull { view ->
@@ -2984,7 +3029,7 @@ private fun DynamicDiscoveredAppScreen(
         val deletedSelectedRecord = refreshPlan?.selectedRecordReconciliation ==
             DynamicSelectedRecordReconciliation.ClearDeletedSelection
         when {
-            deletedSelectedRecord && navigationHistory.isNotEmpty() -> navigateWithinDynamicApp()
+            deletedSelectedRecord && navigationHistory.isNotEmpty() -> restoreLatestLocation()
             deletedSelectedRecord -> {
                 navigationHistory = emptyList()
                 selectedRecord = null
@@ -2992,6 +3037,7 @@ private fun DynamicDiscoveredAppScreen(
                 selectedPathParameterValues = emptyMap()
                 selectedViewId = initialViewId
             }
+            leaveMutatedSurface && navigationHistory.isNotEmpty() -> restoreLatestLocation()
             leaveMutatedSurface -> navigateWithinDynamicApp()
         }
         loadAttempt += 1
@@ -3066,18 +3112,38 @@ private fun DynamicDiscoveredAppScreen(
         val collectionDestinationEntries = remember(
             primaryNavigationDestinations,
             descriptor.app.name,
+            schema,
         ) {
-            primaryNavigationDestinations
+            val destinationsWithLabels = primaryNavigationDestinations
                 .distinctBy { (_, view) -> view.id }
                 .map { (destination, view) ->
+                    val baseLabel = destination.label
+                        .dynamicUiLabel(descriptor.app.name)
+                        .ifBlank { view.dynamicNavigationLabel(descriptor.app.name) }
+                    Triple(destination, view, baseLabel)
+                }
+            destinationsWithLabels
+                .map { (destination, view, baseLabel) ->
+                    val duplicateLabel = destinationsWithLabels.count { (_, _, candidateLabel) ->
+                        candidateLabel.equals(baseLabel, ignoreCase = true)
+                    } > 1
+                    val resourceLabel = schema.resource(view.resourceId)?.name.orEmpty()
                     destination to NextcloudCollectionDestination(
                         id = view.id,
-                        label = destination.label
-                            .dynamicUiLabel(descriptor.app.name)
-                            .ifBlank { view.dynamicNavigationLabel(descriptor.app.name) },
+                        label = dynamicSecondaryDestinationLabel(
+                            destinationLabel = baseLabel,
+                            resourceLabel = resourceLabel.dynamicUiLabel(descriptor.app.name),
+                            duplicate = duplicateLabel,
+                        ),
                         accessibilityId = destination.actionId,
+                        supportingText = view.dynamicDestinationSupportingText(
+                            destinationLabel = baseLabel,
+                            resourceLabel = resourceLabel,
+                        ),
+                        section = destination.dynamicDestinationSection(view),
                     )
                 }
+                .sortedBy { (_, destination) -> destination.section.ordinal }
         }
         val selectedCollectionDestinationId = collectionDestinationEntries
             .firstOrNull { (_, item) -> item.id == selectedView.id }
@@ -3103,28 +3169,53 @@ private fun DynamicDiscoveredAppScreen(
             availableWidthDp = maxWidth.value.toInt(),
             destinationCount = collectionNavigationModel.destinations.size,
         )
-        val collectionSubtitle = selectedRecord?.dynamicContextSubtitle(
-            selectedView,
-            schema.resource(selectedRecordResourceId.orEmpty())?.name,
-        ) ?: selectedView.dynamicRootSubtitle(descriptor.app.name)
         val activeContextToken = selectedRecord?.dynamicContextNavigationToken(
             selectedRecordResourceId.orEmpty(),
         )
         val showContextDestinationMenu = contextualMenuOpen &&
             contextualMenuRecordToken == activeContextToken &&
             shouldShowDynamicContextDestinationMenu(
-                collectionDestinationEntries.map { (_, destination) -> destination.id },
+                collectionDestinationEntries.map { (destination, _) -> destination },
             )
+        val ancestorWorkspaceLabel = navigationHistory.asReversed()
+            .firstNotNullOfOrNull { snapshot -> snapshot.record?.dynamicContextLabel() }
+        val activeSectionLabel = selectedView.dynamicNavigationLabel(descriptor.app.name)
+        val nestedObjectTitle = selectedRecord
+            ?.dynamicContextLabel()
+            ?.takeIf {
+                !showContextDestinationMenu &&
+                    ancestorWorkspaceLabel != null &&
+                    selectedRecordResourceId != selectedView.resourceId
+            }
+        val activeContentTitle = when {
+            showContextDestinationMenu -> selectedRecord?.dynamicContextLabel().orEmpty()
+            nestedObjectTitle != null -> nestedObjectTitle
+            else -> activeSectionLabel
+        }.ifBlank { descriptor.app.name }
+        val activeContentSubtitle = if (showContextDestinationMenu) {
+            "Choose a section"
+        } else if (nestedObjectTitle != null) {
+            activeSectionLabel.takeUnless { label ->
+                label.equals(activeContentTitle, ignoreCase = true)
+            }
+        } else {
+            selectedRecord?.dynamicContextLabel()
+                ?.takeUnless { label -> label.equals(activeContentTitle, ignoreCase = true) }
+                ?: selectedView.dynamicRootSubtitle(descriptor.app.name)
+                    .takeUnless { subtitle -> subtitle.equals(activeContentTitle, ignoreCase = true) }
+        }
+        val hasHeaderActions = overflowActionViews.isNotEmpty() ||
+            secondaryNavigationDestinations.isNotEmpty()
 
         NextcloudCollectionWorkspaceScaffold(
             model = collectionNavigationModel,
             mode = collectionNavigationMode,
-            title = descriptor.app.name,
-            subtitle = if (showContextDestinationMenu) {
-                selectedRecord?.dynamicContextLabel()
-            } else {
-                collectionSubtitle
-            },
+            workspaceLabel = ancestorWorkspaceLabel
+                ?: selectedRecord?.dynamicContextLabel()
+                ?.takeIf(String::isNotBlank)
+                ?: descriptor.app.name,
+            contentTitle = activeContentTitle,
+            contentSubtitle = activeContentSubtitle,
             onBack = ::navigateWithinDynamicApp,
             hasHierarchyBack = hasCollectionHierarchyBack,
             onDestinationSelected = { selected ->
@@ -3142,24 +3233,7 @@ private fun DynamicDiscoveredAppScreen(
                     ?.dynamicCollectionNavigationIcon()
             },
             headerActions = {
-                if (!showContextDestinationMenu) {
-                    primaryCreateAction?.let { (action, view) ->
-                        val actionSpec = schema.action(action.actionId)
-                        val label = actionSpec?.let { spec ->
-                            dynamicHeaderActionLabel(spec, view.dynamicActionLabel())
-                        } ?: view.dynamicActionLabel()
-                        IconButton(
-                            onClick = { selectDynamicAction(action, view) },
-                            modifier = Modifier.semantics {
-                                contentDescription = "$label; action ${action.actionId}"
-                            },
-                        ) {
-                            Icon(
-                                NextcloudIcons.Add,
-                                contentDescription = null,
-                            )
-                        }
-                    }
+                if (!showContextDestinationMenu && hasHeaderActions) {
                     Box {
                         IconButton(onClick = { actionMenuExpanded = true }) {
                             Icon(NextcloudIcons.More, contentDescription = "More options")
@@ -3209,27 +3283,13 @@ private fun DynamicDiscoveredAppScreen(
                                         )
                                     },
                                     modifier = Modifier.semantics {
-                                        contentDescription =
-                                            "Open destination ${destination.actionId}"
+                                        contentDescription = "Open $baseLabel"
                                     },
                                     onClick = {
                                         selectCollectionDestination(destination, view)
                                     },
                                 )
                             }
-                            if (
-                                overflowActionViews.isNotEmpty() ||
-                                secondaryNavigationDestinations.isNotEmpty()
-                            ) {
-                                HorizontalDivider()
-                            }
-                            DropdownMenuItem(
-                                text = { Text("Contract info") },
-                                onClick = {
-                                    actionMenuExpanded = false
-                                    contractInfoExpanded = true
-                                },
-                            )
                         }
                     }
                 }
@@ -3330,10 +3390,11 @@ private fun DynamicDiscoveredAppScreen(
                 mutationReconciliationGeneration = mutationReconciliationGeneration,
                 collectionBatchRelationLoader = collectionBatchRelationLoader,
                 filePicker = dynamicFilePicker,
-            onSelectRecord = selectedView.takeIf {
-                it.component != NativeComponent.detail && it.component != NativeComponent.form
-            }?.let {
-                { record ->
+                recordImageLoader = recordImageLoader,
+                onSelectRecord = selectedView.takeIf {
+                    it.component != NativeComponent.detail && it.component != NativeComponent.form
+                }?.let {
+                    { record ->
                     rememberCurrentLocation()
                     val selectedParentResourceId = record.effectiveNativeResourceId(selectedView.resourceId)
                     val inheritedParameters = inheritDynamicParentParameters(
@@ -3372,15 +3433,8 @@ private fun DynamicDiscoveredAppScreen(
                         parentResourceId = selectedParentResourceId,
                         destinations = nextPlan.contextualChildDestinations,
                     )
-                    val contextualSurfaceIds = buildSet {
-                        nextPlan.contextualChildDestinations.mapTo(this) { destination ->
-                            destination.layoutId
-                        }
-                        compositeTarget?.id?.let(::add)
-                        detailTarget?.id?.let(::add)
-                    }
                     val showDestinationMenu = shouldShowDynamicContextDestinationMenu(
-                        contextualSurfaceIds.toList(),
+                        nextPlan.contextualChildDestinations,
                     )
                     val nextViewId = if (showDestinationMenu) {
                         selectedViewId
@@ -3435,8 +3489,7 @@ private fun DynamicDiscoveredAppScreen(
                         leaveMutatedSurface = false,
                     )
                 },
-                showCollectionCreateAction = primaryCreateAction == null &&
-                    selectedCollectionState == null,
+                showCollectionCreateAction = selectedCollectionState == null,
                 onOpenLink = services::openExternalUrl,
                 imageLoader = imageLoader,
                 audioPlayer = audioSourceCapability?.let {
@@ -3497,12 +3550,6 @@ private fun DynamicDiscoveredAppScreen(
             }
         }
     }
-    }
-    if (contractInfoExpanded) {
-        DynamicContractInfoDialog(
-            info = contractInfo,
-            onDismiss = { contractInfoExpanded = false },
-        )
     }
     pendingDirectAction?.let { pending ->
         val outcomeUnknown = directActionFailureState?.requiresReconciliation == true
@@ -4172,7 +4219,11 @@ private fun DynamicPaginationSpec.toDynamicPaginationState(
 
 private fun String.dynamicUiLabel(appName: String): String {
     val cleaned = removePrefix("API ").removePrefix("Api ").removePrefix("api ").trim()
-    return if (cleaned.equals("general", ignoreCase = true)) appName else cleaned
+    return when {
+        cleaned.equals("general", ignoreCase = true) -> appName
+        cleaned.equals("prefs", ignoreCase = true) -> "Preferences"
+        else -> cleaned
+    }
 }
 
 private fun String.dynamicResourceWords(): Set<String> = lowercase()
@@ -4229,8 +4280,131 @@ private fun String.isMailNavigationAncestor(): Boolean = dynamicResourceWords().
     )
 }
 
-internal fun shouldShowDynamicContextDestinationMenu(destinationIds: List<String>): Boolean =
-    destinationIds.filter(String::isNotBlank).distinct().size >= 2
+internal fun shouldShowDynamicContextDestinationMenu(
+    destinations: List<DynamicNavigationDestination>,
+): Boolean {
+    val uniqueDestinations = destinations.distinctBy(DynamicNavigationDestination::layoutId)
+    if (uniqueDestinations.size < 2) return false
+
+    val meaningfulResourceGroups = uniqueDestinations.mapNotNull { destination ->
+        destination.resourceId.dynamicNavigationResourceWords()
+            .asSequence()
+            .filterNot { word -> word in dynamicSupportingSectionWords }
+            .map { word -> word.removeSuffix("s") }
+            .lastOrNull(String::isNotBlank)
+    }.distinct()
+    return meaningfulResourceGroups.size >= 2
+}
+
+private fun String.dynamicNavigationResourceWords(): List<String> = buildString {
+    this@dynamicNavigationResourceWords.forEachIndexed { index, character ->
+        val previous = this@dynamicNavigationResourceWords.getOrNull(index - 1)
+        if (character.isUpperCase() && previous?.isLowerCase() == true) append(' ')
+        append(if (character.isLetterOrDigit()) character.lowercaseChar() else ' ')
+    }
+}.split(' ').filter(String::isNotBlank)
+
+private val dynamicSupportingSectionWords = setOf(
+    "active",
+    "archive",
+    "archived",
+    "attachment",
+    "attachments",
+    "comment",
+    "comments",
+    "deleted",
+    "detail",
+    "details",
+    "history",
+    "member",
+    "members",
+    "permission",
+    "permissions",
+    "preference",
+    "preferences",
+    "role",
+    "roles",
+    "setting",
+    "settings",
+    "trash",
+    "trashed",
+)
+
+private val dynamicManagementSectionWords = setOf(
+    "archive",
+    "archived",
+    "deleted",
+    "history",
+    "member",
+    "members",
+    "permission",
+    "permissions",
+    "preference",
+    "preferences",
+    "prefs",
+    "role",
+    "roles",
+    "setting",
+    "settings",
+    "trash",
+    "trashed",
+)
+
+private fun DynamicNavigationDestination.dynamicDestinationSection(
+    view: ViewSpec,
+): NextcloudCollectionDestinationSection {
+    val words = buildSet {
+        addAll(label.dynamicNavigationResourceWords())
+        addAll(resourceId.dynamicNavigationResourceWords())
+        addAll(view.title.dynamicNavigationResourceWords())
+    }
+    return if (words.any(dynamicManagementSectionWords::contains)) {
+        NextcloudCollectionDestinationSection.Manage
+    } else {
+        NextcloudCollectionDestinationSection.Primary
+    }
+}
+
+private fun ViewSpec.dynamicDestinationSupportingText(
+    destinationLabel: String,
+    resourceLabel: String,
+): String {
+    val subject = resourceLabel
+        .takeIf(String::isNotBlank)
+        ?.takeUnless { label -> label.equals(destinationLabel, ignoreCase = true) }
+        ?.lowercase()
+    return when (component) {
+        NativeComponent.dashboard -> "Summary and recent activity"
+        NativeComponent.fileBrowser -> "Browse folders and files"
+        NativeComponent.mediaGrid,
+        NativeComponent.mediaLibrary,
+        -> subject?.let { "Browse $it" } ?: "Browse photos and media"
+
+        NativeComponent.taskList -> subject?.let { "Track and complete $it" }
+            ?: "Track and complete items"
+
+        NativeComponent.calendar,
+        NativeComponent.timeline,
+        -> "Browse dates and scheduled activity"
+
+        NativeComponent.board -> "Organize work across lanes"
+        NativeComponent.mailbox -> "Read and manage messages"
+        NativeComponent.contactList -> "Browse people and contact details"
+        NativeComponent.dataTable -> subject?.let { "Review and edit $it" }
+            ?: "Review and edit records"
+
+        NativeComponent.recipeList -> "Browse recipes and ingredients"
+        NativeComponent.documentEditor -> "Open and edit content"
+        NativeComponent.conversationList,
+        NativeComponent.chatThread,
+        -> "Open conversations and messages"
+
+        NativeComponent.detail -> "Summary and key details"
+        NativeComponent.form -> "Create or update information"
+        NativeComponent.collectionList -> subject?.let { "Browse and manage $it" }
+            ?: "Browse and manage records"
+    }
+}
 
 private fun NativeRecord.dynamicContextNavigationToken(resourceId: String): String =
     "$resourceId\u0000$id"
@@ -4242,12 +4416,6 @@ private fun NativeRecord.dynamicContextLabel(): String =
         }
         ?: id
 
-private fun NativeRecord.dynamicContextSubtitle(view: ViewSpec, resourceName: String?): String {
-    val title = dynamicContextLabel()
-    val section = view.dynamicNavigationLabel(resourceName.orEmpty()).takeIf(String::isNotBlank)
-    return listOfNotNull(title, section?.takeUnless { it.equals(title, ignoreCase = true) }).joinToString(" · ")
-}
-
 @Composable
 internal fun DynamicContextDestinationMenu(
     recordLabel: String,
@@ -4255,53 +4423,145 @@ internal fun DynamicContextDestinationMenu(
     schema: NativeAppSchema,
     onDestinationSelected: (DynamicNavigationDestination, ViewSpec) -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(
-                start = NextcloudSpacing.XLarge,
-                top = NextcloudSpacing.Large,
-                end = NextcloudSpacing.XLarge,
-                bottom = NextcloudSpacing.Medium,
-            ),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-        ) {
+    val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
+    val groupedDestinations = remember(destinations) {
+        NextcloudCollectionDestinationSection.entries.mapNotNull { section ->
+            val matching = destinations.filter { (_, destination) ->
+                destination.section == section
+            }
+            matching.takeIf { it.isNotEmpty() }?.let { section to it }
+        }
+    }
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(if (dense) 240.dp else 280.dp),
+        contentPadding = PaddingValues(
+            start = if (dense) NextcloudSpacing.XLarge else NextcloudSpacing.Medium,
+            top = NextcloudSpacing.Large,
+            end = if (dense) NextcloudSpacing.XLarge else NextcloudSpacing.Medium,
+            bottom = NextcloudSpacing.XXLarge,
+        ),
+        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+    ) {
+        item(span = { GridItemSpan(maxLineSpan) }, key = "section-menu-introduction") {
             Text(
-                "Choose a section",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                "Go directly to the part of $recordLabel you need.",
+                "Open the part of $recordLabel you need.",
+                modifier = Modifier.padding(bottom = NextcloudSpacing.Medium),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(150.dp),
-            contentPadding = PaddingValues(
-                start = NextcloudSpacing.XLarge,
-                top = NextcloudSpacing.Small,
-                end = NextcloudSpacing.XLarge,
-                bottom = NextcloudSpacing.XXLarge,
-            ),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-        ) {
-            items(destinations, key = { (_, destination) -> destination.id }) { (planned, destination) ->
-                val view = schema.views.singleOrNull { candidate -> candidate.id == destination.id }
-                    ?: return@items
-                val resourceLabel = schema.resource(view.resourceId)?.name
-                    ?.takeUnless { name -> name.equals(destination.label, ignoreCase = true) }
-                NextcloudAppTile(
-                    title = destination.label,
-                    icon = view.dynamicCollectionNavigationIcon(),
-                    supportingText = resourceLabel,
-                    onClick = { onDestinationSelected(planned, view) },
-                    modifier = Modifier.fillMaxWidth().height(140.dp),
-                    accessibilityId = destination.accessibilityId,
-                    accessibilityDescription = "Open destination ${destination.accessibilityId}",
+        groupedDestinations.forEach { (section, sectionDestinations) ->
+            item(span = { GridItemSpan(maxLineSpan) }, key = "section-menu-${section.name}") {
+                Text(
+                    if (section == NextcloudCollectionDestinationSection.Primary) {
+                        "Sections"
+                    } else {
+                        "Manage"
+                    },
+                    modifier = Modifier.padding(
+                        top = if (section == NextcloudCollectionDestinationSection.Primary) {
+                            0.dp
+                        } else {
+                            NextcloudSpacing.Medium
+                        },
+                        bottom = NextcloudSpacing.XSmall,
+                    ),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
+            items(
+                items = sectionDestinations,
+                key = { (_, destination) -> destination.id },
+            ) { (planned, destination) ->
+                val view = schema.views.singleOrNull { candidate -> candidate.id == destination.id }
+                    ?: return@items
+                DynamicContextDestinationTile(
+                    destination = destination,
+                    icon = view.dynamicCollectionNavigationIcon(),
+                    onClick = { onDestinationSelected(planned, view) },
+                    dense = dense,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DynamicContextDestinationTile(
+    destination: NextcloudCollectionDestination,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    dense: Boolean,
+) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = if (dense) 68.dp else 80.dp)
+            .semantics {
+                contentDescription = "Open ${destination.label}"
+            },
+        colors = CardDefaults.cardColors(
+            containerColor = if (dense) {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            } else {
+                NextcloudTheme.colors.appTile
+            },
+        ),
+        shape = RoundedCornerShape(NextcloudRadii.Medium),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(
+                horizontal = if (dense) NextcloudSpacing.Medium else NextcloudSpacing.Medium,
+                vertical = if (dense) NextcloudSpacing.Small else NextcloudSpacing.Medium,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                color = NextcloudTheme.colors.appIconContainer,
+                shape = RoundedCornerShape(NextcloudRadii.Small),
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = NextcloudTheme.colors.appIcon,
+                    modifier = Modifier.padding(NextcloudSpacing.Small).size(if (dense) 22.dp else 24.dp),
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    destination.label,
+                    style = if (dense) {
+                        MaterialTheme.typography.bodyLarge
+                    } else {
+                        MaterialTheme.typography.titleSmall
+                    },
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                destination.supportingText?.let { supportingText ->
+                    Text(
+                        supportingText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Icon(
+                NextcloudIcons.ChevronRight,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

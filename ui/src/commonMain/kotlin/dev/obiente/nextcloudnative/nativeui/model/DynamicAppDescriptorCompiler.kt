@@ -506,6 +506,56 @@ private fun String.collectionRouteForTerminalState(): String? {
     return segments.dropLast(1).joinToString("/").ifBlank { "/" }
 }
 
+private fun recordImagePreviewRouteResourceIdentity(
+    path: String,
+    readRouteResourceIdentities: Map<String, KotlinRouteResourceIdentity>,
+): KotlinRouteResourceIdentity? {
+    val segments = path.trim('/').split('/').filter(String::isNotBlank)
+    if (segments.size < 3 || segments.last().stableId() !in RECORD_IMAGE_PREVIEW_TERMINALS) return null
+    val recordSegment = segments[segments.lastIndex - 1]
+    if (!recordSegment.startsWith('{') || !recordSegment.endsWith('}')) return null
+    val collectionPath = "/" + segments.dropLast(2).joinToString("/")
+    return readRouteResourceIdentities.entries
+        .filter { (candidatePath, identity) ->
+            identity.collection && candidatePath.trimEnd('/') == collectionPath
+        }
+        .map { entry -> entry.value }
+        .distinct()
+        .singleOrNull()
+}
+
+private val RECORD_IMAGE_PREVIEW_TERMINALS = setOf("image", "preview", "thumbnail")
+
+private val TRUSTED_RECORD_IMAGE_PREVIEW_PROVENANCE = setOf(
+    ProvenanceKind.verifiedAppPackage,
+    ProvenanceKind.appStoreLinkedSourceTag,
+)
+
+private fun String.isDeclaredRecordImageContentType(): Boolean =
+    this == "*/*" || this == "application/octet-stream" || startsWith("image/")
+
+private fun DynamicAction.hasResolvableRecordImageShape(resource: KotlinResourceBuilder): Boolean {
+    val segments = binding.path.trim('/').split('/').filter(String::isNotBlank)
+    val recordToken = segments.getOrNull(segments.lastIndex - 1) ?: return false
+    if (!recordToken.startsWith('{') || !recordToken.endsWith('}')) return false
+    val recordParameterName = recordToken.removePrefix("{").removeSuffix("}")
+    if (binding.pathParameters.none { parameter -> parameter.name == recordParameterName }) return false
+    val recordParameterStem = recordParameterName
+        .takeIf { name -> name.endsWith("Id", ignoreCase = true) && name.length > 2 }
+        ?.dropLast(2)
+    if (
+        !recordParameterName.equals("id", ignoreCase = true) &&
+        recordParameterStem?.semanticBaseVariants()
+            ?.intersect(resource.id.semanticBaseVariants())
+            ?.isNotEmpty() != true
+    ) {
+        return false
+    }
+    return resource.fields.values.any { field ->
+        field.id.lowercase() in setOf("id", "databaseid", "uuid", "token")
+    }
+}
+
 private fun String.terminalCollectionState(): String? =
     trimEnd('/')
         .substringAfterLast('/')
@@ -637,6 +687,7 @@ private class KotlinCompilerState(
     private val operationActionIds = linkedMapOf<String, String>()
     private val fallbackOperationIds = linkedMapOf<String, List<String>>()
     private val readActionIdsByExactContractPath = linkedMapOf<String, MutableList<String>>()
+    private val recordImagePreviewCandidates = linkedMapOf<String, MutableList<DynamicRecordImagePreviewSpec>>()
     val warnings = mutableListOf<DynamicWarning>()
 
     /**
@@ -740,7 +791,17 @@ private class KotlinCompilerState(
             filteredCollectionResourceId = filteredCollectionResourceId,
         )
         val response = responseSchema(operation)
-        val binaryRead = method == HttpMethod.GET && hasSuccessfulBinaryResponse(operation)
+        val binaryResponseContentTypes = if (method == HttpMethod.GET) {
+            successfulBinaryResponseContentTypes(operation)
+        } else {
+            null
+        }
+        val binaryRead = binaryResponseContentTypes != null
+        val recordImagePreviewIdentity = if (binaryRead) {
+            recordImagePreviewRouteResourceIdentity(path, readRouteResourceIdentities)
+        } else {
+            null
+        }
         val (itemSchema, responseCollection) = responseItemSchema(response)
         val preliminaryCollection =
             responseCollection ||
@@ -762,7 +823,8 @@ private class KotlinCompilerState(
             ?: routeResourceIdentity
         val collection = preliminaryCollection || semanticRouteResourceIdentity?.collection == true
         val resourceId =
-            filteredCollectionResourceId
+            recordImagePreviewIdentity?.resourceId
+                ?: filteredCollectionResourceId
                 ?: semanticRouteResourceIdentity?.resourceId
                 ?: inferredResourceId
         val resource = resources.getOrPut(resourceId) { KotlinResourceBuilder(resourceId) }
@@ -859,6 +921,21 @@ private class KotlinCompilerState(
             resultRecoveryActionId = resultRecoveryActionId,
         )
         actions[actionId] = action
+        if (
+            recordImagePreviewIdentity != null &&
+            source.kind in TRUSTED_RECORD_IMAGE_PREVIEW_PROVENANCE &&
+            binaryResponseContentTypes != null &&
+            binaryResponseContentTypes.all(String::isDeclaredRecordImageContentType) &&
+            action.binding.body == null &&
+            action.binding.queryParameters.none(HttpParameter::required) &&
+            action.hasResolvableRecordImageShape(resource)
+        ) {
+            recordImagePreviewCandidates.getOrPut(resourceId) { mutableListOf() } +=
+                DynamicRecordImagePreviewSpec(
+                    actionId = actionId,
+                    declaredContentTypes = binaryResponseContentTypes,
+                )
+        }
         if (method == HttpMethod.GET) {
             readActionIdsByExactContractPath.getOrPut(path) { mutableListOf() } += actionId
         }
@@ -934,7 +1011,13 @@ private class KotlinCompilerState(
                     .distinct(),
             )
         }
-        val completedResources = resources.values.map(KotlinResourceBuilder::finish)
+        val completedResources = resources.values.map(KotlinResourceBuilder::finish).map { resource ->
+            val preview = recordImagePreviewCandidates[resource.id]
+                .orEmpty()
+                .distinct()
+                .singleOrNull()
+            resource.copy(recordImagePreview = preview)
+        }
         val preferredLayoutSeeds = layoutSeeds.values.filter { candidate ->
             !candidate.alternate || layoutSeeds.values.none { other ->
                 !other.alternate &&
@@ -1052,7 +1135,10 @@ private class KotlinCompilerState(
      * the wildcard content type. Local references are resolved before classification so those
      * bytes cannot accidentally enter the JSON record parser.
      */
-    private fun hasSuccessfulBinaryResponse(operation: JsonObject): Boolean {
+    private fun hasSuccessfulBinaryResponse(operation: JsonObject): Boolean =
+        successfulBinaryResponseContentTypes(operation) != null
+
+    private fun successfulBinaryResponseContentTypes(operation: JsonObject): List<String>? {
         val responseMedia = operation.objectValue("responses")
             ?.entries
             ?.filter { (status, _) -> status.startsWith('2') }
@@ -1061,21 +1147,24 @@ private class KotlinCompilerState(
             }
             ?.flatMap { content -> content.entries }
             .orEmpty()
-        if (responseMedia.isEmpty()) return false
-        return responseMedia.all { (declaredType, mediaElement) ->
+        if (responseMedia.isEmpty()) return null
+        val accepted = responseMedia.mapNotNull { (declaredType, mediaElement) ->
             val type = declaredType.substringBefore(';').trim().lowercase()
-            if (type.contains("json")) return@all false
+            if (type.contains("json")) return@mapNotNull null
             val media = resolveLocal(mediaElement) as? JsonObject
             val schema = media?.get("schema")?.let(::resolveLocal) as? JsonObject
             val exactBinarySchema = schema?.let { declared ->
                 declared.string("type") == "string" && declared.string("format") == "binary"
             } == true
-            exactBinarySchema ||
+            type.takeIf {
+                exactBinarySchema ||
                 type.startsWith("image/") ||
                 type.startsWith("audio/") ||
                 type.startsWith("video/") ||
                 type == "application/octet-stream"
+            }
         }
+        return accepted.distinct().sorted().takeIf { it.size == responseMedia.size }
     }
 
     private fun responseItemSchema(schema: JsonElement?): Pair<JsonObject?, Boolean> {
