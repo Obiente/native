@@ -20,14 +20,42 @@ import kotlin.test.assertTrue
 
 class DynamicNavigationParameterInheritanceTest {
     @Test
-    fun `context records with several destinations open a section menu`() {
+    fun `workspace records open a section menu while operational variants stay direct`() {
+        fun destination(layoutId: String, resourceId: String = layoutId) = DynamicNavigationDestination(
+            layoutId = layoutId,
+            label = layoutId,
+            resourceId = resourceId,
+            actionId = "read-$layoutId",
+        )
+
         assertFalse(shouldShowDynamicContextDestinationMenu(emptyList()))
-        assertFalse(shouldShowDynamicContextDestinationMenu(listOf("items")))
-        assertFalse(shouldShowDynamicContextDestinationMenu(listOf("items", "items")))
-        assertTrue(shouldShowDynamicContextDestinationMenu(listOf("items", "notes")))
+        assertFalse(shouldShowDynamicContextDestinationMenu(listOf(destination("items"))))
+        assertFalse(
+            shouldShowDynamicContextDestinationMenu(
+                listOf(
+                    destination("items"),
+                    destination("archive-items", "archivedItems"),
+                    destination("trash-items", "trashedItems"),
+                    destination("roles"),
+                ),
+            ),
+        )
         assertTrue(
             shouldShowDynamicContextDestinationMenu(
-                listOf("items", "notes", "photos", "preferences"),
+                listOf(
+                    destination("notes"),
+                    destination("photos"),
+                ),
+            ),
+        )
+        assertTrue(
+            shouldShowDynamicContextDestinationMenu(
+                listOf(
+                    destination("lists"),
+                    destination("notes"),
+                    destination("photos"),
+                    destination("preferences"),
+                ),
             ),
         )
     }

@@ -44,6 +44,22 @@ internal fun moveNativeCollectionRecord(
     }
 }
 
+internal fun moveNativeCollectionRecordToIndex(
+    orderedRecordIds: List<String>,
+    recordId: String,
+    targetIndex: Int,
+): List<String> {
+    if (orderedRecordIds.distinct().size != orderedRecordIds.size) return orderedRecordIds
+    val fromIndex = orderedRecordIds.indexOf(recordId)
+    if (fromIndex < 0 || targetIndex !in orderedRecordIds.indices || fromIndex == targetIndex) {
+        return orderedRecordIds
+    }
+    return orderedRecordIds.toMutableList().apply {
+        removeAt(fromIndex)
+        add(targetIndex, recordId)
+    }
+}
+
 /**
  * Returns a bounded snapshot that is safe to place in Android saved instance state.
  *

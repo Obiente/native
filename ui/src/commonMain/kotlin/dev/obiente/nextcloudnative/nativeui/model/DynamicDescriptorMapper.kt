@@ -38,6 +38,12 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
             confidence = resource.confidence,
             fields = fields,
             evidence = resource.provenance.map(Provenance::toEvidence),
+            recordImagePreview = resource.recordImagePreview?.let { preview ->
+                RecordImagePreviewSpec(
+                    actionId = preview.actionId,
+                    declaredContentTypes = preview.declaredContentTypes,
+                )
+            },
         )
     }
     val nativeViews = buildList {
@@ -458,7 +464,10 @@ private fun DynamicLayout.toNativeComponent(
             NativeComponent.recipeList
         }
         words.any { it in setOf("gallery", "image", "images", "media", "memories", "photo", "photos") } &&
-            resource.fields.any { it.kind == FieldKind.image || it.kind == FieldKind.file } -> {
+            (
+                resource.recordImagePreview != null ||
+                    resource.fields.any { it.kind == FieldKind.image || it.kind == FieldKind.file }
+                ) -> {
             NativeComponent.mediaGrid
         }
         resource.fields.any { it.kind == FieldKind.image } -> NativeComponent.mediaGrid
