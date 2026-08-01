@@ -42,6 +42,11 @@ internal interface LinuxVirtualFileBackend {
     fun createDirectory(path: String)
     fun delete(node: LinuxVirtualFileNode)
     fun move(node: LinuxVirtualFileNode, destinationPath: String)
+    fun moveReplacing(
+        node: LinuxVirtualFileNode,
+        destination: LinuxVirtualFileNode,
+        destinationPath: String,
+    )
 }
 
 /** Generation-pinned WebDAV backend shared by the Linux FUSE adapter and its unit tests. */
@@ -148,6 +153,17 @@ internal class DesktopNextcloudVirtualFileBackend(
     override fun move(node: LinuxVirtualFileNode, destinationPath: String) {
         val normalized = destinationPath.linuxVirtualPath()
         tree.move(node.path, normalized, node.remoteRevision)
+        rangeCache.invalidate(accountId, node.path)
+        rangeCache.invalidate(accountId, normalized)
+    }
+
+    override fun moveReplacing(
+        node: LinuxVirtualFileNode,
+        destination: LinuxVirtualFileNode,
+        destinationPath: String,
+    ) {
+        val normalized = destinationPath.linuxVirtualPath()
+        tree.moveReplacing(node.path, normalized, node.remoteRevision, destination.remoteRevision)
         rangeCache.invalidate(accountId, node.path)
         rangeCache.invalidate(accountId, normalized)
     }
@@ -320,16 +336,25 @@ internal class LinuxNextcloudVirtualFileSystem(
 
     override fun rename(oldPath: String, newPath: String): Int = fuseResult {
         val sourcePath = oldPath.linuxVirtualPath()
+        val destination = newPath.linuxVirtualPath()
+        if (sourcePath == destination) return 0
         if (pendingCreatedFiles.containsKey(sourcePath)) return -ErrorCodes.EBUSY()
         val source = backend.resolve(sourcePath) ?: return -ErrorCodes.ENOENT()
-        val destination = newPath.linuxVirtualPath()
         val parent = backend.resolve(destination.substringBeforeLast('/', ""))
             ?: return -ErrorCodes.ENOENT()
         if (!parent.directory) return -ErrorCodes.ENOTDIR()
-        if (backend.resolve(destination) != null || pendingCreatedFiles.containsKey(destination)) {
-            return -ErrorCodes.EEXIST()
+        if (pendingCreatedFiles.containsKey(destination)) return -ErrorCodes.EBUSY()
+        val existingDestination = backend.resolve(destination)
+        if (existingDestination != null) {
+            if (source.directory && !existingDestination.directory) return -ErrorCodes.ENOTDIR()
+            if (!source.directory && existingDestination.directory) return -ErrorCodes.EISDIR()
+            if (existingDestination.directory && backend.list(destination).isNotEmpty()) {
+                return -ErrorCodes.ENOTEMPTY()
+            }
+            backend.moveReplacing(source, existingDestination, destination)
+        } else {
+            backend.move(source, destination)
         }
-        backend.move(source, destination)
         0
     }
 

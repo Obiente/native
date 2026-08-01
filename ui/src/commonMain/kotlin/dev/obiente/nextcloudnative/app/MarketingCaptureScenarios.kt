@@ -748,7 +748,7 @@ internal fun MarketingFileSyncRulesScenario() {
                 direction = FileSyncDirection.Bidirectional,
                 conflictPolicy = FileSyncConflictPolicy.Ask,
                 deletionPolicy = FileSyncDeletionPolicy.Ask,
-                deviceLabel = "Mara's phone",
+                deviceLabel = "Alex's phone",
                 networkPolicy = FileSyncNetworkPolicy.Unmetered,
                 powerPolicy = FileSyncPowerPolicy.BatteryNotLow,
                 ignoredPatterns = listOf("*.part", "**/.thumbnails/**", "**/Cache/**"),
@@ -948,7 +948,7 @@ internal fun MarketingFileSyncStatusMobileScenario() {
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(
             title = "Folder sync",
-            subtitle = "Mara's phone",
+            subtitle = "Alex's phone",
             onBack = {},
         )
         Column(
@@ -967,7 +967,7 @@ internal fun MarketingFileSyncStatusMobileScenario() {
                             remoteRootPath = "Photos/Studio",
                             configuration = FileSyncConfiguration(
                                 direction = FileSyncDirection.Bidirectional,
-                                deviceLabel = "Mara's phone",
+                                deviceLabel = "Alex's phone",
                                 ignoredPatterns = listOf("*.part", "**/.thumbnails/**", "**/Cache/**"),
                                 priorityRules = listOf(
                                     FileSyncPriorityRule("**/*.raf"),
@@ -990,7 +990,7 @@ internal fun MarketingFileSyncStatusMobileScenario() {
                             remoteRootPath = "Photos/Clients/Selects",
                             configuration = FileSyncConfiguration(
                                 direction = FileSyncDirection.Bidirectional,
-                                deviceLabel = "Mara's phone",
+                                deviceLabel = "Alex's phone",
                                 ignoredPatterns = listOf("*.part"),
                             ),
                             readyCount = 5,
@@ -1021,7 +1021,7 @@ internal fun MarketingFileSyncStatusMobileScenario() {
                             remoteRootPath = "Photos/Phone camera",
                             configuration = FileSyncConfiguration(
                                 direction = FileSyncDirection.UploadOnly,
-                                deviceLabel = "Mara's phone",
+                                deviceLabel = "Alex's phone",
                                 networkPolicy = FileSyncNetworkPolicy.Unmetered,
                             ),
                             readyCount = 0,

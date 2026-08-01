@@ -66,11 +66,16 @@ internal class DesktopLinuxVirtualFileWritebackStore(
                 )
             }
             val random = RandomAccessFile(stage, "rw")
-            if (truncate) random.setLength(0L)
-            saveManifest(
-                manifestFile,
-                WritebackManifest(path, expectedRevision, stagedAt, dirty, stage.name),
-            )
+            try {
+                if (truncate) random.setLength(0L)
+                saveManifest(
+                    manifestFile,
+                    WritebackManifest(path, expectedRevision, stagedAt, dirty, stage.name),
+                )
+            } catch (failure: Throwable) {
+                runCatching(random::close)
+                throw failure
+            }
             return object : LinuxVirtualFileWriteHandle {
                 private var closed = false
 

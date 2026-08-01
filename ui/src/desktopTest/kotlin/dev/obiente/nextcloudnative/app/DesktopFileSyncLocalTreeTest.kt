@@ -72,4 +72,43 @@ class DesktopFileSyncLocalTreeTest {
             root.toFile().deleteRecursively()
         }
     }
+
+    @Test
+    fun `directory to file replacement protects the original until complete bytes are published`() {
+        val root = Files.createTempDirectory("desktop-sync-type-replace-")
+        val source = Files.createTempFile("desktop-sync-source-", ".tmp")
+        try {
+            root.resolve("Notes/today.md/child.txt").parent.createDirectories()
+            root.resolve("Notes/today.md/child.txt").writeText("protected")
+            source.writeText("replacement file")
+            val tree = DesktopFileSyncLocalTree(root.toFile())
+            val before = requireNotNull(tree.resolve("Notes/today.md"))
+
+            tree.replaceWithFile("Notes/today.md", source.toFile(), before.entry.revision)
+
+            assertEquals("replacement file", root.resolve("Notes/today.md").toFile().readText())
+            assertFalse(root.toFile().walkTopDown().any { ".nextcloud-native-" in it.name })
+        } finally {
+            root.toFile().deleteRecursively()
+            Files.deleteIfExists(source)
+        }
+    }
+
+    @Test
+    fun `file to directory replacement keeps a recoverable backup until publication`() {
+        val root = Files.createTempDirectory("desktop-sync-directory-replace-")
+        try {
+            root.resolve("Albums").createDirectories()
+            root.resolve("Albums/Shared").writeText("protected")
+            val tree = DesktopFileSyncLocalTree(root.toFile())
+            val before = requireNotNull(tree.resolve("Albums/Shared"))
+
+            tree.replaceWithDirectory("Albums/Shared", before.entry.revision)
+
+            assertTrue(Files.isDirectory(root.resolve("Albums/Shared")))
+            assertFalse(root.toFile().walkTopDown().any { ".nextcloud-native-" in it.name })
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
 }

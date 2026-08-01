@@ -1,11 +1,15 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 enum class FileSyncDirection {
     Bidirectional,
     DownloadOnly,
     UploadOnly,
 }
 
+@Serializable
 enum class FileSyncConflictPolicy {
     Ask,
     KeepBoth,
@@ -13,17 +17,20 @@ enum class FileSyncConflictPolicy {
     PreferRemote,
 }
 
+@Serializable
 enum class FileSyncDeletionPolicy {
     Ask,
     Propagate,
     RestoreMissing,
 }
 
+@Serializable
 enum class FileSyncNetworkPolicy {
     AnyConnection,
     Unmetered,
 }
 
+@Serializable
 enum class FileSyncPowerPolicy {
     AnyPower,
     BatteryNotLow,
@@ -38,6 +45,7 @@ enum class FileSyncPowerPolicy {
  * case-insensitive so camera extensions such as `.RAF` and `.raf` share one policy on every
  * platform; path identity itself remains case-preserving and platform-specific.
  */
+@Serializable
 data class FileSyncPriorityRule(val pattern: String) {
     init {
         requireValidFileSyncGlob(pattern)
@@ -117,6 +125,7 @@ data class FileSyncBaseline(
     }
 }
 
+@Serializable
 data class FileSyncConfiguration(
     val direction: FileSyncDirection = FileSyncDirection.Bidirectional,
     val conflictPolicy: FileSyncConflictPolicy = FileSyncConflictPolicy.Ask,
@@ -382,21 +391,33 @@ private fun planDirectory(
     local == null && remote != null -> when (configuration.deletionPolicy) {
         FileSyncDeletionPolicy.Ask ->
             FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.LocalDeletion)
-        FileSyncDeletionPolicy.Propagate ->
+        FileSyncDeletionPolicy.Propagate -> if (configuration.hasPartialDirectoryView()) {
+            FileSyncOperation.Skipped(path, PARTIAL_DIRECTORY_DELETION_REASON)
+        } else {
             FileSyncOperation.DeleteRemote(path, remote.etag)
+        }
         FileSyncDeletionPolicy.RestoreMissing ->
             FileSyncOperation.Download(path, null)
     }
     remote == null && local != null -> when (configuration.deletionPolicy) {
         FileSyncDeletionPolicy.Ask ->
             FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.RemoteDeletion)
-        FileSyncDeletionPolicy.Propagate ->
+        FileSyncDeletionPolicy.Propagate -> if (configuration.hasPartialDirectoryView()) {
+            FileSyncOperation.Skipped(path, PARTIAL_DIRECTORY_DELETION_REASON)
+        } else {
             FileSyncOperation.DeleteLocal(path, local.revision)
+        }
         FileSyncDeletionPolicy.RestoreMissing ->
             FileSyncOperation.Upload(path, null)
     }
     else -> null
 }
+
+private fun FileSyncConfiguration.hasPartialDirectoryView(): Boolean =
+    selectedPaths.isNotEmpty() || ignoredPatterns.isNotEmpty()
+
+private const val PARTIAL_DIRECTORY_DELETION_REASON =
+    "Directory deletion is paused because selective or ignored items may exist below it."
 
 private fun planFirstSync(
     path: String,

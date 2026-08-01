@@ -122,10 +122,15 @@ internal class DesktopFileSyncEngine(
         val accountId = desktopFileCacheAccountId(session)
         val current = store.load()
         if (current.coordinator.pairs.any { pair ->
-                if (pair.accountId != accountId) return@any false
                 val existingRoot = current.roots.firstOrNull { it.id == pair.localRootId } ?: return@any true
-                desktopSyncRootsOverlap(existingRoot.absolutePath, canonical.absolutePath) ||
-                    desktopSyncRemoteRootsOverlap(pair.remoteRootPath, normalizedRemote)
+                desktopSyncMappingsOverlap(
+                    existingAccountId = pair.accountId,
+                    requestedAccountId = accountId,
+                    existingLocalRoot = existingRoot.absolutePath,
+                    requestedLocalRoot = canonical.absolutePath,
+                    existingRemoteRoot = pair.remoteRootPath,
+                    requestedRemoteRoot = normalizedRemote,
+                )
             }) {
             return@withLock FileSyncCenterActionResult.Rejected(
                 "This folder overlaps another local or Nextcloud sync mapping. Choose separate roots.",
@@ -357,34 +362,52 @@ internal class DesktopFileSyncEngine(
         return when (val operation = command.operation) {
             is FileSyncOperation.Upload -> {
                 val source = requireNotNull(work.observedLocal)
-                if (work.observedRemote?.kind?.let { it != source.kind } == true) {
-                    remote.delete(operation.relativePath, requireNotNull(operation.expectedRemoteEtag))
-                }
-                val expected = operation.expectedRemoteEtag
-                    .takeUnless { work.observedRemote?.kind?.let { it != source.kind } == true }
-                if (source.kind == SyncEntryKind.Directory) {
-                    remote.createDirectory(operation.relativePath, expected)
+                val replacingType = work.observedRemote?.kind?.let { it != source.kind } == true
+                if (source.kind == SyncEntryKind.Directory && replacingType) {
+                    remote.replaceWithDirectory(
+                        operation.relativePath,
+                        requireNotNull(operation.expectedRemoteEtag),
+                    )
+                } else if (source.kind == SyncEntryKind.Directory) {
+                    remote.createDirectory(operation.relativePath, operation.expectedRemoteEtag)
                 } else {
                     withStagingFile("upload") { staged ->
                         local.stageForUpload(operation.relativePath, staged, MAX_SYNC_FILE_BYTES)
-                        remote.writeFile(operation.relativePath, staged, expected)
+                        if (replacingType) {
+                            remote.replaceWithFile(
+                                operation.relativePath,
+                                staged,
+                                requireNotNull(operation.expectedRemoteEtag),
+                            )
+                        } else {
+                            remote.writeFile(operation.relativePath, staged, operation.expectedRemoteEtag)
+                        }
                     }
                 }
                 synchronizedResult(operation.relativePath, local, remote)
             }
             is FileSyncOperation.Download -> {
                 val source = requireNotNull(work.observedRemote)
-                if (work.observedLocal?.kind?.let { it != source.kind } == true) {
-                    local.delete(operation.relativePath, requireNotNull(operation.expectedLocalRevision))
-                }
-                val expected = operation.expectedLocalRevision
-                    .takeUnless { work.observedLocal?.kind?.let { it != source.kind } == true }
-                if (source.kind == SyncEntryKind.Directory) {
-                    local.createDirectory(operation.relativePath, expected)
+                val replacingType = work.observedLocal?.kind?.let { it != source.kind } == true
+                if (source.kind == SyncEntryKind.Directory && replacingType) {
+                    local.replaceWithDirectory(
+                        operation.relativePath,
+                        requireNotNull(operation.expectedLocalRevision),
+                    )
+                } else if (source.kind == SyncEntryKind.Directory) {
+                    local.createDirectory(operation.relativePath, operation.expectedLocalRevision)
                 } else {
                     withStagingFile("download") { staged ->
                         remote.stageDownload(operation.relativePath, source.etag, staged, MAX_SYNC_FILE_BYTES)
-                        local.writeFile(operation.relativePath, staged, expected)
+                        if (replacingType) {
+                            local.replaceWithFile(
+                                operation.relativePath,
+                                staged,
+                                requireNotNull(operation.expectedLocalRevision),
+                            )
+                        } else {
+                            local.writeFile(operation.relativePath, staged, operation.expectedLocalRevision)
+                        }
                     }
                 }
                 synchronizedResult(operation.relativePath, local, remote)
@@ -417,13 +440,24 @@ internal class DesktopFileSyncEngine(
         require(localSource.kind == SyncEntryKind.File && remoteSource.kind == SyncEntryKind.File)
         withStagingFile("keep-local") { localBytes ->
             withStagingFile("keep-remote") { remoteBytes ->
-                local.stageForUpload(operation.relativePath, localBytes, MAX_SYNC_FILE_BYTES)
+                val currentOriginal = local.resolve(operation.relativePath)
+                val preservedLocalPath = if (currentOriginal?.entry?.revision == localSource.revision) {
+                    operation.relativePath
+                } else {
+                    operation.localConflictPath
+                }
+                local.stageForUpload(preservedLocalPath, localBytes, MAX_SYNC_FILE_BYTES)
                 remote.stageDownload(operation.relativePath, remoteSource.etag, remoteBytes, MAX_SYNC_FILE_BYTES)
-                remote.writeFile(operation.localConflictPath, localBytes, null)
-                local.writeFile(operation.localConflictPath, localBytes, null)
-                remote.writeFile(operation.remoteConflictPath, remoteBytes, null)
-                local.writeFile(operation.remoteConflictPath, remoteBytes, null)
-                local.writeFile(operation.relativePath, remoteBytes, localSource.revision)
+                ensureLocalFile(operation.localConflictPath, localBytes, local)
+                ensureRemoteFile(operation.localConflictPath, localBytes, remote)
+                ensureLocalFile(operation.remoteConflictPath, remoteBytes, local)
+                ensureRemoteFile(operation.remoteConflictPath, remoteBytes, remote)
+                replaceLocalOriginalOrVerify(
+                    operation.relativePath,
+                    remoteBytes,
+                    localSource.revision,
+                    local,
+                )
             }
         }
         return FileSyncExecutionSuccess(
@@ -434,6 +468,67 @@ internal class DesktopFileSyncEngine(
             ),
         )
     }
+
+    private fun ensureLocalFile(
+        path: String,
+        expectedBytes: File,
+        local: DesktopFileSyncLocalTree,
+    ) {
+        val current = local.resolve(path)
+        if (current == null) {
+            local.writeFile(path, expectedBytes, null)
+            return
+        }
+        require(current.entry.kind == SyncEntryKind.File) { "A conflict-copy path is not a file." }
+        withStagingFile("verify-local-conflict") { actualBytes ->
+            local.stageForUpload(path, actualBytes, MAX_SYNC_FILE_BYTES)
+            require(filesMatch(actualBytes, expectedBytes)) {
+                "A conflict-copy path contains different local content."
+            }
+        }
+    }
+
+    private fun ensureRemoteFile(
+        path: String,
+        expectedBytes: File,
+        remote: DesktopFileSyncRemoteTree,
+    ) {
+        val current = remote.resolve(path)
+        if (current == null) {
+            remote.writeFile(path, expectedBytes, null)
+            return
+        }
+        require(current.entry.kind == SyncEntryKind.File) { "A conflict-copy path is not a file." }
+        withStagingFile("verify-remote-conflict") { actualBytes ->
+            remote.stageDownload(path, current.entry.etag, actualBytes, MAX_SYNC_FILE_BYTES)
+            require(filesMatch(actualBytes, expectedBytes)) {
+                "A conflict-copy path contains different server content."
+            }
+        }
+    }
+
+    private fun replaceLocalOriginalOrVerify(
+        path: String,
+        expectedBytes: File,
+        originalRevision: String,
+        local: DesktopFileSyncLocalTree,
+    ) {
+        val current = requireNotNull(local.resolve(path)) { "The original local file disappeared." }
+        require(current.entry.kind == SyncEntryKind.File) { "The original local path is not a file." }
+        if (current.entry.revision == originalRevision) {
+            local.writeFile(path, expectedBytes, originalRevision)
+            return
+        }
+        withStagingFile("verify-local-original") { actualBytes ->
+            local.stageForUpload(path, actualBytes, MAX_SYNC_FILE_BYTES)
+            require(filesMatch(actualBytes, expectedBytes)) {
+                "The original local file changed while conflict copies were being published."
+            }
+        }
+    }
+
+    private fun filesMatch(first: File, second: File): Boolean =
+        first.length() == second.length() && Files.mismatch(first.toPath(), second.toPath()) == -1L
 
     private fun synchronizedResult(
         path: String,
@@ -493,6 +588,19 @@ internal fun desktopSyncRemoteRootsOverlap(first: String, second: String): Boole
     return left.isEmpty() || right.isEmpty() ||
         left == right || left.startsWith("$right/") || right.startsWith("$left/")
 }
+
+internal fun desktopSyncMappingsOverlap(
+    existingAccountId: String,
+    requestedAccountId: String,
+    existingLocalRoot: String,
+    requestedLocalRoot: String,
+    existingRemoteRoot: String,
+    requestedRemoteRoot: String,
+): Boolean = desktopSyncRootsOverlap(existingLocalRoot, requestedLocalRoot) ||
+    (
+        existingAccountId == requestedAccountId &&
+            desktopSyncRemoteRootsOverlap(existingRemoteRoot, requestedRemoteRoot)
+        )
 
 private fun desktopFileSyncStagingDirectory(): File {
     val cacheRoot = System.getenv("XDG_CACHE_HOME")?.takeIf(String::isNotBlank)?.let(::File)

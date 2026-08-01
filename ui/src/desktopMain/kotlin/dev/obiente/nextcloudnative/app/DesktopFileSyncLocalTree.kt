@@ -47,6 +47,7 @@ internal class DesktopFileSyncLocalTree(root: File) {
                         "Folder sync stopped because ${relative(dir)} is a symbolic link."
                     }
                     if (dir != root) {
+                        if (isOwnedRecoveryPath(dir)) return FileVisitResult.SKIP_SUBTREE
                         val relative = relative(dir)
                         if (!includes(relative, SyncEntryKind.Directory)) return FileVisitResult.SKIP_SUBTREE
                         add(dir, attrs, SyncEntryKind.Directory)
@@ -55,6 +56,7 @@ internal class DesktopFileSyncLocalTree(root: File) {
                 }
 
                 override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                    if (isOwnedRecoveryPath(file)) return FileVisitResult.CONTINUE
                     require(!Files.isSymbolicLink(file)) {
                         "Folder sync stopped because ${relative(file)} is a symbolic link."
                     }
@@ -147,6 +149,54 @@ internal class DesktopFileSyncLocalTree(root: File) {
         }
         val parent = requireNotNull(destination.parent)
         Files.createDirectories(parent)
+        publishFileReplacement(destination, current, source)
+    }
+
+    fun replaceWithFile(relativePath: String, source: File, expectedLocalRevision: String) {
+        val destination = safePath(relativePath)
+        val current = requireNotNull(resolve(relativePath)) { "The local item was already removed." }
+        require(current.entry.revision == expectedLocalRevision) {
+            "The local item changed after the sync scan."
+        }
+        require(current.entry.kind == SyncEntryKind.Directory) {
+            "The local item type changed after the sync scan."
+        }
+        publishFileReplacement(destination, current, source)
+    }
+
+    fun replaceWithDirectory(relativePath: String, expectedLocalRevision: String) {
+        val destination = safePath(relativePath)
+        val current = requireNotNull(resolve(relativePath)) { "The local item was already removed." }
+        require(current.entry.revision == expectedLocalRevision) {
+            "The local item changed after the sync scan."
+        }
+        require(current.entry.kind == SyncEntryKind.File) {
+            "The local item type changed after the sync scan."
+        }
+        val parent = requireNotNull(destination.parent)
+        Files.createDirectories(parent)
+        val token = UUID.randomUUID().toString()
+        val backup = parent.resolve(".${destination.fileName}.nextcloud-native-backup-$token")
+        var protected = false
+        try {
+            move(current.path, backup, replace = false)
+            protected = true
+            Files.createDirectory(destination)
+        } catch (failure: Throwable) {
+            if (protected && !Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
+                runCatching { move(backup, destination, replace = false) }
+            }
+            throw failure
+        }
+        deleteOwnedPath(backup)
+    }
+
+    private fun publishFileReplacement(
+        destination: Path,
+        current: DesktopLocalSyncDocument?,
+        source: File,
+    ) {
+        val parent = requireNotNull(destination.parent)
         val token = UUID.randomUUID().toString()
         val staged = parent.resolve(".${destination.fileName}.nextcloud-native-download-$token")
         val backup = parent.resolve(".${destination.fileName}.nextcloud-native-backup-$token")
@@ -159,12 +209,14 @@ internal class DesktopFileSyncLocalTree(root: File) {
                 protected = true
             }
             move(staged, destination, replace = false)
-            if (protected) Files.deleteIfExists(backup)
         } catch (failure: Throwable) {
             Files.deleteIfExists(staged)
-            if (protected && !Files.exists(destination)) runCatching { move(backup, destination, replace = false) }
+            if (protected && !Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
+                runCatching { move(backup, destination, replace = false) }
+            }
             throw failure
         }
+        if (protected) deleteOwnedPath(backup)
     }
 
     fun delete(relativePath: String, expectedLocalRevision: String) {
@@ -181,24 +233,43 @@ internal class DesktopFileSyncLocalTree(root: File) {
             setOf(),
             MAX_DEPTH,
             object : SimpleFileVisitor<Path>() {
+                override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                    if (dir == root || BACKUP_MARKER !in dir.fileName.toString()) {
+                        return FileVisitResult.CONTINUE
+                    }
+                    restoreBackupWhenDestinationIsMissing(dir)
+                    return FileVisitResult.SKIP_SUBTREE
+                }
+
                 override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                     val name = file.fileName.toString()
                     when {
                         DOWNLOAD_MARKER in name -> Files.deleteIfExists(file)
-                        BACKUP_MARKER in name -> {
-                            val finalName = name.removePrefix(".").substringBefore(BACKUP_MARKER)
-                            val finalPath = requireNotNull(file.parent).resolve(finalName)
-                            if (Files.exists(finalPath, LinkOption.NOFOLLOW_LINKS)) {
-                                Files.deleteIfExists(file)
-                            } else {
-                                move(file, finalPath, replace = false)
-                            }
-                        }
+                        BACKUP_MARKER in name -> restoreBackupWhenDestinationIsMissing(file)
                     }
                     return FileVisitResult.CONTINUE
                 }
             },
         )
+    }
+
+    private fun restoreBackupWhenDestinationIsMissing(backup: Path) {
+        val name = backup.fileName.toString()
+        val finalName = name.removePrefix(".").substringBefore(BACKUP_MARKER)
+        if (finalName.isBlank()) return
+        val finalPath = requireNotNull(backup.parent).resolve(finalName)
+        if (!Files.exists(finalPath, LinkOption.NOFOLLOW_LINKS)) move(backup, finalPath, replace = false)
+    }
+
+    private fun isOwnedRecoveryPath(path: Path): Boolean {
+        val name = path.fileName.toString()
+        return DOWNLOAD_MARKER in name || BACKUP_MARKER in name
+    }
+
+    private fun deleteOwnedPath(path: Path) {
+        require(path.startsWith(root) && BACKUP_MARKER in path.fileName.toString())
+        if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) path.toFile().deleteRecursively()
+        else Files.deleteIfExists(path)
     }
 
     private fun safePath(relativePath: String): Path {

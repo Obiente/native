@@ -79,6 +79,18 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `rename atomically replaces an existing file for editor save workflows`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        backend.addFile("Photos/.notes.txt.tmp", "new".encodeToByteArray())
+        backend.addFile("Photos/notes.txt", "old".encodeToByteArray())
+
+        assertEquals(0, fileSystem.rename("/Photos/.notes.txt.tmp", "/Photos/notes.txt"))
+        assertEquals(null, backend.resolve("Photos/.notes.txt.tmp"))
+        assertContentEquals("new".encodeToByteArray(), backend.fileBytes("Photos/notes.txt"))
+    }
+
+    @Test
     fun `rmdir refuses a non empty remote directory`() {
         val backend = MutableFixtureBackend()
         val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
@@ -179,6 +191,12 @@ class LinuxVirtualFileSystemTest {
             override fun delete(node: LinuxVirtualFileNode) = error("Not used by this read fixture.")
             override fun move(node: LinuxVirtualFileNode, destinationPath: String) =
                 error("Not used by this read fixture.")
+
+            override fun moveReplacing(
+                node: LinuxVirtualFileNode,
+                destination: LinuxVirtualFileNode,
+                destinationPath: String,
+            ) = error("Not used by this read fixture.")
         }
     }
 
@@ -259,6 +277,17 @@ class LinuxVirtualFileSystemTest {
                 name = destinationPath.substringAfterLast('/'),
             )
             if (content != null) contents[destinationPath] = content
+        }
+
+        override fun moveReplacing(
+            node: LinuxVirtualFileNode,
+            destination: LinuxVirtualFileNode,
+            destinationPath: String,
+        ) {
+            require(nodes[destinationPath]?.remoteRevision == destination.remoteRevision)
+            nodes.remove(destinationPath)
+            contents.remove(destinationPath)
+            move(node, destinationPath)
         }
 
         fun fileBytes(path: String): ByteArray = requireNotNull(contents[path])

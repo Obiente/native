@@ -213,7 +213,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "69f69a56acfb2ab5adf778df100624a70ac96043dda72bd451a1100c647af686",
+    "captureSourceSha256": "4e61e788534934ac69d39111045b76fab4d4ee315ddf2bd73be0a5320b0bdce5",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {
@@ -298,7 +298,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "79da1f1e86a21c13a15171ec0b7824bf9a5fc7c76aec33ca6f69e27c2bc3d2e1"
+            "sha256": "9f969a0294981d3ba6b25633e3f4ae564177fe2c0ece0d9ed9cb3e81ab021383"
         },
         {
             "scenario": "file-sync-status-desktop",

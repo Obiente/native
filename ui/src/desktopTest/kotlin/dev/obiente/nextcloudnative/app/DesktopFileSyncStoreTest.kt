@@ -71,4 +71,38 @@ class DesktopFileSyncStoreTest {
             root.toFile().deleteRecursively()
         }
     }
+
+    @Test
+    fun `local overlap is global while remote overlap is scoped to one account`() {
+        val root = Files.createTempDirectory("desktop-sync-account-overlap-")
+        try {
+            val child = Files.createDirectories(root.resolve("child"))
+            val sibling = Files.createDirectories(root.resolveSibling(root.fileName.toString() + "-sibling"))
+
+            assertTrue(
+                desktopSyncMappingsOverlap(
+                    "account-a", "account-b",
+                    root.toString(), child.toString(),
+                    "Photos", "Documents",
+                ),
+            )
+            assertFalse(
+                desktopSyncMappingsOverlap(
+                    "account-a", "account-b",
+                    root.toString(), sibling.toString(),
+                    "Photos", "Photos/RAW",
+                ),
+            )
+            assertTrue(
+                desktopSyncMappingsOverlap(
+                    "account-a", "account-a",
+                    root.toString(), sibling.toString(),
+                    "Photos", "Photos/RAW",
+                ),
+            )
+            sibling.toFile().deleteRecursively()
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
 }

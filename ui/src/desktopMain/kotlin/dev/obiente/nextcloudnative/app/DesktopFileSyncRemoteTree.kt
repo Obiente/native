@@ -114,6 +114,33 @@ internal class DesktopFileSyncRemoteTree(
         )
     }
 
+    fun replaceWithDirectory(relativePath: String, expectedRemoteEtag: String) {
+        val current = requireNotNull(resolve(relativePath)) { "The server item was already removed." }
+        require(current.entry.etag == expectedRemoteEtag && !current.isDirectory) {
+            "The server item changed after the sync scan."
+        }
+        val destinationPath = fullPath(relativePath)
+        val backupPath = replacementBackupPath(destinationPath)
+        val currentAtFullPath = current.withPath(destinationPath)
+        moveRemoteDocument(currentAtFullPath, backupPath)
+        try {
+            execute(
+                requestBuilder(fileUrl(destinationPath))
+                    .header("If-None-Match", "*")
+                    .method("MKCOL", EMPTY_BODY)
+                    .build(),
+                "replace item with folder",
+            )
+            require(resolve(relativePath)?.isDirectory == true) {
+                "The replacement server folder could not be verified."
+            }
+        } catch (failure: Throwable) {
+            restoreRemoteBackup(destinationPath, backupPath)
+            throw failure
+        }
+        deleteRemoteBackup(backupPath)
+    }
+
     override fun writeFile(relativePath: String, source: File, expectedRemoteEtag: String?): RemoteSyncEntry {
         require(source.isFile)
         val current = resolve(relativePath)
@@ -129,6 +156,40 @@ internal class DesktopFileSyncRemoteTree(
         val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }
         require(!after.isDirectory) { "The uploaded server item is not a file." }
         return after.entry
+    }
+
+    fun replaceWithFile(relativePath: String, source: File, expectedRemoteEtag: String): RemoteSyncEntry {
+        require(source.isFile)
+        val current = requireNotNull(resolve(relativePath)) { "The server item was already removed." }
+        require(current.entry.etag == expectedRemoteEtag && current.isDirectory) {
+            "The server item changed after the sync scan."
+        }
+        val destinationPath = fullPath(relativePath)
+        val parent = destinationPath.substringBeforeLast('/', "")
+        val token = UUID.randomUUID().toString()
+        val stagingPath = listOf(parent, ".nextcloud-native-$token.upload")
+            .filter(String::isNotBlank).joinToString("/")
+        val backupPath = replacementBackupPath(destinationPath)
+        val stagedEtag = createFile(stagingPath, source)
+        var protected = false
+        try {
+            moveRemoteDocument(current.withPath(destinationPath), backupPath)
+            protected = true
+            moveRemotePath(
+                sourcePath = stagingPath,
+                destinationPath = destinationPath,
+                sourceEtag = stagedEtag,
+                sourceIsDirectory = false,
+            )
+            val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }
+            require(!after.isDirectory) { "The uploaded server item is not a file." }
+            deleteRemoteBackup(backupPath)
+            return after.entry
+        } catch (failure: Throwable) {
+            if (protected) restoreRemoteBackup(destinationPath, backupPath)
+            deleteRemoteStage(stagingPath, stagedEtag)
+            throw failure
+        }
     }
 
     fun delete(relativePath: String, expectedRemoteEtag: String) {
@@ -147,16 +208,61 @@ internal class DesktopFileSyncRemoteTree(
         require(resolve(destinationRelativePath) == null) { "The move destination already exists." }
         val current = requireNotNull(resolve(sourceRelativePath)) { "The server item was already removed." }
         require(current.entry.etag == expectedRemoteEtag) { "The server item changed before it could be moved." }
-        val sourceUrl = fileUrl(fullPath(sourceRelativePath))
-        val builder = requestBuilder(sourceUrl)
-            .header("Destination", fileUrl(fullPath(destinationRelativePath)))
-            .header("Overwrite", "F")
-        if (current.isDirectory) builder.header("If", "<$sourceUrl> ([$expectedRemoteEtag])")
-        else builder.header("If-Match", safeEtag(expectedRemoteEtag))
-        execute(builder.method("MOVE", EMPTY_BODY).build(), "move item")
+        moveRemoteDocument(current.withPath(fullPath(sourceRelativePath)), fullPath(destinationRelativePath))
+    }
+
+    fun moveReplacing(
+        sourceRelativePath: String,
+        destinationRelativePath: String,
+        expectedSourceEtag: String,
+        expectedDestinationEtag: String,
+    ) {
+        requireValidSyncPath(sourceRelativePath)
+        requireValidSyncPath(destinationRelativePath)
+        val source = requireNotNull(resolve(sourceRelativePath)) { "The server source was already removed." }
+        val destination = requireNotNull(resolve(destinationRelativePath)) {
+            "The server destination was already removed."
+        }
+        require(source.entry.etag == expectedSourceEtag) { "The server source changed before it could be moved." }
+        require(destination.entry.etag == expectedDestinationEtag) {
+            "The server destination changed before it could be replaced."
+        }
+        require(source.isDirectory == destination.isDirectory) { "The move destination has a different item type." }
+        val sourcePath = fullPath(sourceRelativePath)
+        val destinationPath = fullPath(destinationRelativePath)
+        val backupPath = replacementBackupPath(destinationPath)
+        moveRemoteDocument(destination.withPath(destinationPath), backupPath)
+        try {
+            moveRemoteDocument(source.withPath(sourcePath), destinationPath)
+            val published = requireNotNull(resolve(destinationRelativePath)) {
+                "The moved server item could not be verified."
+            }
+            require(published.isDirectory == source.isDirectory) { "The moved server item type changed." }
+        } catch (failure: Throwable) {
+            restoreRemoteBackup(destinationPath, backupPath)
+            throw failure
+        }
+        deleteRemoteBackup(backupPath)
     }
 
     private fun listDirectory(path: String): List<DesktopRemoteSyncDocument> {
+        var documents = rawListDirectory(path)
+        var recovered = false
+        documents.filter { desktopOwnedBackupDestination(it.entry.relativePath) != null }.forEach { backup ->
+            val destination = requireNotNull(desktopOwnedBackupDestination(backup.entry.relativePath))
+            if (documents.none { it.entry.relativePath == destination }) {
+                moveRemoteDocument(backup, destination)
+                recovered = true
+            }
+        }
+        if (recovered) documents = rawListDirectory(path)
+        return documents
+            .filterNot { isDesktopOwnedUploadStage(it.entry.relativePath) }
+            .filterNot { desktopOwnedBackupDestination(it.entry.relativePath) != null }
+            .also { require(it.size <= MAX_CHILDREN) { "A Nextcloud folder contains too many entries." } }
+    }
+
+    private fun rawListDirectory(path: String): List<DesktopRemoteSyncDocument> {
         val response = execute(
             requestBuilder(fileUrl(path))
                 .header("Accept", "application/xml")
@@ -170,8 +276,77 @@ internal class DesktopFileSyncRemoteTree(
         val parent = path.trim('/')
         return parseDesktopSyncDav(response, userId)
             .filter { it.entry.relativePath.substringBeforeLast('/', "") == parent }
-            .filterNot { isDesktopOwnedUploadStage(it.entry.relativePath) }
-            .also { require(it.size <= MAX_CHILDREN) { "A Nextcloud folder contains too many entries." } }
+            .also { require(it.size <= MAX_CHILDREN + MAX_RECOVERY_ITEMS) { "A Nextcloud folder contains too many entries." } }
+    }
+
+    private fun DesktopRemoteSyncDocument.withPath(path: String): DesktopRemoteSyncDocument =
+        copy(entry = entry.copy(relativePath = path))
+
+    private fun replacementBackupPath(destinationPath: String): String {
+        val parent = destinationPath.substringBeforeLast('/', "")
+        val name = destinationPath.substringAfterLast('/')
+        return listOf(parent, ".$name$BACKUP_MARKER${UUID.randomUUID()}")
+            .filter(String::isNotBlank).joinToString("/")
+    }
+
+    private fun moveRemoteDocument(source: DesktopRemoteSyncDocument, destinationPath: String) {
+        moveRemotePath(
+            sourcePath = source.entry.relativePath,
+            destinationPath = destinationPath,
+            sourceEtag = source.entry.etag,
+            sourceIsDirectory = source.isDirectory,
+        )
+    }
+
+    private fun moveRemotePath(
+        sourcePath: String,
+        destinationPath: String,
+        sourceEtag: String?,
+        sourceIsDirectory: Boolean,
+    ) {
+        val sourceUrl = fileUrl(sourcePath)
+        val builder = requestBuilder(sourceUrl)
+            .header("Destination", fileUrl(destinationPath))
+            .header("Overwrite", "F")
+        if (sourceEtag != null) {
+            if (sourceIsDirectory) builder.header("If", "<$sourceUrl> ([${safeEtag(sourceEtag)}])")
+            else builder.header("If-Match", safeEtag(sourceEtag))
+        }
+        execute(builder.method("MOVE", EMPTY_BODY).build(), "move item")
+    }
+
+    private fun restoreRemoteBackup(destinationPath: String, backupPath: String) {
+        runCatching {
+            val documents = rawListDirectory(destinationPath.substringBeforeLast('/', ""))
+            if (documents.none { it.entry.relativePath == destinationPath }) {
+                documents.firstOrNull { it.entry.relativePath == backupPath }
+                    ?.let { moveRemoteDocument(it, destinationPath) }
+            }
+        }
+    }
+
+    private fun deleteRemoteBackup(backupPath: String) {
+        runCatching {
+            rawListDirectory(backupPath.substringBeforeLast('/', ""))
+                .firstOrNull { it.entry.relativePath == backupPath }
+                ?.let(::deleteRemoteDocument)
+        }
+    }
+
+    private fun deleteRemoteStage(stagingPath: String, stagedEtag: String?) {
+        runCatching {
+            val builder = requestBuilder(fileUrl(stagingPath))
+            stagedEtag?.let { builder.header("If-Match", safeEtag(it)) }
+            execute(builder.delete().build(), "remove staged upload")
+        }
+    }
+
+    private fun deleteRemoteDocument(document: DesktopRemoteSyncDocument) {
+        val url = fileUrl(document.entry.relativePath)
+        val builder = requestBuilder(url)
+        if (document.isDirectory) builder.header("If", "<$url> ([${safeEtag(document.entry.etag)}])")
+        else builder.header("If-Match", safeEtag(document.entry.etag))
+        execute(builder.delete().build(), "remove protected backup")
     }
 
     private fun createFile(path: String, source: File): String? = executeForEtag(
@@ -250,6 +425,7 @@ internal class DesktopFileSyncRemoteTree(
     private companion object {
         const val MAX_ENTRIES = 20_000
         const val MAX_CHILDREN = 5_000
+        const val MAX_RECOVERY_ITEMS = 32
         const val MAX_DEPTH = 64
         const val MAX_DIRECTORY_RESPONSE_BYTES = 16L * 1024L * 1024L
         const val MAX_ERROR_RESPONSE_BYTES = 64L * 1024L
@@ -257,6 +433,7 @@ internal class DesktopFileSyncRemoteTree(
         val XML_CONTENT_TYPE = "application/xml; charset=utf-8".toMediaType()
         val OCTET_STREAM = "application/octet-stream".toMediaType()
         val EMPTY_BODY = byteArrayOf().toRequestBody(null)
+        const val BACKUP_MARKER = ".nextcloud-native-backup-"
         val DIRECTORY_PROPERTIES = """
             <?xml version="1.0" encoding="UTF-8"?>
             <d:propfind xmlns:d="DAV:"><d:prop>
@@ -271,6 +448,18 @@ internal fun isDesktopOwnedUploadStage(relativePath: String): Boolean {
     if (!name.startsWith(".nextcloud-native-") || !name.endsWith(".upload")) return false
     val token = name.removePrefix(".nextcloud-native-").removeSuffix(".upload")
     return runCatching { UUID.fromString(token) }.isSuccess
+}
+
+internal fun desktopOwnedBackupDestination(relativePath: String): String? {
+    val name = relativePath.substringAfterLast('/')
+    val markerIndex = name.lastIndexOf(".nextcloud-native-backup-")
+    if (!name.startsWith('.') || markerIndex <= 1) return null
+    val token = name.substring(markerIndex + ".nextcloud-native-backup-".length)
+    if (runCatching { UUID.fromString(token) }.isFailure) return null
+    val destinationName = name.substring(1, markerIndex)
+    if (destinationName.isBlank()) return null
+    val parent = relativePath.substringBeforeLast('/', "")
+    return listOf(parent, destinationName).filter(String::isNotBlank).joinToString("/")
 }
 
 internal fun parseDesktopSyncDav(bytes: ByteArray, userId: String): List<DesktopRemoteSyncDocument> {

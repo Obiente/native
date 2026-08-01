@@ -324,6 +324,7 @@ internal class WindowsCloudFilesProvider(
     private val cancelledRequests = ConcurrentHashMap<Long, AtomicBoolean>()
     private val knownIdentities = ConcurrentHashMap<String, WindowsCloudFileIdentity>()
     private val pathOperations = ConcurrentHashMap.newKeySet<String>()
+    private val queuedPathOperations = ConcurrentHashMap<String, () -> Unit>()
     private val pendingWritebacks = ConcurrentHashMap.newKeySet<String>()
     private val localChangeScheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { work ->
         Thread(work, "nextcloud-windows-local-changes").apply { isDaemon = true }
@@ -410,11 +411,15 @@ internal class WindowsCloudFilesProvider(
         if (api.placeholderState(localPath) != WindowsCloudPlaceholderState.Dirty) return
         pendingWritebacks += identity.path
         submitPathOperation(identity.path) {
-            val uploaded = backend.upload(identity.path, localPath.toFile(), identity.remoteRevision)
+            val current = api.placeholderIdentity(localPath)
+                ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
+                ?.takeIf { it.accountId == backend.accountId && it.path == identity.path && !it.directory }
+                ?: knownIdentities[identity.path]
+                ?: identity
+            val uploaded = backend.upload(identity.path, localPath.toFile(), current.remoteRevision)
             knownIdentities[uploaded.path] = uploaded
             api.updatePlaceholder(localPath, placeholder(uploaded))
             api.markInSync(localPath)
-            pendingWritebacks -= identity.path
         }
     }
 
@@ -556,6 +561,7 @@ internal class WindowsCloudFilesProvider(
         watchService = null
         pendingLocalChanges.values.forEach { it.cancel(false) }
         pendingLocalChanges.clear()
+        queuedPathOperations.clear()
         localChangeScheduler.shutdownNow()
         executor.shutdownNow()
         api.close()
@@ -632,13 +638,36 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun submitPathOperation(path: String, block: () -> Unit) {
-        if (!pathOperations.add(path)) return
+        val shouldSchedule = synchronized(queuedPathOperations) {
+            queuedPathOperations[path] = block
+            pathOperations.add(path)
+        }
+        if (shouldSchedule) schedulePathOperationDrain(path)
+    }
+
+    private fun schedulePathOperationDrain(path: String) {
         executor.execute {
+            var failure: Throwable? = null
             try {
-                block()
+                while (true) {
+                    val next = synchronized(queuedPathOperations) {
+                        queuedPathOperations.remove(path)
+                    } ?: break
+                    runCatching(next).onFailure { failure = it }
+                }
             } finally {
-                pathOperations.remove(path)
+                val shouldReschedule = synchronized(queuedPathOperations) {
+                    pathOperations.remove(path)
+                    if (queuedPathOperations.containsKey(path)) {
+                        pathOperations.add(path)
+                    } else {
+                        pendingWritebacks -= path
+                        false
+                    }
+                }
+                if (shouldReschedule) schedulePathOperationDrain(path)
             }
+            failure?.let { throw it }
         }
     }
 
@@ -716,7 +745,6 @@ internal class WindowsCloudFilesProvider(
                             knownIdentities[uploaded.path] = uploaded
                             api.updatePlaceholder(local, placeholder(uploaded))
                             api.markInSync(local)
-                            pendingWritebacks -= identity.path
                         }
                     }
                 }

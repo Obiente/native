@@ -141,6 +141,44 @@ class FileSyncPlanningTest {
     }
 
     @Test
+    fun selectiveSyncNeverRecursivelyDeletesAnOnlyPartiallyVisibleRemoteDirectory() {
+        val operation = planFileSync(
+            localEntries = emptyList(),
+            remoteEntries = listOf(
+                RemoteSyncEntry("Photos", SyncEntryKind.Directory, "remote-dir"),
+            ),
+            baselines = listOf(
+                FileSyncBaseline("Photos", SyncEntryKind.Directory, "local-dir", "remote-dir"),
+            ),
+            configuration = config.copy(
+                deletionPolicy = FileSyncDeletionPolicy.Propagate,
+                selectedPaths = listOf("Photos/Shared"),
+            ),
+        ).operations.single()
+
+        assertIs<FileSyncOperation.Skipped>(operation)
+    }
+
+    @Test
+    fun ignoredItemsPreventRecursiveLocalDirectoryDeletion() {
+        val operation = planFileSync(
+            localEntries = listOf(
+                LocalSyncEntry("Projects", SyncEntryKind.Directory, "local-dir"),
+            ),
+            remoteEntries = emptyList(),
+            baselines = listOf(
+                FileSyncBaseline("Projects", SyncEntryKind.Directory, "local-dir", "remote-dir"),
+            ),
+            configuration = config.copy(
+                deletionPolicy = FileSyncDeletionPolicy.Propagate,
+                ignoredPatterns = listOf("**/.cache/**"),
+            ),
+        ).operations.single()
+
+        assertIs<FileSyncOperation.Skipped>(operation)
+    }
+
+    @Test
     fun unsafeOrDuplicatePathsAreRejectedBeforePlanning() {
         assertFailsWith<IllegalArgumentException> { local("../secret", "1") }
         assertFailsWith<IllegalArgumentException> {

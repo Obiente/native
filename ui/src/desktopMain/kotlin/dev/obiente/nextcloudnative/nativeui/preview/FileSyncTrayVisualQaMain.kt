@@ -33,13 +33,13 @@ fun main() = application {
         conflictCount = 1,
         failedCount = 1,
         message = "Uploading DSF10428.RAF",
-        accountLabel = "mara@example.cloud",
+        accountLabel = "alex@example.invalid",
         overallProgress = 0.42f,
         lastCheckedEpochMillis = 1_787_526_720_000L,
         activities = listOf(
             DesktopFileSyncTrayActivity(
                 stableId = "photos:42",
-                relativePath = "2026/Stoppelhaene/Friday/DSF10428.RAF",
+                relativePath = "2026/Summer festival/Friday/DSF10428.RAF",
                 pairLabel = "Camera originals to /Photos/Events",
                 phase = DesktopFileSyncTrayActivityPhase.Uploading,
                 sizeBytes = 52_848_640L,
@@ -47,15 +47,15 @@ fun main() = application {
             ),
             DesktopFileSyncTrayActivity(
                 stableId = "projects:18",
-                relativePath = "Obiente/Launch film/project.kdenlive",
-                pairLabel = "Creative projects to /Obiente/Projects",
+                relativePath = "Campaign/Launch edit/project.kdenlive",
+                pairLabel = "Creative projects to /Projects",
                 phase = DesktopFileSyncTrayActivityPhase.Completed,
                 sizeBytes = 1_835_008L,
                 detail = "Synced safely",
             ),
             DesktopFileSyncTrayActivity(
                 stableId = "archive:9",
-                relativePath = "Invoices/2026/OBT-2026-021.pdf",
+                relativePath = "Documents/2026/Invoice-021.pdf",
                 pairLabel = "Documents to /Administration",
                 phase = DesktopFileSyncTrayActivityPhase.Conflict,
                 sizeBytes = 384_124L,
@@ -63,7 +63,7 @@ fun main() = application {
             ),
             DesktopFileSyncTrayActivity(
                 stableId = "photos:43",
-                relativePath = "2026/Stoppelhaene/Friday/DSF10428.JPG",
+                relativePath = "2026/Summer festival/Friday/DSF10428.JPG",
                 pairLabel = "Camera originals to /Photos/Events",
                 phase = DesktopFileSyncTrayActivityPhase.Waiting,
                 sizeBytes = 12_443_648L,

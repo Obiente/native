@@ -42,6 +42,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -835,7 +837,11 @@ internal fun FileSyncSetupSurface(
     initialStep: FileSyncSetupStep = FileSyncSetupStep.Locations,
     syntheticScopeSummary: String? = null,
 ) {
-    var step by remember { mutableStateOf(initialStep) }
+    var stepName by rememberSaveable(localRoot.localRootId, initialStep.name) {
+        mutableStateOf(initialStep.name)
+    }
+    val step = FileSyncSetupStep.entries.firstOrNull { it.name == stepName } ?: initialStep
+    val setupStateHolder = rememberSaveableStateHolder()
     Surface(
         modifier = modifier,
         color = MaterialTheme.colorScheme.surface,
@@ -852,10 +858,31 @@ internal fun FileSyncSetupSurface(
                     Row(Modifier.weight(1f).fillMaxWidth()) {
                         FileSyncStepRail(
                             current = step,
-                            onSelect = { step = it },
+                            onSelect = { stepName = it.name },
                             modifier = Modifier.width(210.dp).fillMaxHeight(),
                         )
                         HorizontalDivider(Modifier.width(1.dp).fillMaxHeight())
+                        setupStateHolder.SaveableStateProvider(step.name) {
+                            FileSyncStepContent(
+                                step = step,
+                                localRoot = localRoot,
+                                mediaSuggestion = mediaSuggestion,
+                                remotePath = remotePath,
+                                configuration = configuration,
+                                mediaPreview = mediaPreview,
+                                mediaPreviewLoading = mediaPreviewLoading,
+                                mediaPreviewError = mediaPreviewError,
+                                onChooseDestination = onChooseDestination,
+                                onConfigurationChanged = onConfigurationChanged,
+                                syntheticScopeSummary = syntheticScopeSummary,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                } else {
+                    FileSyncStepProgress(current = step, onSelect = { stepName = it.name })
+                    HorizontalDivider()
+                    setupStateHolder.SaveableStateProvider(step.name) {
                         FileSyncStepContent(
                             step = step,
                             localRoot = localRoot,
@@ -871,23 +898,6 @@ internal fun FileSyncSetupSurface(
                             modifier = Modifier.weight(1f),
                         )
                     }
-                } else {
-                    FileSyncStepProgress(current = step, onSelect = { step = it })
-                    HorizontalDivider()
-                    FileSyncStepContent(
-                        step = step,
-                        localRoot = localRoot,
-                        mediaSuggestion = mediaSuggestion,
-                        remotePath = remotePath,
-                        configuration = configuration,
-                        mediaPreview = mediaPreview,
-                        mediaPreviewLoading = mediaPreviewLoading,
-                        mediaPreviewError = mediaPreviewError,
-                        onChooseDestination = onChooseDestination,
-                        onConfigurationChanged = onConfigurationChanged,
-                        syntheticScopeSummary = syntheticScopeSummary,
-                        modifier = Modifier.weight(1f),
-                    )
                 }
                 HorizontalDivider()
                 FileSyncSetupFooter(
@@ -895,8 +905,8 @@ internal fun FileSyncSetupSurface(
                     busy = busy,
                     configuration = configuration,
                     mediaReady = isMediaFolderPreviewReady(mediaSuggestion, mediaPreview),
-                    onBack = { step = FileSyncSetupStep.entries[step.ordinal - 1] },
-                    onNext = { step = FileSyncSetupStep.entries[step.ordinal + 1] },
+                    onBack = { stepName = FileSyncSetupStep.entries[step.ordinal - 1].name },
+                    onNext = { stepName = FileSyncSetupStep.entries[step.ordinal + 1].name },
                     onAdd = onAdd,
                 )
             }
@@ -1125,7 +1135,7 @@ private fun FileSyncRulesStep(
     onConfigurationChanged: (FileSyncConfiguration) -> Unit,
     syntheticScopeSummary: String?,
 ) {
-    var customEditorVisible by remember(configuration.selectedPaths, configuration.ignoredPatterns, configuration.priorityRules) {
+    var customEditorVisible by rememberSaveable {
         mutableStateOf(configuration.selectedPaths.isNotEmpty())
     }
     FileSyncStepIntro("Choose what syncs first", "Start with a safe preset, then refine it only if you need to.")
@@ -1166,7 +1176,7 @@ private fun FileSyncReviewStep(
     onConfigurationChanged: (FileSyncConfiguration) -> Unit,
     syntheticScopeSummary: String?,
 ) {
-    var advancedVisible by remember { mutableStateOf(false) }
+    var advancedVisible by rememberSaveable { mutableStateOf(false) }
     FileSyncStepIntro("Review and start safely", "The first scan creates a plan. Conflicts and deletions still require your chosen policy.")
     FileSyncReviewRow("This device", localRoot.displayName)
     FileSyncReviewRow("Nextcloud", if (remotePath.isBlank()) "Files root" else "/$remotePath")
@@ -1334,7 +1344,7 @@ private fun FileSyncRuleListEditor(
     reorderable: Boolean = false,
     onValuesChanged: (List<String>) -> Unit,
 ) {
-    var draft by remember(title) { mutableStateOf("") }
+    var draft by rememberSaveable(title) { mutableStateOf("") }
     val normalizedDraft = draft.trim()
     val canAdd = normalizedDraft.isNotEmpty() && normalizedDraft !in values && validate(normalizedDraft)
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
@@ -1403,7 +1413,7 @@ private fun FileSyncAdvancedSettings(
     configuration: FileSyncConfiguration,
     onConfigurationChanged: (FileSyncConfiguration) -> Unit,
 ) {
-    var deviceLabelDraft by remember(configuration.deviceLabel) { mutableStateOf(configuration.deviceLabel) }
+    var deviceLabelDraft by rememberSaveable { mutableStateOf(configuration.deviceLabel) }
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large)) {
         FileSyncSettingChoices(
             title = "When both copies changed",

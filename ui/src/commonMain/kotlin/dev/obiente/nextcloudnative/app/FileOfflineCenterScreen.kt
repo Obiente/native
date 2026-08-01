@@ -36,6 +36,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,6 +52,9 @@ import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 @Composable
 internal fun FileOfflineCenterScreen(
@@ -71,13 +75,30 @@ internal fun FileOfflineCenterScreen(
     var mediaFolderDiscovery by remember(session, userId) { mutableStateOf<MediaSyncFolderDiscovery?>(null) }
     var mediaDiscoveryLoading by remember(session, userId) { mutableStateOf(false) }
     var syncBusyPairId by remember(session, userId) { mutableStateOf<String?>(null) }
-    var pendingLocalRoot by remember(session, userId) { mutableStateOf<FileSyncLocalRoot?>(null) }
-    var pendingMediaSuggestion by remember(session, userId) { mutableStateOf<MediaSyncFolderSuggestion?>(null) }
-    var pendingRemotePath by remember(session, userId) { mutableStateOf<String?>(null) }
-    var pendingSyncConfiguration by remember(session, userId) {
-        mutableStateOf<FileSyncConfiguration?>(null)
+    var pendingLocalRootJson by rememberSaveable(session.serverUrl, session.loginName, userId) {
+        mutableStateOf<String?>(null)
     }
-    var remoteFolderPickerVisible by remember(session, userId) { mutableStateOf(false) }
+    var pendingMediaSuggestionJson by rememberSaveable(session.serverUrl, session.loginName, userId) {
+        mutableStateOf<String?>(null)
+    }
+    var pendingRemotePath by rememberSaveable(session.serverUrl, session.loginName, userId) {
+        mutableStateOf<String?>(null)
+    }
+    var pendingSyncConfigurationJson by rememberSaveable(session.serverUrl, session.loginName, userId) {
+        mutableStateOf<String?>(null)
+    }
+    var remoteFolderPickerVisible by rememberSaveable(session.serverUrl, session.loginName, userId) {
+        mutableStateOf(false)
+    }
+    val pendingLocalRoot = pendingLocalRootJson?.let { encoded ->
+        runCatching { fileSyncSetupJson.decodeFromString<FileSyncLocalRoot>(encoded) }.getOrNull()
+    }
+    val pendingMediaSuggestion = pendingMediaSuggestionJson?.let { encoded ->
+        runCatching { fileSyncSetupJson.decodeFromString<MediaSyncFolderSuggestion>(encoded) }.getOrNull()
+    }
+    val pendingSyncConfiguration = pendingSyncConfigurationJson?.let { encoded ->
+        runCatching { fileSyncSetupJson.decodeFromString<FileSyncConfiguration>(encoded) }.getOrNull()
+    }
     var pendingMediaPreview by remember(session, userId) { mutableStateOf<MediaSyncFolderPreview?>(null) }
     var mediaPreviewLoading by remember(session, userId) { mutableStateOf(false) }
     var mediaPreviewError by remember(session, userId) { mutableStateOf<String?>(null) }
@@ -344,12 +365,12 @@ internal fun FileOfflineCenterScreen(
                                 scope.launch {
                                     runCatching { services.chooseFileSyncLocalRoot() }
                                         .onSuccess { selected ->
-                                            pendingMediaSuggestion = null
-                                            pendingLocalRoot = selected
+                                            pendingMediaSuggestionJson = null
+                                            pendingLocalRootJson = selected?.let { fileSyncSetupJson.encodeToString(it) }
                                             pendingRemotePath = selected?.let { "" }
-                                            pendingSyncConfiguration = selected?.let {
+                                            pendingSyncConfigurationJson = selected?.let {
                                                 defaultFileSyncConfiguration(isMediaSuggestion = false)
-                                            }
+                                            }?.let { fileSyncSetupJson.encodeToString(it) }
                                             remoteFolderPickerVisible = false
                                         }
                                         .onFailure { failure ->
@@ -362,10 +383,12 @@ internal fun FileOfflineCenterScreen(
                             if (syncBusyPairId == null) {
                                 pendingMediaPreview = null
                                 mediaPreviewError = null
-                                pendingMediaSuggestion = suggestion
-                                pendingLocalRoot = suggestion.localRoot
+                                pendingMediaSuggestionJson = fileSyncSetupJson.encodeToString(suggestion)
+                                pendingLocalRootJson = fileSyncSetupJson.encodeToString(suggestion.localRoot)
                                 pendingRemotePath = suggestion.suggestedRemoteRootPath
-                                pendingSyncConfiguration = defaultFileSyncConfiguration(isMediaSuggestion = true)
+                                pendingSyncConfigurationJson = fileSyncSetupJson.encodeToString(
+                                    defaultFileSyncConfiguration(isMediaSuggestion = true),
+                                )
                                 remoteFolderPickerVisible = false
                             }
                         },
@@ -514,9 +537,9 @@ internal fun FileOfflineCenterScreen(
             onDismiss = {
                 remoteFolderPickerVisible = false
                 if (pendingRemotePath == null) {
-                    pendingLocalRoot = null
-                    pendingMediaSuggestion = null
-                    pendingSyncConfiguration = null
+                    pendingLocalRootJson = null
+                    pendingMediaSuggestionJson = null
+                    pendingSyncConfigurationJson = null
                 }
             },
             onSelected = { selectedPath ->
@@ -540,17 +563,17 @@ internal fun FileOfflineCenterScreen(
             busy = syncBusyPairId == ADD_PAIR_BUSY_ID,
             onDismiss = {
                 if (syncBusyPairId == null) {
-                    pendingLocalRoot = null
-                    pendingMediaSuggestion = null
+                    pendingLocalRootJson = null
+                    pendingMediaSuggestionJson = null
                     pendingRemotePath = null
-                    pendingSyncConfiguration = null
+                    pendingSyncConfigurationJson = null
                     pendingMediaPreview = null
                 }
             },
             onChooseDestination = {
                 if (syncBusyPairId == null) remoteFolderPickerVisible = true
             },
-            onConfigurationChanged = { pendingSyncConfiguration = it },
+            onConfigurationChanged = { pendingSyncConfigurationJson = fileSyncSetupJson.encodeToString(it) },
             onAdd = {
                 if (syncBusyPairId != null) return@AddFolderSyncDialog
                 syncBusyPairId = ADD_PAIR_BUSY_ID
@@ -569,10 +592,10 @@ internal fun FileOfflineCenterScreen(
                     }.onSuccess { result ->
                         actionMessage = result.fileSyncCenterMessage()
                         if (result is FileSyncCenterActionResult.Completed) {
-                            pendingLocalRoot = null
-                            pendingMediaSuggestion = null
+                            pendingLocalRootJson = null
+                            pendingMediaSuggestionJson = null
                             pendingRemotePath = null
-                            pendingSyncConfiguration = null
+                            pendingSyncConfigurationJson = null
                             pendingMediaPreview = null
                             refreshAttempt += 1
                         }
@@ -1118,6 +1141,10 @@ private fun defaultFileSyncConfiguration(isMediaSuggestion: Boolean): FileSyncCo
         networkPolicy = FileSyncNetworkPolicy.AnyConnection,
         powerPolicy = FileSyncPowerPolicy.BatteryNotLow,
     )
+
+private val fileSyncSetupJson = Json {
+    encodeDefaults = true
+}
 
 internal fun isMediaFolderPreviewReady(
     suggestion: MediaSyncFolderSuggestion?,

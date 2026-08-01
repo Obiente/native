@@ -64,4 +64,16 @@ class DesktopFileSyncRemoteTreeTest {
         assertEquals(false, isDesktopOwnedUploadStage("Photos/.nextcloud-native-not-a-uuid.upload"))
         assertEquals(false, isDesktopOwnedUploadStage("Photos/user-upload.upload"))
     }
+
+    @Test
+    fun `only exact provider owned replacement backups reveal a recovery destination`() {
+        assertEquals(
+            "Photos/today.md",
+            desktopOwnedBackupDestination(
+                "Photos/.today.md.nextcloud-native-backup-123e4567-e89b-12d3-a456-426614174000",
+            ),
+        )
+        assertEquals(null, desktopOwnedBackupDestination("Photos/.today.md.nextcloud-native-backup-not-a-uuid"))
+        assertEquals(null, desktopOwnedBackupDestination("Photos/user-backup"))
+    }
 }

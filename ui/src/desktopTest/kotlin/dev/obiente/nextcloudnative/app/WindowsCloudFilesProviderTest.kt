@@ -127,6 +127,45 @@ class WindowsCloudFilesProviderTest {
         provider.close()
     }
 
+    @Test
+    fun `a newer close event is coalesced and uploads after the active writeback`() {
+        val root = createTempDirectory("windows-cloud-coalesce-")
+        val local = root.resolve("edit.txt")
+        local.writeBytes("first edit".encodeToByteArray())
+        val identity = WindowsCloudFileIdentity(
+            "account-01",
+            "edit.txt",
+            "\"etag-01\"",
+            local.toFile().length(),
+            false,
+        )
+        val backend = FakeBackend(
+            "remote".encodeToByteArray(),
+            expectedUploads = 2,
+            blockFirstUpload = true,
+        )
+        val api = FakeApi().apply { seed(local, WindowsCloudPlaceholderState.Dirty, identity) }
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+        val info = callbackInfo(identity).copy(
+            normalizedPath = local.toString(),
+            fileSize = local.toFile().length(),
+        )
+
+        provider.closed(info, deleted = false)
+        assertTrue(backend.awaitFirstUploadStarted())
+        local.writeBytes("later edit".encodeToByteArray())
+        provider.closed(info.copy(fileSize = local.toFile().length()), deleted = false)
+        backend.releaseFirstUpload()
+
+        assertTrue(backend.awaitUploads())
+        assertEquals(
+            listOf("first edit", "later edit"),
+            backend.uploadedBytes.map { it.decodeToString() },
+        )
+        assertEquals(listOf<String?>("\"etag-01\"", "\"uploaded-1\""), backend.uploadExpectedRevisions)
+        provider.close()
+    }
+
     private fun fixtureIdentity(size: Long) = WindowsCloudFileIdentity(
         accountId = "account-01",
         path = "Photos/example.raf",
@@ -149,11 +188,16 @@ class WindowsCloudFilesProviderTest {
         private val source: ByteArray,
         private val listed: List<WindowsCloudFileIdentity> = emptyList(),
         expectedUploads: Int = 0,
+        private val blockFirstUpload: Boolean = false,
     ) : WindowsCloudFilesBackend {
         override val accountId: String = "account-01"
         private val uploadLatch = CountDownLatch(expectedUploads)
+        private val firstUploadStarted = CountDownLatch(if (blockFirstUpload) 1 else 0)
+        private val firstUploadRelease = CountDownLatch(if (blockFirstUpload) 1 else 0)
         var lastUploadedPath: String? = null
         var lastExpectedRemoteRevision: String? = null
+        val uploadedBytes = mutableListOf<ByteArray>()
+        val uploadExpectedRevisions = mutableListOf<String?>()
 
         override fun resolve(path: String): WindowsCloudFileIdentity? = null
         override fun list(path: String): List<WindowsCloudFileIdentity> =
@@ -174,8 +218,18 @@ class WindowsCloudFilesProviderTest {
         ): WindowsCloudFileIdentity {
             lastUploadedPath = path
             lastExpectedRemoteRevision = expectedRemoteRevision
+            val bytes = localFile.readBytes()
+            val uploadNumber = synchronized(uploadedBytes) {
+                uploadedBytes += bytes
+                uploadExpectedRevisions += expectedRemoteRevision
+                uploadedBytes.size
+            }
+            if (blockFirstUpload && uploadNumber == 1) {
+                firstUploadStarted.countDown()
+                check(firstUploadRelease.await(5, TimeUnit.SECONDS))
+            }
             uploadLatch.countDown()
-            return WindowsCloudFileIdentity(accountId, path, "\"uploaded\"", localFile.length(), false)
+            return WindowsCloudFileIdentity(accountId, path, "\"uploaded-$uploadNumber\"", bytes.size.toLong(), false)
         }
 
         override fun createDirectory(path: String): WindowsCloudFileIdentity =
@@ -186,6 +240,8 @@ class WindowsCloudFilesProviderTest {
             identity.copy(path = destinationPath)
 
         fun awaitUploads(): Boolean = uploadLatch.await(5, TimeUnit.SECONDS)
+        fun awaitFirstUploadStarted(): Boolean = firstUploadStarted.await(5, TimeUnit.SECONDS)
+        fun releaseFirstUpload() = firstUploadRelease.countDown()
     }
 
     private class FakeApi(

@@ -1,11 +1,14 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.serialization.Serializable
+
 /**
  * Platform-facing view of a durable local-folder/Nextcloud-folder synchronization pair.
  *
  * The opaque [localRootId] is a persisted SAF grant, bookmark, or equivalent platform handle.
  * It must not contain credentials and is never interpreted by common UI code.
  */
+@Serializable
 data class FileSyncLocalRoot(
     val localRootId: String,
     val displayName: String,
@@ -27,6 +30,7 @@ enum class MediaSyncFolderDiscoverySupport {
     Unsupported,
 }
 
+@Serializable
 enum class MediaSyncFolderKind {
     Camera,
     Screenshots,
@@ -46,6 +50,7 @@ enum class MediaSyncFolderAccess {
  * [localRootHint] is an opaque platform-owned sync root. Common code may pass it back to the
  * platform, but must never interpret it as a path.
  */
+@Serializable
 data class MediaSyncFolderSuggestion(
     val localRootHint: String,
     val displayName: String,
