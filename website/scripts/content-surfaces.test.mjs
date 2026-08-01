@@ -126,7 +126,7 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   assert.match(captureMain, /NextcloudNativeMarketingCapture/);
 
   const manifest = await readCaptureManifest();
-  assert.equal(manifest.schemaVersion, 3);
+  assert.equal(manifest.schemaVersion, 4);
   assert.equal(manifest.identity, "Obiente");
   assert.equal(manifest.cloudIdentity, "Nextcloud");
   assert.equal(manifest.networkAccess, false);
@@ -265,7 +265,7 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   assert.deepEqual(websiteAvatar, avatar);
 });
 
-test("deploy builds verify committed captures while review CI checks freshness", async () => {
+test("deploy builds verify committed assets while capture refresh owns freshness", async () => {
   const packageJson = JSON.parse(
     await readFile(path.join(websiteRoot, "package.json"), "utf8"),
   );
@@ -277,6 +277,11 @@ test("deploy builds verify committed captures while review CI checks freshness",
     path.join(repositoryRoot, ".github", "workflows", "ci.yml"),
     "utf8",
   );
+  const refreshWorkflow = await readFile(
+    path.join(repositoryRoot, ".github", "workflows", "refresh-marketing-captures.yml"),
+    "utf8",
+  );
+  const dockerIgnore = await readFile(path.join(repositoryRoot, ".dockerignore"), "utf8");
 
   assert.equal(
     packageJson.scripts["verify:captures"],
@@ -289,20 +294,20 @@ test("deploy builds verify committed captures while review CI checks freshness",
   assert.match(packageJson.scripts.build, /\bnpm run verify:captures\b/u);
   assert.doesNotMatch(packageJson.scripts.build, /\bverify:captures:fresh\b/u);
   assert.match(captureWrapper, /\bnpm run --prefix website verify:captures:fresh\b/u);
+  assert.doesNotMatch(ciWorkflow, /Verify marketing capture freshness/u);
+  assert.doesNotMatch(ciWorkflow, /Verify deterministic marketing capture regeneration/u);
+  assert.doesNotMatch(ciWorkflow, /steps\.changes\.outputs\.capture_inputs/u);
+  assert.match(refreshWorkflow, /- "ui\/src\/commonMain\/\*\*"/u);
+  assert.match(refreshWorkflow, /- "gradle\/libs\.versions\.toml"/u);
+  assert.match(refreshWorkflow, /- "website\/public\/screenshots\/\*\*"/u);
+  assert.match(refreshWorkflow, /- "website\/scripts\/marketing-captures\.mjs"/u);
+  assert.match(refreshWorkflow, /- "website\/scripts\/verify-marketing-captures\.mjs"/u);
+  assert.match(refreshWorkflow, /\bnpm ci --prefix website\b/u);
+  assert.match(refreshWorkflow, /:ui:captureMarketingScreenshots\b/u);
+  assert.match(refreshWorkflow, /\bnpm run --prefix website verify:captures:fresh\b/u);
   assert.match(
-    ciWorkflow,
-    /\bnode website\/scripts\/verify-marketing-captures\.mjs\b/u,
-  );
-  assert.match(ciWorkflow, /steps\.changes\.outputs\.capture_inputs == 'true'/u);
-  assert.match(ciWorkflow, /- "ui\/src\/commonMain\/\*\*"/u);
-  assert.match(ciWorkflow, /- "gradle\/libs\.versions\.toml"/u);
-  assert.match(ciWorkflow, /- "website\/public\/screenshots\/\*\*"/u);
-  assert.match(ciWorkflow, /- "website\/scripts\/marketing-captures\.mjs"/u);
-  assert.match(ciWorkflow, /- "website\/scripts\/verify-marketing-captures\.mjs"/u);
-  assert.match(ciWorkflow, /\bnpm ci --prefix website\b/u);
-  assert.ok(
-    ciWorkflow.indexOf("npm ci --prefix website") <
-      ciWorkflow.indexOf("node website/scripts/verify-marketing-captures.mjs"),
+    dockerIgnore,
+    /^!\.github\/workflows\/refresh-marketing-captures\.yml$/mu,
   );
 });
 

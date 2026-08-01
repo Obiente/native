@@ -32,13 +32,13 @@ export function validateCaptureManifest(manifest) {
       "cloudIdentity",
       "networkAccess",
       "captureSources",
-      "captureSourceSha256",
+      "captureSourceHashes",
       "avatarSha256",
       "captures",
     ],
     "Capture manifest",
   );
-  requireValue(manifest.schemaVersion === 3, "schemaVersion must be 3");
+  requireValue(manifest.schemaVersion === 4, "schemaVersion must be 4");
   requireValue(
     manifest.renderer === "Compose ImageComposeScene",
     "renderer must identify ImageComposeScene",
@@ -46,7 +46,6 @@ export function validateCaptureManifest(manifest) {
   requireValue(manifest.identity === "Obiente", "identity must be Obiente");
   requireValue(manifest.cloudIdentity === "Nextcloud", "cloudIdentity must be Nextcloud");
   requireValue(manifest.networkAccess === false, "networkAccess must be false");
-  requireSha256(manifest.captureSourceSha256, "captureSourceSha256");
   requireSha256(manifest.avatarSha256, "avatarSha256");
 
   requireValue(
@@ -59,6 +58,16 @@ export function validateCaptureManifest(manifest) {
   );
   for (const relative of manifest.captureSources) {
     requireSafeRelativePath(relative, "captureSources entry");
+  }
+  requireObject(manifest.captureSourceHashes, "captureSourceHashes");
+  requireExactKeys(
+    manifest.captureSourceHashes,
+    manifest.captureSources,
+    "captureSourceHashes",
+  );
+  for (const [relative, digest] of Object.entries(manifest.captureSourceHashes)) {
+    requireSafeRelativePath(relative, "captureSourceHashes entry");
+    requireSha256(digest, `captureSourceHashes ${relative}`);
   }
 
   requireValue(
@@ -172,9 +181,7 @@ export function stableCapturePath(capture) {
 }
 
 export function websiteCapturePath(manifest, capture) {
-  const revision = createHash("sha256")
-    .update(`${manifest.captureSourceSha256}:${capture.sha256}`)
-    .digest("hex");
+  const revision = createHash("sha256").update(capture.sha256).digest("hex");
   return `${stableCapturePath(capture)}?v=${revision}`;
 }
 
@@ -244,13 +251,12 @@ export async function verifyCaptureFreshness(manifest) {
   if (obsolete.length > 0) {
     failures.push(`captureSources contains obsolete entries: ${obsolete.join(", ")}`);
   }
-  if (missing.length === 0 && obsolete.length === 0) {
-    const digest = await digestCaptureSources(expectedSources);
-    if (digest !== manifest.captureSourceSha256) {
-      failures.push("captureSourceSha256 does not match the current capture inputs");
+  for (const relative of expectedSources) {
+    const bytes = await readFile(path.join(repositoryRoot, relative));
+    if (manifest.captureSourceHashes[relative] !== sha256(bytes)) {
+      failures.push(`captureSourceHashes does not match: ${relative}`);
     }
   }
-
   if (manifest.avatarSha256) {
     const avatar = await readFile(
       path.join(
@@ -321,16 +327,6 @@ async function walkFiles(directory, output, root, realRoot) {
       throw new Error(`Capture input is not a regular file or directory: ${relative}`);
     }
   }
-}
-
-async function digestCaptureSources(sources) {
-  const digest = createHash("sha256");
-  for (const relative of sources) {
-    digest.update(relative);
-    digest.update(new Uint8Array([0]));
-    digest.update(await readFile(path.join(repositoryRoot, relative)));
-  }
-  return digest.digest("hex");
 }
 
 export function decodePngDimensions(bytes) {

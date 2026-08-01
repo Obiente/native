@@ -71,22 +71,6 @@ jobs:
               - "gradle/**"
               - "gradlew"
               - "gradlew.bat"
-            capture_inputs:
-              - "tools/marketing-capture-inputs.txt"
-              - "build.gradle.kts"
-              - "settings.gradle.kts"
-              - "gradle.properties"
-              - "gradle/libs.versions.toml"
-              - "gradle/wrapper/gradle-wrapper.properties"
-              - "ui/build.gradle.kts"
-              - "ui/src/commonMain/**"
-              - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/**"
-              - "ui/src/desktopMain/resources/marketing/**"
-              - "website/package.json"
-              - "website/package-lock.json"
-              - "website/public/screenshots/**"
-              - "website/scripts/marketing-captures.mjs"
-              - "website/scripts/verify-marketing-captures.mjs"
             linux_repositories:
               - ".github/workflows/ci.yml"
               - "tools/build-appstream-catalog.py"
@@ -117,28 +101,6 @@ jobs:
           github.event_name == 'workflow_dispatch' ||
           steps.changes.outputs.linux_repositories == 'true'
         run: bash tools/test-linux-package-repositories.sh
-
-      - name: Set up Node.js for capture verification
-        if: >-
-          github.event_name == 'workflow_dispatch' ||
-          steps.changes.outputs.capture_inputs == 'true'
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: website/package-lock.json
-
-      - name: Install capture verification dependencies
-        if: >-
-          github.event_name == 'workflow_dispatch' ||
-          steps.changes.outputs.capture_inputs == 'true'
-        run: npm ci --prefix website
-
-      - name: Verify marketing capture freshness
-        if: >-
-          github.event_name == 'workflow_dispatch' ||
-          steps.changes.outputs.capture_inputs == 'true'
-        run: node website/scripts/verify-marketing-captures.mjs
 
       - name: Require a changelog fragment
         if: >-
@@ -189,7 +151,9 @@ jobs:
           cache-read-only: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
 
       - name: Install Linux virtual filesystem runtime
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.desktop == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outputs.desktop == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --yes libfuse2t64
