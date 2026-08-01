@@ -3,6 +3,7 @@
 !.github/workflows/
 .github/workflows/*
 !.github/workflows/ci.yml
+!.github/workflows/refresh-marketing-captures.yml
 .gradle
 .idea
 .kotlin
