@@ -1,4 +1,6 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.time.LocalDate
+import java.time.ZoneOffset
 import java.util.Base64
 
 val desktopArchitecture = System.getProperty("os.arch").lowercase()
@@ -6,10 +8,15 @@ val ncDesktopPackageVersion = providers.gradleProperty("ncDesktopPackageVersion"
 val ncMacosPackageVersion = providers.gradleProperty("ncMacosPackageVersion").get()
 val ncVersionName = providers.gradleProperty("ncVersionName").get()
 val ncVersionCode = providers.gradleProperty("ncVersionCode").get()
+val ncAppStreamReleaseDate = providers.gradleProperty("ncAppStreamReleaseDate")
+    .orElse(LocalDate.now(ZoneOffset.UTC).toString())
+    .get()
 val ncDesktopReleaseBuild = providers.gradleProperty("ncDesktopReleaseBuild").orElse("false").get()
 val ncDirectDesktopPackageUpdates = providers.gradleProperty("ncDirectDesktopPackageUpdates").orElse("false").get()
 val linuxAppStreamMetadata = rootProject.layout.projectDirectory
     .file("release/linux/dev.obiente.nextcloudnative.metainfo.xml")
+val generatedLinuxAppStreamMetadata = layout.buildDirectory
+    .file("generated/linux-appstream/dev.obiente.nextcloudnative.metainfo.xml")
 val linuxJpackageTemplates = rootProject.layout.projectDirectory.dir("release/linux/jpackage")
 val generatedJpackageResources = layout.buildDirectory.dir("generated/jpackage-resources")
 val debPackageDirectory = layout.buildDirectory.dir("compose/binaries/main/deb")
@@ -18,8 +25,27 @@ val msiPackageDirectory = layout.buildDirectory.dir("compose/binaries/main/msi")
 val debPackageSucceededMarker = layout.buildDirectory.file("compose/tmp/packageDeb.succeeded")
 val rpmPackageSucceededMarker = layout.buildDirectory.file("compose/tmp/packageRpm.succeeded")
 
-val prepareLinuxJpackageResources by tasks.registering {
+val prepareLinuxAppStreamMetadata by tasks.registering(Exec::class) {
     inputs.file(linuxAppStreamMetadata)
+    inputs.file(rootProject.file("tools/render-linux-appstream-metadata.py"))
+    inputs.property("packageVersion", ncDesktopPackageVersion)
+    inputs.property("releaseName", ncVersionName)
+    inputs.property("releaseDate", ncAppStreamReleaseDate)
+    outputs.file(generatedLinuxAppStreamMetadata)
+    commandLine(
+        "python3",
+        rootProject.file("tools/render-linux-appstream-metadata.py"),
+        linuxAppStreamMetadata.asFile,
+        generatedLinuxAppStreamMetadata.get().asFile,
+        ncDesktopPackageVersion,
+        ncVersionName,
+        ncAppStreamReleaseDate,
+    )
+}
+
+val prepareLinuxJpackageResources by tasks.registering {
+    dependsOn(prepareLinuxAppStreamMetadata)
+    inputs.file(generatedLinuxAppStreamMetadata)
     inputs.dir(linuxJpackageTemplates)
     outputs.dir(generatedJpackageResources)
     doLast {
@@ -27,7 +53,7 @@ val prepareLinuxJpackageResources by tasks.registering {
         output.deleteRecursively()
         val linuxOutput = output.resolve("linux").apply { mkdirs() }
         val metadataBase64 = Base64.getEncoder()
-            .encodeToString(linuxAppStreamMetadata.asFile.readBytes())
+            .encodeToString(generatedLinuxAppStreamMetadata.get().asFile.readBytes())
         linuxJpackageTemplates.asFile.listFiles().orEmpty().forEach { template ->
             val content = template.readText().replace("APPSTREAM_XML_BASE64", metadataBase64)
             linuxOutput.resolve(template.name).writeText(content)
@@ -189,14 +215,15 @@ compose.desktop {
 }
 
 val enrichDebAppStream by tasks.registering(Exec::class) {
-    inputs.file(linuxAppStreamMetadata)
+    dependsOn(prepareLinuxAppStreamMetadata)
+    inputs.file(generatedLinuxAppStreamMetadata)
     doNotTrackState("Post-processes the packageDeb artifact in place.")
     onlyIf { debPackageSucceededMarker.get().asFile.isFile }
     commandLine(
         "bash",
         rootProject.file("tools/enrich-deb-appstream.sh"),
         debPackageDirectory.get().asFile,
-        linuxAppStreamMetadata.asFile,
+        generatedLinuxAppStreamMetadata.get().asFile,
         rootProject.file("LICENSE"),
         project.file("src/desktopMain/resources/nextcloud-native.png"),
     )
