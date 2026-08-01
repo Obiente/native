@@ -62,7 +62,7 @@ release = ET.Element(
 description = ET.SubElement(release, "description")
 paragraph = ET.SubElement(description, "p")
 if release_type == "development":
-    paragraph.text = f"Development build {release_name} from verified Nextcloud Native source."
+    paragraph.text = f"Nextcloud Native development build {release_name}."
 else:
     paragraph.text = f"Nextcloud Native {release_name}."
 releases.insert(0, release)

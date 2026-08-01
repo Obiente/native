@@ -86,6 +86,7 @@ assert release.attrib == {
     "type": "development",
 }
 assert "nightly-20260801-1830-run406-03ebaf9d" in " ".join(release.itertext())
+assert "verified" not in " ".join(release.itertext()).lower()
 PY
 
 printf '%s\n' \
