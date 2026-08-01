@@ -272,6 +272,51 @@ class WindowsCloudFilesProviderTest {
         provider.close()
     }
 
+    @Test
+    fun `failed dirty writeback remains visible after bounded retries and a later close can recover it`() {
+        val root = createTempDirectory("windows-cloud-writeback-retry-")
+        val local = root.resolve("edit.txt")
+        local.writeBytes("retained edit".encodeToByteArray())
+        val identity = WindowsCloudFileIdentity(
+            "account-01",
+            "edit.txt",
+            "\"etag-01\"",
+            local.toFile().length(),
+            false,
+        )
+        val backend = FakeBackend(
+            source = "remote".encodeToByteArray(),
+            uploadFailuresRemaining = Int.MAX_VALUE,
+        )
+        val api = FakeApi(expectedConversions = 1).apply {
+            seed(local, WindowsCloudPlaceholderState.Dirty, identity)
+        }
+        val provider = WindowsCloudFilesProvider(
+            root,
+            backend,
+            api,
+            writebackRetryDelayMillis = { 0L },
+        )
+        val info = callbackInfo(identity).copy(normalizedPath = local.toString())
+
+        provider.closed(info, deleted = false)
+
+        val failureDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (provider.summary().failedWritebackCount == 0 && System.nanoTime() < failureDeadline) {
+            Thread.yield()
+        }
+        assertEquals(1, provider.summary().pendingWritebackCount)
+        assertEquals(1, provider.summary().failedWritebackCount)
+
+        backend.uploadFailuresRemaining = 0
+        provider.closed(info, deleted = false)
+
+        assertTrue(api.awaitConversions())
+        assertEquals(0, provider.summary().pendingWritebackCount)
+        assertEquals(0, provider.summary().failedWritebackCount)
+        provider.close()
+    }
+
     private fun fixtureIdentity(size: Long) = WindowsCloudFileIdentity(
         accountId = "account-01",
         path = "Photos/example.raf",
@@ -296,6 +341,7 @@ class WindowsCloudFilesProviderTest {
         expectedUploads: Int = 0,
         private val blockFirstUpload: Boolean = false,
         private val failAfterUpload: Boolean = false,
+        @Volatile var uploadFailuresRemaining: Int = 0,
     ) : WindowsCloudFilesBackend {
         override val accountId: String = "account-01"
         private val uploadLatch = CountDownLatch(expectedUploads)
@@ -330,6 +376,12 @@ class WindowsCloudFilesProviderTest {
             localFile: File,
             expectedRemoteRevision: String?,
         ): WindowsCloudFileIdentity {
+            synchronized(this) {
+                if (uploadFailuresRemaining > 0) {
+                    uploadFailuresRemaining -= 1
+                    error("Simulated transient upload failure")
+                }
+            }
             lastUploadedPath = path
             lastExpectedRemoteRevision = expectedRemoteRevision
             val bytes = localFile.readBytes()

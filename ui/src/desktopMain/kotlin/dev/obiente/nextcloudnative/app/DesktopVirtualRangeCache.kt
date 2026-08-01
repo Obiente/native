@@ -19,9 +19,14 @@ internal data class DesktopVirtualRangeCacheSummary(
 /** Persistent exact-revision block cache used by the Linux virtual filesystem. */
 internal class DesktopVirtualRangeCache(
     private val root: File,
+    private val maximumIndexBytes: Long = MAX_INDEX_BYTES,
     private val policy: () -> VirtualFileCachePolicy,
 ) {
     private val activePaths = mutableMapOf<FileOfflineKey, Int>()
+
+    init {
+        require(maximumIndexBytes in 1L..MAX_INDEX_BYTES)
+    }
 
     @Synchronized
     fun acquire(accountId: String, path: String) {
@@ -96,13 +101,11 @@ internal class DesktopVirtualRangeCache(
         }
         val identity = "$normalized\u0000$remoteRevision\u0000$fileSize\u0000$offset\u0000${bytes.size}"
         val blobName = "${sha256Hex(identity)}.block"
-        publishBytes(directory, blobName, bytes)
         val current = load(accountId)
         val obsolete = current.blocks.filter { block ->
             block.path == normalized &&
                 (block.remoteRevision != remoteRevision || block.fileSize != fileSize || block.offset == offset)
         }
-        obsolete.forEach { block -> File(directory, block.blobName).delete() }
         val next = current.copy(
             blocks = current.blocks.filterNot { it in obsolete } + CachedRangeBlock(
                 path = normalized,
@@ -116,7 +119,15 @@ internal class DesktopVirtualRangeCache(
                 lastAccessedAtEpochMillis = nowEpochMillis,
             ),
         )
-        save(accountId, next)
+        requireIndexFits(next)
+        val alreadyReferenced = current.blocks.any { block -> block.blobName == blobName }
+        try {
+            publishBytes(directory, blobName, bytes)
+            save(accountId, next)
+        } catch (failure: Throwable) {
+            if (!alreadyReferenced) File(directory, blobName).delete()
+            throw failure
+        }
         applyEviction(accountId, 0L, nowEpochMillis)
     }
 
@@ -196,7 +207,7 @@ internal class DesktopVirtualRangeCache(
 
     private fun load(accountId: String): RangeCacheIndex {
         val file = File(accountDirectory(accountId), INDEX_FILE)
-        if (!file.isFile || file.length() !in 1L..MAX_INDEX_BYTES) return RangeCacheIndex()
+        if (!file.isFile || file.length() !in 1L..maximumIndexBytes) return RangeCacheIndex()
         return runCatching {
             rangeCacheJson.decodeFromString<RangeCacheIndex>(file.readText()).also { index -> index.requireValid() }
         }.getOrElse { RangeCacheIndex() }
@@ -206,18 +217,27 @@ internal class DesktopVirtualRangeCache(
         val directory = accountDirectory(accountId).apply {
             check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
         }
-        val bounded = index.copy(
-            blocks = index.blocks.sortedByDescending(CachedRangeBlock::lastAccessedAtEpochMillis).take(MAX_BLOCKS),
-        )
-        bounded.requireValid()
-        val encoded = rangeCacheJson.encodeToString(bounded).encodeToByteArray()
-        require(encoded.size <= MAX_INDEX_BYTES)
+        val bounded = boundedIndex(index)
+        val encoded = encodedIndex(bounded)
         publishBytes(directory, INDEX_FILE, encoded)
         val referenced = bounded.blocks.mapTo(hashSetOf(), CachedRangeBlock::blobName)
         directory.listFiles().orEmpty()
             .filter { it.isFile && it.extension == "block" && it.name !in referenced }
             .forEach(File::delete)
     }
+
+    private fun requireIndexFits(index: RangeCacheIndex) {
+        encodedIndex(boundedIndex(index))
+    }
+
+    private fun boundedIndex(index: RangeCacheIndex): RangeCacheIndex = index.copy(
+        blocks = index.blocks.sortedByDescending(CachedRangeBlock::lastAccessedAtEpochMillis).take(MAX_BLOCKS),
+    ).also { bounded -> bounded.requireValid() }
+
+    private fun encodedIndex(index: RangeCacheIndex): ByteArray =
+        rangeCacheJson.encodeToString(index).encodeToByteArray().also { encoded ->
+            require(encoded.size.toLong() <= maximumIndexBytes) { "The desktop virtual range index is too large." }
+        }
 
     private fun removeRecord(accountId: String, index: RangeCacheIndex, record: CachedRangeBlock, blob: File) {
         blob.delete()
@@ -270,7 +290,10 @@ internal fun defaultDesktopVirtualRangeCache(
 ): DesktopVirtualRangeCache {
     val xdgCache = System.getenv("XDG_CACHE_HOME")?.takeIf(String::isNotBlank)
     val cacheRoot = xdgCache?.let(::File) ?: File(System.getProperty("user.home"), ".cache")
-    return DesktopVirtualRangeCache(File(cacheRoot, "nextcloud-native/virtual-ranges"), policy)
+    return DesktopVirtualRangeCache(
+        root = File(cacheRoot, "nextcloud-native/virtual-ranges"),
+        policy = policy,
+    )
 }
 
 @Serializable

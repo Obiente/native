@@ -451,7 +451,9 @@ class DesktopNextcloudServices(
     private val externalFileHandoff = DesktopExternalFileHandoff()
     private val localUploadPicker = DesktopLocalUploadPicker()
     private val deckCardDrafts = DesktopDeckCardDraftStore()
-    private val fileSyncEngine = DesktopFileSyncEngine()
+    private val fileSyncEngine = DesktopFileSyncEngine(
+        minimumFreeSpaceBytes = { fileReadCache.loadPolicy().minimumFreeSpaceBytes },
+    )
     private val startOnLoginController = DesktopStartOnLoginController()
     private val fileSyncRunLock = Mutex()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -569,8 +571,12 @@ class DesktopNextcloudServices(
                 if ((windowsSummary?.pendingWritebackCount ?: 0) > 0) {
                     add("${windowsSummary?.pendingWritebackCount} Windows edit(s) are waiting for conflict-safe writeback.")
                 }
+                if ((windowsSummary?.failedWritebackCount ?: 0) > 0) {
+                    add("${windowsSummary?.failedWritebackCount} Windows edit(s) need attention after bounded retries.")
+                }
             },
             providerState = when {
+                (windowsSummary?.failedWritebackCount ?: 0) > 0 -> VirtualFileProviderState.NeedsAttention
                 active -> VirtualFileProviderState.Active
                 linuxVirtualFileFailure != null || windowsCloudFilesFailure != null ->
                     VirtualFileProviderState.NeedsAttention

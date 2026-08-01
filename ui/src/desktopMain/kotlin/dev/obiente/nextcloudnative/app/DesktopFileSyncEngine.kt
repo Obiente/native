@@ -16,6 +16,7 @@ import kotlinx.coroutines.withContext
 internal class DesktopFileSyncEngine(
     private val store: DesktopFileSyncStore = DesktopFileSyncStore(),
     private val stagingRoot: File = desktopFileSyncStagingDirectory(),
+    private val minimumFreeSpaceBytes: () -> Long = { 0L },
 ) {
     private val selectedRoots = ConcurrentHashMap<String, File>()
     private val lock = Mutex()
@@ -40,72 +41,76 @@ internal class DesktopFileSyncEngine(
     }
 
     suspend fun loadCenter(session: NextcloudSession): FileSyncCenterSnapshot = lock.withLock {
-        val accountId = desktopFileCacheAccountId(session)
-        val state = store.load()
-        FileSyncCenterSnapshot(
-            support = FileSyncCenterSupport.Available,
-            pairs = state.coordinator.pairs.filter { it.accountId == accountId }.map { pair ->
-                val root = state.roots.firstOrNull { it.id == pair.localRootId }
-                pair.toCenterSummary(
-                    localDisplayName = root?.displayName ?: "Selected folder",
-                    localRootPath = root?.absolutePath,
-                    scheduleDescription = "Automatic sync while Nextcloud Native is running",
-                )
-            },
-            limitation = null,
-        )
+        store.withExclusiveAccess {
+            val accountId = desktopFileCacheAccountId(session)
+            val state = store.load()
+            FileSyncCenterSnapshot(
+                support = FileSyncCenterSupport.Available,
+                pairs = state.coordinator.pairs.filter { it.accountId == accountId }.map { pair ->
+                    val root = state.roots.firstOrNull { it.id == pair.localRootId }
+                    pair.toCenterSummary(
+                        localDisplayName = root?.displayName ?: "Selected folder",
+                        localRootPath = root?.absolutePath,
+                        scheduleDescription = "Automatic sync while Nextcloud Native is running",
+                    )
+                },
+                limitation = null,
+            )
+        }
     }
 
     suspend fun loadTrayActivities(
         session: NextcloudSession,
         limit: Int = MAX_TRAY_ACTIVITY_ITEMS,
     ): List<DesktopFileSyncTrayActivity> = lock.withLock {
-        require(limit in 1..MAX_TRAY_ACTIVITY_ITEMS)
-        val accountId = desktopFileCacheAccountId(session)
-        val state = store.load()
-        state.coordinator.pairs
-            .asSequence()
-            .filter { it.accountId == accountId }
-            .flatMap { pair ->
-                val root = state.roots.firstOrNull { it.id == pair.localRootId }
-                val pairLabel = syncPairLabel(root?.displayName ?: "Selected folder", pair.remoteRootPath)
-                pair.workItems.asSequence()
-                    .filter { it.state != FileSyncExecutionState.Skipped }
-                    .map { work ->
-                        DesktopFileSyncTrayActivity(
-                            stableId = "${pair.id}:${work.id}",
-                            relativePath = work.relativePath,
-                            pairLabel = pairLabel,
-                            phase = when (work.state) {
-                                FileSyncExecutionState.AwaitingDecision ->
-                                    DesktopFileSyncTrayActivityPhase.Conflict
-                                FileSyncExecutionState.Failed -> DesktopFileSyncTrayActivityPhase.Failed
-                                FileSyncExecutionState.Ready -> DesktopFileSyncTrayActivityPhase.Waiting
-                                FileSyncExecutionState.Running -> work.operation.toTrayActivityPhase()
-                                FileSyncExecutionState.Skipped -> DesktopFileSyncTrayActivityPhase.Waiting
-                            },
-                            sizeBytes = work.observedLocal?.size ?: work.observedRemote?.size,
-                            detail = work.failureMessage,
-                        )
-                    }
-            }
-            .sortedWith(
-                compareBy<DesktopFileSyncTrayActivity> {
-                    when (it.phase) {
-                        DesktopFileSyncTrayActivityPhase.Uploading,
-                        DesktopFileSyncTrayActivityPhase.Downloading,
-                        DesktopFileSyncTrayActivityPhase.Preparing,
-                        -> 0
-                        DesktopFileSyncTrayActivityPhase.Conflict,
-                        DesktopFileSyncTrayActivityPhase.Failed,
-                        -> 1
-                        DesktopFileSyncTrayActivityPhase.Waiting -> 2
-                        DesktopFileSyncTrayActivityPhase.Completed -> 3
-                    }
-                }.thenBy(DesktopFileSyncTrayActivity::relativePath),
-            )
-            .take(limit)
-            .toList()
+        store.withExclusiveAccess {
+            require(limit in 1..MAX_TRAY_ACTIVITY_ITEMS)
+            val accountId = desktopFileCacheAccountId(session)
+            val state = store.load()
+            state.coordinator.pairs
+                .asSequence()
+                .filter { it.accountId == accountId }
+                .flatMap { pair ->
+                    val root = state.roots.firstOrNull { it.id == pair.localRootId }
+                    val pairLabel = syncPairLabel(root?.displayName ?: "Selected folder", pair.remoteRootPath)
+                    pair.workItems.asSequence()
+                        .filter { it.state != FileSyncExecutionState.Skipped }
+                        .map { work ->
+                            DesktopFileSyncTrayActivity(
+                                stableId = "${pair.id}:${work.id}",
+                                relativePath = work.relativePath,
+                                pairLabel = pairLabel,
+                                phase = when (work.state) {
+                                    FileSyncExecutionState.AwaitingDecision ->
+                                        DesktopFileSyncTrayActivityPhase.Conflict
+                                    FileSyncExecutionState.Failed -> DesktopFileSyncTrayActivityPhase.Failed
+                                    FileSyncExecutionState.Ready -> DesktopFileSyncTrayActivityPhase.Waiting
+                                    FileSyncExecutionState.Running -> work.operation.toTrayActivityPhase()
+                                    FileSyncExecutionState.Skipped -> DesktopFileSyncTrayActivityPhase.Waiting
+                                },
+                                sizeBytes = work.observedLocal?.size ?: work.observedRemote?.size,
+                                detail = work.failureMessage,
+                            )
+                        }
+                }
+                .sortedWith(
+                    compareBy<DesktopFileSyncTrayActivity> {
+                        when (it.phase) {
+                            DesktopFileSyncTrayActivityPhase.Uploading,
+                            DesktopFileSyncTrayActivityPhase.Downloading,
+                            DesktopFileSyncTrayActivityPhase.Preparing,
+                            -> 0
+                            DesktopFileSyncTrayActivityPhase.Conflict,
+                            DesktopFileSyncTrayActivityPhase.Failed,
+                            -> 1
+                            DesktopFileSyncTrayActivityPhase.Waiting -> 2
+                            DesktopFileSyncTrayActivityPhase.Completed -> 3
+                        }
+                    }.thenBy(DesktopFileSyncTrayActivity::relativePath),
+                )
+                .take(limit)
+                .toList()
+        }
     }
 
     suspend fun addPair(
@@ -114,67 +119,73 @@ internal class DesktopFileSyncEngine(
         remoteRootPath: String,
         configuration: FileSyncConfiguration,
     ): FileSyncCenterActionResult = lock.withLock {
-        val selected = selectedRoots[localRoot.localRootId]
-            ?: return@withLock FileSyncCenterActionResult.Rejected("Choose the local folder again.")
-        val canonical = selected.canonicalFile
-        DesktopFileSyncLocalTree(canonical)
-        val normalizedRemote = normalizeRemoteRoot(remoteRootPath)
-        val accountId = desktopFileCacheAccountId(session)
-        val current = store.load()
-        if (current.coordinator.pairs.any { pair ->
-                val existingRoot = current.roots.firstOrNull { it.id == pair.localRootId } ?: return@any true
-                desktopSyncMappingsOverlap(
-                    existingAccountId = pair.accountId,
-                    requestedAccountId = accountId,
-                    existingLocalRoot = existingRoot.absolutePath,
-                    requestedLocalRoot = canonical.absolutePath,
-                    existingRemoteRoot = pair.remoteRootPath,
-                    requestedRemoteRoot = normalizedRemote,
+        store.withExclusiveAccess transaction@ {
+            val selected = selectedRoots[localRoot.localRootId]
+                ?: return@transaction FileSyncCenterActionResult.Rejected("Choose the local folder again.")
+            val canonical = selected.canonicalFile
+            DesktopFileSyncLocalTree(canonical)
+            val normalizedRemote = normalizeRemoteRoot(remoteRootPath)
+            val accountId = desktopFileCacheAccountId(session)
+            val current = store.load()
+            if (current.coordinator.pairs.any { pair ->
+                    val existingRoot = current.roots.firstOrNull { it.id == pair.localRootId } ?: return@any true
+                    desktopSyncMappingsOverlap(
+                        existingAccountId = pair.accountId,
+                        requestedAccountId = accountId,
+                        existingLocalRoot = existingRoot.absolutePath,
+                        requestedLocalRoot = canonical.absolutePath,
+                        existingRemoteRoot = pair.remoteRootPath,
+                        requestedRemoteRoot = normalizedRemote,
+                    )
+                }) {
+                return@transaction FileSyncCenterActionResult.Rejected(
+                    "This folder overlaps another local or Nextcloud sync mapping. Choose separate roots.",
                 )
-            }) {
-            return@withLock FileSyncCenterActionResult.Rejected(
-                "This folder overlaps another local or Nextcloud sync mapping. Choose separate roots.",
+            }
+            val rootId = UUID.randomUUID().toString()
+            val pair = FileSyncPair(
+                id = UUID.randomUUID().toString(),
+                accountId = accountId,
+                localRootId = rootId,
+                remoteRootPath = normalizedRemote,
+                configuration = configuration,
             )
-        }
-        val rootId = UUID.randomUUID().toString()
-        val pair = FileSyncPair(
-            id = UUID.randomUUID().toString(),
-            accountId = accountId,
-            localRootId = rootId,
-            remoteRootPath = normalizedRemote,
-            configuration = configuration,
-        )
-        store.save(
-            current.copy(
-                coordinator = addFileSyncPair(current.coordinator, pair),
-                roots = current.roots + DesktopFileSyncRootRecord(
-                    rootId,
-                    canonical.absolutePath,
-                    localRoot.displayName,
+            store.save(
+                current.copy(
+                    coordinator = addFileSyncPair(current.coordinator, pair),
+                    roots = current.roots + DesktopFileSyncRootRecord(
+                        rootId,
+                        canonical.absolutePath,
+                        localRoot.displayName,
+                    ),
                 ),
-            ),
-        )
-        selectedRoots.remove(localRoot.localRootId)
-        FileSyncCenterActionResult.Completed("Folder sync pair added. Run it to review the first sync.")
+            )
+            selectedRoots.remove(localRoot.localRootId)
+            FileSyncCenterActionResult.Completed("Folder sync pair added. Run it to review the first sync.")
+        }
     }
 
     suspend fun removePair(session: NextcloudSession, pairId: String): FileSyncCenterActionResult = lock.withLock {
-        val current = store.load()
-        val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
-            ?: return@withLock FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
-        if (pair.accountId != desktopFileCacheAccountId(session)) {
-            return@withLock FileSyncCenterActionResult.Rejected("This folder sync pair belongs to another account.")
+        store.withExclusiveAccess transaction@ {
+            val current = store.load()
+            val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
+                ?: return@transaction FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
+            if (pair.accountId != desktopFileCacheAccountId(session)) {
+                return@transaction FileSyncCenterActionResult.Rejected(
+                    "This folder sync pair belongs to another account.",
+                )
+            }
+            val remaining = removeFileSyncPair(current.coordinator, pairId)
+            store.save(
+                current.copy(
+                    coordinator = remaining,
+                    roots = current.roots.filterNot { root ->
+                        root.id == pair.localRootId && remaining.pairs.none { it.localRootId == root.id }
+                    },
+                ),
+            )
+            FileSyncCenterActionResult.Completed("Folder sync pair removed. No local or server files were deleted.")
         }
-        val remaining = removeFileSyncPair(current.coordinator, pairId)
-        store.save(
-            current.copy(
-                coordinator = remaining,
-                roots = current.roots.filterNot { root ->
-                    root.id == pair.localRootId && remaining.pairs.none { it.localRootId == root.id }
-                },
-            ),
-        )
-        FileSyncCenterActionResult.Completed("Folder sync pair removed. No local or server files were deleted.")
     }
 
     suspend fun runPair(
@@ -185,7 +196,9 @@ internal class DesktopFileSyncEngine(
         shouldContinue: () -> Boolean = { true },
         resetExhaustedFailures: Boolean = false,
     ): FileSyncCenterActionResult = lock.withLock {
-        runPairLocked(session, userId, pairId, onProgress, shouldContinue, resetExhaustedFailures)
+        store.withExclusiveAccess {
+            runPairLocked(session, userId, pairId, onProgress, shouldContinue, resetExhaustedFailures)
+        }
     }
 
     suspend fun resolveConflictAndRun(
@@ -197,21 +210,32 @@ internal class DesktopFileSyncEngine(
         onProgress: (DesktopFileSyncProgressEvent) -> Unit = {},
         shouldContinue: () -> Boolean = { true },
     ): FileSyncCenterActionResult = lock.withLock {
-        val current = store.load()
-        val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
-            ?: return@withLock FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
-        if (pair.accountId != desktopFileCacheAccountId(session)) {
-            return@withLock FileSyncCenterActionResult.Rejected("This folder sync pair belongs to another account.")
-        }
-        val resolved = runCatching {
-            resolveFileSyncDecision(current.coordinator, pairId, workId, choice)
-        }.getOrElse { failure ->
-            return@withLock FileSyncCenterActionResult.Rejected(
-                safeFailureMessage(failure, "That conflict decision is no longer valid. Scan again."),
+        store.withExclusiveAccess transaction@ {
+            val current = store.load()
+            val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
+                ?: return@transaction FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
+            if (pair.accountId != desktopFileCacheAccountId(session)) {
+                return@transaction FileSyncCenterActionResult.Rejected(
+                    "This folder sync pair belongs to another account.",
+                )
+            }
+            val resolved = runCatching {
+                resolveFileSyncDecision(current.coordinator, pairId, workId, choice)
+            }.getOrElse { failure ->
+                return@transaction FileSyncCenterActionResult.Rejected(
+                    safeFailureMessage(failure, "That conflict decision is no longer valid. Scan again."),
+                )
+            }
+            store.save(current.copy(coordinator = resolved))
+            runPairLocked(
+                session,
+                userId,
+                pairId,
+                onProgress,
+                shouldContinue,
+                resetExhaustedFailures = true,
             )
         }
-        store.save(current.copy(coordinator = resolved))
-        runPairLocked(session, userId, pairId, onProgress, shouldContinue, resetExhaustedFailures = true)
     }
 
     private fun runPairLocked(
@@ -435,13 +459,20 @@ internal class DesktopFileSyncEngine(
                 } else if (source.kind == SyncEntryKind.Directory) {
                     local.createDirectory(operation.relativePath, operation.expectedLocalRevision)
                 } else {
+                    source.size?.let { size -> requireDownloadCapacity(local, operation.relativePath, size) }
                     withStagingFile("download") { staged ->
                         exactRemote = remote.stageDownload(
                             operation.relativePath,
                             source.etag,
                             staged,
                             MAX_SYNC_FILE_BYTES,
-                        )
+                        ) { declaredBytes ->
+                            requireDownloadCapacity(
+                                local,
+                                operation.relativePath,
+                                declaredBytes ?: source.size ?: MAX_SYNC_FILE_BYTES,
+                            )
+                        }
                         exactLocal = if (replacingType) {
                             local.replaceWithFile(
                                 operation.relativePath,
@@ -613,6 +644,32 @@ internal class DesktopFileSyncEngine(
         }
     }
 
+    private fun requireDownloadCapacity(
+        local: DesktopFileSyncLocalTree,
+        relativePath: String,
+        downloadBytes: Long,
+    ) {
+        require(downloadBytes in 0L..MAX_SYNC_FILE_BYTES)
+        val reserve = minimumFreeSpaceBytes()
+        require(reserve >= 0L)
+        check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
+        val stagingStore = Files.getFileStore(stagingRoot.toPath())
+        val destinationStore = local.fileStore(relativePath)
+        if (stagingStore == destinationStore) {
+            require(
+                stagingStore.usableSpace >= requiredDesktopDownloadFreeBytes(downloadBytes, reserve, sameStore = true),
+            ) { "There is not enough free space to stage this synchronized file safely." }
+        } else {
+            val required = requiredDesktopDownloadFreeBytes(downloadBytes, reserve, sameStore = false)
+            require(stagingStore.usableSpace >= required) {
+                "The sync staging location does not have enough reserved free space."
+            }
+            require(destinationStore.usableSpace >= required) {
+                "The destination folder does not have enough reserved free space."
+            }
+        }
+    }
+
     private fun normalizeRemoteRoot(path: String): String {
         val normalized = path.trim().trim('/')
         if (normalized.isEmpty()) return ""
@@ -630,6 +687,20 @@ internal class DesktopFileSyncEngine(
     private companion object {
         const val MAX_SYNC_FILE_BYTES = 8L * 1024L * 1024L * 1024L
     }
+}
+
+internal fun requiredDesktopDownloadFreeBytes(
+    downloadBytes: Long,
+    reserveBytes: Long,
+    sameStore: Boolean,
+): Long {
+    require(downloadBytes >= 0L && reserveBytes >= 0L)
+    val contentBytes = if (sameStore) {
+        if (downloadBytes > Long.MAX_VALUE / 2L) Long.MAX_VALUE else downloadBytes * 2L
+    } else {
+        downloadBytes
+    }
+    return if (reserveBytes > Long.MAX_VALUE - contentBytes) Long.MAX_VALUE else contentBytes + reserveBytes
 }
 
 internal fun desktopSyncRootsOverlap(first: String, second: String): Boolean {

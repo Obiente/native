@@ -75,6 +75,20 @@ internal class DesktopFileSyncRemoteTree(
         expectedRemoteEtag: String,
         destination: File,
         maximumBytes: Long,
+    ): RemoteSyncEntry = stageDownload(
+        relativePath,
+        expectedRemoteEtag,
+        destination,
+        maximumBytes,
+        beforeTransfer = {},
+    )
+
+    fun stageDownload(
+        relativePath: String,
+        expectedRemoteEtag: String,
+        destination: File,
+        maximumBytes: Long,
+        beforeTransfer: (declaredBytes: Long?) -> Unit,
     ): RemoteSyncEntry {
         require(maximumBytes > 0L)
         val request = requestBuilder(fileUrl(fullPath(relativePath)))
@@ -86,6 +100,7 @@ internal class DesktopFileSyncRemoteTree(
             require(response.code == 200) { response.failure("download file") }
             val declared = response.body.contentLength()
             require(declared == -1L || declared <= maximumBytes) { "The server file exceeds the sync size limit." }
+            beforeTransfer(declared.takeIf { it >= 0L })
             FileOutputStream(destination).use { output ->
                 response.body.byteStream().copyBoundedTo(output, maximumBytes)
                 output.fd.sync()

@@ -137,6 +137,29 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `unlink hides a file but defers remote deletion until its read handle closes`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        backend.addFile("Photos/open.txt", "read after unlink".encodeToByteArray())
+        val runtime = Runtime.getSystemRuntime()
+        val fileInfo = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+
+        assertEquals(0, fileSystem.open("/Photos/open.txt", fileInfo))
+        assertEquals(0, fileSystem.unlink("/Photos/open.txt"))
+        assertEquals(-ErrorCodes.ENOENT(), fileSystem.getattr("/Photos/open.txt", FileStat(runtime)))
+        assertTrue(backend.resolve("Photos/open.txt") != null)
+        val output = runtime.memoryManager.allocateDirect(17)
+        assertEquals(17, fileSystem.read("/Photos/open.txt", output, 17L, 0L, fileInfo))
+        assertContentEquals(
+            "read after unlink".encodeToByteArray(),
+            ByteArray(17).also { bytes -> output.get(0L, bytes, 0, bytes.size) },
+        )
+
+        assertEquals(0, fileSystem.release("/Photos/open.txt", fileInfo))
+        assertEquals(null, backend.resolve("Photos/open.txt"))
+    }
+
+    @Test
     fun `rename refuses a directory containing an open write handle`() {
         val backend = MutableFixtureBackend()
         val fileSystem = LinuxNextcloudVirtualFileSystem(backend)

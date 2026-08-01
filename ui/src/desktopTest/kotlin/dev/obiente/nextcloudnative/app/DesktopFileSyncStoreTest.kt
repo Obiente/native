@@ -2,12 +2,56 @@ package dev.obiente.nextcloudnative.app
 
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class DesktopFileSyncStoreTest {
+    @Test
+    fun `download capacity includes reserve and both same-store copies`() {
+        assertEquals(250L, requiredDesktopDownloadFreeBytes(100L, 50L, sameStore = true))
+        assertEquals(150L, requiredDesktopDownloadFreeBytes(100L, 50L, sameStore = false))
+        assertEquals(Long.MAX_VALUE, requiredDesktopDownloadFreeBytes(Long.MAX_VALUE, 1L, sameStore = true))
+    }
+
+    @Test
+    fun `exclusive store transaction serializes independent engine instances`() {
+        val directory = Files.createTempDirectory("desktop-sync-lock-").toFile()
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val stateFile = File(directory, "state.json")
+            val first = DesktopFileSyncStore(stateFile)
+            val second = DesktopFileSyncStore(stateFile)
+            val firstEntered = CountDownLatch(1)
+            val releaseFirst = CountDownLatch(1)
+            val secondEntered = CountDownLatch(1)
+            val firstFuture = executor.submit {
+                first.withExclusiveAccess {
+                    firstEntered.countDown()
+                    check(releaseFirst.await(5, TimeUnit.SECONDS))
+                }
+            }
+            assertTrue(firstEntered.await(5, TimeUnit.SECONDS))
+
+            val secondFuture = executor.submit {
+                second.withExclusiveAccess { secondEntered.countDown() }
+            }
+
+            assertFalse(secondEntered.await(100, TimeUnit.MILLISECONDS))
+            releaseFirst.countDown()
+            firstFuture.get(5, TimeUnit.SECONDS)
+            secondFuture.get(5, TimeUnit.SECONDS)
+            assertTrue(secondEntered.await(5, TimeUnit.SECONDS))
+        } finally {
+            executor.shutdownNow()
+            directory.deleteRecursively()
+        }
+    }
+
     @Test
     fun `desktop store preserves advanced policy and recovers running work`() {
         val directory = Files.createTempDirectory("desktop-sync-store-").toFile()

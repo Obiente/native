@@ -226,6 +226,7 @@ internal data class WindowsCloudFilesSummary(
     val pinnedFileCount: Int,
     val availableFreeBytes: Long,
     val pendingWritebackCount: Int,
+    val failedWritebackCount: Int,
 )
 
 internal interface WindowsCloudFilesBackend {
@@ -321,6 +322,7 @@ internal class WindowsCloudFilesProvider(
     private val executor: ExecutorService = Executors.newFixedThreadPool(4) { work ->
         Thread(work, "nextcloud-windows-cloud-files").apply { isDaemon = true }
     },
+    private val writebackRetryDelayMillis: (attempt: Int) -> Long = ::windowsWritebackRetryDelayMillis,
 ) : AutoCloseable, WindowsCloudFilesCallbacks {
     private val connection = AtomicLongState()
     private val cancelledRequests = ConcurrentHashMap<Long, AtomicBoolean>()
@@ -328,6 +330,8 @@ internal class WindowsCloudFilesProvider(
     private val pathOperations = ConcurrentHashMap.newKeySet<String>()
     private val queuedPathOperations = ConcurrentHashMap<String, () -> Unit>()
     private val pendingWritebacks = ConcurrentHashMap.newKeySet<String>()
+    private val failedWritebacks = ConcurrentHashMap.newKeySet<String>()
+    private val writebackAttempts = ConcurrentHashMap<String, Int>()
     private val localChangeScheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { work ->
         Thread(work, "nextcloud-windows-local-changes").apply { isDaemon = true }
     }
@@ -551,6 +555,7 @@ internal class WindowsCloudFilesProvider(
             pinnedFileCount = pinnedCount,
             availableFreeBytes = Files.getFileStore(root).usableSpace,
             pendingWritebackCount = pendingWritebacks.size,
+            failedWritebackCount = failedWritebacks.size,
         )
     }
 
@@ -642,6 +647,8 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun submitPathOperation(path: String, block: () -> Unit) {
+        failedWritebacks -= path
+        writebackAttempts.remove(path)
         val shouldSchedule = synchronized(queuedPathOperations) {
             queuedPathOperations[path] = block
             pathOperations.add(path)
@@ -649,29 +656,66 @@ internal class WindowsCloudFilesProvider(
         if (shouldSchedule) schedulePathOperationDrain(path)
     }
 
-    private fun schedulePathOperationDrain(path: String) {
-        executor.execute {
-            var failure: Throwable? = null
+    private fun schedulePathOperationDrain(path: String, delayMillis: Long = 0L) {
+        require(delayMillis >= 0L)
+        val drain = {
+            var failedOperation: (() -> Unit)? = null
             try {
                 while (true) {
                     val next = synchronized(queuedPathOperations) {
                         queuedPathOperations.remove(path)
                     } ?: break
-                    runCatching(next).onFailure { failure = it }
+                    try {
+                        next()
+                        failedWritebacks -= path
+                        writebackAttempts.remove(path)
+                    } catch (_: Throwable) {
+                        failedOperation = next
+                        break
+                    }
                 }
             } finally {
+                var retryDelay: Long? = null
+                var rescheduleImmediately = false
                 val shouldReschedule = synchronized(queuedPathOperations) {
                     pathOperations.remove(path)
-                    if (queuedPathOperations.containsKey(path)) {
+                    if (failedOperation != null) {
+                        val attempt = writebackAttempts.merge(path, 1, Int::plus) ?: 1
+                        failedWritebacks += path
+                        if (attempt < MAX_WINDOWS_WRITEBACK_ATTEMPTS) {
+                            queuedPathOperations.putIfAbsent(path, requireNotNull(failedOperation))
+                            retryDelay = writebackRetryDelayMillis(attempt).coerceAtLeast(0L)
+                            pathOperations.add(path)
+                        } else if (queuedPathOperations.containsKey(path)) {
+                            writebackAttempts.remove(path)
+                            failedWritebacks -= path
+                            rescheduleImmediately = pathOperations.add(path)
+                        }
+                        false
+                    } else if (queuedPathOperations.containsKey(path)) {
                         pathOperations.add(path)
                     } else {
                         pendingWritebacks -= path
+                        failedWritebacks -= path
+                        writebackAttempts.remove(path)
                         false
                     }
                 }
                 if (shouldReschedule) schedulePathOperationDrain(path)
+                if (rescheduleImmediately) schedulePathOperationDrain(path)
+                retryDelay?.let { delay -> schedulePathOperationDrain(path, delay) }
             }
-            failure?.let { throw it }
+        }
+        if (delayMillis == 0L) {
+            runCatching { executor.execute(drain) }
+        } else {
+            runCatching {
+                localChangeScheduler.schedule(
+                    { runCatching { executor.execute(drain) } },
+                    delayMillis,
+                    TimeUnit.MILLISECONDS,
+                )
+            }
         }
     }
 
@@ -833,6 +877,7 @@ internal class WindowsCloudFilesProvider(
             "Windows Cloud Files only imports regular files and folders."
         }
         pendingWritebacks += relativePath
+        var completed = false
         try {
             val uploaded = try {
                 if (Files.isDirectory(localPath)) {
@@ -849,8 +894,9 @@ internal class WindowsCloudFilesProvider(
             knownIdentities[relativePath] = uploaded
             api.convertToPlaceholder(localPath, placeholder(uploaded))
             api.markInSync(localPath)
+            completed = true
         } finally {
-            pendingWritebacks -= relativePath
+            if (completed) pendingWritebacks -= relativePath
         }
     }
 
@@ -963,6 +1009,12 @@ private fun String.windowsCloudPath(): String {
 }
 
 private const val WINDOWS_CLOUD_ALIGNMENT = 4 * 1024L
+private const val MAX_WINDOWS_WRITEBACK_ATTEMPTS = 5
+
+private fun windowsWritebackRetryDelayMillis(attempt: Int): Long {
+    require(attempt in 1 until MAX_WINDOWS_WRITEBACK_ATTEMPTS)
+    return (250L shl (attempt - 1)).coerceAtMost(30_000L)
+}
 
 private fun Path.registerForWindowsCloudChanges(watcher: WatchService) {
     register(

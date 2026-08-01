@@ -4,6 +4,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.channels.FileChannel
+import java.nio.file.FileStore
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
@@ -117,6 +118,13 @@ internal class DesktopFileSyncLocalTree(
             ),
             path,
         )
+    }
+
+    fun fileStore(relativePath: String): FileStore {
+        val destination = safePath(relativePath)
+        val existingParent = generateSequence(destination.parent) { parent -> parent.parent }
+            .first { parent -> Files.exists(parent, LinkOption.NOFOLLOW_LINKS) }
+        return Files.getFileStore(existingParent)
     }
 
     fun stageForUpload(relativePath: String, destination: File, maximumBytes: Long): LocalSyncEntry {
