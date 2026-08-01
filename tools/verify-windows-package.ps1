@@ -3,11 +3,7 @@ param(
     [string]$PackageDirectory,
 
     [Parameter(Mandatory = $true)]
-    [string]$ExpectedVersion,
-
-    [switch]$RequireSignature,
-
-    [string]$ExpectedCertificateSha256 = ""
+    [string]$ExpectedVersion
 )
 
 $ErrorActionPreference = "Stop"
@@ -83,27 +79,11 @@ if ($upgradeCode.ToUpperInvariant() -ne $expectedUpgradeCode) {
 }
 
 $signature = Get-AuthenticodeSignature -LiteralPath $package.FullName
-if ($RequireSignature) {
-    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-        throw "The Windows MSI signature is not valid: $($signature.Status)"
-    }
-    if ($null -eq $signature.SignerCertificate) {
-        throw "The Windows MSI has no signer certificate."
-    }
-    $normalizedExpected = $ExpectedCertificateSha256.Replace(":", "").Trim().ToLowerInvariant()
-    if ($normalizedExpected -notmatch "^[a-f0-9]{64}$") {
-        throw "The expected Windows signing certificate digest is invalid."
-    }
-    $sha256 = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $actualBytes = $sha256.ComputeHash($signature.SignerCertificate.RawData)
-    } finally {
-        $sha256.Dispose()
-    }
-    $actual = ([System.BitConverter]::ToString($actualBytes)).Replace("-", "").ToLowerInvariant()
-    if ($actual -ne $normalizedExpected) {
-        throw "The Windows MSI signer does not match the pinned release identity."
-    }
+if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned) {
+    throw "Expected an explicitly unsigned Windows MSI, found signature status $($signature.Status)."
+}
+if ($null -ne $signature.SignerCertificate) {
+    throw "The unsigned Windows MSI unexpectedly reports a signer certificate."
 }
 
-Write-Host "Verified Windows MSI $($package.Name) ($productVersion)."
+Write-Host "Verified unsigned Windows MSI $($package.Name) ($productVersion)."

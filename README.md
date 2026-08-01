@@ -200,10 +200,11 @@ Releases remain below `1.0.0` and are marked as prereleases until the published
 product, data-loss, security, and platform gates pass.
 
 Android release artifacts are signed with the project's protected release key.
-Desktop packages are provided per successful platform build. Windows packages
-use native Credential Manager storage and are signed only when the protected
-Windows release identity is configured and verified. macOS packages still
-prove packaging only and do not yet have native Keychain login integration.
+Desktop packages are provided per successful platform build. Windows MSI
+packages use native Credential Manager storage, include keyless GitHub build
+provenance, and are currently unsigned, so SmartScreen may require choosing
+`More info > Run anyway`. macOS packages still prove packaging only and do not
+yet have native Keychain login integration.
 Read each release's known limitations before installing over an existing test
 build.
 

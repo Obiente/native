@@ -259,6 +259,11 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     environment: prerelease
+    permissions:
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
     steps:
       - name: Check out the exact tested source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -292,18 +297,21 @@ jobs:
           fi
           exit "${status}"
 
-      - name: Sign and verify Windows MSI
+      - name: Verify unsigned Windows MSI
         if: matrix.platform == 'windows'
         shell: pwsh
         env:
-          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
-          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
-          WINDOWS_SIGNING_CERTIFICATE_SHA256: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_SHA256 }}
           NIGHTLY_DESKTOP_VERSION: ${{ needs.source.outputs.desktop-version }}
         run: |
-          tools/sign-windows-package.ps1 `
+          tools/verify-windows-package.ps1 `
             -PackageDirectory "ui/build/compose/binaries/main/msi" `
             -ExpectedVersion "${env:NIGHTLY_DESKTOP_VERSION}"
+
+      - name: Attest Windows MSI provenance
+        if: matrix.platform == 'windows'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ui/build/compose/binaries/main/msi/*.msi
 
       - name: Upload desktop nightly package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

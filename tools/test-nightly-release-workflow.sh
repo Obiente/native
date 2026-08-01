@@ -4,6 +4,7 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 nightly="$project_root/.github/workflows/nightly.yml"
 prerelease="$project_root/.github/workflows/prerelease.yml"
+nightly_notes="$project_root/tools/nightly-release-notes.mjs"
 promotion="$project_root/tools/promote-app-update-channel.sh"
 temporary_directory="$(mktemp -d)"
 trap 'rm -r -- "$temporary_directory"' EXIT
@@ -35,10 +36,13 @@ require_text "$nightly" 'runner: windows-latest'
 require_text "$nightly" 'runner: macos-15-intel'
 require_text "$nightly" 'tasks: ":ui:packageDeb :ui:packageRpm"'
 require_text "$nightly" 'tasks: ":ui:packageMsi"'
-require_text "$nightly" 'tools/sign-windows-package.ps1'
-require_text "$nightly" 'WINDOWS_SIGNING_CERTIFICATE_BASE64'
-require_text "$nightly" 'WINDOWS_SIGNING_CERTIFICATE_PASSWORD'
-require_text "$nightly" 'WINDOWS_SIGNING_CERTIFICATE_SHA256'
+require_text "$nightly" 'name: Verify unsigned Windows MSI'
+require_text "$nightly" 'tools/verify-windows-package.ps1'
+require_text "$nightly" 'uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1'
+require_text "$nightly" 'subject-path: ui/build/compose/binaries/main/msi/*.msi'
+require_text "$nightly" 'artifact-metadata: write'
+require_text "$nightly" 'attestations: write'
+require_text "$nightly" 'id-token: write'
 require_text "$nightly" 'tasks: ":ui:packageDmg"'
 require_text "$nightly" 'tools/derive-desktop-package-version.sh'
 require_text "$nightly" 'source_sequence="$(git rev-list --count "${SOURCE_SHA}")"'
@@ -80,6 +84,7 @@ require_text "$nightly" 'if: needs.stage-assets.outputs.already-published != '\'
 require_text "$nightly" 'tools/promote-app-update-channel.sh'
 require_text "$nightly" 'tools/verify-android-update-manifest-assets.sh'
 require_text "$nightly" 'tools/verify-desktop-update-manifest-assets.sh'
+require_text "$nightly_notes" 'The Windows MSI is currently unsigned.'
 require_text "$nightly" 'if tools/has-direct-linux-update-assets.sh "${canonical}"; then'
 require_text "$nightly" 'channel-nightly'
 require_text "$nightly" '--draft'
@@ -100,10 +105,13 @@ require_text "$prerelease" 'source_sequence="$(git rev-list --count "${GITHUB_SH
 require_text "$prerelease" '-PncDesktopPackageVersion="${RELEASE_DESKTOP_VERSION}"'
 require_text "$prerelease" '-PncMacosPackageVersion="${RELEASE_DESKTOP_VERSION}"'
 require_text "$prerelease" '-PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}"'
-require_text "$prerelease" 'tools/sign-windows-package.ps1'
-require_text "$prerelease" 'WINDOWS_SIGNING_CERTIFICATE_BASE64'
-require_text "$prerelease" 'WINDOWS_SIGNING_CERTIFICATE_PASSWORD'
-require_text "$prerelease" 'WINDOWS_SIGNING_CERTIFICATE_SHA256'
+require_text "$prerelease" 'name: Verify unsigned Windows MSI'
+require_text "$prerelease" 'tools/verify-windows-package.ps1'
+require_text "$prerelease" 'uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1'
+require_text "$prerelease" 'subject-path: ui/build/compose/binaries/main/msi/*.msi'
+require_text "$prerelease" 'artifact-metadata: write'
+require_text "$prerelease" 'attestations: write'
+require_text "$prerelease" 'id-token: write'
 require_text "$prerelease" 'Require protected Android signing secrets'
 require_text "$prerelease" 'if [[ -z "${!secret_name}" ]]; then'
 require_text "$prerelease" 'tools/verify-android-artifact-metadata.sh'
@@ -113,6 +121,9 @@ require_text "$prerelease" 'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fd
 require_text "$prerelease" 'tools/promote-app-update-channel.sh'
 require_text "$prerelease" 'tools/verify-android-update-manifest-assets.sh'
 require_text "$prerelease" 'tools/verify-desktop-update-manifest-assets.sh'
+require_text "$prerelease" 'The Windows MSI is currently unsigned.'
+require_text "$prerelease" 'tools/create-winget-manifests.ps1'
+require_text "$prerelease" 'name: winget-manifest-candidate-${{ github.ref_name }}'
 require_text "$prerelease" 'if tools/has-direct-linux-update-assets.sh "${canonical}"; then'
 require_text "$prerelease" 'channel-prerelease'
 require_text "$prerelease" 'already-published: ${{ steps.release.outputs.already-published }}'
@@ -131,6 +142,17 @@ require_text "$promotion" 'pointer_state'
 require_text "$promotion" '--clobber'
 require_text "$promotion" 'test "$release_state" = $'\''false\ttrue\t'\''"$immutable_tag"'
 bash -n "$promotion"
+
+if [[ -e "$project_root/tools/sign-windows-package.ps1" ]]; then
+    echo "The unsigned Windows release path must not retain a PFX signing helper." >&2
+    exit 1
+fi
+for workflow in "$nightly" "$prerelease"; do
+    if grep -Fq 'WINDOWS_SIGNING_CERTIFICATE_' "$workflow"; then
+        echo "Unsigned Windows releases must not require unavailable certificate secrets." >&2
+        exit 1
+    fi
+done
 
 for workflow in "$nightly" "$prerelease"; do
     [[ "$(grep -Fc 'direct_updates: "true"' "$workflow")" -eq 2 ]]
