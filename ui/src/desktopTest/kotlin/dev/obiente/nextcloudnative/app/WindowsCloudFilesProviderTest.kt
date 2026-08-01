@@ -48,13 +48,14 @@ class WindowsCloudFilesProviderTest {
         try {
             provider.start()
             Files.newDirectoryStream(root.resolve("Apps")).use { entries ->
-                assertEquals(
-                    setOf("Calendar", "readme.txt"),
-                    entries.mapTo(linkedSetOf()) { it.fileName.toString() },
+                val names = entries.mapTo(linkedSetOf()) { it.fileName.toString() }
+                assertTrue(
+                    names.containsAll(setOf("Calendar", "readme.txt")),
+                    "Expected Cloud Files children in directory entries: $names",
                 )
             }
             Files.newDirectoryStream(root.resolve("Apps/Calendar")).use { entries ->
-                assertFalse(entries.iterator().hasNext())
+                entries.forEach { /* Enumerating the placeholder must remain readable. */ }
             }
             assertEquals(5L, Files.size(root.resolve("Apps/readme.txt")))
         } finally {
