@@ -266,7 +266,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
     ) {
         require(!invalidateContent || !preserveSyncState)
         withFileHandle(path, write = true, exclusive = invalidateContent) { handle ->
-            val metadata = placeholder.metadata()
+            val metadata = placeholder.windowsMetadata(fallbackEpochMillis = null)
             val identity = placeholder.identity.nativeMemory()
             val flags = if (preserveSyncState) {
                 0
@@ -456,7 +456,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
                 .also { array ->
                     placeholders.forEachIndexed { index, placeholder ->
                         array[index].relativeFileName = names[index]
-                        array[index].metadata = placeholder.metadata()
+                        array[index].metadata = placeholder.windowsMetadata()
                         array[index].fileIdentity = identities[index]
                         array[index].fileIdentityLength = placeholder.identity.size
                         array[index].flags = CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC
@@ -683,11 +683,23 @@ internal class CfCallbackInfo(pointer: Pointer) : Structure(pointer) {
     @JvmField var requestKey: Long = 0L
 }
 
-private fun WindowsCloudPlaceholder.metadata(): CfFsMetadata = CfFsMetadata().apply {
+internal fun WindowsCloudPlaceholder.windowsMetadata(
+    fallbackEpochMillis: Long? = System.currentTimeMillis(),
+): CfFsMetadata = CfFsMetadata().apply {
+    val timestamp = (lastModifiedEpochMillis ?: fallbackEpochMillis)?.let(::windowsFileTime) ?: 0L
+    creationTime = timestamp
+    lastAccessTime = timestamp
+    lastWriteTime = timestamp
+    changeTime = timestamp
     fileAttributes = if (directory) WinNT.FILE_ATTRIBUTE_DIRECTORY else WinNT.FILE_ATTRIBUTE_ARCHIVE
     fileSize = size
     write()
 }
+
+internal fun windowsFileTime(epochMillis: Long): Long = Math.multiplyExact(
+    Math.addExact(epochMillis, WINDOWS_EPOCH_OFFSET_MILLIS),
+    WINDOWS_FILE_TIME_TICKS_PER_MILLISECOND,
+)
 
 private fun ByteArray.nativeMemory(): Memory = Memory(size.toLong()).also { memory ->
     memory.write(0L, this, 0, size)
@@ -715,3 +727,6 @@ internal fun windowsCloudNativeLayoutSizes(): WindowsCloudNativeLayoutSizes = Wi
     placeholder = CfPlaceholderCreateInfo().size(),
     callbackInfo = CfCallbackInfo(Memory(160L)).size(),
 )
+
+private const val WINDOWS_EPOCH_OFFSET_MILLIS = 11_644_473_600_000L
+private const val WINDOWS_FILE_TIME_TICKS_PER_MILLISECOND = 10_000L

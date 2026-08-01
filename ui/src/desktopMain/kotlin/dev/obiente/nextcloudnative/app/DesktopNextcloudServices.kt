@@ -21,6 +21,7 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.Base64
 import java.util.UUID
@@ -136,6 +137,7 @@ private const val MAX_DOCUMENT_TEMPLATE_ID_LENGTH = 256
 private const val MAX_DOCUMENT_TEMPLATE_NAME_LENGTH = 512
 private const val MAX_DOCUMENT_TEMPLATE_EXTENSION_LENGTH = 32
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
+private const val WINDOWS_CLOUD_FILES_ROOT_SUFFIX = "-v2"
 
 private fun isLinuxDesktop(): Boolean =
     System.getProperty("os.name").orEmpty().lowercase().contains("linux")
@@ -148,7 +150,20 @@ internal fun desktopWindowsCloudFilesRoot(
     userHome: File = File(System.getProperty("user.home")),
 ): File {
     require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    return File(File(userHome, "Nextcloud Native"), accountId)
+    return File(File(userHome, "Nextcloud Native"), accountId + WINDOWS_CLOUD_FILES_ROOT_SUFFIX)
+}
+
+internal fun unregisterSupersededWindowsCloudFilesRoot(
+    preferences: Preferences,
+    currentRoot: Path,
+    userHome: File,
+    api: WindowsCloudFilesApi,
+) {
+    val savedRoot = preferences.get(KEY_WINDOWS_CLOUD_FILES_ROOT, null)?.let(::File) ?: return
+    val normalizedSavedRoot = validatedWindowsCloudFilesRoot(savedRoot, userHome)
+    if (normalizedSavedRoot == currentRoot.toAbsolutePath().normalize()) return
+    api.unregisterSyncRoot(normalizedSavedRoot)
+    preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
 }
 
 internal fun unregisterWindowsCloudFilesRootForUninstall(
@@ -164,11 +179,7 @@ internal fun unregisterWindowsCloudFilesRootForUninstall(
         }
     }
     val root = savedRoot ?: sessionRoot ?: return
-    val expectedParent = File(userHome, "Nextcloud Native").toPath().toAbsolutePath().normalize()
-    val normalizedRoot = root.toPath().toAbsolutePath().normalize()
-    check(normalizedRoot.parent == expectedParent && normalizedRoot.fileName.toString().let { name ->
-        name.length == 64 && name.all { it in '0'..'9' || it in 'a'..'f' }
-    }) { "The stored Windows Cloud Files root is invalid." }
+    val normalizedRoot = validatedWindowsCloudFilesRoot(root, userHome)
     val api = apiFactory()
     try {
         api.unregisterSyncRoot(normalizedRoot)
@@ -176,6 +187,20 @@ internal fun unregisterWindowsCloudFilesRootForUninstall(
     } finally {
         api.close()
     }
+}
+
+private fun validatedWindowsCloudFilesRoot(root: File, userHome: File): Path {
+    val expectedParent = File(userHome, "Nextcloud Native").toPath().toAbsolutePath().normalize()
+    val normalizedRoot = root.toPath().toAbsolutePath().normalize()
+    val name = normalizedRoot.fileName.toString()
+    val accountId = name.removeSuffix(WINDOWS_CLOUD_FILES_ROOT_SUFFIX)
+    check(
+        normalizedRoot.parent == expectedParent &&
+            accountId.length == 64 &&
+            accountId.all { it in '0'..'9' || it in 'a'..'f' } &&
+            (name == accountId || name == accountId + WINDOWS_CLOUD_FILES_ROOT_SUFFIX),
+    ) { "The stored Windows Cloud Files root is invalid." }
+    return normalizedRoot
 }
 
 private fun virtualFileProviderPreferenceKey(accountId: String): String {
@@ -684,6 +709,18 @@ class DesktopNextcloudServices(
                 windowsCloudFilesProvider = null
                 windowsCloudFilesIdentity = null
                 val root = desktopWindowsCloudFilesRoot(accountId).toPath()
+                val api = JnaWindowsCloudFilesApi()
+                try {
+                    unregisterSupersededWindowsCloudFilesRoot(
+                        preferences = preferences,
+                        currentRoot = root,
+                        userHome = File(System.getProperty("user.home")),
+                        api = api,
+                    )
+                } catch (failure: Throwable) {
+                    runCatching(api::close)
+                    throw failure
+                }
                 val provider = WindowsCloudFilesProvider(
                     root = root,
                     backend = DesktopNextcloudWindowsCloudFilesBackend(
@@ -691,7 +728,7 @@ class DesktopNextcloudServices(
                         userId = userId,
                         services = this@DesktopNextcloudServices,
                     ),
-                    api = JnaWindowsCloudFilesApi(),
+                    api = api,
                 )
                 try {
                     provider.start()

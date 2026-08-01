@@ -138,6 +138,34 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun `new placeholders carry complete Windows filesystem metadata`() {
+        val directory = WindowsCloudPlaceholder(
+            name = "Apps",
+            identity = byteArrayOf(1),
+            size = 0L,
+            directory = true,
+            lastModifiedEpochMillis = 0L,
+        ).windowsMetadata()
+        val file = WindowsCloudPlaceholder(
+            name = "readme.txt",
+            identity = byteArrayOf(2),
+            size = 5L,
+            directory = false,
+            lastModifiedEpochMillis = 0L,
+        ).windowsMetadata()
+
+        assertEquals(116_444_736_000_000_000L, windowsFileTime(0L))
+        assertEquals(directory.creationTime, directory.lastAccessTime)
+        assertEquals(directory.creationTime, directory.lastWriteTime)
+        assertEquals(directory.creationTime, directory.changeTime)
+        assertTrue(directory.creationTime > 0L)
+        assertEquals(0x10, directory.fileAttributes)
+        assertEquals(0L, directory.fileSize)
+        assertEquals(0x20, file.fileAttributes)
+        assertEquals(5L, file.fileSize)
+    }
+
+    @Test
     fun `placeholder identities round trip and reject tampering`() {
         val identity = fixtureIdentity(size = 9_217L)
         val encoded = WindowsCloudFileIdentityCodec.encode(identity)

@@ -177,6 +177,7 @@ internal data class WindowsCloudPlaceholder(
         require(name.isNotBlank() && name.none { it == '/' || it == '\\' || it == '\u0000' })
         require(identity.size <= 4_096)
         require(size >= 0L)
+        require(lastModifiedEpochMillis == null || lastModifiedEpochMillis >= 0L)
     }
 }
 
