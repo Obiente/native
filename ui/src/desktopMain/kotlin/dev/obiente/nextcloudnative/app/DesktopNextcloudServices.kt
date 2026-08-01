@@ -169,10 +169,6 @@ internal fun unregisterWindowsCloudFilesRootForUninstall(
     check(normalizedRoot.parent == expectedParent && normalizedRoot.fileName.toString().let { name ->
         name.length == 64 && name.all { it in '0'..'9' || it in 'a'..'f' }
     }) { "The stored Windows Cloud Files root is invalid." }
-    if (!root.isDirectory) {
-        preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
-        return
-    }
     val api = apiFactory()
     try {
         api.unregisterSyncRoot(normalizedRoot)

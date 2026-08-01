@@ -70,6 +70,26 @@ class WindowsUninstallCleanupTest {
         }
     }
 
+    @Test
+    fun uninstallStillUnregistersAValidatedRootAfterItsDirectoryDisappears() {
+        val preferences = Preferences.userRoot().node("windows-uninstall-missing-root-test-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-uninstall-missing-root-home").toFile()
+        val expectedRoot = desktopWindowsCloudFilesRoot("b".repeat(64), home)
+        val api = RecordingWindowsCloudFilesApi()
+        try {
+            preferences.put("windows-cloud-files-root", expectedRoot.absolutePath)
+
+            unregisterWindowsCloudFilesRootForUninstall(preferences, home) { api }
+
+            assertEquals(expectedRoot.toPath(), api.unregisteredRoot)
+            assertTrue(api.closed)
+            assertEquals(null, preferences.get("windows-cloud-files-root", null))
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
     private class RecordingWindowsCloudFilesApi : WindowsCloudFilesApi {
         var unregisteredRoot: Path? = null
         var closed = false
