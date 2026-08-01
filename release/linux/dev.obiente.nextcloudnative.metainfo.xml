@@ -10,6 +10,7 @@
     <name>Obiente</name>
   </developer>
   <icon type="stock">dev.obiente.nextcloudnative</icon>
+  <icon type="remote" width="512" height="512">https://nc-native.obiente.dev/icon-512.png</icon>
   <launchable type="desktop-id">nextcloudnative-NextcloudNative.desktop</launchable>
   <provides>
     <binary>NextcloudNative</binary>
