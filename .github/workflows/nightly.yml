@@ -551,7 +551,7 @@ jobs:
             --title "Nextcloud Native ${NIGHTLY_VERSION}"
 
           if [[ "${canonical_successful}" -ge 3 ]]; then
-            if tools/has-direct-linux-update-assets.sh "${canonical}"; then
+            if tools/has-direct-desktop-update-assets.sh "${canonical}"; then
               tools/create-desktop-update-manifest.sh \
                 "${canonical}/desktop-update-manifest.json" \
                 nightly-v1 \

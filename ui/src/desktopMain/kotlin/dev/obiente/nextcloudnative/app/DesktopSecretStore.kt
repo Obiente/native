@@ -9,7 +9,9 @@ import com.sun.jna.ptr.PointerByReference
 import com.sun.jna.win32.StdCallLibrary
 import com.sun.jna.win32.W32APIOptions
 import java.security.MessageDigest
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 internal data class DesktopSecretReference(
     val targetName: String,
@@ -89,26 +91,51 @@ internal fun desktopDeckDraftSecretReference(): DesktopSecretReference = Desktop
 )
 
 internal class SecretToolDesktopSecretStore(
-    private val timeoutSeconds: Long = 10L,
+    private val timeoutMillis: Long = 10_000L,
+    private val startProcess: (List<String>) -> Process = { command ->
+        ProcessBuilder(command)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+    },
 ) : DesktopSecretStore {
     init {
-        require(timeoutSeconds > 0L)
+        require(timeoutMillis > 0L)
     }
 
     override fun load(reference: DesktopSecretReference): ByteArray? {
         val process = runCatching {
-            ProcessBuilder(secretToolCommand("lookup", reference))
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start()
+            startProcess(secretToolCommand("lookup", reference))
         }.getOrElse { return null }
-        val output = process.inputStream.use { it.readNBytes(MAX_SECRET_BYTES + 1) }
-        if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            error("Timed out while loading a desktop secret.")
+        val executor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "nextcloud-native-secret-reader").apply { isDaemon = true }
         }
-        if (process.exitValue() != 0 || output.isEmpty()) return null
-        check(output.size <= MAX_SECRET_BYTES) { "The desktop secret service returned an oversized value." }
-        return output.trimSingleTrailingLineBreak()
+        val startedAt = System.nanoTime()
+        val output = executor.submit<ByteArray> {
+            process.inputStream.use { it.readNBytes(MAX_SECRET_BYTES + 1) }
+        }
+        var timedOut = false
+        try {
+            if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
+                throw TimeoutException()
+            }
+            val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+            val remainingMillis = (timeoutMillis - elapsedMillis).coerceAtLeast(1L)
+            val bytes = output.get(remainingMillis, TimeUnit.MILLISECONDS)
+            if (process.exitValue() != 0 || bytes.isEmpty()) return null
+            check(bytes.size <= MAX_SECRET_BYTES) { "The desktop secret service returned an oversized value." }
+            return bytes.trimSingleTrailingLineBreak()
+        } catch (_: TimeoutException) {
+            timedOut = true
+            runCatching {
+                process.descendants().forEach { child -> runCatching { child.destroyForcibly() } }
+            }
+            process.destroyForcibly()
+            output.cancel(true)
+            error("Timed out while loading a desktop secret.")
+        } finally {
+            if (!timedOut) runCatching { process.inputStream.close() }
+            executor.shutdownNow()
+        }
     }
 
     override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
@@ -126,7 +153,7 @@ internal class SecretToolDesktopSecretStore(
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
         process.outputStream.use { it.write(secret) }
-        check(process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+        check(process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
             process.destroyForcibly()
             "Timed out while storing a desktop secret."
         }
@@ -139,7 +166,7 @@ internal class SecretToolDesktopSecretStore(
                 .redirectError(ProcessBuilder.Redirect.DISCARD)
                 .start()
         }.getOrElse { return }
-        if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) process.destroyForcibly()
+        if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) process.destroyForcibly()
     }
 
     private fun secretToolCommand(command: String, reference: DesktopSecretReference): List<String> = buildList {

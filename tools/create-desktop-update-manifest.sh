@@ -17,7 +17,7 @@ repository="${GITHUB_REPOSITORY:-Obiente/nc-native}"
 
 [[ "$repository" == "Obiente/nc-native" ]]
 [[ -d "$asset_directory" ]]
-"$(dirname "$0")/has-direct-linux-update-assets.sh" "$asset_directory"
+"$(dirname "$0")/has-direct-desktop-update-assets.sh" "$asset_directory"
 case "$channel" in
     prerelease-v1)
         [[ "$version" =~ ^0\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[1-9][0-9]*$ ]]
@@ -70,7 +70,6 @@ while IFS= read -r -d '' asset; do
         *_amd64.deb) append_asset "$asset" linux deb x86_64 ;;
         *_arm64.deb) append_asset "$asset" linux deb aarch64 ;;
         *.msi) append_asset "$asset" windows msi x86_64 ;;
-        *.dmg) append_asset "$asset" macos dmg x86_64 ;;
     esac
 done < <(find "$asset_directory" -maxdepth 1 -type f -print0 | sort -z)
 

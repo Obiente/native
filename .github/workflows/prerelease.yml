@@ -205,26 +205,6 @@ jobs:
         with:
           subject-path: ui/build/compose/binaries/main/msi/*.msi
 
-      - name: Generate WinGet manifest candidate
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          $packageVersion = $env:GITHUB_REF_NAME.Substring(1)
-          tools/create-winget-manifests.ps1 `
-            -PackageDirectory "ui/build/compose/binaries/main/msi" `
-            -PackageVersion $packageVersion `
-            -ReleaseTag $env:GITHUB_REF_NAME `
-            -OutputDirectory "ui/build/winget"
-
-      - name: Upload WinGet manifest candidate
-        if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: winget-manifest-candidate-${{ github.ref_name }}
-          path: ui/build/winget/**/*.yaml
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Upload desktop package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -715,7 +695,7 @@ jobs:
                 "${version}" \
                 "${RELEASE_VERSION_CODE}"
             fi
-            if tools/has-direct-linux-update-assets.sh "${canonical}"; then
+            if tools/has-direct-desktop-update-assets.sh "${canonical}"; then
               tools/create-desktop-update-manifest.sh \
                 "${canonical}/desktop-update-manifest.json" \
                 prerelease-v1 \
@@ -753,6 +733,45 @@ jobs:
               --repo "${GITHUB_REPOSITORY}" \
               --clobber
           fi
+
+  winget-candidate:
+    needs: stage-assets
+    if: contains(needs.stage-assets.outputs.available-platforms, 'windows')
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download canonical Windows release package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path "canonical-windows" | Out-Null
+          gh release download $env:GITHUB_REF_NAME `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern '*.msi' `
+            --dir "canonical-windows"
+
+      - name: Generate WinGet manifest candidate
+        shell: pwsh
+        run: |
+          $packageVersion = $env:GITHUB_REF_NAME.Substring(1)
+          tools/create-winget-manifests.ps1 `
+            -PackageDirectory "canonical-windows" `
+            -PackageVersion $packageVersion `
+            -ReleaseTag $env:GITHUB_REF_NAME `
+            -OutputDirectory "winget"
+
+      - name: Upload WinGet manifest candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: winget-manifest-candidate-${{ github.ref_name }}
+          path: winget/**/*.yaml
+          if-no-files-found: error
+          retention-days: 14
 
   release-quorum:
     needs: stage-assets

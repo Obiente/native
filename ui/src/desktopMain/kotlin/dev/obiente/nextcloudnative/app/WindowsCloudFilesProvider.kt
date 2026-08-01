@@ -571,11 +571,8 @@ internal class WindowsCloudFilesProvider(
 
     fun removeSyncRoot() {
         stopRuntime()
-        try {
-            api.unregisterSyncRoot(root)
-        } finally {
-            closeApi()
-        }
+        api.unregisterSyncRoot(root)
+        closeApi()
     }
 
     override fun close() {
@@ -584,8 +581,11 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun stopRuntime() {
-        val key = connection.getAndSet(0L)
-        if (key != 0L) runCatching { api.disconnect(key) }
+        val key = connection.get()
+        if (key != 0L) {
+            api.disconnect(key)
+            connection.compareAndSet(key, 0L)
+        }
         cancelledRequests.values.forEach { it.set(true) }
         cancelledRequests.clear()
         runCatching { watchService?.close() }
@@ -1020,7 +1020,11 @@ private class AtomicLongState {
     @Volatile private var value: Long = 0L
     @Synchronized fun get(): Long = value
     @Synchronized fun set(next: Long) { value = next }
-    @Synchronized fun getAndSet(next: Long): Long = value.also { value = next }
+    @Synchronized fun compareAndSet(expected: Long, next: Long): Boolean {
+        if (value != expected) return false
+        value = next
+        return true
+    }
 }
 
 internal fun requireWindowsCloudCallbackPath(root: Path, normalizedPath: String, identityPath: String) {

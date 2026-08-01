@@ -32,6 +32,49 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun failedSyncRootRemovalKeepsTheNativeApiAvailableForRetry() {
+        val root = createTempDirectory("windows-cloud-remove-retry")
+        val api = FakeApi().apply { unregisterFailure = IllegalStateException("in use") }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0)),
+            api = api,
+        )
+        provider.start()
+
+        assertFailsWith<IllegalStateException> { provider.removeSyncRoot() }
+        assertFalse(api.closed)
+
+        api.unregisterFailure = null
+        provider.removeSyncRoot()
+        assertEquals(root, api.unregisteredRoot)
+        assertTrue(api.closed)
+    }
+
+    @Test
+    fun failedDisconnectKeepsTheConnectionAvailableForRemovalRetry() {
+        val root = createTempDirectory("windows-cloud-disconnect-retry")
+        val api = FakeApi().apply { disconnectFailure = IllegalStateException("in use") }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0)),
+            api = api,
+        )
+        provider.start()
+
+        assertFailsWith<IllegalStateException> { provider.removeSyncRoot() }
+        assertEquals(listOf(1L), api.disconnectAttempts)
+        assertEquals(null, api.unregisteredRoot)
+        assertFalse(api.closed)
+
+        api.disconnectFailure = null
+        provider.removeSyncRoot()
+        assertEquals(listOf(1L, 1L), api.disconnectAttempts)
+        assertEquals(root, api.unregisteredRoot)
+        assertTrue(api.closed)
+    }
+
+    @Test
     fun `native layouts match 64 bit cfapi structures`() {
         assertEquals(
             WindowsCloudNativeLayoutSizes(
@@ -501,14 +544,21 @@ class WindowsCloudFilesProviderTest {
         val invalidatedUpdates = mutableListOf<Path>()
         var lastRenameAccepted = false
         var unregisteredRoot: Path? = null
+        var unregisterFailure: RuntimeException? = null
+        val disconnectAttempts = mutableListOf<Long>()
+        var disconnectFailure: RuntimeException? = null
         var closed = false
 
         override fun registerSyncRoot(root: Path, syncRootIdentity: ByteArray) = Unit
         override fun unregisterSyncRoot(root: Path) {
+            unregisterFailure?.let { throw it }
             unregisteredRoot = root
         }
         override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long = 1L
-        override fun disconnect(connectionKey: Long) = Unit
+        override fun disconnect(connectionKey: Long) {
+            disconnectAttempts += connectionKey
+            disconnectFailure?.let { throw it }
+        }
         override fun createPlaceholders(baseDirectory: Path, placeholders: List<WindowsCloudPlaceholder>) = Unit
         override fun transferData(info: WindowsCloudCallbackInfo, offset: Long, bytes: ByteArray) {
             synchronized(transfers) { transfers += offset to bytes.copyOf() }

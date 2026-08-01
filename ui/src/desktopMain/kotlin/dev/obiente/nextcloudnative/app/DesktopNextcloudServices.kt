@@ -135,6 +135,7 @@ private enum class DesktopFileSyncRunSource {
 private const val MAX_DOCUMENT_TEMPLATE_ID_LENGTH = 256
 private const val MAX_DOCUMENT_TEMPLATE_NAME_LENGTH = 512
 private const val MAX_DOCUMENT_TEMPLATE_EXTENSION_LENGTH = 32
+private const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
 
 private fun isLinuxDesktop(): Boolean =
     System.getProperty("os.name").orEmpty().lowercase().contains("linux")
@@ -142,9 +143,43 @@ private fun isLinuxDesktop(): Boolean =
 private fun desktopLinuxVirtualFileMountPoint(): File =
     File(System.getProperty("user.home"), "Nextcloud Native")
 
-private fun desktopWindowsCloudFilesRoot(accountId: String): File {
+internal fun desktopWindowsCloudFilesRoot(
+    accountId: String,
+    userHome: File = File(System.getProperty("user.home")),
+): File {
     require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    return File(File(System.getProperty("user.home"), "Nextcloud Native"), accountId)
+    return File(File(userHome, "Nextcloud Native"), accountId)
+}
+
+internal fun unregisterWindowsCloudFilesRootForUninstall(
+    preferences: Preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative"),
+    userHome: File = File(System.getProperty("user.home")),
+    apiFactory: () -> WindowsCloudFilesApi = ::JnaWindowsCloudFilesApi,
+) {
+    val savedRoot = preferences.get(KEY_WINDOWS_CLOUD_FILES_ROOT, null)?.let(::File)
+    val sessionRoot = preferences.get("server", null)?.let { server ->
+        preferences.get("login", null)?.let { login ->
+            val accountId = desktopFileCacheAccountId(NextcloudSession(server, login, "unused"))
+            desktopWindowsCloudFilesRoot(accountId, userHome)
+        }
+    }
+    val root = savedRoot ?: sessionRoot ?: return
+    val expectedParent = File(userHome, "Nextcloud Native").toPath().toAbsolutePath().normalize()
+    val normalizedRoot = root.toPath().toAbsolutePath().normalize()
+    check(normalizedRoot.parent == expectedParent && normalizedRoot.fileName.toString().let { name ->
+        name.length == 64 && name.all { it in '0'..'9' || it in 'a'..'f' }
+    }) { "The stored Windows Cloud Files root is invalid." }
+    if (!root.isDirectory) {
+        preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
+        return
+    }
+    val api = apiFactory()
+    try {
+        api.unregisterSyncRoot(normalizedRoot)
+        preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
+    } finally {
+        api.close()
+    }
 }
 
 private fun virtualFileProviderPreferenceKey(accountId: String): String {
@@ -667,6 +702,7 @@ class DesktopNextcloudServices(
                     windowsCloudFilesProvider = provider
                     windowsCloudFilesIdentity = accountId
                     windowsCloudFilesFailure = null
+                    preferences.put(KEY_WINDOWS_CLOUD_FILES_ROOT, root.toAbsolutePath().toString())
                     preferences.putBoolean(virtualFileProviderPreferenceKey(accountId), true)
                 } catch (failure: Throwable) {
                     runCatching(provider::close)
@@ -1282,10 +1318,20 @@ class DesktopNextcloudServices(
             linuxVirtualFileSystem = null
             linuxVirtualFileMountIdentity = null
             linuxVirtualFileFailure = null
-            runCatching { windowsCloudFilesProvider?.removeSyncRoot() }
-            windowsCloudFilesProvider = null
-            windowsCloudFilesIdentity = null
-            windowsCloudFilesFailure = null
+            try {
+                if (windowsCloudFilesProvider != null) {
+                    windowsCloudFilesProvider?.removeSyncRoot()
+                    preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
+                } else if (isWindowsDesktop()) {
+                    unregisterWindowsCloudFilesRootForUninstall(preferences)
+                }
+                windowsCloudFilesProvider = null
+                windowsCloudFilesIdentity = null
+                windowsCloudFilesFailure = null
+            } catch (failure: Throwable) {
+                windowsCloudFilesFailure = failure.message ?: "Could not remove the Windows Cloud Files root."
+                throw failure
+            }
         }
         mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
             phase = DesktopFileSyncTrayPhase.Idle,

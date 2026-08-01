@@ -13,6 +13,20 @@ import kotlin.test.assertIs
 
 class DesktopAppUpdatesTest {
     @Test
+    fun windowsInstallerMetadataPreservesTheInternetTrustBoundary() {
+        val source = "https://github.com/Obiente/nc-native/releases/download/v1/NextcloudNative.msi"
+        val notes = "https://github.com/Obiente/nc-native/releases/tag/v1"
+
+        assertEquals(
+            "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=$source\r\nReferrerUrl=$notes\r\n",
+            windowsZoneIdentifier(source, notes),
+        )
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            windowsZoneIdentifier("https://example.invalid/package.msi\r\nZoneId=0", notes)
+        }
+    }
+
+    @Test
     fun linuxTargetDetectionSelectsOnlyAnUnambiguousNativePackage() {
         assertEquals(
             DesktopUpdateTarget("linux", "rpm", "x86_64"),

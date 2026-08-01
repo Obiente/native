@@ -4,4 +4,4 @@ pull: none
 platforms: windows
 user-facing: yes
 
-Windows builds now use Credential Manager for app passwords, verify intentionally unsigned MSI identity and upgrade metadata, publish keyless build provenance, and run native Windows tests and packaging in CI.
+Windows builds now use Credential Manager, preserve Windows trust prompts for in-app MSI updates, clean up Cloud Files registration during uninstall, publish keyless provenance, and run native Windows packaging tests in CI.

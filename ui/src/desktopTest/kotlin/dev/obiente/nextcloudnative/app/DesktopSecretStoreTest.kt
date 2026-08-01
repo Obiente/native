@@ -1,13 +1,67 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class DesktopSecretStoreTest {
+    @Test
+    fun secretLookupTimeoutIncludesReadingStandardOutput() {
+        val store = SecretToolDesktopSecretStore(
+            timeoutMillis = 100,
+            startProcess = { NeverCompletingProcess() },
+        )
+        val reference = DesktopSecretReference(
+            targetName = "test/timeout",
+            label = "Timeout test",
+            attributes = mapOf("application" to "test"),
+        )
+        val startedAt = System.nanoTime()
+
+        val failure = assertFailsWith<IllegalStateException> { store.load(reference) }
+
+        assertTrue(failure.message.orEmpty().contains("Timed out"))
+        assertTrue(System.nanoTime() - startedAt < 1_000_000_000L)
+    }
+
+    private class NeverCompletingProcess : Process() {
+        private val completion = CountDownLatch(1)
+        private val output = ByteArrayOutputStream()
+        private val input = object : InputStream() {
+            override fun read(): Int = try {
+                completion.await()
+                -1
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                -1
+            }
+        }
+
+        override fun getOutputStream(): OutputStream = output
+        override fun getInputStream(): InputStream = input
+        override fun getErrorStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+        override fun waitFor(): Int {
+            completion.await()
+            return 0
+        }
+        override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = completion.await(timeout, unit)
+        override fun exitValue(): Int = throw IllegalThreadStateException("Process is still running")
+        override fun destroy() = completion.countDown()
+        override fun destroyForcibly(): Process = apply { completion.countDown() }
+        override fun isAlive(): Boolean = completion.count > 0L
+    }
+
     @Test
     fun platformSelectionUsesWindowsCredentialManagerOnlyOnWindows() {
         assertEquals(

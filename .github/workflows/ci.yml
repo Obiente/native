@@ -270,6 +270,7 @@ jobs:
               - "contractAcquisition/**"
               - "release/windows/**"
               - "tools/create-winget-manifests.ps1"
+              - "tools/repackage-msi-with-uninstall-cleanup.ps1"
               - "tools/verify-windows-package.ps1"
               - "ui/build.gradle.kts"
               - "ui/src/commonMain/**"
