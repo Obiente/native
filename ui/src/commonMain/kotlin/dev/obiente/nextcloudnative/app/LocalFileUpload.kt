@@ -108,6 +108,58 @@ data class MultipartTextField(
 }
 
 /**
+ * Typed multipart payload carried by a same-origin dynamic API request.
+ *
+ * This retains the picker capability as structured data until the platform streaming executor
+ * resolves it. It deliberately cannot contain raw bytes, a local path, a URI, or arbitrary
+ * multipart headers.
+ */
+data class NextcloudMultipartBody(
+    val file: LocalUploadFile,
+    val fileFieldName: String,
+    val textFields: List<MultipartTextField> = emptyList(),
+    val maximumFileBytes: Long = DEFAULT_LOCAL_UPLOAD_LIMIT_BYTES,
+) {
+    fun requireSafe(): NextcloudMultipartBody {
+        require(fileFieldName.isMultipartToken()) { "The multipart file field name is invalid." }
+        require(textFields.size <= MAX_MULTIPART_TEXT_FIELDS) {
+            "The multipart request has too many text fields."
+        }
+        require(textFields.map(MultipartTextField::name).distinct().size == textFields.size) {
+            "Multipart text field names must be unique."
+        }
+        require(textFields.none { it.name == fileFieldName }) {
+            "The multipart file field must be distinct from text fields."
+        }
+        require(maximumFileBytes in 1..MAX_LOCAL_UPLOAD_LIMIT_BYTES) {
+            "The local upload limit is outside the allowed range."
+        }
+        require(file.sizeBytes == null || file.sizeBytes <= maximumFileBytes) {
+            "The selected file is larger than the allowed upload limit."
+        }
+        return this
+    }
+
+    fun toUploadRequest(request: NextcloudApiRequest): NextcloudMultipartUploadRequest {
+        val safeRequest = request.requireSafe()
+        require(safeRequest.multipartBody === this || safeRequest.multipartBody == this) {
+            "The multipart body does not belong to this request."
+        }
+        return NextcloudMultipartUploadRequest(
+            method = safeRequest.method,
+            relativePath = safeRequest.relativePath,
+            file = file,
+            queryParameters = safeRequest.queryParameters,
+            fileFieldName = fileFieldName,
+            textFields = textFields,
+            ocsApiRequest = safeRequest.ocsApiRequest,
+            maximumFileBytes = maximumFileBytes,
+            maximumResponseBytes = safeRequest.maximumResponseBytes,
+        ).requireSafe()
+    }
+}
+
+/**
  * Dedicated request for one user-selected file and a bounded set of text fields.
  *
  * The platform service resolves [file.selectionId] to the exact picker result and streams it.
@@ -180,6 +232,70 @@ fun localUploadFile(
     mimeType = mimeType?.trim()?.lowercase()?.takeIf(String::isNotBlank),
     sizeBytes = sizeBytes,
 )
+
+/**
+ * Encodes picker metadata for a generated form without ever exposing the platform path or URI.
+ *
+ * The length-prefixed representation is intentionally private to this runtime and strictly
+ * decoded. Manually entered paths, content URIs, malformed values, and trailing data cannot become
+ * upload capabilities.
+ */
+internal fun encodeDynamicLocalUploadSelection(file: LocalUploadFile): String = buildString {
+    append(DYNAMIC_UPLOAD_SELECTION_PREFIX)
+    listOf(
+        file.selectionId,
+        file.displayName,
+        file.mimeType.orEmpty(),
+        file.sizeBytes?.toString().orEmpty(),
+    ).forEach { value ->
+        append(value.length)
+        append(':')
+        append(value)
+    }
+}.also { encoded ->
+    require(encoded.length <= MAX_DYNAMIC_UPLOAD_SELECTION_CHARACTERS) {
+        "The local upload selection metadata is too large."
+    }
+}
+
+internal fun decodeDynamicLocalUploadSelection(value: String): LocalUploadFile {
+    require(value.length <= MAX_DYNAMIC_UPLOAD_SELECTION_CHARACTERS) {
+        "The local upload selection metadata is too large."
+    }
+    require(value.startsWith(DYNAMIC_UPLOAD_SELECTION_PREFIX)) {
+        "Choose a file with the native file picker."
+    }
+    var offset = DYNAMIC_UPLOAD_SELECTION_PREFIX.length
+    fun component(): String {
+        val delimiter = value.indexOf(':', offset)
+        require(delimiter in (offset + 1)..minOf(offset + 4, value.lastIndex)) {
+            "The local upload selection metadata is invalid."
+        }
+        val lengthText = value.substring(offset, delimiter)
+        require(lengthText.all(Char::isDigit) && (lengthText == "0" || !lengthText.startsWith('0'))) {
+            "The local upload selection metadata is invalid."
+        }
+        val length = lengthText.toIntOrNull()
+            ?: throw IllegalArgumentException("The local upload selection metadata is invalid.")
+        val start = delimiter + 1
+        val end = start + length
+        require(end >= start && end <= value.length) {
+            "The local upload selection metadata is invalid."
+        }
+        offset = end
+        return value.substring(start, end)
+    }
+    val selectionId = component()
+    val displayName = component()
+    val mimeType = component().takeIf(String::isNotEmpty)
+    val sizeText = component()
+    val size = sizeText.takeIf(String::isNotEmpty)?.toLongOrNull()
+    require(sizeText.isEmpty() || size != null) {
+        "The local upload selection metadata is invalid."
+    }
+    require(offset == value.length) { "The local upload selection metadata is invalid." }
+    return LocalUploadFile(selectionId, displayName, mimeType, size)
+}
 
 fun requireSafeUploadPickerRequest(
     acceptedMimeTypes: List<String>,
@@ -387,9 +503,11 @@ private val MIME_TOKEN_PUNCTUATION = setOf('!', '#', '$', '&', '+', '-', '.', '^
 private const val MAX_ACCEPTED_UPLOAD_MIME_TYPES = 16
 private const val MAX_MULTIPART_TEXT_FIELDS = 16
 private const val MAX_MULTIPART_TEXT_FIELD_BYTES = 16 * 1024
+private const val MAX_DYNAMIC_UPLOAD_SELECTION_CHARACTERS = 512
 private const val MAX_UPLOAD_FILENAME_CHARACTERS = 180
 private const val MULTIPART_STREAM_BUFFER_BYTES = 32 * 1024
 private const val DEFAULT_UPLOAD_FILENAME = "upload.bin"
 private const val DEFAULT_UPLOAD_MIME_TYPE = "application/octet-stream"
+private const val DYNAMIC_UPLOAD_SELECTION_PREFIX = "ncn-upload-v1:"
 private const val CRLF = "\r\n"
 private const val HEX_DIGITS = "0123456789ABCDEF"

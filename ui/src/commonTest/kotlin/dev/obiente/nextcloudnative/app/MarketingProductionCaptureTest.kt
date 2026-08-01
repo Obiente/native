@@ -20,9 +20,10 @@ class MarketingProductionCaptureTest {
     }
 
     @Test
-    fun `dynamic table captures cover desktop and compact viewports`() {
+    fun `dynamic visual QA captures cover desktop and compact viewports`() {
         val desktop = MarketingCaptureScenario.AdaptiveApp
         val mobile = MarketingCaptureScenario.AdaptiveAppMobile
+        val mobileCollection = MarketingCaptureScenario.AdaptiveAppCollectionMobile
 
         assertEquals("desktop", desktop.platform)
         assertEquals("wide", desktop.viewport)
@@ -33,6 +34,8 @@ class MarketingProductionCaptureTest {
         assertEquals(1_080, mobile.width)
         assertEquals(1_800, mobile.height)
         assertTrue(mobile.density > 1f)
+        assertEquals("mobile", mobileCollection.platform)
+        assertEquals("phone-portrait", mobileCollection.viewport)
         assertFalse(shouldUseCompactTableRecordList(widthDp = 1_440f))
         assertFalse(shouldUseCompactTableRecordList(widthDp = 900f))
         assertTrue(shouldUseCompactTableRecordList(widthDp = 412f))

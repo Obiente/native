@@ -23,7 +23,9 @@ internal class AndroidFileSyncRemoteTree(
 ) {
     private val rootPath = remoteRootPath.trim('/')
 
-    fun scan(): List<AndroidRemoteSyncDocument> {
+    fun scan(
+        includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
+    ): List<AndroidRemoteSyncDocument> {
         val result = ArrayList<AndroidRemoteSyncDocument>()
         val pending = ArrayDeque<String>()
         pending += ""
@@ -39,13 +41,15 @@ internal class AndroidFileSyncRemoteTree(
             require(!listing.limited) { "A Nextcloud folder contains too many entries to sync safely." }
             listing.files.forEach { file ->
                 val relativePath = toRelativePath(file.path) ?: return@forEach
+                val kind = if (file.isDirectory) SyncEntryKind.Directory else SyncEntryKind.File
+                if (!includes(relativePath, kind)) return@forEach
                 require(result.size < MAX_ENTRIES) { "The Nextcloud folder contains too many entries." }
                 val etag = file.etag?.takeIf(String::isNotBlank)
                     ?: error("Refresh failed because ${file.name} has no server revision.")
                 val document = AndroidRemoteSyncDocument(
                     entry = RemoteSyncEntry(
                         relativePath = relativePath,
-                        kind = if (file.isDirectory) SyncEntryKind.Directory else SyncEntryKind.File,
+                        kind = kind,
                         etag = etag,
                         size = if (file.isDirectory) null else file.size,
                         contentHash = if (file.isDirectory) {

@@ -78,6 +78,13 @@ internal sealed interface NextcloudNotificationEvent {
         val detail: String,
         val semantic: NextcloudActivitySemantic = NextcloudActivitySemantic.General,
     ) : NextcloudNotificationEvent
+
+    data class AppUpdateAvailable(
+        override val id: Int,
+        override val accountKey: String,
+        val versionName: String,
+        val versionCode: Long,
+    ) : NextcloudNotificationEvent
 }
 
 internal data class NextcloudNotificationPolicy(
@@ -131,6 +138,12 @@ internal fun NextcloudNotificationEvent.notificationPolicy(): NextcloudNotificat
             NotificationCompat.PRIORITY_DEFAULT,
         )
     }
+    is NextcloudNotificationEvent.AppUpdateAvailable -> NextcloudNotificationPolicy(
+        CHANNEL_APP_UPDATES,
+        "app-updates",
+        NotificationCompat.CATEGORY_STATUS,
+        NotificationCompat.PRIORITY_DEFAULT,
+    )
 }
 
 internal fun DynamicActivityNotificationPlan.toAndroidNotificationEvent(
@@ -167,6 +180,7 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
         ) return false
         ensureChannels()
         val policy = event.notificationPolicy()
+        if (!notificationDeliveryAllowed(context, policy.channelId)) return false
         val builder = NotificationCompat.Builder(context, policy.channelId)
             .setSmallIcon(R.drawable.ic_notification)
             .setColor(0xFF8F5EAD.toInt())
@@ -235,15 +249,40 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
                 .setContentTitle(event.title)
                 .setContentText(event.detail)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(event.detail))
+            is NextcloudNotificationEvent.AppUpdateAvailable -> builder
+                .setContentTitle("Nextcloud Native update available")
+                .setContentText("Version ${event.versionName} is ready to review")
+                .setContentIntent(
+                    openAppIntent(
+                        action = ACTION_REVIEW_APP_UPDATE,
+                        requestCode = event.id,
+                        appUpdateReviewEventId = event.versionCode,
+                    ),
+                )
         }
-        NotificationManagerCompat.from(context).notify(event.accountKey, event.id, builder.build())
-        return true
+        return try {
+            NotificationManagerCompat.from(context).notify(event.accountKey, event.id, builder.build())
+            true
+        } catch (_: SecurityException) {
+            false
+        }
     }
 
-    private fun openAppIntent(action: String, requestCode: Int): PendingIntent = PendingIntent.getActivity(
+    private fun openAppIntent(
+        action: String,
+        requestCode: Int,
+        appUpdateReviewEventId: Long? = null,
+    ): PendingIntent = PendingIntent.getActivity(
         context,
         requestCode,
-        Intent(context, MainActivity::class.java).setAction("dev.obiente.nextcloudnative.notification.$action"),
+        Intent(context, MainActivity::class.java)
+            .setAction("dev.obiente.nextcloudnative.notification.$action")
+            .apply {
+                appUpdateReviewEventId?.let { eventId ->
+                    putExtra(EXTRA_APP_UPDATE_REVIEW_EVENT_ID, eventId)
+                }
+            }
+            .addFlags(NOTIFICATION_ACTIVITY_FLAGS),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
@@ -253,6 +292,50 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
         .setContentText("Open the app to view this update")
         .build()
 }
+
+internal val NOTIFICATION_ACTIVITY_FLAGS: Int =
+    Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+
+internal fun notificationDeliveryAllowed(context: Context, channelId: String): Boolean {
+    val channelImportance = if (Build.VERSION.SDK_INT >= 26) {
+        context.getSystemService(NotificationManager::class.java)
+            .getNotificationChannel(channelId)
+            ?.importance
+    } else {
+        null
+    }
+    return notificationDeliveryAllowed(
+        sdk = Build.VERSION.SDK_INT,
+        runtimePermissionGranted = notificationRuntimePermissionGranted(context),
+        appNotificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled(),
+        channelImportance = channelImportance,
+    )
+}
+
+internal fun notificationPermissionAllowed(context: Context): Boolean =
+    notificationPermissionAllowed(
+        runtimePermissionGranted = notificationRuntimePermissionGranted(context),
+        appNotificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled(),
+    )
+
+private fun notificationRuntimePermissionGranted(context: Context): Boolean =
+    Build.VERSION.SDK_INT < 33 ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+        PackageManager.PERMISSION_GRANTED
+
+internal fun notificationPermissionAllowed(
+    runtimePermissionGranted: Boolean,
+    appNotificationsEnabled: Boolean,
+): Boolean = runtimePermissionGranted && appNotificationsEnabled
+
+internal fun notificationDeliveryAllowed(
+    sdk: Int,
+    runtimePermissionGranted: Boolean,
+    appNotificationsEnabled: Boolean,
+    channelImportance: Int?,
+): Boolean =
+    notificationPermissionAllowed(runtimePermissionGranted, appNotificationsEnabled) &&
+        (sdk < 26 || channelImportance == null || channelImportance != NotificationManager.IMPORTANCE_NONE)
 
 private fun notificationChannels(): List<NotificationChannel> = if (Build.VERSION.SDK_INT < 26) emptyList() else listOf(
     NotificationChannel(CHANNEL_CALLS, "Calls", NotificationManager.IMPORTANCE_HIGH).apply {
@@ -279,6 +362,9 @@ private fun notificationChannels(): List<NotificationChannel> = if (Build.VERSIO
     NotificationChannel(CHANNEL_ACTIVITY, "Nextcloud activity", NotificationManager.IMPORTANCE_DEFAULT).apply {
         description = "Shares, comments, app events, and administrative updates"
     },
+    NotificationChannel(CHANNEL_APP_UPDATES, "App updates", NotificationManager.IMPORTANCE_DEFAULT).apply {
+        description = "New Nextcloud Native versions ready to review"
+    },
 )
 
 internal const val CHANNEL_MESSAGES = "nextcloud_messages"
@@ -288,3 +374,7 @@ internal const val CHANNEL_SYNC = "nextcloud_sync"
 internal const val CHANNEL_MEDIA = "nextcloud_media"
 internal const val CHANNEL_REMINDERS = "nextcloud_reminders"
 internal const val CHANNEL_ACTIVITY = "nextcloud_activity"
+internal const val CHANNEL_APP_UPDATES = "nextcloud_app_updates"
+internal const val ACTION_REVIEW_APP_UPDATE = "review-app-update"
+internal const val EXTRA_APP_UPDATE_REVIEW_EVENT_ID =
+    "dev.obiente.nextcloudnative.notification.app-update-review-event-id"

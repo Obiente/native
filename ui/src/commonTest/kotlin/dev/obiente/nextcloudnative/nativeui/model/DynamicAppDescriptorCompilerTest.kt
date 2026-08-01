@@ -7,11 +7,63 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DynamicAppDescriptorCompilerTest {
+    @Test
+    fun `read response fields remain separate from write-only resource fields`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Records","version":"1"},
+              "servers":[{"url":"/apps/records"}],
+              "paths":{
+                "/api/records":{
+                  "get":{
+                    "operationId":"records-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{"title":{"type":"string"}}}
+                    }}}}}
+                  },
+                  "post":{
+                    "operationId":"records-create",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["id","title"],
+                      "properties":{"id":{"type":"string"},"title":{"type":"string"}}
+                    }}}},
+                    "responses":{"200":{"description":"OK"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            DynamicDiscoveryInput(
+                app = AppIdentity("records", "Records", "1"),
+                endpointPolicy = EndpointPolicy("https://cloud.example.test", listOf("/apps/records")),
+                advertisedOpenApi = AdvertisedOpenApi(
+                    "/apps/records/openapi.json",
+                    Json.parseToJsonElement(document),
+                    OpenApiTrust.sameOriginAdvertisement,
+                ),
+            ),
+        )
+
+        val read = descriptor.actions.single { it.id == "records-list" }
+        val create = descriptor.actions.single { it.id == "records-create" }
+        assertEquals(setOf("id", "title"), descriptor.resources.single().fields.mapTo(mutableSetOf()) { it.id })
+        assertEquals(listOf("title"), read.responseFieldIds)
+        assertTrue(create.responseFieldIds.isEmpty())
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
     @Test
     fun `specialized route constants discard stale inherited path parameters`() {
         val document = """
@@ -103,6 +155,413 @@ class DynamicAppDescriptorCompilerTest {
         assertTrue(assertNotNull(create.binding.ocs).apiRequestHeader)
         assertEquals(listOf("description", "title"), descriptor.forms.single().fields.map(FormField::fieldId))
         assertTrue(descriptor.links.single().target == DynamicLinkTarget.FieldUrl(allowExternal = false))
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `fallback labels humanize camel case and acronym identifiers`() {
+        val openApi = OPEN_API.replace(
+            """
+            "TableInput": {
+              "type": "object",
+              "required": ["title"],
+              "properties": {
+                "title": { "type": "string" },
+                "description": { "type": "string" }
+              }
+            }
+            """.trimIndent().prependIndent("      "),
+            """
+            "TableInput": {
+              "type": "object",
+              "required": ["title"],
+              "properties": {
+                "title": { "type": "string" },
+                "description": { "type": "string" },
+                "sortOrder": { "type": "integer" },
+                "deleteOnDoneDefault": { "type": "boolean" },
+                "iconURLValue": { "type": "string" }
+              }
+            }
+            """.trimIndent().prependIndent("      "),
+        )
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(input(openApi))
+
+        val labels = descriptor.forms.single().fields.associate { field -> field.fieldId to field.label }
+        assertEquals("Sort Order", labels["sortOrder"])
+        assertEquals("Delete On Done Default", labels["deleteOnDoneDefault"])
+        assertEquals("Icon URL Value", labels["iconURLValue"])
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `collection writes inherit the resource identity of the get on the same route`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Pantry-shaped contract","version":"1"},
+              "paths":{
+                "/ocs/v2.php/apps/example/api/houses/{houseId}/lists":{
+                  "get":{
+                    "operationId":"checklist-index-lists",
+                    "tags":["Lists"],
+                    "parameters":[
+                      {"name":"houseId","in":"path","required":true,"schema":{"type":"integer"}}
+                    ],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{
+                        "id":{"type":"integer"},
+                        "name":{"type":"string"}
+                      }}
+                    }}}}}
+                  },
+                  "post":{
+                    "operationId":"checklist-create-list",
+                    "tags":["Checklist"],
+                    "parameters":[
+                      {"name":"houseId","in":"path","required":true,"schema":{"type":"integer"}}
+                    ],
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["name"],
+                      "properties":{"name":{"type":"string"}}
+                    }}}},
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{"id":{"type":"integer"},"name":{"type":"string"}}
+                    }}}}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            DynamicDiscoveryInput(
+                app = AppIdentity("example", "Example", "1"),
+                endpointPolicy = EndpointPolicy(
+                    "https://cloud.example.test",
+                    listOf("/ocs/v2.php/apps/example"),
+                ),
+                advertisedOpenApi = AdvertisedOpenApi(
+                    "/ocs/v2.php/apps/example/openapi.json",
+                    Json.parseToJsonElement(document),
+                    OpenApiTrust.sameOriginAdvertisement,
+                ),
+            ),
+        )
+
+        val list = descriptor.actions.single { it.id == "checklist-index-lists" }
+        val create = descriptor.actions.single { it.id == "checklist-create-list" }
+        assertEquals("lists", list.resourceId)
+        assertEquals(list.resourceId, create.resourceId)
+        assertEquals(ActionIntent.create, create.intent)
+        assertEquals(listOf("houseId"), create.binding.pathParameters.map { it.name })
+        assertEquals("lists", descriptor.forms.single { it.actionId == create.id }.resourceId)
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `record mutations inherit the resource identity of the get on the same route`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Controller-tagged records","version":"1"},
+              "paths":{
+                "/ocs/v2.php/apps/example/api/houses/{houseId}/lists/{listId}":{
+                  "get":{
+                    "operationId":"checklist-show-list",
+                    "tags":["Lists"],
+                    "parameters":[
+                      {"name":"houseId","in":"path","required":true,"schema":{"type":"integer"}},
+                      {"name":"listId","in":"path","required":true,"schema":{"type":"integer"}}
+                    ],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{"id":{"type":"integer"},"name":{"type":"string"}}
+                    }}}}}
+                  },
+                  "patch":{
+                    "operationId":"checklist-update-list",
+                    "tags":["Checklist"],
+                    "parameters":[
+                      {"name":"houseId","in":"path","required":true,"schema":{"type":"integer"}},
+                      {"name":"listId","in":"path","required":true,"schema":{"type":"integer"}}
+                    ],
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{"name":{"type":"string"}}
+                    }}}},
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{"id":{"type":"integer"},"name":{"type":"string"}}
+                    }}}}}
+                  },
+                  "delete":{
+                    "operationId":"checklist-delete-list",
+                    "tags":["Checklist"],
+                    "parameters":[
+                      {"name":"houseId","in":"path","required":true,"schema":{"type":"integer"}},
+                      {"name":"listId","in":"path","required":true,"schema":{"type":"integer"}}
+                    ],
+                    "responses":{"204":{"description":"Deleted"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            DynamicDiscoveryInput(
+                app = AppIdentity("example", "Example", "1"),
+                endpointPolicy = EndpointPolicy(
+                    "https://cloud.example.test",
+                    listOf("/ocs/v2.php/apps/example"),
+                ),
+                advertisedOpenApi = AdvertisedOpenApi(
+                    "/ocs/v2.php/apps/example/openapi.json",
+                    Json.parseToJsonElement(document),
+                    OpenApiTrust.sameOriginAdvertisement,
+                ),
+            ),
+        )
+
+        val show = descriptor.actions.single { it.id == "checklist-show-list" }
+        val update = descriptor.actions.single { it.id == "checklist-update-list" }
+        val delete = descriptor.actions.single { it.id == "checklist-delete-list" }
+        assertEquals("lists", show.resourceId)
+        assertEquals(show.resourceId, update.resourceId)
+        assertEquals(show.resourceId, delete.resourceId)
+        assertEquals(ActionIntent.update, update.intent)
+        assertEquals(ActionIntent.delete, delete.intent)
+        assertEquals("lists", descriptor.forms.single { it.actionId == update.id }.resourceId)
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `state collections and their transitions retain the parent collection resource`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"State collections","version":"1"},
+              "paths":{
+                "/api/teams/{teamId}/entries":{
+                  "get":{
+                    "operationId":"entry-index",
+                    "tags":["Entries"],
+                    "parameters":[
+                      {"name":"teamId","in":"path","required":true,"schema":{"type":"integer"}}
+                    ],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{
+                        "id":{"type":"integer"},
+                        "name":{"type":"string"},
+                        "deletedAt":{"type":"string","nullable":true}
+                      }}
+                    }}}}}
+                  }
+                },
+                "/api/teams/{teamId}/entries/trash":{
+                  "get":{
+                    "operationId":"entry-index-deleted",
+                    "tags":["Trash entries"],
+                    "parameters":[
+                      {"name":"teamId","in":"path","required":true,"schema":{"type":"integer"}}
+                    ],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{
+                        "id":{"type":"integer"},
+                        "name":{"type":"string"},
+                        "deletedAt":{"type":"string","nullable":true}
+                      }}
+                    }}}}}
+                  }
+                },
+                "/api/teams/{teamId}/entries/{entryId}/restore":{
+                  "post":{
+                    "operationId":"entry-restore",
+                    "tags":["Entries"],
+                    "parameters":[
+                      {"name":"teamId","in":"path","required":true,"schema":{"type":"integer"}},
+                      {"name":"entryId","in":"path","required":true,"schema":{"type":"integer"}}
+                    ],
+                    "responses":{"200":{"description":"Restored"}}
+                  }
+                },
+                "/api/teams/{teamId}/entries/{entryId}/permanent":{
+                  "delete":{
+                    "operationId":"entry-delete-permanently",
+                    "tags":["Entries"],
+                    "parameters":[
+                      {"name":"teamId","in":"path","required":true,"schema":{"type":"integer"}},
+                      {"name":"entryId","in":"path","required":true,"schema":{"type":"integer"}}
+                    ],
+                    "responses":{"204":{"description":"Deleted"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            DynamicDiscoveryInput(
+                app = AppIdentity("example", "Example", "1"),
+                endpointPolicy = EndpointPolicy("https://cloud.example.test", listOf("/api")),
+                advertisedOpenApi = AdvertisedOpenApi(
+                    "/api/openapi.json",
+                    Json.parseToJsonElement(document),
+                    OpenApiTrust.sameOriginAdvertisement,
+                ),
+            ),
+        )
+
+        val active = descriptor.actions.single { it.id == "entry-index" }
+        val trash = descriptor.actions.single { it.id == "entry-index-deleted" }
+        listOf(
+            "entry-restore",
+            "entry-delete-permanently",
+        ).forEach { actionId ->
+            assertEquals(active.resourceId, descriptor.actions.single { it.id == actionId }.resourceId)
+        }
+        assertEquals(active.resourceId, trash.resourceId)
+        val activeLayout = descriptor.layouts.single { it.sourceActionId == active.id }
+        val trashLayout = descriptor.layouts.single { it.sourceActionId == trash.id }
+        assertNotEquals(activeLayout.id, trashLayout.id)
+        assertEquals("Entries", activeLayout.title)
+        assertEquals("Trash", trashLayout.title)
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `command routes require proven read resource ownership`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Command ownership","version":"1"},
+              "paths":{
+                "/apps/example/api/tasks":{
+                  "get":{
+                    "operationId":"tasks-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{"id":{"type":"integer"},"done":{"type":"boolean"}}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/tasks/{taskId}/toggle":{
+                  "parameters":[{"name":"taskId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{
+                    "operationId":"task-toggle",
+                    "summary":"Toggle task done status",
+                    "responses":{"200":{"description":"OK"}}
+                  }
+                },
+                "/apps/example/api/projects":{
+                  "get":{
+                    "operationId":"projects-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{"id":{"type":"integer"},"name":{"type":"string"}}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/projects/automation/{automationId}/toggle":{
+                  "parameters":[{"name":"automationId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{
+                    "operationId":"automation-toggle",
+                    "summary":"Toggle automation done status",
+                    "responses":{"200":{"description":"OK"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val actions = descriptor.actions.associateBy(DynamicAction::id)
+        val tasks = assertNotNull(actions["tasks-list"])
+        val taskToggle = assertNotNull(actions["task-toggle"])
+        val projects = assertNotNull(actions["projects-list"])
+        val unrelatedToggle = assertNotNull(actions["automation-toggle"])
+
+        assertEquals(ActionEffect.toggle, taskToggle.effect)
+        assertEquals(tasks.resourceId, taskToggle.resourceId)
+        assertEquals(ActionEffect.toggle, unrelatedToggle.effect)
+        assertNotEquals(projects.resourceId, unrelatedToggle.resourceId)
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `bare toggle vocabulary does not imply completion semantics`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Generic toggle","version":"1"},
+              "paths":{
+                "/apps/example/api/switches":{
+                  "get":{
+                    "operationId":"switches-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{"id":{"type":"integer"},"enabled":{"type":"boolean"}}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/switches/{switchId}/toggle":{
+                  "parameters":[{"name":"switchId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{
+                    "operationId":"switch-toggle",
+                    "summary":"Toggle switch",
+                    "responses":{"200":{"description":"OK"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val toggle = descriptor.actions.single { action -> action.id == "switch-toggle" }
+
+        assertEquals(ActionEffect.execute, toggle.effect)
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `destructive post vocabulary always requires confirmation`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Destructive commands","version":"1"},
+              "paths":{
+                "/apps/example/api/records/{recordId}/remove":{
+                  "parameters":[{"name":"recordId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{
+                    "operationId":"record-remove",
+                    "summary":"Remove record",
+                    "responses":{"200":{"description":"Removed"}}
+                  }
+                },
+                "/apps/example/api/artifacts/{artifactId}/destroy":{
+                  "parameters":[{"name":"artifactId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{
+                    "operationId":"artifact-destroy",
+                    "summary":"Destroy artifact",
+                    "responses":{"200":{"description":"Destroyed"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        listOf("record-remove", "artifact-destroy").forEach { actionId ->
+            val action = descriptor.actions.single { candidate -> candidate.id == actionId }
+            assertEquals(ActionRisk.destructive, action.risk, actionId)
+            assertTrue(action.requiresConfirmation, actionId)
+        }
         assertTrue(descriptor.validationErrors().isEmpty())
     }
 
@@ -227,7 +686,7 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
-    fun `recipe actions recover useful forms when an external schema is unavailable`() {
+    fun `empty recipe request schemas do not invent mutation fields`() {
         val document = """
             {
               "openapi":"3.0.3",
@@ -267,37 +726,52 @@ class DynamicAppDescriptorCompilerTest {
         val create = descriptor.actions.single { it.id == "newrecipe" }
         val import = descriptor.actions.single { it.id == "import" }
 
-        assertEquals(
-            listOf(
-                "cookTime",
-                "description",
-                "keywords",
-                "name",
-                "prepTime",
-                "recipeCategory",
-                "recipeIngredient",
-                "recipeInstructions",
-                "recipeYield",
-                "tool",
-            ),
-            descriptor.forms.single { it.actionId == create.id }.fields.map(FormField::fieldId),
-        )
-        assertEquals(
-            listOf("url"),
-            descriptor.forms.single { it.actionId == import.id }.fields.map(FormField::fieldId),
-        )
-        assertTrue((assertNotNull(create.binding.body).schema as JsonObject).containsKey("properties"))
-        assertTrue((assertNotNull(import.binding.body).schema as JsonObject).containsKey("properties"))
+        assertTrue(descriptor.forms.single { it.actionId == create.id }.fields.isEmpty())
+        assertTrue(descriptor.forms.single { it.actionId == import.id }.fields.isEmpty())
+        assertTrue((assertNotNull(create.binding.body).schema as JsonObject).isEmpty())
+        assertTrue((assertNotNull(import.binding.body).schema as JsonObject).isEmpty())
         assertEquals("recipes", import.resourceId)
-        assertEquals(
-            setOf("import", "newrecipe"),
-            descriptor.planDynamicNavigation().rootFormActions.map { it.actionId }.toSet(),
-        )
         assertTrue(descriptor.validationErrors().isEmpty())
     }
 
     @Test
-    fun `recipe action recovery preserves undeclared and non object bodies`() {
+    fun `explicit recipe request schema remains authoritative`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Recipes","version":"1"},
+              "paths":{
+                "/apps/example/api/v1/recipes":{
+                  "post":{
+                    "operationId":"newRecipe",
+                    "summary":"Create a new recipe",
+                    "tags":["Recipes"],
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["customTitle"],
+                      "properties":{
+                        "customTitle":{"type":"string","title":"Exact contract title"}
+                      }
+                    }}}},
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val create = descriptor.actions.single { it.id == "newrecipe" }
+        val schema = assertNotNull(create.binding.body).schema as JsonObject
+
+        assertEquals(setOf("customTitle"), (schema["properties"] as? JsonObject)?.keys)
+        assertEquals(listOf("customTitle"), descriptor.forms.single().fields.map(FormField::fieldId))
+        assertEquals("Exact contract title", descriptor.forms.single().fields.single().label)
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `recipe actions preserve undeclared and non object bodies`() {
         val document = """
             {
               "openapi":"3.0.3",
@@ -450,6 +924,81 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
+    fun `nested plural routes and verified request fields enrich generic collection semantics`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Example","version":"1"},
+              "paths":{
+                "/apps/example/api/houses":{
+                  "get":{
+                    "operationId":"house-index",
+                    "tags":["house"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array","items":{"type":"object","properties":{"id":{"type":"integer"}}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/houses/{houseId}":{
+                  "parameters":[
+                    {"name":"houseId","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"house-show",
+                    "tags":["house"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object","properties":{"id":{"type":"integer"}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/houses/{houseId}/lists":{
+                  "parameters":[
+                    {"name":"houseId","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"list-index",
+                    "tags":["lists"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array","items":{"type":"object","properties":{
+                        "id":{"type":"integer"},
+                        "name":{"type":"string"},
+                        "color":{}
+                      }}
+                    }}}}}
+                  },
+                  "post":{
+                    "operationId":"list-create",
+                    "tags":["lists"],
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["name"],
+                      "properties":{"name":{"type":"string"},"color":{"type":"string"}}
+                    }}}},
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val house = descriptor.actions.single { action -> action.id == "house-index" }
+        val lists = descriptor.actions.single { action -> action.id == "list-index" }
+        val listResource = descriptor.resources.single { resource -> resource.id == lists.resourceId }
+
+        assertEquals(house.resourceId, descriptor.actions.single { it.id == "house-show" }.resourceId)
+        assertEquals(FieldKind.string, listResource.fields.single { field -> field.id == "color" }.kind)
+        assertTrue(
+            descriptor.links.any { link ->
+                link.resourceId == house.resourceId &&
+                    (link.target as? DynamicLinkTarget.Action)?.actionId == lists.id
+            },
+            "links=${descriptor.links}",
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
     fun `binary artwork reads are not exposed as JSON detail views`() {
         val document = """
             {
@@ -593,6 +1142,431 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
+    fun `generic discovery withholds credential generation mutations`() {
+        val credentialWrite = OPEN_API.replace(
+            "\"operationId\": \"tables.create\"",
+            "\"operationId\": \"settings.createUserKey\"",
+        )
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(input(credentialWrite))
+
+        assertTrue(descriptor.actions.all { action -> action.binding.method == HttpMethod.GET })
+        assertTrue(descriptor.forms.isEmpty())
+        assertTrue(
+            descriptor.warnings.any { warning ->
+                warning.code == "ignored-sensitive-credential-write"
+            },
+        )
+    }
+
+    @Test
+    fun `generic discovery withholds ambiguous result mutations from every semantic source`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Ambiguous results","version":"1"},
+              "paths":{
+                "/apps/example/api/records":{
+                  "get":{
+                    "operationId":"records-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{"id":{"type":"integer"},"name":{"type":"string"}}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/messages":{
+                  "post":{
+                    "operationId":"messages.sendNow",
+                    "summary":"Dispatch notification",
+                    "responses":{"202":{"description":"Accepted"}}
+                  }
+                },
+                "/apps/example/api/records/{recordId}/collaboration":{
+                  "parameters":[{"name":"recordId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{
+                    "operationId":"collaboration-create",
+                    "summary":"Share record",
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                },
+                "/apps/example/api/records/{recordId}/merge":{
+                  "parameters":[{"name":"recordId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{
+                    "operationId":"records-combine",
+                    "summary":"Combine records",
+                    "responses":{"200":{"description":"Combined"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        assertEquals(listOf("records-list"), descriptor.actions.map(DynamicAction::id))
+        assertEquals(
+            3,
+            descriptor.warnings.count { warning ->
+                warning.code == "ignored-ambiguous-result-write"
+            },
+        )
+        assertTrue(descriptor.forms.isEmpty())
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `ambiguous result vocabulary uses exact words and does not hide safe neighbors or reads`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Safe semantic boundaries","version":"1"},
+              "paths":{
+                "/apps/example/api/share":{
+                  "get":{
+                    "operationId":"share-read",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{"enabled":{"type":"boolean"}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/senders":{
+                  "post":{
+                    "operationId":"sender-create",
+                    "summary":"Create sender",
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                },
+                "/apps/example/api/preferences/shared":{
+                  "patch":{
+                    "operationId":"shared-preferences-update",
+                    "summary":"Update shared preferences",
+                    "responses":{"200":{"description":"Updated"}}
+                  }
+                },
+                "/apps/example/api/mergeable/{recordId}":{
+                  "parameters":[{"name":"recordId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "put":{
+                    "operationId":"mergeable-record-update",
+                    "summary":"Update mergeable record",
+                    "responses":{"200":{"description":"Updated"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        assertEquals(
+            setOf(
+                "mergeable-record-update",
+                "sender-create",
+                "share-read",
+                "shared-preferences-update",
+            ),
+            descriptor.actions.map(DynamicAction::id).toSet(),
+        )
+        assertTrue(
+            descriptor.warnings.none { warning ->
+                warning.code == "ignored-ambiguous-result-write"
+            },
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `signed idempotent ambiguous replacement uses exact read recovery and typed object rows`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Generic shares","version":"1"},
+              "paths":{
+                "/apps/example/api/entities/{entityId}/share":{
+                  "parameters":[
+                    {"name":"entityId","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"entity-shares-read",
+                    "summary":"Read entity shares",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{
+                        "uid":{"type":"string"},
+                        "permission":{"type":"string"}
+                      }}
+                    }}}}}
+                  },
+                  "put":{
+                    "operationId":"entity-share",
+                    "summary":"Share entity",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["shares"],
+                      "properties":{
+                        "shares":{
+                          "type":"array",
+                          "minItems":1,
+                          "maxItems":8,
+                          "description":"Recipients with permission ('view' or 'edit').",
+                          "items":{
+                            "type":"object",
+                            "additionalProperties":false,
+                            "required":["uid","permission"],
+                            "properties":{
+                              "uid":{"type":"string","title":"Recipient","minLength":1},
+                              "permission":{"type":"string","title":"Permission"}
+                            }
+                          }
+                        }
+                      }
+                    }}}},
+                    "responses":{"200":{"description":"Updated"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val input = exampleInput(document)
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            input.copy(
+                advertisedOpenApi = input.advertisedOpenApi?.copy(
+                    trust = OpenApiTrust.nextcloudSignedAppPackage,
+                ),
+            ),
+        )
+
+        val actionEvidence = "actions=${descriptor.actions.map(DynamicAction::id)}; " +
+            "warnings=${descriptor.warnings}"
+        val read = assertNotNull(
+            descriptor.actions.singleOrNull { it.id == "entity-shares-read" },
+            actionEvidence,
+        )
+        val replacement = assertNotNull(
+            descriptor.actions.singleOrNull { it.id == "entity-share" },
+            actionEvidence,
+        )
+        assertEquals(read.id, replacement.resultRecoveryActionId)
+        val form = assertNotNull(
+            descriptor.forms.singleOrNull { it.actionId == replacement.id },
+            "Missing replacement form; $actionEvidence; forms=${descriptor.forms.map(DynamicForm::actionId)}",
+        )
+        val field = assertNotNull(
+            form.fields.singleOrNull(),
+            "Expected one replacement field; fields=${form.fields}",
+        )
+        assertEquals(DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT, field.format)
+        val structured = assertNotNull(field.repeatableObjectInput)
+        assertEquals(1, structured.minimumItems)
+        assertEquals(8, structured.maximumItems)
+        assertEquals(listOf("uid", "permission"), structured.fields.map { it.id })
+        assertEquals(
+            listOf("view", "edit"),
+            structured.fields.single { it.id == "permission" }.enumValues,
+        )
+        assertEquals(
+            """[{"uid":"alice","permission":"edit"}]""",
+            structured.encode(
+                listOf(
+                    RepeatableObjectInputRow(
+                        mapOf("uid" to "alice", "permission" to "edit"),
+                    ),
+                ),
+            ),
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+        assertTrue(descriptor.warnings.none { it.code == "ignored-ambiguous-result-write" })
+    }
+
+    @Test
+    fun `repeatable mutation objects exclude nested read only fields from fields and required set`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Generic recipients","version":"1"},
+              "paths":{
+                "/apps/example/api/recipients":{
+                  "post":{
+                    "operationId":"recipients-create",
+                    "summary":"Create recipients",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["recipients"],
+                      "properties":{
+                        "recipients":{
+                          "type":"array",
+                          "items":{
+                            "type":"object",
+                            "additionalProperties":false,
+                            "required":["serverId","uid"],
+                            "properties":{
+                              "serverId":{"type":"integer","readOnly":true},
+                              "uid":{"type":"string","title":"Recipient"}
+                            }
+                          }
+                        }
+                      }
+                    }}}},
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        val action = descriptor.actions.single { it.id == "recipients-create" }
+        val form = descriptor.forms.single { it.actionId == action.id }
+        val repeatable = assertNotNull(form.fields.single().repeatableObjectInput)
+
+        assertEquals(listOf("uid"), repeatable.fields.map(RepeatableObjectInputFieldSpec::id))
+        assertTrue(repeatable.fields.single().required)
+        assertEquals(
+            """[{"uid":"alice"}]""",
+            repeatable.encode(listOf(RepeatableObjectInputRow(mapOf("uid" to "alice")))),
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `mutation is withheld when a repeatable object contains only read only fields`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Server snapshots","version":"1"},
+              "paths":{
+                "/apps/example/api/snapshots":{
+                  "post":{
+                    "operationId":"snapshots-create",
+                    "summary":"Create snapshots",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["snapshots"],
+                      "properties":{
+                        "snapshots":{
+                          "type":"array",
+                          "items":{
+                            "type":"object",
+                            "additionalProperties":false,
+                            "required":["serverId"],
+                            "properties":{
+                              "serverId":{"type":"integer","readOnly":true}
+                            }
+                          }
+                        }
+                      }
+                    }}}},
+                    "responses":{"201":{"description":"Created"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        assertTrue(descriptor.actions.none { it.id == "snapshots-create" })
+        assertTrue(descriptor.forms.none { it.actionId == "snapshots-create" })
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `constrained string array mutations are withheld while unconstrained arrays remain editable`() {
+        fun operation(operationId: String, arrayConstraints: String, itemConstraints: String = "") = """
+            "post":{
+              "operationId":"$operationId",
+              "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                "type":"object",
+                "required":["values"],
+                "properties":{
+                  "values":{
+                    "type":"array"$arrayConstraints,
+                    "items":{"type":"string"$itemConstraints}
+                  }
+                }
+              }}}},
+              "responses":{"204":{"description":"Updated"}}
+            }
+        """.trimIndent()
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"String arrays","version":"1"},
+              "paths":{
+                "/apps/example/api/plain":{${operation("plain-values", "")}},
+                "/apps/example/api/minimum":{${operation("minimum-values", ",\"minItems\":2")}},
+                "/apps/example/api/maximum":{${operation("maximum-values", ",\"maxItems\":2")}},
+                "/apps/example/api/unique":{${operation("unique-values", ",\"uniqueItems\":true")}},
+                "/apps/example/api/enumerated":{
+                  ${operation("enumerated-values", "", ",\"enum\":[\"one\",\"two\"]")}
+                }
+              }
+            }
+        """.trimIndent()
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+
+        val plain = descriptor.actions.single { it.id == "plain-values" }
+        assertEquals(
+            DYNAMIC_STRING_ARRAY_FORMAT,
+            descriptor.forms.single { it.actionId == plain.id }.fields.single().format,
+        )
+        assertTrue(
+            descriptor.actions.none { action ->
+                action.id in setOf(
+                    "minimum-values",
+                    "maximum-values",
+                    "unique-values",
+                    "enumerated-values",
+                )
+            },
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `ambiguous replacement remains withheld without exact trusted get recovery`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Unsafe share","version":"1"},
+              "paths":{
+                "/apps/example/api/entities/{entityId}/share":{
+                  "parameters":[
+                    {"name":"entityId","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "put":{
+                    "operationId":"entity-share",
+                    "summary":"Share entity",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["shares"],
+                      "properties":{"shares":{"type":"array","items":{
+                        "type":"object",
+                        "properties":{"uid":{"type":"string"}}
+                      }}}
+                    }}}},
+                    "responses":{"200":{"description":"Updated"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val input = exampleInput(document)
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            input.copy(
+                advertisedOpenApi = input.advertisedOpenApi?.copy(
+                    trust = OpenApiTrust.nextcloudSignedAppPackage,
+                ),
+            ),
+        )
+
+        assertTrue(descriptor.actions.isEmpty())
+        assertTrue(descriptor.forms.isEmpty())
+        assertTrue(descriptor.warnings.any { it.code == "ignored-ambiguous-result-write" })
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
     fun exposesBodylessAndQueryDrivenMutationsAsConfirmedNativeActions() {
         val withDeleteAndQuery = OPEN_API
             .replace(
@@ -642,6 +1616,165 @@ class DynamicAppDescriptorCompilerTest {
         assertEquals(setOf("description", "title"), mappedAction.binding.bodyFieldNames.toSet())
         assertEquals(listOf("title"), mappedAction.binding.requiredBodyFieldNames)
         assertEquals("application/json", mappedAction.binding.bodyContentType)
+    }
+
+    @Test
+    fun `single member allOf preserves referenced enum metadata for editable fields`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Composed enum contract","version":"1"},
+              "components":{"schemas":{
+                "Palette":{"type":"string","enum":["red","blue"]},
+                "OtherPalette":{"type":"string","enum":["green","yellow"]}
+              }},
+              "paths":{
+                "/apps/example/api/items":{
+                  "get":{
+                    "operationId":"items-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{
+                        "id":{"type":"integer"},
+                        "color":{
+                          "nullable":true,
+                          "allOf":[{"${'$'}ref":"#/components/schemas/Palette"}]
+                        },
+                        "ambiguous":{
+                          "allOf":[
+                            {"${'$'}ref":"#/components/schemas/Palette"},
+                            {"${'$'}ref":"#/components/schemas/OtherPalette"}
+                          ]
+                        }
+                      }}
+                    }}}}}
+                  },
+                  "post":{
+                    "operationId":"items-create",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{
+                        "color":{"type":"string"},
+                        "ambiguous":{"type":"string"}
+                      }
+                    }}}},
+                    "responses":{"200":{"description":"Created"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val resource = descriptor.resources.single()
+        val fields = resource.fields.associateBy(DynamicField::id)
+        val color = fields.getValue("color")
+        val ambiguous = fields.getValue("ambiguous")
+
+        assertEquals(FieldKind.enumeration, color.kind)
+        assertEquals(listOf("red", "blue"), color.enumValues)
+        assertTrue(color.nullable)
+        assertEquals(FieldKind.string, ambiguous.kind)
+        assertNull(ambiguous.enumValues)
+
+        val nativeColor = descriptor.toNativeAppSchema()
+            .resources
+            .single()
+            .fields
+            .single { field -> field.id == "color" }
+        assertFalse(nativeColor.readOnly)
+        assertEquals(FieldKind.enumeration, nativeColor.kind)
+        assertEquals(listOf("red", "blue"), nativeColor.enumValues)
+    }
+
+    @Test
+    fun `only exact declared integer arrays receive the generic integer array format`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Scalar array contract","version":"1"},
+              "paths":{
+                "/apps/example/api/assignments":{
+                  "post":{
+                    "operationId":"assignments-update",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{
+                        "integerIds":{"type":"array","items":{"type":"integer","format":"int64"}},
+                        "textIds":{"type":"array","items":{"type":"string"}},
+                        "decimalIds":{"type":"array","items":{"type":"number"}},
+                        "objectIds":{"type":"array","items":{"type":"object"}},
+                        "mixedIds":{"type":"array","items":{"oneOf":[
+                          {"type":"integer"},{"type":"string"}
+                        ]}},
+                        "untypedIds":{"type":"array"}
+                      }
+                    }}}},
+                    "responses":{"200":{"description":"Updated"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val action = descriptor.actions.single { it.id == "assignments-update" }
+        val fields = descriptor.forms.single { it.actionId == action.id }.fields.associateBy(FormField::fieldId)
+        val bodyProperties = ((requireNotNull(action.binding.body).schema as JsonObject)["properties"] as JsonObject)
+
+        assertEquals(DYNAMIC_INTEGER_ARRAY_FORMAT, fields.getValue("integerIds").format)
+        assertEquals(DYNAMIC_STRING_ARRAY_FORMAT, fields.getValue("textIds").format)
+        assertNull(fields.getValue("decimalIds").format)
+        assertNull(fields.getValue("objectIds").format)
+        assertNull(fields.getValue("mixedIds").format)
+        assertNull(fields.getValue("untypedIds").format)
+        assertTrue(bodyProperties["integerIds"].isExactDynamicIntegerArraySchema())
+        assertFalse(bodyProperties["textIds"].isExactDynamicIntegerArraySchema())
+
+        val nativeField = descriptor.toNativeAppSchema()
+            .resources
+            .single { resource -> resource.id == action.resourceId }
+            .fields
+            .single { field -> field.id == "integerIds" }
+        assertEquals(FieldKind.integer, nativeField.kind)
+        assertEquals(DYNAMIC_INTEGER_ARRAY_FORMAT, nativeField.format)
+    }
+
+    @Test
+    fun `form encoded arrays do not receive JSON typed editor formats`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Form array contract","version":"1"},
+              "paths":{
+                "/apps/example/api/assignments":{
+                  "post":{
+                    "operationId":"assignments-form-update",
+                    "requestBody":{"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                      "type":"object",
+                      "properties":{
+                        "integerIds":{"type":"array","items":{"type":"integer"}},
+                        "textIds":{"type":"array","items":{"type":"string"}},
+                        "label":{"type":"string"}
+                      }
+                    }}}},
+                    "responses":{"200":{"description":"Updated"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val action = descriptor.actions.single { it.id == "assignments-form-update" }
+        val fields = descriptor.forms.single().fields.associateBy(FormField::fieldId)
+        val bodyProperties = ((requireNotNull(action.binding.body).schema as JsonObject)["properties"] as JsonObject)
+
+        assertEquals("application/x-www-form-urlencoded", action.binding.body.contentType)
+        assertEquals(setOf("label"), fields.keys)
+        assertNull((bodyProperties.getValue("integerIds") as JsonObject)["format"])
+        assertNull((bodyProperties.getValue("textIds") as JsonObject)["format"])
+        assertTrue(descriptor.validationErrors().isEmpty())
     }
 
     @Test
@@ -791,6 +1924,226 @@ class DynamicAppDescriptorCompilerTest {
         assertTrue(descriptor.actions.all { it.binding.method == HttpMethod.GET })
         assertTrue(descriptor.resources.single().fields.all(DynamicField::readOnly))
         assertTrue(descriptor.forms.isEmpty())
+    }
+
+    @Test
+    fun `root and parent scoped singleton reads retain distinct layouts`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Scoped settings","version":"1"},
+              "paths":{
+                "/apps/example/api/preferences":{
+                  "get":{
+                    "operationId":"preferences-user",
+                    "tags":["Preferences"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{"theme":{"type":"string"}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/workspaces/{workspaceId}/preferences":{
+                  "parameters":[
+                    {"name":"workspaceId","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"preferences-workspace",
+                    "tags":["Preferences"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{"notifications":{"type":"boolean"}}
+                    }}}}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val preferenceLayouts = descriptor.layouts.filter { layout ->
+            layout.resourceId == descriptor.actions.single { action ->
+                action.id == "preferences-user"
+            }.resourceId
+        }
+
+        assertEquals(2, preferenceLayouts.size)
+        assertEquals(
+            setOf("preferences-user", "preferences-workspace"),
+            preferenceLayouts.mapNotNull(DynamicLayout::sourceActionId).toSet(),
+        )
+        assertEquals(2, preferenceLayouts.map(DynamicLayout::id).distinct().size)
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `write effects come from contract semantics instead of the HTTP method`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Semantic actions","version":"1"},
+              "paths":{
+                "/apps/example/api/widgets":{
+                  "get":{
+                    "operationId":"widgets-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{"id":{"type":"integer"},"name":{"type":"string"}}}
+                    }}}}}
+                  },
+                  "post":{
+                    "operationId":"widgets-create",
+                    "summary":"Create widget",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["name"],
+                      "properties":{"name":{"type":"string"}}
+                    }}}},
+                    "responses":{"201":{"description":"Created"}}
+                  },
+                  "patch":{
+                    "operationId":"widgets-update",
+                    "summary":"Update widgets",
+                    "responses":{"200":{"description":"Updated"}}
+                  }
+                },
+                "/apps/example/api/widgets/reorder":{
+                  "post":{"operationId":"widgets-reorder","summary":"Reorder widgets","responses":{"200":{"description":"OK"}}}
+                },
+                "/apps/example/api/widgets/trash":{
+                  "delete":{"operationId":"widgets-empty-trash","summary":"Empty trash","responses":{"204":{"description":"Empty"}}}
+                },
+                "/apps/example/api/widgets/{widgetId}":{
+                  "parameters":[{"name":"widgetId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "get":{
+                    "operationId":"widget-show",
+                    "tags":["WidgetDetails"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{"id":{"type":"integer"},"name":{"type":"string"}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/widgets/{widgetId}/toggle":{
+                  "parameters":[{"name":"widgetId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{"operationId":"widget-toggle","summary":"Toggle widget done status","responses":{"200":{"description":"OK"}}}
+                },
+                "/apps/example/api/widgets/{widgetId}/restore":{
+                  "parameters":[{"name":"widgetId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{"operationId":"widget-restore","summary":"Restore widget","responses":{"200":{"description":"OK"}}}
+                },
+                "/apps/example/api/widgets/{widgetId}/archive":{
+                  "parameters":[{"name":"widgetId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{"operationId":"widget-archive","summary":"Archive widget","responses":{"200":{"description":"OK"}}}
+                },
+                "/apps/example/api/widgets/{widgetId}/unarchive":{
+                  "parameters":[{"name":"widgetId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{"operationId":"widget-unarchive","summary":"Unarchive widget","responses":{"200":{"description":"OK"}}}
+                },
+                "/apps/example/api/widgets/{widgetId}/copy":{
+                  "parameters":[{"name":"widgetId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{"operationId":"widget-copy","summary":"Copy widget","responses":{"201":{"description":"Copied"}}}
+                },
+                "/apps/example/api/widgets/{widgetId}/permanent":{
+                  "parameters":[{"name":"widgetId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "delete":{"operationId":"widget-delete-permanently","summary":"Permanently delete widget","responses":{"204":{"description":"Deleted"}}}
+                },
+                "/apps/example/api/widgets/batch/delete":{
+                  "post":{"operationId":"widgets-batch-delete","summary":"Delete selected widgets","responses":{"200":{"description":"OK"}}}
+                },
+                "/apps/example/api/widgets/upload":{
+                  "post":{"operationId":"widgets-upload","summary":"Upload widgets","responses":{"200":{"description":"OK"}}}
+                },
+                "/apps/example/api/workspaces/{workspaceId}":{
+                  "parameters":[{"name":"workspaceId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "get":{
+                    "operationId":"workspace-show",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object",
+                      "properties":{"id":{"type":"integer"},"name":{"type":"string"}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/workspaces/{workspaceId}/leave":{
+                  "parameters":[{"name":"workspaceId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{"operationId":"workspace-leave","summary":"Leave workspace","responses":{"200":{"description":"OK"}}}
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val actions = descriptor.actions.associateBy(DynamicAction::id)
+
+        fun assertAction(
+            id: String,
+            effect: ActionEffect,
+            intent: ActionIntent,
+            risk: ActionRisk,
+            requiresConfirmation: Boolean,
+        ) {
+            val action = assertNotNull(actions[id])
+            assertEquals(effect, action.effect, id)
+            assertEquals(intent, action.intent, id)
+            assertEquals(risk, action.risk, id)
+            assertEquals(requiresConfirmation, action.requiresConfirmation, id)
+        }
+
+        assertAction("widgets-create", ActionEffect.create, ActionIntent.create, ActionRisk.mutating, false)
+        assertAction("widgets-update", ActionEffect.update, ActionIntent.update, ActionRisk.mutating, false)
+        assertAction("widgets-reorder", ActionEffect.reorder, ActionIntent.execute, ActionRisk.mutating, false)
+        assertAction("widget-toggle", ActionEffect.toggle, ActionIntent.execute, ActionRisk.mutating, false)
+        assertAction("widget-restore", ActionEffect.restore, ActionIntent.execute, ActionRisk.mutating, false)
+        assertAction("widget-archive", ActionEffect.archive, ActionIntent.execute, ActionRisk.mutating, false)
+        assertAction("widget-unarchive", ActionEffect.unarchive, ActionIntent.execute, ActionRisk.mutating, false)
+        assertAction("widget-copy", ActionEffect.copy, ActionIntent.execute, ActionRisk.mutating, false)
+        assertAction(
+            "widget-delete-permanently",
+            ActionEffect.permanentDelete,
+            ActionIntent.delete,
+            ActionRisk.destructive,
+            true,
+        )
+        assertAction(
+            "widgets-empty-trash",
+            ActionEffect.empty,
+            ActionIntent.delete,
+            ActionRisk.destructive,
+            true,
+        )
+        assertAction(
+            "widgets-batch-delete",
+            ActionEffect.batch,
+            ActionIntent.execute,
+            ActionRisk.destructive,
+            true,
+        )
+        assertAction("widgets-upload", ActionEffect.upload, ActionIntent.execute, ActionRisk.mutating, false)
+        assertAction("workspace-leave", ActionEffect.leave, ActionIntent.execute, ActionRisk.destructive, true)
+        assertEquals("widgets", actions.getValue("widget-show").resourceId)
+        assertTrue(
+            actions.values
+                .filter { action -> action.id.startsWith("widget") }
+                .all { action -> action.resourceId == "widgets" },
+        )
+        assertEquals(actions.getValue("workspace-show").resourceId, actions.getValue("workspace-leave").resourceId)
+        assertTrue(
+            descriptor.resources.none { resource ->
+                resource.id in setOf(
+                    "archive",
+                    "batch",
+                    "copy",
+                    "leave",
+                    "permanent",
+                    "reorder",
+                    "restore",
+                    "toggle",
+                    "unarchive",
+                    "upload",
+                )
+            },
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
     }
 
     private fun input(

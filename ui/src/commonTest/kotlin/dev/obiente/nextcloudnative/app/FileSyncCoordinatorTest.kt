@@ -161,6 +161,62 @@ class FileSyncCoordinatorTest {
     }
 
     @Test
+    fun `selective directory deletion choice remains non destructive`() {
+        var state = state(
+            baselines = listOf(
+                FileSyncBaseline("Photos", SyncEntryKind.Directory, "local-dir", "remote-dir"),
+            ),
+            configuration = FileSyncConfiguration(
+                deviceLabel = "Workstation",
+                selectedPaths = listOf("Photos/Shared"),
+            ),
+        )
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = listOf(RemoteSyncEntry("Photos", SyncEntryKind.Directory, "remote-dir")),
+            nowEpochMillis = 10,
+        )
+        val workId = state.pair().workItems.single().id
+
+        state = resolveFileSyncDecision(
+            state,
+            PAIR_ID,
+            workId,
+            FileSyncDecisionChoice.PropagateDeletion,
+        )
+
+        assertIs<FileSyncOperation.Skipped>(state.pair().workItems.single().operation)
+        assertNull(claimNextFileSyncOperation(state, PAIR_ID, 20).command)
+    }
+
+    @Test
+    fun `explicit recovery resets only failures that exhausted automatic retries`() {
+        var coordinator = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            localEntries = listOf(local("retry.txt", "local-v1")),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10,
+        )
+        val workId = coordinator.pair().workItems.single().id
+        repeat(MAX_FILE_SYNC_ATTEMPTS) { attempt ->
+            coordinator = claimNextFileSyncOperation(coordinator, PAIR_ID, attempt.toLong()).state
+            coordinator = failFileSyncOperation(coordinator, PAIR_ID, workId, "Temporary failure")
+            if (attempt + 1 < MAX_FILE_SYNC_ATTEMPTS) {
+                coordinator = retryFileSyncOperation(coordinator, PAIR_ID, workId)
+            }
+        }
+
+        val reset = resetExhaustedFileSyncOperations(coordinator, PAIR_ID).pair().workItems.single()
+
+        assertEquals(FileSyncExecutionState.Ready, reset.state)
+        assertEquals(0, reset.attemptCount)
+        assertNull(reset.failureMessage)
+    }
+
+    @Test
     fun `keep both requires verified convergence for every generated path`() {
         var state = state(baselines = listOf(baseline("daily.note.md", "l1", "r1")))
         state = scanFileSyncPair(
@@ -231,6 +287,72 @@ class FileSyncCoordinatorTest {
     }
 
     @Test
+    fun `selective and ignored paths cannot become deletion work`() {
+        val configuration = FileSyncConfiguration(
+            deviceLabel = "Test phone",
+            selectedPaths = listOf("Photos/Keep"),
+            ignoredPatterns = listOf("*.tmp"),
+        )
+        var state = state(
+            baselines = listOf(
+                baseline("Photos/Keep/a.raf", "l1", "r1"),
+                baseline("Photos/Other/b.raf", "l1", "r1"),
+                baseline("Photos/Keep/incomplete.tmp", "l1", "r1"),
+            ),
+            configuration = configuration,
+        )
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            localEntries = listOf(local("Photos/Keep/a.raf", "l2")),
+            remoteEntries = listOf(
+                remote("Photos/Keep/a.raf", "r1"),
+                remote("Photos/Other/b.raf", "r1"),
+                remote("Photos/Keep/incomplete.tmp", "r1"),
+            ),
+            nowEpochMillis = 10,
+        )
+
+        assertEquals(listOf("Photos/Keep/a.raf"), state.pair().workItems.map { it.relativePath })
+        assertEquals(
+            setOf("Photos/Keep/a.raf", "Photos/Other/b.raf", "Photos/Keep/incomplete.tmp"),
+            state.pair().baselines.mapTo(linkedSetOf(), FileSyncBaseline::relativePath),
+        )
+    }
+
+    @Test
+    fun `directories are created first then raw files outrank jpeg files across folders`() {
+        val configuration = FileSyncConfiguration(
+            deviceLabel = "Test phone",
+            priorityRules = listOf(
+                FileSyncPriorityRule("**/*.raf"),
+                FileSyncPriorityRule("**/*.jpg"),
+            ),
+        )
+        var state = state(configuration = configuration)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            localEntries = listOf(
+                LocalSyncEntry("Shoot", SyncEntryKind.Directory, "dir"),
+                LocalSyncEntry("Other", SyncEntryKind.Directory, "other-dir"),
+                local("Shoot/export.jpg", "jpg"),
+                local("Other/negative.raf", "raf"),
+                local("Shoot/sidecar.xmp", "xmp"),
+            ),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10,
+        )
+
+        assertEquals(
+            listOf("Other", "Shoot", "Other/negative.raf", "Shoot/export.jpg", "Shoot/sidecar.xmp"),
+            state.pair().workItems.map(FileSyncWorkItem::relativePath),
+        )
+    }
+
+    @Test
     fun `pair and failure fields are bounded before persistence`() {
         assertFailsWith<IllegalArgumentException> {
             FileSyncPair(
@@ -261,14 +383,17 @@ class FileSyncCoordinatorTest {
         }
     }
 
-    private fun state(baselines: List<FileSyncBaseline> = emptyList()) = FileSyncCoordinatorState(
+    private fun state(
+        baselines: List<FileSyncBaseline> = emptyList(),
+        configuration: FileSyncConfiguration = FileSyncConfiguration(deviceLabel = "Test phone"),
+    ) = FileSyncCoordinatorState(
         pairs = listOf(
             FileSyncPair(
                 id = PAIR_ID,
                 accountId = "account-a",
                 localRootId = "android-tree:primary-notes",
                 remoteRootPath = "Notes",
-                configuration = FileSyncConfiguration(deviceLabel = "Test phone"),
+                configuration = configuration,
                 baselines = baselines,
             ),
         ),
