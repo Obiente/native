@@ -74,6 +74,10 @@ test("nightly notes disclose the unsigned Windows installation path", () => {
   assert.match(notes, /More info > Run anyway/);
   assert.match(
     notes,
+    /Windows MSI installs can check the Nightly channel from Settings > App updates/,
+  );
+  assert.match(
+    notes,
     /gh attestation verify <downloaded-msi> --repo Obiente\/nc-native/,
   );
 });
