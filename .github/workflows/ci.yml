@@ -87,6 +87,10 @@ jobs:
               - "website/public/screenshots/**"
               - "website/scripts/marketing-captures.mjs"
               - "website/scripts/verify-marketing-captures.mjs"
+            linux_repositories:
+              - ".github/workflows/ci.yml"
+              - "tools/build-linux-package-repositories.sh"
+              - "tools/test-linux-package-repositories.sh"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -95,6 +99,20 @@ jobs:
         run: |
           bash tools/check-repository.sh
           bash tools/test-prerelease-update-contract.sh
+
+      - name: Install Linux repository tooling
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outputs.linux_repositories == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes apt-utils createrepo-c dpkg-dev gnupg rpm
+
+      - name: Test signed Linux package repositories
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outputs.linux_repositories == 'true'
+        run: bash tools/test-linux-package-repositories.sh
 
       - name: Set up Node.js for capture verification
         if: >-
