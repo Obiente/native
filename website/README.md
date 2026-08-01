@@ -82,8 +82,10 @@ UI source changes to regenerate the catalog:
 npm run --prefix website verify:captures
 ```
 
-Review CI separately checks whether the catalog represents the current capture
-inputs. Run the same freshness gate locally with:
+The dedicated `Refresh marketing captures` workflow checks whether the catalog
+represents the current capture inputs. Normal build and test jobs do not fail
+only because the generated catalog is stale. Run the same freshness gate
+locally with:
 
 ```bash
 npm run --prefix website verify:captures:fresh
@@ -93,6 +95,13 @@ If the freshness command reports stale inputs, run the capture wrapper with
 JDK 21 and review the updated synthetic images. The `/visual-qa/` route lists
 scenario, feature, surface, state, platform, viewport, and pixel metadata.
 Future scenario entries may also identify the pull request they review.
+
+For same-repository pull requests, the refresh workflow prepares an untrusted
+patch without write credentials. A separate default-branch workflow validates
+the pull request identity, exact head revision, patch paths, regular-file modes,
+and patch size before `obiente-automations[bot]` commits it with a short-lived
+token restricted to this repository and `Contents: write`. Forks and Dependabot
+remain read-only and must commit stale capture updates themselves.
 
 The canonical Obiente organization avatar lives with the desktop capture
 resources. Content generation copies it into `public/` for static hosting, so
