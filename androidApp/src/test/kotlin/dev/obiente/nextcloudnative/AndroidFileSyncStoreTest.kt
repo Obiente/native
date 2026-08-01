@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.FileSyncPriorityRule
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
@@ -95,7 +96,15 @@ class AndroidFileSyncStoreTest {
         accountId = "account-1",
         localRootId = "content://documents/tree/primary%3ANotes",
         remoteRootPath = "Notes",
-        configuration = FileSyncConfiguration(deviceLabel = "phone"),
+        configuration = FileSyncConfiguration(
+            deviceLabel = "phone",
+            selectedPaths = listOf("Camera"),
+            ignoredPatterns = listOf("*.part"),
+            priorityRules = listOf(
+                FileSyncPriorityRule("**/*.raf"),
+                FileSyncPriorityRule("**/*.jpg"),
+            ),
+        ),
     )
 
     private fun withTemporaryStore(block: (AndroidFileSyncStore) -> Unit) {

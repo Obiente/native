@@ -170,4 +170,42 @@ class FileSyncCenterTest {
 
         assertEquals(2, pair.toCenterSummary("Camera").completedCount)
     }
+
+    @Test
+    fun `summary exposes why skipped work is paused`() {
+        val reason = "Directory deletion is paused because selective or ignored items may exist below it."
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "content://opaque-grant",
+            remoteRootPath = "Projects",
+            configuration = FileSyncConfiguration(
+                deviceLabel = "phone",
+                deletionPolicy = FileSyncDeletionPolicy.Propagate,
+                ignoredPatterns = listOf("**/.cache/**"),
+            ),
+            workItems = listOf(
+                FileSyncWorkItem(
+                    id = 1,
+                    relativePath = "Archive",
+                    observedLocal = null,
+                    observedRemote = RemoteSyncEntry("Archive", SyncEntryKind.Directory, "remote"),
+                    observedBaseline = FileSyncBaseline(
+                        "Archive",
+                        SyncEntryKind.Directory,
+                        "local",
+                        "remote",
+                    ),
+                    operation = FileSyncOperation.Skipped("Archive", reason),
+                    state = FileSyncExecutionState.Skipped,
+                ),
+            ),
+            nextWorkId = 2,
+        )
+
+        val summary = pair.toCenterSummary("Projects")
+
+        assertEquals(1, summary.skippedCount)
+        assertEquals(listOf(reason), summary.skippedReasons)
+    }
 }

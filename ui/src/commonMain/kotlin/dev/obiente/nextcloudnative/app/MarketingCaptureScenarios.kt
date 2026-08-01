@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -14,7 +15,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -73,6 +77,60 @@ enum class MarketingCaptureScenario(
         "Media backup", "Folder discovery", "Ready with pending uploads",
         MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
         width = 1_080, height = 2_200, density = 2.625f,
+    ),
+    FileSyncRulesMobile(
+        "file-sync-rules-mobile", "file-sync-rules-mobile.png", NextcloudPresentation.Adaptive,
+        "File sync", "Folder pair configuration", "Selective, ignore, and priority rules",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 2_200, density = 2.625f,
+    ),
+    FileSyncStatusMobile(
+        "file-sync-status-mobile", "file-sync-status-mobile.png", NextcloudPresentation.Adaptive,
+        "File sync", "Folder sync center", "Conflict recovery and mapping health",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 2_200, density = 2.625f,
+    ),
+    FileSyncStatusDesktop(
+        "file-sync-status-desktop", "file-sync-status-desktop.png", NextcloudPresentation.Desktop,
+        "File sync", "Folder sync center", "Priority queue, conflict, and failure",
+        MarketingCapturePurpose.StateCoverage, "linux", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    FileSyncSetupDesktop(
+        "file-sync-setup-desktop", "file-sync-setup-desktop.png", NextcloudPresentation.Desktop,
+        "File sync", "Folder pair configuration", "Guided RAW-first setup",
+        MarketingCapturePurpose.StateCoverage, "linux", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    FileSyncSelectionDesktop(
+        "file-sync-selection-desktop", "file-sync-selection-desktop.png", NextcloudPresentation.Desktop,
+        "File sync", "Selective sync browser", "Verified folders and files",
+        MarketingCapturePurpose.StateCoverage, "linux", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    FileSyncSelectionMobile(
+        "file-sync-selection-mobile", "file-sync-selection-mobile.png", NextcloudPresentation.Adaptive,
+        "File sync", "Selective sync browser", "Verified folders and files",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 2_200, density = 2.625f,
+    ),
+    VirtualFileStorageMobile(
+        "virtual-file-storage-mobile", "virtual-file-storage-mobile.png", NextcloudPresentation.Adaptive,
+        "Virtual files", "Storage rules", "Automatic cleanup with protected pins",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 2_200, density = 2.625f,
+    ),
+    VirtualFileStorageDesktop(
+        "virtual-file-storage-desktop", "virtual-file-storage-desktop.png", NextcloudPresentation.Desktop,
+        "Virtual files", "Storage overview", "Hydrated cache, pins, and free-up action",
+        MarketingCapturePurpose.StateCoverage, "linux", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    DesktopStartupSettings(
+        "desktop-startup-settings", "desktop-startup-settings.png", NextcloudPresentation.Desktop,
+        "File sync", "Desktop settings", "Start on login enabled",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
     ),
     AdaptiveApp(
         "adaptive-dynamic-data", "adaptive-dynamic-data.png", NextcloudPresentation.Desktop,
@@ -693,6 +751,445 @@ internal fun MarketingMediaBackupScenario() {
         }
     }
 }
+
+@Composable
+internal fun MarketingFileSyncRulesScenario() {
+    var configuration by remember {
+        mutableStateOf(
+            FileSyncConfiguration(
+                direction = FileSyncDirection.Bidirectional,
+                conflictPolicy = FileSyncConflictPolicy.Ask,
+                deletionPolicy = FileSyncDeletionPolicy.Ask,
+                deviceLabel = "Alex's phone",
+                networkPolicy = FileSyncNetworkPolicy.Unmetered,
+                powerPolicy = FileSyncPowerPolicy.BatteryNotLow,
+                ignoredPatterns = listOf("*.part", "**/.thumbnails/**", "**/Cache/**"),
+                priorityRules = listOf(
+                    FileSyncPriorityRule("**/*.raf"),
+                    FileSyncPriorityRule("**/*.jpg"),
+                    FileSyncPriorityRule("**/*.jpeg"),
+                ),
+            ),
+        )
+    }
+    FileSyncSetupSurface(
+        localRoot = FileSyncLocalRoot("fixture-studio-local", "Pictures/Studio"),
+        mediaSuggestion = null,
+        remotePath = "Photos/Studio",
+        configuration = configuration,
+        mediaPreview = null,
+        mediaPreviewLoading = false,
+        mediaPreviewError = null,
+        busy = false,
+        onDismiss = {},
+        onChooseDestination = {},
+        onConfigurationChanged = { configuration = it },
+        onAdd = {},
+        modifier = Modifier.fillMaxSize(),
+        initialStep = FileSyncSetupStep.Rules,
+        syntheticScopeSummary = "18,742 files - 123.4 GB - 2,511 RAW",
+    )
+}
+
+@Composable
+internal fun MarketingFileSyncStatusDesktopScenario() {
+    Column(modifier = Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = "Folder sync",
+            subtitle = "Linux workstation",
+            onBack = {},
+        )
+        Column(
+            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+        ) {
+            FileSyncWorkspace(
+                snapshot = FileSyncCenterSnapshot(
+                    support = FileSyncCenterSupport.Available,
+                    limitation = "Automatic background desktop scheduling is not enabled yet. Use Sync now.",
+                    pairs = listOf(
+                        FileSyncPairSummary(
+                            id = "fixture-studio",
+                            localDisplayName = "Studio archive",
+                            localRootPath = "~/Pictures/Studio",
+                            remoteRootPath = "Photos/Studio",
+                            configuration = FileSyncConfiguration(
+                                direction = FileSyncDirection.Bidirectional,
+                                deviceLabel = "Field workstation",
+                                selectedPaths = listOf("Shoots/2026", "Exports/Portfolio"),
+                                ignoredPatterns = listOf("*.part", "**/.thumbnails/**"),
+                                priorityRules = listOf(
+                                    FileSyncPriorityRule("**/*.raf"),
+                                    FileSyncPriorityRule("**/*.jpg"),
+                                ),
+                            ),
+                            readyCount = 5,
+                            runningCount = 1,
+                            conflicts = emptyList(),
+                            failedCount = 0,
+                            skippedCount = 0,
+                            completedCount = 341,
+                            lastScanEpochMillis = 1,
+                            scheduleDescription = "Manual sync on this desktop",
+                        ),
+                        FileSyncPairSummary(
+                            id = "fixture-client",
+                            localDisplayName = "Client selects",
+                            localRootPath = "~/Pictures/Clients/Selects",
+                            remoteRootPath = "Photos/Clients/Selects",
+                            configuration = FileSyncConfiguration(
+                                direction = FileSyncDirection.Bidirectional,
+                                deviceLabel = "Field workstation",
+                                ignoredPatterns = listOf("*.part"),
+                            ),
+                            readyCount = 5,
+                            runningCount = 0,
+                            conflicts = listOf(
+                                FileSyncConflictSummary(
+                                    workId = 42,
+                                    relativePath = "cover.jpg",
+                                    reason = FileSyncDecisionReason.SimultaneousEdit,
+                                    choices = setOf(
+                                        FileSyncDecisionChoice.UseLocal,
+                                        FileSyncDecisionChoice.UseRemote,
+                                        FileSyncDecisionChoice.KeepBoth,
+                                        FileSyncDecisionChoice.Skip,
+                                    ),
+                                ),
+                            ),
+                            failedCount = 0,
+                            skippedCount = 0,
+                            completedCount = 86,
+                            lastScanEpochMillis = 1,
+                            scheduleDescription = "Manual sync on this desktop",
+                        ),
+                        FileSyncPairSummary(
+                            id = "fixture-documents",
+                            localDisplayName = "Project documents",
+                            localRootPath = "~/Nextcloud/Projects",
+                            remoteRootPath = "Work/Projects",
+                            configuration = FileSyncConfiguration(
+                                direction = FileSyncDirection.UploadOnly,
+                                deviceLabel = "Field workstation",
+                                ignoredPatterns = listOf("*.tmp"),
+                            ),
+                            readyCount = 0,
+                            runningCount = 0,
+                            conflicts = emptyList(),
+                            failedCount = 0,
+                            skippedCount = 0,
+                            completedCount = 219,
+                            lastScanEpochMillis = 1,
+                            scheduleDescription = "Manual sync on this desktop",
+                        ),
+                        FileSyncPairSummary(
+                            id = "fixture-archive",
+                            localDisplayName = "Archive 2024",
+                            localRootPath = "~/Pictures/Archive/2024",
+                            remoteRootPath = "Photos/Archive/2024",
+                            configuration = FileSyncConfiguration(
+                                direction = FileSyncDirection.DownloadOnly,
+                                deviceLabel = "Field workstation",
+                            ),
+                            readyCount = 12,
+                            runningCount = 0,
+                            conflicts = emptyList(),
+                            failedCount = 1,
+                            skippedCount = 0,
+                            completedCount = 802,
+                            lastScanEpochMillis = 1,
+                            scheduleDescription = "Will resume when Nextcloud is reachable",
+                        ),
+                    ),
+                ),
+                loading = false,
+                busyPairId = null,
+                onAdd = {},
+                onRun = {},
+                onRemove = {},
+                onResolve = { _, _, _ -> },
+                initialSelectedPairId = "fixture-client",
+            )
+        }
+    }
+}
+
+@Composable
+internal fun MarketingFileSyncSetupDesktopScenario() {
+    var configuration by remember {
+        mutableStateOf(
+            FileSyncConfiguration(
+                direction = FileSyncDirection.Bidirectional,
+                conflictPolicy = FileSyncConflictPolicy.Ask,
+                deletionPolicy = FileSyncDeletionPolicy.Ask,
+                deviceLabel = "Field workstation",
+                networkPolicy = FileSyncNetworkPolicy.AnyConnection,
+                powerPolicy = FileSyncPowerPolicy.BatteryNotLow,
+                ignoredPatterns = listOf("*.part", "**/.thumbnails/**", "**/Cache/**"),
+                priorityRules = listOf(
+                    FileSyncPriorityRule("**/*.raf"),
+                    FileSyncPriorityRule("**/*.jpg"),
+                    FileSyncPriorityRule("**/*.jpeg"),
+                ),
+            ),
+        )
+    }
+    Box(modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge), contentAlignment = Alignment.Center) {
+        FileSyncSetupSurface(
+            localRoot = FileSyncLocalRoot("fixture-desktop-studio", "~/Pictures/Studio"),
+            mediaSuggestion = null,
+            remotePath = "Photos/Studio",
+            configuration = configuration,
+            mediaPreview = null,
+            mediaPreviewLoading = false,
+            mediaPreviewError = null,
+            busy = false,
+            onDismiss = {},
+            onChooseDestination = {},
+            onConfigurationChanged = { configuration = it },
+            onAdd = {},
+            modifier = Modifier.fillMaxWidth().widthIn(max = 920.dp).heightIn(max = 760.dp),
+            initialStep = FileSyncSetupStep.Rules,
+            syntheticScopeSummary = "18,742 files - 123.4 GB - 2,511 RAW",
+        )
+    }
+}
+
+@Composable
+internal fun MarketingFileSyncSelectionScenario(services: NextcloudPlatformServices) {
+    Box(
+        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
+        contentAlignment = Alignment.Center,
+    ) {
+        RemoteFileSyncSelectionDialog(
+            services = services,
+            session = NextcloudSession("https://cloud.invalid", "alex@example.invalid", "fixture"),
+            userId = "alex",
+            remoteRootPath = "Photos/Studio",
+            initialSelection = listOf("RAW/Day 1"),
+            onDismiss = {},
+            onSelected = {},
+            embedded = true,
+        )
+    }
+}
+
+@Composable
+internal fun MarketingFileSyncStatusMobileScenario() {
+    Column(modifier = Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = "Folder sync",
+            subtitle = "Alex's phone",
+            onBack = {},
+        )
+        Column(
+            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Medium),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        ) {
+            FileSyncWorkspace(
+                snapshot = FileSyncCenterSnapshot(
+                    support = FileSyncCenterSupport.Available,
+                    limitation = "Background sync resumes automatically when network and power rules allow it.",
+                    pairs = listOf(
+                        FileSyncPairSummary(
+                            id = "fixture-mobile-studio",
+                            localDisplayName = "Studio archive",
+                            localRootPath = "Pictures/Studio",
+                            remoteRootPath = "Photos/Studio",
+                            configuration = FileSyncConfiguration(
+                                direction = FileSyncDirection.Bidirectional,
+                                deviceLabel = "Alex's phone",
+                                ignoredPatterns = listOf("*.part", "**/.thumbnails/**", "**/Cache/**"),
+                                priorityRules = listOf(
+                                    FileSyncPriorityRule("**/*.raf"),
+                                    FileSyncPriorityRule("**/*.jpg"),
+                                ),
+                            ),
+                            readyCount = 17,
+                            runningCount = 1,
+                            conflicts = emptyList(),
+                            failedCount = 0,
+                            skippedCount = 0,
+                            completedCount = 341,
+                            lastScanEpochMillis = 1,
+                            scheduleDescription = "Background sync enabled",
+                        ),
+                        FileSyncPairSummary(
+                            id = "fixture-mobile-client",
+                            localDisplayName = "Client selects",
+                            localRootPath = "Pictures/Clients/Selects",
+                            remoteRootPath = "Photos/Clients/Selects",
+                            configuration = FileSyncConfiguration(
+                                direction = FileSyncDirection.Bidirectional,
+                                deviceLabel = "Alex's phone",
+                                ignoredPatterns = listOf("*.part"),
+                            ),
+                            readyCount = 5,
+                            runningCount = 0,
+                            conflicts = listOf(
+                                FileSyncConflictSummary(
+                                    workId = 52,
+                                    relativePath = "cover.jpg",
+                                    reason = FileSyncDecisionReason.SimultaneousEdit,
+                                    choices = setOf(
+                                        FileSyncDecisionChoice.UseLocal,
+                                        FileSyncDecisionChoice.UseRemote,
+                                        FileSyncDecisionChoice.KeepBoth,
+                                        FileSyncDecisionChoice.Skip,
+                                    ),
+                                ),
+                            ),
+                            failedCount = 0,
+                            skippedCount = 0,
+                            completedCount = 86,
+                            lastScanEpochMillis = 1,
+                            scheduleDescription = "Waiting for your decision",
+                        ),
+                        FileSyncPairSummary(
+                            id = "fixture-mobile-camera",
+                            localDisplayName = "Camera backup",
+                            localRootPath = "DCIM/Camera",
+                            remoteRootPath = "Photos/Phone camera",
+                            configuration = FileSyncConfiguration(
+                                direction = FileSyncDirection.UploadOnly,
+                                deviceLabel = "Alex's phone",
+                                networkPolicy = FileSyncNetworkPolicy.Unmetered,
+                            ),
+                            readyCount = 0,
+                            runningCount = 0,
+                            conflicts = emptyList(),
+                            failedCount = 0,
+                            skippedCount = 0,
+                            completedCount = 1_842,
+                            lastScanEpochMillis = 1,
+                            scheduleDescription = "Wi-Fi only",
+                        ),
+                    ),
+                ),
+                loading = false,
+                busyPairId = null,
+                onAdd = {},
+                onRun = {},
+                onRemove = {},
+                onResolve = { _, _, _ -> },
+                initialSelectedPairId = "fixture-mobile-client",
+            )
+        }
+    }
+}
+
+@Composable
+internal fun MarketingVirtualFileStorageMobileScenario() {
+    val snapshot = remember {
+        marketingVirtualFileStorageSnapshot(
+            support = VirtualFileStorageSupport.Available,
+            integration = VirtualFilePlatformIntegration.AndroidDocumentsProvider,
+        )
+    }
+    var policy by remember { mutableStateOf(snapshot.policy) }
+    Column(modifier = Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = "Virtual file storage",
+            subtitle = "Cache and automatic cleanup",
+            onBack = {},
+        )
+        VirtualFileStoragePolicyEditor(
+            snapshot = snapshot,
+            busy = false,
+            policy = policy,
+            onPolicyChanged = { policy = it },
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
+        )
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            tonalElevation = 4.dp,
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.TextButton(onClick = {}) { Text("Cancel") }
+                androidx.compose.material3.Button(onClick = {}) { Text("Save rules") }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun MarketingVirtualFileStorageDesktopScenario() {
+    Column(modifier = Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = "Sync & offline",
+            subtitle = "Virtual files and device storage",
+            onBack = {},
+        )
+        Box(
+            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Column(
+                modifier = Modifier.widthIn(max = 920.dp).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+            ) {
+                Text(
+                    "Keep the whole cloud visible in your file manager",
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+                Text(
+                    "Opened files stay fast in a managed cache. Pins remain offline, while safe " +
+                        "cleanup protects edits, transfers, conflicts, and files in use.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                VirtualFileStorageCard(
+                    snapshot = marketingVirtualFileStorageSnapshot(
+                        support = VirtualFileStorageSupport.Available,
+                        integration = VirtualFilePlatformIntegration.WindowsCloudFiles,
+                    ),
+                    loading = false,
+                    busy = false,
+                    onManage = {},
+                    onFreeUp = {},
+                    onActivateProvider = {},
+                    onDeactivateProvider = {},
+                )
+            }
+        }
+    }
+}
+
+private fun marketingVirtualFileStorageSnapshot(
+    support: VirtualFileStorageSupport,
+    integration: VirtualFilePlatformIntegration,
+): VirtualFileStorageSnapshot = VirtualFileStorageSnapshot(
+    support = support,
+    integration = integration,
+    policy = VirtualFileCachePolicy(
+        automaticCleanup = true,
+        maximumCacheBytes = 20L * 1024L * 1024L * 1024L,
+        minimumFreeSpaceBytes = 10L * 1024L * 1024L * 1024L,
+        unusedFileAgeMillis = 30L * 24L * 60L * 60L * 1_000L,
+    ),
+    cachedBytes = 12_884_901_888L,
+    reclaimableBytes = 7_193_722_880L,
+    pinnedBytes = 4_482_344_960L,
+    hydratedFileCount = 1_842,
+    pinnedFileCount = 318,
+    availableFreeBytes = 68_719_476_736L,
+    storageCapacityBytes = 512L * 1024L * 1024L * 1024L,
+    limitations = emptyList(),
+    providerState = VirtualFileProviderState.Active,
+    providerLocation = when (integration) {
+        VirtualFilePlatformIntegration.AndroidDocumentsProvider -> "System Files / Nextcloud Native"
+        VirtualFilePlatformIntegration.WindowsCloudFiles -> "Nextcloud Native in File Explorer"
+        VirtualFilePlatformIntegration.LinuxFilesystemMount -> "~/Nextcloud Native"
+        VirtualFilePlatformIntegration.AppleFileProvider -> "Files / Nextcloud Native"
+        VirtualFilePlatformIntegration.InAppOnDemandCache -> null
+    },
+)
 
 @Composable
 internal fun MarketingAdaptiveAppScenario(scenario: MarketingCaptureScenario) {

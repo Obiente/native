@@ -51,6 +51,13 @@ import dev.obiente.nextcloudnative.app.FileSyncCenterSnapshot
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
+import dev.obiente.nextcloudnative.app.VirtualFileCachePolicy
+import dev.obiente.nextcloudnative.app.VirtualFilePlatformIntegration
+import dev.obiente.nextcloudnative.app.VirtualFileProviderState
+import dev.obiente.nextcloudnative.app.VirtualFileStorageActionResult
+import dev.obiente.nextcloudnative.app.VirtualFileStorageSnapshot
+import dev.obiente.nextcloudnative.app.VirtualFileStorageSupport
+import dev.obiente.nextcloudnative.app.formatVirtualFileBytes
 import dev.obiente.nextcloudnative.app.MediaSyncFolderDiscovery
 import dev.obiente.nextcloudnative.app.MAX_MEDIA_BACKUP_STATUS_PATHS
 import dev.obiente.nextcloudnative.app.MediaBackupStatus
@@ -156,7 +163,9 @@ import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
 import java.io.File
 import java.io.ByteArrayOutputStream
+import java.io.FileInputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -272,6 +281,7 @@ internal class AndroidNextcloudServices(
     )
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
+    private val virtualFileCache = AndroidVirtualFileCache(appContext)
     private val dynamicApiReadCache = DynamicApiResponseCache(File(appContext.cacheDir, "dynamic-api-v1"))
     private val nativeMediaPreviewCache = AndroidNativeMediaPreviewCache(
         File(appContext.cacheDir, "native-media-previews-v1"),
@@ -295,6 +305,7 @@ internal class AndroidNextcloudServices(
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
 
     override val supportsFileOfflineStorage: Boolean = true
+    override val supportsVirtualFileStorage: Boolean = true
     override val supportsRecursiveFileOfflineStorage: Boolean = true
     override val supportsBidirectionalFileSync: Boolean = fileSyncRootPicker != null
     override val externalFileHandoffSupport: ExternalFileHandoffSupport = ExternalFileHandoffSupport.Available(
@@ -564,6 +575,23 @@ internal class AndroidNextcloudServices(
         )
     }
 
+    private fun notifyDocumentsDocumentChanged(session: NextcloudSession, path: String) {
+        appContext.contentResolver.notifyChange(
+            DocumentsContract.buildDocumentUri(
+                NEXTCLOUD_DOCUMENTS_AUTHORITY,
+                NextcloudDocumentIds.documentId(session, path),
+            ),
+            null,
+        )
+        appContext.contentResolver.notifyChange(
+            DocumentsContract.buildChildDocumentsUri(
+                NEXTCLOUD_DOCUMENTS_AUTHORITY,
+                NextcloudDocumentIds.documentId(session, NextcloudDocumentIds.parentPath(path)),
+            ),
+            null,
+        )
+    }
+
     override suspend fun beginLogin(serverUrl: String): LoginChallenge = withContext(Dispatchers.IO) {
         val baseUrl = normalizeServerUrl(serverUrl)
         val response = request(method = "POST", url = "$baseUrl/index.php/login/v2")
@@ -713,6 +741,136 @@ internal class AndroidNextcloudServices(
         key: FileOfflineKey,
     ): FileOfflineCenterActionResult = withContext(Dispatchers.IO) {
         fileOfflineRepository.removeCenterItem(session, userId, key)
+    }
+
+    override suspend fun loadVirtualFileStorage(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageSnapshot = withContext(Dispatchers.IO) {
+        val cache = virtualFileCache.summary(session)
+        val offline = fileOfflineRepository.loadCenter(session)
+        val documentWritebacks = androidDocumentPendingWritebacks(appContext, session)
+        if (documentWritebacks.isNotEmpty()) {
+            val webDav = NextcloudDocumentWebDav(cloudMutationsAllowed = appContext.cloudMutationGate())
+            documentWritebacks.forEach { discovered ->
+                val pending = claimAndroidDocumentPendingWritebackForRecovery(
+                    appContext,
+                    session,
+                    discovered.remotePath,
+                ) ?: return@forEach
+                runCatching {
+                    if (pending.conflict) {
+                        pending.releaseActive()
+                        return@runCatching
+                    }
+                    requireAndroidDocumentStagedWritebackCapacity(
+                        stagedBytes = pending.staging.length(),
+                        availableBytes = pending.staging.parentFile?.usableSpace ?: 0L,
+                    )
+                    val remote = compareAndroidDocumentWriteback(
+                        webDav = webDav,
+                        session = session,
+                        userId = userId,
+                        pending = pending,
+                    )
+                    if (remote.contentsMatch) {
+                        virtualFileCache.invalidate(session, pending.remotePath)
+                        notifyDocumentsDocumentChanged(session, pending.remotePath)
+                        pending.complete()
+                        return@runCatching
+                    }
+                    if (remote.etag == null || remote.etag != pending.expectedRemoteEtag) {
+                        pending.markConflict(remote.etag)
+                        pending.releaseActive()
+                        return@runCatching
+                    }
+                    webDav.replaceFileAtomically(
+                        session = session,
+                        userId = userId,
+                        path = pending.remotePath,
+                        source = pending.staging,
+                        expectedEtag = pending.expectedRemoteEtag,
+                    )
+                    virtualFileCache.invalidate(session, pending.remotePath)
+                    notifyDocumentsDocumentChanged(session, pending.remotePath)
+                    pending.complete()
+                }.onFailure { pending.releaseActive() }
+            }
+        }
+        val pendingWritebacks = androidDocumentPendingWritebackCount(appContext, session)
+        val conflictedWritebacks = androidDocumentPendingWritebacks(appContext, session).count { it.conflict }
+        VirtualFileStorageSnapshot(
+            support = VirtualFileStorageSupport.Available,
+            integration = VirtualFilePlatformIntegration.AndroidDocumentsProvider,
+            policy = cache.policy,
+            cachedBytes = cache.cachedBytes,
+            reclaimableBytes = cache.reclaimableBytes,
+            pinnedBytes = offline.storageUsage?.usedBytes ?: 0L,
+            hydratedFileCount = cache.entryCount,
+            pinnedFileCount = offline.items.count {
+                it.availability == FileOfflineAvailability.Available
+            },
+            availableFreeBytes = cache.availableFreeBytes,
+            storageCapacityBytes = appContext.cacheDir.totalSpace.takeIf { it > 0L },
+            limitations = listOf(
+                "System Files hydrates remote content on open and reuses complete cached generations.",
+                "Pinned offline files are durable and are never removed by automatic cache cleanup.",
+            ) + if (conflictedWritebacks > 0) {
+                listOf(
+                    "$conflictedWritebacks System Files edit(s) conflict with a newer remote generation and need attention.",
+                )
+            } else if (pendingWritebacks > 0) {
+                listOf("$pendingWritebacks System Files edit(s) are retained with recovery metadata after failed writeback.")
+            } else {
+                emptyList()
+            },
+            providerState = VirtualFileProviderState.Active,
+            providerLocation = "System Files / Nextcloud Native",
+            pendingWritebackCount = pendingWritebacks,
+        )
+    }
+
+    override suspend fun activateVirtualFileProvider(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Completed(
+        "Nextcloud Native is already available in System Files.",
+    )
+
+    override suspend fun deactivateVirtualFileProvider(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Rejected(
+        "Android manages the System Files provider while this account is signed in.",
+    )
+
+    override suspend fun saveVirtualFileCachePolicy(
+        session: NextcloudSession,
+        userId: String,
+        policy: VirtualFileCachePolicy,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        virtualFileCache.savePolicy(policy)
+        VirtualFileStorageActionResult.Completed("Virtual file storage rules saved.")
+    }
+
+    override suspend fun freeUpVirtualFileSpace(
+        session: NextcloudSession,
+        userId: String,
+        requestedBytes: Long,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        require(requestedBytes >= 0L)
+        val before = virtualFileCache.summary(session).cachedBytes
+        virtualFileCache.freeUp(session, requestedBytes)
+        val after = virtualFileCache.summary(session).cachedBytes
+        val freed = (before - after).coerceAtLeast(0L)
+        VirtualFileStorageActionResult.Completed(
+            message = if (freed > 0L) {
+                "Freed ${formatVirtualFileBytes(freed)} of disposable virtual file content."
+            } else {
+                "No disposable virtual file content could be freed. Pinned and active files were kept."
+            },
+            freedBytes = freed,
+        )
     }
 
     override suspend fun chooseFileSyncLocalRoot(initialRootHint: String?): FileSyncLocalRoot? =
@@ -2750,6 +2908,66 @@ private fun org.w3c.dom.Node.fileVersionFirstText(namespace: String, localName: 
 
 private const val FILE_VERSION_DAV_NAMESPACE = "DAV:"
 private const val FILE_VERSION_NC_NAMESPACE = "http://nextcloud.org/ns"
+
+private data class AndroidDocumentRemoteComparison(
+    val contentsMatch: Boolean,
+    val etag: String?,
+)
+
+private fun compareAndroidDocumentWriteback(
+    webDav: NextcloudDocumentWebDav,
+    session: NextcloudSession,
+    userId: String,
+    pending: AndroidDocumentPendingWriteback,
+): AndroidDocumentRemoteComparison = AndroidDocumentStagingComparator(pending.staging).use { comparison ->
+    val result = webDav.readFile(
+        session = session,
+        userId = userId,
+        path = pending.remotePath,
+        destination = comparison,
+        maximumBytes = MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES,
+    )
+    AndroidDocumentRemoteComparison(
+        contentsMatch = comparison.matches(result.byteCount),
+        etag = result.etag,
+    )
+}
+
+internal class AndroidDocumentStagingComparator(staging: File) : OutputStream() {
+    private val expectedLength = staging.length()
+    private val expected = FileInputStream(staging)
+    private var matching = true
+    private var closed = false
+
+    override fun write(value: Int) {
+        val actual = value and 0xff
+        val wanted = expected.read()
+        if (wanted != actual) matching = false
+    }
+
+    override fun write(bytes: ByteArray, offset: Int, length: Int) {
+        require(offset >= 0 && length >= 0 && offset <= bytes.size - length)
+        val wanted = ByteArray(length)
+        var consumed = 0
+        while (consumed < length) {
+            val read = expected.read(wanted, consumed, length - consumed)
+            if (read < 0) break
+            consumed += read
+        }
+        if (consumed != length || (0 until length).any { index -> bytes[offset + index] != wanted[index] }) {
+            matching = false
+        }
+    }
+
+    fun matches(remoteBytes: Long): Boolean =
+        !closed && matching && remoteBytes == expectedLength && expected.read() == -1
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        expected.close()
+    }
+}
 
 internal fun parseAndroidSystemTagsDavResponse(xml: ByteArray): List<NextcloudSystemTag> {
     val responses = SafeXmlParser.parse(xml).getElementsByTagNameNS(SYSTEM_TAG_DAV_NAMESPACE, "response")

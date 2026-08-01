@@ -27,9 +27,22 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.prefs.Preferences
 import javax.xml.parsers.DocumentBuilderFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -113,9 +126,31 @@ internal fun resolveDesktopNextcloudRedirectLocation(
 internal const val DIRECT_EDITING_OPEN_RELATIVE_PATH =
     "/ocs/v2.php/apps/files/api/v1/directEditing/open?format=json"
 
+private enum class DesktopFileSyncRunSource {
+    Background,
+    Resume,
+    Tray,
+}
+
 private const val MAX_DOCUMENT_TEMPLATE_ID_LENGTH = 256
 private const val MAX_DOCUMENT_TEMPLATE_NAME_LENGTH = 512
 private const val MAX_DOCUMENT_TEMPLATE_EXTENSION_LENGTH = 32
+
+private fun isLinuxDesktop(): Boolean =
+    System.getProperty("os.name").orEmpty().lowercase().contains("linux")
+
+private fun desktopLinuxVirtualFileMountPoint(): File =
+    File(System.getProperty("user.home"), "Nextcloud Native")
+
+private fun desktopWindowsCloudFilesRoot(accountId: String): File {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return File(File(System.getProperty("user.home"), "Nextcloud Native"), accountId)
+}
+
+private fun virtualFileProviderPreferenceKey(accountId: String): String {
+    require(accountId.isNotBlank() && accountId.length <= 128)
+    return "virtual-file-provider-active.$accountId"
+}
 
 internal fun documentTemplatesRelativePath(editorId: String, creatorId: String): String {
     require(editorId.isSafeDocumentCapabilityId()) { "The document editor ID is invalid." }
@@ -361,9 +396,29 @@ internal suspend fun executeDesktopDynamicApiGet(
     )
 }
 
+internal fun combinedAutomaticCacheExcess(
+    maximumBytes: Long,
+    completeFileBytes: Long,
+    rangeBytes: Long,
+    windowsCachedBytes: Long,
+    windowsPinnedBytes: Long,
+): Long {
+    require(maximumBytes > 0L)
+    require(listOf(completeFileBytes, rangeBytes, windowsCachedBytes, windowsPinnedBytes).all { it >= 0L })
+    require(windowsPinnedBytes <= windowsCachedBytes)
+    val total = listOf(
+        completeFileBytes,
+        rangeBytes,
+        windowsCachedBytes - windowsPinnedBytes,
+    ).fold(0L) { accumulated, bytes ->
+        if (bytes > Long.MAX_VALUE - accumulated) Long.MAX_VALUE else accumulated + bytes
+    }
+    return (total - maximumBytes).coerceAtLeast(0L)
+}
+
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
-) : NextcloudPlatformServices {
+) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
     private val appUpdater = DesktopAppUpdater(preferences.node("app-updates-v1"))
     private val httpClient = OkHttpClient()
@@ -377,6 +432,14 @@ class DesktopNextcloudServices(
         verifiedContractCache = FileVerifiedContractCache(desktopContractCacheDirectory("verified")),
     )
     private val fileReadCache = defaultDesktopFileReadCache()
+    private val virtualRangeCache = defaultDesktopVirtualRangeCache(fileReadCache::loadPolicy)
+    private val virtualFileProviderLock = Any()
+    private var linuxVirtualFileSystem: LinuxNextcloudVirtualFileSystem? = null
+    private var linuxVirtualFileMountIdentity: String? = null
+    private var linuxVirtualFileFailure: String? = null
+    private var windowsCloudFilesProvider: WindowsCloudFilesProvider? = null
+    private var windowsCloudFilesIdentity: String? = null
+    private var windowsCloudFilesFailure: String? = null
     private val dynamicApiReadCache = DynamicApiResponseCache(
         desktopContractCacheDirectory("responses"),
     )
@@ -388,11 +451,55 @@ class DesktopNextcloudServices(
     private val externalFileHandoff = DesktopExternalFileHandoff()
     private val localUploadPicker = DesktopLocalUploadPicker()
     private val deckCardDrafts = DesktopDeckCardDraftStore()
+    private val fileSyncEngine = DesktopFileSyncEngine(
+        minimumFreeSpaceBytes = { fileReadCache.loadPolicy().minimumFreeSpaceBytes },
+    )
+    private val startOnLoginController = DesktopStartOnLoginController()
+    private val fileSyncRunLock = Mutex()
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var backgroundFileSyncJob: Job? = null
+    private val mutableFileSyncTraySnapshot = MutableStateFlow(
+        DesktopFileSyncTraySnapshot(
+            phase = if (preferences.getBoolean(KEY_FILE_SYNC_PAUSED, false)) {
+                DesktopFileSyncTrayPhase.Paused
+            } else {
+                DesktopFileSyncTrayPhase.Idle
+            },
+        ),
+    )
+    val fileSyncTraySnapshot: StateFlow<DesktopFileSyncTraySnapshot> =
+        mutableFileSyncTraySnapshot.asStateFlow()
     private val projectNewsCache = File(
         desktopContractCacheDirectory("responses").parentFile,
         "project-content/news-feed-v1.json",
     )
     private val projectNewsImageDirectory = File(projectNewsCache.parentFile, "news-images")
+
+    suspend fun restoreVirtualFileProviderIfEnabled() {
+        val session = loadSession() ?: return
+        val accountId = desktopFileCacheAccountId(session)
+        if (!preferences.getBoolean(virtualFileProviderPreferenceKey(accountId), false)) return
+        val userId = loadServerInfo(session).userId
+        loadVirtualFileStorage(session, userId)
+    }
+
+    fun startDesktopSyncLifecycle() {
+        synchronized(this) {
+            if (backgroundFileSyncJob?.isActive == true) return
+            backgroundFileSyncJob = serviceScope.launch {
+                if (loadStartOnLoginPreference()) {
+                    runCatching { startOnLoginController.configure(enabled = true) }
+                }
+                while (isActive) {
+                    if (!isFileSyncPaused()) {
+                        runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
+                            .onFailure(::publishBackgroundFileSyncFailure)
+                    }
+                    delay(DESKTOP_FILE_SYNC_INTERVAL_MILLIS)
+                }
+            }
+        }
+    }
 
     override val externalFileHandoffSupport: ExternalFileHandoffSupport = ExternalFileHandoffSupport.Available(
         ExternalFileHandoffCapability(
@@ -400,6 +507,628 @@ class DesktopNextcloudServices(
             maximumFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
         ),
     )
+
+    override val supportsBidirectionalFileSync: Boolean = true
+    override val supportsVirtualFileStorage: Boolean = true
+
+    override suspend fun loadVirtualFileStorage(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageSnapshot = withContext(Dispatchers.IO) {
+        val accountId = desktopFileCacheAccountId(session)
+        val providerPreferenceKey = virtualFileProviderPreferenceKey(accountId)
+        if (
+            (isLinuxDesktop() || isWindowsDesktop()) &&
+            preferences.getBoolean(providerPreferenceKey, false) &&
+            synchronized(virtualFileProviderLock) {
+                linuxVirtualFileMountIdentity != accountId && windowsCloudFilesIdentity != accountId
+            }
+        ) {
+            runCatching { activateVirtualFileProvider(session, userId) }
+        }
+        enforceCombinedVirtualFileCachePolicy(accountId, fileReadCache.loadPolicy())
+        val cache = fileReadCache.virtualFileSummary(accountId)
+        val ranges = virtualRangeCache.summary(accountId)
+        val linux = isLinuxDesktop()
+        val windows = isWindowsDesktop()
+        val active = synchronized(virtualFileProviderLock) {
+            (linux && linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) ||
+                (windows && windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId)
+        }
+        val windowsSummary = windowsVirtualFileSummary(accountId)
+        val writebacks = defaultDesktopLinuxWritebackStore(session).pendingWritebacks()
+        VirtualFileStorageSnapshot(
+            support = if (linux || windows) VirtualFileStorageSupport.Available else VirtualFileStorageSupport.CacheOnly,
+            integration = when {
+                linux -> VirtualFilePlatformIntegration.LinuxFilesystemMount
+                windows -> VirtualFilePlatformIntegration.WindowsCloudFiles
+                else -> VirtualFilePlatformIntegration.InAppOnDemandCache
+            },
+            policy = cache.policy,
+            cachedBytes = cache.cachedBytes + ranges.cachedBytes + (windowsSummary?.cachedBytes ?: 0L),
+            reclaimableBytes = cache.reclaimableBytes + ranges.reclaimableBytes +
+                (windowsSummary?.reclaimableBytes ?: 0L),
+            pinnedBytes = windowsSummary?.pinnedBytes ?: 0L,
+            hydratedFileCount = cache.entryCount + ranges.fileCount +
+                (windowsSummary?.hydratedFileCount ?: 0),
+            pinnedFileCount = windowsSummary?.pinnedFileCount ?: 0,
+            availableFreeBytes = listOfNotNull(
+                cache.availableFreeBytes,
+                ranges.availableFreeBytes,
+                windowsSummary?.availableFreeBytes,
+            ).minOrNull(),
+            storageCapacityBytes = null,
+            limitations = buildList {
+                add("Range blocks and complete files share the managed automatic-cleanup policy.")
+                linuxVirtualFileFailure?.let { add("The last Linux mount attempt failed: $it") }
+                windowsCloudFilesFailure?.let { add("The last Windows Cloud Files activation failed: $it") }
+                if (windows) {
+                    add("Windows can dehydrate in-sync placeholders automatically when space is needed.")
+                }
+                if (writebacks.isNotEmpty()) {
+                    add("${writebacks.size} staged writeback(s) need recovery before local edits can be discarded.")
+                }
+                if ((windowsSummary?.pendingWritebackCount ?: 0) > 0) {
+                    add("${windowsSummary?.pendingWritebackCount} Windows edit(s) are waiting for conflict-safe writeback.")
+                }
+                if ((windowsSummary?.failedWritebackCount ?: 0) > 0) {
+                    add("${windowsSummary?.failedWritebackCount} Windows edit(s) need attention after bounded retries.")
+                }
+            },
+            providerState = when {
+                (windowsSummary?.failedWritebackCount ?: 0) > 0 -> VirtualFileProviderState.NeedsAttention
+                active -> VirtualFileProviderState.Active
+                linuxVirtualFileFailure != null || windowsCloudFilesFailure != null ->
+                    VirtualFileProviderState.NeedsAttention
+                linux || windows -> VirtualFileProviderState.Inactive
+                else -> VirtualFileProviderState.NotApplicable
+            },
+            providerLocation = when {
+                linux -> desktopLinuxVirtualFileMountPoint().absolutePath
+                windows -> desktopWindowsCloudFilesRoot(accountId).absolutePath
+                else -> null
+            },
+            pendingWritebackCount = writebacks.size + (windowsSummary?.pendingWritebackCount ?: 0),
+        )
+    }
+
+    override suspend fun saveVirtualFileCachePolicy(
+        session: NextcloudSession,
+        userId: String,
+        policy: VirtualFileCachePolicy,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        fileReadCache.savePolicy(policy)
+        enforceCombinedVirtualFileCachePolicy(desktopFileCacheAccountId(session), policy)
+        VirtualFileStorageActionResult.Completed("Virtual file storage rules saved.")
+    }
+
+    override suspend fun freeUpVirtualFileSpace(
+        session: NextcloudSession,
+        userId: String,
+        requestedBytes: Long,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        require(requestedBytes >= 0L)
+        val accountId = desktopFileCacheAccountId(session)
+        val before = fileReadCache.virtualFileSummary(accountId).cachedBytes +
+            virtualRangeCache.summary(accountId).cachedBytes
+        val windowsFreed = synchronized(virtualFileProviderLock) {
+            windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }
+                ?.freeUpSpace(requestedBytes)
+        } ?: 0L
+        val rangePlan = virtualRangeCache.freeUp(accountId, (requestedBytes - windowsFreed).coerceAtLeast(0L))
+        val remaining = (requestedBytes - windowsFreed - rangePlan.plannedFreedBytes).coerceAtLeast(0L)
+        fileReadCache.freeUpVirtualFiles(accountId, remaining)
+        val after = fileReadCache.virtualFileSummary(accountId).cachedBytes +
+            virtualRangeCache.summary(accountId).cachedBytes
+        val freed = windowsFreed + (before - after).coerceAtLeast(0L)
+        VirtualFileStorageActionResult.Completed(
+            message = if (freed > 0L) {
+                "Freed ${formatVirtualFileBytes(freed)} of disposable virtual file content."
+            } else {
+                "No disposable virtual file content could be freed. Active files were kept."
+            },
+            freedBytes = freed,
+        )
+    }
+
+    override suspend fun activateVirtualFileProvider(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        if (!isLinuxDesktop() && !isWindowsDesktop()) {
+            return@withContext VirtualFileStorageActionResult.Unsupported(
+                "This desktop build does not have a system virtual-file adapter for the current operating system.",
+            )
+        }
+        val accountId = desktopFileCacheAccountId(session)
+        synchronized(virtualFileProviderLock) {
+            if (isWindowsDesktop()) {
+                if (windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId) {
+                    return@withContext VirtualFileStorageActionResult.Completed(
+                        "Windows Cloud Files are already connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
+                    )
+                }
+                windowsCloudFilesProvider?.close()
+                windowsCloudFilesProvider = null
+                windowsCloudFilesIdentity = null
+                val root = desktopWindowsCloudFilesRoot(accountId).toPath()
+                val provider = WindowsCloudFilesProvider(
+                    root = root,
+                    backend = DesktopNextcloudWindowsCloudFilesBackend(
+                        session = session,
+                        userId = userId,
+                        services = this@DesktopNextcloudServices,
+                    ),
+                    api = JnaWindowsCloudFilesApi(),
+                )
+                try {
+                    provider.start()
+                    windowsCloudFilesProvider = provider
+                    windowsCloudFilesIdentity = accountId
+                    windowsCloudFilesFailure = null
+                    preferences.putBoolean(virtualFileProviderPreferenceKey(accountId), true)
+                } catch (failure: Throwable) {
+                    runCatching(provider::close)
+                    windowsCloudFilesFailure = failure.message ?: "Unknown Cloud Files activation failure"
+                    throw failure
+                }
+                return@withContext VirtualFileStorageActionResult.Completed(
+                    "Windows Cloud Files connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
+                )
+            }
+            if (linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) {
+                return@withContext VirtualFileStorageActionResult.Completed(
+                    "Virtual files are already mounted at ${desktopLinuxVirtualFileMountPoint().absolutePath}.",
+                )
+            }
+            if (linuxVirtualFileSystem != null) {
+                runCatching { linuxVirtualFileSystem?.unmount() }
+                linuxVirtualFileSystem = null
+                linuxVirtualFileMountIdentity = null
+            }
+            val mountPoint = desktopLinuxVirtualFileMountPoint().apply {
+                check(isDirectory || mkdirs()) { "Could not create the virtual-files mount folder." }
+            }
+            check(!Files.isSymbolicLink(mountPoint.toPath())) { "The virtual-files mount folder cannot be a symlink." }
+            check(mountPoint.list().orEmpty().isEmpty()) {
+                "The virtual-files mount folder must be empty before it can be activated."
+            }
+            val writebackStore = defaultDesktopLinuxWritebackStore(session)
+            writebackStore.recoverPending(
+                tree = DesktopFileSyncRemoteTree(session, userId, ""),
+                onCommitted = { path -> virtualRangeCache.invalidate(accountId, path) },
+            )
+            val fileSystem = LinuxNextcloudVirtualFileSystem(
+                DesktopNextcloudVirtualFileBackend(
+                    session = session,
+                    userId = userId,
+                    services = this@DesktopNextcloudServices,
+                    rangeCache = virtualRangeCache,
+                    writebacks = writebackStore,
+                ),
+            )
+            try {
+                fileSystem.mountAt(mountPoint.toPath())
+                linuxVirtualFileSystem = fileSystem
+                linuxVirtualFileMountIdentity = accountId
+                linuxVirtualFileFailure = null
+                preferences.putBoolean(virtualFileProviderPreferenceKey(accountId), true)
+            } catch (failure: Throwable) {
+                linuxVirtualFileFailure = failure.message ?: "Unknown FUSE mount failure"
+                throw failure
+            }
+        }
+        VirtualFileStorageActionResult.Completed(
+            "Virtual files mounted at ${desktopLinuxVirtualFileMountPoint().absolutePath}.",
+        )
+    }
+
+    override suspend fun deactivateVirtualFileProvider(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        synchronized(virtualFileProviderLock) {
+            linuxVirtualFileSystem?.unmount()
+            linuxVirtualFileSystem = null
+            linuxVirtualFileMountIdentity = null
+            linuxVirtualFileFailure = null
+            windowsCloudFilesProvider?.close()
+            windowsCloudFilesProvider = null
+            windowsCloudFilesIdentity = null
+            windowsCloudFilesFailure = null
+            preferences.putBoolean(
+                virtualFileProviderPreferenceKey(desktopFileCacheAccountId(session)),
+                false,
+            )
+        }
+        VirtualFileStorageActionResult.Completed(
+            if (isWindowsDesktop()) {
+                "Windows Cloud Files disconnected. Placeholders, cached content, and remote files were kept."
+            } else {
+                "Virtual files unmounted. Cached content and remote files were kept."
+            },
+        )
+    }
+
+    override fun close() {
+        serviceScope.cancel()
+        synchronized(virtualFileProviderLock) {
+            runCatching { linuxVirtualFileSystem?.unmount() }
+            linuxVirtualFileSystem = null
+            linuxVirtualFileMountIdentity = null
+            runCatching { windowsCloudFilesProvider?.close() }
+            windowsCloudFilesProvider = null
+            windowsCloudFilesIdentity = null
+        }
+    }
+
+    override suspend fun chooseFileSyncLocalRoot(initialRootHint: String?): FileSyncLocalRoot? =
+        fileSyncEngine.chooseLocalRoot(initialRootHint)
+
+    override suspend fun loadFileSyncCenter(
+        session: NextcloudSession,
+        userId: String,
+    ): FileSyncCenterSnapshot = withContext(Dispatchers.IO) {
+        val center = fileSyncEngine.loadCenter(session)
+        publishFileSyncTraySnapshot(center, fileSyncEngine.loadTrayActivities(session))
+        center
+    }
+
+    override suspend fun addFileSyncPair(
+        session: NextcloudSession,
+        userId: String,
+        localRoot: FileSyncLocalRoot,
+        remoteRootPath: String,
+        configuration: FileSyncConfiguration,
+    ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        fileSyncEngine.addPair(session, localRoot, remoteRootPath, configuration).also {
+            runCatching {
+                publishFileSyncTraySnapshot(
+                    fileSyncEngine.loadCenter(session),
+                    fileSyncEngine.loadTrayActivities(session),
+                )
+            }
+        }
+    }
+
+    override suspend fun runFileSyncPair(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+    ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        fileSyncRunLock.withLock {
+            if (isFileSyncPaused()) {
+                return@withLock FileSyncCenterActionResult.Rejected(
+                "Desktop syncing is paused. Resume it from the system tray first.",
+                )
+            }
+            mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+                phase = DesktopFileSyncTrayPhase.Syncing,
+                message = "Checking folder changes",
+            )
+            try {
+                fileSyncEngine.runPair(
+                    session,
+                    userId,
+                    pairId,
+                    onProgress = ::publishFileSyncProgress,
+                    shouldContinue = { !isFileSyncPaused() },
+                    resetExhaustedFailures = true,
+                )
+            } finally {
+                runCatching {
+                    publishFileSyncTraySnapshot(
+                        fileSyncEngine.loadCenter(session),
+                        fileSyncEngine.loadTrayActivities(session),
+                    )
+                }
+            }
+        }
+    }
+
+    override suspend fun resolveFileSyncConflict(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+        workId: Long,
+        choice: FileSyncDecisionChoice,
+    ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        fileSyncRunLock.withLock {
+            if (isFileSyncPaused()) {
+                return@withLock FileSyncCenterActionResult.Rejected(
+                "Desktop syncing is paused. Resume it from the system tray first.",
+                )
+            }
+            mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+                phase = DesktopFileSyncTrayPhase.Syncing,
+                message = "Resolving sync conflict",
+            )
+            try {
+                fileSyncEngine.resolveConflictAndRun(
+                    session,
+                    userId,
+                    pairId,
+                    workId,
+                    choice,
+                    onProgress = ::publishFileSyncProgress,
+                    shouldContinue = { !isFileSyncPaused() },
+                )
+            } finally {
+                runCatching {
+                    publishFileSyncTraySnapshot(
+                        fileSyncEngine.loadCenter(session),
+                        fileSyncEngine.loadTrayActivities(session),
+                    )
+                }
+            }
+        }
+    }
+
+    override suspend fun removeFileSyncPair(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+    ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        fileSyncEngine.removePair(session, pairId).also {
+            runCatching {
+                publishFileSyncTraySnapshot(
+                    fileSyncEngine.loadCenter(session),
+                    fileSyncEngine.loadTrayActivities(session),
+                )
+            }
+        }
+    }
+
+    fun isFileSyncPaused(): Boolean = preferences.getBoolean(KEY_FILE_SYNC_PAUSED, false)
+
+    override val supportsStartOnLogin: Boolean = true
+
+    override fun loadStartOnLoginPreference(): Boolean = preferences.getBoolean(KEY_START_ON_LOGIN, true)
+
+    override fun saveStartOnLoginPreference(enabled: Boolean): String? {
+        val result = startOnLoginController.configure(enabled)
+        if (result.configured) preferences.putBoolean(KEY_START_ON_LOGIN, enabled)
+        return result.message.takeUnless { result.configured }
+    }
+
+    fun setFileSyncPaused(paused: Boolean) {
+        preferences.putBoolean(KEY_FILE_SYNC_PAUSED, paused)
+        val current = mutableFileSyncTraySnapshot.value
+        mutableFileSyncTraySnapshot.value = current.copy(
+            phase = if (paused) DesktopFileSyncTrayPhase.Paused else {
+                if (current.conflictCount + current.failedCount > 0) {
+                    DesktopFileSyncTrayPhase.NeedsAttention
+                } else {
+                    DesktopFileSyncTrayPhase.Idle
+                }
+            },
+            message = if (paused) "Sync is paused" else null,
+        )
+        if (!paused) {
+            serviceScope.launch {
+                runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Resume) }
+                    .onFailure(::publishBackgroundFileSyncFailure)
+            }
+        }
+    }
+
+    suspend fun refreshFileSyncTraySnapshot() = withContext(Dispatchers.IO) {
+        val session = loadSession() ?: return@withContext
+        publishFileSyncTraySnapshot(
+            fileSyncEngine.loadCenter(session),
+            fileSyncEngine.loadTrayActivities(session),
+        )
+    }
+
+    suspend fun syncAllFileSyncPairsFromTray(): FileSyncCenterActionResult =
+        syncAllFileSyncPairs(DesktopFileSyncRunSource.Tray)
+
+    private suspend fun syncAllFileSyncPairs(
+        source: DesktopFileSyncRunSource,
+    ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        fileSyncRunLock.withLock {
+        if (isFileSyncPaused()) {
+            return@withLock FileSyncCenterActionResult.Rejected("Desktop syncing is paused.")
+        }
+        val session = loadSession()
+            ?: return@withLock FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
+        val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
+            return@withLock FileSyncCenterActionResult.Rejected(
+                failure.message ?: "Could not load the signed-in account.",
+            )
+        }
+        val initial = fileSyncEngine.loadCenter(session)
+        if (initial.pairs.isEmpty()) {
+            publishFileSyncTraySnapshot(initial, emptyList())
+            return@withLock FileSyncCenterActionResult.Completed("No desktop sync folders are configured.")
+        }
+        mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+            phase = DesktopFileSyncTrayPhase.Syncing,
+            message = if (source == DesktopFileSyncRunSource.Background) {
+                "Checking for changes"
+            } else {
+                "Syncing all folders"
+            },
+            accountLabel = session.loginName,
+        )
+        try {
+            var failures = 0
+            var waitingForConditions = 0
+            initial.pairs.forEach { pair ->
+                if (isFileSyncPaused()) return@forEach
+                fun runtimeAllowsPair(): Boolean =
+                    source == DesktopFileSyncRunSource.Tray ||
+                        desktopFileSyncRuntimeConditions().allows(pair.configuration)
+                if (!runtimeAllowsPair()) {
+                    waitingForConditions += 1
+                    return@forEach
+                }
+                val result = try {
+                    fileSyncEngine.runPair(
+                        session,
+                        userId,
+                        pair.id,
+                        onProgress = ::publishFileSyncProgress,
+                        shouldContinue = { !isFileSyncPaused() && runtimeAllowsPair() },
+                        resetExhaustedFailures = source == DesktopFileSyncRunSource.Tray,
+                    )
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (_: Throwable) {
+                    failures += 1
+                    return@forEach
+                }
+                if (result is FileSyncCenterActionResult.Rejected) failures += 1
+                if (source != DesktopFileSyncRunSource.Tray && !runtimeAllowsPair()) {
+                    waitingForConditions += 1
+                }
+            }
+            if (failures == 0) {
+                FileSyncCenterActionResult.Completed(
+                    if (waitingForConditions == 0) {
+                        "All desktop sync folders were checked."
+                    } else {
+                        "$waitingForConditions desktop sync folder(s) are waiting for their network or power rules."
+                    },
+                )
+            } else {
+                FileSyncCenterActionResult.Rejected("$failures desktop sync folders need attention.")
+            }
+        } finally {
+            runCatching {
+                publishFileSyncTraySnapshot(
+                    fileSyncEngine.loadCenter(session),
+                    fileSyncEngine.loadTrayActivities(session),
+                )
+            }
+        }
+        }
+    }
+
+    private fun enforceCombinedVirtualFileCachePolicy(
+        accountId: String,
+        policy: VirtualFileCachePolicy,
+    ) {
+        fileReadCache.freeUpVirtualFiles(accountId, requestedBytesToFree = 0L)
+        virtualRangeCache.freeUp(accountId, requestedBytes = 0L)
+        synchronized(virtualFileProviderLock) {
+            windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }?.enforcePolicy(policy)
+        }
+        if (!policy.automaticCleanup) return
+        val maximumBytes = policy.maximumCacheBytes ?: return
+        fun currentExcess(): Long {
+            val windows = windowsVirtualFileSummary(accountId)
+            return combinedAutomaticCacheExcess(
+                maximumBytes,
+                fileReadCache.virtualFileSummary(accountId).cachedBytes,
+                virtualRangeCache.summary(accountId).cachedBytes,
+                windows?.cachedBytes ?: 0L,
+                windows?.pinnedBytes ?: 0L,
+            )
+        }
+        var excess = currentExcess()
+        if (excess == 0L) return
+        synchronized(virtualFileProviderLock) {
+            windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }?.freeUpSpace(excess)
+        }
+        excess = currentExcess()
+        if (excess > 0L) virtualRangeCache.freeUp(accountId, excess)
+        excess = currentExcess()
+        if (excess > 0L) fileReadCache.freeUpVirtualFiles(accountId, excess)
+    }
+
+    private fun windowsVirtualFileSummary(accountId: String): WindowsCloudFilesSummary? =
+        synchronized(virtualFileProviderLock) {
+            windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }?.summary()
+        }
+
+    private fun publishFileSyncTraySnapshot(
+        center: FileSyncCenterSnapshot,
+        durableActivities: List<DesktopFileSyncTrayActivity> = emptyList(),
+    ) {
+        val conflicts = center.pairs.sumOf { it.conflicts.size }
+        val failed = center.pairs.sumOf(FileSyncPairSummary::failedCount)
+        val paused = isFileSyncPaused()
+        val recentCompleted = mutableFileSyncTraySnapshot.value.activities.filter {
+            it.phase == DesktopFileSyncTrayActivityPhase.Completed
+        }
+        val activities = (durableActivities + recentCompleted)
+            .distinctBy(DesktopFileSyncTrayActivity::stableId)
+            .take(MAX_TRAY_ACTIVITY_ITEMS)
+        mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
+            phase = when {
+                paused -> DesktopFileSyncTrayPhase.Paused
+                conflicts + failed > 0 -> DesktopFileSyncTrayPhase.NeedsAttention
+                else -> DesktopFileSyncTrayPhase.Idle
+            },
+            pairCount = center.pairs.size,
+            pendingCount = center.pairs.sumOf { it.readyCount + it.runningCount },
+            conflictCount = conflicts,
+            failedCount = failed,
+            message = when {
+                paused -> "Sync is paused"
+                conflicts + failed > 0 -> "Open Nextcloud Native to review sync problems"
+                else -> null
+            },
+            accountLabel = loadSession()?.loginName,
+            overallProgress = null,
+            activities = activities,
+            lastCheckedEpochMillis = center.pairs.mapNotNull(FileSyncPairSummary::lastScanEpochMillis).maxOrNull(),
+        )
+    }
+
+    private fun publishFileSyncProgress(event: DesktopFileSyncProgressEvent) {
+        val current = mutableFileSyncTraySnapshot.value
+        val phase = when (event.stage) {
+            DesktopFileSyncProgressStage.Started -> event.operation.toTrayActivityPhase()
+            DesktopFileSyncProgressStage.Completed -> DesktopFileSyncTrayActivityPhase.Completed
+            DesktopFileSyncProgressStage.Failed -> DesktopFileSyncTrayActivityPhase.Failed
+        }
+        val activity = DesktopFileSyncTrayActivity(
+            stableId = event.stableId,
+            relativePath = event.relativePath,
+            pairLabel = event.pairLabel,
+            phase = phase,
+            sizeBytes = event.sizeBytes,
+            detail = when (event.stage) {
+                DesktopFileSyncProgressStage.Started ->
+                    "${event.completedOperations + 1} of ${event.totalOperations}"
+                DesktopFileSyncProgressStage.Completed -> "Synced safely"
+                DesktopFileSyncProgressStage.Failed -> event.failureMessage
+            },
+        )
+        val paused = isFileSyncPaused()
+        mutableFileSyncTraySnapshot.value = current.copy(
+            phase = if (paused) DesktopFileSyncTrayPhase.Paused else DesktopFileSyncTrayPhase.Syncing,
+            pendingCount = (event.totalOperations - event.completedOperations).coerceAtLeast(0),
+            message = if (paused) {
+                "Pausing after the current file"
+            } else when (phase) {
+                DesktopFileSyncTrayActivityPhase.Uploading -> "Uploading ${event.relativePath.substringAfterLast('/')}"
+                DesktopFileSyncTrayActivityPhase.Downloading ->
+                    "Downloading ${event.relativePath.substringAfterLast('/')}"
+                DesktopFileSyncTrayActivityPhase.Failed -> "A sync item needs attention"
+                else -> "Applying ${event.relativePath.substringAfterLast('/')}"
+            },
+            overallProgress = event.progressFraction,
+            activities = (listOf(activity) + current.activities.filterNot { it.stableId == activity.stableId })
+                .take(MAX_TRAY_ACTIVITY_ITEMS),
+        )
+    }
+
+    private fun publishBackgroundFileSyncFailure(failure: Throwable) {
+        val current = mutableFileSyncTraySnapshot.value
+        val message = failure.message
+            ?.takeIf { it.isNotBlank() && it.none(Char::isISOControl) }
+            ?.take(1_024)
+            ?: "The automatic sync check failed."
+        mutableFileSyncTraySnapshot.value = current.copy(
+            phase = DesktopFileSyncTrayPhase.NeedsAttention,
+            failedCount = current.failedCount + 1,
+            message = message,
+            overallProgress = null,
+        )
+    }
 
     override fun loadThemePreference(): ThemePreference = runCatching {
         ThemePreference.valueOf(preferences.get(KEY_THEME, ThemePreference.System.name))
@@ -537,9 +1266,27 @@ class DesktopNextcloudServices(
         check(process.waitFor() == 0) { "Could not store the session in the desktop keyring." }
         preferences.put(KEY_SERVER, session.serverUrl)
         preferences.put(KEY_LOGIN, session.loginName)
+        startDesktopSyncLifecycle()
     }
 
     override fun clearSession() {
+        synchronized(this) {
+            backgroundFileSyncJob?.cancel()
+            backgroundFileSyncJob = null
+        }
+        synchronized(virtualFileProviderLock) {
+            runCatching { linuxVirtualFileSystem?.unmount() }
+            linuxVirtualFileSystem = null
+            linuxVirtualFileMountIdentity = null
+            linuxVirtualFileFailure = null
+            runCatching { windowsCloudFilesProvider?.close() }
+            windowsCloudFilesProvider = null
+            windowsCloudFilesIdentity = null
+            windowsCloudFilesFailure = null
+        }
+        mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
+            phase = DesktopFileSyncTrayPhase.Idle,
+        )
         val server = preferences.get(KEY_SERVER, null)
         val login = preferences.get(KEY_LOGIN, null)
         if (server != null && login != null) secretTool("clear", server, login)
@@ -2150,6 +2897,9 @@ class DesktopNextcloudServices(
         const val KEY_LAST_OPENED_APP = "last_opened_app"
         const val KEY_SERVER = "server"
         const val KEY_LOGIN = "login"
+        const val KEY_FILE_SYNC_PAUSED = "file_sync_paused"
+        const val KEY_START_ON_LOGIN = "start_on_login"
+        const val DESKTOP_FILE_SYNC_INTERVAL_MILLIS = 2L * 60L * 1_000L
         const val USER_AGENT = "Nextcloud-Native/0.1.0 (Desktop)"
         const val DAV = "DAV:"
         const val OC = "http://owncloud.org/ns"

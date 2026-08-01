@@ -831,6 +831,18 @@ fun NextcloudNativeMarketingCapture(
                     -> MarketingPhotoFolderScenario(scenario, assets)
                     MarketingCaptureScenario.ObsidianSync -> MarketingObsidianSyncScenario()
                     MarketingCaptureScenario.MediaBackup -> MarketingMediaBackupScenario()
+                    MarketingCaptureScenario.FileSyncRulesMobile -> MarketingFileSyncRulesScenario()
+                    MarketingCaptureScenario.FileSyncStatusMobile -> MarketingFileSyncStatusMobileScenario()
+                    MarketingCaptureScenario.FileSyncStatusDesktop -> MarketingFileSyncStatusDesktopScenario()
+                    MarketingCaptureScenario.FileSyncSetupDesktop -> MarketingFileSyncSetupDesktopScenario()
+                    MarketingCaptureScenario.FileSyncSelectionDesktop,
+                    MarketingCaptureScenario.FileSyncSelectionMobile,
+                    ->
+                        MarketingFileSyncSelectionScenario(assets.services)
+                    MarketingCaptureScenario.VirtualFileStorageMobile -> MarketingVirtualFileStorageMobileScenario()
+                    MarketingCaptureScenario.VirtualFileStorageDesktop -> MarketingVirtualFileStorageDesktopScenario()
+                    MarketingCaptureScenario.DesktopStartupSettings ->
+                        MarketingDesktopStartupSettingsScenario(fixture, assets)
                     MarketingCaptureScenario.RawPreviewLoadingMobile,
                     MarketingCaptureScenario.RawPreviewErrorMobile,
                     MarketingCaptureScenario.RawPreviewMemoriesReadyMobile,
@@ -852,6 +864,81 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.DeckBoardDesktop,
                     MarketingCaptureScenario.DeckBoardMobile,
                     -> MarketingDeckBoardScenario()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarketingDesktopStartupSettingsScenario(
+    fixture: MarketingDemoFixture,
+    assets: MarketingCaptureAssets,
+) {
+    RootShell(
+        presentation = NextcloudPresentation.Desktop,
+        selected = NextcloudDestination.Settings,
+        onSelected = {},
+        identity = NextcloudDesktopIdentity(
+            displayName = fixture.displayName,
+            cloudName = fixture.cloudName,
+            avatar = assets.avatar,
+        ),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            ProductHeader(title = "Settings", showSettings = false)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(NextcloudSpacing.XLarge),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XLarge),
+            ) {
+                item {
+                    SectionTitle("Appearance")
+                    Row(
+                        modifier = Modifier.padding(top = NextcloudSpacing.Medium),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        ThemePreference.entries.forEach { preference ->
+                            FilterChip(
+                                selected = preference == ThemePreference.System,
+                                onClick = {},
+                                label = { Text(preference.name) },
+                            )
+                        }
+                    }
+                }
+                item {
+                    SectionTitle("Desktop")
+                    DesktopStartOnLoginSettingsCard(
+                        enabled = true,
+                        message = null,
+                        onEnabledChanged = {},
+                    )
+                }
+                item {
+                    SectionTitle("Files")
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
+                        color = NextcloudTheme.colors.appTile,
+                        shape = RoundedCornerShape(NextcloudRadii.Card),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+                        ) {
+                            Icon(NextcloudIcons.Cloud, contentDescription = null)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Sync and offline", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Folder sync, virtual files, conflicts, and storage",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Icon(NextcloudIcons.ChevronRight, contentDescription = null)
+                        }
+                    }
                 }
             }
         }
@@ -10252,6 +10339,8 @@ private fun SettingsScreen(
     val scope = rememberCoroutineScope()
     var loggingOut by remember { mutableStateOf(false) }
     var capabilityRefresh by remember { mutableStateOf(0) }
+    var startOnLogin by remember(services) { mutableStateOf(services.loadStartOnLoginPreference()) }
+    var startOnLoginMessage by remember(services) { mutableStateOf<String?>(null) }
     val platformCapabilities = remember(services, capabilityRefresh, platformCapabilityRefreshRequest) {
         services.platformCapabilities()
     }
@@ -10286,6 +10375,19 @@ private fun SettingsScreen(
                             },
                         )
                     }
+                }
+            }
+            if (services.supportsStartOnLogin) {
+                item {
+                    SectionTitle("Desktop")
+                    DesktopStartOnLoginSettingsCard(
+                        enabled = startOnLogin,
+                        message = startOnLoginMessage,
+                        onEnabledChanged = { enabled ->
+                            startOnLogin = enabled
+                            startOnLoginMessage = services.saveStartOnLoginPreference(enabled)
+                        },
+                    )
                 }
             }
             item {
@@ -10554,6 +10656,55 @@ private fun SettingsScreen(
                     Text(if (loggingOut) "Signing out..." else "Sign out and revoke access")
                 }
             }
+        }
+    }
+}
+
+@Composable
+internal fun DesktopStartOnLoginSettingsCard(
+    enabled: Boolean,
+    message: String?,
+    onEnabledChanged: (Boolean) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
+        color = NextcloudTheme.colors.appTile,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().toggleable(
+                value = enabled,
+                role = Role.Switch,
+                onValueChange = onEnabledChanged,
+            ).padding(NextcloudSpacing.Large),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
+                Icon(
+                    NextcloudIcons.Schedule,
+                    contentDescription = null,
+                    modifier = Modifier.padding(12.dp).size(26.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Start on login", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Keep folder sync and virtual files available after signing in to this computer.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                message?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = NextcloudSpacing.Small),
+                    )
+                }
+            }
+            Switch(checked = enabled, onCheckedChange = null)
         }
     }
 }

@@ -10,6 +10,18 @@ import kotlin.test.assertTrue
 
 class RemoteFolderPickerTest {
     @Test
+    fun `selective sync identities are resolved relative to the mapped remote root`() {
+        assertEquals(
+            "Camera/2026/photo.raf",
+            fileSyncSelectionRelativePath("Photos", "Photos/Camera/2026/photo.raf"),
+        )
+        assertEquals("Documents/report.pdf", fileSyncSelectionRelativePath("", "Documents/report.pdf"))
+        assertNull(fileSyncSelectionRelativePath("Photos", "Documents/report.pdf"))
+        assertNull(fileSyncSelectionRelativePath("Photos", "Photos"))
+        assertNull(fileSyncSelectionRelativePath("Photos", "Photos/../Secrets"))
+    }
+
+    @Test
     fun `canonical paths preserve server names while manual input normalizes outer separators`() {
         assertEquals("", canonicalRemoteFolderPath(""))
         assertEquals(" Photos / Camera ", canonicalRemoteFolderPath(" Photos / Camera "))
