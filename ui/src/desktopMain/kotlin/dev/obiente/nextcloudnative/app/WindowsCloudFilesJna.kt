@@ -180,7 +180,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
             parameters.setLong(PLACEHOLDERS_TOTAL_OFFSET, placeholders.size.toLong())
             parameters.setPointer(PLACEHOLDERS_ARRAY_OFFSET, native.firstPointer)
             parameters.setInt(PLACEHOLDERS_COUNT_OFFSET, placeholders.size)
-            parameters.setInt(PLACEHOLDERS_PROCESSED_OFFSET, 0)
+            parameters.setInt(PLACEHOLDERS_PROCESSED_OFFSET, placeholders.size)
         }
     }
 
