@@ -7,6 +7,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.createTempDirectory
@@ -40,13 +41,15 @@ class WindowsCloudFilesProviderTest {
             size = 5L,
             directory = false,
         )
+        val backend = FakeBackend(
+            ByteArray(5),
+            listed = listOf(directory, childDirectory, childFile),
+        )
+        val api = JnaWindowsCloudFilesApi()
         val provider = WindowsCloudFilesProvider(
             root = root,
-            backend = FakeBackend(
-                ByteArray(5),
-                listed = listOf(directory, childDirectory, childFile),
-            ),
-            api = JnaWindowsCloudFilesApi(),
+            backend = backend,
+            api = api,
         )
 
         try {
@@ -55,7 +58,8 @@ class WindowsCloudFilesProviderTest {
             val names = awaitDirectoryEntries(root.resolve("Apps"), expectedChildren)
             assertTrue(
                 names.containsAll(expectedChildren),
-                "Expected Cloud Files children in directory entries: $names",
+                "Expected Cloud Files children in directory entries: $names; " +
+                    "backend listings=${backend.listedPaths}; ${api.diagnostics()}",
             )
             Files.newDirectoryStream(root.resolve("Apps/Calendar")).use { entries ->
                 entries.forEach { /* Enumerating the placeholder must remain readable. */ }
@@ -640,14 +644,17 @@ class WindowsCloudFilesProviderTest {
         val uploadedBytes = mutableListOf<ByteArray>()
         val uploadExpectedRevisions = mutableListOf<String?>()
         val operations = mutableListOf<String>()
+        val listedPaths = CopyOnWriteArrayList<String>()
         private val remoteIdentities = mutableMapOf<String, WindowsCloudFileIdentity>()
         private val remoteContents = mutableMapOf<String, ByteArray>()
 
         override fun resolve(path: String): WindowsCloudFileIdentity? = synchronized(this) {
             remoteIdentities[path]
         }
-        override fun list(path: String): List<WindowsCloudFileIdentity> =
-            listed.filter { it.path.substringBeforeLast('/', "") == path }
+        override fun list(path: String): List<WindowsCloudFileIdentity> {
+            listedPaths += path
+            return listed.filter { it.path.substringBeforeLast('/', "") == path }
+        }
 
         override fun open(identity: WindowsCloudFileIdentity): WindowsCloudFileReadHandle {
             val bytes = synchronized(this) { remoteContents[identity.path]?.copyOf() } ?: source

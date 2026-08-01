@@ -15,12 +15,15 @@ import com.sun.jna.win32.StdCallLibrary
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 
 /** 64-bit Windows CldApi.dll binding kept behind [WindowsCloudFilesApi] for deterministic tests. */
 internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
     private val cldApi: CldApi
     private val kernelFiles: KernelFileApi
     private val callbacksByConnection = ConcurrentHashMap<Long, CallbackLifetime>()
+    private val callbackCounts = ConcurrentHashMap<Int, Int>()
+    private val callbackFailures = ConcurrentLinkedQueue<String>()
 
     init {
         require(isWindowsDesktop()) { "CldApi.dll is only available on Windows." }
@@ -85,9 +88,12 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         )
         val nativeCallbacks = types.filter { it != CF_CALLBACK_TYPE_NONE }.associateWith { callbackType ->
             CldCallback { infoPointer, parametersPointer ->
+                callbackCounts.merge(callbackType, 1, Int::plus)
                 currentCallbackType.set(callbackType)
                 try {
-                    runCatching { dispatchCallback(callbacks, infoPointer, parametersPointer) }
+                    dispatchCallback(callbacks, infoPointer, parametersPointer)
+                } catch (failure: Throwable) {
+                    recordCallbackFailure("callback $callbackType: ${failure.message ?: failure.javaClass.simpleName}")
                 } finally {
                     currentCallbackType.remove()
                 }
@@ -340,6 +346,15 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         callbacksByConnection.keys.toList().forEach { key -> runCatching { disconnect(key) } }
     }
 
+    internal fun diagnostics(): String = buildString {
+        append("callback counts=")
+        append(callbackCounts.toSortedMap())
+        if (callbackFailures.isNotEmpty()) {
+            append(", failures=")
+            append(callbackFailures.toList())
+        }
+    }
+
     private fun dispatchCallback(callbacks: WindowsCloudFilesCallbacks, infoPointer: Pointer, parameters: Pointer) {
         val nativeInfo = CfCallbackInfo(infoPointer).apply { read() }
         val identity = nativeInfo.fileIdentity?.takeIf { nativeInfo.fileIdentityLength > 0 }
@@ -405,7 +420,16 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
             setInt(0L, parameterSize)
             fill(this)
         }
-        checkHResult(cldApi.CfExecute(operation, parameters), "complete a Windows Cloud Files callback")
+        try {
+            checkHResult(cldApi.CfExecute(operation, parameters), "complete a Windows Cloud Files callback")
+        } catch (failure: Throwable) {
+            recordCallbackFailure("operation $operationType: ${failure.message ?: failure.javaClass.simpleName}")
+            throw failure
+        }
+    }
+
+    private fun recordCallbackFailure(message: String) {
+        if (callbackFailures.size < MAX_RECORDED_CALLBACK_FAILURES) callbackFailures.add(message)
     }
 
     private inline fun <T> withFileHandle(
@@ -537,6 +561,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         const val CF_STANDARD_INFO_BUFFER_BYTES = CF_STANDARD_INFO_IDENTITY_OFFSET + MAX_PLACEHOLDER_IDENTITY_BYTES
         const val CF_IN_SYNC_STATE_IN_SYNC = 1
         const val FILE_ATTRIBUTE_PINNED = 0x0008_0000
+        const val MAX_RECORDED_CALLBACK_FAILURES = 16
 
         const val PARAMETERS_UNION_OFFSET = 8L
         const val OPERATION_INFO_SIZE = 48
