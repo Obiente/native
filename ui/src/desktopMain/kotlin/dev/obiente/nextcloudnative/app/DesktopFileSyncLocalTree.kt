@@ -293,16 +293,7 @@ internal class DesktopFileSyncLocalTree(root: File) {
         }
     }
 
-    private fun isOwnedRecoveryPath(path: Path): Boolean {
-        val owned = ownedRecoveryPath(path) ?: return false
-        return when (owned.kind) {
-            OwnedRecoveryKind.Download -> true
-            OwnedRecoveryKind.Backup -> !Files.exists(
-                requireNotNull(path.parent).resolve(owned.destinationName),
-                LinkOption.NOFOLLOW_LINKS,
-            )
-        }
-    }
+    private fun isOwnedRecoveryPath(path: Path): Boolean = ownedRecoveryPath(path) != null
 
     private fun deleteOwnedPath(path: Path) {
         require(path.startsWith(root) && ownedRecoveryPath(path)?.kind == OwnedRecoveryKind.Backup)

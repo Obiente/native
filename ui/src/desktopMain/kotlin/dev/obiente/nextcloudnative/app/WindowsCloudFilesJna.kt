@@ -256,12 +256,18 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         path: Path,
         placeholder: WindowsCloudPlaceholder,
         invalidateContent: Boolean,
+        preserveSyncState: Boolean,
     ) {
+        require(!invalidateContent || !preserveSyncState)
         withFileHandle(path, write = true, exclusive = invalidateContent) { handle ->
             val metadata = placeholder.metadata()
             val identity = placeholder.identity.nativeMemory()
-            val flags = CF_UPDATE_FLAG_MARK_IN_SYNC or CF_UPDATE_FLAG_VERIFY_IN_SYNC or
-                if (invalidateContent) CF_UPDATE_FLAG_DEHYDRATE else 0
+            val flags = if (preserveSyncState) {
+                0
+            } else {
+                CF_UPDATE_FLAG_MARK_IN_SYNC or CF_UPDATE_FLAG_VERIFY_IN_SYNC or
+                    if (invalidateContent) CF_UPDATE_FLAG_DEHYDRATE else 0
+            }
             checkHResult(
                 cldApi.CfUpdatePlaceholder(
                     handle,

@@ -98,7 +98,7 @@ class DesktopFileSyncLocalTreeTest {
     }
 
     @Test
-    fun `completed replacement backup remains visible for explicit recovery`() {
+    fun `completed replacement backup stays on disk but is excluded from sync`() {
         val root = Files.createTempDirectory("desktop-sync-visible-backup-")
         try {
             root.resolve("notes.txt").writeText("published")
@@ -108,7 +108,7 @@ class DesktopFileSyncLocalTreeTest {
             val entries = DesktopFileSyncLocalTree(root.toFile()).scan().map { it.entry.relativePath }
 
             assertTrue("notes.txt" in entries)
-            assertTrue(backup in entries)
+            assertFalse(backup in entries)
             assertEquals("protected original", root.resolve(backup).toFile().readText())
         } finally {
             root.toFile().deleteRecursively()

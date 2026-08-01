@@ -70,7 +70,8 @@ class AndroidVirtualFileCacheInstrumentedTest {
         assertArrayEquals(bytes, lease.content.readBytes())
         assertNull(cache.acquire(session, file.path, expectedRemoteEtag = "\"raf-v2\""))
 
-        cache.savePolicy(
+        val secondCache = AndroidVirtualFileCache(context)
+        secondCache.savePolicy(
             VirtualFileCachePolicy(
                 automaticCleanup = true,
                 maximumCacheBytes = 1L,
@@ -78,7 +79,7 @@ class AndroidVirtualFileCacheInstrumentedTest {
                 unusedFileAgeMillis = null,
             ),
         )
-        val secondLease = requireNotNull(cache.acquire(session, file.path, expectedRemoteEtag = "\"raf-v1\""))
+        val secondLease = requireNotNull(secondCache.acquire(session, file.path, expectedRemoteEtag = "\"raf-v1\""))
         secondLease.release()
 
         lease.release()
@@ -110,6 +111,37 @@ class AndroidVirtualFileCacheInstrumentedTest {
         )
         stage.delete()
         assertEquals(0, androidDocumentPendingWritebackCount(context, session))
+    }
+
+    @Test
+    fun providerStartupDiscardsIncompleteWritebacksAndKeepsReadyRecovery() {
+        val recovery = File(context.filesDir, "documents-recovery").apply { mkdirs() }
+        fun writeTransaction(name: String, ready: Boolean) {
+            val stage = File(recovery, "writeback-$name.stage").apply { writeText("local edit") }
+            File(recovery, stage.name + ".json").writeText(
+                JSONObject()
+                    .put("version", 1)
+                    .put("account", NextcloudDocumentIds.accountKey(session))
+                    .put("path", "Notes/$name.md")
+                    .put("etag", "\"v1\"")
+                    .put("displayName", "$name.md")
+                    .put("stage", stage.name)
+                    .put("startedAt", 10L)
+                    .put("ready", ready)
+                    .toString(),
+            )
+        }
+        writeTransaction("unfinished", ready = false)
+        writeTransaction("recoverable", ready = true)
+        File(recovery, "writeback-orphan.stage").writeText("partial")
+        File(recovery, "manifest-orphan.tmp").writeText("partial")
+
+        assertEquals(4, cleanupIncompleteAndroidDocumentWritebacks(context))
+        assertEquals(1, androidDocumentPendingWritebackCount(context, session))
+        assertEquals(
+            "Notes/recoverable.md",
+            androidDocumentPendingWritebacks(context, session).single().remotePath,
+        )
     }
 
     @Test

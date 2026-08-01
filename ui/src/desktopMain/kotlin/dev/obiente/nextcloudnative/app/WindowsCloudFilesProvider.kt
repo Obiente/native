@@ -205,6 +205,7 @@ internal interface WindowsCloudFilesApi : AutoCloseable {
         path: Path,
         placeholder: WindowsCloudPlaceholder,
         invalidateContent: Boolean = false,
+        preserveSyncState: Boolean = false,
     )
     fun convertToPlaceholder(path: Path, placeholder: WindowsCloudPlaceholder)
     fun markInSync(path: Path)
@@ -442,7 +443,9 @@ internal class WindowsCloudFilesProvider(
                 val moved = backend.move(identity, destination)
                 knownIdentities.remove(identity.path)
                 knownIdentities[moved.path] = moved
-                api.updatePlaceholder(root.resolve(destination.replace('/', File.separatorChar)), placeholder(moved))
+                val destinationPath = root.resolve(destination.replace('/', File.separatorChar))
+                api.updatePlaceholder(destinationPath, placeholder(moved))
+                if (identity.directory) rebindMovedDescendants(identity, moved, destinationPath)
             }.isSuccess
             api.acknowledgeRename(info, accepted)
         }
@@ -727,6 +730,7 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun recoverLocalChanges() {
+        recoverDirtyPlaceholders()
         val pendingDirectories = ArrayDeque<String>()
         pendingDirectories += ""
         var discovered = 0
@@ -737,26 +741,6 @@ internal class WindowsCloudFilesProvider(
                 knownIdentities[identity.path] = identity
                 discovered += 1
                 if (identity.directory) pendingDirectories += identity.path
-                val local = localPath(identity)
-                if (Files.exists(local) && api.placeholderState(local) == WindowsCloudPlaceholderState.Dirty) {
-                    if (!identity.directory) {
-                        pendingWritebacks += identity.path
-                        submitPathOperation(identity.path) {
-                            val original = requireNotNull(api.placeholderIdentity(local)) {
-                                "The dirty Windows placeholder has no recoverable identity."
-                            }.let(WindowsCloudFileIdentityCodec::decode)
-                            require(
-                                original.accountId == backend.accountId &&
-                                    original.path == identity.path &&
-                                    !original.directory,
-                            ) { "The dirty Windows placeholder identity is not safe to recover." }
-                            val uploaded = backend.upload(identity.path, local.toFile(), original.remoteRevision)
-                            knownIdentities[uploaded.path] = uploaded
-                            api.updatePlaceholder(local, placeholder(uploaded))
-                            api.markInSync(local)
-                        }
-                    }
-                }
             }
         }
         runCatching {
@@ -771,6 +755,73 @@ internal class WindowsCloudFilesProvider(
                     .joinToString("/") { it.toString() }.windowsCloudPath()
                 runCatching { uploadLocalEntry(path, relative) }
             }
+        }
+    }
+
+    private fun recoverDirtyPlaceholders() {
+        runCatching {
+            Files.walk(root).use { paths ->
+                paths.filter { path ->
+                    path != root &&
+                        !Files.isSymbolicLink(path) &&
+                        Files.isRegularFile(path) &&
+                        api.placeholderState(path) == WindowsCloudPlaceholderState.Dirty
+                }.forEach { local ->
+                    val original = api.placeholderIdentity(local)
+                        ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
+                        ?.takeIf { identity ->
+                            identity.accountId == backend.accountId &&
+                                !identity.directory &&
+                                localPath(identity).toAbsolutePath().normalize() == local.toAbsolutePath().normalize()
+                        }
+                        ?: return@forEach
+                    knownIdentities[original.path] = original
+                    pendingWritebacks += original.path
+                    submitPathOperation(original.path) {
+                        val current = requireNotNull(api.placeholderIdentity(local)) {
+                            "The dirty Windows placeholder has no recoverable identity."
+                        }.let(WindowsCloudFileIdentityCodec::decode)
+                        require(
+                            current.accountId == backend.accountId &&
+                                current.path == original.path &&
+                                !current.directory,
+                        ) { "The dirty Windows placeholder identity is not safe to recover." }
+                        val uploaded = backend.upload(current.path, local.toFile(), current.remoteRevision)
+                        knownIdentities[uploaded.path] = uploaded
+                        api.updatePlaceholder(local, placeholder(uploaded))
+                        api.markInSync(local)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun rebindMovedDescendants(
+        originalDirectory: WindowsCloudFileIdentity,
+        movedDirectory: WindowsCloudFileIdentity,
+        localDirectory: Path,
+    ) {
+        if (!Files.isDirectory(localDirectory) || Files.isSymbolicLink(localDirectory)) return
+        Files.walk(localDirectory).use { paths ->
+            paths.filter { path -> path != localDirectory && !Files.isSymbolicLink(path) }
+                .forEach { descendant ->
+                    val suffix = localDirectory.relativize(descendant).joinToString("/") { it.toString() }.windowsCloudPath()
+                    val expectedOriginalPath = "${originalDirectory.path}/$suffix"
+                    val previous = api.placeholderIdentity(descendant)
+                        ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
+                        ?.takeIf { identity ->
+                            identity.accountId == backend.accountId && identity.path == expectedOriginalPath
+                        }
+                        ?: return@forEach
+                    val rebound = previous.copy(path = "${movedDirectory.path}/$suffix")
+                    knownIdentities.remove(previous.path)
+                    knownIdentities[rebound.path] = rebound
+                    api.updatePlaceholder(
+                        descendant,
+                        placeholder(rebound),
+                        preserveSyncState = true,
+                    )
+                }
         }
     }
 

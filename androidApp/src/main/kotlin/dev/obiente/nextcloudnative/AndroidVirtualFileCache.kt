@@ -51,15 +51,13 @@ internal class AndroidVirtualFileCache(context: Context) {
     private val appContext = context.applicationContext
     private val root = File(appContext.cacheDir, CACHE_DIRECTORY)
     private val preferences = appContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
-    private val activeLeases = mutableMapOf<FileOfflineKey, Int>()
 
-    @Synchronized
     fun acquire(
         session: dev.obiente.nextcloudnative.app.NextcloudSession,
         path: String,
         expectedRemoteEtag: String? = null,
         nowEpochMillis: Long = System.currentTimeMillis(),
-    ): AndroidVirtualFileLease? {
+    ): AndroidVirtualFileLease? = synchronized(STORE_LOCK) {
         require(nowEpochMillis >= 0L)
         val accountId = NextcloudDocumentIds.accountKey(session)
         val key = FileOfflineKey(accountId, path)
@@ -82,7 +80,7 @@ internal class AndroidVirtualFileCache(context: Context) {
             content = blob,
             localRevision = touched.localRevision,
             release = {
-                synchronized(this) {
+                synchronized(STORE_LOCK) {
                     if (!released) {
                         released = true
                         val remaining = activeLeases.getOrDefault(key, 1) - 1
@@ -93,19 +91,20 @@ internal class AndroidVirtualFileCache(context: Context) {
         )
     }
 
-    @Synchronized
     fun cachedEntry(
         session: dev.obiente.nextcloudnative.app.NextcloudSession,
         path: String,
-    ): NextcloudFile? = acquire(session, path)?.let { lease ->
-        try {
-            lease.file
-        } finally {
-            lease.release()
+    ): NextcloudFile? = synchronized(STORE_LOCK) {
+        acquire(session, path)?.let { lease ->
+            try {
+                lease.file
+            } finally {
+                lease.release()
+            }
         }
     }
 
-    fun createHydrationStagingFile(): File {
+    fun createHydrationStagingFile(): File = synchronized(STORE_LOCK) {
         val directory = File(root, STAGING_DIRECTORY).apply {
             check(isDirectory || mkdirs()) { "Could not create virtual file hydration staging." }
         }
@@ -114,11 +113,10 @@ internal class AndroidVirtualFileCache(context: Context) {
 
     fun canCacheHydration(sizeBytes: Long): Boolean = sizeBytes in 0L..MAX_VIRTUAL_FILE_BYTES
 
-    @Synchronized
     fun prepareHydration(
         session: dev.obiente.nextcloudnative.app.NextcloudSession,
         sizeBytes: Long,
-    ): File? {
+    ): File? = synchronized(STORE_LOCK) {
         if (!canCacheHydration(sizeBytes)) return null
         check(root.isDirectory || root.mkdirs()) { "Could not create virtual file cache storage." }
         val policy = loadPolicy()
@@ -145,13 +143,12 @@ internal class AndroidVirtualFileCache(context: Context) {
         }
     }
 
-    @Synchronized
     fun publishHydration(
         session: dev.obiente.nextcloudnative.app.NextcloudSession,
         file: NextcloudFile,
         staging: File,
         nowEpochMillis: Long = System.currentTimeMillis(),
-    ): Boolean {
+    ): Boolean = synchronized(STORE_LOCK) {
         require(!file.isDirectory)
         require(nowEpochMillis >= 0L)
         val remoteEtag = file.etag?.takeIf(String::isNotBlank) ?: return false
@@ -187,11 +184,10 @@ internal class AndroidVirtualFileCache(context: Context) {
         return load(accountId).entries.any { it.path == file.path && it.localRevision == localRevision }
     }
 
-    @Synchronized
     fun summary(
         session: dev.obiente.nextcloudnative.app.NextcloudSession,
         nowEpochMillis: Long = System.currentTimeMillis(),
-    ): AndroidVirtualFileCacheSummary {
+    ): AndroidVirtualFileCacheSummary = synchronized(STORE_LOCK) {
         val accountId = NextcloudDocumentIds.accountKey(session)
         val entries = load(accountId).entries.toDomain(accountId)
         val plan = planVirtualFileEviction(
@@ -210,8 +206,7 @@ internal class AndroidVirtualFileCache(context: Context) {
         )
     }
 
-    @Synchronized
-    fun savePolicy(policy: VirtualFileCachePolicy) {
+    fun savePolicy(policy: VirtualFileCachePolicy) = synchronized(STORE_LOCK) {
         preferences.edit()
             .putBoolean(KEY_AUTOMATIC, policy.automaticCleanup)
             .putLong(KEY_MAXIMUM_BYTES, policy.maximumCacheBytes ?: UNLIMITED_SENTINEL)
@@ -223,20 +218,18 @@ internal class AndroidVirtualFileCache(context: Context) {
         }
     }
 
-    @Synchronized
     fun freeUp(
         session: dev.obiente.nextcloudnative.app.NextcloudSession,
         requestedBytesToFree: Long,
-    ): VirtualFileEvictionPlan {
+    ): VirtualFileEvictionPlan = synchronized(STORE_LOCK) {
         require(requestedBytesToFree >= 0L)
         return applyEviction(NextcloudDocumentIds.accountKey(session), requestedBytesToFree)
     }
 
-    @Synchronized
     fun invalidate(
         session: dev.obiente.nextcloudnative.app.NextcloudSession,
         path: String,
-    ) {
+    ) = synchronized(STORE_LOCK) {
         val accountId = NextcloudDocumentIds.accountKey(session)
         val normalized = FileOfflineKey(accountId, path).relativePath
         val current = load(accountId)
@@ -507,6 +500,8 @@ internal class AndroidVirtualFileCache(context: Context) {
     }
 
     private companion object {
+        val STORE_LOCK = Any()
+        val activeLeases = mutableMapOf<FileOfflineKey, Int>()
         const val CACHE_DIRECTORY = "virtual-files-v1"
         const val STAGING_DIRECTORY = "staging"
         const val INDEX_FILE_NAME = "index-v1.bin"

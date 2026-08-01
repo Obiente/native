@@ -160,8 +160,7 @@ class WindowsCloudFilesProviderTest {
         val local = root.resolve("edit.txt")
         local.writeBytes("local edit".encodeToByteArray())
         val old = WindowsCloudFileIdentity("account-01", "edit.txt", "\"etag-01\"", local.toFile().length(), false)
-        val fresh = old.copy(remoteRevision = "\"etag-02\"")
-        val backend = FakeBackend("fresh".encodeToByteArray(), listed = listOf(fresh), expectedUploads = 1)
+        val backend = FakeBackend("fresh".encodeToByteArray(), expectedUploads = 1)
         val api = FakeApi().apply { seed(local, WindowsCloudPlaceholderState.Dirty, old) }
         val provider = WindowsCloudFilesProvider(root, backend, api)
 
@@ -169,6 +168,37 @@ class WindowsCloudFilesProviderTest {
 
         assertTrue(backend.awaitUploads())
         assertEquals("\"etag-01\"", backend.lastExpectedRemoteRevision)
+        provider.close()
+    }
+
+    @Test
+    fun `folder rename rebinds every descendant identity without clearing dirty state`() {
+        val root = createTempDirectory("windows-cloud-rename-")
+        val destination = root.resolve("Projects/New")
+        destination.toFile().mkdirs()
+        val child = destination.resolve("brief.txt")
+        child.writeBytes("local edit".encodeToByteArray())
+        val directoryIdentity = WindowsCloudFileIdentity("account-01", "Projects/Old", "\"dir-v1\"", 0L, true)
+        val childIdentity = WindowsCloudFileIdentity(
+            "account-01",
+            "Projects/Old/brief.txt",
+            "\"file-v1\"",
+            child.toFile().length(),
+            false,
+        )
+        val backend = FakeBackend("remote".encodeToByteArray())
+        val api = FakeApi(expectedRenames = 1).apply {
+            seed(destination, WindowsCloudPlaceholderState.InSync, directoryIdentity)
+            seed(child, WindowsCloudPlaceholderState.Dirty, childIdentity)
+        }
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+
+        provider.renameRequested(callbackInfo(directoryIdentity), destination.toString())
+
+        assertTrue(api.awaitRenames())
+        assertTrue(api.lastRenameAccepted)
+        assertEquals("Projects/New/brief.txt", api.decodedIdentity(child)?.path)
+        assertEquals(WindowsCloudPlaceholderState.Dirty, api.placeholderState(child))
         provider.close()
     }
 
@@ -311,13 +341,16 @@ class WindowsCloudFilesProviderTest {
     private class FakeApi(
         expectedTransfers: Int = 0,
         expectedConversions: Int = 0,
+        expectedRenames: Int = 0,
     ) : WindowsCloudFilesApi {
         private val transferLatch = CountDownLatch(expectedTransfers)
         private val conversionLatch = CountDownLatch(expectedConversions)
+        private val renameLatch = CountDownLatch(expectedRenames)
         private val states = HashMap<Path, WindowsCloudPlaceholderState>()
         private val identities = HashMap<Path, ByteArray>()
         val transfers = mutableListOf<Pair<Long, ByteArray>>()
         val invalidatedUpdates = mutableListOf<Path>()
+        var lastRenameAccepted = false
 
         override fun registerSyncRoot(root: Path, syncRootIdentity: ByteArray) = Unit
         override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long = 1L
@@ -331,7 +364,10 @@ class WindowsCloudFilesProviderTest {
         override fun completePlaceholderFetch(info: WindowsCloudCallbackInfo, placeholders: List<WindowsCloudPlaceholder>) = Unit
         override fun failPlaceholderFetch(info: WindowsCloudCallbackInfo) = Unit
         override fun acknowledgeDelete(info: WindowsCloudCallbackInfo, accepted: Boolean) = Unit
-        override fun acknowledgeRename(info: WindowsCloudCallbackInfo, accepted: Boolean) = Unit
+        override fun acknowledgeRename(info: WindowsCloudCallbackInfo, accepted: Boolean) {
+            lastRenameAccepted = accepted
+            renameLatch.countDown()
+        }
         override fun placeholderState(path: Path): WindowsCloudPlaceholderState =
             states[path] ?: WindowsCloudPlaceholderState.Absent
         override fun allocatedBytes(path: Path): Long = if (states[path] == WindowsCloudPlaceholderState.InSync) {
@@ -346,8 +382,9 @@ class WindowsCloudFilesProviderTest {
             path: Path,
             placeholder: WindowsCloudPlaceholder,
             invalidateContent: Boolean,
+            preserveSyncState: Boolean,
         ) {
-            states[path] = WindowsCloudPlaceholderState.InSync
+            if (!preserveSyncState) states[path] = WindowsCloudPlaceholderState.InSync
             identities[path] = placeholder.identity.copyOf()
             if (invalidateContent) invalidatedUpdates.add(path)
         }
@@ -363,6 +400,10 @@ class WindowsCloudFilesProviderTest {
 
         fun awaitTransfers(): Boolean = transferLatch.await(5, TimeUnit.SECONDS)
         fun awaitConversions(): Boolean = conversionLatch.await(5, TimeUnit.SECONDS)
+        fun awaitRenames(): Boolean = renameLatch.await(5, TimeUnit.SECONDS)
+
+        fun decodedIdentity(path: Path): WindowsCloudFileIdentity? =
+            placeholderIdentity(path)?.let(WindowsCloudFileIdentityCodec::decode)
 
         fun seed(path: Path, state: WindowsCloudPlaceholderState, identity: WindowsCloudFileIdentity) {
             states[path] = state

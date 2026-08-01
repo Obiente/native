@@ -43,6 +43,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
 
     override fun onCreate(): Boolean {
         val providerContext = context ?: return false
+        cleanupIncompleteAndroidDocumentWritebacks(providerContext)
         services = AndroidNextcloudServices(providerContext)
         offline = AndroidFileOfflineRepository(providerContext)
         virtualFiles = AndroidVirtualFileCache(providerContext)
@@ -785,22 +786,44 @@ internal fun androidDocumentPendingWriteback(
 private fun parseAndroidDocumentWriteback(
     root: File,
     manifest: File,
-    expectedAccount: String,
+    expectedAccount: String?,
 ): AndroidDocumentPendingWriteback? = runCatching {
     require(manifest.isFile && manifest.name.endsWith(".stage.json") && manifest.length() <= 64 * 1024L)
     val data = JSONObject(manifest.readText())
     val stageName = data.getString("stage")
     require(data.getInt("version") == 1 && data.optBoolean("ready", false))
-    require(data.getString("account") == expectedAccount)
+    val account = data.getString("account")
+    require(expectedAccount == null || account == expectedAccount)
+    require(data.getLong("startedAt") >= 0L)
     require(stageName.startsWith("writeback-") && stageName.endsWith(".stage"))
     require('/' !in stageName && '\\' !in stageName)
+    require(manifest.name == "$stageName.json")
     val stage = File(root, stageName)
     require(stage.isFile)
     AndroidDocumentPendingWriteback(
         staging = stage,
         manifest = manifest,
-        accountId = expectedAccount,
+        accountId = account,
         remotePath = data.getString("path"),
         expectedRemoteEtag = data.getString("etag"),
     )
 }.getOrNull()
+
+/** Removes writeback transactions that could not reach the close-ready state before process death. */
+internal fun cleanupIncompleteAndroidDocumentWritebacks(context: android.content.Context): Int {
+    val root = File(context.filesDir, "documents-recovery")
+    if (!root.isDirectory) return 0
+    val files = root.listFiles().orEmpty().filter(File::isFile)
+    val retainedNames = files.mapNotNull { manifest ->
+        parseAndroidDocumentWriteback(root, manifest, expectedAccount = null)
+    }.flatMapTo(hashSetOf()) { writeback ->
+        listOf(writeback.staging.name, writeback.manifest.name)
+    }
+    return files.count { file ->
+        val owned =
+            (file.name.startsWith("writeback-") && file.name.endsWith(".stage")) ||
+                (file.name.startsWith("writeback-") && file.name.endsWith(".stage.json")) ||
+                (file.name.startsWith("manifest-") && file.name.endsWith(".tmp"))
+        owned && file.name !in retainedNames && file.delete()
+    }
+}
