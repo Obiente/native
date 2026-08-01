@@ -6,6 +6,7 @@ nightly="$project_root/.github/workflows/nightly.yml"
 prerelease="$project_root/.github/workflows/prerelease.yml"
 nightly_notes="$project_root/tools/nightly-release-notes.mjs"
 promotion="$project_root/tools/promote-app-update-channel.sh"
+msi_repackager="$project_root/tools/repackage-msi-with-uninstall-cleanup.ps1"
 temporary_directory="$(mktemp -d)"
 trap 'rm -r -- "$temporary_directory"' EXIT
 
@@ -141,6 +142,11 @@ fi
 require_text "$promotion" 'pointer_state'
 require_text "$promotion" '--clobber'
 require_text "$promotion" 'test "$release_state" = $'\''false\ttrue\t'\''"$immutable_tag"'
+require_text "$msi_repackager" 'Join-Path $AppImage "app/.jpackage.xml"'
+if grep -Fq 'Join-Path $AppImage "lib/app/.jpackage.xml"' "$msi_repackager"; then
+    echo "Windows MSI repackaging must use the Windows jpackage metadata layout." >&2
+    exit 1
+fi
 bash -n "$promotion"
 
 if [[ -e "$project_root/tools/sign-windows-package.ps1" ]]; then

@@ -72,7 +72,7 @@ if ($name -ne "NextcloudNative" -or
     -not (Test-Path -LiteralPath $license -PathType Leaf) -or
     -not (Test-Path -LiteralPath $icon -PathType Leaf) -or
     -not (Test-Path -LiteralPath (Join-Path $AppImage "NextcloudNative.exe") -PathType Leaf) -or
-    -not (Test-Path -LiteralPath (Join-Path $AppImage "lib/app/.jpackage.xml") -PathType Leaf)) {
+    -not (Test-Path -LiteralPath (Join-Path $AppImage "app/.jpackage.xml") -PathType Leaf)) {
     throw "The captured package metadata or application image is invalid."
 }
 
