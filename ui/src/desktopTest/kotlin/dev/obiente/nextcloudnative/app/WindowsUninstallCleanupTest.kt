@@ -37,7 +37,13 @@ class WindowsUninstallCleanupTest {
 
             unregisterWindowsCloudFilesRootForUninstall(preferences, home) { api }
 
-            assertEquals(expectedRoot.toPath(), api.unregisteredRoot)
+            assertEquals(
+                setOf(
+                    expectedRoot.toPath(),
+                    home.resolve("Nextcloud Native").resolve(desktopFileCacheAccountId(session)).toPath(),
+                ),
+                api.unregisteredRoots.toSet(),
+            )
             assertTrue(api.closed)
         } finally {
             preferences.removeNode()
@@ -145,7 +151,10 @@ class WindowsUninstallCleanupTest {
                 api = api,
             )
 
-            assertEquals(null, api.unregisteredRoot)
+            assertEquals(
+                home.resolve("Nextcloud Native").resolve("b".repeat(64)).toPath(),
+                api.unregisteredRoot,
+            )
             assertEquals(otherRoot.absolutePath, preferences.get("windows-cloud-files-root", null))
         } finally {
             preferences.removeNode()
@@ -200,11 +209,12 @@ class WindowsUninstallCleanupTest {
     }
 
     private class RecordingWindowsCloudFilesApi : WindowsCloudFilesApi {
-        var unregisteredRoot: Path? = null
+        val unregisteredRoots = mutableListOf<Path>()
+        val unregisteredRoot: Path? get() = unregisteredRoots.lastOrNull()
         var closed = false
 
         override fun unregisterSyncRoot(root: Path) {
-            unregisteredRoot = root
+            unregisteredRoots.add(root)
         }
 
         override fun close() {

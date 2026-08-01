@@ -1,8 +1,11 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
@@ -180,7 +183,7 @@ class WindowsCloudFilesProviderTest {
 
     @Test
     fun `placeholder identities round trip and reject tampering`() {
-        val identity = fixtureIdentity(size = 9_217L)
+        val identity = fixtureIdentity(size = 9_217L).copy(lastModifiedEpochMillis = 1_785_587_696_000L)
         val encoded = WindowsCloudFileIdentityCodec.encode(identity)
 
         assertEquals(identity, WindowsCloudFileIdentityCodec.decode(encoded))
@@ -188,6 +191,15 @@ class WindowsCloudFilesProviderTest {
 
         val tampered = encoded.copyOf().also { it[12] = (it[12].toInt() xor 1).toByte() }
         assertFailsWith<IllegalArgumentException> { WindowsCloudFileIdentityCodec.decode(tampered) }
+    }
+
+    @Test
+    fun `legacy placeholder identities remain readable during migration`() {
+        val decoded = WindowsCloudFileIdentityCodec.decode(legacyWindowsCloudIdentity())
+
+        assertEquals("account-01", decoded.accountId)
+        assertEquals("Apps/readme.txt", decoded.path)
+        assertEquals(null, decoded.lastModifiedEpochMillis)
     }
 
     @Test
@@ -203,6 +215,26 @@ class WindowsCloudFilesProviderTest {
             val outside = requireNotNull(root.parent).resolve("outside.raf")
             requireWindowsCloudCallbackPath(root, outside.toString(), "Photos/example.raf")
         }
+    }
+
+    @Test
+    fun `patterned population still transfers the complete directory`() {
+        val root = createTempDirectory("windows-cloud-pattern-")
+        val directory = WindowsCloudFileIdentity("account-01", "Apps", "\"directory\"", 0L, true)
+        val text = WindowsCloudFileIdentity("account-01", "Apps/readme.txt", "\"text\"", 5L, false)
+        val image = WindowsCloudFileIdentity("account-01", "Apps/photo.jpg", "\"image\"", 9L, false)
+        val api = FakeApi(expectedPlaceholderFetches = 1)
+        val provider = WindowsCloudFilesProvider(
+            root,
+            FakeBackend(ByteArray(0), listed = listOf(text, image)),
+            api,
+        )
+
+        provider.fetchPlaceholders(callbackInfo(root, directory), "*.txt")
+
+        assertTrue(api.awaitPlaceholderFetches())
+        assertEquals(setOf("readme.txt", "photo.jpg"), api.completedPlaceholders.map { it.name }.toSet())
+        provider.close()
     }
 
     @Test
@@ -333,7 +365,9 @@ class WindowsCloudFilesProviderTest {
         provider.start()
 
         assertTrue(backend.awaitUploads())
+        provider.recoverBeforeRootMigration(timeoutSeconds = 5L)
         assertEquals("\"etag-01\"", backend.lastExpectedRemoteRevision)
+        assertEquals(0, provider.summary().pendingWritebackCount)
         provider.close()
     }
 
@@ -532,6 +566,24 @@ class WindowsCloudFilesProviderTest {
         priorityHint = 12,
     )
 
+    private fun legacyWindowsCloudIdentity(): ByteArray {
+        val payload = ByteArrayOutputStream().use { bytes ->
+            DataOutputStream(bytes).use { output ->
+                output.writeInt(0x4E434656)
+                output.writeShort(1)
+                output.writeBoolean(false)
+                output.writeLong(5L)
+                listOf("account-01", "Apps/readme.txt", "\"etag-01\"").forEach { value ->
+                    val encoded = value.encodeToByteArray()
+                    output.writeShort(encoded.size)
+                    output.write(encoded)
+                }
+            }
+            bytes.toByteArray()
+        }
+        return payload + MessageDigest.getInstance("SHA-256").digest(payload)
+    }
+
     private class FakeBackend(
         private val source: ByteArray,
         private val listed: List<WindowsCloudFileIdentity> = emptyList(),
@@ -623,15 +675,18 @@ class WindowsCloudFilesProviderTest {
         expectedConversions: Int = 0,
         expectedRenames: Int = 0,
         expectedIdentityReads: Int = 0,
+        expectedPlaceholderFetches: Int = 0,
     ) : WindowsCloudFilesApi {
         private val transferLatch = CountDownLatch(expectedTransfers)
         private val conversionLatch = CountDownLatch(expectedConversions)
         private val renameLatch = CountDownLatch(expectedRenames)
         private val identityReadLatch = CountDownLatch(expectedIdentityReads)
+        private val placeholderFetchLatch = CountDownLatch(expectedPlaceholderFetches)
         private val states = HashMap<Path, WindowsCloudPlaceholderState>()
         private val identities = HashMap<Path, ByteArray>()
         val transfers = mutableListOf<Pair<Long, ByteArray>>()
         val invalidatedUpdates = mutableListOf<Path>()
+        var completedPlaceholders = emptyList<WindowsCloudPlaceholder>()
         var lastRenameAccepted = false
         var unregisteredRoot: Path? = null
         var unregisterFailure: RuntimeException? = null
@@ -655,7 +710,13 @@ class WindowsCloudFilesProviderTest {
             transferLatch.countDown()
         }
         override fun failData(info: WindowsCloudCallbackInfo, offset: Long, length: Long, message: String) = Unit
-        override fun completePlaceholderFetch(info: WindowsCloudCallbackInfo, placeholders: List<WindowsCloudPlaceholder>) = Unit
+        override fun completePlaceholderFetch(
+            info: WindowsCloudCallbackInfo,
+            placeholders: List<WindowsCloudPlaceholder>,
+        ) {
+            completedPlaceholders = placeholders
+            placeholderFetchLatch.countDown()
+        }
         override fun failPlaceholderFetch(info: WindowsCloudCallbackInfo) = Unit
         override fun acknowledgeDelete(info: WindowsCloudCallbackInfo, accepted: Boolean) = Unit
         override fun acknowledgeRename(info: WindowsCloudCallbackInfo, accepted: Boolean) {
@@ -700,6 +761,7 @@ class WindowsCloudFilesProviderTest {
         fun awaitConversions(): Boolean = conversionLatch.await(5, TimeUnit.SECONDS)
         fun awaitRenames(): Boolean = renameLatch.await(5, TimeUnit.SECONDS)
         fun awaitIdentityReads(): Boolean = identityReadLatch.await(5, TimeUnit.SECONDS)
+        fun awaitPlaceholderFetches(): Boolean = placeholderFetchLatch.await(5, TimeUnit.SECONDS)
 
         fun decodedIdentity(path: Path): WindowsCloudFileIdentity? =
             placeholderIdentity(path)?.let(WindowsCloudFileIdentityCodec::decode)

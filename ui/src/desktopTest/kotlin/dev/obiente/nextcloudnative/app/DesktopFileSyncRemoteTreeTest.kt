@@ -24,6 +24,7 @@ class DesktopFileSyncRemoteTreeTest {
                 <d:propstat><d:prop>
                   <d:getetag>"file-etag"</d:getetag>
                   <d:getcontentlength>42</d:getcontentlength>
+                  <d:getlastmodified>Sat, 01 Aug 2026 12:34:56 GMT</d:getlastmodified>
                   <d:resourcetype/>
                 </d:prop></d:propstat>
               </d:response>
@@ -39,6 +40,7 @@ class DesktopFileSyncRemoteTreeTest {
         assertEquals(SyncEntryKind.Directory, documents.first().entry.kind)
         assertEquals(42L, documents.last().entry.size)
         assertEquals("\"file-etag\"", documents.last().entry.etag)
+        assertEquals(1_785_587_696_000L, documents.last().lastModifiedEpochMillis)
     }
 
     @Test
