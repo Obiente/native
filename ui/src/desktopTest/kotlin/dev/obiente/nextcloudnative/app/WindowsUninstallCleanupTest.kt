@@ -116,6 +116,7 @@ class WindowsUninstallCleanupTest {
 
             unregisterSupersededWindowsCloudFilesRoot(
                 preferences = preferences,
+                accountId = "c".repeat(64),
                 currentRoot = currentRoot.toPath(),
                 userHome = home,
                 api = api,
@@ -124,6 +125,32 @@ class WindowsUninstallCleanupTest {
             assertEquals(legacyRoot.toPath(), api.unregisteredRoot)
             assertTrue(legacyRoot.isDirectory)
             assertEquals(null, preferences.get("windows-cloud-files-root", null))
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun activationDoesNotUnregisterAnotherAccountsProviderRoot() {
+        val preferences = Preferences.userRoot().node("windows-root-account-test-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-root-account-home").toFile()
+        val otherRoot = desktopWindowsCloudFilesRoot("a".repeat(64), home)
+        val currentRoot = desktopWindowsCloudFilesRoot("b".repeat(64), home)
+        val api = RecordingWindowsCloudFilesApi()
+        try {
+            preferences.put("windows-cloud-files-root", otherRoot.absolutePath)
+
+            unregisterSupersededWindowsCloudFilesRoot(
+                preferences = preferences,
+                accountId = "b".repeat(64),
+                currentRoot = currentRoot.toPath(),
+                userHome = home,
+                api = api,
+            )
+
+            assertEquals(null, api.unregisteredRoot)
+            assertEquals(otherRoot.absolutePath, preferences.get("windows-cloud-files-root", null))
         } finally {
             preferences.removeNode()
             home.deleteRecursively()
