@@ -2,6 +2,8 @@ package dev.obiente.nextcloudnative.app
 
 import jnr.ffi.Runtime
 import jnr.ffi.Pointer
+import org.junit.Assume.assumeTrue
+import org.junit.Before
 import java.nio.ByteBuffer
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -12,6 +14,14 @@ import ru.serce.jnrfuse.struct.FileStat
 import ru.serce.jnrfuse.struct.FuseFileInfo
 
 class LinuxVirtualFileSystemTest {
+    @Before
+    fun requireLinux() {
+        assumeTrue(
+            "The jnr-fuse adapter requires a Linux libfuse runtime.",
+            System.getProperty("os.name").startsWith("Linux", ignoreCase = true),
+        )
+    }
+
     @Test
     fun `open read seek and release use one generation pinned handle`() {
         val bytes = "nextcloud virtual file".encodeToByteArray()
