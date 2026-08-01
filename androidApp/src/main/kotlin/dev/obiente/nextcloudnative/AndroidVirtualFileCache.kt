@@ -52,6 +52,10 @@ internal class AndroidVirtualFileCache(context: Context) {
     private val root = File(appContext.cacheDir, CACHE_DIRECTORY)
     private val preferences = appContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
+    init {
+        synchronized(STORE_LOCK) { reconcileHydrationStaging() }
+    }
+
     fun acquire(
         session: dev.obiente.nextcloudnative.app.NextcloudSession,
         path: String,
@@ -108,7 +112,14 @@ internal class AndroidVirtualFileCache(context: Context) {
         val directory = File(root, STAGING_DIRECTORY).apply {
             check(isDirectory || mkdirs()) { "Could not create virtual file hydration staging." }
         }
-        return File.createTempFile("hydrate-", ".part", directory)
+        return File.createTempFile("hydrate-", ".part", directory).also { staging ->
+            activeHydrationStages += staging.activeHydrationKey()
+        }
+    }
+
+    fun discardHydrationStagingFile(staging: File) = synchronized(STORE_LOCK) {
+        activeHydrationStages -= staging.activeHydrationKey()
+        staging.delete()
     }
 
     fun canCacheHydration(sizeBytes: Long): Boolean = sizeBytes in 0L..MAX_VIRTUAL_FILE_BYTES
@@ -157,15 +168,24 @@ internal class AndroidVirtualFileCache(context: Context) {
         val directory = accountDirectory(accountId).apply {
             check(isDirectory || mkdirs()) { "Could not create the Android virtual file cache." }
         }
+        var current = load(accountId)
+        if (current.entries.none { it.path == file.path } && current.entries.size >= MAX_ENTRIES) {
+            val eviction = current.entries
+                .asSequence()
+                .filter { cached ->
+                    activeLeases.getOrDefault(FileOfflineKey(accountId, cached.path), 0) == 0
+                }
+                .minWithOrNull(compareBy<CachedVirtualFile> { it.lastAccessedAtEpochMillis }.thenBy { it.path })
+                ?: return false
+            current = current.copy(entries = current.entries - eviction)
+            save(accountId, current)
+        }
         val digest = staging.sha256Hex()
         val localRevision = "sha256:$digest"
         val blobName = "${sha256Hex("${file.path}\u0000$remoteEtag")}.blob"
         val destination = File(directory, blobName)
         publishAtomically(staging, destination)
-        val current = load(accountId)
-        current.entries
-            .filter { it.path == file.path && it.blobName != blobName }
-            .forEach { old -> File(directory, old.blobName).delete() }
+        activeHydrationStages -= staging.activeHydrationKey()
         val next = current.copy(
             entries = current.entries.filterNot { it.path == file.path } + CachedVirtualFile(
                 path = file.path,
@@ -179,7 +199,12 @@ internal class AndroidVirtualFileCache(context: Context) {
                 lastAccessedAtEpochMillis = nowEpochMillis,
             ),
         )
-        save(accountId, next)
+        try {
+            save(accountId, next)
+        } catch (failure: Throwable) {
+            if (current.entries.none { it.blobName == blobName }) destination.delete()
+            throw failure
+        }
         applyEviction(accountId, requestedBytesToFree = 0L, nowEpochMillis = nowEpochMillis)
         return load(accountId).entries.any { it.path == file.path && it.localRevision == localRevision }
     }
@@ -440,6 +465,21 @@ internal class AndroidVirtualFileCache(context: Context) {
         return File(root, accountId)
     }
 
+    private fun reconcileHydrationStaging() {
+        val directory = File(root, STAGING_DIRECTORY)
+        if (!directory.isDirectory) return
+        directory.listFiles().orEmpty()
+            .filter { staging ->
+                staging.isFile &&
+                    staging.name.startsWith("hydrate-") &&
+                    staging.name.endsWith(".part") &&
+                    staging.activeHydrationKey() !in activeHydrationStages
+            }
+            .forEach(File::delete)
+    }
+
+    private fun File.activeHydrationKey(): String = absoluteFile.normalize().path
+
     private fun String.isAccountId(): Boolean = length == 32 && all { it in '0'..'9' || it in 'a'..'f' }
 
     private fun File.sha256Hex(): String = inputStream().buffered().use { input ->
@@ -502,6 +542,7 @@ internal class AndroidVirtualFileCache(context: Context) {
     private companion object {
         val STORE_LOCK = Any()
         val activeLeases = mutableMapOf<FileOfflineKey, Int>()
+        val activeHydrationStages = mutableSetOf<String>()
         const val CACHE_DIRECTORY = "virtual-files-v1"
         const val STAGING_DIRECTORY = "staging"
         const val INDEX_FILE_NAME = "index-v1.bin"

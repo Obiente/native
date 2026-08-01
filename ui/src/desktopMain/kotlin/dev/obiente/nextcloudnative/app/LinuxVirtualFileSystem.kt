@@ -230,7 +230,6 @@ internal class LinuxNextcloudVirtualFileSystem(
     private val readHandlePaths = ConcurrentHashMap<Long, String>()
     private val writeHandles = ConcurrentHashMap<Long, LinuxOpenWriteReference>()
     private val pendingCreatedFiles = ConcurrentHashMap<String, LinuxSharedWriteHandle>()
-    private val pendingDeletedFiles = ConcurrentHashMap<String, LinuxVirtualFileNode>()
     private val namespaceLock = Any()
 
     override fun getattr(path: String, stat: FileStat): Int = fuseResult {
@@ -262,7 +261,6 @@ internal class LinuxNextcloudVirtualFileSystem(
         if (!directory.directory) return -ErrorCodes.ENOTDIR()
         val visibleNames = LinkedHashSet<String>()
         backend.list(normalized)
-            .filterNot { node -> pendingDeletedFiles.containsKey(node.path) }
             .forEach { node -> visibleNames += node.name }
         pendingCreatedFiles.keys
             .asSequence()
@@ -336,9 +334,8 @@ internal class LinuxNextcloudVirtualFileSystem(
         val id = fileInfo.fh.get()
         if (id != EMPTY_FILE_HANDLE) {
             synchronized(namespaceLock) {
-                val readPath = readHandlePaths.remove(id)
+                readHandlePaths.remove(id)
                 readHandles.remove(id)?.close()
-                if (readPath != null) finalizePendingDelete(readPath)
             }
             releaseWriteHandle(id)
         }
@@ -353,7 +350,6 @@ internal class LinuxNextcloudVirtualFileSystem(
     override fun create(path: String, mode: Long, fi: FuseFileInfo?): Int = fuseResult {
         val fileInfo = fi ?: return -ErrorCodes.EINVAL()
         val normalized = path.linuxVirtualPath()
-        if (pendingDeletedFiles.containsKey(normalized)) return -ErrorCodes.EBUSY()
         val parent = visibleNode(normalized.substringBeforeLast('/', ""))
             ?: return -ErrorCodes.ENOENT()
         if (!parent.directory) return -ErrorCodes.ENOTDIR()
@@ -373,7 +369,6 @@ internal class LinuxNextcloudVirtualFileSystem(
 
     override fun mkdir(path: String, mode: Long): Int = fuseResult {
         val normalized = path.linuxVirtualPath()
-        if (pendingDeletedFiles.containsKey(normalized)) return -ErrorCodes.EBUSY()
         val parent = visibleNode(normalized.substringBeforeLast('/', ""))
             ?: return -ErrorCodes.ENOENT()
         if (!parent.directory) return -ErrorCodes.ENOTDIR()
@@ -393,9 +388,6 @@ internal class LinuxNextcloudVirtualFileSystem(
             if (sourcePath == destination) return 0
             if (pendingCreatedFiles.containsKey(sourcePath)) return -ErrorCodes.EBUSY()
             if (hasOpenWriteHandleWithin(sourcePath) || hasOpenWriteHandleWithin(destination)) {
-                return -ErrorCodes.EBUSY()
-            }
-            if (hasPendingDeleteWithin(sourcePath) || hasPendingDeleteWithin(destination)) {
                 return -ErrorCodes.EBUSY()
             }
             val source = visibleNode(sourcePath) ?: return -ErrorCodes.ENOENT()
@@ -471,8 +463,6 @@ internal class LinuxNextcloudVirtualFileSystem(
         readHandlePaths.clear()
         writeHandles.clear()
         pendingCreatedFiles.clear()
-        pendingDeletedFiles.values.forEach { node -> runCatching { backend.delete(node) } }
-        pendingDeletedFiles.clear()
         umount()
     }
 
@@ -530,20 +520,7 @@ internal class LinuxNextcloudVirtualFileSystem(
             openPath == path || openPath.startsWith("$path/")
         }
 
-    private fun hasPendingDeleteWithin(path: String): Boolean =
-        pendingDeletedFiles.keys.any { pendingPath ->
-            pendingPath == path || pendingPath.startsWith("$path/")
-        }
-
-    private fun visibleNode(path: String): LinuxVirtualFileNode? =
-        if (pendingDeletedFiles.containsKey(path)) null else backend.resolve(path)
-
-    private fun finalizePendingDelete(path: String) {
-        if (readHandlePaths.containsValue(path)) return
-        val pending = pendingDeletedFiles[path] ?: return
-        backend.delete(pending)
-        pendingDeletedFiles.remove(path, pending)
-    }
+    private fun visibleNode(path: String): LinuxVirtualFileNode? = backend.resolve(path)
 
     private fun deletePath(path: String, expectDirectory: Boolean): Int = fuseResult {
         synchronized(namespaceLock) {
@@ -560,11 +537,8 @@ internal class LinuxNextcloudVirtualFileSystem(
                 }
                 if (hasRemoteChildren || hasPendingChildren) return -ErrorCodes.ENOTEMPTY()
             }
-            if (!expectDirectory && readHandlePaths.containsValue(normalized)) {
-                pendingDeletedFiles[normalized] = node
-            } else {
-                backend.delete(node)
-            }
+            if (!expectDirectory && readHandlePaths.containsValue(normalized)) return -ErrorCodes.EBUSY()
+            backend.delete(node)
             0
         }
     }

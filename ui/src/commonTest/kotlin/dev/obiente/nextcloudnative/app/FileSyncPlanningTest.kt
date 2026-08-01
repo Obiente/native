@@ -125,6 +125,68 @@ class FileSyncPlanningTest {
     }
 
     @Test
+    fun oneWaySyncNeverMutatesTheProhibitedSideDuringDeletionEditRaces() {
+        val uploadOnly = planFileSync(
+            localEntries = emptyList(),
+            remoteEntries = listOf(remote("vault/a.md", "remote-2")),
+            baselines = listOf(baseline("vault/a.md", "local-1", "remote-1")),
+            configuration = config.copy(direction = FileSyncDirection.UploadOnly),
+        ).operations.single()
+        assertEquals(
+            FileSyncDecisionReason.LocalDeletion,
+            assertIs<FileSyncOperation.NeedsDecision>(uploadOnly).reason,
+        )
+
+        val downloadOnly = planFileSync(
+            localEntries = listOf(local("vault/a.md", "local-2")),
+            remoteEntries = emptyList(),
+            baselines = listOf(baseline("vault/a.md", "local-1", "remote-1")),
+            configuration = config.copy(direction = FileSyncDirection.DownloadOnly),
+        ).operations.single()
+        assertEquals(
+            FileSyncDecisionReason.RemoteDeletion,
+            assertIs<FileSyncOperation.NeedsDecision>(downloadOnly).reason,
+        )
+
+        fun scanned(configuration: FileSyncConfiguration, localEntries: List<LocalSyncEntry>, remoteEntries: List<RemoteSyncEntry>) =
+            scanFileSyncPair(
+                state = FileSyncCoordinatorState(
+                    listOf(
+                        FileSyncPair(
+                            id = "pair",
+                            accountId = "account",
+                            localRootId = "root",
+                            remoteRootPath = "vault",
+                            configuration = configuration,
+                            baselines = listOf(baseline("vault/a.md", "local-1", "remote-1")),
+                        ),
+                    ),
+                ),
+                pairId = "pair",
+                localEntries = localEntries,
+                remoteEntries = remoteEntries,
+                nowEpochMillis = 1L,
+            ).pairs.single().workItems.single().decision?.choices
+
+        assertEquals(
+            setOf(FileSyncDecisionChoice.PropagateDeletion, FileSyncDecisionChoice.Skip),
+            scanned(
+                config.copy(direction = FileSyncDirection.UploadOnly),
+                emptyList(),
+                listOf(remote("vault/a.md", "remote-2")),
+            ),
+        )
+        assertEquals(
+            setOf(FileSyncDecisionChoice.PropagateDeletion, FileSyncDecisionChoice.Skip),
+            scanned(
+                config.copy(direction = FileSyncDirection.DownloadOnly),
+                listOf(local("vault/a.md", "local-2")),
+                emptyList(),
+            ),
+        )
+    }
+
+    @Test
     fun directoryDeletionsUseTheSameExplicitPolicyAsFiles() {
         val operation = planFileSync(
             localEntries = emptyList(),

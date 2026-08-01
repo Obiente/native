@@ -449,8 +449,15 @@ private fun planLocalDeletion(
     configuration: FileSyncConfiguration,
 ): FileSyncOperation? {
     if (remote == null) return null
-    if (configuration.direction == FileSyncDirection.DownloadOnly || remoteChanged) {
+    if (configuration.direction == FileSyncDirection.DownloadOnly) {
         return FileSyncOperation.Download(path, null)
+    }
+    if (remoteChanged) {
+        return if (configuration.direction == FileSyncDirection.UploadOnly) {
+            FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.LocalDeletion)
+        } else {
+            FileSyncOperation.Download(path, null)
+        }
     }
     return when (configuration.deletionPolicy) {
         FileSyncDeletionPolicy.Ask -> FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.LocalDeletion)
@@ -466,8 +473,15 @@ private fun planRemoteDeletion(
     localChanged: Boolean,
     configuration: FileSyncConfiguration,
 ): FileSyncOperation? {
-    if (configuration.direction == FileSyncDirection.UploadOnly || localChanged) {
+    if (configuration.direction == FileSyncDirection.UploadOnly) {
         return FileSyncOperation.Upload(path, null)
+    }
+    if (localChanged) {
+        return if (configuration.direction == FileSyncDirection.DownloadOnly) {
+            FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.RemoteDeletion)
+        } else {
+            FileSyncOperation.Upload(path, null)
+        }
     }
     return when (configuration.deletionPolicy) {
         FileSyncDeletionPolicy.Ask -> FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.RemoteDeletion)

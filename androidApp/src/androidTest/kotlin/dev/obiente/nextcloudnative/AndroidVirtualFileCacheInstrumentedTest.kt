@@ -10,6 +10,7 @@ import java.io.File
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -85,6 +86,20 @@ class AndroidVirtualFileCacheInstrumentedTest {
         lease.release()
         cache.freeUp(session, bytes.size.toLong())
         assertNull(cache.acquire(session, file.path, expectedRemoteEtag = "\"raf-v1\""))
+    }
+
+    @Test
+    fun cacheStartupReclaimsInterruptedOwnedHydrationStages() {
+        val stagingDirectory = File(context.cacheDir, "virtual-files-v1/staging").apply { mkdirs() }
+        val interrupted = File(stagingDirectory, "hydrate-interrupted.part").apply {
+            writeText("partial bytes")
+        }
+        val unrelated = File(stagingDirectory, "user-file.part").apply { writeText("preserve") }
+
+        AndroidVirtualFileCache(context)
+
+        assertFalse(interrupted.exists())
+        org.junit.Assert.assertTrue(unrelated.exists())
     }
 
     @Test
@@ -174,6 +189,38 @@ class AndroidVirtualFileCacheInstrumentedTest {
         assertEquals(0, androidDocumentPendingWritebackCount(context, session))
         active.releaseActive()
         assertEquals(1, androidDocumentPendingWritebackCount(context, session))
+    }
+
+    @Test
+    fun ambiguousWritebackCanBePersistedAsAnExplicitConflict() {
+        val recovery = File(context.filesDir, "documents-recovery").apply { mkdirs() }
+        val stage = File(recovery, "writeback-conflict.stage").apply { writeText("local edit") }
+        val manifest = File(recovery, stage.name + ".json").apply {
+            writeText(
+                JSONObject()
+                    .put("version", 1)
+                    .put("account", NextcloudDocumentIds.accountKey(session))
+                    .put("path", "Notes/conflict.md")
+                    .put("etag", "\"v1\"")
+                    .put("displayName", "conflict.md")
+                    .put("stage", stage.name)
+                    .put("startedAt", 10L)
+                    .put("ready", true)
+                    .toString(),
+            )
+        }
+        val pending = AndroidDocumentPendingWriteback(
+            stage,
+            manifest,
+            NextcloudDocumentIds.accountKey(session),
+            "Notes/conflict.md",
+            "\"v1\"",
+        )
+
+        pending.markConflict("\"v2\"")
+
+        assertEquals(true, androidDocumentPendingWritebacks(context, session).single().conflict)
+        assertEquals("local edit", stage.readText())
     }
 
     @Test

@@ -217,7 +217,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             }
             if (!empty.exists()) empty = virtualFiles.createHydrationStagingFile()
             return ParcelFileDescriptor.open(empty, ParcelFileDescriptor.MODE_READ_ONLY, WRITE_HANDLER) {
-                empty.delete()
+                virtualFiles.discardHydrationStagingFile(empty)
             }
         }
         val rangeSession = services.openFileRangeSession(
@@ -236,6 +236,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                     .onFailure { failure -> Log.w(LOG_TAG, "Virtual file cache publish failed", failure) }
                     .getOrDefault(false)
             },
+            discardIncompleteHydration = virtualFiles::discardHydrationStagingFile,
         )
         signal?.setOnCancelListener(callback::cancel)
         return try {
@@ -356,6 +357,10 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val writeback: AndroidDocumentPendingWriteback
         try {
             recovered = claimAndroidDocumentPendingWriteback(context, session, file.path)
+            if (recovered?.conflict == true) {
+                recovered.releaseActive()
+                error("This retained local edit conflicts with a newer Nextcloud generation.")
+            }
             writeback = recovered ?: createDurableWriteback(session, file, requireMutationEtag(file))
         } catch (failure: Throwable) {
             releaseAndroidDocumentWritebackPath(session, file.path)
@@ -749,6 +754,7 @@ internal data class AndroidDocumentPendingWriteback(
     val accountId: String,
     val remotePath: String,
     val expectedRemoteEtag: String,
+    val conflict: Boolean = false,
 ) {
     init {
         require(accountId.isNotBlank())
@@ -776,6 +782,33 @@ internal data class AndroidDocumentPendingWriteback(
                 Files.move(temporary.toPath(), manifest.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
             ACTIVE_ANDROID_DOCUMENT_WRITEBACKS += manifest.activeWritebackKey()
+        } finally {
+            temporary.delete()
+        }
+    }
+
+    fun markConflict(observedRemoteEtag: String?) = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
+        val data = JSONObject(manifest.readText())
+            .put("conflict", true)
+            .put("observedEtag", observedRemoteEtag ?: JSONObject.NULL)
+        val payload = data.toString().encodeToByteArray()
+        require(payload.size <= 64 * 1024)
+        val temporary = File.createTempFile("manifest-", ".tmp", manifest.parentFile)
+        try {
+            FileOutputStream(temporary).use { output ->
+                output.write(payload)
+                output.fd.sync()
+            }
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    manifest.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary.toPath(), manifest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
         } finally {
             temporary.delete()
         }
@@ -918,6 +951,7 @@ private fun parseAndroidDocumentWriteback(
         accountId = account,
         remotePath = data.getString("path"),
         expectedRemoteEtag = data.getString("etag"),
+        conflict = data.optBoolean("conflict", false),
     )
 }.getOrNull()
 

@@ -213,7 +213,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "fefd05dcc5dfae93eca363d168ce484879f2eed3f8c2c4b07ced05ae6a6ee6bb",
+    "captureSourceSha256": "334681851a3a8e1556d953defab9cb345f2e1ca5023e5f22c140af3f348586eb",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {
@@ -228,7 +228,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "1495005bbb47a669a52ebd4931e821e1cbc7a76608b7df608382aabf7fa41f95"
+            "sha256": "8c51b7a628149cd9c7dad580de118d55e653eb11708651d699346393e0cdb814"
         },
         {
             "scenario": "mobile-home",
@@ -242,7 +242,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "f92c861a4800b7a52886eb902849c5719ebc6db6eadfa6ea4e8d4ae8600ce714"
+            "sha256": "071f9d85242b37a8cac81a06fb23e290d452bd0c48923c910155fc50882336bc"
         },
         {
             "scenario": "obsidian-vault-sync",
@@ -256,7 +256,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-compact",
-            "sha256": "05c7cf4cde6f9954ef13ad66233504f4ea9f3d08219fb652e69bba23c4d59b1f"
+            "sha256": "92effc92d25f6d8f2a733391e02e87935e670de5ab766b100253c92e68c6ee57"
         },
         {
             "scenario": "media-backup-queue",
@@ -270,7 +270,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "28baab9a53b8620070500077ef7264a8cdb1a03f65366c18403635bb65fa63eb"
+            "sha256": "480d55c3a41249a145552c68a651681974be04f662b748c085e695eb1d8f15b2"
         },
         {
             "scenario": "file-sync-rules-mobile",
@@ -284,7 +284,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "e59945c879b92e1dcf7245e7e03f4103a856a7fe3da29acf638a821ee651292b"
+            "sha256": "cdaeebb040a176f9355e05fc78cbd7ec094a9cb3e33acfdd37a50b9b454f54df"
         },
         {
             "scenario": "file-sync-status-mobile",
@@ -298,7 +298,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "9f969a0294981d3ba6b25633e3f4ae564177fe2c0ece0d9ed9cb3e81ab021383"
+            "sha256": "416941a8930fd0c3912ec03a86647769712607ab80e0de1304cde395f2e772af"
         },
         {
             "scenario": "file-sync-status-desktop",
@@ -312,7 +312,7 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "8559c9d990f46a25b85a79a40ce34afd993df0faf1bbccc6033edee7fd10d8f8"
+            "sha256": "f9abfbd6811164c1d4555c86f272c563ca00f848488d27039971fd3c2579ba80"
         },
         {
             "scenario": "file-sync-setup-desktop",
@@ -326,7 +326,7 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "3fd752198caec382feecf3b6bb7cbc29bef310f9ad17b2dfdf6595defe4dbcff"
+            "sha256": "e87550eb59e37ea3272d2111efd063fcfa21ba953856d41e3ce48043e45fb931"
         },
         {
             "scenario": "file-sync-selection-desktop",
@@ -340,7 +340,7 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "93d9c093a96d06166c399cd0ca152350a10c49d520a5a8dbd4d84b1ada0e3502"
+            "sha256": "1ab3ccc92d7e04d84fbae123e4f2ecb216a6e6aa507e0df1343738906ab46c05"
         },
         {
             "scenario": "file-sync-selection-mobile",
@@ -354,7 +354,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "319abb2fa2e0de0fe1a91f04e69b60e8eea1074321a9566212d4f8a603502cff"
+            "sha256": "5dfa7a84ec3fd2aa61ef63721dc2e2d01747df5e6f7ac029bfa93101bce9705b"
         },
         {
             "scenario": "virtual-file-storage-mobile",
@@ -368,7 +368,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "844406d0ce52de30ae201269734d195467224b93ea6e8983305d3c43061811b0"
+            "sha256": "16323447e8142814960387f19e88b5181c8137baf0df41896278bbb28a4d3164"
         },
         {
             "scenario": "virtual-file-storage-desktop",
@@ -382,7 +382,7 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "9f3c99fbe7bd24510c726457bf259611edf3d8c40c3e644fd4e0ad8a2553b8ca"
+            "sha256": "c84fc9b38f87706be8604554b5f38744f33482ac00c08c5007cf69d7ab6e13b4"
         },
         {
             "scenario": "desktop-startup-settings",
@@ -396,7 +396,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "c41cd6d3441e321545175793ff4a8cb7c880c908918d564a91e827c978a9f0f8"
+            "sha256": "7d09486e46635bbef8686eeb60a0f4d12755c55fd3d6839e382719fd168f0165"
         },
         {
             "scenario": "adaptive-dynamic-data",
@@ -410,7 +410,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "ddbe82d0dc42a3902f41897231147402d7e3b6d0c0b51a15ce69ff1d2cf40202"
+            "sha256": "839e03dca564c5337ad6c1b941e692690a2fcac2c415ecac055265467fa54b45"
         },
         {
             "scenario": "adaptive-dynamic-data-mobile",
@@ -424,7 +424,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "304a7dea161c51ec61978764db46d69fbf9194476fe7ae05b8c900b645fe59c7"
+            "sha256": "58362248560249ad0978ae981764d80beb6a38ed352807addce472ce70ce85ff"
         },
         {
             "scenario": "adaptive-dynamic-collection-mobile",
@@ -438,7 +438,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "849dbda0b56d984944f77b7d547d03b9bf3aaf0ac6de2d96ce6138445d65f796"
+            "sha256": "a9007162fc1d2bc7a47817d2d66a2e77103573fb9cdc79537233d5b81e36728a"
         },
         {
             "scenario": "adaptive-dynamic-context-menu-mobile",
@@ -452,7 +452,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "e483aa2640fc4df5c905c1a79af01c522cc2fa8c7ffc511433bd730329551080"
+            "sha256": "c38a69e6e2bdc734973c8424e4a3f4ec726d14f2a4f8b522393248e349351f7e"
         },
         {
             "scenario": "photo-timeline-revalidation-error-mobile",
@@ -468,7 +468,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 246,
             "issue": 242,
-            "sha256": "74b26981a5d7b8abfe3837acc238d69e99a34db6f2af88cda7d20b41d5b32d03"
+            "sha256": "60d76a9530c215f5d5473975e162dda5b192fc56e3672401f53e9c0774c10740"
         },
         {
             "scenario": "photo-timeline-return-to-newest-error-mobile",
@@ -484,7 +484,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 246,
             "issue": 242,
-            "sha256": "dbe920a60aed29947f5c81c30d173c67e0013506a84329ebefb57125fe702b2f"
+            "sha256": "c6960155703b6bee4216b684adda94c9c4b5325e621d10d7c24be2cd0be5213f"
         },
         {
             "scenario": "photo-timeline-raw-retry-mobile",
@@ -500,7 +500,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 249,
             "issue": 248,
-            "sha256": "6af1b7d716ea58413727e3e5ce1fbd178d772b583e8481ebc71a5cd6fa1ebccd"
+            "sha256": "b82e70232c249715c0e18db678f24bc84f1c77db2463770a8a2c5b4d45c62ee9"
         },
         {
             "scenario": "photo-folder-browser-mobile",
@@ -516,7 +516,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 245,
             "issue": 243,
-            "sha256": "60c32a8efa89d4f1c6d006a44912abd6504cdf7321002b0e886f9ea45204d219"
+            "sha256": "c24e27abd1a897d556c0dac47448bf00da2deb1ab12065401aae05f730de6a35"
         },
         {
             "scenario": "photo-folder-browser-desktop",
@@ -532,7 +532,7 @@
             "viewport": "wide",
             "pullRequest": 245,
             "issue": 243,
-            "sha256": "c22be231ab73c80eeb8619932b7830463100fe0aa1293ee0f31660f3b09cabfd"
+            "sha256": "0222cf8131beeff16e5ab0448b8de4e3cf7616520a5781bac015d2755335d5b5"
         },
         {
             "scenario": "raw-preview-loading-mobile",
@@ -548,7 +548,7 @@
             "viewport": "phone-compact",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "14744822f7b9e60015675f2515f3b7e9685345ef3d56c080556f2cf9acc935e7"
+            "sha256": "05e2c33c9a37cad7a95808419b77e72b7e33c1d4274e658cb04e65edac9c0193"
         },
         {
             "scenario": "raw-preview-error-mobile",
@@ -564,7 +564,7 @@
             "viewport": "phone-compact",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "7aef0508cdbae8d691c9187847de3c0d188cef65465021ce861aee6d3eb0863a"
+            "sha256": "01d0d42f3dc57b3f0a5da0353ad40f30a9e9e219fbc52b0c65358d72c41758d0"
         },
         {
             "scenario": "raw-preview-memories-ready-mobile",
@@ -580,7 +580,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "0381f21fa25ef09aeca8d7a9606f39eab96a8ad0e5a2178ef1fc14561fa0fc39"
+            "sha256": "25cd22beb5640c73269b5b786fc6a6525e0913f402c17c29f963c2709c8b2a7a"
         },
         {
             "scenario": "raw-preview-high-detail-desktop",
@@ -596,7 +596,7 @@
             "viewport": "wide",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "265c35d941a8ebce4c0408544dcb78cfc0ac3700dd4b1366e04cf2792b451028"
+            "sha256": "5b0d81b2626247baf3572be949143fee9cdf8392156a5a5eee5d9d70ad160a9e"
         },
         {
             "scenario": "live-photo-motion-failure-mobile",
@@ -612,7 +612,7 @@
             "viewport": "phone-compact",
             "pullRequest": 249,
             "issue": 182,
-            "sha256": "2f248b1b9251f0211774cd57c33a9e639c31ca7935147d0a309120f070ae914a"
+            "sha256": "3fc5ec6e2db43ebbebaca5b764e81d46685543bedfbeb391065d95ef0fc97f52"
         },
         {
             "scenario": "native-tiff-preview-mobile",
@@ -628,7 +628,7 @@
             "viewport": "phone-compact",
             "pullRequest": 249,
             "issue": 84,
-            "sha256": "780fbac0bcf219772df7d99b2726deeec27ed9fa2355a16e1576e17ccdbe8ae2"
+            "sha256": "42a2fba65982fb18c7462b8a2838ad79507f43ebd5443b2cfcbd2bf147fca30d"
         },
         {
             "scenario": "file-share-user-mobile",
@@ -644,7 +644,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "c1084b73d58e6ad6f0dffc2e7e31f6c2388b1fe268205c3f20ff303f14f69aa0"
+            "sha256": "ea41901e75f47ff662d9b4d2f0ffb5fdf9822f8fde4e0decbdddef7675da8ae0"
         },
         {
             "scenario": "file-share-group-desktop",
@@ -660,7 +660,7 @@
             "viewport": "wide",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "7ec0df01a0a04ff054afb8a50672e64b3edfcf45f35cc15d90f8d396e3ff78ee"
+            "sha256": "5fc62f679169035bfdb67a2dbe8cea7c8c21a418448896294fc7988814f8e5b6"
         },
         {
             "scenario": "file-share-loading-mobile",
@@ -676,7 +676,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "03646d3ee9b1a809531b586df0014095f0cb1a6b9c885ab5b9d562492e2328e3"
+            "sha256": "e524289888582bbf6531c9e6467664d187e99c9d23508f020f0aaff638b48c02"
         },
         {
             "scenario": "file-share-error-mobile",
@@ -692,7 +692,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "5500df269e219eecbf7d9173b11698fef809e2d1b99a39ece1b4c4ec5a112514"
+            "sha256": "30107de4377bddd5a13fd851bc5283f784ef3fe96f67e8cc81be5e41c35ae83e"
         },
         {
             "scenario": "transfer-mobile-pending",
@@ -708,7 +708,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "9cc97dd52807da7d43fa0ae5a2ec1b2d1acf8258d5289a38262ea7c8ffd8b992"
+            "sha256": "5a8ec403de582eab401e9c2173df8e5fdddabf7bf5664dc5a592eb037f9109e2"
         },
         {
             "scenario": "transfer-mobile-failed-cached",
@@ -724,7 +724,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "497e4544313c5b4910d6bec4f77547ed1876cb071305879a87b970275271ce59"
+            "sha256": "e5c2ecbc65842cd46b12006cc879ac0dfc7787d2cee03e5938d1222a05708da4"
         },
         {
             "scenario": "transfer-desktop-active",
@@ -740,7 +740,7 @@
             "viewport": "wide",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "099c1cbb5c61037b5aba13fe2ca59cf00307aebe98d2bce74f5b14b8252ea69f"
+            "sha256": "b1c3ba9ed6236345ae8fe8d18024ea2adaed33a861758a1aa52d571d634083a1"
         },
         {
             "scenario": "transfer-desktop-completed-page",
@@ -756,7 +756,7 @@
             "viewport": "wide",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "2d2d6887f26d60551c25e774b0f3bcd4ea46df54d34d697a408d5661bd61d1df"
+            "sha256": "570b0c78d0d88f73407a7ea827fb6c26a8d1c3f4bc19f2bd05e10a8e38df9a23"
         },
         {
             "scenario": "deck-board-desktop",
@@ -772,7 +772,7 @@
             "viewport": "wide",
             "pullRequest": 221,
             "issue": 52,
-            "sha256": "f13fdb332b679bc88f76a2d9393f9da1c529dbb893c6aec490f455bfe44ec9fe"
+            "sha256": "b41f9a2d8da5653fb1bc174d77f72bf1eda5c10b63e38209ed8f5fc9a17bc019"
         },
         {
             "scenario": "deck-board-mobile",
@@ -788,7 +788,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 221,
             "issue": 52,
-            "sha256": "a1cfcc4d620103cb146c3f2f5b2de1f9dd3ffdea6c73e8b31444107537fd6e18"
+            "sha256": "ea047a30de48e5366edf30e43d142ab8a6491617dcf0051d6f1f932a213133f5"
         }
     ]
 }

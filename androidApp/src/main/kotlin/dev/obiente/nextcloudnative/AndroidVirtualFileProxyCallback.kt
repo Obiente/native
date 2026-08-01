@@ -22,6 +22,7 @@ internal class AndroidVirtualFileProxyCallback(
     private val source: NextcloudFileRangeSession,
     private val staging: File?,
     private val publishCompleteHydration: (File) -> Boolean,
+    private val discardIncompleteHydration: (File) -> Unit = File::delete,
     private val blockSizeBytes: Int = DEFAULT_BLOCK_SIZE_BYTES,
 ) : ProxyFileDescriptorCallback() {
     private val cancelled = AtomicBoolean(false)
@@ -80,7 +81,7 @@ internal class AndroidVirtualFileProxyCallback(
         cancelled.set(true)
         source.close()
         runCatching { stagedContent?.close() }
-        if (!published) staging?.delete()
+        if (!published) staging?.let(discardIncompleteHydration)
     }
 
     fun cancel() {

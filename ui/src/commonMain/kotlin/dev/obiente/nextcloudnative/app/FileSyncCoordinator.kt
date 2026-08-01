@@ -62,8 +62,8 @@ data class FileSyncDecision(
     val state: FileSyncDecisionState = FileSyncDecisionState.Pending,
 ) {
     init {
-        require(choices == allowedFileSyncDecisions(reason)) {
-            "The decision choices do not match the conflict reason."
+        require(choices.isNotEmpty() && choices.all { it in allowedFileSyncDecisions(reason) }) {
+            "The decision choices are not valid for the conflict reason."
         }
         val resolved = state as? FileSyncDecisionState.Resolved
         require(resolved == null || resolved.choice in choices)
@@ -257,7 +257,10 @@ fun scanFileSyncPair(
             operation = operation,
             state = operation.initialExecutionState(),
             decision = (operation as? FileSyncOperation.NeedsDecision)?.let { needed ->
-                FileSyncDecision(needed.reason, allowedFileSyncDecisions(needed.reason))
+                FileSyncDecision(
+                    needed.reason,
+                    allowedFileSyncDecisions(needed.reason, pair.configuration),
+                )
             },
         )
     }
@@ -514,6 +517,25 @@ private fun allowedFileSyncDecisions(reason: FileSyncDecisionReason): Set<FileSy
     )
 }
 
+private fun allowedFileSyncDecisions(
+    reason: FileSyncDecisionReason,
+    configuration: FileSyncConfiguration,
+): Set<FileSyncDecisionChoice> = allowedFileSyncDecisions(reason).filterTo(linkedSetOf()) { choice ->
+    when (choice) {
+        FileSyncDecisionChoice.PropagateDeletion -> when (reason) {
+            FileSyncDecisionReason.LocalDeletion -> configuration.direction != FileSyncDirection.DownloadOnly
+            FileSyncDecisionReason.RemoteDeletion -> configuration.direction != FileSyncDirection.UploadOnly
+            else -> true
+        }
+        FileSyncDecisionChoice.RestoreMissing -> when (reason) {
+            FileSyncDecisionReason.LocalDeletion -> configuration.direction != FileSyncDirection.UploadOnly
+            FileSyncDecisionReason.RemoteDeletion -> configuration.direction != FileSyncDirection.DownloadOnly
+            else -> true
+        }
+        else -> true
+    }
+}
+
 private fun resolveDecisionOperation(
     pair: FileSyncPair,
     work: FileSyncWorkItem,
@@ -647,6 +669,11 @@ private fun requireValidFileSyncPair(pair: FileSyncPair) {
     pair.workItems.forEach { work ->
         requireBoundedWorkItem(work)
         val resolved = work.decision?.state as? FileSyncDecisionState.Resolved
+        work.decision?.let { decision ->
+            require(decision.choices == allowedFileSyncDecisions(decision.reason, pair.configuration)) {
+                "The persisted sync decision choices do not match the pair direction."
+            }
+        }
         val expectedOperation = if (resolved != null) {
             resolveDecisionOperation(pair, work, resolved.choice)
         } else {

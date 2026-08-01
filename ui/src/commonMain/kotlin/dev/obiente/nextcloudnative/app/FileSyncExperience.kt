@@ -566,6 +566,20 @@ private fun FileSyncPairDetails(
                     "${pair.failedCount} failed",
                 problem = pair.conflicts.isNotEmpty() || pair.failedCount > 0,
             )
+            if (pair.skippedCount > 0) {
+                FileSyncHealthLine(
+                    "Paused",
+                    "${pair.skippedCount} ${if (pair.skippedCount == 1) "item" else "items"}",
+                    problem = true,
+                )
+                pair.skippedReasons.forEach { reason ->
+                    Text(
+                        reason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
             pair.scheduleDescription?.let { FileSyncHealthLine("Schedule", it, problem = false) }
         }
         FileSyncDetailBlock("Rules") {
@@ -701,10 +715,12 @@ private fun FileSyncHealthLine(label: String, value: String, problem: Boolean) {
 @Composable
 private fun FileSyncHealthBadge(pair: FileSyncPairSummary, modifier: Modifier = Modifier) {
     val attention = pair.failedCount > 0 || pair.conflicts.isNotEmpty()
+    val paused = pair.skippedCount > 0
     val label = when {
         attention -> "Attention"
         pair.runningCount > 0 -> "Syncing"
         pair.readyCount > 0 -> "Ready"
+        paused -> "Paused"
         else -> "Up to date"
     }
     Surface(
@@ -712,6 +728,7 @@ private fun FileSyncHealthBadge(pair: FileSyncPairSummary, modifier: Modifier = 
         color = when {
             attention -> MaterialTheme.colorScheme.errorContainer
             pair.runningCount > 0 -> MaterialTheme.colorScheme.primaryContainer
+            paused -> MaterialTheme.colorScheme.tertiaryContainer
             else -> MaterialTheme.colorScheme.secondaryContainer
         },
         shape = RoundedCornerShape(999.dp),
@@ -723,6 +740,7 @@ private fun FileSyncHealthBadge(pair: FileSyncPairSummary, modifier: Modifier = 
             color = when {
                 attention -> MaterialTheme.colorScheme.onErrorContainer
                 pair.runningCount > 0 -> MaterialTheme.colorScheme.onPrimaryContainer
+                paused -> MaterialTheme.colorScheme.onTertiaryContainer
                 else -> MaterialTheme.colorScheme.onSecondaryContainer
             },
             maxLines = 1,

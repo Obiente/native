@@ -161,6 +161,7 @@ data class FileSyncPairSummary(
     val completedCount: Int = 0,
     val lastScanEpochMillis: Long?,
     val scheduleDescription: String? = null,
+    val skippedReasons: List<String> = emptyList(),
 ) {
     init {
         require(id.isSafeFileSyncCenterText(256))
@@ -172,6 +173,8 @@ data class FileSyncPairSummary(
         require(conflicts.map(FileSyncConflictSummary::workId).distinct().size == conflicts.size)
         require(lastScanEpochMillis == null || lastScanEpochMillis >= 0L)
         require(scheduleDescription == null || scheduleDescription.isSafeFileSyncCenterText(256))
+        require(skippedReasons.size <= 20)
+        require(skippedReasons.all { reason -> reason.isSafeFileSyncCenterText(1_024) })
     }
 }
 
@@ -251,6 +254,11 @@ fun FileSyncPair.toCenterSummary(
         completedCount = baselines.size,
         lastScanEpochMillis = lastScanEpochMillis,
         scheduleDescription = scheduleDescription,
+        skippedReasons = workItems.mapNotNull { work ->
+            (work.operation as? FileSyncOperation.Skipped)
+                ?.takeIf { work.state == FileSyncExecutionState.Skipped }
+                ?.reason
+        }.distinct().take(20),
     )
 
 private fun String.isSafeFileSyncCenterText(maxLength: Int): Boolean =

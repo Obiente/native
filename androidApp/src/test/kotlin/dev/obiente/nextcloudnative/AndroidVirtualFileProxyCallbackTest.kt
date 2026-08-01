@@ -11,6 +11,28 @@ import kotlin.test.assertTrue
 
 class AndroidVirtualFileProxyCallbackTest {
     @Test
+    fun `writeback reconciliation compares remote bytes without replacing the retained stage`() {
+        val staging = Files.createTempFile("writeback-compare-", ".stage").toFile().apply {
+            writeText("retained edit")
+        }
+        try {
+            val matching = AndroidDocumentStagingComparator(staging)
+            matching.write("retained edit".encodeToByteArray())
+            assertTrue(matching.matches(staging.length()))
+            matching.close()
+
+            val different = AndroidDocumentStagingComparator(staging)
+            different.write("remote change".encodeToByteArray())
+            assertFalse(different.matches("remote change".length.toLong()))
+            different.close()
+
+            assertEquals("retained edit", staging.readText())
+        } finally {
+            staging.delete()
+        }
+    }
+
+    @Test
     fun `active child writeback blocks parent and exact path mutations`() {
         assertTrue(
             androidDocumentWritebackPathBlocksMutation(
