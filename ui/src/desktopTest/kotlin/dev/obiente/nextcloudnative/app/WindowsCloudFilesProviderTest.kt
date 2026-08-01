@@ -8,6 +8,7 @@ import java.nio.file.Path
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.writeBytes
 import kotlin.test.Test
@@ -218,6 +219,21 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun `callback paths are rooted on the reported Windows volume`() {
+        assertEquals(
+            "D:\\Users\\runner\\Nextcloud Native\\Apps",
+            windowsCloudAbsoluteCallbackPath("D:", "\\Users\\runner\\Nextcloud Native\\Apps"),
+        )
+        assertEquals(
+            "C:\\Users\\runner\\Nextcloud Native\\Apps",
+            windowsCloudAbsoluteCallbackPath("D:", "C:\\Users\\runner\\Nextcloud Native\\Apps"),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            windowsCloudAbsoluteCallbackPath("", "\\Users\\runner\\Nextcloud Native\\Apps")
+        }
+    }
+
+    @Test
     fun `patterned population still transfers the complete directory`() {
         val root = createTempDirectory("windows-cloud-pattern-")
         val directory = WindowsCloudFileIdentity("account-01", "Apps", "\"directory\"", 0L, true)
@@ -358,15 +374,38 @@ class WindowsCloudFilesProviderTest {
         val local = root.resolve("edit.txt")
         local.writeBytes("local edit".encodeToByteArray())
         val old = WindowsCloudFileIdentity("account-01", "edit.txt", "\"etag-01\"", local.toFile().length(), false)
-        val backend = FakeBackend("fresh".encodeToByteArray(), expectedUploads = 1)
-        val api = FakeApi().apply { seed(local, WindowsCloudPlaceholderState.Dirty, old) }
+        val backend = FakeBackend(
+            "fresh".encodeToByteArray(),
+            listed = listOf(old),
+            expectedUploads = 1,
+            blockFirstUpload = true,
+        )
+        val api = FakeApi(expectedIdentityReads = 4).apply {
+            seed(local, WindowsCloudPlaceholderState.Dirty, old)
+        }
         val provider = WindowsCloudFilesProvider(root, backend, api)
 
         provider.start()
+        assertTrue(backend.awaitFirstUploadStarted())
 
+        val migrationFailure = AtomicReference<Throwable?>()
+        val migration = Thread {
+            runCatching { provider.recoverBeforeRootMigration(timeoutSeconds = 5L) }
+                .onFailure(migrationFailure::set)
+        }
+        migration.start()
+
+        try {
+            assertTrue(api.awaitIdentityReads())
+        } finally {
+            backend.releaseFirstUpload()
+        }
+        migration.join(TimeUnit.SECONDS.toMillis(5L))
+        assertFalse(migration.isAlive)
+        migrationFailure.get()?.let { throw it }
         assertTrue(backend.awaitUploads())
-        provider.recoverBeforeRootMigration(timeoutSeconds = 5L)
         assertEquals("\"etag-01\"", backend.lastExpectedRemoteRevision)
+        assertEquals(listOf<String?>("\"etag-01\""), backend.uploadExpectedRevisions)
         assertEquals(0, provider.summary().pendingWritebackCount)
         provider.close()
     }

@@ -924,7 +924,7 @@ internal class WindowsCloudFilesProvider(
                         ?: return@forEach
                     knownIdentities[original.path] = original
                     if (state != WindowsCloudPlaceholderState.Dirty || original.directory) return@forEach
-                    pendingWritebacks += original.path
+                    if (!pendingWritebacks.add(original.path)) return@forEach
                     submitPathOperation(original.path) {
                         val current = requireNotNull(api.placeholderIdentity(local)) {
                             "The dirty Windows placeholder has no recoverable identity."

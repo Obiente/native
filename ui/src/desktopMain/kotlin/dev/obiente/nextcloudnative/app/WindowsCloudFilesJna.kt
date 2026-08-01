@@ -348,7 +348,10 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
             connectionKey = nativeInfo.connectionKey,
             transferKey = nativeInfo.transferKey,
             requestKey = nativeInfo.requestKey,
-            normalizedPath = nativeInfo.normalizedPath?.toString().orEmpty(),
+            normalizedPath = windowsCloudAbsoluteCallbackPath(
+                volumeDosName = nativeInfo.volumeDosName?.toString().orEmpty(),
+                normalizedPath = nativeInfo.normalizedPath?.toString().orEmpty(),
+            ),
             fileIdentity = identity,
             fileSize = nativeInfo.fileSize,
             priorityHint = nativeInfo.priorityHint.toInt() and 0xff,
@@ -719,6 +722,18 @@ private fun String.wideMemory(): Memory = Memory(((length + 1) * Native.WCHAR_SI
 internal fun isWindowsDesktop(): Boolean =
     System.getProperty("os.name").orEmpty().lowercase().contains("windows")
 
+internal fun windowsCloudAbsoluteCallbackPath(volumeDosName: String, normalizedPath: String): String {
+    require(normalizedPath.isNotBlank()) { "The Cloud Files callback has no normalized path." }
+    if (WINDOWS_ABSOLUTE_PATH.matchesAt(normalizedPath, 0)) return normalizedPath
+    require(WINDOWS_VOLUME_DOS_NAME.matches(volumeDosName)) {
+        "The Cloud Files callback has no valid DOS volume name."
+    }
+    require(normalizedPath.first() == '\\' || normalizedPath.first() == '/') {
+        "The Cloud Files callback path is not rooted on its volume."
+    }
+    return "$volumeDosName$normalizedPath"
+}
+
 internal data class WindowsCloudNativeLayoutSizes(
     val registration: Int,
     val policies: Int,
@@ -737,3 +752,5 @@ internal fun windowsCloudNativeLayoutSizes(): WindowsCloudNativeLayoutSizes = Wi
 
 private const val WINDOWS_EPOCH_OFFSET_MILLIS = 11_644_473_600_000L
 private const val WINDOWS_FILE_TIME_TICKS_PER_MILLISECOND = 10_000L
+private val WINDOWS_ABSOLUTE_PATH = Regex("^[A-Za-z]:[\\\\/]")
+private val WINDOWS_VOLUME_DOS_NAME = Regex("^[A-Za-z]:$")
