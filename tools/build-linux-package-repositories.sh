@@ -57,12 +57,17 @@ if [[ "${#deb_packages[@]}" -eq 0 || "${#rpm_packages[@]}" -eq 0 ]]; then
     exit 2
 fi
 
-available_fingerprints="$(
+primary_fingerprint="$(
     gpg --batch --with-colons --list-secret-keys "$signing_fingerprint" 2>/dev/null |
-        awk -F: '$1 == "fpr" { print toupper($10) }'
+        awk -F: '$1 == "sec" { primary = 1; next }
+            primary && $1 == "fpr" { print toupper($10); exit }'
 )"
-if ! grep -Fxq "$signing_fingerprint" <<<"$available_fingerprints"; then
+if [[ -z "$primary_fingerprint" ]]; then
     printf 'The configured OpenPGP signing key is not available in the active GnuPG home.\n' >&2
+    exit 2
+fi
+if [[ "$signing_fingerprint" != "$primary_fingerprint" ]]; then
+    printf 'NC_LINUX_REPOSITORY_SIGNING_FINGERPRINT must identify the primary signing certificate.\n' >&2
     exit 2
 fi
 
@@ -101,6 +106,12 @@ for package in "${deb_packages[@]}"; do
     fi
 done
 
+all_packages_index="$temporary/Packages.all"
+(
+    cd "$apt_root"
+    apt-ftparchive packages pool
+) >"$all_packages_index"
+
 apt_architecture_names=()
 if [[ "${#apt_architectures[@]}" -gt 0 ]]; then
     mapfile -t apt_architecture_names < <(printf '%s\n' "${!apt_architectures[@]}" | sort)
@@ -112,10 +123,8 @@ fi
 for architecture in "${apt_architecture_names[@]}"; do
     index_directory="$apt_root/dists/$channel/main/binary-$architecture"
     mkdir -p "$index_directory"
-    (
-        cd "$apt_root"
-        apt-ftparchive --arch "$architecture" packages pool
-    ) >"$index_directory/Packages"
+    python3 "$project_root/tools/filter-deb-packages-index.py" \
+        "$all_packages_index" "$index_directory/Packages" "$architecture"
     gzip --best --no-name --keep "$index_directory/Packages"
 
     mapfile -d '' architecture_packages < <(

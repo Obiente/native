@@ -82,6 +82,11 @@ EOF
         "$deb_root" "$packages/${package_name}_1.2.3-1_${package_architecture}.deb" >/dev/null
 done
 
+while IFS= read -r -d '' package; do
+    package_name="$(dpkg-deb --field "$package" Package)"
+    mv -- "$package" "$packages/retained-$package_name.deb"
+done < <(find "$packages" -maxdepth 1 -type f -name '*.deb' -print0)
+
 rpm_top="$temporary/rpmbuild"
 mkdir -p "$rpm_top/BUILD" "$rpm_top/BUILDROOT" "$rpm_top/RPMS" \
     "$rpm_top/SOURCES" "$rpm_top/SPECS" "$rpm_top/SRPMS"
@@ -131,6 +136,14 @@ fingerprint="$(
     gpg --batch --with-colons --list-secret-keys |
         awk -F: '$1 == "fpr" { print toupper($10); exit }'
 )"
+gpg --batch --pinentry-mode loopback --passphrase '' \
+    --quick-add-key "$fingerprint" rsa2048 sign 0 >/dev/null 2>&1
+signing_subkey_fingerprint="$(
+    gpg --batch --with-colons --list-secret-keys "$fingerprint" |
+        awk -F: '$1 == "ssb" { subkey = 1; next }
+            subkey && $1 == "fpr" { print toupper($10); exit }'
+)"
+test -n "$signing_subkey_fingerprint"
 export NC_LINUX_REPOSITORY_SIGNING_FINGERPRINT="$fingerprint"
 
 output="$temporary/repository"
@@ -140,6 +153,8 @@ output="$temporary/repository"
 grep -Fxq 'Package: nextcloudnative' \
     "$output/apt/dists/prerelease/main/binary-amd64/Packages"
 grep -Fxq 'Package: nextcloud-native-vfs' \
+    "$output/apt/dists/prerelease/main/binary-amd64/Packages"
+grep -Fq 'Filename: pool/main/n/nextcloudnative/retained-nextcloudnative.deb' \
     "$output/apt/dists/prerelease/main/binary-amd64/Packages"
 grep -Fxq 'Architectures: amd64' "$output/apt/dists/prerelease/Release"
 grep -Eq '^Valid-Until: .+ \+0000$' "$output/apt/dists/prerelease/Release"
@@ -239,6 +254,15 @@ if [[ -e "$nightly_output/rpm/prerelease" ]]; then
 fi
 grep -Fq 'baseurl=https://packages.example.invalid/rpm/nightly/$basearch' \
     "$nightly_output/nextcloud-native.repo"
+subkey_output="$temporary/subkey-repository"
+if NC_LINUX_REPOSITORY_SIGNING_FINGERPRINT="$signing_subkey_fingerprint" \
+    "$project_root/tools/build-linux-package-repositories.sh" \
+    "$packages" "$subkey_output" prerelease https://packages.example.invalid \
+    >"$temporary/subkey-output" 2>&1; then
+    printf 'Repository builder accepted a signing subkey fingerprint.\n' >&2
+    exit 1
+fi
+grep -Fq 'must identify the primary signing certificate' "$temporary/subkey-output"
 if "$project_root/tools/build-linux-package-repositories.sh" \
     "$packages" "$output" prerelease https://packages.example.invalid \
     >"$temporary/reuse-output" 2>&1; then

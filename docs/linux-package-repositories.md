@@ -66,26 +66,39 @@ published in the corresponding release at
 `https://github.com/Obiente/nc-native/releases`. That GitHub-hosted value is the
 independently authenticated expected fingerprint. Download the certificate to
 a temporary file, inspect it locally, and compare the complete value before
-installing it:
+installing a clean export of it:
 
 ```bash
 expected_fingerprint=FULL_FINGERPRINT_FROM_THE_GITHUB_RELEASE
+expected_fingerprint="${expected_fingerprint^^}"
+[[ "$expected_fingerprint" =~ ^[A-F0-9]{40}$ ]]
+verification_home="$(mktemp -d)"
+chmod 700 "$verification_home"
+trap 'rm -r -- "$verification_home"' EXIT
 curl --fail --proto '=https' --tlsv1.2 \
   --output nextcloud-native.asc \
   https://packages.nc-native.obiente.dev/keys/nextcloud-native.asc
-actual_fingerprint="$(
-  gpg --batch --show-keys --with-colons nextcloud-native.asc |
-    awk -F: '$1 == "fpr" { print toupper($10); exit }'
-)"
-test "$actual_fingerprint" = "$expected_fingerprint"
+GNUPGHOME="$verification_home" gpg --batch --import nextcloud-native.asc
+mapfile -t actual_fingerprints < <(
+  GNUPGHOME="$verification_home" gpg --batch --with-colons --list-keys |
+    awk -F: '$1 == "pub" { primary = 1; next }
+      primary && $1 == "fpr" { print toupper($10); primary = 0 }'
+)
+test "${#actual_fingerprints[@]}" -eq 1
+test "${actual_fingerprints[0]}" = "$expected_fingerprint"
+GNUPGHOME="$verification_home" gpg --batch --armor \
+  --export "$expected_fingerprint" >nextcloud-native-verified.asc
+test -s nextcloud-native-verified.asc
+rm -r -- "$verification_home"
+trap - EXIT
 ```
 
-Stop if the values differ. APT clients then install the verified certificate
-as `/etc/apt/keyrings/nextcloud-native.asc`, install the generated
+Stop if the certificate count or fingerprint differs. APT clients then install
+`nextcloud-native-verified.asc` as `/etc/apt/keyrings/nextcloud-native.asc`, install the generated
 `nextcloud-native.sources` file as
 `/etc/apt/sources.list.d/nextcloud-native.sources`, and run `apt update`.
 
-DNF clients install the same verified certificate as
+DNF clients install the same clean verified certificate as
 `/etc/pki/rpm-gpg/NEXTCLOUD-NATIVE-REPOSITORY`, then install the generated
 `nextcloud-native.repo` file as `/etc/yum.repos.d/nextcloud-native.repo`. The
 generated configuration references that local certificate. Both package and

@@ -91,6 +91,7 @@ jobs:
               - ".github/workflows/ci.yml"
               - "tools/build-appstream-catalog.py"
               - "tools/build-linux-package-repositories.sh"
+              - "tools/filter-deb-packages-index.py"
               - "tools/render-linux-appstream-metadata.py"
               - "tools/test-linux-package-repositories.sh"
               - "release/linux/dev.obiente.nextcloudnative.metainfo.xml"
