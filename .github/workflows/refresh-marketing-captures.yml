@@ -1,0 +1,103 @@
+name: Refresh marketing captures
+
+on:
+  pull_request:
+    types:
+      - opened
+      - ready_for_review
+      - reopened
+      - synchronize
+    paths:
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/refresh-marketing-captures.yml"
+      - "tools/marketing-capture-inputs.txt"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle.properties"
+      - "gradle/libs.versions.toml"
+      - "gradle/wrapper/gradle-wrapper.properties"
+      - "ui/build.gradle.kts"
+      - "ui/src/commonMain/**"
+      - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/**"
+      - "ui/src/desktopMain/resources/marketing/**"
+      - "website/package.json"
+      - "website/package-lock.json"
+      - "website/public/screenshots/**"
+      - "website/scripts/marketing-captures.mjs"
+      - "website/scripts/verify-marketing-captures.mjs"
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: marketing-captures-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    name: Refresh marketing captures
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out pull request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle build cache
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+        with:
+          cache-read-only: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install capture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libfuse2t64
+          npm ci --prefix website
+
+      - name: Regenerate captures
+        run: ./gradlew --no-daemon --max-workers=1 :ui:captureMarketingScreenshots
+
+      - name: Commit capture changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- website/public/screenshots; then
+            printf 'Marketing captures already match this pull request.\n'
+            exit 0
+          fi
+          if [[ "${HEAD_REPOSITORY}" != "${GITHUB_REPOSITORY}" || "${HEAD_AUTHOR}" == 'dependabot[bot]' ]]; then
+            printf 'Marketing captures changed, but this pull request is read-only to workflows.\n' >&2
+            printf 'Run tools/capture-marketing-screenshots.sh and commit the results.\n' >&2
+            exit 1
+          fi
+          if ! git diff --quiet -- . ':(exclude)website/public/screenshots/**'; then
+            printf 'Capture regeneration modified files outside the screenshot directory.\n' >&2
+            git status --short
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- website/public/screenshots
+          git commit -m 'chore(website): refresh marketing captures'
+          git push origin "HEAD:${HEAD_REF}"
+          gh workflow run ci.yml --repo "${GITHUB_REPOSITORY}" --ref "${HEAD_REF}"

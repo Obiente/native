@@ -99,15 +99,11 @@ internal fun validateStagedCaptureCatalog(
     stagedDirectory: Path,
     registry: List<MarketingCaptureRegistryEntry>,
     expectedCaptureSources: List<String>,
-    expectedCaptureSourceSha256: String,
     expectedAvatarSha256: String,
     preservedFileNames: Set<String> = preservedMarketingCaptureFiles,
 ) {
     validatePreservedFileNames(preservedFileNames)
     requireDirectoryWithoutSymlinks(stagedDirectory, "Capture staging directory")
-    require(expectedCaptureSourceSha256.matches(sha256Digest)) {
-        "The expected capture source digest is invalid."
-    }
     require(expectedAvatarSha256.matches(sha256Digest)) {
         "The expected avatar digest is invalid."
     }
@@ -128,19 +124,17 @@ internal fun validateStagedCaptureCatalog(
             "cloudIdentity",
             "networkAccess",
             "captureSources",
-            "captureSourceSha256",
             "avatarSha256",
             "captures",
         ),
     ) {
         "The staged capture manifest has an unexpected top-level schema."
     }
-    require(manifest.getInt("schemaVersion") == 3)
+    require(manifest.getInt("schemaVersion") == 4)
     require(manifest.getString("renderer") == "Compose ImageComposeScene")
     require(manifest.getString("identity") == "Obiente")
     require(manifest.getString("cloudIdentity") == "Nextcloud")
     require(!manifest.getBoolean("networkAccess"))
-    require(manifest.getString("captureSourceSha256") == expectedCaptureSourceSha256)
     require(manifest.getString("avatarSha256") == expectedAvatarSha256)
 
     val declaredSources = manifest.getJSONArray("captureSources").let { sources ->

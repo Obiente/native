@@ -126,7 +126,7 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   assert.match(captureMain, /NextcloudNativeMarketingCapture/);
 
   const manifest = await readCaptureManifest();
-  assert.equal(manifest.schemaVersion, 3);
+  assert.equal(manifest.schemaVersion, 4);
   assert.equal(manifest.identity, "Obiente");
   assert.equal(manifest.cloudIdentity, "Nextcloud");
   assert.equal(manifest.networkAccess, false);

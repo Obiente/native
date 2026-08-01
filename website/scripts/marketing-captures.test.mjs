@@ -32,7 +32,7 @@ function validManifest() {
     sha256: digest,
   };
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     renderer: "Compose ImageComposeScene",
     identity: "Obiente",
     cloudIdentity: "Nextcloud",
@@ -41,7 +41,6 @@ function validManifest() {
       "tools/marketing-capture-inputs.txt",
       "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SyntheticCapture.kt",
     ],
-    captureSourceSha256: digest,
     avatarSha256: digest,
     captures: [
       darkCapture,
@@ -57,7 +56,7 @@ function validManifest() {
 
 test("capture manifest accepts optional pull request and issue metadata", () => {
   const withoutPullRequest = validManifest();
-  assert.equal(validateCaptureManifest(withoutPullRequest).schemaVersion, 3);
+  assert.equal(validateCaptureManifest(withoutPullRequest).schemaVersion, 4);
 
   const withPullRequest = validManifest();
   withPullRequest.captures.forEach((capture) => { capture.pullRequest = 123; });
@@ -161,7 +160,7 @@ test("capture manifest rejects duplicate scenarios and obsolete schemas", () => 
 
   const obsolete = validManifest();
   obsolete.schemaVersion = 1;
-  assert.throws(() => validateCaptureManifest(obsolete), /schemaVersion must be 3/u);
+  assert.throws(() => validateCaptureManifest(obsolete), /schemaVersion must be 4/u);
 });
 
 test("capture manifest rejects unexpected schema fields", () => {

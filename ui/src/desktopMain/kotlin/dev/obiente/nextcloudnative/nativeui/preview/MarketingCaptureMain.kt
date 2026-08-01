@@ -43,7 +43,7 @@ fun main(arguments: Array<String>) {
     val registry = marketingCaptureVariants.map(MarketingCaptureVariant::registryEntry)
     validateMarketingCaptureRegistry(registry)
     val captureSources = discoverCaptureSources(repositoryRoot)
-    val captureSourceSha256 = captureSourceDigest(repositoryRoot, captureSources)
+    val initialCaptureSourceSha256 = captureSourceDigest(repositoryRoot, captureSources)
     val avatarSha256 = Files.readAllBytes(
         repositoryRoot.resolve(
             "ui/src/desktopMain/resources/marketing/obiente-avatar.png",
@@ -91,20 +91,18 @@ fun main(arguments: Array<String>) {
             captureDirectory = stagedDirectory,
             outputs = outputs,
             captureSources = captureSources,
-            captureSourceSha256 = captureSourceSha256,
             avatarSha256 = avatarSha256,
         )
         validateStagedCaptureCatalog(
             stagedDirectory = stagedDirectory,
             registry = registry,
             expectedCaptureSources = captureSources,
-            expectedCaptureSourceSha256 = captureSourceSha256,
             expectedAvatarSha256 = avatarSha256,
         )
         require(discoverCaptureSources(repositoryRoot) == captureSources) {
             "Marketing capture sources changed while screenshots were rendering."
         }
-        require(captureSourceDigest(repositoryRoot, captureSources) == captureSourceSha256) {
+        require(captureSourceDigest(repositoryRoot, captureSources) == initialCaptureSourceSha256) {
             "Marketing capture source contents changed while screenshots were rendering."
         }
         require(
@@ -259,7 +257,6 @@ private fun writeCaptureManifest(
     captureDirectory: Path,
     outputs: List<Path>,
     captureSources: List<String>,
-    captureSourceSha256: String,
     avatarSha256: String,
 ) {
     val captures = buildJsonArray {
@@ -288,7 +285,7 @@ private fun writeCaptureManifest(
         }
     }
     val manifest = buildJsonObject {
-        put("schemaVersion", 3)
+        put("schemaVersion", 4)
         put("renderer", "Compose ImageComposeScene")
         put("identity", "Obiente")
         put("cloudIdentity", "Nextcloud")
@@ -299,7 +296,6 @@ private fun writeCaptureManifest(
                 captureSources.forEach { add(it) }
             },
         )
-        put("captureSourceSha256", captureSourceSha256)
         put("avatarSha256", avatarSha256)
         put("captures", captures)
     }
