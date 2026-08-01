@@ -91,7 +91,9 @@ jobs:
               - ".github/workflows/ci.yml"
               - "tools/build-appstream-catalog.py"
               - "tools/build-linux-package-repositories.sh"
+              - "tools/render-linux-appstream-metadata.py"
               - "tools/test-linux-package-repositories.sh"
+              - "release/linux/dev.obiente.nextcloudnative.metainfo.xml"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable

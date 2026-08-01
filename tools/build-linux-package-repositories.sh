@@ -96,10 +96,19 @@ for package in "${deb_packages[@]}"; do
     pool_directory="$apt_root/pool/main/${package_name:0:1}/$package_name"
     mkdir -p "$pool_directory"
     cp -- "$package" "$pool_directory/$package_filename"
-    apt_architectures["$package_architecture"]=1
+    if [[ "$package_architecture" != all ]]; then
+        apt_architectures["$package_architecture"]=1
+    fi
 done
 
-mapfile -t apt_architecture_names < <(printf '%s\n' "${!apt_architectures[@]}" | sort)
+apt_architecture_names=()
+if [[ "${#apt_architectures[@]}" -gt 0 ]]; then
+    mapfile -t apt_architecture_names < <(printf '%s\n' "${!apt_architectures[@]}" | sort)
+fi
+if [[ "${#apt_architecture_names[@]}" -eq 0 ]]; then
+    printf 'At least one architecture-specific DEB package is required.\n' >&2
+    exit 1
+fi
 for architecture in "${apt_architecture_names[@]}"; do
     index_directory="$apt_root/dists/$channel/main/binary-$architecture"
     mkdir -p "$index_directory"
@@ -116,7 +125,8 @@ for architecture in "${apt_architecture_names[@]}"; do
     catalog_arguments=()
     package_index=0
     for package in "${architecture_packages[@]}"; do
-        if [[ "$(dpkg-deb --field "$package" Architecture)" != "$architecture" ]]; then
+        package_architecture="$(dpkg-deb --field "$package" Architecture)"
+        if [[ "$package_architecture" != "$architecture" && "$package_architecture" != all ]]; then
             continue
         fi
         package_version="$(dpkg-deb --field "$package" Version)"
@@ -159,6 +169,7 @@ architectures="$(IFS=' '; echo "${apt_architecture_names[*]}")"
         -o "APT::FTPArchive::Release::Architectures=$architectures" \
         -o "APT::FTPArchive::Release::Components=main" \
         -o "APT::FTPArchive::Release::Description=Native Nextcloud client packages" \
+        -o "APT::FTPArchive::Release::ValidTime=604800" \
         release "dists/$channel"
 ) >"$release_directory/Release"
 gpg --batch --yes --local-user "$signing_fingerprint" --digest-algo SHA256 \
@@ -178,6 +189,7 @@ EOF
 
 rpm_root="$output_directory/rpm"
 declare -A rpm_architectures=()
+declare -A rpm_package_architectures=()
 for package in "${rpm_packages[@]}"; do
     package_name="$(rpm -qp --queryformat '%{NAME}' "$package")"
     package_architecture="$(rpm -qp --queryformat '%{ARCH}' "$package")"
@@ -191,21 +203,37 @@ for package in "${rpm_packages[@]}"; do
         printf 'RPM filename is not repository-safe: %s\n' "$package_filename" >&2
         exit 1
     fi
-    package_output="$rpm_root/$package_architecture/Packages/$package_filename"
-    mkdir -p "$(dirname "$package_output")"
-    cp -- "$package" "$package_output"
-    rpmsign \
-        --define "__gpg $(command -v gpg)" \
-        --define "_openpgp_sign_id $signing_fingerprint" \
-        --define "_gpg_name $signing_fingerprint" \
-        --define "_gpg_path ${GNUPGHOME:-$HOME/.gnupg}" \
-        --addsign "$package_output"
-    rpm_architectures["$package_architecture"]=1
+    rpm_package_architectures["$package"]="$package_architecture"
+    if [[ "$package_architecture" != noarch ]]; then
+        rpm_architectures["$package_architecture"]=1
+    fi
 done
 
-mapfile -t rpm_architecture_names < <(printf '%s\n' "${!rpm_architectures[@]}" | sort)
+rpm_architecture_names=()
+if [[ "${#rpm_architectures[@]}" -gt 0 ]]; then
+    mapfile -t rpm_architecture_names < <(printf '%s\n' "${!rpm_architectures[@]}" | sort)
+fi
+if [[ "${#rpm_architecture_names[@]}" -eq 0 ]]; then
+    printf 'At least one architecture-specific RPM package is required.\n' >&2
+    exit 1
+fi
 for architecture in "${rpm_architecture_names[@]}"; do
     architecture_root="$rpm_root/$architecture"
+    mkdir -p "$architecture_root/Packages"
+    for package in "${rpm_packages[@]}"; do
+        package_architecture="${rpm_package_architectures[$package]}"
+        if [[ "$package_architecture" != "$architecture" && "$package_architecture" != noarch ]]; then
+            continue
+        fi
+        package_output="$architecture_root/Packages/$(basename "$package")"
+        cp -- "$package" "$package_output"
+        rpmsign \
+            --define "__gpg $(command -v gpg)" \
+            --define "_openpgp_sign_id $signing_fingerprint" \
+            --define "_gpg_name $signing_fingerprint" \
+            --define "_gpg_path ${GNUPGHOME:-$HOME/.gnupg}" \
+            --addsign "$package_output"
+    done
     createrepo_c \
         --checksum sha256 \
         --general-compress-type=gz \

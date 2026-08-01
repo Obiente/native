@@ -28,17 +28,21 @@ for package_name in nextcloudnative nextcloud-native-vfs; do
         install -D -m 0644 "$fixture_metadata" \
             "$deb_root/usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml"
     fi
+    package_architecture=amd64
+    if [[ "$package_name" == nextcloud-native-vfs ]]; then
+        package_architecture=all
+    fi
     cat >"$deb_root/DEBIAN/control" <<EOF
 Package: $package_name
 Version: 1.2.3-1
 Section: net
 Priority: optional
-Architecture: amd64
+Architecture: $package_architecture
 Maintainer: Nextcloud Native
 Description: Repository integration fixture
 EOF
     dpkg-deb --build --root-owner-group \
-        "$deb_root" "$packages/${package_name}_1.2.3-1_amd64.deb" >/dev/null
+        "$deb_root" "$packages/${package_name}_1.2.3-1_${package_architecture}.deb" >/dev/null
 done
 
 rpm_top="$temporary/rpmbuild"
@@ -53,13 +57,17 @@ for package_name in nextcloudnative nextcloud-native-vfs; do
         extra_install=$'mkdir -p %{buildroot}/usr/share/metainfo\ninstall -m 0644 %{_sourcedir}/dev.obiente.nextcloudnative.metainfo.xml %{buildroot}/usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml'
         extra_files=/usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml
     fi
+    package_architecture=x86_64
+    if [[ "$package_name" == nextcloud-native-vfs ]]; then
+        package_architecture=noarch
+    fi
     cat >"$spec" <<EOF
 Name: $package_name
 Version: 1.2.3
 Release: 1
 Summary: Repository integration fixture
 License: AGPL-3.0-or-later
-BuildArch: x86_64
+BuildArch: $package_architecture
 
 %description
 Repository integration fixture.
@@ -97,6 +105,22 @@ grep -Fxq 'Package: nextcloudnative' \
 grep -Fxq 'Package: nextcloud-native-vfs' \
     "$output/apt/dists/prerelease/main/binary-amd64/Packages"
 grep -Fxq 'Architectures: amd64' "$output/apt/dists/prerelease/Release"
+grep -Eq '^Valid-Until: .+ \+0000$' "$output/apt/dists/prerelease/Release"
+python3 - "$output/apt/dists/prerelease/Release" <<'PY'
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+import pathlib
+import sys
+
+fields = {}
+for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    if ": " in line:
+        key, value = line.split(": ", 1)
+        fields[key] = value
+valid_until = parsedate_to_datetime(fields["Valid-Until"])
+remaining = valid_until - datetime.now(timezone.utc)
+assert 6 * 24 * 60 * 60 < remaining.total_seconds() <= 7 * 24 * 60 * 60
+PY
 grep -Fq 'main/dep11/Components-amd64.yml.gz' \
     "$output/apt/dists/prerelease/Release"
 gzip --decompress --stdout \
@@ -129,6 +153,10 @@ gzip --decompress --stdout "$output/rpm/x86_64/repodata/primary.xml.gz" |
     grep -Fq '<name>nextcloudnative</name>'
 gzip --decompress --stdout "$output/rpm/x86_64/repodata/primary.xml.gz" |
     grep -Fq '<name>nextcloud-native-vfs</name>'
+if [[ -e "$output/rpm/noarch" ]]; then
+    printf 'Architecture-independent RPMs must be published in concrete repositories.\n' >&2
+    exit 1
+fi
 grep -Fq 'type="appstream"' "$output/rpm/x86_64/repodata/repomd.xml"
 rpm_appstream_href="$(python3 - "$output/rpm/x86_64/repodata/repomd.xml" <<'PY'
 import sys
@@ -156,7 +184,7 @@ mkdir -p "$rpm_database"
 rpm --define "_dbpath $rpm_database" --import "$output/keys/nextcloud-native.asc"
 while IFS= read -r -d '' package; do
     rpm --define "_dbpath $rpm_database" --checksig "$package" |
-        grep -Eq 'digests signatures OK|digests OK'
+        grep -Fq 'signatures OK'
 done < <(find "$output/rpm" -type f -name '*.rpm' -print0)
 
 test -s "$output/SHA256SUMS"
