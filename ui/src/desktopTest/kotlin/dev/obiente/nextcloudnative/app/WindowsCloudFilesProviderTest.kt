@@ -47,13 +47,12 @@ class WindowsCloudFilesProviderTest {
 
         try {
             provider.start()
-            Files.newDirectoryStream(root.resolve("Apps")).use { entries ->
-                val names = entries.mapTo(linkedSetOf()) { it.fileName.toString() }
-                assertTrue(
-                    names.containsAll(setOf("Calendar", "readme.txt")),
-                    "Expected Cloud Files children in directory entries: $names",
-                )
-            }
+            val expectedChildren = setOf("Calendar", "readme.txt")
+            val names = awaitDirectoryEntries(root.resolve("Apps"), expectedChildren)
+            assertTrue(
+                names.containsAll(expectedChildren),
+                "Expected Cloud Files children in directory entries: $names",
+            )
             Files.newDirectoryStream(root.resolve("Apps/Calendar")).use { entries ->
                 entries.forEach { /* Enumerating the placeholder must remain readable. */ }
             }
@@ -62,6 +61,19 @@ class WindowsCloudFilesProviderTest {
             runCatching { provider.removeSyncRoot() }
             root.toFile().deleteRecursively()
         }
+    }
+
+    private fun awaitDirectoryEntries(directory: Path, expected: Set<String>): Set<String> {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        var names: Set<String>
+        do {
+            names = Files.newDirectoryStream(directory).use { entries ->
+                entries.mapTo(linkedSetOf()) { it.fileName.toString() }
+            }
+            if (names.containsAll(expected)) return names
+            Thread.sleep(50)
+        } while (System.nanoTime() < deadline)
+        return names
     }
 
     @Test
