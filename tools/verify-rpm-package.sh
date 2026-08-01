@@ -26,4 +26,23 @@ if [[ -n "$build_id_paths" ]]; then
     exit 1
 fi
 
-printf 'Verified readable RPM payload without global build-ID paths: %s\n' "$package"
+required_desktop_assets=(
+    /usr/share/applications/nextcloudnative-NextcloudNative.desktop
+    /usr/share/icons/hicolor/512x512/apps/dev.obiente.nextcloudnative.png
+    /usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml
+)
+missing_desktop_assets=()
+for asset in "${required_desktop_assets[@]}"; do
+    if ! grep -Fxq "$asset" <<<"$package_files"; then
+        missing_desktop_assets+=("$asset")
+    fi
+done
+
+if [[ "${#missing_desktop_assets[@]}" -gt 0 ]]; then
+    printf 'RPM package is missing required desktop integration assets:\n' >&2
+    printf '%s\n' "${missing_desktop_assets[@]}" >&2
+    exit 1
+fi
+
+printf 'Verified RPM payload desktop integration and global build-ID safety: %s\n' \
+    "$package"

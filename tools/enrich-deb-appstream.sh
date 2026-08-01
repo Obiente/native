@@ -4,6 +4,7 @@ set -euo pipefail
 package_directory="${1:?DEB package directory is required.}"
 metadata="${2:?AppStream metadata file is required.}"
 license="${3:?Project license file is required.}"
+icon="${4:?Application icon file is required.}"
 
 mapfile -d '' packages < <(find "$package_directory" -maxdepth 1 -type f -name '*.deb' -print0)
 if [[ "${#packages[@]}" -ne 1 ]]; then
@@ -13,6 +14,7 @@ if [[ "${#packages[@]}" -ne 1 ]]; then
 fi
 [[ -f "$metadata" ]]
 [[ -f "$license" ]]
+[[ -f "$icon" ]]
 
 temporary="$(mktemp -d)"
 trap 'rm -r -- "$temporary"' EXIT
@@ -37,10 +39,15 @@ desktop_entry="${desktop_entries[0]}"
 sed -i \
     -e 's|^Comment=.*|Comment=One native client for your complete Nextcloud account|' \
     -e 's|^Categories=.*|Categories=Network;FileTransfer;Utility;|' \
+    -e 's|^Icon=.*|Icon=dev.obiente.nextcloudnative|' \
     "$desktop_entry"
 if ! grep -q '^Keywords=' "$desktop_entry"; then
     printf '%s\n' 'Keywords=Nextcloud;cloud;files;photos;sync;collaboration;' >>"$desktop_entry"
 fi
+install -D -m 0644 "$desktop_entry" \
+    "$root/usr/share/applications/nextcloudnative-NextcloudNative.desktop"
+install -D -m 0644 "$icon" \
+    "$root/usr/share/icons/hicolor/512x512/apps/dev.obiente.nextcloudnative.png"
 (
     cd "$root"
     find . -path ./DEBIAN -prune -o -type f -print0 |

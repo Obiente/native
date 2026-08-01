@@ -38,7 +38,9 @@ Nextcloud apps together in one coherent native desktop client.
 %build
 
 %install
-rm -rf %{buildroot}
+if [ -e "%{buildroot}" ]; then
+  rm -r -- "%{buildroot}"
+fi
 install -d -m 755 %{buildroot}APPLICATION_DIRECTORY
 cp -r %{_sourcedir}APPLICATION_DIRECTORY/* %{buildroot}APPLICATION_DIRECTORY
 if [ "$(echo %{_sourcedir}/lib/systemd/system/*.service)" != '%{_sourcedir}/lib/systemd/system/*.service' ]; then
@@ -48,6 +50,14 @@ fi
 install -d -m 755 %{buildroot}/usr/share/metainfo
 printf '%s' 'APPSTREAM_XML_BASE64' | base64 --decode > \
   %{buildroot}/usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml
+install -d -m 755 %{buildroot}/usr/share/applications
+install -m 644 \
+  %{buildroot}APPLICATION_DIRECTORY/lib/nextcloudnative-NextcloudNative.desktop \
+  %{buildroot}/usr/share/applications/nextcloudnative-NextcloudNative.desktop
+install -d -m 755 %{buildroot}/usr/share/icons/hicolor/512x512/apps
+install -m 644 \
+  %{buildroot}APPLICATION_DIRECTORY/lib/NextcloudNative.png \
+  %{buildroot}/usr/share/icons/hicolor/512x512/apps/dev.obiente.nextcloudnative.png
 %if "xAPPLICATION_LICENSE_FILE" != "x"
   %define license_install_file %{_defaultlicensedir}/%{name}-%{version}/%{basename:APPLICATION_LICENSE_FILE}
   install -d -m 755 "%{buildroot}%{dirname:%{license_install_file}}"

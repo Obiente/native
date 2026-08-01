@@ -56,7 +56,9 @@ if [[ "${#packages[@]}" -ne 1 ]]; then
     exit 1
 fi
 
-rm -rf -- "$resource_directory"
+if [[ -e "$resource_directory" ]]; then
+    rm -r -- "$resource_directory"
+fi
 install -d -m 0755 "$resource_directory"
 cp -a -- "$generated_resources"/. "$resource_directory"/
 rm -- "${packages[0]}"

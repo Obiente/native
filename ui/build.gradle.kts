@@ -192,6 +192,7 @@ val enrichDebAppStream by tasks.registering(Exec::class) {
         debPackageDirectory.get().asFile,
         linuxAppStreamMetadata.asFile,
         rootProject.file("LICENSE"),
+        project.file("src/desktopMain/resources/nextcloud-native.png"),
     )
 }
 
