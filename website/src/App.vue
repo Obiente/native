@@ -1,16 +1,21 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
+  PhAndroidLogo as AndroidLogo,
+  PhAppleLogo as AppleLogo,
   PhArrowRight as ArrowRight,
   PhBookOpen as BookOpen,
   PhCaretDown as CaretDown,
   PhCamera as Camera,
   PhChatCircleDots as ChatCircleDots,
+  PhCloudCheck as CloudCheck,
   PhCode as Code,
   PhDesktop as Desktop,
+  PhDeviceMobile as DeviceMobile,
   PhFile as File,
   PhGitBranch as GitBranch,
   PhGithubLogo as GithubLogo,
+  PhLinuxLogo as LinuxLogo,
   PhListChecks as ListChecks,
   PhList as Menu,
   PhMagnifyingGlass as MagnifyingGlass,
@@ -18,6 +23,7 @@ import {
   PhShieldCheck as ShieldCheck,
   PhSquaresFour as SquaresFour,
   PhSun as Sun,
+  PhWindowsLogo as WindowsLogo,
   PhX as X,
 } from "@phosphor-icons/vue";
 import { docs } from "./generated/docs.js";
@@ -127,6 +133,13 @@ function homepageCapture(darkScenario, lightScenario, fallbackScenario) {
   return captureByScenario.get(scenario) ?? captureByScenario.get(fallbackScenario);
 }
 
+function newsCapture(post) {
+  if (resolvedTheme.value === "light") {
+    return post.websiteImageLight ?? post.websiteImage;
+  }
+  return post.websiteImageDark ?? post.websiteImage;
+}
+
 const heroDesktopCapture = computed(() =>
   homepageCapture(
     "homepage-overview-desktop-dark",
@@ -139,6 +152,13 @@ const mobileHomeCapture = computed(() =>
     "homepage-overview-mobile-dark",
     "homepage-overview-mobile-light",
     "mobile-home",
+  ),
+);
+const platformDesktopCapture = computed(() =>
+  homepageCapture(
+    "homepage-files-desktop-dark",
+    "homepage-files-desktop-light",
+    "obsidian-vault-sync",
   ),
 );
 const normalizedPath =
@@ -248,18 +268,18 @@ const searchResults = computed(() => {
 const nativePromises = [
   {
     icon: SquaresFour,
-    title: "One place for your whole cloud",
-    body: "Files, photos, conversations, calendars, mail, notes, boards, music, and installed apps share one clear way of working.",
+    title: "Your apps are all there",
+    body: "Files, Photos, Talk, Calendar, Mail, Notes, Deck, and the other apps on your server live under the same account.",
   },
   {
     icon: Desktop,
-    title: "At home on every device",
-    body: "Native file access, sharing, notifications, background work, media controls, keyboard shortcuts, and touch behavior come from the operating system.",
+    title: "It uses the device you are holding",
+    body: "A phone gets touch controls and share sheets. A desktop gets resizable panes, keyboard navigation, context menus, and drag and drop.",
   },
   {
     icon: ShieldCheck,
-    title: "Safe by default",
-    body: "Originals are preserved, conflicts are explicit, uncertain changes stop safely, and nothing sits between the app and your Nextcloud.",
+    title: "It stops before it guesses",
+    body: "Originals are kept, conflicts are shown, and a write is withheld when the server contract is unclear.",
   },
 ];
 
@@ -335,18 +355,21 @@ const platforms = [
 
 const adaptiveSteps = [
   {
-    step: "01",
-    title: "Reads what your server offers",
+    icon: CloudCheck,
+    label: "Server",
+    title: "Ask what is actually available",
     body: "The app discovers the exact features, versions, permissions, and installed apps your Nextcloud makes available.",
   },
   {
-    step: "02",
-    title: "Understands the work",
+    icon: Code,
+    label: "Contract",
+    title: "Check before doing anything",
     body: "Verified contracts turn files, dates, people, messages, rows, media, relationships, and actions into typed concepts.",
   },
   {
-    step: "03",
-    title: "Feels native on your device",
+    icon: Desktop,
+    label: "Interface",
+    title: "Use the right native view",
     body: "The result becomes a gallery, editor, table, conversation, calendar, board, or dashboard integrated with the operating system.",
   },
 ];
@@ -398,7 +421,7 @@ const frequentlyAsked = [
         <span class="brand-mark">
           <img src="/cloud.svg" alt="" width="28" height="28" />
         </span>
-        <span>Nextcloud Native</span>
+        <span class="brand-copy"><strong>Nextcloud Native</strong><small>by Obiente</small></span>
       </a>
 
       <nav class="desktop-nav" aria-label="Primary navigation">
@@ -510,18 +533,12 @@ const frequentlyAsked = [
         <div class="home-page">
           <section class="product-hero section-width">
             <div class="product-hero-copy">
-              <p class="eyebrow">Independent. Open source. Yours.</p>
-              <h1>Your Nextcloud, <span>at home on every device.</span></h1>
+              <p class="eyebrow">An independent client by Obiente</p>
+              <h1>Your Nextcloud deserves <span>a real app.</span></h1>
               <p class="hero-lede">
-                Files, photos, conversations, calendars, and the apps on your
-                Nextcloud come together in one client that feels at home on every
-                device.
+                Use Files, Photos, Talk, Calendar, and the apps installed on your
+                server from one client on phone, tablet, and desktop.
               </p>
-              <ul class="hero-proofs">
-                <li><ShieldCheck :size="19" weight="fill" aria-hidden="true" />One client for the complete account</li>
-                <li><ShieldCheck :size="19" weight="fill" aria-hidden="true" />Direct connection, without a hosted intermediary</li>
-                <li><ShieldCheck :size="19" weight="fill" aria-hidden="true" />Native system features, not embedded app pages</li>
-              </ul>
               <div class="hero-actions">
                 <a class="button button-primary" href="https://github.com/Obiente/nc-native/releases" target="_blank" rel="noreferrer">
                   Get Nextcloud Native
@@ -529,17 +546,13 @@ const frequentlyAsked = [
                 </a>
                 <a class="button button-secondary" href="/#experience">See how it works</a>
               </div>
-              <p class="hero-note">
-                Connects directly to your own Nextcloud. No Obiente account,
-                subscription, tracking layer, or hosted middleman.
-              </p>
             </div>
 
             <figure class="product-hero-visual">
               <img
                 class="product-hero-desktop"
                 :src="heroDesktopCapture.websitePath"
-                alt="Nextcloud Native desktop Photos and Memories workspace with persistent navigation and a native folder browser"
+                alt="Nextcloud Native desktop home view with account status, recent files, activity, events, and photo backup"
                 :width="heroDesktopCapture.width"
                 :height="heroDesktopCapture.height"
               />
@@ -558,17 +571,54 @@ const frequentlyAsked = [
                 </span>
               </figcaption>
             </figure>
+
+            <div class="hero-foundation" aria-label="Availability and project details">
+              <div class="hero-foundation-platforms">
+                <div class="hero-availability">
+                  <p>Available for</p>
+                  <ul>
+                    <li><WindowsLogo :size="21" weight="fill" aria-hidden="true" /><span>Windows</span></li>
+                    <li><AppleLogo :size="21" weight="fill" aria-hidden="true" /><span>macOS</span></li>
+                    <li><LinuxLogo :size="21" weight="fill" aria-hidden="true" /><span>Linux</span></li>
+                    <li><AndroidLogo :size="21" weight="fill" aria-hidden="true" /><span>Android</span></li>
+                    <li><DeviceMobile :size="21" weight="fill" aria-hidden="true" /><span>iOS</span></li>
+                  </ul>
+                </div>
+              </div>
+
+              <ul class="hero-trust">
+                <li>
+                  <GithubLogo :size="21" weight="fill" aria-hidden="true" />
+                  <span>
+                    <strong>Open source</strong>
+                    <small>
+                      AGPL-3.0-or-later
+                      <a :href="githubUrl" target="_blank" rel="noreferrer">View source</a>
+                    </small>
+                  </span>
+                </li>
+              </ul>
+
+              <div class="hero-project-note">
+                <p class="maker-note">
+                  Built by <strong>Obiente</strong>. Independent and <span class="no-break">community-driven</span>.
+                </p>
+                <nav class="hero-release-links" aria-label="Project downloads and updates">
+                  <a href="https://github.com/Obiente/nc-native/releases" target="_blank" rel="noreferrer">Packages on GitHub</a>
+                  <a href="/changelog/">Release notes <ArrowRight :size="14" weight="bold" aria-hidden="true" /></a>
+                </nav>
+              </div>
+            </div>
           </section>
 
           <section id="experience" class="native-promise section-width" data-reveal>
             <div class="section-heading compact">
-              <p class="eyebrow">One coherent experience</p>
-              <h2>Your Nextcloud behaves like part of the operating system.</h2>
+              <p class="eyebrow">Everyday work</p>
+              <h2>Open a file. Share a photo. Answer a call.</h2>
               <p>
-                Open a file from a native picker, share a photo from another app,
-                answer a call, continue offline, or move from a message to the file
-                it references. The same account, permissions, and history follow the
-                object instead of disappearing between separate clients.
+                Nextcloud Native uses your device's file picker, share sheet,
+                notifications, background work, keyboard, and touch controls. Your
+                account and permissions stay with you as you move between them.
               </p>
             </div>
 
@@ -585,8 +635,8 @@ const frequentlyAsked = [
           <section id="apps" class="app-story" data-reveal>
             <div class="section-width app-story-layout">
               <div class="section-heading compact">
-                <p class="eyebrow">The whole account</p>
-                <h2>Every app keeps its purpose. The experience stays familiar.</h2>
+                <p class="eyebrow">Your apps</p>
+                <h2>Each app keeps the shape that makes it useful.</h2>
                 <p>
                   Mail is a mailbox, Deck is a board, Tables is a table, and
                   Memories is a photo library. Shared native building blocks make
@@ -656,7 +706,7 @@ const frequentlyAsked = [
 
           <section id="native" class="native-method section-width" data-reveal>
             <div class="native-method-intro">
-              <p class="eyebrow">Understands your Nextcloud</p>
+              <p class="eyebrow">How it works</p>
               <h2>Native is a behavior, not a coat of paint.</h2>
               <p>
                 Nextcloud Native reads verified capabilities and versioned contracts,
@@ -668,35 +718,70 @@ const frequentlyAsked = [
             </div>
 
             <ol class="native-method-steps">
-              <li v-for="item in adaptiveSteps" :key="item.step">
-                <span class="step-number">{{ item.step }}</span>
+              <li v-for="(item, index) in adaptiveSteps" :key="item.label">
+                <div class="method-step-heading">
+                  <component :is="item.icon" :size="24" weight="duotone" aria-hidden="true" />
+                  <span>{{ item.label }}</span>
+                </div>
                 <div><h3>{{ item.title }}</h3><p>{{ item.body }}</p></div>
+                <ArrowRight
+                  v-if="index < adaptiveSteps.length - 1"
+                  class="method-step-arrow"
+                  :size="19"
+                  weight="bold"
+                  aria-hidden="true"
+                />
               </li>
             </ol>
           </section>
 
           <section class="platform-story section-width" data-reveal>
             <div class="section-heading compact">
-              <p class="eyebrow">Made for the device</p>
-              <h2>Shared rules. Properly native products.</h2>
+              <p class="eyebrow">Every device</p>
+              <h2>Built for each device, not merely resized.</h2>
               <p>
                 Your data follows the same safety and sync rules everywhere. Each
                 platform still gets the layout, controls, lifecycle, and system
                 integration that belong there.
               </p>
             </div>
-            <div class="platform-story-list">
-              <article v-for="platform in platforms" :key="platform.name">
-                <component :is="platform.icon" :size="25" weight="duotone" aria-hidden="true" />
-                <div><h3>{{ platform.name }}</h3><p>{{ platform.body }}</p></div>
-              </article>
+            <div class="platform-story-content">
+              <figure class="platform-story-visual">
+                <img
+                  class="platform-story-desktop"
+                  :src="platformDesktopCapture.websitePath"
+                  alt="Nextcloud Native Files on desktop with folders, photos, documents, and offline availability"
+                  :width="platformDesktopCapture.width"
+                  :height="platformDesktopCapture.height"
+                  loading="lazy"
+                />
+                <img
+                  class="platform-story-mobile"
+                  :src="mobileHomeCapture.websitePath"
+                  alt="Nextcloud Native home on mobile"
+                  :width="mobileHomeCapture.width"
+                  :height="mobileHomeCapture.height"
+                  loading="lazy"
+                />
+                <figcaption>
+                  <span>One account. Separate layouts for the screen in front of you.</span>
+                  <span class="capture-provenance"><ShieldCheck :size="15" weight="fill" aria-hidden="true" />Real Compose UI</span>
+                </figcaption>
+              </figure>
+
+              <div class="platform-story-list">
+                <article v-for="platform in platforms" :key="platform.name">
+                  <component :is="platform.icon" :size="25" weight="duotone" aria-hidden="true" />
+                  <div><h3>{{ platform.name }}</h3><p>{{ platform.body }}</p></div>
+                </article>
+              </div>
             </div>
           </section>
 
           <section class="project-links section-width" data-reveal>
             <div>
               <p class="eyebrow">Built in the open</p>
-              <h2>Follow the work as closely as you want.</h2>
+              <h2>The work is public.</h2>
             </div>
             <a href="/roadmap/"><GitBranch :size="22" weight="duotone" aria-hidden="true" /><span><strong>Roadmap</strong><small>Priorities, milestones, and delivery</small></span><ArrowRight :size="18" weight="bold" aria-hidden="true" /></a>
             <a href="/news/"><BookOpen :size="22" weight="duotone" aria-hidden="true" /><span><strong>Journal</strong><small>Product decisions and deeper stories</small></span><ArrowRight :size="18" weight="bold" aria-hidden="true" /></a>
@@ -704,80 +789,101 @@ const frequentlyAsked = [
           </section>
 
           <section id="docs" class="docs-section" data-reveal>
-            <div class="section-width">
-              <div class="section-heading">
+            <div class="section-width docs-layout">
+              <div class="section-heading compact">
                 <p class="eyebrow">Documentation</p>
-                <h2>Architecture, security, compatibility, and contribution guides.</h2>
+                <h2>Read how the product is put together.</h2>
                 <p>
-                  The technical boundaries behind the product are public, searchable,
-                  and built from the same repository as the application.
+                  Architecture, security decisions, compatibility rules, and
+                  contribution guides live beside the source they describe.
                 </p>
               </div>
-              <div class="docs-grid">
-                <a v-for="doc in docs.slice(0, 6)" :key="doc.path" class="doc-card" :href="doc.path">
+              <nav class="docs-index" aria-label="Product documentation">
+                <a v-for="doc in docs.slice(0, 6)" :key="doc.path" :href="doc.path">
                   <BookOpen :size="24" weight="duotone" aria-hidden="true" />
                   <span><strong>{{ doc.shortTitle }}</strong><small>{{ doc.description }}</small></span>
                   <span class="read-time">{{ doc.readingMinutes }} min</span>
+                  <ArrowRight :size="17" weight="bold" aria-hidden="true" />
+                </a>
+              </nav>
+            </div>
+          </section>
+
+          <section class="news-section section-width" data-reveal>
+            <div class="news-heading">
+              <div class="section-heading compact">
+                <p class="eyebrow">Journal</p>
+                <h2>Notes from building the client.</h2>
+              </div>
+              <a class="text-link" href="/news/">All project news <ArrowRight :size="18" weight="bold" /></a>
+            </div>
+
+            <div class="journal-layout">
+              <a v-if="news[0]" class="journal-feature" :href="news[0].path">
+                <div class="journal-feature-media">
+                  <img
+                    :src="newsCapture(news[0])"
+                    :alt="news[0].imageAlt"
+                    :width="news[0].imageWidth"
+                    :height="news[0].imageHeight"
+                    loading="lazy"
+                  />
+                </div>
+                <div class="journal-feature-copy">
+                  <time :datetime="news[0].date">{{ news[0].date }}</time>
+                  <h3>{{ news[0].title }}</h3>
+                  <p>{{ news[0].description }}</p>
+                  <span>{{ news[0].readingMinutes }} min read <ArrowRight :size="16" weight="bold" aria-hidden="true" /></span>
+                </div>
+              </a>
+
+              <div class="journal-briefs">
+                <a v-for="post in news.slice(1, 3)" :key="post.path" :href="post.path">
+                  <div>
+                    <time :datetime="post.date">{{ post.date }}</time>
+                    <h3>{{ post.title }}</h3>
+                    <p>{{ post.description }}</p>
+                    <span>{{ post.readingMinutes }} min read <ArrowRight :size="15" weight="bold" aria-hidden="true" /></span>
+                  </div>
+                  <img
+                    :src="newsCapture(post)"
+                    :alt="post.imageAlt"
+                    :width="post.imageWidth"
+                    :height="post.imageHeight"
+                    loading="lazy"
+                  />
                 </a>
               </div>
             </div>
           </section>
 
-          <section class="news-section section-width" data-reveal>
-          <div class="news-heading">
-            <div class="section-heading compact">
-              <p class="eyebrow">Product guides and project news</p>
-              <h2>How Nextcloud Native handles everyday work.</h2>
-            </div>
-            <a class="text-link" href="/news/">All project news <ArrowRight :size="18" weight="bold" /></a>
-          </div>
-          <div class="news-grid">
-            <a v-for="post in news.slice(0, 3)" :key="post.path" class="news-card" :href="post.path">
-              <div class="news-card-media">
-                <img
-                  :src="post.websiteImage"
-                  :alt="post.imageAlt"
-                  :width="post.imageWidth"
-                  :height="post.imageHeight"
-                  loading="lazy"
-                />
-              </div>
-              <div class="news-card-copy">
-                <time :datetime="post.date">{{ post.date }}</time>
-                <h3>{{ post.title }}</h3>
-                <p>{{ post.description }}</p>
-                <span class="news-card-link">{{ post.readingMinutes }} min read <ArrowRight :size="16" weight="bold" /></span>
-              </div>
-            </a>
-          </div>
-          </section>
-
           <section class="faq-section section-width">
-          <div class="section-heading compact">
-            <p class="eyebrow">Straight answers</p>
-            <h2>What Nextcloud Native is, and is not.</h2>
-          </div>
-          <div class="faq-list">
-            <details v-for="item in frequentlyAsked" :key="item.question">
-              <summary>{{ item.question }}</summary>
-              <p>{{ item.answer }}</p>
-            </details>
-          </div>
+            <div class="section-heading compact">
+              <p class="eyebrow">Straight answers</p>
+              <h2>Before you connect a server.</h2>
+            </div>
+            <div class="faq-list">
+              <details v-for="(item, index) in frequentlyAsked" :key="item.question" :open="index === 0">
+                <summary>{{ item.question }}</summary>
+                <p>{{ item.answer }}</p>
+              </details>
+            </div>
           </section>
 
           <section class="contribute section-width">
-          <div>
-            <p class="eyebrow">AGPL-3.0 open source</p>
-            <h2>Build and test Nextcloud Native with us.</h2>
-            <p>
-              Read the architecture, run the clients, test another app contract,
-              or bring a platform integration you care about.
-            </p>
-          </div>
-          <a class="button button-primary" href="/contributing/">
-            Start contributing
-            <ArrowRight :size="19" weight="bold" aria-hidden="true" />
-          </a>
+            <div>
+              <p class="eyebrow">AGPL-3.0 open source</p>
+              <h2>Use it. Read it. Help shape it.</h2>
+              <p>
+                Run the clients, test your server and apps, inspect the architecture,
+                or bring a platform integration you care about.
+              </p>
+            </div>
+            <nav class="contribute-links" aria-label="Contribute to Nextcloud Native">
+              <a href="/contributing/">Contribution guide <ArrowRight :size="17" weight="bold" aria-hidden="true" /></a>
+              <a :href="githubUrl" target="_blank" rel="noreferrer">Browse the source <GithubLogo :size="17" weight="fill" aria-hidden="true" /></a>
+              <a :href="`${githubUrl}/issues`" target="_blank" rel="noreferrer">Open issues <ArrowRight :size="17" weight="bold" aria-hidden="true" /></a>
+            </nav>
           </section>
         </div>
       </template>
@@ -988,7 +1094,7 @@ const frequentlyAsked = [
           </header>
           <figure class="article-hero" data-reveal>
             <img
-              :src="currentPost.websiteImage"
+              :src="newsCapture(currentPost)"
               :alt="currentPost.imageAlt"
               :width="currentPost.imageWidth"
               :height="currentPost.imageHeight"
@@ -1040,7 +1146,7 @@ const frequentlyAsked = [
           <a v-for="post in news" :key="post.path" class="news-card" :href="post.path" data-reveal>
             <div class="news-card-media">
               <img
-                :src="post.websiteImage"
+                :src="newsCapture(post)"
                 :alt="post.imageAlt"
                 :width="post.imageWidth"
                 :height="post.imageHeight"
@@ -1143,7 +1249,7 @@ const frequentlyAsked = [
         <span class="brand-mark">
           <img src="/cloud.svg" alt="" width="25" height="25" />
         </span>
-        <span>Nextcloud Native</span>
+        <span class="brand-copy"><strong>Nextcloud Native</strong><small>by Obiente</small></span>
       </a>
       <p>An independent AGPL-3.0-or-later project by Obiente.</p>
       <div class="footer-links">

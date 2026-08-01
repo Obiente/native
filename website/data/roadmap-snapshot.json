@@ -2,7 +2,7 @@
   "source": "github-snapshot",
   "syncState": "snapshot",
   "projectUrl": "https://github.com/orgs/Obiente/projects/4",
-  "updatedAt": "2026-08-01T00:04:46Z",
+  "updatedAt": "2026-08-01T18:30:44Z",
   "epics": [
     {
       "number": 10,
@@ -37,8 +37,8 @@
       "milestone": "0.2 Safe sync and media",
       "progress": {
         "total": 21,
-        "completed": 3,
-        "percent_completed": 14
+        "completed": 5,
+        "percent_completed": 23
       },
       "labels": [
         "priority:P0",
@@ -189,6 +189,50 @@
     }
   ],
   "shipped": [
+    {
+      "number": 117,
+      "taskId": "SYNC-011",
+      "title": "Version-aware overwrite protection",
+      "url": "https://github.com/Obiente/nc-native/issues/117",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-08-01T18:30:44Z",
+      "closedAt": "2026-08-01T18:30:44Z"
+    },
+    {
+      "number": 108,
+      "taskId": "SYNC-002",
+      "title": "Initial sync policy",
+      "url": "https://github.com/Obiente/nc-native/issues/108",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-08-01T18:30:43Z",
+      "closedAt": "2026-08-01T18:30:43Z"
+    },
     {
       "number": 269,
       "taskId": null,
@@ -2366,28 +2410,6 @@
       "closedAt": null
     },
     {
-      "number": 108,
-      "taskId": "SYNC-002",
-      "title": "Initial sync policy",
-      "url": "https://github.com/Obiente/nc-native/issues/108",
-      "priority": "P0",
-      "area": "Files and sync",
-      "status": "Todo",
-      "milestone": "0.2 Safe sync and media",
-      "progress": {
-        "total": 0,
-        "completed": 0,
-        "percent_completed": 0
-      },
-      "labels": [
-        "priority:P0",
-        "area:files-sync",
-        "type:feature"
-      ],
-      "updatedAt": "2026-07-24T16:07:43Z",
-      "closedAt": null
-    },
-    {
       "number": 110,
       "taskId": "SYNC-004",
       "title": "Update existing sync-pair settings",
@@ -2520,28 +2542,6 @@
         "type:feature"
       ],
       "updatedAt": "2026-07-24T16:07:55Z",
-      "closedAt": null
-    },
-    {
-      "number": 117,
-      "taskId": "SYNC-011",
-      "title": "Version-aware overwrite protection",
-      "url": "https://github.com/Obiente/nc-native/issues/117",
-      "priority": "P0",
-      "area": "Files and sync",
-      "status": "Todo",
-      "milestone": "0.2 Safe sync and media",
-      "progress": {
-        "total": 0,
-        "completed": 0,
-        "percent_completed": 0
-      },
-      "labels": [
-        "priority:P0",
-        "area:files-sync",
-        "type:feature"
-      ],
-      "updatedAt": "2026-07-24T16:07:58Z",
       "closedAt": null
     },
     {
@@ -4379,9 +4379,9 @@
       "description": "Trustworthy Android media backup, storage reclaim foundation, and advanced files synchronization.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-07-31T23:38:34Z",
-      "open": 38,
-      "closed": 19
+      "updatedAt": "2026-08-01T18:30:44Z",
+      "open": 35,
+      "closed": 22
     },
     {
       "number": 2,
@@ -4434,9 +4434,9 @@
       "description": "Security, CI, signed packages, documentation, and contributor-ready stable release work.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-07-31T23:44:24Z",
+      "updatedAt": "2026-08-01T18:30:44Z",
       "open": 8,
-      "closed": 17
+      "closed": 18
     }
   ]
 }

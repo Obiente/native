@@ -25,7 +25,16 @@ test("news stays long-form, visual, and separate from release history", async ()
     assert.ok(post.readingMinutes >= 4, `${post.file} is too short to be a product story`);
     assert.match(post.image, /^\/screenshots\/[a-z0-9-]+\.png$/);
     assert.match(post.websiteImage, /^\/screenshots\/[a-z0-9-]+\.png\?v=[a-f0-9]{64}$/);
+    assert.match(post.imageDark, /^\/screenshots\/[a-z0-9-]+\.png$/);
+    assert.match(post.imageLight, /^\/screenshots\/[a-z0-9-]+\.png$/);
+    assert.match(post.websiteImageDark, /^\/screenshots\/[a-z0-9-]+\.png\?v=[a-f0-9]{64}$/);
+    assert.match(post.websiteImageLight, /^\/screenshots\/[a-z0-9-]+\.png\?v=[a-f0-9]{64}$/);
+    assert.notEqual(post.imageDark, post.imageLight);
+    assert.equal(post.image, post.imageDark);
+    assert.equal(post.websiteImage, post.websiteImageDark);
     assert.match(post.captureScenario, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+    assert.match(post.captureScenarioDark, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+    assert.match(post.captureScenarioLight, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     assert.ok(post.imageAlt.length >= 40);
     assert.ok(post.imageCaption.length >= 40);
     assert.ok(post.text.split(/\s+/).filter(Boolean).length >= 700);
@@ -117,7 +126,7 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   assert.match(captureMain, /NextcloudNativeMarketingCapture/);
 
   const manifest = await readCaptureManifest();
-  assert.equal(manifest.schemaVersion, 2);
+  assert.equal(manifest.schemaVersion, 3);
   assert.equal(manifest.identity, "Obiente");
   assert.equal(manifest.cloudIdentity, "Nextcloud");
   assert.equal(manifest.networkAccess, false);
@@ -132,12 +141,10 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   ]) {
     assert.ok(captureScenarios.has(requiredScenario));
   }
-  const homepageCaptures = manifest.captures.filter(
-    (capture) => capture.feature === "Homepage",
-  );
+  const homepageCaptures = manifest.captures.filter((capture) => capture.feature === "Homepage");
   const homepageCaptureBases = new Set(
     homepageCaptures.map((capture) =>
-      capture.scenario.replace(/-(?:dark|light)$/u, ""),
+      capture.baseScenario,
     ),
   );
   assert.equal(homepageCaptures.length, 14);
@@ -153,6 +160,16 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   for (const base of homepageCaptureBases) {
     assert.ok(captureScenarios.has(`${base}-dark`));
     assert.ok(captureScenarios.has(`${base}-light`));
+  }
+  const capturePairs = new Map();
+  for (const capture of manifest.captures) {
+    const pair = capturePairs.get(capture.baseScenario) ?? [];
+    pair.push(capture);
+    capturePairs.set(capture.baseScenario, pair);
+  }
+  for (const [baseScenario, pair] of capturePairs) {
+    assert.equal(pair.length, 2, `${baseScenario} must have two theme captures`);
+    assert.deepEqual(new Set(pair.map((capture) => capture.theme)), new Set(["dark", "light"]));
   }
   assert.equal(captureScenarios.size, marketingCaptures.length);
   assert.deepEqual(
@@ -171,12 +188,14 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   const capturedImages = new Set(
     manifest.captures.map((capture) => `/screenshots/${capture.file}`),
   );
-  assert.ok(news.every((post) => capturedImages.has(post.image)));
+  assert.ok(news.every((post) => capturedImages.has(post.imageDark)));
+  assert.ok(news.every((post) => capturedImages.has(post.imageLight)));
   assert.ok(
     news.every(
       (post) =>
-        manifest.captures.find((capture) => capture.scenario === post.captureScenario)
-          ?.purpose === "showcase",
+        manifest.captures
+          .filter((capture) => capture.baseScenario === post.captureScenario)
+          .every((capture) => capture.purpose === "showcase"),
     ),
   );
   assert.deepEqual(await verifyCaptureAssets(manifest), []);
@@ -346,7 +365,21 @@ test("visual QA and mobile navigation are driven by registered captures", async 
   assert.match(appSource, /nextcloud-native-theme/u);
   assert.match(appSource, /homepage-overview-desktop-dark/u);
   assert.match(appSource, /homepage-overview-desktop-light/u);
+  assert.match(appSource, /function newsCapture\(post\)/u);
+  assert.match(appSource, /post\.websiteImageLight/u);
+  assert.match(appSource, /post\.websiteImageDark/u);
+  assert.equal((appSource.match(/:src="newsCapture\(/gu) ?? []).length, 4);
   assert.match(styles, /:root\[data-theme="light"\]/u);
+  assert.match(styles, /--primary:\s*#cbb3fd/u);
+  assert.match(styles, /--primary-action:\s*#cbb3fd/u);
+  assert.match(styles, /--app-icon-container:\s*#24232e/u);
+  assert.match(styles, /:root\[data-theme="light"\][\s\S]*?--primary:\s*#684a9e/u);
+  assert.match(styles, /:root\[data-theme="light"\][\s\S]*?--primary-action:\s*#ebddff/u);
+  assert.match(styles, /:root\[data-theme="light"\][\s\S]*?--app-icon-container:\s*#f0e8f9/u);
+  assert.match(
+    styles,
+    /@media \(max-width:\s*1120px\)[\s\S]*?\.product-hero-mobile\s*\{[^}]*left:\s*1\.5%;/u,
+  );
   assert.match(appSource, /<Transition name="capture-swap">/u);
   assert.match(appSource, /Real native UI\. Synthetic private data\./u);
   assert.match(appSource, /window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)/u);

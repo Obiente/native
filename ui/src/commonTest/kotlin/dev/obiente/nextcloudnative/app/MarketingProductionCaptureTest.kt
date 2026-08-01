@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
 class MarketingProductionCaptureTest {
     @Test
     fun `homepage captures cover every story in matched dark and light themes`() {
-        val homepageCaptures = marketingCaptureScenarios.filter { it.feature == "Homepage" }
+        val homepageCaptures = marketingCaptureVariants.filter { it.scenario.feature == "Homepage" }
         val expectedPairs = setOf(
             "homepage-overview-desktop",
             "homepage-overview-mobile",
@@ -25,12 +25,24 @@ class MarketingProductionCaptureTest {
         )
 
         assertEquals(expectedPairs.size * 2, homepageCaptures.size)
-        assertEquals(expectedPairs, homepageCaptures.map { it.id.removeSuffix("-dark").removeSuffix("-light") }.toSet())
+        assertEquals(expectedPairs, homepageCaptures.map(MarketingCaptureVariant::baseScenario).toSet())
         expectedPairs.forEach { baseId ->
-            val pair = homepageCaptures.filter { capture -> capture.id.startsWith("$baseId-") }
+            val pair = homepageCaptures.filter { capture -> capture.baseScenario == baseId }
             assertEquals(2, pair.size)
-            assertEquals(setOf(true, false), pair.map(MarketingCaptureScenario::darkTheme).toSet())
-            assertTrue(pair.all { it.purpose == MarketingCapturePurpose.Showcase })
+            assertEquals(setOf(true, false), pair.map { it.theme.darkTheme }.toSet())
+            assertTrue(pair.all { it.scenario.purpose == MarketingCapturePurpose.Showcase })
+        }
+    }
+
+    @Test
+    fun `every marketing capture is generated in both themes`() {
+        val pairs = marketingCaptureVariants.groupBy(MarketingCaptureVariant::baseScenario)
+
+        assertTrue(pairs.isNotEmpty())
+        pairs.forEach { (_, pair) ->
+            assertEquals(2, pair.size)
+            assertEquals(setOf(MarketingCaptureTheme.Dark, MarketingCaptureTheme.Light), pair.map { it.theme }.toSet())
+            assertEquals(1, pair.map { it.width to it.height }.toSet().size)
         }
     }
 

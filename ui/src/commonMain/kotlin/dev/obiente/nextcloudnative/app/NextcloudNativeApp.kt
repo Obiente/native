@@ -789,8 +789,9 @@ fun NextcloudNativeMarketingCapture(
     scenario: MarketingCaptureScenario,
     assets: MarketingCaptureAssets,
     fixture: MarketingDemoFixture = nextcloudNativeMarketingFixture,
+    darkTheme: Boolean = scenario.darkTheme,
 ) {
-    NextcloudNativeTheme(darkTheme = scenario.darkTheme) {
+    NextcloudNativeTheme(darkTheme = darkTheme) {
         NextcloudAppBackground {
             val desktop = scenario.presentation == NextcloudPresentation.Desktop
             CompositionLocalProvider(

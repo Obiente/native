@@ -26,6 +26,13 @@ test("machine-readable product claims present the stable complete product experi
   assert.match(app, /Linux, Windows, and macOS/);
   assert.match(app, /href="https:\/\/github\.com\/Obiente\/nc-native\/releases"/);
   assert.doesNotMatch(app, /releases\/latest/);
+  assert.match(app, /Your Nextcloud deserves/);
+  assert.match(app, /Available for/);
+  assert.match(app, /AGPL-3\.0-or-later/);
+  assert.doesNotMatch(app, /No Obiente account|No hosted intermediary|Obiente never carries your data/);
+  assert.match(app, /Built by <strong>Obiente<\/strong>\. Independent and/);
+  assert.match(app, /Packages on GitHub/);
+  assert.doesNotMatch(app, /Independent\. Open source\. Yours\./);
   assert.match(app, /href="\/roadmap\/"/);
   assert.match(app, /href="\/news\/"/);
   assert.doesNotMatch(app, /alpha build|active development|packaging preview|status: "Planned"|completion status/i);

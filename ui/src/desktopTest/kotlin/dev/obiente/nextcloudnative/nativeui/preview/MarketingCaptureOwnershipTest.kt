@@ -196,7 +196,9 @@ class MarketingCaptureOwnershipTest {
 
     private fun registryEntry() = MarketingCaptureRegistryEntry(
         id = "capture",
+        baseScenario = "capture",
         fileName = "capture.png",
+        theme = "dark",
         feature = "Files",
         surface = "Browser",
         state = "Ready",
@@ -220,7 +222,7 @@ class MarketingCaptureOwnershipTest {
             directory.resolve("capture-manifest.json"),
             """
                 {
-                  "schemaVersion": 2,
+                  "schemaVersion": 3,
                   "renderer": "Compose ImageComposeScene",
                   "identity": "Obiente",
                   "cloudIdentity": "Nextcloud",
@@ -230,7 +232,9 @@ class MarketingCaptureOwnershipTest {
                   "avatarSha256": "${"2".repeat(64)}",
                   "captures": [{
                     "scenario": "${entry.id}",
+                    "baseScenario": "${entry.baseScenario}",
                     "file": "${entry.fileName}",
+                    "theme": "${entry.theme}",
                     "width": ${entry.width},
                     "height": ${entry.height},
                     "density": ${entry.density},

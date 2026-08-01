@@ -41,6 +41,14 @@ enum class MarketingCapturePurpose(val manifestValue: String) {
     StateCoverage("state-coverage"),
 }
 
+enum class MarketingCaptureTheme(
+    val manifestValue: String,
+    val darkTheme: Boolean,
+) {
+    Dark("dark", true),
+    Light("light", false),
+}
+
 enum class MarketingCaptureScenario(
     val id: String,
     val fileName: String,
@@ -78,7 +86,7 @@ enum class MarketingCaptureScenario(
         NextcloudPresentation.Desktop,
         "Homepage",
         "Complete account overview",
-        "Ready in light theme",
+        "Ready",
         MarketingCapturePurpose.Showcase,
         "desktop",
         "wide",
@@ -107,7 +115,7 @@ enum class MarketingCaptureScenario(
         NextcloudPresentation.Adaptive,
         "Homepage",
         "Complete account overview",
-        "Ready in light theme",
+        "Ready",
         MarketingCapturePurpose.Showcase,
         "mobile",
         "phone-portrait",
@@ -136,7 +144,7 @@ enum class MarketingCaptureScenario(
         NextcloudPresentation.Desktop,
         "Homepage",
         "Files workspace",
-        "Synced with offline content in light theme",
+        "Synced with offline content",
         MarketingCapturePurpose.Showcase,
         "desktop",
         "wide",
@@ -165,7 +173,7 @@ enum class MarketingCaptureScenario(
         NextcloudPresentation.Desktop,
         "Homepage",
         "Photos and memories workspace",
-        "Library ready in light theme",
+        "Library ready",
         MarketingCapturePurpose.Showcase,
         "desktop",
         "wide",
@@ -194,7 +202,7 @@ enum class MarketingCaptureScenario(
         NextcloudPresentation.Desktop,
         "Homepage",
         "Conversation workspace",
-        "Active conversation in light theme",
+        "Active conversation",
         MarketingCapturePurpose.Showcase,
         "desktop",
         "wide",
@@ -223,7 +231,7 @@ enum class MarketingCaptureScenario(
         NextcloudPresentation.Desktop,
         "Homepage",
         "Planning workspace",
-        "Board ready in light theme",
+        "Board ready",
         MarketingCapturePurpose.Showcase,
         "desktop",
         "wide",
@@ -252,7 +260,7 @@ enum class MarketingCaptureScenario(
         NextcloudPresentation.Desktop,
         "Homepage",
         "Installed app workspace",
-        "Verified native data in light theme",
+        "Verified native data",
         MarketingCapturePurpose.Showcase,
         "desktop",
         "wide",
@@ -297,7 +305,7 @@ enum class MarketingCaptureScenario(
     FileSyncStatusDesktop(
         "file-sync-status-desktop", "file-sync-status-desktop.png", NextcloudPresentation.Desktop,
         "File sync", "Folder sync center", "Priority queue, conflict, and failure",
-        MarketingCapturePurpose.StateCoverage, "linux", "wide",
+        MarketingCapturePurpose.Showcase, "linux", "wide",
         width = 1_440, height = 900, density = 1f,
     ),
     FileSyncSetupDesktop(
@@ -580,9 +588,23 @@ enum class MarketingCaptureScenario(
     ),
 }
 
-internal data class MarketingCaptureRegistryEntry(
+data class MarketingCaptureVariant(
+    val scenario: MarketingCaptureScenario,
+    val baseScenario: String,
     val id: String,
     val fileName: String,
+    val theme: MarketingCaptureTheme,
+) {
+    val width: Int get() = scenario.width
+    val height: Int get() = scenario.height
+    val density: Float get() = scenario.density
+}
+
+internal data class MarketingCaptureRegistryEntry(
+    val id: String,
+    val baseScenario: String,
+    val fileName: String,
+    val theme: String,
     val feature: String,
     val surface: String,
     val state: String,
@@ -599,21 +621,23 @@ internal data class MarketingCaptureRegistryEntry(
 private val marketingCaptureSlug = Regex("[a-z0-9-]+")
 private val marketingCapturePngFileName = Regex("[a-z0-9-]+\\.png")
 
-internal fun MarketingCaptureScenario.registryEntry(): MarketingCaptureRegistryEntry =
+internal fun MarketingCaptureVariant.registryEntry(): MarketingCaptureRegistryEntry =
     MarketingCaptureRegistryEntry(
         id = id,
+        baseScenario = baseScenario,
         fileName = fileName,
-        feature = feature,
-        surface = surface,
-        state = state,
-        purpose = purpose.manifestValue,
-        platform = platform,
-        viewport = viewport,
-        pullRequest = pullRequest,
-        issue = issue,
-        width = width,
-        height = height,
-        density = density,
+        theme = theme.manifestValue,
+        feature = scenario.feature,
+        surface = scenario.surface,
+        state = scenario.state,
+        purpose = scenario.purpose.manifestValue,
+        platform = scenario.platform,
+        viewport = scenario.viewport,
+        pullRequest = scenario.pullRequest,
+        issue = scenario.issue,
+        width = scenario.width,
+        height = scenario.height,
+        density = scenario.density,
     )
 
 internal fun validateMarketingCaptureRegistry(
@@ -632,8 +656,14 @@ internal fun validateMarketingCaptureRegistry(
         require(entry.id.matches(marketingCaptureSlug)) {
             "Invalid marketing capture scenario ID: ${entry.id}"
         }
+        require(entry.baseScenario.matches(marketingCaptureSlug)) {
+            "${entry.id} has an invalid base scenario slug."
+        }
         require(entry.fileName.matches(marketingCapturePngFileName)) {
             "Invalid marketing capture PNG file name: ${entry.fileName}"
+        }
+        require(entry.theme in MarketingCaptureTheme.entries.map(MarketingCaptureTheme::manifestValue)) {
+            "${entry.id} has an unsupported capture theme."
         }
         require(entry.width > 0 && entry.height > 0) {
             "${entry.id} must have positive pixel dimensions."
@@ -669,6 +699,33 @@ internal fun validateMarketingCaptureRegistry(
             "${entry.id} must use a positive issue number."
         }
     }
+    entries.groupBy(MarketingCaptureRegistryEntry::baseScenario).forEach { (baseScenario, pair) ->
+        require(pair.size == MarketingCaptureTheme.entries.size) {
+            "$baseScenario must declare exactly one dark and one light capture."
+        }
+        require(pair.map(MarketingCaptureRegistryEntry::theme).toSet() ==
+            MarketingCaptureTheme.entries.map(MarketingCaptureTheme::manifestValue).toSet()) {
+            "$baseScenario must declare exactly one dark and one light capture."
+        }
+        val reference = pair.first()
+        pair.drop(1).forEach { candidate ->
+            require(
+                candidate.feature == reference.feature &&
+                    candidate.surface == reference.surface &&
+                    candidate.state == reference.state &&
+                    candidate.purpose == reference.purpose &&
+                    candidate.platform == reference.platform &&
+                    candidate.viewport == reference.viewport &&
+                    candidate.pullRequest == reference.pullRequest &&
+                    candidate.issue == reference.issue &&
+                    candidate.width == reference.width &&
+                    candidate.height == reference.height &&
+                    candidate.density == reference.density,
+            ) {
+                "$baseScenario theme variants must share capture metadata and dimensions."
+            }
+        }
+    }
 }
 
 internal val fileShareCaptureScenarios: List<MarketingCaptureScenario> = listOf(
@@ -680,6 +737,61 @@ internal val fileShareCaptureScenarios: List<MarketingCaptureScenario> = listOf(
 
 val marketingCaptureScenarios: List<MarketingCaptureScenario> =
     MarketingCaptureScenario.entries
+
+private fun MarketingCaptureScenario.explicitThemeOrNull(): MarketingCaptureTheme? = when {
+    id.endsWith("-dark") -> MarketingCaptureTheme.Dark
+    id.endsWith("-light") -> MarketingCaptureTheme.Light
+    else -> null
+}
+
+private fun MarketingCaptureScenario.baseScenarioId(): String =
+    id.removeSuffix("-dark").removeSuffix("-light")
+
+val marketingCaptureVariants: List<MarketingCaptureVariant> =
+    marketingCaptureScenarios
+        .groupBy(MarketingCaptureScenario::baseScenarioId)
+        .flatMap { (baseScenario, scenarios) ->
+            when (scenarios.size) {
+                1 -> {
+                    val scenario = scenarios.single()
+                    require(scenario.explicitThemeOrNull() == null) {
+                        "$baseScenario has only one explicit theme variant."
+                    }
+                    listOf(
+                        MarketingCaptureVariant(
+                            scenario = scenario,
+                            baseScenario = baseScenario,
+                            id = scenario.id,
+                            fileName = scenario.fileName,
+                            theme = MarketingCaptureTheme.Dark,
+                        ),
+                        MarketingCaptureVariant(
+                            scenario = scenario,
+                            baseScenario = baseScenario,
+                            id = "${scenario.id}-light",
+                            fileName = "${scenario.fileName.removeSuffix(".png")}-light.png",
+                            theme = MarketingCaptureTheme.Light,
+                        ),
+                    )
+                }
+                MarketingCaptureTheme.entries.size -> scenarios.map { scenario ->
+                    val theme = requireNotNull(scenario.explicitThemeOrNull()) {
+                        "$baseScenario mixes explicit and implicit theme variants."
+                    }
+                    require(scenario.darkTheme == theme.darkTheme) {
+                        "${scenario.id} theme suffix does not match its renderer theme."
+                    }
+                    MarketingCaptureVariant(
+                        scenario = scenario,
+                        baseScenario = baseScenario,
+                        id = scenario.id,
+                        fileName = scenario.fileName,
+                        theme = theme,
+                    )
+                }
+                else -> error("$baseScenario has an unsupported number of capture scenarios.")
+            }
+        }
 
 val rawPreviewCaptureScenarios: List<MarketingCaptureScenario> = listOf(
     MarketingCaptureScenario.RawPreviewLoadingMobile,

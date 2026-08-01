@@ -5,9 +5,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.Density
 import dev.obiente.nextcloudnative.app.MarketingCaptureAssets
-import dev.obiente.nextcloudnative.app.MarketingCaptureScenario
+import dev.obiente.nextcloudnative.app.MarketingCaptureVariant
 import dev.obiente.nextcloudnative.app.NextcloudNativeMarketingCapture
-import dev.obiente.nextcloudnative.app.marketingCaptureScenarios
+import dev.obiente.nextcloudnative.app.marketingCaptureVariants
 import dev.obiente.nextcloudnative.app.registryEntry
 import dev.obiente.nextcloudnative.app.validateMarketingCaptureRegistry
 import java.nio.file.Files
@@ -35,7 +35,7 @@ fun main(arguments: Array<String>) {
         "The capture registry owns every output path and accepts no arguments."
     }
     val repositoryRoot = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize()
-    val registry = marketingCaptureScenarios.map(MarketingCaptureScenario::registryEntry)
+    val registry = marketingCaptureVariants.map(MarketingCaptureVariant::registryEntry)
     validateMarketingCaptureRegistry(registry)
     val captureSources = discoverCaptureSources(repositoryRoot)
     val captureSourceSha256 = captureSourceDigest(repositoryRoot, captureSources)
@@ -59,8 +59,8 @@ fun main(arguments: Array<String>) {
             manifestPath = captureDirectory.resolve("capture-manifest.json"),
             stagedDirectory = stagedDirectory,
         )
-        val outputs = marketingCaptureScenarios.map { scenario ->
-            captureOutputPath(stagedDirectory, scenario.fileName)
+        val outputs = marketingCaptureVariants.map { variant ->
+            captureOutputPath(stagedDirectory, variant.fileName)
         }
         val assets = MarketingCaptureAssets(
             avatar = loadObienteAvatar(),
@@ -70,13 +70,13 @@ fun main(arguments: Array<String>) {
                 previewBytesByFileId = loadHomepageFilePreviews(repositoryRoot),
             ),
         )
-        marketingCaptureScenarios.zip(outputs).forEach { (scenario, output) ->
+        marketingCaptureVariants.zip(outputs).forEach { (variant, output) ->
             capture(
                 output = output,
-                width = scenario.width,
-                height = scenario.height,
-                density = Density(scenario.density),
-                scenario = scenario,
+                width = variant.width,
+                height = variant.height,
+                density = Density(variant.density),
+                variant = variant,
                 assets = assets,
             )
         }
@@ -126,12 +126,13 @@ private fun capture(
     width: Int,
     height: Int,
     density: Density,
-    scenario: MarketingCaptureScenario,
+    variant: MarketingCaptureVariant,
     assets: MarketingCaptureAssets,
 ) {
     Files.createDirectories(output.parent)
-    val rawMediaCapture = RawMediaMarketingCapture.forScenarioOrNull(scenario)
-    val nativeTiffCapture = NativeTiffMarketingCapture.forScenarioOrNull(scenario)
+    val scenario = variant.scenario
+    val rawMediaCapture = RawMediaMarketingCapture.forScenarioOrNull(scenario, variant.id)
+    val nativeTiffCapture = NativeTiffMarketingCapture.forScenarioOrNull(scenario, variant.id)
     check(rawMediaCapture == null || nativeTiffCapture == null) {
         "${scenario.id} cannot use multiple isolated media renderers."
     }
@@ -142,18 +143,31 @@ private fun capture(
         coroutineContext = Dispatchers.Unconfined,
     ) {
         when {
-            rawMediaCapture != null -> rawMediaCapture.Content()
-            nativeTiffCapture != null -> nativeTiffCapture.Content()
-            else -> NextcloudNativeMarketingCapture(scenario, assets)
+            rawMediaCapture != null -> rawMediaCapture.Content(variant.theme.darkTheme)
+            nativeTiffCapture != null -> nativeTiffCapture.Content(variant.theme.darkTheme)
+            else -> NextcloudNativeMarketingCapture(
+                scenario = scenario,
+                assets = assets,
+                darkTheme = variant.theme.darkTheme,
+            )
         }
     }
     try {
-        repeat(CAPTURE_WARM_UP_FRAMES) {
+        val warmUpFrames = if (rawMediaCapture != null || nativeTiffCapture != null) {
+            ISOLATED_MEDIA_WARM_UP_FRAMES
+        } else {
+            CAPTURE_WARM_UP_FRAMES
+        }
+        repeat(warmUpFrames) {
             scene.render().close()
         }
         val rendered = scene.render()
-        rawMediaCapture?.verify()
-        nativeTiffCapture?.verify()
+        try {
+            rawMediaCapture?.verify()
+            nativeTiffCapture?.verify()
+        } catch (failure: IllegalStateException) {
+            throw IllegalStateException("${variant.id} capture verification failed.", failure)
+        }
         val encoded = rendered.use {
             requireNotNull(it.encodeToData(EncodedImageFormat.PNG)) {
                 "Compose could not encode ${output.fileName}."
@@ -166,6 +180,7 @@ private fun capture(
 }
 
 private const val CAPTURE_WARM_UP_FRAMES = 3
+private const val ISOLATED_MEDIA_WARM_UP_FRAMES = 8
 
 private fun loadObienteAvatar(): ImageBitmap {
     val bytes = requireNotNull(
@@ -193,11 +208,14 @@ private fun writeCaptureManifest(
     avatarSha256: String,
 ) {
     val captures = buildJsonArray {
-        marketingCaptureScenarios.zip(outputs).forEach { (scenario, output) ->
+        marketingCaptureVariants.zip(outputs).forEach { (variant, output) ->
+            val scenario = variant.scenario
             add(
                 buildJsonObject {
-                    put("scenario", scenario.id)
-                    put("file", scenario.fileName)
+                    put("scenario", variant.id)
+                    put("baseScenario", variant.baseScenario)
+                    put("file", variant.fileName)
+                    put("theme", variant.theme.manifestValue)
                     put("width", scenario.width)
                     put("height", scenario.height)
                     put("density", scenario.density)
@@ -215,7 +233,7 @@ private fun writeCaptureManifest(
         }
     }
     val manifest = buildJsonObject {
-        put("schemaVersion", 2)
+        put("schemaVersion", 3)
         put("renderer", "Compose ImageComposeScene")
         put("identity", "Obiente")
         put("cloudIdentity", "Nextcloud")
@@ -239,7 +257,7 @@ private fun writeCaptureManifest(
             .jsonObject
             .getValue("captures")
             .jsonArray
-            .size == marketingCaptureScenarios.size,
+            .size == marketingCaptureVariants.size,
     ) {
         "Capture manifest did not retain every registered scenario."
     }
