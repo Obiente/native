@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 package_directory="${1:?RPM package directory is required.}"
 arguments_file="${2:?jpackage arguments file is required.}"
 resource_directory="${3:?jpackage resource directory is required.}"
@@ -81,3 +82,5 @@ if [[ "${#rebuilt[@]}" -ne 1 ]]; then
         "$package_directory" "${#rebuilt[@]}" >&2
     exit 1
 fi
+
+"$project_root/tools/verify-rpm-package.sh" "${rebuilt[0]}"

@@ -1,3 +1,5 @@
+%global _build_id_links none
+
 Summary: One native client for your complete Nextcloud account
 Name: APPLICATION_PACKAGE
 Version: APPLICATION_VERSION
