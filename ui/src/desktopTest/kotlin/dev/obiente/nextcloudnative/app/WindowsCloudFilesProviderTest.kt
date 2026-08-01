@@ -5,7 +5,6 @@ import java.io.DataOutputStream
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
@@ -56,38 +55,58 @@ class WindowsCloudFilesProviderTest {
         try {
             provider.start()
             val expectedChildren = setOf("Calendar", "readme.txt")
-            val childAccessSucceeded = runCatching {
-                Files.readAttributes(root.resolve("Apps/readme.txt"), BasicFileAttributes::class.java)
-            }.isSuccess
-            val names = awaitDirectoryEntries(root.resolve("Apps"), expectedChildren)
+            val names = awaitExternalDirectoryEntries(root.resolve("Apps"), expectedChildren)
             assertTrue(
                 names.containsAll(expectedChildren),
                 "Expected Cloud Files children in directory entries: $names; " +
-                    "child access succeeded=$childAccessSucceeded; " +
                     "backend listings=${backend.listedPaths}; ${api.diagnostics()}",
             )
-            Files.newDirectoryStream(root.resolve("Apps/Calendar")).use { entries ->
-                entries.forEach { /* Enumerating the placeholder must remain readable. */ }
-            }
-            assertEquals(5L, Files.size(root.resolve("Apps/readme.txt")))
+            val childNames = runWindowsCommand("dir", "/b", root.resolve("Apps/Calendar").toString())
+            assertEquals(0, childNames.exitCode, childNames.output.toString(Charsets.UTF_8))
+            val hydrated = runWindowsCommand("type", root.resolve("Apps/readme.txt").toString())
+            assertEquals(0, hydrated.exitCode, hydrated.output.toString(Charsets.UTF_8))
+            assertContentEquals(ByteArray(5), hydrated.output)
         } finally {
             runCatching { provider.removeSyncRoot() }
             root.toFile().deleteRecursively()
         }
     }
 
-    private fun awaitDirectoryEntries(directory: Path, expected: Set<String>): Set<String> {
+    private fun awaitExternalDirectoryEntries(directory: Path, expected: Set<String>): Set<String> {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
         var names: Set<String>
         do {
-            names = Files.newDirectoryStream(directory).use { entries ->
-                entries.mapTo(linkedSetOf()) { it.fileName.toString() }
+            val result = runWindowsCommand("dir", "/b", directory.toString())
+            names = if (result.exitCode == 0) {
+                result.output.toString(Charsets.UTF_8).lineSequence()
+                    .map(String::trim)
+                    .filter(String::isNotEmpty)
+                    .toCollection(linkedSetOf())
+            } else {
+                emptySet()
             }
             if (names.containsAll(expected)) return names
             Thread.sleep(50)
         } while (System.nanoTime() < deadline)
         return names
     }
+
+    private fun runWindowsCommand(vararg arguments: String): WindowsCommandResult {
+        val process = ProcessBuilder(listOf("cmd.exe", "/d", "/c") + arguments)
+            .redirectErrorStream(true)
+            .start()
+        if (!process.waitFor(10, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            check(process.waitFor(5, TimeUnit.SECONDS)) { "The Windows Cloud Files probe did not stop." }
+            error("The Windows Cloud Files probe timed out.")
+        }
+        return WindowsCommandResult(process.exitValue(), process.inputStream.readBytes())
+    }
+
+    private data class WindowsCommandResult(
+        val exitCode: Int,
+        val output: ByteArray,
+    )
 
     @Test
     fun accountRemovalDisconnectsAndUnregistersTheSyncRoot() {
