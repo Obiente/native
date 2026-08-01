@@ -2,6 +2,8 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
+import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -102,6 +104,29 @@ internal data class NativeGroupwarePresentation(
     val attendeeCount: Int?,
     val allDay: Boolean,
 )
+
+private data class NativeTaskCompletionSemantics(
+    val field: FieldSpec,
+    val completedWireValue: String,
+    val incompleteWireValue: String,
+) {
+    fun read(record: NativeRecord): Boolean? {
+        val rawValue = record.values[field.id]?.trim() ?: return null
+        return when (field.kind) {
+            FieldKind.boolean -> when (rawValue.lowercase()) {
+                "true", "1" -> true
+                "false", "0" -> false
+                else -> null
+            }
+            FieldKind.enumeration -> when (rawValue) {
+                completedWireValue -> true
+                incompleteWireValue -> false
+                else -> null
+            }
+            else -> null
+        }
+    }
+}
 
 internal enum class NativeHouseholdItemKind {
     Household,
@@ -513,9 +538,15 @@ internal fun nativeGroupwarePresentation(
 ): NativeGroupwarePresentation? {
     val values = NativeSemanticValues(record)
     val words = semanticTokens(resource.id, resource.name)
+    val typedCompletion = resource.uniqueNativeTaskCompletionSemantics()
+        ?.takeIf { semantics ->
+            semantics.read(record) != null &&
+                values.hasAny("summary", "title", "name", "displayname", "label")
+        }
     val taskShape = values.hasAny(
-        "due", "duedate", "percentcomplete", "completed", "priority", "relatedto",
-    )
+        "assignee", "assignedto", "due", "duedate", "percentcomplete", "priority",
+        "relatedto",
+    ) || typedCompletion != null
     val completionShape = values.hasAny("worktime", "completedat", "donetimestamp") &&
         values.hasAny("member", "assignee", "user")
     val eventShape = values.hasAny("dtstart", "start", "startdate") &&
@@ -537,16 +568,21 @@ internal fun nativeGroupwarePresentation(
     val end = values.string("dtend", "end", "enddate")
     val due = values.string("due", "duedate")
     val status = values.string("status", "state")
+        ?: typedCompletion
+            ?.takeIf { semantics -> semantics.field.kind == FieldKind.enumeration }
+            ?.let { semantics -> record.values[semantics.field.id] }
     val recurrence = values.string("rrule", "recurrencerule", "recurrenceid")
         ?: values.string("repeat")
     val recurring = recurrence?.isRecurringTaskRule() == true
     val completionPercent = values.int("percentcomplete", "completionpercent", "progress")
         ?.coerceIn(0, 100)
     val completedValue = values.string("completedat")
-    val completed = values.boolean("completed", "done") == true ||
+    val completed = typedCompletion?.read(record) ?: (
+        values.boolean("completed", "done") == true ||
         status.equals("completed", ignoreCase = true) ||
         completionPercent == 100 ||
         !completedValue.isNullOrBlank()
+        )
     val organization = values.string("org", "organization", "company")
     val email = values.person("email", "emails", "mail")
     val phone = values.string("tel", "phone", "telephone", "phones")
@@ -564,7 +600,7 @@ internal fun nativeGroupwarePresentation(
         NativeGroupwareItemKind.Contact ->
             values.string("fn", "formattedname", "displayname", "name") ?: email ?: phone ?: record.id
         NativeGroupwareItemKind.Event, NativeGroupwareItemKind.Task ->
-            values.string("summary", "title", "name") ?: record.id
+            values.string("summary", "title", "name", "displayname", "label") ?: record.id
     }
     val subtitle = when (kind) {
         NativeGroupwareItemKind.Contact -> listOfNotNull(
@@ -626,18 +662,77 @@ internal fun nativeTaskCollectionPresentations(
     records: List<NativeRecord>,
 ): List<Pair<NativeRecord, NativeGroupwarePresentation>>? {
     if (records.isEmpty()) return null
+    val typedCompletion = resource.uniqueNativeTaskCompletionSemantics()
     return records.map { record ->
         val values = NativeSemanticValues(record)
         if (!values.hasAny(
                 "assignee", "assignedto", "completed", "completedat", "done", "donetimestamp",
                 "due", "duedate", "effort", "percentcomplete", "points", "priority", "repeat",
                 "rrule", "status", "worktime",
-            )
+            ) && (
+                typedCompletion?.read(record) == null ||
+                    !values.hasAny("summary", "title", "name", "displayname", "label")
+                )
         ) return null
         val presentation = nativeGroupwarePresentation(resource, record)
             ?.takeIf { it.kind == NativeGroupwareItemKind.Task }
             ?: return null
         record to presentation
+    }
+}
+
+/**
+ * Uses the declared field type and a standard completion concept to recognize reversible item
+ * state without relying on an app or endpoint identifier. Enumeration values must prove both a
+ * completed and an incomplete state; an arbitrary boolean such as `favorite` is not enough.
+ */
+private fun ResourceSpec.uniqueNativeTaskCompletionSemantics(): NativeTaskCompletionSemantics? {
+    val candidates = fields.mapNotNull { field ->
+        if (field.taskCompletionFieldScore() == 0) return@mapNotNull null
+        when (field.kind) {
+            FieldKind.boolean -> if (
+                !field.requiresIndependentNativeTaskEvidence() ||
+                hasIndependentNativeTaskEvidence(field)
+            ) {
+                NativeTaskCompletionSemantics(
+                    field = field,
+                    completedWireValue = "true",
+                    incompleteWireValue = "false",
+                )
+            } else {
+                null
+            }
+            FieldKind.enumeration -> {
+                val values = field.enumValues.orEmpty()
+                val completed = values.singleOrNull { value ->
+                    value.semanticKey() in TASK_COMPLETED_VALUES
+                }
+                val incomplete = values.singleOrNull { value ->
+                    value.semanticKey() in TASK_INCOMPLETE_VALUES
+                }
+                if (completed == null || incomplete == null) null else {
+                    NativeTaskCompletionSemantics(
+                        field = field,
+                        completedWireValue = completed,
+                        incompleteWireValue = incomplete,
+                    )
+                }
+            }
+            else -> null
+        }?.let { semantics -> semantics to field.taskCompletionFieldScore() }
+    }.sortedByDescending { (_, score) -> score }
+    val best = candidates.firstOrNull() ?: return null
+    return best.first.takeIf { candidates.drop(1).none { (_, score) -> score == best.second } }
+}
+
+private fun FieldSpec.taskCompletionFieldScore(): Int {
+    if (kind !in setOf(FieldKind.boolean, FieldKind.enumeration)) return 0
+    val id = id.semanticKey()
+    val label = label.semanticKey()
+    return when {
+        id in TASK_COMPLETION_FIELD_NAMES -> 2
+        label in TASK_COMPLETION_FIELD_NAMES -> 1
+        else -> 0
     }
 }
 
@@ -983,4 +1078,30 @@ private val CONTACT_PHONE_FORMATTING = setOf('+', ' ', '-', '(', ')', '.')
 private val TASK_WORDS = setOf(
     "assignment", "assignments", "chore", "chores", "duty", "duties",
     "rota", "rotas", "task", "tasks", "todo", "todos", "vtodo",
+)
+private val TASK_COMPLETION_FIELD_NAMES = setOf(
+    "complete",
+    "completed",
+    "done",
+    "finished",
+    "iscomplete",
+    "iscompleted",
+    "isdone",
+    "status",
+    "state",
+)
+private val TASK_COMPLETED_VALUES = setOf(
+    "closed",
+    "complete",
+    "completed",
+    "done",
+    "finished",
+)
+private val TASK_INCOMPLETE_VALUES = setOf(
+    "active",
+    "incomplete",
+    "new",
+    "open",
+    "pending",
+    "todo",
 )

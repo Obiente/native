@@ -19,7 +19,9 @@ internal data class AndroidLocalSyncDocument(
 )
 
 internal interface AndroidFileSyncLocalTree {
-    fun scan(): List<AndroidLocalSyncDocument>
+    fun scan(
+        includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
+    ): List<AndroidLocalSyncDocument>
     fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry
     fun createDirectory(path: String, expectedLocalRevision: String?)
     fun writeFile(path: String, source: File, expectedLocalRevision: String?)
@@ -51,7 +53,9 @@ internal class AndroidSafFileSyncLocalTree(
         ) { "Access to the selected local folder has expired. Select it again." }
     }
 
-    override fun scan(): List<AndroidLocalSyncDocument> {
+    override fun scan(
+        includes: (relativePath: String, kind: SyncEntryKind) -> Boolean,
+    ): List<AndroidLocalSyncDocument> {
         val result = ArrayList<AndroidLocalSyncDocument>()
         val pending = ArrayDeque<Pair<String, Uri>>()
         pending += "" to rootUri
@@ -59,6 +63,7 @@ internal class AndroidSafFileSyncLocalTree(
             val (parentPath, parentUri) = pending.removeFirst()
             require(parentPath.count { it == '/' } < MAX_DEPTH) { "The local folder is nested too deeply." }
             for (document in children(parentUri, parentPath)) {
+                if (!includes(document.entry.relativePath, document.entry.kind)) continue
                 require(result.size < MAX_ENTRIES) { "The local folder contains too many entries." }
                 result += document
                 if (document.entry.kind == SyncEntryKind.Directory) {

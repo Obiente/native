@@ -9,6 +9,8 @@ const val MAX_PROJECT_NEWS_FEED_BYTES = 512 * 1024
 const val MAX_PROJECT_NEWS_IMAGE_BYTES = 8 * 1024 * 1024
 const val MAX_ANDROID_UPDATE_METADATA_BYTES = 64 * 1024
 const val MAX_ANDROID_UPDATE_APK_BYTES = 256L * 1024L * 1024L
+const val MAX_DESKTOP_UPDATE_METADATA_BYTES = 128 * 1024
+const val MAX_DESKTOP_UPDATE_PACKAGE_BYTES = 512L * 1024L * 1024L
 
 @Serializable
 data class ProjectNewsFeed(
@@ -54,12 +56,16 @@ fun projectNewsArticlePresentation(article: ProjectNewsArticle): ProjectNewsArti
 
 enum class AppDistributionChannel {
     DirectApk,
+    DirectDesktopPackage,
     GooglePlay,
     FDroid,
     OtherStore,
     Development,
     Unsupported,
 }
+
+internal fun appUpdateDownloadCancellationLabel(channel: AppDistributionChannel): String =
+    if (channel == AppDistributionChannel.DirectDesktopPackage) "Cancel download" else "Pause download"
 
 data class AppUpdateSupport(
     val channel: AppDistributionChannel,
@@ -112,19 +118,66 @@ sealed interface AppUpdateInstallState {
     ) : AppUpdateInstallState
 }
 
+sealed interface AppUpdateRelease {
+    val versionName: String
+    val versionCode: Long
+    val packageSize: Long
+    val releaseNotesUrl: String
+}
+
 @Serializable
 data class AndroidDirectRelease(
     val schemaVersion: Int,
     val channel: String,
-    val versionName: String,
-    val versionCode: Long,
+    override val versionName: String,
+    override val versionCode: Long,
     val packageName: String,
     val minimumAndroidSdk: Int,
     val apkUrl: String,
     val apkSize: Long,
     val apkSha256: String,
     val signingCertificateSha256Digests: List<String>,
+    override val releaseNotesUrl: String,
+) : AppUpdateRelease {
+    override val packageSize: Long get() = apkSize
+}
+
+@Serializable
+data class DesktopUpdateManifest(
+    val schemaVersion: Int,
+    val channel: String,
+    val versionName: String,
+    val versionCode: Long,
+    val packageVersion: String,
     val releaseNotesUrl: String,
+    val assets: List<DesktopUpdateAsset>,
+)
+
+@Serializable
+data class DesktopUpdateAsset(
+    val platform: String,
+    val format: String,
+    val architecture: String,
+    val url: String,
+    val size: Long,
+    val sha256: String,
+)
+
+data class DesktopDirectRelease(
+    val updateChannel: AndroidUpdateChannel,
+    override val versionName: String,
+    override val versionCode: Long,
+    val packageVersion: String,
+    val asset: DesktopUpdateAsset,
+    override val releaseNotesUrl: String,
+) : AppUpdateRelease {
+    override val packageSize: Long get() = asset.size
+}
+
+data class AppUpdatePreferences(
+    val automaticChecks: Boolean = true,
+    val unmeteredNetworkOnly: Boolean = true,
+    val notifications: Boolean = true,
 )
 
 enum class AndroidUpdateChannel(
@@ -144,6 +197,12 @@ fun AndroidUpdateChannel.manifestUrl(): String {
     return "https://github.com/Obiente/nc-native/releases/download/$pointerTag/update-manifest.json"
 }
 
+fun AndroidUpdateChannel.desktopManifestUrl(): String {
+    require(available) { "$name updates are not available yet." }
+    return "https://github.com/Obiente/nc-native/releases/download/" +
+        "$pointerTag/desktop-update-manifest.json"
+}
+
 fun parseAndroidUpdateChannel(value: String?): AndroidUpdateChannel =
     AndroidUpdateChannel.entries
         .singleOrNull { channel ->
@@ -160,15 +219,19 @@ sealed interface AppUpdateCheckResult {
     data class Current(val support: AppUpdateSupport) : AppUpdateCheckResult
     data class Available(
         val support: AppUpdateSupport,
-        val release: AndroidDirectRelease,
+        val release: AppUpdateRelease,
     ) : AppUpdateCheckResult
     data class Unavailable(val support: AppUpdateSupport) : AppUpdateCheckResult
-    data class Failed(val support: AppUpdateSupport, val message: String) : AppUpdateCheckResult
+    data class Failed(
+        val support: AppUpdateSupport,
+        val message: String,
+        val retryable: Boolean = false,
+    ) : AppUpdateCheckResult
 }
 
 sealed interface AppUpdateInstallResult {
     data object ConfirmationOpened : AppUpdateInstallResult
-    data object Cancelled : AppUpdateInstallResult
+    data class Cancelled(val canResume: Boolean) : AppUpdateInstallResult
     data class PermissionRequired(val message: String) : AppUpdateInstallResult
     data class Rejected(val message: String) : AppUpdateInstallResult
 }
@@ -299,6 +362,99 @@ fun validateAndroidDirectRelease(
 fun isNewerAndroidRelease(currentVersionCode: Long, release: AndroidDirectRelease): Boolean =
     release.versionCode > currentVersionCode
 
+fun isNewerAppRelease(currentVersionCode: Long, release: AppUpdateRelease): Boolean =
+    release.versionCode > currentVersionCode
+
+fun parseDesktopDirectRelease(
+    bytes: ByteArray,
+    metadataUrl: String,
+    expectedChannel: AndroidUpdateChannel,
+    platform: String,
+    format: String,
+    architecture: String,
+): DesktopDirectRelease {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_DESKTOP_UPDATE_METADATA_BYTES)
+    require(isCanonicalDesktopUpdateManifestUrl(metadataUrl, expectedChannel))
+    val manifest = publicContentJson.decodeFromString<DesktopUpdateManifest>(bytes.decodeToString())
+    validateDesktopUpdateManifest(manifest, expectedChannel, metadataUrl)
+    val asset = manifest.assets.singleOrNull { candidate ->
+        candidate.platform == platform &&
+            candidate.format == format &&
+            candidate.architecture == architecture
+    } ?: error("No $format update is available for $platform $architecture.")
+    return DesktopDirectRelease(
+        updateChannel = expectedChannel,
+        versionName = manifest.versionName,
+        versionCode = manifest.versionCode,
+        packageVersion = manifest.packageVersion,
+        asset = asset,
+        releaseNotesUrl = manifest.releaseNotesUrl,
+    )
+}
+
+fun validateDesktopUpdateManifest(
+    manifest: DesktopUpdateManifest,
+    expectedChannel: AndroidUpdateChannel,
+    metadataUrl: String,
+): DesktopUpdateManifest {
+    require(expectedChannel.available)
+    require(manifest.schemaVersion == 1)
+    require(manifest.channel == expectedChannel.manifestChannel)
+    require(manifest.versionName.isBoundedPublicText(64) && manifest.versionCode > 0)
+    require(manifest.packageVersion.matches(Regex("[1-9][0-9]*\\.[0-9]+\\.[0-9]+")))
+    require(manifest.assets.isNotEmpty() && manifest.assets.size <= 8)
+    require(
+        manifest.assets.map { asset -> Triple(asset.platform, asset.format, asset.architecture) }
+            .distinct().size == manifest.assets.size,
+    )
+    val tag = releaseTag(expectedChannel, manifest.versionName)
+    require(
+        metadataUrl == expectedChannel.desktopManifestUrl() ||
+            metadataUrl ==
+            "https://github.com/Obiente/nc-native/releases/download/" +
+            "$tag/desktop-update-manifest.json",
+    )
+    require(
+        manifest.releaseNotesUrl ==
+            "https://github.com/Obiente/nc-native/releases/tag/$tag",
+    )
+    manifest.assets.forEach { asset ->
+        require(asset.platform in setOf("linux", "windows", "macos"))
+        require(
+            asset.format in when (asset.platform) {
+                "linux" -> setOf("deb", "rpm")
+                "windows" -> setOf("msi")
+                "macos" -> setOf("dmg")
+                else -> emptySet()
+            },
+        )
+        require(asset.architecture in setOf("x86_64", "aarch64"))
+        require(asset.size in 1..MAX_DESKTOP_UPDATE_PACKAGE_BYTES)
+        require(asset.sha256.isSha256())
+        require(
+            asset.url.hasCanonicalPathUnder(
+                "https://github.com/Obiente/nc-native/releases/download/$tag/",
+                trailingSlash = false,
+            ) && asset.url.endsWith(".${asset.format}"),
+        )
+    }
+    return manifest
+}
+
+fun isCanonicalDesktopUpdateManifestUrl(
+    url: String,
+    channel: AndroidUpdateChannel,
+): Boolean {
+    if (!channel.available) return false
+    if (url == channel.desktopManifestUrl()) return true
+    val prefix = "https://github.com/Obiente/nc-native/releases/download/"
+    if (!url.hasCanonicalPathUnder(prefix, trailingSlash = false)) return false
+    val path = url.removePrefix(prefix).split('/')
+    return path.size == 2 &&
+        path[0].matches(channel.releaseTagPattern()) &&
+        path[1] == "desktop-update-manifest.json"
+}
+
 fun isCanonicalAndroidPrereleaseManifestUrl(url: String): Boolean {
     return isCanonicalAndroidUpdateManifestUrl(url, AndroidUpdateChannel.Alpha)
 }
@@ -332,7 +488,10 @@ private fun AndroidUpdateChannel.releaseTagPattern(): Regex = when (this) {
     -> error("$name updates are not available yet.")
 }
 
-private fun AndroidDirectRelease.releaseTag(channel: AndroidUpdateChannel): String = when (channel) {
+private fun AndroidDirectRelease.releaseTag(channel: AndroidUpdateChannel): String =
+    releaseTag(channel, versionName)
+
+private fun releaseTag(channel: AndroidUpdateChannel, versionName: String): String = when (channel) {
     AndroidUpdateChannel.Alpha -> {
         require(versionName.matches(Regex("0\\.[0-9]+\\.[0-9]+-(?:alpha|beta|rc)\\.[0-9]+")))
         "v$versionName"

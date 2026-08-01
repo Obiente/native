@@ -25,6 +25,8 @@ internal data class NativeBoardLane(
     val records: List<NativeRecord>,
     /** Stable parent/lane values retained for exact contract-backed card creation. */
     val contextValues: Map<String, String> = emptyMap(),
+    /** False when lane context was retained for display but is ambiguous for mutations. */
+    val actionBindingProvenanceValid: Boolean = true,
 )
 
 internal data class NativeChartPoint(
@@ -117,11 +119,7 @@ internal fun nativeCellEditPlan(
     val cell = projection.cellsByRecord[record.id]?.get(field.id) ?: return null
     if (cell.valueShape == NativeCellValueShape.complex) return null
     if (cell.valueShape == NativeCellValueShape.nullValue && cell.declaredKind == null) return null
-    val preserved = buildMap {
-        record.values.forEach { (key, value) -> if (value != null) put(key, value) }
-        if (record.canResolveUnsafeActionIdentity()) putIfAbsent("id", record.id)
-        putAll(cell.contextValues)
-    }
+    val preserved = record.safeActionBindingValues(contextualValues = cell.contextValues) ?: return null
     val candidates = schema.actions.mapNotNull { action ->
         if (!action.resourceId.sameTabularResourceShape(resource.id) || action.intent != ActionIntent.update ||
             action.risk != ActionRisk.mutating || action.binding.method !in setOf(HttpMethod.PUT, HttpMethod.PATCH, HttpMethod.POST)
@@ -142,9 +140,10 @@ internal fun nativeCellEditPlan(
                 action.binding.bodyFieldNames.singleOrNull { it.semanticCellFieldId() in CELL_VALUE_BODY_FIELD_IDS }
             else -> return@mapNotNull null
         } ?: return@mapNotNull null
+        if (action.binding.hasFlatCellActionCollision(valueField)) return@mapNotNull null
         val available = preserved.keys + valueField
-        if (!action.binding.requiredPathParameterNames.all { it.canResolveFrom(available) } ||
-            !action.binding.requiredQueryParameterNames.all { it.canResolveFrom(available) } ||
+        if (!action.binding.requiredPathParameterNames.all { it.canResolveFrom(available, action.resourceId) } ||
+            !action.binding.requiredQueryParameterNames.all { it.canResolveFrom(available, action.resourceId) } ||
             !action.binding.requiredBodyFieldNames.all { it in available }
         ) return@mapNotNull null
         val rank = when {
@@ -187,8 +186,28 @@ internal fun validateNativeCellEdit(field: FieldSpec, value: String): String? {
 data class NativeDatasetContext(
     val parentResourceId: String? = null,
     val parentRecord: NativeRecord? = null,
+    /**
+     * Exact values already resolved by descriptor-driven navigation.
+     *
+     * These values let an empty child collection still expose safe create actions without
+     * guessing a parent identity from a route name or an application-specific convention.
+     */
+    val bindingValues: Map<String, String> = emptyMap(),
     val relatedRecords: Map<String, List<NativeRecord>> = emptyMap(),
+    val relatedRecordPaging: Map<String, NativeRelatedRecordPaging> = emptyMap(),
 )
+
+data class NativeRelatedRecordPaging(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val discardedChoiceCount: Int = 0,
+    val loadMore: (() -> Unit)? = null,
+    val returnToFirstPage: (() -> Unit)? = null,
+) {
+    init {
+        require(discardedChoiceCount >= 0)
+    }
+}
 
 internal data class HydratedNativeDataset(
     val resource: ResourceSpec,
@@ -278,15 +297,14 @@ internal fun expandNestedBoardDataset(
         val laneTitle = laneRecord.presentationValue("title")
             ?: laneRecord.presentationValue("name")
             ?: laneRecord.id
+        val laneContext = laneRecord.safeActionBindingValues()
         NativeBoardLane(
             key = laneRecord.id,
             title = laneTitle,
             records = childRecords.filter { (child, _) -> child.laneRecord.id == laneRecord.id }
                 .map { (_, record) -> record },
-            contextValues = laneRecord.actionBindingValues(allowUnsafeIdentity = true) + mapOf(
-                "laneId" to laneRecord.id,
-                "stackId" to laneRecord.id,
-            ),
+            contextValues = laneContext.orEmpty(),
+            actionBindingProvenanceValid = laneContext != null,
         )
     }
     return HydratedNativeDataset(
@@ -330,6 +348,18 @@ private fun NestedBoardChild.toNativeBoardRecord(
     val inheritedContext = laneRecord.values.filterKeys { key ->
         key.semanticFieldId().endsWith("id") && key.semanticFieldId() != "id"
     }
+    val parentBindingContext = laneRecord.safeActionBindingValues()
+        ?.filterKeys { key ->
+            key.semanticFieldId().endsWith("id") && key.semanticFieldId() != "id"
+        }
+    val childBindingContext = parentBindingContext?.let { parentValues ->
+        safeActionBindingValues(
+            parentValues,
+            mapOf(
+                laneField to (scalarValues[laneField] ?: laneRecord.id),
+            ),
+        )
+    }
     val nestedStructures = value.entries.mapNotNull { entry ->
         entry.value.takeIf { nested -> nested !is NativeStructuredValue.Scalar }?.let { nested -> entry.key to nested }
     }.toMap()
@@ -343,6 +373,8 @@ private fun NestedBoardChild.toNativeBoardRecord(
         ephemeralFields = value.entries.map { entry -> entry.toNestedBoardField(declaredWritableIds) },
         actionSafeIdentity = identityEntry?.key?.semanticFieldId() in declaredIdentityIds,
         structuredValues = nestedStructures,
+        bindingContext = childBindingContext.orEmpty(),
+        actionBindingProvenanceValid = childBindingContext != null,
     )
 }
 
@@ -550,12 +582,15 @@ internal fun nativeBoardLanes(
         ?.value
         ?.takeIf { it.boardLanePriority() > 0 && records.any { record -> !record.values[it.id].isNullOrBlank() } }
         ?: return listOf(
-            NativeBoardLane(
+            records.sharedBoardLaneContext().let { sharedContext ->
+                NativeBoardLane(
                 "all",
                 resource.name,
                 sortBoardRecords(resource, records),
-                records.firstOrNull()?.actionBindingValues(allowUnsafeIdentity = true).orEmpty(),
-            ),
+                    sharedContext.orEmpty(),
+                    actionBindingProvenanceValid = sharedContext != null,
+                )
+            },
         )
 
     val orderedKeys = records.map { it.values[laneField.id].orEmpty().trim().ifBlank { UNASSIGNED_LANE } }.distinct()
@@ -563,6 +598,7 @@ internal fun nativeBoardLanes(
         val laneRecords = records.filter {
             it.values[laneField.id].orEmpty().trim().ifBlank { UNASSIGNED_LANE } == key
         }
+        val sharedContext = laneRecords.sharedBoardLaneContext(laneField.id)
         NativeBoardLane(
             key = key,
             title = laneRecords.firstNotNullOfOrNull { it.displayValues[laneField.id] }
@@ -571,9 +607,34 @@ internal fun nativeBoardLanes(
                 resource,
                 laneRecords,
             ),
-            contextValues = laneRecords.firstOrNull()?.actionBindingValues(allowUnsafeIdentity = true).orEmpty(),
+            contextValues = sharedContext.orEmpty(),
+            actionBindingProvenanceValid = sharedContext != null,
         )
     }
+}
+
+private fun List<NativeRecord>.sharedBoardLaneContext(laneFieldId: String? = null): Map<String, String>? {
+    if (isEmpty()) return emptyMap()
+    val resolved = map { record ->
+        record.safeActionBindingValues() ?: return null
+    }
+    val candidateSemantics = resolved.first().keys
+        .map(String::semanticFieldId)
+        .filterTo(mutableSetOf()) { semantic ->
+            semantic != "id" && (semantic.endsWith("id") || semantic == laneFieldId?.semanticFieldId())
+        }
+    val sharedSemantics = candidateSemantics.filterTo(mutableSetOf()) { semantic ->
+        resolved.all { values ->
+            values.filterKeys { key -> key.semanticFieldId() == semantic }
+                .values
+                .distinct()
+                .singleOrNull() != null
+        } &&
+            resolved.mapNotNull { values ->
+                values.entries.firstOrNull { (key, _) -> key.semanticFieldId() == semantic }?.value
+            }.distinct().size == 1
+    }
+    return resolved.first().filterKeys { key -> key.semanticFieldId() in sharedSemantics }
 }
 
 /**
@@ -695,6 +756,7 @@ private fun FieldSpec.measurePriority(): Int {
         "quantity", "count" -> 500
         else -> 0
     }
+    if (semantic <= 0) return 0
     return semantic + when (kind) {
         FieldKind.currency -> 300
         FieldKind.decimal -> 200
@@ -828,8 +890,14 @@ private fun List<FieldKind>.mostSpecificCellKind(): FieldKind = when {
 
 private fun projectedCellId(sourceFieldId: String, key: String): String = "$sourceFieldId.$key"
 
-private fun String.canResolveFrom(available: Set<String>): Boolean =
-    this in available || length > 2 && endsWith("Id", ignoreCase = true) && "id" in available
+private fun String.canResolveFrom(available: Set<String>, actionResourceId: String): Boolean {
+    val normalizedAvailable = available.mapTo(mutableSetOf(), String::semanticCellFieldId)
+    val normalizedName = semanticCellFieldId()
+    if (normalizedName in normalizedAvailable) return true
+    if ("id" !in normalizedAvailable || !normalizedName.endsWith("id")) return false
+    return normalizedName in TABULAR_RECORD_IDENTITY_FIELD_IDS ||
+        normalizedName.removeSuffix("id").sameTabularResourceShape(actionResourceId)
+}
 
 /**
  * A projected cell can use a generic payload name such as `data` only when the route is explicitly
@@ -839,6 +907,13 @@ private fun String.canResolveFrom(available: Set<String>): Boolean =
 private fun dev.obiente.nextcloudnative.nativeui.model.ApiBinding.declaresCellIdentity(): Boolean =
     (pathParameterNames + queryParameterNames + bodyFieldNames)
         .any { it.semanticCellFieldId() in CELL_IDENTITY_FIELD_IDS }
+
+private fun dev.obiente.nextcloudnative.nativeui.model.ApiBinding.hasFlatCellActionCollision(
+    submittedBodyField: String,
+): Boolean {
+    val submitted = submittedBodyField.semanticCellFieldId()
+    return (pathParameterNames + queryParameterNames).any { it.semanticCellFieldId() == submitted }
+}
 
 private fun dev.obiente.nextcloudnative.nativeui.model.ApiBinding.bodyFieldExplicitlyAcceptsObject(
     fieldName: String,
@@ -1027,6 +1102,7 @@ private val CELL_IDENTITY_FIELD_IDS = setOf(
     "cellid",
 )
 private val CELL_VALUE_BODY_FIELD_IDS = setOf("data", "content", "payload", "cellvalue")
+private val TABULAR_RECORD_IDENTITY_FIELD_IDS = setOf("id", "rowid", "recordid", "itemid", "entryid")
 private val SUPPORTED_INLINE_BODY_TYPES = setOf("application/json", "application/x-www-form-urlencoded")
 
 private val IDENTITY_FIELD_IDS = setOf("id", "uuid", "token")

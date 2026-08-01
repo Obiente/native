@@ -21,6 +21,8 @@ data class NativeRecord(
      * not response data, and therefore never render as fields.
      */
     val bindingContext: Map<String, String> = emptyMap(),
+    /** False when display data was retained after detecting ambiguous action provenance. */
+    val actionBindingProvenanceValid: Boolean = true,
 )
 
 @Serializable
@@ -66,16 +68,90 @@ internal const val NATIVE_SYNTHETIC_RESOURCE_FIELD = "__nextcloud_native_resourc
 internal fun NativeRecord.effectiveNativeResourceId(fallback: String): String =
     values[NATIVE_SYNTHETIC_RESOURCE_FIELD]?.takeIf(String::isNotBlank) ?: fallback
 
-/** Values allowed to cross from a selected read record into action/path/query binding. */
-internal fun NativeRecord.actionBindingValues(allowUnsafeIdentity: Boolean = false): Map<String, String> = buildMap {
-    putAll(bindingContext)
-    this@actionBindingValues.values.forEach { (key, value) ->
-        if (key !in structuredValues) value?.let { put(key, it) }
+/**
+ * Values allowed to cross from a selected read record into action/path/query binding.
+ *
+ * This compatibility helper deliberately returns no values when provenance is ambiguous. Mutation
+ * planners should use [safeActionBindingValues] directly so an unavailable action remains explicit.
+ */
+internal fun NativeRecord.actionBindingValues(allowUnsafeIdentity: Boolean = false): Map<String, String> =
+    safeActionBindingValues(allowUnsafeIdentity).orEmpty()
+
+/**
+ * Resolves values for a mutation without silently choosing between conflicting provenance.
+ *
+ * [bindingContext] contains the exact request and navigation identities used to load the record.
+ * Response values and additional semantic context may confirm those identities, but may not
+ * replace them. A response field literally named `id` is display/protocol data when [id] is a
+ * different contract-selected backing identity, so only the canonical identity is exported under
+ * the generic `id` key. Callers must keep an action unavailable when this returns `null`.
+ */
+internal fun NativeRecord.safeActionBindingValues(
+    allowUnsafeIdentity: Boolean = false,
+    contextualValues: Map<String, String> = emptyMap(),
+): Map<String, String>? {
+    if (!actionBindingProvenanceValid) return null
+    val usableCanonicalIdentity =
+        actionSafeIdentity || (allowUnsafeIdentity && canResolveUnsafeActionIdentity())
+    val authoritativeContext = safeActionBindingValues(bindingContext, contextualValues) ?: return null
+    val contextualIdentityValues = authoritativeContext.entries
+        .filter { (key, _) -> key.actionBindingSemanticKey() == ACTION_BINDING_CANONICAL_ID }
+        .map { (_, value) -> value }
+        .distinct()
+    if (
+        usableCanonicalIdentity &&
+        contextualIdentityValues.any { contextualIdentity -> contextualIdentity != id }
+    ) {
+        return null
     }
-    // The parser may deliberately choose a contract-declared backing identity such as
-    // `databaseId` over a protocol/display field also named `id`. The canonical safe identity must
-    // therefore win when an action uses a conventional `{id}` parameter.
-    if (actionSafeIdentity || (allowUnsafeIdentity && canResolveUnsafeActionIdentity())) put("id", id)
+    val contextWithoutGenericIdentity = authoritativeContext.filterKeys { key ->
+        key.actionBindingSemanticKey() != ACTION_BINDING_CANONICAL_ID
+    }
+    val observedValues = values.mapNotNull { (key, value) ->
+        value
+            ?.takeIf {
+                key !in structuredValues &&
+                    key.actionBindingSemanticKey() != ACTION_BINDING_CANONICAL_ID
+            }
+            ?.let { key to it }
+    }.toMap()
+    val canonicalIdentity = when {
+        usableCanonicalIdentity -> mapOf("id" to id)
+        contextualIdentityValues.size == 1 -> mapOf("id" to contextualIdentityValues.single())
+        else -> emptyMap()
+    }
+    return safeActionBindingValues(
+        contextWithoutGenericIdentity,
+        observedValues,
+        canonicalIdentity,
+    )
+}
+
+/**
+ * Merges flat action values only when every semantic key has one exact value.
+ *
+ * Exact spellings are retained because the request executor binds declared parameter names
+ * literally. Normalized aliases such as `parentId` and `parent_id` may coexist only when they
+ * confirm the same value.
+ */
+internal fun safeActionBindingValues(
+    vararg sources: Map<String, String>,
+): Map<String, String>? {
+    val semanticValues = linkedMapOf<String, String>()
+    val merged = linkedMapOf<String, String>()
+    sources.forEach { source ->
+        source.forEach { (key, value) ->
+            val semanticKey = key.actionBindingSemanticKey()
+            if (semanticKey.isBlank()) return null
+            val existingSemanticValue = semanticValues[semanticKey]
+            if (existingSemanticValue != null && existingSemanticValue != value) return null
+            val existingExactValue = merged[key]
+            if (existingExactValue != null && existingExactValue != value) return null
+            semanticValues.putIfAbsent(semanticKey, value)
+            merged.putIfAbsent(key, value)
+        }
+    }
+    return merged
 }
 
 internal fun NativeRecord.canResolveUnsafeActionIdentity(): Boolean {
@@ -99,6 +175,10 @@ private fun String.isSafeDynamicActionValue(): Boolean =
     isNotBlank() && length <= 256 && none { character ->
         character == '/' || character == '\\' || character.isISOControl()
     }
+
+private fun String.actionBindingSemanticKey(): String = lowercase().filter(Char::isLetterOrDigit)
+
+private const val ACTION_BINDING_CANONICAL_ID = "id"
 
 /** Adds bounded response-only fields to a renderer-local copy of the resource. */
 internal fun ResourceSpec.withEphemeralDisplayFields(records: List<NativeRecord>): ResourceSpec {

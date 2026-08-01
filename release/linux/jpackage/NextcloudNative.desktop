@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Nextcloud Native
+Comment=One native client for your complete Nextcloud account
+Exec=APPLICATION_LAUNCHER
+Icon=dev.obiente.nextcloudnative
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;Utility;
+Keywords=Nextcloud;cloud;files;photos;sync;collaboration;

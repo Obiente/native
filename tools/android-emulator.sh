@@ -118,6 +118,13 @@ ensure_avd() {
             fail "could not create emulator definition for '$instance'"
         fi
     fi
+    local avd_config="$avd_home/$avd_name.avd/config.ini"
+    [[ -f "$avd_config" ]] || fail "emulator definition is missing $avd_config"
+    if grep -q '^hw.keyboard=' "$avd_config"; then
+        sed -i 's/^hw\.keyboard=.*/hw.keyboard=yes/' "$avd_config"
+    else
+        printf '%s\n' 'hw.keyboard=yes' >>"$avd_config"
+    fi
     printf '%s\n' "$avd_name"
 }
 
