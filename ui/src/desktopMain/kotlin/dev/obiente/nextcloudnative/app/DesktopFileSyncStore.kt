@@ -2,10 +2,14 @@ package dev.obiente.nextcloudnative.app
 
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -34,6 +38,22 @@ internal data class DesktopFileSyncPersistedState(
 }
 
 internal class DesktopFileSyncStore(private val stateFile: File = desktopFileSyncStateFile()) {
+    private val transactionKey = runCatching(stateFile::getCanonicalPath).getOrElse {
+        stateFile.toPath().toAbsolutePath().normalize().toString()
+    }
+
+    /** Serializes one complete load-mutate-save transaction across app processes. */
+    fun <T> withExclusiveAccess(block: () -> T): T = processLocks
+        .computeIfAbsent(transactionKey) { ReentrantLock() }
+        .withLock {
+            val parent = requireNotNull(stateFile.parentFile)
+            check(parent.isDirectory || parent.mkdirs()) { "Could not create desktop folder sync storage." }
+            val lockFile = File(parent, "${stateFile.name}.lock")
+            RandomAccessFile(lockFile, "rw").channel.use { channel ->
+                channel.lock().use { block() }
+            }
+        }
+
     @Synchronized
     fun load(): DesktopFileSyncPersistedState {
         if (!stateFile.exists()) return DesktopFileSyncPersistedState()
@@ -82,6 +102,10 @@ internal class DesktopFileSyncStore(private val stateFile: File = desktopFileSyn
         } finally {
             temporary.delete()
         }
+    }
+
+    private companion object {
+        val processLocks = ConcurrentHashMap<String, ReentrantLock>()
     }
 }
 

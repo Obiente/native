@@ -90,14 +90,18 @@ class CookbookOpenApiCompatibilityTest {
                 ),
             ),
         )
-        val resource = descriptor.resources.single { it.id == "recipes" }
-        val detailAction = descriptor.actions.single { action ->
+        val resource = assertNotNull(
+            descriptor.resources.singleOrNull { it.id == "recipes" },
+            "resources=${descriptor.resources.map { it.id }}",
+        )
+        val detailAction = assertNotNull(descriptor.actions.singleOrNull { action ->
             action.binding.method == HttpMethod.GET &&
                 action.binding.path == "/apps/cookbook/api/v1/recipes/{id}"
-        }
-        val detailView = descriptor.toNativeAppSchema().views.single { view ->
+        }, "actions=${descriptor.actions.map { "${it.id}:${it.binding.method}:${it.binding.path}:${it.resourceId}" }}")
+        val nativeViews = descriptor.toNativeAppSchema().views
+        val detailView = assertNotNull(nativeViews.singleOrNull { view ->
             view.resourceId == resource.id && view.component == NativeComponent.detail
-        }
+        }, "views=$nativeViews")
 
         assertEquals(detailAction.id, detailView.sourceActionId)
         val request = buildDynamicApiRequest(
@@ -108,11 +112,15 @@ class CookbookOpenApiCompatibilityTest {
         assertEquals(NextcloudApiMethod.GET, request.method)
         assertEquals("/apps/cookbook/api/v1/recipes/123", request.relativePath)
 
-        val record = parseDynamicRecords(
+        val records = parseDynamicRecords(
             detailAction,
             fixtureResponse(),
             resource.fields.mapTo(linkedSetOf(), DynamicField::id),
-        ).single()
+        )
+        val record = assertNotNull(
+            records.singleOrNull(),
+            "records=$records fields=${resource.fields.map { "${it.id}:${it.kind}" }}",
+        )
         val nativeResource = descriptor.toNativeAppSchema().resources.single { it.id == resource.id }
         val detail = nativeStructuredDetail(nativeResource, record)
         assertEquals(
@@ -194,9 +202,10 @@ class CookbookOpenApiCompatibilityTest {
                 action.binding.path == "/apps/cookbook/api/v1/config"
         }
         val configWrite = descriptor.actions.single { action ->
-            action.intent == ActionIntent.create &&
+            action.binding.method == HttpMethod.POST &&
                 action.binding.path == "/apps/cookbook/api/v1/config"
         }
+        assertEquals(ActionEffect.execute, configWrite.effect)
         assertTrue(rootPlan.rootDestinations.any { destination -> destination.actionId == configRead.id })
         assertTrue(rootPlan.rootFormActions.any { action -> action.actionId == configWrite.id })
     }

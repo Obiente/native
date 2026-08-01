@@ -82,11 +82,17 @@ class MusicLiveContractCompatibilityTest {
             action.binding.method == HttpMethod.GET &&
                 action.binding.path == "/apps/music/api/settings/user/keys"
         })
-        assertTrue(descriptor.actions.none { action ->
+        val unsafeKeyMutations = descriptor.actions.filter { action ->
             action.binding.method != HttpMethod.GET &&
                 (action.binding.path == "/apps/music/api/settings/user/keys" ||
                     action.binding.path == "/apps/music/api/settings/userkey/generate")
-        })
+        }
+        assertTrue(
+            unsafeKeyMutations.isEmpty(),
+            unsafeKeyMutations.joinToString { action ->
+                "${action.id}:${action.binding.method}:${action.binding.path}:${action.binding.body}"
+            },
+        )
         assertTrue(descriptor.validationErrors().isEmpty())
     }
 }

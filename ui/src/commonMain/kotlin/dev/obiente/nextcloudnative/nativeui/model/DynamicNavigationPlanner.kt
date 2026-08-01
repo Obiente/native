@@ -1,6 +1,10 @@
 package dev.obiente.nextcloudnative.nativeui.model
 
 import dev.obiente.nextcloudnative.template.scanBracedTemplate
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /** A selected resource record and any exact parameter bindings already known by the host. */
 data class DynamicResourceRecordContext(
@@ -11,6 +15,13 @@ data class DynamicResourceRecordContext(
     val currentLayoutId: String? = null,
     val visitedStates: Set<DynamicNavigationState> = emptySet(),
     val actionSafeIdentity: Boolean = true,
+    /**
+     * Whether the selected record's request, parent, and response identities agree.
+     *
+     * Read-only navigation may remain useful when display data is retained after a conflict, but
+     * the record must not authorize a mutation until its provenance is unambiguous again.
+     */
+    val actionBindingProvenanceValid: Boolean = true,
 )
 
 /** Resource/view/context identity used to prevent a dynamic navigation graph from revisiting itself. */
@@ -73,21 +84,44 @@ fun DynamicAppDescriptor.singleSafeContextualChild(
 
 /**
  * Chooses a useful collection child for container records that otherwise have a technical detail
- * surface. This is semantic rather than app-specific: account-like containers prefer their single
- * mailbox collection, and mailbox-like containers prefer their single message collection.
+ * surface. This is semantic rather than app-specific: list, checklist, project, and container
+ * records prefer their single item, task, or entry collection; account-like containers prefer
+ * their single mailbox collection; and mailbox-like containers prefer their single message
+ * collection.
  *
- * Every candidate has already passed the planner's read-only, complete-binding, and cycle checks.
- * Ambiguous equal-scoring children remain explicit tabs instead of being guessed.
+ * Automatic entry requires an accepted declared relationship, a read-only list action, a
+ * collection layout, and complete record-context binding. Ambiguous equal-scoring children remain
+ * explicit tabs instead of being guessed.
  */
 fun DynamicAppDescriptor.preferredSemanticContextualChild(
     context: DynamicResourceRecordContext,
 ): DynamicNavigationDestination? {
-    val collectionLayoutIds = layouts
+    val actionsById = actions.associateBy(DynamicAction::id)
+    val collectionLayoutsById = layouts
         .filter(DynamicLayout::isCollectionNavigationLayout)
-        .mapTo(hashSetOf(), DynamicLayout::id)
-    val scored = planDynamicNavigation(context).contextualChildDestinations.mapNotNull { destination ->
-        if (destination.layoutId !in collectionLayoutIds) return@mapNotNull null
-        val score = preferredSemanticChildScore(context.resourceId, destination)
+        .associateBy(DynamicLayout::id)
+    val declaredChildLinksByAction = acyclicNavigationLinks(actionsById)
+        .filter { edge -> edge.link.resourceId.sameResourceAs(context.resourceId) }
+        .associateBy { edge -> edge.action.id }
+    val plannedChildren = planDynamicNavigation(context).contextualChildDestinations
+    val hasDeclaredContentCollection = plannedChildren.any { destination ->
+        semanticConceptsForDestination(destination).any(SEMANTIC_CONTENT_CONTAINER_CONCEPTS::contains)
+    }
+    val scored = plannedChildren.mapNotNull { destination ->
+        val layout = collectionLayoutsById[destination.layoutId] ?: return@mapNotNull null
+        val action = actionsById[destination.actionId]
+            ?.takeIf(DynamicAction::isCollectionReadAction)
+            ?: return@mapNotNull null
+        val edge = declaredChildLinksByAction[action.id] ?: return@mapNotNull null
+        if (!layout.resourceId.sameResourceAs(action.resourceId)) return@mapNotNull null
+        val resolution = action.resolveNavigationParameters(context, edge.link)
+        if (!resolution.complete || !resolution.usedContext) return@mapNotNull null
+        if (isSecondaryTechnicalDestination(context, destination)) return@mapNotNull null
+        val score = preferredSemanticChildScore(
+            context = context,
+            destination = destination,
+            hasDeclaredContentCollection = hasDeclaredContentCollection,
+        )
         destination.takeIf { score > 0 }?.let { it to score }
     }
     val bestScore = scored.maxOfOrNull { (_, score) -> score } ?: return null
@@ -111,39 +145,84 @@ fun DynamicAppDescriptor.isSecondaryTechnicalDestination(
     val child = (
         destination.resourceId + " " + destination.label + " " + destination.actionId
     ).navigationSemanticIdentity()
-    if (TECHNICAL_CHILD_CONCEPTS.any(child::hasNavigationConcept)) return true
+    if (SECONDARY_CHILD_CONCEPTS.any(child::hasNavigationConcept)) return true
     val parentIsMessage = parent.hasNavigationConcept("message") || parent.hasNavigationConcept("email")
     return parentIsMessage && MESSAGE_HELPER_CHILD_CONCEPTS.any(child::hasNavigationConcept)
 }
 
-private fun preferredSemanticChildScore(
-    parentResourceId: String,
+private fun DynamicAppDescriptor.preferredSemanticChildScore(
+    context: DynamicResourceRecordContext,
     destination: DynamicNavigationDestination,
+    hasDeclaredContentCollection: Boolean,
 ): Int {
-    val parent = parentResourceId.navigationSemanticIdentity()
-    val parentIsAccount = parent.hasNavigationConcept("account") || parent.hasNavigationConcept("container")
-    val parentIsMailbox = parent.hasNavigationConcept("mailbox") || parent.hasNavigationConcept("folder")
-    val parentIsTaxonomy =
-        parentResourceId.hasAnySemanticConcept(SEMANTIC_TAXONOMY_CONCEPTS)
-    val mailboxEvidence = destination.semanticConceptEvidence("mailbox")
-    val folderEvidence = destination.semanticConceptEvidence("folder")
-    val messageEvidence = maxOf(
-        destination.semanticConceptEvidence("message"),
-        destination.semanticConceptEvidence("email"),
+    val parentConcepts = semanticConceptsForResource(context.resourceId)
+    val childConcepts = semanticConceptsForDestination(destination)
+    val parentIsContentContainer = parentConcepts.any(SEMANTIC_CONTENT_CONTAINER_CONCEPTS::contains)
+    val parentIsAccount = parentConcepts.any(SEMANTIC_ACCOUNT_CONTAINER_CONCEPTS::contains)
+    val parentIsMailbox = parentConcepts.any(SEMANTIC_MAILBOX_CONTAINER_CONCEPTS::contains)
+    val parentIsTaxonomy = parentConcepts.any(SEMANTIC_TAXONOMY_CONCEPTS::contains)
+    val contentEvidence = destination.semanticConceptEvidence(
+        childConcepts,
+        SEMANTIC_CONTENT_CHILD_CONCEPTS,
+    )
+    val contentCollectionEvidence = destination.semanticConceptEvidence(
+        childConcepts,
+        SEMANTIC_CONTENT_CONTAINER_CONCEPTS,
+    )
+    val mailboxEvidence = destination.semanticConceptEvidence(childConcepts, setOf("mailbox"))
+    val folderEvidence = destination.semanticConceptEvidence(childConcepts, setOf("folder"))
+    val messageEvidence = destination.semanticConceptEvidence(childConcepts, setOf("message", "email"))
+    val taxonomyContentEvidence = destination.semanticConceptEvidence(
+        childConcepts,
+        PRIMARY_CONTENT_ROOT_CONCEPTS,
     )
     return when {
+        parentIsContentContainer && contentEvidence > 0 -> 500 + contentEvidence
+        hasDeclaredContentCollection && contentCollectionEvidence > 0 -> 450 + contentCollectionEvidence
         parentIsAccount && mailboxEvidence > 0 -> 400 + mailboxEvidence
         parentIsAccount && folderEvidence > 0 -> 300 + folderEvidence
         parentIsMailbox && messageEvidence > 0 -> 400 + messageEvidence
-        parentIsTaxonomy -> 350
+        parentIsTaxonomy && taxonomyContentEvidence > 0 -> 350 + taxonomyContentEvidence
         else -> 0
     }
 }
 
-private fun DynamicNavigationDestination.semanticConceptEvidence(concept: String): Int = when {
-    resourceId.navigationSemanticIdentity().hasNavigationConcept(concept) -> 3
-    label.navigationSemanticIdentity().hasNavigationConcept(concept) -> 2
-    actionId.navigationSemanticIdentity().hasNavigationConcept(concept) -> 1
+private fun DynamicAppDescriptor.semanticConceptsForResource(resourceId: String): Set<String> = buildSet {
+    addAll(resourceId.semanticConceptTokens())
+    resources
+        .asSequence()
+        .filter { resource -> resource.id.sameResourceAs(resourceId) }
+        .flatMap { resource -> sequenceOf(resource.id, resource.label) }
+        .flatMap { value -> value.semanticConceptTokens().asSequence() }
+        .forEach(::add)
+    layouts
+        .asSequence()
+        .filter { layout -> layout.resourceId.sameResourceAs(resourceId) }
+        .flatMap { layout -> sequenceOf(layout.resourceId, layout.title) }
+        .flatMap { value -> value.semanticConceptTokens().asSequence() }
+        .forEach(::add)
+}
+
+private fun DynamicAppDescriptor.semanticConceptsForDestination(
+    destination: DynamicNavigationDestination,
+): Set<String> = buildSet {
+    addAll(destination.resourceId.semanticConceptTokens())
+    addAll(destination.label.semanticConceptTokens())
+    addAll(destination.actionId.semanticConceptTokens())
+    actions.firstOrNull { action -> action.id == destination.actionId }?.let { action ->
+        addAll(action.label.semanticConceptTokens())
+        addAll(action.resourceId.semanticConceptTokens())
+    }
+}
+
+private fun DynamicNavigationDestination.semanticConceptEvidence(
+    concepts: Set<String>,
+    expectedConcepts: Set<String>,
+): Int = when {
+    resourceId.semanticConceptTokens().any(expectedConcepts::contains) -> 3
+    label.semanticConceptTokens().any(expectedConcepts::contains) -> 2
+    actionId.semanticConceptTokens().any(expectedConcepts::contains) -> 1
+    concepts.any(expectedConcepts::contains) -> 1
     else -> 0
 }
 
@@ -153,13 +232,18 @@ private fun String.navigationSemanticIdentity(): String =
 private fun String.hasNavigationConcept(singular: String): Boolean =
     contains(singular) || contains("${singular}s")
 
-private val TECHNICAL_CHILD_CONCEPTS = setOf(
+private val SECONDARY_CHILD_CONCEPTS = setOf(
+    "archive",
+    "deleted",
     "debug",
     "diagnostic",
+    "history",
     "internal",
     "metadata",
     "protocol",
+    "recycle",
     "schema",
+    "trash",
 )
 
 private val MESSAGE_HELPER_CHILD_CONCEPTS = setOf(
@@ -171,6 +255,29 @@ private val MESSAGE_HELPER_CHILD_CONCEPTS = setOf(
     "smartreply",
     "source",
     "thread",
+)
+
+private val SEMANTIC_CONTENT_CONTAINER_CONCEPTS = setOf(
+    "checklist",
+    "container",
+    "list",
+    "project",
+)
+
+private val SEMANTIC_CONTENT_CHILD_CONCEPTS = setOf(
+    "entry",
+    "item",
+    "task",
+)
+
+private val SEMANTIC_ACCOUNT_CONTAINER_CONCEPTS = setOf(
+    "account",
+    "container",
+)
+
+private val SEMANTIC_MAILBOX_CONTAINER_CONCEPTS = setOf(
+    "folder",
+    "mailbox",
 )
 
 /**
@@ -196,6 +303,7 @@ enum class DynamicChildCandidateStatus {
     selfEdge,
     cycle,
     missingContext,
+    ancestorOnlyContext,
     noLayout,
     noLink,
 }
@@ -237,6 +345,7 @@ fun DynamicAppDescriptor.explainDynamicChildNavigation(
                 rawContextLinks.isNotEmpty() && !accepted -> DynamicChildCandidateStatus.cycle
                 !resolution.complete -> DynamicChildCandidateStatus.missingContext
                 rawContextLinks.isEmpty() -> DynamicChildCandidateStatus.noLink
+                !resolution.usedSelectedRecord -> DynamicChildCandidateStatus.ancestorOnlyContext
                 else -> DynamicChildCandidateStatus.noLink
             }
             DynamicChildNavigationDiagnostic(
@@ -285,6 +394,12 @@ fun DynamicAppDescriptor.planDynamicNavigation(
     val rootForms = forms.mapNotNull { form ->
         val action = actionsById[form.actionId] ?: return@mapNotNull null
         if (action.binding.method == HttpMethod.GET || action.binding.pathParameters.isNotEmpty()) return@mapNotNull null
+        if (
+            action.effect == ActionEffect.upload &&
+            !action.isVerifiedCompiledUploadForm(form)
+        ) {
+            return@mapNotNull null
+        }
         if (rootResourceIds.none { root -> root.sameResourceAs(form.resourceId) }) return@mapNotNull null
         DynamicNavigationFormAction(
             formId = form.id,
@@ -321,6 +436,7 @@ fun DynamicAppDescriptor.planDynamicNavigation(
             ) return@mapNotNull null
             val resolution = action.resolveNavigationParameters(selectedRecord, link)
             if (!resolution.complete || (!resolution.usedContext && link == null)) return@mapNotNull null
+            if (!resolution.usedSelectedRecord) return@mapNotNull null
             if (!layout.advancesFrom(selectedRecord, action, resolution, link)) return@mapNotNull null
             layout.toDestination(
                 action = action,
@@ -332,19 +448,43 @@ fun DynamicAppDescriptor.planDynamicNavigation(
         .sortedWith(compareBy(DynamicNavigationDestination::label, DynamicNavigationDestination::layoutId))
         .toList()
 
-    val contextualForms = forms.mapNotNull { form ->
-        val action = actionsById[form.actionId] ?: return@mapNotNull null
-        if (action.binding.method == HttpMethod.GET || action.binding.pathParameters.isEmpty()) return@mapNotNull null
-            val resolution = action.resolveNavigationParameters(selectedRecord, allowEphemeralIdentity = false)
-        if (!resolution.complete || !resolution.usedContext) return@mapNotNull null
-        DynamicNavigationFormAction(
-            formId = form.id,
-            label = form.title,
-            resourceId = form.resourceId,
-            actionId = action.id,
-            pathParameterValues = resolution.values,
-        )
-    }.sortedWith(compareBy(DynamicNavigationFormAction::label, DynamicNavigationFormAction::formId))
+    val contextualForms = forms
+        .takeIf { selectedRecord.actionBindingProvenanceValid }
+        .orEmpty()
+        .mapNotNull { form ->
+            val action = actionsById[form.actionId] ?: return@mapNotNull null
+            if (action.binding.method == HttpMethod.GET) return@mapNotNull null
+            if (
+                action.effect == ActionEffect.upload &&
+                !action.isVerifiedCompiledUploadForm(form)
+            ) {
+                return@mapNotNull null
+            }
+            if (
+                action.intent == ActionIntent.update &&
+                !action.resourceId.sameResourceAs(selectedRecord.resourceId) &&
+                !hasUnambiguousContextBoundSingletonUpdate(
+                    action = action,
+                    form = form,
+                    context = selectedRecord,
+                )
+            ) {
+                return@mapNotNull null
+            }
+            val values = action.resolveContextualFormValues(
+                form = form,
+                context = selectedRecord,
+                parentLinks = actionLinks,
+            ) ?: return@mapNotNull null
+            if (!selectedRecord.permitsContextualForm(action, resources)) return@mapNotNull null
+            DynamicNavigationFormAction(
+                formId = form.id,
+                label = form.title,
+                resourceId = form.resourceId,
+                actionId = action.id,
+                pathParameterValues = values,
+            )
+        }.sortedWith(compareBy(DynamicNavigationFormAction::label, DynamicNavigationFormAction::formId))
 
     return DynamicNavigationPlan(
         rootDestinations = rootDestinations,
@@ -352,6 +492,216 @@ fun DynamicAppDescriptor.planDynamicNavigation(
         contextualChildDestinations = contextualChildren,
         contextualFormActions = contextualForms,
     )
+}
+
+private fun DynamicAction.isVerifiedCompiledUploadForm(form: DynamicForm): Boolean {
+    val body = binding.body ?: return false
+    val properties = (body.schema as? JsonObject)
+        ?.get("properties") as? JsonObject
+        ?: return false
+    val fileField = form.fields.singleOrNull { field -> field.kind == FieldKind.file }
+        ?: return false
+    val fileSchema = properties[fileField.fieldId] as? JsonObject ?: return false
+    return intent == ActionIntent.execute &&
+        effect == ActionEffect.upload &&
+        risk == ActionRisk.mutating &&
+        hasVerifiedDynamicContractEvidence() &&
+        form.hasVerifiedDynamicContractEvidence() &&
+        form.resourceId.sameResourceAs(resourceId) &&
+        fileSchema["type"] == JsonPrimitive("string") &&
+        fileSchema["format"] == JsonPrimitive("binary") &&
+        body.contentType.substringBefore(';').trim().lowercase().startsWith("multipart/")
+}
+
+/**
+ * A scoped singleton write may target the active child surface while its trusted context record is
+ * the selected parent. The exact active detail layout must prove one read surface for the action's
+ * resource; this is deliberately separate from ordinary same-record update authorization.
+ */
+private fun DynamicAppDescriptor.hasUnambiguousContextBoundSingletonUpdate(
+    action: DynamicAction,
+    form: DynamicForm,
+    context: DynamicResourceRecordContext,
+): Boolean {
+    if (
+        action.risk != ActionRisk.mutating ||
+        !action.hasVerifiedDynamicContractEvidence() ||
+        !form.hasVerifiedDynamicContractEvidence() ||
+        !form.resourceId.sameResourceAs(action.resourceId)
+    ) {
+        return false
+    }
+    val currentLayoutId = context.currentLayoutId ?: return false
+    val activeLayout = layouts.singleOrNull { layout ->
+        layout.id == currentLayoutId &&
+            layout.kind == LayoutKind.detail &&
+            layout.resourceId.sameResourceAs(action.resourceId) &&
+            layout.hasVerifiedDynamicContractEvidence()
+    } ?: return false
+    val readActionId = activeLayout.sourceActionId ?: return false
+    val activeRead = actions.singleOrNull { candidate ->
+        candidate.id == readActionId &&
+            candidate.resourceId.sameResourceAs(action.resourceId) &&
+            candidate.binding.method == HttpMethod.GET &&
+            candidate.intent in setOf(ActionIntent.read, ActionIntent.list) &&
+            candidate.risk == ActionRisk.readOnly &&
+            candidate.hasVerifiedDynamicContractEvidence()
+    } ?: return false
+    if (activeRead.id == action.id) return false
+    if (!activeRead.binding.isExactContextBoundSingletonRoute(action.binding)) return false
+    return resources.count { resource ->
+        resource.id.sameResourceAs(action.resourceId)
+    } == 1
+}
+
+private fun DynamicHttpBinding.isExactContextBoundSingletonRoute(
+    writeBinding: DynamicHttpBinding,
+): Boolean =
+    path == writeBinding.path &&
+        pathParameters.map(HttpParameter::name).toSet() ==
+        writeBinding.pathParameters.map(HttpParameter::name).toSet() &&
+        queryParameters.filter(HttpParameter::required).map(HttpParameter::name).toSet() ==
+        writeBinding.queryParameters.filter(HttpParameter::required).map(HttpParameter::name).toSet()
+
+private fun DynamicAction.hasVerifiedDynamicContractEvidence(): Boolean =
+    confidence == Confidence.verified ||
+        (
+            confidence == Confidence.high &&
+                provenance.any { evidence ->
+                    evidence.kind == ProvenanceKind.verifiedAppPackage
+                }
+            )
+
+private fun DynamicForm.hasVerifiedDynamicContractEvidence(): Boolean =
+    confidence == Confidence.verified ||
+        (
+            confidence == Confidence.high &&
+                provenance.any { evidence ->
+                    evidence.kind == ProvenanceKind.verifiedAppPackage
+                }
+            )
+
+private fun DynamicLayout.hasVerifiedDynamicContractEvidence(): Boolean =
+    confidence == Confidence.verified ||
+        (
+            confidence == Confidence.high &&
+                provenance.any { evidence ->
+                    evidence.kind == ProvenanceKind.verifiedAppPackage
+                }
+            )
+
+/**
+ * Applies exact record-level capability fields before exposing a mutation form.
+ *
+ * A relationship-proven child create is governed by the child action contract, not by whether the
+ * selected parent itself is editable. For same-record writes, however, a declared capability whose
+ * value is absent or malformed is unknown and therefore cannot authorize the form. Once any
+ * edit/delete capability is declared, each mutation category needs its own affirmative evidence.
+ */
+private fun DynamicResourceRecordContext.permitsContextualForm(
+    action: DynamicAction,
+    resources: List<DynamicResource>,
+): Boolean {
+    if (!action.resourceId.sameResourceAs(resourceId)) return true
+    val resource = resources.firstOrNull { candidate ->
+        candidate.id.sameResourceAs(action.resourceId)
+    } ?: return true
+    val capabilityFields = resource.fields.mapNotNull { field ->
+        val semanticId = field.id.lowercase().filter(Char::isLetterOrDigit)
+        semanticId.takeIf(RECORD_MUTATION_CAPABILITY_IDS::contains)?.let { it to field.id }
+    }.toMap()
+    if (capabilityFields.isEmpty()) return true
+
+    fun declaredCapability(id: String): Boolean? {
+        val fieldId = capabilityFields[id] ?: return null
+        return fieldValues[fieldId]?.dynamicCapabilityBooleanOrNull()
+    }
+
+    if ("readonly" in capabilityFields && declaredCapability("readonly") != false) return false
+    if ("writable" in capabilityFields && declaredCapability("writable") != true) return false
+    if ("canwrite" in capabilityFields && declaredCapability("canwrite") != true) return false
+
+    val deletion = when (action.effect) {
+        ActionEffect.delete,
+        ActionEffect.permanentDelete,
+        -> true
+        ActionEffect.clear,
+        ActionEffect.leave,
+        -> false
+        else -> action.intent == ActionIntent.delete
+    }
+    val scopedCapabilities = setOf("canedit", "canupdate", "candelete")
+        .filter(capabilityFields::containsKey)
+    if (scopedCapabilities.isEmpty()) return true
+    return if (deletion) {
+        "candelete" in scopedCapabilities && declaredCapability("candelete") == true
+    } else {
+        val editCapabilities = setOf("canedit", "canupdate").filter(scopedCapabilities::contains)
+        action.intent !in setOf(ActionIntent.update, ActionIntent.execute) ||
+            (
+                editCapabilities.isNotEmpty() &&
+                    editCapabilities.all { id -> declaredCapability(id) == true }
+                )
+    }
+}
+
+private fun String.dynamicCapabilityBooleanOrNull(): Boolean? = when (trim().lowercase()) {
+    "true", "1", "yes" -> true
+    "false", "0", "no" -> false
+    else -> null
+}
+
+/**
+ * Resolves a contextual mutation from either route parameters or one exact required parent field.
+ *
+ * Some verified contracts scope child creation in the request body instead of the URL. Such an
+ * action is contextual only when an accepted parent-child link proves the resource relationship,
+ * the action is a create mutation, and one required form field names the selected parent exactly.
+ * This keeps the rule reusable while withholding unrelated or ambiguous writes.
+ */
+private fun DynamicAction.resolveContextualFormValues(
+    form: DynamicForm,
+    context: DynamicResourceRecordContext,
+    parentLinks: List<NavigationLinkEdge>,
+): Map<String, String>? {
+    val routeResolution = resolveNavigationParameters(context, allowEphemeralIdentity = false)
+    // A same-named field is contextual data, not proof that this mutation targets the selected
+    // record. Route writes require the resolver to identify the selected record itself.
+    if (routeResolution.complete && routeResolution.usedSelectedRecord) {
+        return routeResolution.values
+    }
+    if (!routeResolution.complete || routeResolution.usedContext) return null
+    if (intent != ActionIntent.create || risk != ActionRisk.mutating) return null
+    if (!context.actionSafeIdentity || !context.actionBindingProvenanceValid) return null
+
+    val parentLink = parentLinks.singleOrNull { edge ->
+        edge.action.resourceId.sameResourceAs(resourceId)
+    } ?: return null
+
+    val requiredBodyFieldIds = ((binding.body?.schema as? JsonObject)?.get("required") as? JsonArray)
+        ?.mapNotNull { element -> (element as? JsonPrimitive)?.contentOrNull }
+        ?.toSet()
+        .orEmpty()
+    if (requiredBodyFieldIds.isEmpty()) return null
+    val bodyFieldNames = form.fields
+        .asSequence()
+        .filter(FormField::required)
+        .map(FormField::fieldId)
+        .filter(requiredBodyFieldIds::contains)
+        .filter { fieldId -> fieldId.isContextFilterFor(context.resourceId) }
+        .distinct()
+        .toList()
+    val parentFieldId = bodyFieldNames.singleOrNull() ?: return null
+    val parentValue = context.exactValue(parentFieldId)
+        ?: context.recordIdFor(
+            parameterName = parentFieldId,
+            actionResourceId = resourceId,
+            actionPath = binding.path,
+            link = parentLink.link,
+            allowEphemeralIdentity = false,
+        )
+        ?: return null
+    return routeResolution.values + (parentFieldId to parentValue)
 }
 
 private fun String.normalizedActionLabel(): String = lowercase()
@@ -376,6 +726,7 @@ private val ROOT_SINGLETON_IDENTITIES = setOf(
     "config",
     "configuration",
     "household",
+    "prefs",
     "preferences",
     "profile",
     "settings",
@@ -391,7 +742,24 @@ private fun DynamicAction.isContextualReadAction(): Boolean =
 
 private fun DynamicAction.isRootReadAction(): Boolean =
     binding.method == HttpMethod.GET && intent in setOf(ActionIntent.list, ActionIntent.read) &&
-        risk == ActionRisk.readOnly && !binding.hasUnboundRequiredBodyFields()
+        risk == ActionRisk.readOnly &&
+        !binding.hasUnboundRequiredBodyFields() &&
+        !isInteractiveLookupHelper()
+
+/**
+ * Search-as-you-type endpoints are data sources for relation pickers, not standalone app roots.
+ * Require both explicit helper semantics and a declared query term so ordinary filterable
+ * collections and search-centric apps remain navigable.
+ */
+private fun DynamicAction.isInteractiveLookupHelper(): Boolean {
+    val concepts = (
+        id + " " + label + " " + resourceId + " " + binding.path
+    ).semanticConceptTokens()
+    if (concepts.none(INTERACTIVE_LOOKUP_CONCEPTS::contains)) return false
+    return binding.queryParameters.any { parameter ->
+        parameter.name.semanticConceptTokens().any(INTERACTIVE_LOOKUP_QUERY_CONCEPTS::contains)
+    }
+}
 
 /**
  * A response contract may expose helper GET routes whose input is modeled as a JSON body, such as
@@ -403,6 +771,23 @@ private fun DynamicHttpBinding.hasUnboundRequiredBodyFields(): Boolean {
     return (objectSchema["required"] as? kotlinx.serialization.json.JsonArray)
         ?.isNotEmpty() == true
 }
+
+private val INTERACTIVE_LOOKUP_CONCEPTS = setOf(
+    "autocomplete",
+    "autocompletion",
+    "lookup",
+    "suggest",
+    "suggestion",
+    "typeahead",
+)
+
+private val INTERACTIVE_LOOKUP_QUERY_CONCEPTS = setOf(
+    "prefix",
+    "query",
+    "search",
+    "term",
+    "text",
+)
 
 private fun DynamicLayout.toDestination(
     action: DynamicAction,
@@ -420,6 +805,7 @@ private data class PathParameterResolution(
     val values: Map<String, String>,
     val complete: Boolean,
     val usedContext: Boolean,
+    val usedSelectedRecord: Boolean = false,
     val missingRequiredParameterNames: List<String> = emptyList(),
 )
 
@@ -450,21 +836,76 @@ private fun DynamicAction.resolveNavigationParameters(
     }
     val resolved = linkedMapOf<String, String>()
     var usedContext = false
+    var usedSelectedRecord = false
     navigationParameters.forEach { parameter ->
-        val value = context?.exactValue(parameter.name)
-            ?: context?.recordId.takeIf {
+        val exactParameterValue = context?.parameterValues
+            ?.get(parameter.name)
+            ?.takeIf(String::isNotBlank)
+        val exactFieldValue = context?.fieldValues
+            ?.get(parameter.name)
+            ?.takeIf { !it.isNullOrBlank() }
+        val ephemeralIdentityValue = context?.recordId.takeIf {
                 context != null && allowEphemeralIdentity && parameter.name.isContextFilterFor(context.resourceId)
             }
-            ?: context?.recordIdFor(
+        val declaredIdentityValue = context?.recordIdFor(
                 parameterName = parameter.name,
                 actionResourceId = resourceId,
                 actionPath = binding.path,
                 link = link,
                 allowEphemeralIdentity = allowEphemeralIdentity,
             )
+        val value = exactParameterValue
+            ?: exactFieldValue
+            ?: ephemeralIdentityValue
+            ?: declaredIdentityValue
         if (!value.isNullOrBlank()) {
             resolved[parameter.name] = value
             usedContext = true
+            val exactParameterIsSelectedIdentity =
+                exactParameterValue != null &&
+                    (
+                        parameter.name.isContextFilterFor(context.resourceId) ||
+                            (
+                                parameter.name.isIdentityField() &&
+                                    binding.path.nestsParameterUnderResource(
+                                        parameter.name,
+                                        context.resourceId,
+                                    )
+                            )
+                    )
+            val exactFieldIsSelectedIdentity =
+                exactParameterValue == null &&
+                exactFieldValue != null &&
+                    (
+                        parameter.name.isContextFilterFor(context.resourceId) ||
+                            (
+                                parameter.name.isIdentityField() &&
+                                    (
+                                        link?.resourceId?.sameResourceAs(context.resourceId) == true ||
+                                            binding.path.nestsParameterUnderResource(
+                                                parameter.name,
+                                                context.resourceId,
+                                            )
+                                    )
+                            )
+                    )
+            val ephemeralIdentityWasSelected =
+                exactParameterValue == null &&
+                    exactFieldValue == null &&
+                    ephemeralIdentityValue != null
+            val declaredIdentityWasSelected =
+                exactParameterValue == null &&
+                    exactFieldValue == null &&
+                    ephemeralIdentityValue == null &&
+                    declaredIdentityValue != null
+            if (
+                exactParameterIsSelectedIdentity ||
+                exactFieldIsSelectedIdentity ||
+                ephemeralIdentityWasSelected ||
+                declaredIdentityWasSelected
+            ) {
+                usedSelectedRecord = true
+            }
         }
     }
     val unresolvedPlaceholders = pathTemplate.tokens.any { it.name !in resolved }
@@ -475,6 +916,7 @@ private fun DynamicAction.resolveNavigationParameters(
         values = resolved,
         complete = !unresolvedPlaceholders && missingRequiredNames.isEmpty(),
         usedContext = usedContext,
+        usedSelectedRecord = usedSelectedRecord,
         missingRequiredParameterNames = missingRequiredNames,
     )
 }
@@ -685,6 +1127,15 @@ private fun DynamicNavigationDestination.primaryRootScore(descriptor: DynamicApp
     return score
 }
 
+private val RECORD_MUTATION_CAPABILITY_IDS = setOf(
+    "readonly",
+    "writable",
+    "canwrite",
+    "canedit",
+    "canupdate",
+    "candelete",
+)
+
 private val PRIMARY_CONTENT_ROOT_CONCEPTS = setOf(
     "board",
     "card",
@@ -743,7 +1194,7 @@ private fun String.resourceIdentity(): String {
     return when {
         tail.endsWith("ies") && tail.length > 3 -> tail.dropLast(3) + "y"
         tail.endsWith("ches") || tail.endsWith("shes") -> tail.dropLast(2)
-        tail.endsWith("ses") || tail.endsWith("xes") || tail.endsWith("zes") -> tail.dropLast(2)
+        tail.endsWith("sses") || tail.endsWith("xes") || tail.endsWith("zes") -> tail.dropLast(2)
         tail.endsWith("s") && tail.length > 1 -> tail.dropLast(1)
         else -> tail
     }

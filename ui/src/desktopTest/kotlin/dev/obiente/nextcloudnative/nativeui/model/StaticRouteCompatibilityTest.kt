@@ -109,7 +109,8 @@ class StaticRouteCompatibilityTest {
         val patch = descriptor.actions.single { action -> action.binding.method == HttpMethod.PATCH }
         val delete = descriptor.actions.single { action -> action.binding.method == HttpMethod.DELETE }
 
-        assertTrue(listOf(create, update, patch, delete).all(DynamicAction::requiresConfirmation))
+        assertTrue(listOf(create, update, patch).none(DynamicAction::requiresConfirmation))
+        assertTrue(delete.requiresConfirmation)
         assertEquals(ActionRisk.mutating, create.risk)
         assertEquals(ActionRisk.mutating, update.risk)
         assertEquals(ActionRisk.mutating, patch.risk)

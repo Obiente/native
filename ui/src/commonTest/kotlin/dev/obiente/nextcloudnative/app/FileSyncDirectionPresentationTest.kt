@@ -7,15 +7,15 @@ class FileSyncDirectionPresentationTest {
     @Test
     fun `sync route marker follows configured direction`() {
         assertEquals(
-            "Device ↔ Nextcloud /Notes",
+            "Device <-> Nextcloud /Notes",
             fileSyncRouteLabel(FileSyncDirection.Bidirectional, "Notes"),
         )
         assertEquals(
-            "Nextcloud /Documents → device",
+            "Nextcloud /Documents -> device",
             fileSyncRouteLabel(FileSyncDirection.DownloadOnly, "/Documents"),
         )
         assertEquals(
-            "Device → Nextcloud /Photos/Camera",
+            "Device -> Nextcloud /Photos/Camera",
             fileSyncRouteLabel(FileSyncDirection.UploadOnly, "Photos/Camera"),
         )
     }

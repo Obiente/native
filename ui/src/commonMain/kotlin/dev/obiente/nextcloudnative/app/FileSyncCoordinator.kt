@@ -62,8 +62,8 @@ data class FileSyncDecision(
     val state: FileSyncDecisionState = FileSyncDecisionState.Pending,
 ) {
     init {
-        require(choices == allowedFileSyncDecisions(reason)) {
-            "The decision choices do not match the conflict reason."
+        require(choices.isNotEmpty() && choices.all { it in allowedFileSyncDecisions(reason) }) {
+            "The decision choices are not valid for the conflict reason."
         }
         val resolved = state as? FileSyncDecisionState.Resolved
         require(resolved == null || resolved.choice in choices)
@@ -217,12 +217,25 @@ fun scanFileSyncPair(
     require(pair.workItems.none { it.state == FileSyncExecutionState.Running }) {
         "A sync pair cannot be rescanned while work is running."
     }
-    val localByPath = localEntries.associateBy(LocalSyncEntry::relativePath)
-    val remoteByPath = remoteEntries.associateBy(RemoteSyncEntry::relativePath)
-    require(localByPath.size == localEntries.size) { "The local sync snapshot contains duplicate paths." }
-    require(remoteByPath.size == remoteEntries.size) { "The remote sync snapshot contains duplicate paths." }
-    val baselineByPath = pair.baselines.associateBy(FileSyncBaseline::relativePath)
-    val plan = planFileSync(localEntries, remoteEntries, pair.baselines, pair.configuration)
+    require(localEntries.map(LocalSyncEntry::relativePath).distinct().size == localEntries.size) {
+        "The local sync snapshot contains duplicate paths."
+    }
+    require(remoteEntries.map(RemoteSyncEntry::relativePath).distinct().size == remoteEntries.size) {
+        "The remote sync snapshot contains duplicate paths."
+    }
+    val scopedLocalEntries = localEntries.filter { entry ->
+        pair.configuration.includesSyncPath(entry.relativePath, entry.kind)
+    }
+    val scopedRemoteEntries = remoteEntries.filter { entry ->
+        pair.configuration.includesSyncPath(entry.relativePath, entry.kind)
+    }
+    val scopedBaselines = pair.baselines.filter { baseline ->
+        pair.configuration.includesSyncPath(baseline.relativePath, baseline.kind)
+    }
+    val localByPath = scopedLocalEntries.associateBy(LocalSyncEntry::relativePath)
+    val remoteByPath = scopedRemoteEntries.associateBy(RemoteSyncEntry::relativePath)
+    val baselineByPath = scopedBaselines.associateBy(FileSyncBaseline::relativePath)
+    val plan = planFileSync(scopedLocalEntries, scopedRemoteEntries, scopedBaselines, pair.configuration)
     require(plan.operations.size <= MAX_FILE_SYNC_WORK_ITEMS) { "The sync plan contains too much work." }
     var nextId = pair.nextWorkId
     val work = plan.operations.map { operation ->
@@ -244,11 +257,14 @@ fun scanFileSyncPair(
             operation = operation,
             state = operation.initialExecutionState(),
             decision = (operation as? FileSyncOperation.NeedsDecision)?.let { needed ->
-                FileSyncDecision(needed.reason, allowedFileSyncDecisions(needed.reason))
+                FileSyncDecision(
+                    needed.reason,
+                    allowedFileSyncDecisions(needed.reason, pair.configuration),
+                )
             },
         )
     }
-    val structuralBaselines = localEntries
+    val structuralBaselines = scopedLocalEntries
         .asSequence()
         .filter { it.kind == SyncEntryKind.Directory && it.relativePath !in baselineByPath }
         .mapNotNull { local ->
@@ -264,7 +280,7 @@ fun scanFileSyncPair(
                 }
         }
         .toList()
-    val contentVerifiedBaselines = localEntries
+    val contentVerifiedBaselines = scopedLocalEntries
         .asSequence()
         .filter { local ->
             local.kind == SyncEntryKind.File &&
@@ -289,26 +305,38 @@ fun scanFileSyncPair(
                 structuralBaselines +
                 contentVerifiedBaselines
             ).sortedBy(FileSyncBaseline::relativePath),
-        workItems = work.sortedWith(fileSyncExecutionComparator()),
+        workItems = work.sortedWith(fileSyncExecutionComparator(pair.configuration)),
         nextWorkId = nextId,
         lastScanEpochMillis = nowEpochMillis,
     )
 }
 
-private fun fileSyncExecutionComparator(): Comparator<FileSyncWorkItem> = Comparator { left, right ->
+private fun fileSyncExecutionComparator(
+    configuration: FileSyncConfiguration,
+): Comparator<FileSyncWorkItem> = Comparator { left, right ->
     val leftDelete = left.operation is FileSyncOperation.DeleteLocal ||
         left.operation is FileSyncOperation.DeleteRemote
     val rightDelete = right.operation is FileSyncOperation.DeleteLocal ||
         right.operation is FileSyncOperation.DeleteRemote
+    val leftDirectory = left.observedLocal?.kind == SyncEntryKind.Directory ||
+        left.observedRemote?.kind == SyncEntryKind.Directory
+    val rightDirectory = right.observedLocal?.kind == SyncEntryKind.Directory ||
+        right.observedRemote?.kind == SyncEntryKind.Directory
     when {
         leftDelete != rightDelete -> if (leftDelete) 1 else -1
+        leftDelete && leftDirectory != rightDirectory -> if (leftDirectory) 1 else -1
         leftDelete -> compareValues(
             right.relativePath.count { it == '/' },
             left.relativePath.count { it == '/' },
         ).takeIf { it != 0 } ?: compareValues(left.relativePath, right.relativePath)
-        else -> compareValues(
+        leftDirectory != rightDirectory -> if (leftDirectory) -1 else 1
+        leftDirectory -> compareValues(
             left.relativePath.count { it == '/' },
             right.relativePath.count { it == '/' },
+        ).takeIf { it != 0 } ?: compareValues(left.relativePath, right.relativePath)
+        else -> compareValues(
+            configuration.fileSyncPriority(left.relativePath),
+            configuration.fileSyncPriority(right.relativePath),
         ).takeIf { it != 0 } ?: compareValues(left.relativePath, right.relativePath)
     }
 }
@@ -430,6 +458,27 @@ fun retryFileSyncOperation(
     }
 }
 
+/** Explicit user recovery for work that exhausted the automatic retry budget. */
+fun resetExhaustedFileSyncOperations(
+    state: FileSyncCoordinatorState,
+    pairId: String,
+): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
+    pair.copy(
+        workItems = pair.workItems.map { work ->
+            if (work.state == FileSyncExecutionState.Failed && work.attemptCount >= MAX_FILE_SYNC_ATTEMPTS) {
+                work.copy(
+                    state = FileSyncExecutionState.Ready,
+                    attemptCount = 0,
+                    lastAttemptEpochMillis = null,
+                    failureMessage = null,
+                )
+            } else {
+                work
+            }
+        },
+    )
+}
+
 internal fun recoverInterruptedFileSyncWork(state: FileSyncCoordinatorState): FileSyncCoordinatorState =
     state.copy(
         pairs = state.pairs.map { pair ->
@@ -468,6 +517,25 @@ private fun allowedFileSyncDecisions(reason: FileSyncDecisionReason): Set<FileSy
     )
 }
 
+private fun allowedFileSyncDecisions(
+    reason: FileSyncDecisionReason,
+    configuration: FileSyncConfiguration,
+): Set<FileSyncDecisionChoice> = allowedFileSyncDecisions(reason).filterTo(linkedSetOf()) { choice ->
+    when (choice) {
+        FileSyncDecisionChoice.PropagateDeletion -> when (reason) {
+            FileSyncDecisionReason.LocalDeletion -> configuration.direction != FileSyncDirection.DownloadOnly
+            FileSyncDecisionReason.RemoteDeletion -> configuration.direction != FileSyncDirection.UploadOnly
+            else -> true
+        }
+        FileSyncDecisionChoice.RestoreMissing -> when (reason) {
+            FileSyncDecisionReason.LocalDeletion -> configuration.direction != FileSyncDirection.UploadOnly
+            FileSyncDecisionReason.RemoteDeletion -> configuration.direction != FileSyncDirection.DownloadOnly
+            else -> true
+        }
+        else -> true
+    }
+}
+
 private fun resolveDecisionOperation(
     pair: FileSyncPair,
     work: FileSyncWorkItem,
@@ -492,10 +560,20 @@ private fun resolveDecisionOperation(
         )
     }
     FileSyncDecisionChoice.PropagateDeletion -> when (work.decision?.reason) {
-        FileSyncDecisionReason.LocalDeletion ->
+        FileSyncDecisionReason.LocalDeletion -> if (
+            pair.configuration.hasPartialDirectoryView() && work.observedRemote?.kind == SyncEntryKind.Directory
+        ) {
+            FileSyncOperation.Skipped(work.relativePath, PARTIAL_DIRECTORY_DECISION_REASON)
+        } else {
             FileSyncOperation.DeleteRemote(work.relativePath, requireNotNull(work.observedRemote).etag)
-        FileSyncDecisionReason.RemoteDeletion ->
+        }
+        FileSyncDecisionReason.RemoteDeletion -> if (
+            pair.configuration.hasPartialDirectoryView() && work.observedLocal?.kind == SyncEntryKind.Directory
+        ) {
+            FileSyncOperation.Skipped(work.relativePath, PARTIAL_DIRECTORY_DECISION_REASON)
+        } else {
             FileSyncOperation.DeleteLocal(work.relativePath, requireNotNull(work.observedLocal).revision)
+        }
         else -> error("There is no deletion to propagate.")
     }
     FileSyncDecisionChoice.RestoreMissing -> when (work.decision?.reason) {
@@ -508,6 +586,12 @@ private fun resolveDecisionOperation(
     FileSyncDecisionChoice.Skip ->
         FileSyncOperation.Skipped(work.relativePath, "Skipped by the user for this observed generation.")
 }
+
+private fun FileSyncConfiguration.hasPartialDirectoryView(): Boolean =
+    selectedPaths.isNotEmpty() || ignoredPatterns.isNotEmpty()
+
+private const val PARTIAL_DIRECTORY_DECISION_REASON =
+    "Directory deletion is paused because selective or ignored items may exist below it."
 
 private fun FileSyncWorkItem.sameGeneration(
     planned: FileSyncOperation,
@@ -571,6 +655,9 @@ private fun requireValidFileSyncPair(pair: FileSyncPair) {
     if (pair.remoteRootPath.isNotEmpty()) requireValidSyncPath(pair.remoteRootPath)
     require(pair.remoteRootPath.length <= MAX_FILE_SYNC_PATH_LENGTH)
     require(pair.configuration.deviceLabel.isSafeSyncText(MAX_FILE_SYNC_DEVICE_LABEL_LENGTH))
+    pair.configuration.selectedPaths.forEach {
+        require(it.length <= MAX_FILE_SYNC_PATH_LENGTH)
+    }
     require(pair.baselines.size <= MAX_FILE_SYNC_ENTRIES) { "The sync pair contains too many baselines." }
     require(pair.workItems.size <= MAX_FILE_SYNC_WORK_ITEMS) { "The sync pair contains too much work." }
     requireUniqueCoordinatorPaths(pair.baselines.map(FileSyncBaseline::relativePath), "baseline")
@@ -582,6 +669,11 @@ private fun requireValidFileSyncPair(pair: FileSyncPair) {
     pair.workItems.forEach { work ->
         requireBoundedWorkItem(work)
         val resolved = work.decision?.state as? FileSyncDecisionState.Resolved
+        work.decision?.let { decision ->
+            require(decision.choices == allowedFileSyncDecisions(decision.reason, pair.configuration)) {
+                "The persisted sync decision choices do not match the pair direction."
+            }
+        }
         val expectedOperation = if (resolved != null) {
             resolveDecisionOperation(pair, work, resolved.choice)
         } else {

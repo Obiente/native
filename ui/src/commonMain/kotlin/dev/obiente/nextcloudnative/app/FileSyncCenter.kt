@@ -1,11 +1,14 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.serialization.Serializable
+
 /**
  * Platform-facing view of a durable local-folder/Nextcloud-folder synchronization pair.
  *
  * The opaque [localRootId] is a persisted SAF grant, bookmark, or equivalent platform handle.
  * It must not contain credentials and is never interpreted by common UI code.
  */
+@Serializable
 data class FileSyncLocalRoot(
     val localRootId: String,
     val displayName: String,
@@ -27,6 +30,7 @@ enum class MediaSyncFolderDiscoverySupport {
     Unsupported,
 }
 
+@Serializable
 enum class MediaSyncFolderKind {
     Camera,
     Screenshots,
@@ -46,6 +50,7 @@ enum class MediaSyncFolderAccess {
  * [localRootHint] is an opaque platform-owned sync root. Common code may pass it back to the
  * platform, but must never interpret it as a path.
  */
+@Serializable
 data class MediaSyncFolderSuggestion(
     val localRootHint: String,
     val displayName: String,
@@ -145,6 +150,7 @@ const val MAX_MEDIA_PREVIEW_THUMBNAIL_BYTES = 256 * 1_024
 data class FileSyncPairSummary(
     val id: String,
     val localDisplayName: String,
+    val localRootPath: String? = null,
     val remoteRootPath: String,
     val configuration: FileSyncConfiguration,
     val readyCount: Int,
@@ -155,16 +161,20 @@ data class FileSyncPairSummary(
     val completedCount: Int = 0,
     val lastScanEpochMillis: Long?,
     val scheduleDescription: String? = null,
+    val skippedReasons: List<String> = emptyList(),
 ) {
     init {
         require(id.isSafeFileSyncCenterText(256))
         require(localDisplayName.isSafeFileSyncCenterText(256))
+        require(localRootPath == null || localRootPath.isSafeFileSyncCenterText(2_048))
         if (remoteRootPath.isNotEmpty()) requireValidSyncPath(remoteRootPath)
         require(listOf(readyCount, runningCount, failedCount, skippedCount, completedCount).all { it >= 0 })
         require(conflicts.size <= 20_000)
         require(conflicts.map(FileSyncConflictSummary::workId).distinct().size == conflicts.size)
         require(lastScanEpochMillis == null || lastScanEpochMillis >= 0L)
         require(scheduleDescription == null || scheduleDescription.isSafeFileSyncCenterText(256))
+        require(skippedReasons.size <= 20)
+        require(skippedReasons.all { reason -> reason.isSafeFileSyncCenterText(1_024) })
     }
 }
 
@@ -216,11 +226,13 @@ sealed interface FileSyncCenterActionResult {
 
 fun FileSyncPair.toCenterSummary(
     localDisplayName: String,
+    localRootPath: String? = null,
     scheduleDescription: String? = null,
 ): FileSyncPairSummary =
     FileSyncPairSummary(
         id = id,
         localDisplayName = localDisplayName,
+        localRootPath = localRootPath,
         remoteRootPath = remoteRootPath,
         configuration = configuration,
         readyCount = workItems.count { it.state == FileSyncExecutionState.Ready },
@@ -242,6 +254,11 @@ fun FileSyncPair.toCenterSummary(
         completedCount = baselines.size,
         lastScanEpochMillis = lastScanEpochMillis,
         scheduleDescription = scheduleDescription,
+        skippedReasons = workItems.mapNotNull { work ->
+            (work.operation as? FileSyncOperation.Skipped)
+                ?.takeIf { work.state == FileSyncExecutionState.Skipped }
+                ?.reason
+        }.distinct().take(20),
     )
 
 private fun String.isSafeFileSyncCenterText(maxLength: Int): Boolean =
