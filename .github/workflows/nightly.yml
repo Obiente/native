@@ -31,6 +31,7 @@ jobs:
       version: ${{ steps.source.outputs.version }}
       version-code: ${{ steps.source.outputs.version_code }}
       desktop-version: ${{ steps.source.outputs.desktop_version }}
+      release-date: ${{ steps.source.outputs.release_date }}
     steps:
       - name: Check out the exact tested source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -69,6 +70,7 @@ jobs:
           source_sequence="$(git rev-list --count "${SOURCE_SHA}")"
           version_code="$(tools/derive-android-version-code.sh "${source_sequence}" nightly)"
           desktop_version="$(tools/derive-desktop-package-version.sh "${source_sequence}" nightly)"
+          release_date="$(date --utc --date="${SOURCE_STARTED_AT}" +%F)"
           {
             echo "eligible=true"
             echo "sha=${SOURCE_SHA}"
@@ -76,6 +78,7 @@ jobs:
             echo "version=${tag}"
             echo "version_code=${version_code}"
             echo "desktop_version=${desktop_version}"
+            echo "release_date=${release_date}"
           } >>"${GITHUB_OUTPUT}"
 
   android:
@@ -288,7 +291,7 @@ jobs:
             -PncMacosPackageVersion="${NIGHTLY_DESKTOP_VERSION}" \
             -PncVersionName="${{ needs.source.outputs.version }}" \
             -PncVersionCode="${{ needs.source.outputs.version-code }}" \
-            -PncAppStreamReleaseDate="$(git show -s --format=%cs HEAD)" \
+            -PncAppStreamReleaseDate="${{ needs.source.outputs.release-date }}" \
             -PncDesktopReleaseBuild=true \
             -PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}" \
             ${{ matrix.tasks }}

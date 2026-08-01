@@ -258,6 +258,7 @@ Architecture and protocol references:
 - [Native Schema](NATIVE_SCHEMA.md)
 - [Platform strategy](PLATFORMS.md)
 - [Compatibility matrix](COMPATIBILITY.md)
+- [Linux package repositories](docs/linux-package-repositories.md)
 - [Changelog](CHANGELOG.md)
 - [Security policy](SECURITY.md)
 
