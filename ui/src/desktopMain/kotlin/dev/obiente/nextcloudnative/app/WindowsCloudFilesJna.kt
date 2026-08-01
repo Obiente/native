@@ -492,7 +492,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         const val CF_PLACEHOLDER_MANAGEMENT_POLICY_DEFAULT = 0
         const val CF_REGISTER_FLAG_UPDATE = 0x1
         const val CF_REGISTER_FLAG_MARK_IN_SYNC_ON_ROOT = 0x4
-        const val CF_CONNECT_FLAG_REQUIRE_FULL_FILE_PATH = 0x2
+        const val CF_CONNECT_FLAG_REQUIRE_FULL_FILE_PATH = 0x4
 
         const val CF_CALLBACK_TYPE_FETCH_DATA = 0
         const val CF_CALLBACK_TYPE_CANCEL_FETCH_DATA = 2
