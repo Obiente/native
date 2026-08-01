@@ -313,7 +313,7 @@ internal class DesktopFileSyncLocalTree(
                     if (dir == root || owned?.kind != OwnedRecoveryKind.Backup) {
                         return FileVisitResult.CONTINUE
                     }
-                    restoreBackupWhenDestinationIsMissing(dir)
+                    reconcileOwnedBackup(dir)
                     return if (Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
                         FileVisitResult.CONTINUE
                     } else {
@@ -324,7 +324,7 @@ internal class DesktopFileSyncLocalTree(
                 override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                     when (ownedRecoveryPath(file)?.kind) {
                         OwnedRecoveryKind.Download -> Files.deleteIfExists(file)
-                        OwnedRecoveryKind.Backup -> restoreBackupWhenDestinationIsMissing(file)
+                        OwnedRecoveryKind.Backup -> reconcileOwnedBackup(file)
                         null -> Unit
                     }
                     return FileVisitResult.CONTINUE
@@ -333,10 +333,18 @@ internal class DesktopFileSyncLocalTree(
         )
     }
 
-    private fun restoreBackupWhenDestinationIsMissing(backup: Path) {
+    private fun reconcileOwnedBackup(backup: Path) {
         val owned = ownedRecoveryPath(backup)?.takeIf { it.kind == OwnedRecoveryKind.Backup } ?: return
         val finalPath = requireNotNull(backup.parent).resolve(owned.destinationName)
-        if (!Files.exists(finalPath, LinkOption.NOFOLLOW_LINKS)) move(backup, finalPath, replace = false)
+        if (Files.exists(finalPath, LinkOption.NOFOLLOW_LINKS)) {
+            requireSafeAncestors(finalPath, includeLeaf = true, allowMissingTail = false)
+            val incompleteDownload = backup.parent.resolve(
+                ".${owned.destinationName}$DOWNLOAD_MARKER${owned.token}",
+            )
+            if (!Files.exists(incompleteDownload, LinkOption.NOFOLLOW_LINKS)) deleteOwnedPath(backup)
+        } else {
+            move(backup, finalPath, replace = false)
+        }
     }
 
     private fun ownedRecoveryPath(path: Path): OwnedRecoveryPath? {
@@ -352,7 +360,7 @@ internal class DesktopFileSyncLocalTree(
             val token = name.substring(markerIndex + marker.length)
             if (runCatching { UUID.fromString(token) }.isFailure) return@firstNotNullOfOrNull null
             val destinationName = name.substring(1, markerIndex)
-            destinationName.takeIf(String::isNotBlank)?.let { OwnedRecoveryPath(kind, it) }
+            destinationName.takeIf(String::isNotBlank)?.let { OwnedRecoveryPath(kind, it, token) }
         }
     }
 
@@ -563,4 +571,5 @@ private enum class OwnedRecoveryKind { Download, Backup }
 private data class OwnedRecoveryPath(
     val kind: OwnedRecoveryKind,
     val destinationName: String,
+    val token: String,
 )

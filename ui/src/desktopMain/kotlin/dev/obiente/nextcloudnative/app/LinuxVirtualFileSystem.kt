@@ -537,7 +537,11 @@ internal class LinuxNextcloudVirtualFileSystem(
                 }
                 if (hasRemoteChildren || hasPendingChildren) return -ErrorCodes.ENOTEMPTY()
             }
-            if (!expectDirectory && readHandlePaths.containsValue(normalized)) return -ErrorCodes.EBUSY()
+            if (!expectDirectory &&
+                (readHandlePaths.containsValue(normalized) || hasOpenWriteHandleWithin(normalized))
+            ) {
+                return -ErrorCodes.EBUSY()
+            }
             backend.delete(node)
             0
         }

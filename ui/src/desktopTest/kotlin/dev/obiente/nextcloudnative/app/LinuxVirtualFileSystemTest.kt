@@ -180,6 +180,23 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `unlink rejects a file with an open writeback handle`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        backend.addFile("Photos/open.txt", "pending edit".encodeToByteArray())
+        val fileInfo = FuseFileInfo.of(Runtime.getSystemRuntime().memoryManager.allocateDirect(256)).apply {
+            flags.set(1L)
+        }
+
+        assertEquals(0, fileSystem.open("/Photos/open.txt", fileInfo))
+        assertEquals(-ErrorCodes.EBUSY(), fileSystem.unlink("/Photos/open.txt"))
+        assertTrue(backend.resolve("Photos/open.txt") != null)
+        assertEquals(0, fileSystem.release("/Photos/open.txt", fileInfo))
+        assertEquals(0, fileSystem.unlink("/Photos/open.txt"))
+        assertEquals(null, backend.resolve("Photos/open.txt"))
+    }
+
+    @Test
     fun `parent rename remains available after an open child is safely removed`() {
         val backend = MutableFixtureBackend()
         val fileSystem = LinuxNextcloudVirtualFileSystem(backend)

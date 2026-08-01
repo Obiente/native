@@ -88,8 +88,8 @@ internal fun FileSyncWorkspace(
     initialSelectedPairId: String? = null,
 ) {
     val pairs = snapshot?.pairs.orEmpty()
-    var selectedPairId by remember(initialSelectedPairId) { mutableStateOf(initialSelectedPairId) }
-    var filter by remember { mutableStateOf(FileSyncListFilter.All) }
+    var selectedPairId by rememberSaveable(initialSelectedPairId) { mutableStateOf(initialSelectedPairId) }
+    var filter by rememberSaveable { mutableStateOf(FileSyncListFilter.All) }
     LaunchedEffect(pairs.map(FileSyncPairSummary::id)) {
         if (selectedPairId !in pairs.map(FileSyncPairSummary::id)) {
             selectedPairId = pairs.firstOrNull()?.id

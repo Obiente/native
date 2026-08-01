@@ -41,6 +41,21 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun `callback paths must stay in the sync root and match their identity`() {
+        val root = createTempDirectory("windows-cloud-callback-path-")
+        val expected = root.resolve("Photos/example.raf")
+
+        requireWindowsCloudCallbackPath(root, expected.toString(), "Photos/example.raf")
+        assertFailsWith<IllegalArgumentException> {
+            requireWindowsCloudCallbackPath(root, root.resolve("Photos/other.raf").toString(), "Photos/example.raf")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            val outside = requireNotNull(root.parent).resolve("outside.raf")
+            requireWindowsCloudCallbackPath(root, outside.toString(), "Photos/example.raf")
+        }
+    }
+
+    @Test
     fun `hydration planning aligns random reads and ends exactly at eof`() {
         val ranges = planWindowsCloudHydration(
             requiredOffset = 4_321L,
@@ -65,7 +80,7 @@ class WindowsCloudFilesProviderTest {
         val api = FakeApi(expectedTransfers = 1)
         val provider = WindowsCloudFilesProvider(root, backend, api)
         val identity = fixtureIdentity(size = bytes.size.toLong())
-        val info = callbackInfo(identity)
+        val info = callbackInfo(root, identity)
 
         provider.fetchData(info, requiredOffset = 4_500L, requiredLength = 7_845L)
 
@@ -225,7 +240,7 @@ class WindowsCloudFilesProviderTest {
         }
         val provider = WindowsCloudFilesProvider(root, backend, api)
 
-        provider.renameRequested(callbackInfo(directoryIdentity), destination.toString())
+        provider.renameRequested(callbackInfo(root, directoryIdentity), destination.toString())
 
         assertTrue(api.awaitRenames())
         assertTrue(api.lastRenameAccepted)
@@ -252,7 +267,7 @@ class WindowsCloudFilesProviderTest {
         }
         val provider = WindowsCloudFilesProvider(root, backend, api)
 
-        provider.renameRequested(callbackInfo(identity), destination.toString())
+        provider.renameRequested(callbackInfo(root, identity), destination.toString())
 
         assertTrue(api.awaitRenames())
         assertFalse(api.lastRenameAccepted)
@@ -280,7 +295,7 @@ class WindowsCloudFilesProviderTest {
         )
         val api = FakeApi().apply { seed(local, WindowsCloudPlaceholderState.Dirty, identity) }
         val provider = WindowsCloudFilesProvider(root, backend, api)
-        val info = callbackInfo(identity).copy(
+        val info = callbackInfo(root, identity).copy(
             normalizedPath = local.toString(),
             fileSize = local.toFile().length(),
         )
@@ -325,7 +340,7 @@ class WindowsCloudFilesProviderTest {
             api,
             writebackRetryDelayMillis = { 0L },
         )
-        val info = callbackInfo(identity).copy(normalizedPath = local.toString())
+        val info = callbackInfo(root, identity).copy(normalizedPath = local.toString())
 
         provider.closed(info, deleted = false)
 
@@ -357,11 +372,11 @@ class WindowsCloudFilesProviderTest {
         directory = false,
     )
 
-    private fun callbackInfo(identity: WindowsCloudFileIdentity) = WindowsCloudCallbackInfo(
+    private fun callbackInfo(root: Path, identity: WindowsCloudFileIdentity) = WindowsCloudCallbackInfo(
         connectionKey = 10L,
         transferKey = 20L,
         requestKey = 30L,
-        normalizedPath = "C:\\Nextcloud Native\\Photos\\example.raf",
+        normalizedPath = root.resolve(identity.path.replace('/', File.separatorChar)).toString(),
         fileIdentity = WindowsCloudFileIdentityCodec.encode(identity),
         fileSize = identity.size,
         priorityHint = 12,

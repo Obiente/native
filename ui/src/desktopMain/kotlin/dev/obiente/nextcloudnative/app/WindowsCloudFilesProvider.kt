@@ -631,6 +631,7 @@ internal class WindowsCloudFilesProvider(
         val bytes = requireNotNull(info.fileIdentity) { "The Cloud Files callback has no identity." }
         val identity = WindowsCloudFileIdentityCodec.decode(bytes)
         require(identity.accountId == backend.accountId) { "The Cloud Files callback belongs to another account." }
+        requireWindowsCloudCallbackPath(root, info.normalizedPath, identity.path)
         if (expectDirectory != null) require(identity.directory == expectDirectory)
         require(identity.size == info.fileSize || identity.directory) { "The Cloud Files callback size is stale." }
         knownIdentities[identity.path] = identity
@@ -1001,6 +1002,18 @@ private class AtomicLongState {
     @Synchronized fun get(): Long = value
     @Synchronized fun set(next: Long) { value = next }
     @Synchronized fun getAndSet(next: Long): Long = value.also { value = next }
+}
+
+internal fun requireWindowsCloudCallbackPath(root: Path, normalizedPath: String, identityPath: String) {
+    val absoluteRoot = root.toAbsolutePath().normalize()
+    val callbackTarget = Path.of(normalizedPath).toAbsolutePath().normalize()
+    require(callbackTarget.startsWith(absoluteRoot)) { "The Cloud Files callback escaped its sync root." }
+    val relative = if (callbackTarget == absoluteRoot) {
+        ""
+    } else {
+        absoluteRoot.relativize(callbackTarget).joinToString("/") { it.toString() }.windowsCloudPath()
+    }
+    require(relative == identityPath) { "The Cloud Files callback path does not match its identity." }
 }
 
 private fun windowsWildcardMatches(pattern: String, name: String): Boolean {

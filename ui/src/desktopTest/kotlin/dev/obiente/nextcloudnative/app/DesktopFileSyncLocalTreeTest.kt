@@ -99,7 +99,7 @@ class DesktopFileSyncLocalTreeTest {
     }
 
     @Test
-    fun `completed replacement backup stays on disk but is excluded from sync`() {
+    fun `scan reclaims the backup after a completed replacement`() {
         val root = Files.createTempDirectory("desktop-sync-visible-backup-")
         try {
             root.resolve("notes.txt").writeText("published")
@@ -110,7 +110,31 @@ class DesktopFileSyncLocalTreeTest {
 
             assertTrue("notes.txt" in entries)
             assertFalse(backup in entries)
-            assertEquals("protected original", root.resolve(backup).toFile().readText())
+            assertFalse(Files.exists(root.resolve(backup)))
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `ambiguous replacement artifacts are bounded by the next recovery scan`() {
+        val root = Files.createTempDirectory("desktop-sync-bounded-backup-")
+        val token = "00000000-0000-4000-8000-000000000001"
+        try {
+            root.resolve("notes.txt").writeText("published")
+            val backup = root.resolve(".notes.txt.nextcloud-native-backup-$token").apply {
+                writeText("protected original")
+            }
+            val download = root.resolve(".notes.txt.nextcloud-native-download-$token").apply {
+                writeText("complete replacement")
+            }
+
+            DesktopFileSyncLocalTree(root.toFile()).scan()
+            DesktopFileSyncLocalTree(root.toFile()).scan()
+
+            assertFalse(Files.exists(backup))
+            assertFalse(Files.exists(download))
+            assertEquals("published", root.resolve("notes.txt").toFile().readText())
         } finally {
             root.toFile().deleteRecursively()
         }
