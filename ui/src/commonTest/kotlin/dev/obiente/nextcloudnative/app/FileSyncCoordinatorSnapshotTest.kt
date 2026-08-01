@@ -128,6 +128,9 @@ class FileSyncCoordinatorSnapshotTest {
             deviceLabel = "Test phone",
             networkPolicy = FileSyncNetworkPolicy.Unmetered,
             powerPolicy = FileSyncPowerPolicy.Charging,
+            selectedPaths = listOf("vault.md", "note.md"),
+            ignoredPatterns = listOf("*.tmp"),
+            priorityRules = listOf(FileSyncPriorityRule("**/*.raf")),
         ),
         baselines = baselines,
     )

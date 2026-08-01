@@ -16,6 +16,8 @@ import dev.obiente.nextcloudnative.app.AppDistributionChannel
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallState
+import dev.obiente.nextcloudnative.app.AppUpdatePreferences
+import dev.obiente.nextcloudnative.app.AppUpdateRelease
 import dev.obiente.nextcloudnative.app.AppUpdateSupport
 import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_APK_BYTES
 import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_METADATA_BYTES
@@ -36,6 +38,8 @@ import dev.obiente.nextcloudnative.app.validateAndroidDirectRelease
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -77,6 +81,8 @@ internal class AndroidProjectContentClient(
     private val newsImageDirectory = File(appContext.cacheDir, "project-content/news-images")
     private val updateDirectory = File(appContext.cacheDir, "app-updates")
     private val updateMutex = Mutex()
+    private val updateChannelStateLock = Any()
+    private val mutableUpdateCheckResult = MutableStateFlow<AppUpdateCheckResult?>(null)
     private val mutableUpdateState = MutableStateFlow<AppUpdateInstallState>(AppUpdateInstallState.Idle)
     @Volatile private var activeUpdateCall: Call? = null
     @Volatile private var updateCancellationRequested = false
@@ -111,6 +117,8 @@ internal class AndroidProjectContentClient(
                     "This APK was installed directly. Updates are checked securely by Nextcloud Native."
                 AppDistributionChannel.DirectApk ->
                     "This build does not include direct APK installation. Use its distribution channel for updates."
+                AppDistributionChannel.DirectDesktopPackage ->
+                    "Desktop packages cannot be installed by Android."
                 AppDistributionChannel.GooglePlay ->
                     "Google Play owns updates for this installation."
                 AppDistributionChannel.FDroid ->
@@ -141,6 +149,9 @@ internal class AndroidProjectContentClient(
     }
 
     fun observeUpdateState(): Flow<AppUpdateInstallState> = mutableUpdateState.asStateFlow()
+
+    fun observeUpdateCheckResult(): Flow<AppUpdateCheckResult?> =
+        mutableUpdateCheckResult.asStateFlow()
 
     fun cancelUpdate(): Boolean {
         if (mutableUpdateState.value !is AppUpdateInstallState.Downloading) return false
@@ -191,31 +202,46 @@ internal class AndroidProjectContentClient(
         return bytes
     }
 
-    fun updateChannel(): AndroidUpdateChannel =
-        parseAndroidUpdateChannel(preferences.getString(KEY_UPDATE_CHANNEL, null))
+    fun updateChannel(): AndroidUpdateChannel = synchronized(updateChannelStateLock) {
+        storedUpdateChannel()
+    }
 
-    fun saveUpdateChannel(channel: AndroidUpdateChannel): Boolean {
+    fun saveUpdateChannel(channel: AndroidUpdateChannel): Boolean = synchronized(updateChannelStateLock) {
         if (!canSelectAppUpdateChannel(support(), channel)) return false
+        if (channel != storedUpdateChannel()) mutableUpdateCheckResult.value = null
         preferences.edit().putString(KEY_UPDATE_CHANNEL, channel.storageValue).apply()
         return true
     }
 
+    fun updatePreferences(): AppUpdatePreferences = AppUpdatePreferences(
+        automaticChecks = preferences.getBoolean(KEY_AUTOMATIC_UPDATE_CHECKS, true),
+        unmeteredNetworkOnly = preferences.getBoolean(KEY_UNMETERED_UPDATE_CHECKS, true),
+        notifications = preferences.getBoolean(KEY_UPDATE_NOTIFICATIONS, true),
+    )
+
+    fun saveUpdatePreferences(value: AppUpdatePreferences) {
+        preferences.edit()
+            .putBoolean(KEY_AUTOMATIC_UPDATE_CHECKS, value.automaticChecks)
+            .putBoolean(KEY_UNMETERED_UPDATE_CHECKS, value.unmeteredNetworkOnly)
+            .putBoolean(KEY_UPDATE_NOTIFICATIONS, value.notifications)
+            .apply()
+    }
+
     fun checkForUpdate(channel: AndroidUpdateChannel): AppUpdateCheckResult {
         val support = support()
-        if (!support.canCheckDirectUpdates) return AppUpdateCheckResult.Unavailable(support)
-        if (!channel.available) {
-            return AppUpdateCheckResult.Failed(
+        val result = if (!support.canCheckDirectUpdates) {
+            AppUpdateCheckResult.Unavailable(support)
+        } else if (!channel.available) {
+            AppUpdateCheckResult.Failed(
                 support,
                 "${channel.name} updates are not available yet.",
             )
-        }
-        if (channel != updateChannel()) {
-            return AppUpdateCheckResult.Failed(
+        } else if (channel != updateChannel()) {
+            AppUpdateCheckResult.Failed(
                 support,
                 "The update channel changed. Check again using the saved channel.",
             )
-        }
-        return runCatching {
+        } else runCatching {
             val metadataUrl = channel.manifestUrl()
             val metadata = getBounded(
                 metadataUrl,
@@ -232,16 +258,30 @@ internal class AndroidProjectContentClient(
             AppUpdateCheckResult.Failed(
                 support,
                 failure.message ?: "The update check failed.",
+                retryable = failure is IOException,
             )
+        }
+        return synchronized(updateChannelStateLock) {
+            if (channel != storedUpdateChannel()) {
+                AppUpdateCheckResult.Failed(
+                    support,
+                    "The update channel changed. Check again using the saved channel.",
+                )
+            } else {
+                mutableUpdateCheckResult.value = result
+                result
+            }
         }
     }
 
-    suspend fun beginUpdate(release: AndroidDirectRelease): AppUpdateInstallResult {
+    suspend fun beginUpdate(release: AppUpdateRelease): AppUpdateInstallResult {
+        val androidRelease = release as? AndroidDirectRelease
+            ?: return AppUpdateInstallResult.Rejected("This is not an Android update package.")
         if (!updateMutex.tryLock()) {
             return AppUpdateInstallResult.Rejected("An app update is already in progress.")
         }
         try {
-            return beginUpdateLocked(release)
+            return beginUpdateLocked(androidRelease)
         } finally {
             activeUpdateCall = null
             updateMutex.unlock()
@@ -285,9 +325,15 @@ internal class AndroidProjectContentClient(
             return AppUpdateInstallResult.PermissionRequired(message)
         }
 
-        updateDirectory.mkdirs()
+        check(updateDirectory.isDirectory || updateDirectory.mkdirs()) {
+            "Could not create the Android app-update cache."
+        }
         val staged = File(updateDirectory, "nextcloud-native-${release.versionCode}.apk")
         val temporary = File(updateDirectory, "${staged.name}.part")
+        cleanupAndroidUpdatePackages(
+            directory = updateDirectory,
+            activePartial = temporary,
+        )
         updateCancellationRequested = false
         return try {
             val resumedFromBytes = settleUpdatePartial(
@@ -358,7 +404,9 @@ internal class AndroidProjectContentClient(
                 downloadedBytes = retainedBytes,
                 canResume = retainedBytes in 1 until release.apkSize,
             )
-            AppUpdateInstallResult.Cancelled
+            AppUpdateInstallResult.Cancelled(
+                canResume = retainedBytes in 1 until release.apkSize,
+            )
         } catch (cancelled: CancellationException) {
             activeUpdateCall?.cancel()
             val retainedBytes = settleUpdatePartial(
@@ -424,7 +472,13 @@ internal class AndroidProjectContentClient(
         )
         val request = Request.Builder().url(url).get().build()
         executeWithTrustedGitHubReleaseRedirect(client, request).use { response ->
-            check(response.isSuccessful) { "Public content request failed (HTTP ${response.code})." }
+            if (!response.isSuccessful) {
+                val message = "Public content request failed (HTTP ${response.code})."
+                if (updateChannel != null && isRetryableAppUpdateHttpStatus(response.code)) {
+                    throw IOException(message)
+                }
+                error(message)
+            }
             val body = requireNotNull(response.body)
             check(body.contentLength() in -1..maximumBytes)
             return body.byteStream().use { input ->
@@ -566,10 +620,19 @@ internal class AndroidProjectContentClient(
         const val PREFERENCES = "project-content-v1"
         const val KEY_NEWS_FETCHED_AT = "news-fetched-at"
         const val KEY_UPDATE_CHANNEL = "update-channel"
+        const val KEY_AUTOMATIC_UPDATE_CHECKS = "automatic-update-checks"
+        const val KEY_UNMETERED_UPDATE_CHECKS = "unmetered-update-checks"
+        const val KEY_UPDATE_NOTIFICATIONS = "update-notifications"
         const val NEWS_CACHE_TTL_MILLIS = 6 * 60 * 60 * 1_000L
         const val UPDATE_PROGRESS_STEP_BYTES = 256L * 1024L
     }
+
+    private fun storedUpdateChannel(): AndroidUpdateChannel =
+        parseAndroidUpdateChannel(preferences.getString(KEY_UPDATE_CHANNEL, null))
 }
+
+internal fun isRetryableAppUpdateHttpStatus(status: Int): Boolean =
+    status == 408 || status == 429 || status in 500..599
 
 internal data class AndroidInstallSource(
     val installerPackage: String?,
@@ -692,6 +755,42 @@ internal fun settleUpdatePartial(
     }
     return length
 }
+
+internal fun cleanupAndroidUpdatePackages(
+    directory: File,
+    activePartial: File,
+): Int {
+    if (!directory.isDirectory) return 0
+    val activePath = activePartial.toPath().toAbsolutePath().normalize()
+    var removed = 0
+    directory.listFiles().orEmpty().forEach { candidate ->
+        if (
+            candidate.androidUpdatePackageVersionCode() != null &&
+            candidate.toPath().toAbsolutePath().normalize() != activePath &&
+            Files.isRegularFile(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)
+        ) {
+            check(candidate.delete()) { "Could not clear an obsolete Android update package." }
+            removed += 1
+        }
+    }
+    return removed
+}
+
+private fun File.androidUpdatePackageVersionCode(): Long? {
+    if (!name.startsWith(ANDROID_UPDATE_PACKAGE_PREFIX)) return null
+    val version = when {
+        name.endsWith(ANDROID_UPDATE_PARTIAL_SUFFIX) ->
+            name.removePrefix(ANDROID_UPDATE_PACKAGE_PREFIX).removeSuffix(ANDROID_UPDATE_PARTIAL_SUFFIX)
+        name.endsWith(ANDROID_UPDATE_PACKAGE_SUFFIX) ->
+            name.removePrefix(ANDROID_UPDATE_PACKAGE_PREFIX).removeSuffix(ANDROID_UPDATE_PACKAGE_SUFFIX)
+        else -> return null
+    }
+    return version.toLongOrNull()?.takeIf { it > 0 }
+}
+
+private const val ANDROID_UPDATE_PACKAGE_PREFIX = "nextcloud-native-"
+private const val ANDROID_UPDATE_PACKAGE_SUFFIX = ".apk"
+private const val ANDROID_UPDATE_PARTIAL_SUFFIX = ".apk.part"
 
 internal fun downloadUpdateApk(
     client: OkHttpClient,

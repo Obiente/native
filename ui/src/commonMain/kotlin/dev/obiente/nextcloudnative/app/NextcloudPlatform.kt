@@ -382,12 +382,28 @@ interface NextcloudPlatformServices {
      */
     fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean = false
 
+    fun loadAppUpdatePreferences(): AppUpdatePreferences = AppUpdatePreferences()
+
+    fun saveAppUpdatePreferences(preferences: AppUpdatePreferences): Boolean = false
+
+    /** True only when the platform can currently deliver the dedicated app-update notification. */
+    fun appUpdateNotificationDeliveryAllowed(): Boolean = false
+
+    /** Requests runtime, app-wide, or app-update-channel notification access as appropriate. */
+    fun requestAppUpdateNotificationDelivery(): Boolean = false
+
+    /** Periodic check interval while this app process is running, or null for platform-owned scheduling. */
+    fun appUpdateAutomaticCheckIntervalMillis(): Long? = null
+
+    fun observeAppUpdateCheckResult(): Flow<AppUpdateCheckResult?> = flowOf(null)
+
     suspend fun checkForAppUpdate(
         channel: AndroidUpdateChannel = loadAppUpdateChannel(),
+        automatic: Boolean = false,
     ): AppUpdateCheckResult =
         AppUpdateCheckResult.Unavailable(appUpdateSupport())
 
-    /** Observable direct-APK download, verification, cancellation, and retry state. */
+    /** Observable direct-package download, verification, cancellation, and retry state. */
     fun observeAppUpdateInstallState(): Flow<AppUpdateInstallState> =
         flowOf(AppUpdateInstallState.Idle)
 
@@ -396,14 +412,17 @@ interface NextcloudPlatformServices {
      *
      * Implementations may never silently install or invoke this for store-owned installs.
      */
-    suspend fun beginAppUpdate(release: AndroidDirectRelease): AppUpdateInstallResult =
+    suspend fun beginAppUpdate(release: AppUpdateRelease): AppUpdateInstallResult =
         AppUpdateInstallResult.Rejected("Direct app updates are unavailable on this platform.")
 
-    /** Cancels the active direct-APK download while retaining a safe resumable partial file. */
+    /** Cancels the active direct-package download; the result states whether a partial can resume. */
     fun cancelAppUpdate(): Boolean = false
 
     /** True only when this platform has durable app-private offline file storage and execution. */
     val supportsFileOfflineStorage: Boolean get() = false
+
+    /** True when remote files can hydrate into a managed, automatically reclaimable local cache. */
+    val supportsVirtualFileStorage: Boolean get() = false
 
     /**
      * True only for one-way recursive folder availability backed by durable platform execution.
@@ -427,6 +446,15 @@ interface NextcloudPlatformServices {
     fun loadThemePreference(): ThemePreference
 
     fun saveThemePreference(preference: ThemePreference)
+
+    /** Desktop-only login startup integration; unsupported platforms keep this setting hidden. */
+    val supportsStartOnLogin: Boolean
+        get() = false
+
+    fun loadStartOnLoginPreference(): Boolean = false
+
+    /** Returns a user-facing limitation when the preference could not be applied immediately. */
+    fun saveStartOnLoginPreference(enabled: Boolean): String? = null
 
     fun loadLastOpenedAppId(): String
 
@@ -567,6 +595,46 @@ interface NextcloudPlatformServices {
         key: FileOfflineKey,
     ): FileOfflineCenterActionResult = FileOfflineCenterActionResult.Unsupported(
         "Removing offline copies from this center is not available on this platform.",
+    )
+
+    /** Returns cache and platform-provider status without performing network IO. */
+    suspend fun loadVirtualFileStorage(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageSnapshot = defaultVirtualFileStorageSnapshot()
+
+    /** Persists automatic virtual-file cleanup rules and immediately enforces hard limits. */
+    suspend fun saveVirtualFileCachePolicy(
+        session: NextcloudSession,
+        userId: String,
+        policy: VirtualFileCachePolicy,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "Virtual file cache rules are not available on this platform.",
+    )
+
+    /** Frees only disposable hydrated content; it must never remove pins or unsynchronized data. */
+    suspend fun freeUpVirtualFileSpace(
+        session: NextcloudSession,
+        userId: String,
+        requestedBytes: Long,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "Virtual file storage cleanup is not available on this platform.",
+    )
+
+    /** Activates the operating-system virtual file provider at its configured location. */
+    suspend fun activateVirtualFileProvider(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "A system virtual file provider is not available on this platform.",
+    )
+
+    /** Stops the operating-system provider without deleting cached or remote content. */
+    suspend fun deactivateVirtualFileProvider(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "A system virtual file provider is not available on this platform.",
     )
 
     /** Opens the native folder chooser and persists a least-privilege folder grant. */
