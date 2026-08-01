@@ -20,7 +20,7 @@ The target architecture has three portable layers and thin platform products:
 | --- | --- | --- | --- |
 | Android | Compose Multiplatform | Active launcher and signed alpha APK/AAB | Keystore, WorkManager, DocumentsProvider, permissions, notifications, shares, media sessions, camera backup, and calls |
 | Linux | Compose Desktop | Primary interactive desktop target; alpha RPM/DEB | Secret Service, desktop file integration, notifications, media keys, portals, and conventional sync roots |
-| Windows | Compose Desktop | Early MSI packaging artifact; no supported authenticated login yet | Credential Manager, Cloud Files API, notifications, media controls, and updates |
+| Windows | Compose Desktop | x86-64 MSI with Credential Manager and Cloud Files integration under prerelease qualification | Explorer validation, Authenticode signing, notifications, media controls, and updates |
 | macOS | Compose Desktop | Early DMG packaging artifact; no supported authenticated login yet | Keychain, File Provider/Finder integration, notifications, media controls, and updates |
 | iOS / iPadOS | Planned Compose target | No supported launcher is shipped | Keychain, File Provider, background transfer, share extension, notifications, media, and CallKit |
 

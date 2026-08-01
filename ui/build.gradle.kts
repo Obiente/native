@@ -174,6 +174,11 @@ compose.desktop {
             }
             windows {
                 iconFile.set(project.file("src/desktopMain/resources/nextcloud-native.ico"))
+                menu = true
+                menuGroup = "Nextcloud Native"
+                shortcut = true
+                perUserInstall = true
+                upgradeUuid = "81237d85-c511-47a7-b8dc-c87a5f5c5823"
             }
             macOS {
                 packageVersion = ncMacosPackageVersion

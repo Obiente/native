@@ -35,6 +35,10 @@ require_text "$nightly" 'runner: windows-latest'
 require_text "$nightly" 'runner: macos-15-intel'
 require_text "$nightly" 'tasks: ":ui:packageDeb :ui:packageRpm"'
 require_text "$nightly" 'tasks: ":ui:packageMsi"'
+require_text "$nightly" 'tools/sign-windows-package.ps1'
+require_text "$nightly" 'WINDOWS_SIGNING_CERTIFICATE_BASE64'
+require_text "$nightly" 'WINDOWS_SIGNING_CERTIFICATE_PASSWORD'
+require_text "$nightly" 'WINDOWS_SIGNING_CERTIFICATE_SHA256'
 require_text "$nightly" 'tasks: ":ui:packageDmg"'
 require_text "$nightly" 'tools/derive-desktop-package-version.sh'
 require_text "$nightly" 'source_sequence="$(git rev-list --count "${SOURCE_SHA}")"'
@@ -96,6 +100,10 @@ require_text "$prerelease" 'source_sequence="$(git rev-list --count "${GITHUB_SH
 require_text "$prerelease" '-PncDesktopPackageVersion="${RELEASE_DESKTOP_VERSION}"'
 require_text "$prerelease" '-PncMacosPackageVersion="${RELEASE_DESKTOP_VERSION}"'
 require_text "$prerelease" '-PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}"'
+require_text "$prerelease" 'tools/sign-windows-package.ps1'
+require_text "$prerelease" 'WINDOWS_SIGNING_CERTIFICATE_BASE64'
+require_text "$prerelease" 'WINDOWS_SIGNING_CERTIFICATE_PASSWORD'
+require_text "$prerelease" 'WINDOWS_SIGNING_CERTIFICATE_SHA256'
 require_text "$prerelease" 'Require protected Android signing secrets'
 require_text "$prerelease" 'if [[ -z "${!secret_name}" ]]; then'
 require_text "$prerelease" 'tools/verify-android-artifact-metadata.sh'
@@ -125,8 +133,8 @@ require_text "$promotion" 'test "$release_state" = $'\''false\ttrue\t'\''"$immut
 bash -n "$promotion"
 
 for workflow in "$nightly" "$prerelease"; do
-    [[ "$(grep -Fc 'direct_updates: "true"' "$workflow")" -eq 1 ]]
-    [[ "$(grep -Fc 'direct_updates: "false"' "$workflow")" -eq 2 ]]
+    [[ "$(grep -Fc 'direct_updates: "true"' "$workflow")" -eq 2 ]]
+    [[ "$(grep -Fc 'direct_updates: "false"' "$workflow")" -eq 1 ]]
 done
 
 if grep -Fq 'cmp "${asset}" "${RUNNER_TEMP}/existing/${name}"' "$nightly"; then

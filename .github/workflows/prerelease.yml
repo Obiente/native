@@ -131,6 +131,7 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-latest
+            platform: linux
             artifact: nextcloud-native-linux
             direct_updates: "true"
             tasks: ":ui:packageDeb :ui:packageRpm"
@@ -138,17 +139,20 @@ jobs:
               ui/build/compose/binaries/main/deb/*.deb
               ui/build/compose/binaries/main/rpm/*.rpm
           - runner: windows-latest
+            platform: windows
             artifact: nextcloud-native-windows
-            direct_updates: "false"
+            direct_updates: "true"
             tasks: ":ui:packageMsi"
             paths: ui/build/compose/binaries/main/msi/*.msi
           - runner: macos-15-intel
+            platform: macos
             artifact: nextcloud-native-macos
             direct_updates: "false"
             tasks: ":ui:packageDmg"
             paths: ui/build/compose/binaries/main/dmg/*.dmg
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    environment: prerelease
     steps:
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -179,6 +183,19 @@ jobs:
             find ui/build/compose/logs -type f -print -exec cat {} \; 2>/dev/null || true
           fi
           exit "${status}"
+
+      - name: Sign and verify Windows MSI
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          WINDOWS_SIGNING_CERTIFICATE_SHA256: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_SHA256 }}
+          RELEASE_DESKTOP_VERSION: ${{ needs.authorize-signing.outputs.desktop-version }}
+        run: |
+          tools/sign-windows-package.ps1 `
+            -PackageDirectory "ui/build/compose/binaries/main/msi" `
+            -ExpectedVersion "${env:RELEASE_DESKTOP_VERSION}"
 
       - name: Upload desktop package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

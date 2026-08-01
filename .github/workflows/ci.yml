@@ -251,3 +251,74 @@ jobs:
           steps.changes.outputs.desktop != 'true' &&
           steps.changes.outputs.android != 'true'
         run: echo "No compiler, contract, desktop, Android, or build-system changes; compilation was skipped." >>"${GITHUB_STEP_SUMMARY}"
+
+  windows:
+    name: Windows build and package
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Detect Windows desktop changes
+        id: changes
+        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+        with:
+          filters: |
+            windows:
+              - ".github/workflows/ci.yml"
+              - "contractAcquisition/**"
+              - "release/windows/**"
+              - "tools/verify-windows-package.ps1"
+              - "ui/build.gradle.kts"
+              - "ui/src/commonMain/**"
+              - "ui/src/commonTest/**"
+              - "ui/src/desktopMain/**"
+              - "ui/src/desktopTest/**"
+              - "build.gradle.kts"
+              - "settings.gradle.kts"
+              - "gradle.properties"
+              - "gradle/**"
+              - "gradlew"
+              - "gradlew.bat"
+
+      - name: Set up JDK 21
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle build cache
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+
+      - name: Test Windows desktop and build MSI
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        shell: pwsh
+        run: |
+          .\gradlew.bat --no-daemon :ui:desktopTest :ui:packageMsi
+
+      - name: Verify Windows MSI metadata
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        shell: pwsh
+        run: |
+          tools/verify-windows-package.ps1 `
+            -PackageDirectory "ui/build/compose/binaries/main/msi" `
+            -ExpectedVersion "0.1.0"
+
+      - name: Upload Windows MSI
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: nextcloud-native-windows
+          path: ui/build/compose/binaries/main/msi/*.msi
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Report skipped Windows build
+        if: github.event_name != 'workflow_dispatch' && steps.changes.outputs.windows != 'true'
+        shell: pwsh
+        run: '"No Windows desktop or build-system changes; native Windows validation was skipped." >> $env:GITHUB_STEP_SUMMARY'

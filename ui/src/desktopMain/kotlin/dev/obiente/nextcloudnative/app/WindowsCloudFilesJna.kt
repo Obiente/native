@@ -66,6 +66,13 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         identity.clear()
     }
 
+    override fun unregisterSyncRoot(root: Path) {
+        checkHResult(
+            cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString())),
+            "unregister the Windows Cloud Files root",
+        )
+    }
+
     override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long {
         val types = intArrayOf(
             CF_CALLBACK_TYPE_FETCH_DATA,
@@ -541,6 +548,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
 
 internal interface CldApi : StdCallLibrary {
     fun CfRegisterSyncRoot(path: WString, registration: CfSyncRegistration, policies: CfSyncPolicies, flags: Int): Int
+    fun CfUnregisterSyncRoot(path: WString): Int
     fun CfConnectSyncRoot(path: WString, callbackTable: Pointer, context: Pointer?, flags: Int, key: LongByReference): Int
     fun CfDisconnectSyncRoot(key: Long): Int
     fun CfCreatePlaceholders(path: WString, placeholders: Pointer?, count: Int, flags: Int, processed: IntByReference): Int

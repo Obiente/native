@@ -188,6 +188,7 @@ internal enum class WindowsCloudPlaceholderState {
 
 internal interface WindowsCloudFilesApi : AutoCloseable {
     fun registerSyncRoot(root: Path, syncRootIdentity: ByteArray)
+    fun unregisterSyncRoot(root: Path)
     fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long
     fun disconnect(connectionKey: Long)
     fun createPlaceholders(baseDirectory: Path, placeholders: List<WindowsCloudPlaceholder>)
@@ -325,6 +326,7 @@ internal class WindowsCloudFilesProvider(
     private val writebackRetryDelayMillis: (attempt: Int) -> Long = ::windowsWritebackRetryDelayMillis,
 ) : AutoCloseable, WindowsCloudFilesCallbacks {
     private val connection = AtomicLongState()
+    private val apiClosed = AtomicBoolean(false)
     private val cancelledRequests = ConcurrentHashMap<Long, AtomicBoolean>()
     private val knownIdentities = ConcurrentHashMap<String, WindowsCloudFileIdentity>()
     private val pathOperations = ConcurrentHashMap.newKeySet<String>()
@@ -567,7 +569,21 @@ internal class WindowsCloudFilesProvider(
         )
     }
 
+    fun removeSyncRoot() {
+        stopRuntime()
+        try {
+            api.unregisterSyncRoot(root)
+        } finally {
+            closeApi()
+        }
+    }
+
     override fun close() {
+        stopRuntime()
+        closeApi()
+    }
+
+    private fun stopRuntime() {
         val key = connection.getAndSet(0L)
         if (key != 0L) runCatching { api.disconnect(key) }
         cancelledRequests.values.forEach { it.set(true) }
@@ -581,7 +597,10 @@ internal class WindowsCloudFilesProvider(
         queuedPathOperations.clear()
         localChangeScheduler.shutdownNow()
         executor.shutdownNow()
-        api.close()
+    }
+
+    private fun closeApi() {
+        if (apiClosed.compareAndSet(false, true)) api.close()
     }
 
     private fun populateDirectory(relativePath: String, localDirectory: Path) {

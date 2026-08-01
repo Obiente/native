@@ -15,6 +15,23 @@ import kotlin.test.assertTrue
 
 class WindowsCloudFilesProviderTest {
     @Test
+    fun accountRemovalDisconnectsAndUnregistersTheSyncRoot() {
+        val root = createTempDirectory("windows-cloud-remove")
+        val api = FakeApi()
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0)),
+            api = api,
+        )
+
+        provider.start()
+        provider.removeSyncRoot()
+
+        assertEquals(root, api.unregisteredRoot)
+        assertTrue(api.closed)
+    }
+
+    @Test
     fun `native layouts match 64 bit cfapi structures`() {
         assertEquals(
             WindowsCloudNativeLayoutSizes(
@@ -483,8 +500,13 @@ class WindowsCloudFilesProviderTest {
         val transfers = mutableListOf<Pair<Long, ByteArray>>()
         val invalidatedUpdates = mutableListOf<Path>()
         var lastRenameAccepted = false
+        var unregisteredRoot: Path? = null
+        var closed = false
 
         override fun registerSyncRoot(root: Path, syncRootIdentity: ByteArray) = Unit
+        override fun unregisterSyncRoot(root: Path) {
+            unregisteredRoot = root
+        }
         override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long = 1L
         override fun disconnect(connectionKey: Long) = Unit
         override fun createPlaceholders(baseDirectory: Path, placeholders: List<WindowsCloudPlaceholder>) = Unit
@@ -530,7 +552,9 @@ class WindowsCloudFilesProviderTest {
             conversionLatch.countDown()
         }
         override fun dehydrate(path: Path): Long = 0L
-        override fun close() = Unit
+        override fun close() {
+            closed = true
+        }
 
         fun awaitTransfers(): Boolean = transferLatch.await(5, TimeUnit.SECONDS)
         fun awaitConversions(): Boolean = conversionLatch.await(5, TimeUnit.SECONDS)

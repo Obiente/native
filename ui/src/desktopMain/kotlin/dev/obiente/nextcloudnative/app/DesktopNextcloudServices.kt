@@ -420,6 +420,7 @@ class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
 ) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
+    private val secretStore = defaultDesktopSecretStore()
     private val appUpdater = DesktopAppUpdater(preferences.node("app-updates-v1"))
     private val httpClient = OkHttpClient()
     private val noRedirectHttpClient = httpClient.newBuilder()
@@ -1253,17 +1254,19 @@ class DesktopNextcloudServices(
     override fun loadSession(): NextcloudSession? {
         val server = preferences.get(KEY_SERVER, null) ?: return null
         val login = preferences.get(KEY_LOGIN, null) ?: return null
-        val password = secretTool("lookup", server, login) ?: return null
+        val password = secretStore.load(desktopSessionSecretReference(server, login))
+            ?.decodeToString()
+            ?.takeIf(String::isNotBlank)
+            ?: return null
         return NextcloudSession(server, login, password)
     }
 
     override fun saveSession(session: NextcloudSession) {
-        val process = ProcessBuilder(
-            "secret-tool", "store", "--label=Nextcloud Native app password",
-            "application", APP_ID, "server", session.serverUrl, "login", session.loginName,
-        ).start()
-        process.outputStream.bufferedWriter().use { it.write(session.appPassword) }
-        check(process.waitFor() == 0) { "Could not store the session in the desktop keyring." }
+        secretStore.save(
+            reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
+            username = session.loginName,
+            secret = session.appPassword.encodeToByteArray(),
+        )
         preferences.put(KEY_SERVER, session.serverUrl)
         preferences.put(KEY_LOGIN, session.loginName)
         startDesktopSyncLifecycle()
@@ -1279,7 +1282,7 @@ class DesktopNextcloudServices(
             linuxVirtualFileSystem = null
             linuxVirtualFileMountIdentity = null
             linuxVirtualFileFailure = null
-            runCatching { windowsCloudFilesProvider?.close() }
+            runCatching { windowsCloudFilesProvider?.removeSyncRoot() }
             windowsCloudFilesProvider = null
             windowsCloudFilesIdentity = null
             windowsCloudFilesFailure = null
@@ -1289,7 +1292,9 @@ class DesktopNextcloudServices(
         )
         val server = preferences.get(KEY_SERVER, null)
         val login = preferences.get(KEY_LOGIN, null)
-        if (server != null && login != null) secretTool("clear", server, login)
+        if (server != null && login != null) {
+            secretStore.clear(desktopSessionSecretReference(server, login))
+        }
         preferences.remove(KEY_SERVER)
         preferences.remove(KEY_LOGIN)
     }
@@ -2816,14 +2821,6 @@ class DesktopNextcloudServices(
         require(uri.scheme == "https" && !uri.host.isNullOrBlank()) { "Enter a valid secure https:// server address." }
         return candidate.trimEnd('/').removeSuffix("/index.php")
     }
-
-    private fun secretTool(command: String, server: String, login: String): String? = runCatching {
-        val process = ProcessBuilder(
-            "secret-tool", command, "application", APP_ID, "server", server, "login", login,
-        ).start()
-        val value = process.inputStream.bufferedReader().use { it.readText().trim() }
-        if (process.waitFor() == 0) value.takeIf(String::isNotBlank) else null
-    }.getOrNull()
 
     private fun JSONArray.toAppEntries(): List<NextcloudAppEntry> = buildList {
         for (index in 0 until length()) {
