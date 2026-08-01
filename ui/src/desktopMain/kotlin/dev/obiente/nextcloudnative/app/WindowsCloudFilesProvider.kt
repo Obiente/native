@@ -365,15 +365,23 @@ internal class WindowsCloudFilesProvider(
         check(!Files.isSymbolicLink(root)) { "The Windows Cloud Files root cannot be a symlink." }
         val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
         api.registerSyncRoot(root, WindowsCloudFileIdentityCodec.encode(rootIdentity))
-        populateDirectory("", root)
         connection.set(api.connect(root, this))
-        startLocalWatcher()
-        executor.execute {
-            try {
-                recoverLocalChanges()
-            } finally {
-                initialRecoveryFinished.countDown()
+        try {
+            populateDirectory("", root)
+            startLocalWatcher()
+            executor.execute {
+                try {
+                    recoverLocalChanges()
+                } finally {
+                    initialRecoveryFinished.countDown()
+                }
             }
+        } catch (failure: Throwable) {
+            val key = connection.get()
+            if (key != 0L && runCatching { api.disconnect(key) }.isSuccess) {
+                connection.compareAndSet(key, 0L)
+            }
+            throw failure
         }
     }
 

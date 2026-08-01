@@ -107,6 +107,30 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun callbackChannelStartsBeforeInitialPlaceholderPopulation() {
+        val root = createTempDirectory("windows-cloud-start-order")
+        val api = FakeApi()
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(
+                source = ByteArray(0),
+                listed = listOf(
+                    WindowsCloudFileIdentity("account-01", "Apps", "revision", 0L, true),
+                ),
+            ),
+            api = api,
+        )
+
+        try {
+            provider.start()
+            assertEquals(listOf("register", "connect", "create"), api.lifecycleEvents.take(3))
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun failedSyncRootRemovalKeepsTheNativeApiAvailableForRetry() {
         val root = createTempDirectory("windows-cloud-remove-retry")
         val api = FakeApi().apply { unregisterFailure = IllegalStateException("in use") }
@@ -744,18 +768,26 @@ class WindowsCloudFilesProviderTest {
         val disconnectAttempts = mutableListOf<Long>()
         var disconnectFailure: RuntimeException? = null
         var closed = false
+        val lifecycleEvents = mutableListOf<String>()
 
-        override fun registerSyncRoot(root: Path, syncRootIdentity: ByteArray) = Unit
+        override fun registerSyncRoot(root: Path, syncRootIdentity: ByteArray) {
+            lifecycleEvents += "register"
+        }
         override fun unregisterSyncRoot(root: Path) {
             unregisterFailure?.let { throw it }
             unregisteredRoot = root
         }
-        override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long = 1L
+        override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long {
+            lifecycleEvents += "connect"
+            return 1L
+        }
         override fun disconnect(connectionKey: Long) {
             disconnectAttempts += connectionKey
             disconnectFailure?.let { throw it }
         }
-        override fun createPlaceholders(baseDirectory: Path, placeholders: List<WindowsCloudPlaceholder>) = Unit
+        override fun createPlaceholders(baseDirectory: Path, placeholders: List<WindowsCloudPlaceholder>) {
+            lifecycleEvents += "create"
+        }
         override fun transferData(info: WindowsCloudCallbackInfo, offset: Long, bytes: ByteArray) {
             synchronized(transfers) { transfers += offset to bytes.copyOf() }
             transferLatch.countDown()
