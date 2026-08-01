@@ -22,6 +22,7 @@ on:
       - "ui/src/desktopMain/resources/marketing/**"
       - "website/package.json"
       - "website/package-lock.json"
+      - "website/public/demo-media/**"
       - "website/public/screenshots/**"
       - "website/scripts/marketing-captures.mjs"
       - "website/scripts/verify-marketing-captures.mjs"
@@ -75,13 +76,14 @@ jobs:
 
       - name: Commit capture changes
         env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GH_TOKEN: ${{ github.token }}
           HEAD_AUTHOR: ${{ github.event.pull_request.user.login }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- website/public/screenshots; then
+          if [[ -z "$(git status --porcelain --untracked-files=all -- website/public/screenshots)" ]]; then
             printf 'Marketing captures already match this pull request.\n'
             exit 0
           fi
@@ -95,6 +97,12 @@ jobs:
             git status --short
             exit 1
           fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          fi
+          node tools/changelog-fragments.mjs check-diff \
+            --base "${BASE_SHA}" \
+            --head HEAD
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- website/public/screenshots

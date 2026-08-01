@@ -99,6 +99,7 @@ internal fun validateStagedCaptureCatalog(
     stagedDirectory: Path,
     registry: List<MarketingCaptureRegistryEntry>,
     expectedCaptureSources: List<String>,
+    expectedCaptureSourceHashes: Map<String, String>,
     expectedAvatarSha256: String,
     preservedFileNames: Set<String> = preservedMarketingCaptureFiles,
 ) {
@@ -124,6 +125,7 @@ internal fun validateStagedCaptureCatalog(
             "cloudIdentity",
             "networkAccess",
             "captureSources",
+            "captureSourceHashes",
             "avatarSha256",
             "captures",
         ),
@@ -142,6 +144,15 @@ internal fun validateStagedCaptureCatalog(
     }
     require(declaredSources == expectedCaptureSources) {
         "The staged capture source inventory is stale."
+    }
+    val declaredSourceHashes = manifest.getJSONObject("captureSourceHashes")
+    require(declaredSourceHashes.keySet() == expectedCaptureSourceHashes.keys) {
+        "The staged capture source hash inventory is stale."
+    }
+    expectedCaptureSourceHashes.forEach { (relative, digest) ->
+        require(declaredSourceHashes.getString(relative) == digest) {
+            "The staged capture source hash is stale: $relative"
+        }
     }
 
     val captures = manifest.getJSONArray("captures")

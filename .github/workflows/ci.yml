@@ -86,6 +86,7 @@ jobs:
               - "ui/src/desktopMain/resources/marketing/**"
               - "website/package.json"
               - "website/package-lock.json"
+              - "website/public/demo-media/**"
               - "website/public/screenshots/**"
               - "website/scripts/marketing-captures.mjs"
               - "website/scripts/verify-marketing-captures.mjs"

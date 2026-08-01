@@ -32,6 +32,7 @@ export function validateCaptureManifest(manifest) {
       "cloudIdentity",
       "networkAccess",
       "captureSources",
+      "captureSourceHashes",
       "avatarSha256",
       "captures",
     ],
@@ -57,6 +58,16 @@ export function validateCaptureManifest(manifest) {
   );
   for (const relative of manifest.captureSources) {
     requireSafeRelativePath(relative, "captureSources entry");
+  }
+  requireObject(manifest.captureSourceHashes, "captureSourceHashes");
+  requireExactKeys(
+    manifest.captureSourceHashes,
+    manifest.captureSources,
+    "captureSourceHashes",
+  );
+  for (const [relative, digest] of Object.entries(manifest.captureSourceHashes)) {
+    requireSafeRelativePath(relative, "captureSourceHashes entry");
+    requireSha256(digest, `captureSourceHashes ${relative}`);
   }
 
   requireValue(
@@ -239,6 +250,12 @@ export async function verifyCaptureFreshness(manifest) {
   }
   if (obsolete.length > 0) {
     failures.push(`captureSources contains obsolete entries: ${obsolete.join(", ")}`);
+  }
+  for (const relative of expectedSources) {
+    const bytes = await readFile(path.join(repositoryRoot, relative));
+    if (manifest.captureSourceHashes[relative] !== sha256(bytes)) {
+      failures.push(`captureSourceHashes does not match: ${relative}`);
+    }
   }
   if (manifest.avatarSha256) {
     const avatar = await readFile(

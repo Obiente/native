@@ -22,12 +22,16 @@ require_text "$workflow" 'repository: ${{ github.event.pull_request.head.repo.fu
 require_text "$workflow" 'ref: ${{ github.event.pull_request.head.sha }}'
 require_text "$workflow" 'HEAD_AUTHOR: ${{ github.event.pull_request.user.login }}'
 require_text "$workflow" 'HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}'
+require_text "$workflow" 'website/public/demo-media/**'
 require_text "$workflow" 'if [[ "${HEAD_REPOSITORY}" != "${GITHUB_REPOSITORY}" || "${HEAD_AUTHOR}" == '\''dependabot[bot]'\'' ]]; then'
+require_text "$workflow" 'git status --porcelain --untracked-files=all -- website/public/screenshots'
 require_text "$workflow" "git diff --quiet -- . ':(exclude)website/public/screenshots/**'"
+require_text "$workflow" 'node tools/changelog-fragments.mjs check-diff'
 require_text "$workflow" "git commit -m 'chore(website): refresh marketing captures'"
 require_text "$workflow" 'git push origin "HEAD:${HEAD_REF}"'
 require_text "$workflow" 'gh workflow run ci.yml'
 require_text "$ci" 'Verify deterministic marketing capture regeneration'
+require_text "$ci" 'website/public/demo-media/**'
 require_text "$ci" 'git diff --exit-code -- website/public/screenshots'
 require_text "$ci" 'steps.changes.outputs.capture_inputs == '\''true'\'''
 

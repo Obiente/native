@@ -41,6 +41,10 @@ function validManifest() {
       "tools/marketing-capture-inputs.txt",
       "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SyntheticCapture.kt",
     ],
+    captureSourceHashes: {
+      "tools/marketing-capture-inputs.txt": digest,
+      "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SyntheticCapture.kt": digest,
+    },
     avatarSha256: digest,
     captures: [
       darkCapture,

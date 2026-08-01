@@ -111,6 +111,7 @@ class MarketingCaptureOwnershipTest {
                 stagedDirectory = staged,
                 registry = listOf(entry),
                 expectedCaptureSources = listOf("source.kt"),
+                expectedCaptureSourceHashes = mapOf("source.kt" to "3".repeat(64)),
                 expectedAvatarSha256 = "2".repeat(64),
                 preservedFileNames = emptySet(),
             )
@@ -122,6 +123,7 @@ class MarketingCaptureOwnershipTest {
                     staged,
                     listOf(entry),
                     listOf("source.kt"),
+                    mapOf("source.kt" to "3".repeat(64)),
                     "2".repeat(64),
                     emptySet(),
                 )
@@ -134,6 +136,7 @@ class MarketingCaptureOwnershipTest {
                     staged,
                     listOf(entry),
                     listOf("source.kt"),
+                    mapOf("source.kt" to "3".repeat(64)),
                     "2".repeat(64),
                     emptySet(),
                 )
@@ -225,6 +228,7 @@ class MarketingCaptureOwnershipTest {
             staged,
             listOf(entry),
             listOf("source.kt"),
+            mapOf("source.kt" to "3".repeat(64)),
             "2".repeat(64),
             emptySet(),
         )
@@ -264,6 +268,7 @@ class MarketingCaptureOwnershipTest {
                   "cloudIdentity": "Nextcloud",
                   "networkAccess": false,
                   "captureSources": ["source.kt"],
+                  "captureSourceHashes": {"source.kt": "${"3".repeat(64)}"},
                   "avatarSha256": "${"2".repeat(64)}",
                   "captures": [{
                     "scenario": "${entry.id}",

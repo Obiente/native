@@ -43,6 +43,7 @@ fun main(arguments: Array<String>) {
     val registry = marketingCaptureVariants.map(MarketingCaptureVariant::registryEntry)
     validateMarketingCaptureRegistry(registry)
     val captureSources = discoverCaptureSources(repositoryRoot)
+    val captureSourceHashes = captureSourceHashes(repositoryRoot, captureSources)
     val initialCaptureSourceSha256 = captureSourceDigest(repositoryRoot, captureSources)
     val avatarSha256 = Files.readAllBytes(
         repositoryRoot.resolve(
@@ -91,12 +92,14 @@ fun main(arguments: Array<String>) {
             captureDirectory = stagedDirectory,
             outputs = outputs,
             captureSources = captureSources,
+            captureSourceHashes = captureSourceHashes,
             avatarSha256 = avatarSha256,
         )
         validateStagedCaptureCatalog(
             stagedDirectory = stagedDirectory,
             registry = registry,
             expectedCaptureSources = captureSources,
+            expectedCaptureSourceHashes = captureSourceHashes,
             expectedAvatarSha256 = avatarSha256,
         )
         require(discoverCaptureSources(repositoryRoot) == captureSources) {
@@ -257,6 +260,7 @@ private fun writeCaptureManifest(
     captureDirectory: Path,
     outputs: List<Path>,
     captureSources: List<String>,
+    captureSourceHashes: Map<String, String>,
     avatarSha256: String,
 ) {
     val captures = buildJsonArray {
@@ -294,6 +298,12 @@ private fun writeCaptureManifest(
             "captureSources",
             buildJsonArray {
                 captureSources.forEach { add(it) }
+            },
+        )
+        put(
+            "captureSourceHashes",
+            buildJsonObject {
+                captureSourceHashes.forEach { (relative, digest) -> put(relative, digest) }
             },
         )
         put("avatarSha256", avatarSha256)
@@ -411,6 +421,13 @@ private fun captureSourceDigest(
         sourceDigest.update(Files.readAllBytes(repositoryRoot.resolve(relative)))
     }
     return sourceDigest.digest().toHex()
+}
+
+private fun captureSourceHashes(
+    repositoryRoot: Path,
+    captureSources: List<String>,
+): Map<String, String> = captureSources.associateWith { relative ->
+    Files.readAllBytes(repositoryRoot.resolve(relative)).sha256()
 }
 
 private fun captureOutputPath(
