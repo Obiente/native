@@ -22,6 +22,7 @@ jobs:
     outputs:
       version-code: ${{ steps.version-code.outputs.value }}
       desktop-version: ${{ steps.version-code.outputs.desktop_version }}
+      release-date: ${{ steps.version-code.outputs.release_date }}
     steps:
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -62,9 +63,15 @@ jobs:
           desktop_version="$(
             tools/derive-desktop-package-version.sh "${source_sequence}" "${channel}"
           )"
+          release_started_at="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --jq .created_at
+          )"
+          release_date="$(date --utc --date="${release_started_at}" +%F)"
           {
             echo "value=${version_code}"
             echo "desktop_version=${desktop_version}"
+            echo "release_date=${release_date}"
           } >>"${GITHUB_OUTPUT}"
 
   validate:
@@ -180,7 +187,7 @@ jobs:
             -PncMacosPackageVersion="${RELEASE_DESKTOP_VERSION}" \
             -PncVersionName="${GITHUB_REF_NAME#v}" \
             -PncVersionCode="${{ needs.authorize-signing.outputs.version-code }}" \
-            -PncAppStreamReleaseDate="$(git show -s --format=%cs HEAD)" \
+            -PncAppStreamReleaseDate="${{ needs.authorize-signing.outputs.release-date }}" \
             -PncDesktopReleaseBuild=true \
             -PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}" \
             ${{ matrix.tasks }}
