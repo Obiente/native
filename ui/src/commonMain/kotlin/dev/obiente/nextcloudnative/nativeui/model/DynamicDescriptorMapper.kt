@@ -28,6 +28,7 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
                     readOnly = false,
                     format = input.format ?: existing.format,
                     enumValues = input.enumValues ?: existing.enumValues,
+                    repeatableObjectInput = input.repeatableObjectInput ?: existing.repeatableObjectInput,
                 )
             }
         }
@@ -101,9 +102,11 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
             confidence = action.confidence,
             inputSchema = formsByActionId[action.id]?.toNativeInputSchema(),
             evidence = action.provenance.map(Provenance::toEvidence),
+            effect = action.effect,
+            resultRecoveryActionId = action.resultRecoveryActionId,
         )
     }
-    val nativeRelationships = links.mapNotNull { link ->
+    val linkedRelationships = links.mapNotNull { link ->
         val target = link.target as? DynamicLinkTarget.Action ?: return@mapNotNull null
         val childResourceId = actions.firstOrNull { it.id == target.actionId }?.resourceId ?: return@mapNotNull null
         if (childResourceId == link.resourceId) return@mapNotNull null
@@ -118,7 +121,44 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
             }?.id,
             confidence = link.confidence,
         )
-    }.distinctBy { relationship ->
+    }
+    val inferredForeignKeyRelationships = resources.flatMap { childResource ->
+        childResource.fields.mapNotNull { childField ->
+            val parentBase = childField.id.foreignKeyBase() ?: return@mapNotNull null
+            val parentResource = resources.filter { candidate ->
+                parentBase in setOf(
+                    candidate.id.relationBase(),
+                    candidate.label.relationBase(),
+                )
+            }.singleOrNull() ?: return@mapNotNull null
+            val parentIdentity = parentResource.fields
+                .filter { field -> field.id.lowercase() in setOf("databaseid", "id", "uuid", "token") }
+                .minByOrNull { field ->
+                    when (field.id.lowercase()) {
+                        "databaseid" -> 0
+                        "id" -> 1
+                        "uuid" -> 2
+                        else -> 3
+                    }
+                } ?: return@mapNotNull null
+            ResourceRelationshipSpec(
+                parentResourceId = parentResource.id,
+                childResourceId = childResource.id,
+                parentFieldId = parentIdentity.id,
+                childFieldId = childField.id,
+                // Name inference may support labels and relation choices, but it cannot by itself
+                // become verified evidence that authorizes an automatic write binding.
+                confidence = minOf(
+                    Confidence.high,
+                    parentResource.confidence,
+                    childResource.confidence,
+                    parentIdentity.confidence,
+                    childField.confidence,
+                ),
+            )
+        }
+    }
+    val nativeRelationships = (linkedRelationships + inferredForeignKeyRelationships).distinctBy { relationship ->
         listOf(
             relationship.parentResourceId,
             relationship.childResourceId,
@@ -246,7 +286,11 @@ private fun kotlinx.serialization.json.JsonElement.requiredPropertyNames(): List
 
 private fun String.foreignKeyBase(): String? {
     val normalized = lowercase().filter(Char::isLetterOrDigit)
-    return normalized.takeIf { it.length > 2 && it.endsWith("id") }?.dropLast(2)?.relationBase()
+    return when {
+        normalized.length > 3 && normalized.endsWith("ids") -> normalized.dropLast(3).relationBase()
+        normalized.length > 2 && normalized.endsWith("id") -> normalized.dropLast(2).relationBase()
+        else -> null
+    }
 }
 
 private fun String.relationBase(): String {
@@ -288,6 +332,7 @@ private fun FormField.toNativeField(): FieldSpec = FieldSpec(
     readOnly = false,
     format = format,
     enumValues = enumValues,
+    repeatableObjectInput = repeatableObjectInput,
 )
 
 private fun DynamicLayout.toNativeComponent(
@@ -316,6 +361,10 @@ private fun DynamicLayout.toNativeComponent(
         it in setOf("stackid", "stack", "columnid", "column", "laneid", "lane", "listid", "list", "stage", "status")
     }
     val hasBoardOrdering = normalizedFields.keys.any { it in setOf("order", "position", "sortorder", "sort", "index") }
+    val hasCompletionShape = normalizedFields.any { (id, field) ->
+        id in setOf("completed", "done", "iscompleted", "isdone") &&
+            field.kind == FieldKind.boolean
+    }
     val hasMeasure = normalizedFields.any { (id, field) ->
         field.kind in setOf(FieldKind.integer, FieldKind.decimal, FieldKind.currency) &&
             id in setOf(
@@ -371,6 +420,7 @@ private fun DynamicLayout.toNativeComponent(
             fields.any { it in setOf("boardid", "stackid", "order", "position") } -> {
             NativeComponent.board
         }
+        hasTitle && hasCompletionShape -> NativeComponent.taskList
         hasTitle && hasBoardGrouping && hasBoardOrdering -> NativeComponent.board
         hasMeasure && hasFinancialSemantics -> NativeComponent.dashboard
         hasSettingsSemantics && action?.binding?.method == HttpMethod.GET -> NativeComponent.detail

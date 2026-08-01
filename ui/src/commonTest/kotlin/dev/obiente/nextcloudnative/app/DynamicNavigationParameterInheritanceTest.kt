@@ -16,8 +16,22 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class DynamicNavigationParameterInheritanceTest {
+    @Test
+    fun `context records with several destinations open a section menu`() {
+        assertFalse(shouldShowDynamicContextDestinationMenu(emptyList()))
+        assertFalse(shouldShowDynamicContextDestinationMenu(listOf("items")))
+        assertFalse(shouldShowDynamicContextDestinationMenu(listOf("items", "items")))
+        assertTrue(shouldShowDynamicContextDestinationMenu(listOf("items", "notes")))
+        assertTrue(
+            shouldShowDynamicContextDestinationMenu(
+                listOf("items", "notes", "photos", "preferences"),
+            ),
+        )
+    }
+
     @Test
     fun exactCollectionDetailBeatsEarlierSingularRandomResource() {
         fun action(

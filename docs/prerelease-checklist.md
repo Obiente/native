@@ -49,6 +49,9 @@ release.
       use the correct icon and application identity, and uninstall cleanly.
 - [ ] Package metadata, minimum platform versions, licenses, notices, website,
       source, issue tracker, and privacy/security links are accurate.
+- [ ] Windows release notes disclose the unsigned MSI, the SmartScreen
+      confirmation path was tested without disabling security controls, and
+      `gh attestation verify` succeeds for the downloaded MSI.
 - [ ] Mobile and desktop screenshots come from the real application running
       deterministic synthetic data.
 - [ ] `SHA256SUMS` and `update-manifest.json` match the published artifacts.

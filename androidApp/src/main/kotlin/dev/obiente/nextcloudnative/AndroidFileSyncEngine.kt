@@ -29,6 +29,7 @@ import dev.obiente.nextcloudnative.app.resolveFileSyncDecision
 import dev.obiente.nextcloudnative.app.retryFileSyncOperation
 import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import dev.obiente.nextcloudnative.app.toCenterSummary
+import dev.obiente.nextcloudnative.app.includesSyncPath
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -344,7 +345,11 @@ internal class AndroidFileSyncEngine(context: Context) {
             initialPair.remoteRootPath,
             webDav,
         )
-        var remoteEntries = remote.scan().map(AndroidRemoteSyncDocument::entry)
+        val configuration = initialPair.configuration
+        val includes: (String, SyncEntryKind) -> Boolean = { relativePath, kind ->
+            configuration.includesSyncPath(relativePath, kind)
+        }
+        var remoteEntries = remote.scan(includes).map(AndroidRemoteSyncDocument::entry)
         val contentHashPaths = remoteEntries
             .asSequence()
             .filter { it.kind == SyncEntryKind.File && it.contentHash != null }
@@ -354,7 +359,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             initialPair.localRootId,
             contentHashPaths,
         )
-        var localEntries = local.scan().map(AndroidLocalSyncDocument::entry)
+        var localEntries = local.scan(includes).map(AndroidLocalSyncDocument::entry)
         val baselineByPath = initialPair.baselines.associateBy(FileSyncBaseline::relativePath)
         val remoteByPath = remoteEntries.associateBy { it.relativePath }
         val verifiedContentPaths = localEntries
