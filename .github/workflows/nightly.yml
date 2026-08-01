@@ -288,6 +288,7 @@ jobs:
             -PncMacosPackageVersion="${NIGHTLY_DESKTOP_VERSION}" \
             -PncVersionName="${{ needs.source.outputs.version }}" \
             -PncVersionCode="${{ needs.source.outputs.version-code }}" \
+            -PncAppStreamReleaseDate="$(git show -s --format=%cs HEAD)" \
             -PncDesktopReleaseBuild=true \
             -PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}" \
             ${{ matrix.tasks }}
