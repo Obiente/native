@@ -5,6 +5,7 @@ import java.io.DataOutputStream
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
@@ -55,10 +56,14 @@ class WindowsCloudFilesProviderTest {
         try {
             provider.start()
             val expectedChildren = setOf("Calendar", "readme.txt")
+            val childAccessSucceeded = runCatching {
+                Files.readAttributes(root.resolve("Apps/readme.txt"), BasicFileAttributes::class.java)
+            }.isSuccess
             val names = awaitDirectoryEntries(root.resolve("Apps"), expectedChildren)
             assertTrue(
                 names.containsAll(expectedChildren),
                 "Expected Cloud Files children in directory entries: $names; " +
+                    "child access succeeded=$childAccessSucceeded; " +
                     "backend listings=${backend.listedPaths}; ${api.diagnostics()}",
             )
             Files.newDirectoryStream(root.resolve("Apps/Calendar")).use { entries ->

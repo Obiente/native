@@ -142,6 +142,9 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         )
         check(processed.value == placeholders.size) { "Windows created only some requested placeholders." }
         native.requireSuccessful()
+        placeholders.filter { it.directory }.forEach { placeholder ->
+            updatePlaceholder(baseDirectory.resolve(placeholder.name), placeholder)
+        }
     }
 
     override fun transferData(info: WindowsCloudCallbackInfo, offset: Long, bytes: ByteArray) {
@@ -283,7 +286,8 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
                 0
             } else {
                 CF_UPDATE_FLAG_MARK_IN_SYNC or CF_UPDATE_FLAG_VERIFY_IN_SYNC or
-                    if (invalidateContent) CF_UPDATE_FLAG_DEHYDRATE else 0
+                    (if (invalidateContent) CF_UPDATE_FLAG_DEHYDRATE else 0) or
+                    (if (placeholder.directory) CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION else 0)
             }
             checkHResult(
                 cldApi.CfUpdatePlaceholder(
@@ -552,6 +556,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         const val CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC = 0x2
         const val CF_UPDATE_FLAG_MARK_IN_SYNC = 0x2
         const val CF_UPDATE_FLAG_DEHYDRATE = 0x4
+        const val CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION = 0x8
         const val CF_UPDATE_FLAG_VERIFY_IN_SYNC = 0x1
         const val CF_CONVERT_FLAG_MARK_IN_SYNC = 0x1
         const val CF_PLACEHOLDER_INFO_STANDARD = 1
