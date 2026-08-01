@@ -304,6 +304,7 @@ test("deploy builds verify committed assets while capture refresh owns freshness
   assert.match(refreshWorkflow, /- "website\/scripts\/verify-marketing-captures\.mjs"/u);
   assert.match(refreshWorkflow, /\bnpm ci --prefix website\b/u);
   assert.match(refreshWorkflow, /:ui:captureMarketingScreenshots\b/u);
+  assert.match(refreshWorkflow, /\bnpm run --prefix website verify:captures:fresh\b/u);
   assert.match(
     dockerIgnore,
     /^!\.github\/workflows\/refresh-marketing-captures\.yml$/mu,

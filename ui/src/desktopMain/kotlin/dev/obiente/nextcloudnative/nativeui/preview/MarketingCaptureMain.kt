@@ -43,8 +43,7 @@ fun main(arguments: Array<String>) {
     val registry = marketingCaptureVariants.map(MarketingCaptureVariant::registryEntry)
     validateMarketingCaptureRegistry(registry)
     val captureSources = discoverCaptureSources(repositoryRoot)
-    val captureSourceHashes = captureSourceHashes(repositoryRoot, captureSources)
-    val initialCaptureSourceSha256 = captureSourceDigest(repositoryRoot, captureSources)
+    val initialCaptureSourceHashes = captureSourceHashes(repositoryRoot, captureSources)
     val avatarSha256 = Files.readAllBytes(
         repositoryRoot.resolve(
             "ui/src/desktopMain/resources/marketing/obiente-avatar.png",
@@ -92,20 +91,20 @@ fun main(arguments: Array<String>) {
             captureDirectory = stagedDirectory,
             outputs = outputs,
             captureSources = captureSources,
-            captureSourceHashes = captureSourceHashes,
+            captureSourceHashes = initialCaptureSourceHashes,
             avatarSha256 = avatarSha256,
         )
         validateStagedCaptureCatalog(
             stagedDirectory = stagedDirectory,
             registry = registry,
             expectedCaptureSources = captureSources,
-            expectedCaptureSourceHashes = captureSourceHashes,
+            expectedCaptureSourceHashes = initialCaptureSourceHashes,
             expectedAvatarSha256 = avatarSha256,
         )
         require(discoverCaptureSources(repositoryRoot) == captureSources) {
             "Marketing capture sources changed while screenshots were rendering."
         }
-        require(captureSourceDigest(repositoryRoot, captureSources) == initialCaptureSourceSha256) {
+        require(captureSourceHashes(repositoryRoot, captureSources) == initialCaptureSourceHashes) {
             "Marketing capture source contents changed while screenshots were rendering."
         }
         require(
@@ -408,19 +407,6 @@ private fun requireSafeRepositoryPath(
     require(path.toRealPath(LinkOption.NOFOLLOW_LINKS).startsWith(realRepositoryRoot)) {
         "Marketing capture input escaped the repository: $label"
     }
-}
-
-private fun captureSourceDigest(
-    repositoryRoot: Path,
-    captureSources: List<String>,
-): String {
-    val sourceDigest = MessageDigest.getInstance("SHA-256")
-    captureSources.forEach { relative ->
-        sourceDigest.update(relative.encodeToByteArray())
-        sourceDigest.update(0.toByte())
-        sourceDigest.update(Files.readAllBytes(repositoryRoot.resolve(relative)))
-    }
-    return sourceDigest.digest().toHex()
 }
 
 private fun captureSourceHashes(

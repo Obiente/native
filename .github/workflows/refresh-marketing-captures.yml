@@ -78,6 +78,9 @@ jobs:
       - name: Regenerate captures
         run: ./gradlew --no-daemon --max-workers=1 :ui:captureMarketingScreenshots
 
+      - name: Verify regenerated captures
+        run: npm run --prefix website verify:captures:fresh
+
       - name: Prepare capture refresh artifact
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
