@@ -1,13 +1,18 @@
 package dev.obiente.nextcloudnative.nativeui.preview
 
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.material3.Typography
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.platform.Font
 import androidx.compose.ui.unit.Density
 import dev.obiente.nextcloudnative.app.MarketingCaptureAssets
-import dev.obiente.nextcloudnative.app.MarketingCaptureScenario
+import dev.obiente.nextcloudnative.app.MarketingCaptureVariant
 import dev.obiente.nextcloudnative.app.NextcloudNativeMarketingCapture
-import dev.obiente.nextcloudnative.app.marketingCaptureScenarios
+import dev.obiente.nextcloudnative.app.design.NextcloudTypography
+import dev.obiente.nextcloudnative.app.marketingCaptureVariants
 import dev.obiente.nextcloudnative.app.registryEntry
 import dev.obiente.nextcloudnative.app.validateMarketingCaptureRegistry
 import java.nio.file.Files
@@ -35,7 +40,7 @@ fun main(arguments: Array<String>) {
         "The capture registry owns every output path and accepts no arguments."
     }
     val repositoryRoot = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize()
-    val registry = marketingCaptureScenarios.map(MarketingCaptureScenario::registryEntry)
+    val registry = marketingCaptureVariants.map(MarketingCaptureVariant::registryEntry)
     validateMarketingCaptureRegistry(registry)
     val captureSources = discoverCaptureSources(repositoryRoot)
     val captureSourceSha256 = captureSourceDigest(repositoryRoot, captureSources)
@@ -59,22 +64,27 @@ fun main(arguments: Array<String>) {
             manifestPath = captureDirectory.resolve("capture-manifest.json"),
             stagedDirectory = stagedDirectory,
         )
-        val outputs = marketingCaptureScenarios.map { scenario ->
-            captureOutputPath(stagedDirectory, scenario.fileName)
+        val outputs = marketingCaptureVariants.map { variant ->
+            captureOutputPath(stagedDirectory, variant.fileName)
         }
         val assets = MarketingCaptureAssets(
             avatar = loadObienteAvatar(),
             mediaPreview = loadMarketingMediaPreview(),
-            services = networkInertMarketingServices(loadRawCaptureFixture()),
+            services = networkInertMarketingServices(
+                fallbackPreviewBytes = loadRawCaptureFixture(),
+                previewBytesByFileId = loadHomepageFilePreviews(repositoryRoot),
+            ),
         )
-        marketingCaptureScenarios.zip(outputs).forEach { (scenario, output) ->
+        val typography = deterministicCaptureTypography(repositoryRoot)
+        marketingCaptureVariants.zip(outputs).forEach { (variant, output) ->
             capture(
                 output = output,
-                width = scenario.width,
-                height = scenario.height,
-                density = Density(scenario.density),
-                scenario = scenario,
+                width = variant.width,
+                height = variant.height,
+                density = Density(variant.density, fontScale = CAPTURE_FONT_SCALE),
+                variant = variant,
                 assets = assets,
+                typography = typography,
             )
         }
         writeCaptureManifest(
@@ -123,12 +133,14 @@ private fun capture(
     width: Int,
     height: Int,
     density: Density,
-    scenario: MarketingCaptureScenario,
+    variant: MarketingCaptureVariant,
     assets: MarketingCaptureAssets,
+    typography: Typography,
 ) {
     Files.createDirectories(output.parent)
-    val rawMediaCapture = RawMediaMarketingCapture.forScenarioOrNull(scenario)
-    val nativeTiffCapture = NativeTiffMarketingCapture.forScenarioOrNull(scenario)
+    val scenario = variant.scenario
+    val rawMediaCapture = RawMediaMarketingCapture.forScenarioOrNull(scenario, variant.id)
+    val nativeTiffCapture = NativeTiffMarketingCapture.forScenarioOrNull(scenario, variant.id)
     check(rawMediaCapture == null || nativeTiffCapture == null) {
         "${scenario.id} cannot use multiple isolated media renderers."
     }
@@ -139,16 +151,32 @@ private fun capture(
         coroutineContext = Dispatchers.Unconfined,
     ) {
         when {
-            rawMediaCapture != null -> rawMediaCapture.Content()
-            nativeTiffCapture != null -> nativeTiffCapture.Content()
-            else -> NextcloudNativeMarketingCapture(scenario, assets)
+            rawMediaCapture != null -> rawMediaCapture.Content(variant.theme.darkTheme, typography)
+            nativeTiffCapture != null -> nativeTiffCapture.Content(variant.theme.darkTheme, typography)
+            else -> NextcloudNativeMarketingCapture(
+                scenario = scenario,
+                assets = assets,
+                darkTheme = variant.theme.darkTheme,
+                typography = typography,
+            )
         }
     }
     try {
-        scene.render().close()
+        val warmUpFrames = if (rawMediaCapture != null || nativeTiffCapture != null) {
+            ISOLATED_MEDIA_WARM_UP_FRAMES
+        } else {
+            CAPTURE_WARM_UP_FRAMES
+        }
+        repeat(warmUpFrames) {
+            scene.render().close()
+        }
         val rendered = scene.render()
-        rawMediaCapture?.verify()
-        nativeTiffCapture?.verify()
+        try {
+            rawMediaCapture?.verify()
+            nativeTiffCapture?.verify()
+        } catch (failure: IllegalStateException) {
+            throw IllegalStateException("${variant.id} capture verification failed.", failure)
+        }
         val encoded = rendered.use {
             requireNotNull(it.encodeToData(EncodedImageFormat.PNG)) {
                 "Compose could not encode ${output.fileName}."
@@ -158,6 +186,55 @@ private fun capture(
     } finally {
         scene.close()
     }
+}
+
+private const val CAPTURE_WARM_UP_FRAMES = 3
+private const val ISOLATED_MEDIA_WARM_UP_FRAMES = 8
+private const val CAPTURE_FONT_SCALE = 1f
+
+internal fun deterministicCaptureTypography(repositoryRoot: Path): Typography {
+    val fontDirectory = repositoryRoot.resolve(
+        "ui/src/desktopMain/resources/marketing/fonts",
+    )
+    val fontFamily = FontFamily(
+        Font(fontDirectory.resolve("NotoSans-Regular.ttf").toFile(), FontWeight.Normal),
+        Font(fontDirectory.resolve("NotoSans-Medium.ttf").toFile(), FontWeight.Medium),
+        Font(fontDirectory.resolve("NotoSans-SemiBold.ttf").toFile(), FontWeight.SemiBold),
+        Font(fontDirectory.resolve("NotoSans-Bold.ttf").toFile(), FontWeight.Bold),
+    )
+    fun androidx.compose.ui.text.TextStyle.pinned() = copy(fontFamily = fontFamily)
+    return NextcloudTypography.copy(
+        displayLarge = NextcloudTypography.displayLarge.pinned(),
+        displayMedium = NextcloudTypography.displayMedium.pinned(),
+        displaySmall = NextcloudTypography.displaySmall.pinned(),
+        headlineLarge = NextcloudTypography.headlineLarge.pinned(),
+        headlineMedium = NextcloudTypography.headlineMedium.pinned(),
+        headlineSmall = NextcloudTypography.headlineSmall.pinned(),
+        titleLarge = NextcloudTypography.titleLarge.pinned(),
+        titleMedium = NextcloudTypography.titleMedium.pinned(),
+        titleSmall = NextcloudTypography.titleSmall.pinned(),
+        bodyLarge = NextcloudTypography.bodyLarge.pinned(),
+        bodyMedium = NextcloudTypography.bodyMedium.pinned(),
+        bodySmall = NextcloudTypography.bodySmall.pinned(),
+        labelLarge = NextcloudTypography.labelLarge.pinned(),
+        labelMedium = NextcloudTypography.labelMedium.pinned(),
+        labelSmall = NextcloudTypography.labelSmall.pinned(),
+        displayLargeEmphasized = NextcloudTypography.displayLargeEmphasized.pinned(),
+        displayMediumEmphasized = NextcloudTypography.displayMediumEmphasized.pinned(),
+        displaySmallEmphasized = NextcloudTypography.displaySmallEmphasized.pinned(),
+        headlineLargeEmphasized = NextcloudTypography.headlineLargeEmphasized.pinned(),
+        headlineMediumEmphasized = NextcloudTypography.headlineMediumEmphasized.pinned(),
+        headlineSmallEmphasized = NextcloudTypography.headlineSmallEmphasized.pinned(),
+        titleLargeEmphasized = NextcloudTypography.titleLargeEmphasized.pinned(),
+        titleMediumEmphasized = NextcloudTypography.titleMediumEmphasized.pinned(),
+        titleSmallEmphasized = NextcloudTypography.titleSmallEmphasized.pinned(),
+        bodyLargeEmphasized = NextcloudTypography.bodyLargeEmphasized.pinned(),
+        bodyMediumEmphasized = NextcloudTypography.bodyMediumEmphasized.pinned(),
+        bodySmallEmphasized = NextcloudTypography.bodySmallEmphasized.pinned(),
+        labelLargeEmphasized = NextcloudTypography.labelLargeEmphasized.pinned(),
+        labelMediumEmphasized = NextcloudTypography.labelMediumEmphasized.pinned(),
+        labelSmallEmphasized = NextcloudTypography.labelSmallEmphasized.pinned(),
+    )
 }
 
 private fun loadObienteAvatar(): ImageBitmap {
@@ -170,6 +247,14 @@ private fun loadObienteAvatar(): ImageBitmap {
 private fun loadMarketingMediaPreview(): ImageBitmap =
     Image.makeFromEncoded(loadRawCaptureFixture()).toComposeImageBitmap()
 
+private fun loadHomepageFilePreviews(repositoryRoot: Path): Map<Long, ByteArray> = mapOf(
+    5_101L to "website/public/demo-media/field-notes.webp",
+    5_102L to "website/public/demo-media/forest-trail.webp",
+    5_103L to "website/public/demo-media/north-sea.webp",
+).mapValues { (_, relativePath) ->
+    Files.readAllBytes(repositoryRoot.resolve(relativePath))
+}
+
 private fun writeCaptureManifest(
     captureDirectory: Path,
     outputs: List<Path>,
@@ -178,11 +263,14 @@ private fun writeCaptureManifest(
     avatarSha256: String,
 ) {
     val captures = buildJsonArray {
-        marketingCaptureScenarios.zip(outputs).forEach { (scenario, output) ->
+        marketingCaptureVariants.zip(outputs).forEach { (variant, output) ->
+            val scenario = variant.scenario
             add(
                 buildJsonObject {
-                    put("scenario", scenario.id)
-                    put("file", scenario.fileName)
+                    put("scenario", variant.id)
+                    put("baseScenario", variant.baseScenario)
+                    put("file", variant.fileName)
+                    put("theme", variant.theme.manifestValue)
                     put("width", scenario.width)
                     put("height", scenario.height)
                     put("density", scenario.density)
@@ -200,7 +288,7 @@ private fun writeCaptureManifest(
         }
     }
     val manifest = buildJsonObject {
-        put("schemaVersion", 2)
+        put("schemaVersion", 3)
         put("renderer", "Compose ImageComposeScene")
         put("identity", "Obiente")
         put("cloudIdentity", "Nextcloud")
@@ -224,7 +312,7 @@ private fun writeCaptureManifest(
             .jsonObject
             .getValue("captures")
             .jsonArray
-            .size == marketingCaptureScenarios.size,
+            .size == marketingCaptureVariants.size,
     ) {
         "Capture manifest did not retain every registered scenario."
     }

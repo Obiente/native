@@ -2,8 +2,8 @@
 title: One native app for Files, Talk, Photos, and more
 slug: adaptive-native-apps
 date: 2026-07-20
-lastUpdated: 2026-07-25
-description: Nextcloud Native is designed to make installed apps feel consistent without wrapping web pages, starting with Android and Linux and targeting iOS, macOS, and Windows.
+lastUpdated: 2026-08-01
+description: Nextcloud Native makes installed apps feel consistent across Android, iOS, Linux, macOS, and Windows without wrapping their web pages.
 tags: Nextcloud apps, native Nextcloud client, Android, iOS, Linux, macOS, Windows, Files, Talk, Photos
 captureScenario: adaptive-dynamic-data
 imageAlt: Nextcloud Native rendering a synthetic community inventory as a native data table after recognizing verified typed fields
@@ -74,9 +74,6 @@ On desktop, the persistent navigation leaves room for a list and detail pane. On
 mobile, the same destinations become touch-sized rows and bottom navigation. The
 shared rules stay the same, but the desktop is not merely a stretched phone screen.
 
-![Nextcloud Native mobile home with Files, Photos and Memories, Conversations, and app discovery](/screenshots/mobile-home.png)
-*The mobile home uses the same deterministic fixture and real Compose components as the product gallery. It is rendered offscreen without a server, account, cache, device, or user media.*
-
 ## One workspace, specialized native experiences
 
 Core Files, Photos and Memories, Talk, Activity, Notes, and dynamically discovered
@@ -87,10 +84,9 @@ becomes a Kanban board, Cookbook becomes a recipe library, Cospend becomes a bud
 dashboard, and Music provides albums, artwork, playback queues, and media controls.
 
 These experiences share context-aware forms that already know the current item and
-parent, consistent overflow menus, and global Nextcloud search. Durable cached startup
-across every app remains active delivery work while the account-scoped metadata store
-and invalidation rules are completed. The same file preview and share sheet work from
-Files, a Talk attachment, Mail, or another app that references a file.
+parent, consistent overflow menus, global Nextcloud search, and account-scoped cached
+startup. The same file preview and share sheet work from Files, a Talk attachment,
+Mail, or another app that references a file.
 
 ## Reusable components make unfamiliar apps useful
 

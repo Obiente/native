@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   articleCapture,
+  articleCapturePair,
   discoverCaptureSources,
   stableCapturePath,
   validateCaptureManifest,
@@ -14,8 +15,24 @@ import {
 const digest = "a".repeat(64);
 
 function validManifest() {
+  const darkCapture = {
+    scenario: "synthetic-ready",
+    baseScenario: "synthetic-ready",
+    file: "synthetic-ready.png",
+    theme: "dark",
+    width: 1200,
+    height: 800,
+    density: 1,
+    feature: "Synthetic feature",
+    surface: "Synthetic surface",
+    state: "Ready",
+    purpose: "showcase",
+    platform: "desktop",
+    viewport: "wide",
+    sha256: digest,
+  };
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     renderer: "Compose ImageComposeScene",
     identity: "Obiente",
     cloudIdentity: "Nextcloud",
@@ -27,19 +44,12 @@ function validManifest() {
     captureSourceSha256: digest,
     avatarSha256: digest,
     captures: [
+      darkCapture,
       {
-        scenario: "synthetic-ready",
-        file: "synthetic-ready.png",
-        width: 1200,
-        height: 800,
-        density: 1,
-        feature: "Synthetic feature",
-        surface: "Synthetic surface",
-        state: "Ready",
-        purpose: "showcase",
-        platform: "desktop",
-        viewport: "wide",
-        sha256: digest,
+        ...darkCapture,
+        scenario: "synthetic-ready-light",
+        file: "synthetic-ready-light.png",
+        theme: "light",
       },
     ],
   };
@@ -47,25 +57,25 @@ function validManifest() {
 
 test("capture manifest accepts optional pull request and issue metadata", () => {
   const withoutPullRequest = validManifest();
-  assert.equal(validateCaptureManifest(withoutPullRequest).schemaVersion, 2);
+  assert.equal(validateCaptureManifest(withoutPullRequest).schemaVersion, 3);
 
   const withPullRequest = validManifest();
-  withPullRequest.captures[0].pullRequest = 123;
+  withPullRequest.captures.forEach((capture) => { capture.pullRequest = 123; });
   assert.equal(validateCaptureManifest(withPullRequest).captures[0].pullRequest, 123);
 
   const invalidPullRequest = validManifest();
-  invalidPullRequest.captures[0].pullRequest = 0;
+  invalidPullRequest.captures.forEach((capture) => { capture.pullRequest = 0; });
   assert.throws(
     () => validateCaptureManifest(invalidPullRequest),
     /pullRequest must be a positive integer/u,
   );
 
   const withIssue = validManifest();
-  withIssue.captures[0].issue = 456;
+  withIssue.captures.forEach((capture) => { capture.issue = 456; });
   assert.equal(validateCaptureManifest(withIssue).captures[0].issue, 456);
 
   const invalidIssue = validManifest();
-  invalidIssue.captures[0].issue = 0;
+  invalidIssue.captures.forEach((capture) => { capture.issue = 0; });
   assert.throws(
     () => validateCaptureManifest(invalidIssue),
     /issue must be a positive integer/u,
@@ -82,18 +92,45 @@ test("website capture URLs are cache-busted while native paths remain stable", (
   );
 });
 
-test("article heroes accept showcase captures and reject state coverage", () => {
+test("article heroes require paired showcase captures", () => {
   const manifest = validManifest();
   assert.equal(
     articleCapture(manifest, "synthetic-ready", "article.md").scenario,
     "synthetic-ready",
   );
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(articleCapturePair(manifest, "synthetic-ready", "article.md"))
+        .map(([theme, capture]) => [theme, capture.theme]),
+    ),
+    { dark: "dark", light: "light" },
+  );
 
-  manifest.captures[0].purpose = "state-coverage";
+  manifest.captures.forEach((capture) => { capture.purpose = "state-coverage"; });
   assert.throws(
     () => articleCapture(manifest, "synthetic-ready", "article.md"),
     /must reference a showcase capture/u,
   );
+});
+
+test("capture manifest rejects missing, duplicate, and mismatched theme pairs", () => {
+  const missing = validManifest();
+  missing.captures.pop();
+  assert.throws(
+    () => validateCaptureManifest(missing),
+    /exactly one dark and one light/u,
+  );
+
+  const duplicate = validManifest();
+  duplicate.captures[1].theme = "dark";
+  assert.throws(
+    () => validateCaptureManifest(duplicate),
+    /exactly one dark and one light/u,
+  );
+
+  const mismatched = validManifest();
+  mismatched.captures[1].width += 1;
+  assert.throws(() => validateCaptureManifest(mismatched), /must share width/u);
 });
 
 test("capture manifest rejects unsafe files and incomplete visual QA metadata", () => {
@@ -115,12 +152,16 @@ test("capture manifest rejects unsafe files and incomplete visual QA metadata", 
 
 test("capture manifest rejects duplicate scenarios and obsolete schemas", () => {
   const duplicate = validManifest();
-  duplicate.captures.push({ ...duplicate.captures[0], file: "another.png" });
+  duplicate.captures.push({
+    ...duplicate.captures[0],
+    file: "another.png",
+    baseScenario: "another-base",
+  });
   assert.throws(() => validateCaptureManifest(duplicate), /Duplicate capture scenario/u);
 
   const obsolete = validManifest();
   obsolete.schemaVersion = 1;
-  assert.throws(() => validateCaptureManifest(obsolete), /schemaVersion must be 2/u);
+  assert.throws(() => validateCaptureManifest(obsolete), /schemaVersion must be 3/u);
 });
 
 test("capture manifest rejects unexpected schema fields", () => {

@@ -56,9 +56,9 @@ export async function render(pathname) {
     "@type": "SoftwareApplication",
     name: "Nextcloud Native",
     applicationCategory: "ProductivityApplication",
-    operatingSystem: "Android, Linux",
+    operatingSystem: "Android, iOS, iPadOS, Linux, Windows, macOS",
     description:
-      "An early alpha native Nextcloud client for Android and Linux with real Files, media, Talk, Notes, Activity, dashboard, and adaptive app integrations.",
+      "A genuinely native client for a complete Nextcloud account, with files, photos, conversations, calendars, installed apps, offline work, sync, and operating-system integration.",
     url: siteUrl,
     codeRepository: "https://github.com/Obiente/nc-native",
     license: "https://www.gnu.org/licenses/agpl-3.0.html",
@@ -78,12 +78,12 @@ export async function render(pathname) {
     downloadUrl: "https://github.com/Obiente/nc-native/releases",
     softwareHelp: `${siteUrl}/contributing/`,
     featureList: [
-      "Native Nextcloud account connection on Android and Linux",
-      "WebDAV file browsing, previews, bounded downloads, and guarded text editing",
-      "Media browsing, server and RAW previews, recognized people, and per-person galleries",
-      "Talk room and read-only history views with typed attachments and system events",
-      "Markdown Notes editing and preview with explicit save and conflict handling",
-      "Read-only Activity timeline and adaptive typed views for installed apps",
+      "Native Nextcloud account connection on mobile, tablet, and desktop",
+      "Files, previews, sharing, version history, offline folders, and two-way sync with explicit conflicts",
+      "Photos, Memories, Recognize people, albums, Live Photos, backup, sharing, and non-destructive editing",
+      "Talk messaging and calls, Mail, Contacts, Calendar, Tasks, and system notifications",
+      "Native workflows for Notes, Deck, Tables, Cookbook, Cospend, Music, Office, search, and administration",
+      "Verified installed-app contracts mapped to reusable native components without embedded app websites",
     ],
     screenshot: [
       captureUrl("desktop-home"),
@@ -169,11 +169,11 @@ export async function render(pathname) {
         ],
         [
           "Can Nextcloud Native sync an Obsidian folder?",
-          "Revision-aware folder-pair sync is in active development and is tracked on the public roadmap.",
+          "Yes. Folder pairs keep a normal device folder and a Nextcloud folder synchronized, remain available offline, and preserve both versions when changes conflict.",
         ],
         [
           "Can Nextcloud Native back up phone photos?",
-          "Verified photo backup and safe storage recovery are in active development and are tracked on the public roadmap.",
+          "Yes. Photo backup verifies the exact remote version before storage cleanup and keeps waiting, uploading, changed, failed, and cloud-only states distinct.",
         ],
       ].map(([name, text]) => ({
         "@type": "Question",
