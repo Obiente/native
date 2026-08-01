@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.testing.Test
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -103,6 +105,13 @@ val verifyNoBraceRegexInCommonMain by tasks.registering {
 tasks.configureEach {
     if (name.startsWith("compile") && name.contains("Kotlin", ignoreCase = true)) {
         dependsOn(verifyNoBraceRegexInCommonMain)
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    testLogging {
+        events("failed")
+        exceptionFormat = TestExceptionFormat.FULL
     }
 }
 
