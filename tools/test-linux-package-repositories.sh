@@ -20,6 +20,43 @@ python3 "$project_root/tools/render-linux-appstream-metadata.py" \
     "$project_root/release/linux/dev.obiente.nextcloudnative.metainfo.xml" \
     "$fixture_metadata" 1.2.3 1.2.3 2026-08-01
 
+older_metadata="$temporary/renamed-z-older.metainfo.xml"
+newer_metadata="$temporary/renamed-a-newer.metainfo.xml"
+python3 "$project_root/tools/render-linux-appstream-metadata.py" \
+    "$project_root/release/linux/dev.obiente.nextcloudnative.metainfo.xml" \
+    "$older_metadata" 1.9.0 1.9.0 2026-07-31
+python3 "$project_root/tools/render-linux-appstream-metadata.py" \
+    "$project_root/release/linux/dev.obiente.nextcloudnative.metainfo.xml" \
+    "$newer_metadata" 2.0.0 2.0.0 2026-08-01
+python3 - "$older_metadata" "$newer_metadata" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+for path, summary in zip(sys.argv[1:], ("Older metadata", "Newer metadata"), strict=True):
+    tree = ET.parse(path)
+    tree.getroot().find("summary").text = summary
+    tree.write(path, encoding="UTF-8", xml_declaration=True)
+PY
+version_catalog="$temporary/version-ordered-catalog.xml"
+python3 "$project_root/tools/build-appstream-catalog.py" \
+    "$version_catalog" nextcloud-native-test \
+    2.0.0 "$newer_metadata" \
+    1.9.0 "$older_metadata"
+python3 - "$version_catalog" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+component = ET.parse(sys.argv[1]).getroot().find("component")
+assert component is not None
+assert component.findtext("summary") == "Newer metadata"
+versions = [release.attrib["version"] for release in component.findall("./releases/release")]
+assert versions[:2] == [
+    "2.0.0",
+    "1.9.0",
+]
+assert versions.index("2.0.0") < versions.index("1.9.0")
+PY
+
 for package_name in nextcloudnative nextcloud-native-vfs; do
     deb_root="$temporary/deb-$package_name"
     mkdir -p "$deb_root/DEBIAN" "$deb_root/usr/share/$package_name"
@@ -149,16 +186,20 @@ apt-get \
 
 grep -Fq 'gpgcheck=1' "$output/nextcloud-native.repo"
 grep -Fq 'repo_gpgcheck=1' "$output/nextcloud-native.repo"
-gzip --decompress --stdout "$output/rpm/x86_64/repodata/primary.xml.gz" |
+grep -Fq 'baseurl=https://packages.example.invalid/rpm/prerelease/$basearch' \
+    "$output/nextcloud-native.repo"
+grep -Fq 'gpgkey=file:///etc/pki/rpm-gpg/NEXTCLOUD-NATIVE-REPOSITORY' \
+    "$output/nextcloud-native.repo"
+gzip --decompress --stdout "$output/rpm/prerelease/x86_64/repodata/primary.xml.gz" |
     grep -Fq '<name>nextcloudnative</name>'
-gzip --decompress --stdout "$output/rpm/x86_64/repodata/primary.xml.gz" |
+gzip --decompress --stdout "$output/rpm/prerelease/x86_64/repodata/primary.xml.gz" |
     grep -Fq '<name>nextcloud-native-vfs</name>'
-if [[ -e "$output/rpm/noarch" ]]; then
+if [[ -e "$output/rpm/prerelease/noarch" || -e "$output/rpm/x86_64" ]]; then
     printf 'Architecture-independent RPMs must be published in concrete repositories.\n' >&2
     exit 1
 fi
-grep -Fq 'type="appstream"' "$output/rpm/x86_64/repodata/repomd.xml"
-rpm_appstream_href="$(python3 - "$output/rpm/x86_64/repodata/repomd.xml" <<'PY'
+grep -Fq 'type="appstream"' "$output/rpm/prerelease/x86_64/repodata/repomd.xml"
+rpm_appstream_href="$(python3 - "$output/rpm/prerelease/x86_64/repodata/repomd.xml" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 
@@ -170,14 +211,14 @@ print(entries[0].attrib["href"])
 PY
 )"
 [[ "$rpm_appstream_href" =~ ^repodata/[A-Za-z0-9._-]+\.gz$ ]]
-rpm_appstream_catalog="$output/rpm/x86_64/$rpm_appstream_href"
+rpm_appstream_catalog="$output/rpm/prerelease/x86_64/$rpm_appstream_href"
 gzip --decompress --stdout "$rpm_appstream_catalog" |
     grep -Fq '<id>dev.obiente.nextcloudnative</id>'
 gzip --decompress --stdout "$rpm_appstream_catalog" |
     grep -Fq '<release version="1.2.3"'
 gpg --batch --verify \
-    "$output/rpm/x86_64/repodata/repomd.xml.asc" \
-    "$output/rpm/x86_64/repodata/repomd.xml" >/dev/null 2>&1
+    "$output/rpm/prerelease/x86_64/repodata/repomd.xml.asc" \
+    "$output/rpm/prerelease/x86_64/repodata/repomd.xml" >/dev/null 2>&1
 
 rpm_database="$temporary/rpm-database"
 mkdir -p "$rpm_database"
@@ -188,6 +229,16 @@ while IFS= read -r -d '' package; do
 done < <(find "$output/rpm" -type f -name '*.rpm' -print0)
 
 test -s "$output/SHA256SUMS"
+nightly_output="$temporary/nightly-repository"
+"$project_root/tools/build-linux-package-repositories.sh" \
+    "$packages" "$nightly_output" nightly https://packages.example.invalid >/dev/null
+test -d "$nightly_output/rpm/nightly/x86_64/repodata"
+if [[ -e "$nightly_output/rpm/prerelease" ]]; then
+    printf 'RPM repository output leaked across release channels.\n' >&2
+    exit 1
+fi
+grep -Fq 'baseurl=https://packages.example.invalid/rpm/nightly/$basearch' \
+    "$nightly_output/nextcloud-native.repo"
 if "$project_root/tools/build-linux-package-repositories.sh" \
     "$packages" "$output" prerelease https://packages.example.invalid \
     >"$temporary/reuse-output" 2>&1; then

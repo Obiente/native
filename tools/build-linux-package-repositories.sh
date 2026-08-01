@@ -187,7 +187,7 @@ Architectures: $architectures
 Signed-By: /etc/apt/keyrings/nextcloud-native.asc
 EOF
 
-rpm_root="$output_directory/rpm"
+rpm_root="$output_directory/rpm/$channel"
 declare -A rpm_architectures=()
 declare -A rpm_package_architectures=()
 for package in "${rpm_packages[@]}"; do
@@ -284,11 +284,11 @@ done
 cat >"$output_directory/nextcloud-native.repo" <<EOF
 [nextcloud-native-$channel]
 name=Nextcloud Native ($channel)
-baseurl=$repository_url/rpm/\$basearch
+baseurl=$repository_url/rpm/$channel/\$basearch
 enabled=1
 gpgcheck=1
 repo_gpgcheck=1
-gpgkey=$repository_url/keys/nextcloud-native.asc
+gpgkey=file:///etc/pki/rpm-gpg/NEXTCLOUD-NATIVE-REPOSITORY
 metadata_expire=6h
 EOF
 

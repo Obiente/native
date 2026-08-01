@@ -60,14 +60,36 @@ repository pointer only after the complete snapshot is available.
 
 ## Client configuration
 
-APT clients install the exported certificate as
-`/etc/apt/keyrings/nextcloud-native.asc`, install the generated
+Do not trust a certificate fetched only from the package origin. Before a
+channel is made public, its full 40-character signing fingerprint must also be
+published in the corresponding release at
+`https://github.com/Obiente/nc-native/releases`. That GitHub-hosted value is the
+independently authenticated expected fingerprint. Download the certificate to
+a temporary file, inspect it locally, and compare the complete value before
+installing it:
+
+```bash
+expected_fingerprint=FULL_FINGERPRINT_FROM_THE_GITHUB_RELEASE
+curl --fail --proto '=https' --tlsv1.2 \
+  --output nextcloud-native.asc \
+  https://packages.nc-native.obiente.dev/keys/nextcloud-native.asc
+actual_fingerprint="$(
+  gpg --batch --show-keys --with-colons nextcloud-native.asc |
+    awk -F: '$1 == "fpr" { print toupper($10); exit }'
+)"
+test "$actual_fingerprint" = "$expected_fingerprint"
+```
+
+Stop if the values differ. APT clients then install the verified certificate
+as `/etc/apt/keyrings/nextcloud-native.asc`, install the generated
 `nextcloud-native.sources` file as
 `/etc/apt/sources.list.d/nextcloud-native.sources`, and run `apt update`.
 
-DNF clients install the generated `nextcloud-native.repo` file as
-`/etc/yum.repos.d/nextcloud-native.repo`. Both package and repository-metadata
-signature checking are enabled.
+DNF clients install the same verified certificate as
+`/etc/pki/rpm-gpg/NEXTCLOUD-NATIVE-REPOSITORY`, then install the generated
+`nextcloud-native.repo` file as `/etc/yum.repos.d/nextcloud-native.repo`. The
+generated configuration references that local certificate. Both package and
+repository-metadata signature checking are enabled.
 
 The public origin must serve files byte-for-byte over HTTPS and preserve the
 repository paths. Do not use GitHub Pages for the package payloads: the current

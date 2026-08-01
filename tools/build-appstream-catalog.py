@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import copy
+import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -22,6 +23,16 @@ records = list(zip(sys.argv[3::2], sys.argv[4::2], strict=True))
 if not origin or any(ord(character) < 0x20 for character in origin):
     fail("AppStream catalog origin must be non-empty text without control characters.")
 
+def version_key(version: str) -> tuple[tuple[int, object], ...]:
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_~-]*", version):
+        fail(f"AppStream package version is invalid: {version}")
+    return tuple(
+        (1, int(part)) if part.isdigit() else (0, part.lower())
+        for part in re.split(r"([0-9]+)", version)
+        if part
+    )
+
+
 components = []
 for package_version, metadata_name in records:
     metadata = Path(metadata_name)
@@ -37,13 +48,14 @@ for package_version, metadata_name in records:
         for release in component.findall("./releases/release")
     ):
         fail(f"AppStream metadata does not describe package version {package_version}: {metadata}")
-    components.append(component)
+    components.append((package_version, component))
 
-component_ids = {component.findtext("id") for component in components}
+component_ids = {component.findtext("id") for _, component in components}
 if component_ids != {"dev.obiente.nextcloudnative"}:
     fail("AppStream metadata contains unexpected or conflicting component IDs.")
 
-catalog_component = copy.deepcopy(components[-1])
+components.sort(key=lambda record: version_key(record[0]))
+catalog_component = copy.deepcopy(components[-1][1])
 metadata_license = catalog_component.find("metadata_license")
 if metadata_license is not None:
     catalog_component.remove(metadata_license)
@@ -52,13 +64,16 @@ if catalog_releases is None:
     catalog_releases = ET.SubElement(catalog_component, "releases")
 catalog_releases.clear()
 seen_versions = set()
-for component in reversed(components):
+releases = []
+for _, component in components:
     for release in component.findall("./releases/release"):
         version = release.attrib.get("version")
         if not version or version in seen_versions:
             continue
-        catalog_releases.append(copy.deepcopy(release))
+        releases.append((version, copy.deepcopy(release)))
         seen_versions.add(version)
+for _, release in sorted(releases, key=lambda record: version_key(record[0]), reverse=True):
+    catalog_releases.append(release)
 
 catalog = ET.Element("components", {"version": "1.0", "origin": origin})
 catalog.append(catalog_component)
