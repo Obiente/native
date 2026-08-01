@@ -135,7 +135,7 @@ internal fun validateStagedCaptureCatalog(
     ) {
         "The staged capture manifest has an unexpected top-level schema."
     }
-    require(manifest.getInt("schemaVersion") == 2)
+    require(manifest.getInt("schemaVersion") == 3)
     require(manifest.getString("renderer") == "Compose ImageComposeScene")
     require(manifest.getString("identity") == "Obiente")
     require(manifest.getString("cloudIdentity") == "Nextcloud")
@@ -160,7 +160,9 @@ internal fun validateStagedCaptureCatalog(
             addAll(
                 listOf(
                     "scenario",
+                    "baseScenario",
                     "file",
+                    "theme",
                     "width",
                     "height",
                     "density",
@@ -180,7 +182,9 @@ internal fun validateStagedCaptureCatalog(
             "${entry.id} has unexpected or missing manifest fields."
         }
         require(capture.getString("scenario") == entry.id)
+        require(capture.getString("baseScenario") == entry.baseScenario)
         require(capture.getString("file") == entry.fileName)
+        require(capture.getString("theme") == entry.theme)
         require(capture.getInt("width") == entry.width)
         require(capture.getInt("height") == entry.height)
         require(capture.getDouble("density") == entry.density.toDouble())

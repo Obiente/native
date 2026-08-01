@@ -14,8 +14,48 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class MarketingCaptureOwnershipTest {
+    @Test
+    fun `capture typography is repository owned and weight stable`() {
+        val workingDirectory = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize()
+        val repositoryRoot = if (Files.exists(workingDirectory.resolve("tools/marketing-capture-inputs.txt"))) {
+            workingDirectory
+        } else {
+            requireNotNull(workingDirectory.parent)
+        }
+        val typography = deterministicCaptureTypography(repositoryRoot)
+        val standardStyles = listOf(
+            typography.displayLarge,
+            typography.displayMedium,
+            typography.displaySmall,
+            typography.headlineLarge,
+            typography.headlineMedium,
+            typography.headlineSmall,
+            typography.titleLarge,
+            typography.titleMedium,
+            typography.titleSmall,
+            typography.bodyLarge,
+            typography.bodyMedium,
+            typography.bodySmall,
+            typography.labelLarge,
+            typography.labelMedium,
+            typography.labelSmall,
+        )
+        val fontFamily = assertNotNull(standardStyles.first().fontFamily)
+        assertTrue(standardStyles.all { style -> style.fontFamily == fontFamily })
+
+        val captureSources = discoverCaptureSources(repositoryRoot)
+        listOf("Regular", "Medium", "SemiBold", "Bold").forEach { weight ->
+            assertTrue(
+                "ui/src/desktopMain/resources/marketing/fonts/NotoSans-$weight.ttf" in captureSources,
+            )
+        }
+        assertTrue("ui/src/desktopMain/resources/marketing/fonts/OFL.txt" in captureSources)
+    }
+
     @Test
     fun `preservation requires an explicit allowlist and rejects symlinks`() {
         withTemporaryDirectory("capture-preservation") { parent ->
@@ -196,7 +236,9 @@ class MarketingCaptureOwnershipTest {
 
     private fun registryEntry() = MarketingCaptureRegistryEntry(
         id = "capture",
+        baseScenario = "capture",
         fileName = "capture.png",
+        theme = "dark",
         feature = "Files",
         surface = "Browser",
         state = "Ready",
@@ -220,7 +262,7 @@ class MarketingCaptureOwnershipTest {
             directory.resolve("capture-manifest.json"),
             """
                 {
-                  "schemaVersion": 2,
+                  "schemaVersion": 3,
                   "renderer": "Compose ImageComposeScene",
                   "identity": "Obiente",
                   "cloudIdentity": "Nextcloud",
@@ -230,7 +272,9 @@ class MarketingCaptureOwnershipTest {
                   "avatarSha256": "${"2".repeat(64)}",
                   "captures": [{
                     "scenario": "${entry.id}",
+                    "baseScenario": "${entry.baseScenario}",
                     "file": "${entry.fileName}",
+                    "theme": "${entry.theme}",
                     "width": ${entry.width},
                     "height": ${entry.height},
                     "density": ${entry.density},

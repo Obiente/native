@@ -27,6 +27,7 @@ import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayPopup
 import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
 import dev.obiente.nextcloudnative.app.NextcloudNativeApp
 import dev.obiente.nextcloudnative.app.ThemePreference
+import dev.obiente.nextcloudnative.app.applyDesktopNativeWindowFrame
 import dev.obiente.nextcloudnative.app.tooltip
 import dev.obiente.nextcloudnative.app.unregisterWindowsCloudFilesRootForUninstall
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
@@ -185,6 +186,7 @@ fun main(arguments: Array<String>) {
         state = rememberWindowState(width = 1_280.dp, height = 820.dp),
     ) {
         SideEffect {
+            applyDesktopNativeWindowFrame(window, darkTheme)
             window.background = java.awt.Color(background.toArgb(), true)
             window.minimumSize = java.awt.Dimension(960, 640)
         }

@@ -15,6 +15,8 @@ import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 internal val photoFolderCaptureScenarios: List<MarketingCaptureScenario> = listOf(
     MarketingCaptureScenario.PhotoFolderBrowserMobile,
     MarketingCaptureScenario.PhotoFolderBrowserDesktop,
+    MarketingCaptureScenario.HomepagePhotosDesktopDark,
+    MarketingCaptureScenario.HomepagePhotosDesktopLight,
 )
 
 @Composable

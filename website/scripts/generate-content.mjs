@@ -26,7 +26,7 @@ import {
   validateArchivedReleaseHistory,
 } from "../../tools/changelog-fragments.mjs";
 import {
-  articleCapture,
+  articleCapturePair,
   stableCapturePath,
   validateCaptureManifest,
   websiteCapturePath,
@@ -280,8 +280,13 @@ const news = await Promise.all(
     const { metadata, body } = parseNewsFrontmatter(source, file);
     const text = textOnly(body);
     const articleBody = normalizeNewsArticleBody(body, metadata.title);
-    const capture = articleCapture(captureManifest, metadata.captureScenario, file);
-    const image = stableCapturePath(capture);
+    const capturePair = articleCapturePair(
+      captureManifest,
+      metadata.captureScenario,
+      file,
+    );
+    const imageDark = stableCapturePath(capturePair.dark);
+    const imageLight = stableCapturePath(capturePair.light);
     return {
       file,
       path: `/news/${metadata.slug}/`,
@@ -291,13 +296,19 @@ const news = await Promise.all(
       date: metadata.date,
       lastUpdated: metadata.lastUpdated,
       tags: metadata.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
-      captureScenario: capture.scenario,
-      image,
-      websiteImage: websiteCapturePath(captureManifest, capture),
+      captureScenario: capturePair.dark.baseScenario,
+      captureScenarioDark: capturePair.dark.scenario,
+      captureScenarioLight: capturePair.light.scenario,
+      image: imageDark,
+      imageDark,
+      imageLight,
+      websiteImage: websiteCapturePath(captureManifest, capturePair.dark),
+      websiteImageDark: websiteCapturePath(captureManifest, capturePair.dark),
+      websiteImageLight: websiteCapturePath(captureManifest, capturePair.light),
       imageAlt: metadata.imageAlt,
       imageCaption: metadata.imageCaption,
-      imageWidth: capture.width,
-      imageHeight: capture.height,
+      imageWidth: capturePair.dark.width,
+      imageHeight: capturePair.dark.height,
       html: markdown.render(articleBody),
       text,
       headings: headingsFrom(articleBody),
@@ -359,12 +370,12 @@ await writeFile(
 const searchIndex = [
   {
     path: "/",
-    title: "Nextcloud Native mobile and desktop client",
+    title: "Nextcloud Native for your complete Nextcloud account",
     shortTitle: "Nextcloud Native",
     description:
-      "Explore the Android and Linux alpha plus the public delivery roadmap for Files, sync, Photos, Memories, Talk, groupware, installed apps, and administration.",
+      "One genuinely native client for Files, sync, Photos, Memories, Talk, groupware, installed apps, administration, and operating-system integration.",
     text:
-      "Android Linux alpha native Nextcloud client public roadmap planned iOS macOS Windows offline cache multiple accounts background sync global search photo backup Live Photos RAW editing Talk calls Obsidian folder sync administration",
+      "Android iOS iPadOS Linux Windows macOS native Nextcloud client Files offline sync multiple accounts background transfer global search photo backup Memories Recognize Live Photos non-destructive editing Talk calls Mail Calendar Contacts Tasks Notes Deck Tables Cookbook Cospend Music Office Obsidian folder sync administration",
     contentType: "Product",
   },
   ...docs.map(({ html, ...doc }) => ({ ...doc, contentType: "Documentation" })),
