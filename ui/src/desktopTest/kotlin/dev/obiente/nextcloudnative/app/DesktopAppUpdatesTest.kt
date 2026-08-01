@@ -14,29 +14,25 @@ import kotlin.test.assertIs
 
 class DesktopAppUpdatesTest {
     @Test
-    fun rpmUpdatesUseAnAuthorizedNativePackageManagerWithoutShellParsing() {
+    fun linuxUpdatesUseAnAuthorizedPackageServiceWithoutShellParsing() {
         val packageFile = File("/tmp/update path;still-one-argument.rpm")
-        val pkexec = File("/usr/bin/pkexec")
-        val dnf5 = File("/usr/bin/dnf5")
+        val packageKit = File("/usr/bin/pkcon")
 
         assertEquals(
             listOf(
-                pkexec.absolutePath,
-                "--disable-internal-agent",
-                dnf5.absolutePath,
-                "--assumeyes",
-                "install",
-                "--no-allow-downgrade",
+                packageKit.absolutePath,
+                "--noninteractive",
+                "install-local",
                 packageFile.toPath().toAbsolutePath().normalize().toString(),
             ),
-            linuxNativePackageInstallerCommand(packageFile) { executable ->
-                executable == pkexec || executable == dnf5
-            },
+            linuxNativePackageInstallerCommand(packageFile) { executable -> executable == packageKit },
         )
-        assertNull(linuxNativePackageInstallerCommand(packageFile) { executable -> executable == dnf5 })
-        assertNull(
-            linuxNativePackageInstallerCommand(File("/tmp/nextcloudnative.deb")) { true },
+        assertEquals(
+            "install-local",
+            linuxNativePackageInstallerCommand(File("/tmp/nextcloudnative.deb")) { true }?.get(2),
         )
+        assertNull(linuxNativePackageInstallerCommand(packageFile) { false })
+        assertNull(linuxNativePackageInstallerCommand(File("/tmp/nextcloudnative.pkg")) { true })
     }
 
     @Test

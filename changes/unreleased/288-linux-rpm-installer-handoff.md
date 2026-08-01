@@ -4,4 +4,4 @@ pull: none
 platforms: linux
 user-facing: yes
 
-In-app RPM updates now use a fresh system-authorized DNF transaction instead of a stale software-center transaction.
+In-app Linux updates now use a fresh system-authorized package transaction instead of a stale software-center transaction.

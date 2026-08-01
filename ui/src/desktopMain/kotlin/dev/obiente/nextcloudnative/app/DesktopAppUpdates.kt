@@ -595,18 +595,13 @@ internal fun linuxNativePackageInstallerCommand(
     packageFile: File,
     executableAvailable: (File) -> Boolean = { executable -> executable.isFile && executable.canExecute() },
 ): List<String>? {
-    if (!packageFile.name.endsWith(".rpm", ignoreCase = true)) return null
-    val authorizationBroker = File("/usr/bin/pkexec")
-    if (!executableAvailable(authorizationBroker)) return null
-    val packageManager = File("/usr/bin/dnf5")
-    if (!executableAvailable(packageManager)) return null
+    if (packageFile.extension.lowercase() !in DESKTOP_LINUX_PACKAGE_FORMATS) return null
+    val packageKitClient = File("/usr/bin/pkcon")
+    if (!executableAvailable(packageKitClient)) return null
     return listOf(
-        authorizationBroker.absolutePath,
-        "--disable-internal-agent",
-        packageManager.absolutePath,
-        "--assumeyes",
-        "install",
-        "--no-allow-downgrade",
+        packageKitClient.absolutePath,
+        "--noninteractive",
+        "install-local",
         packageFile.toPath().toAbsolutePath().normalize().toString(),
     )
 }
