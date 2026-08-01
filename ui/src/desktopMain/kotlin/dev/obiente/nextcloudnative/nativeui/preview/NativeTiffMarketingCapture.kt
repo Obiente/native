@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.nativeui.preview
 
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.Typography
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffSupport
 import dev.obiente.nextcloudnative.app.MAX_PHOTO_EDIT_SOURCE_BYTES
 import dev.obiente.nextcloudnative.app.MAX_RAW_DISPLAY_PREVIEW_BYTES
@@ -40,8 +41,8 @@ internal class NativeTiffMarketingCapture private constructor(
     )
 
     @Composable
-    fun Content(darkTheme: Boolean) {
-        NextcloudNativeTheme(darkTheme = darkTheme) {
+    fun Content(darkTheme: Boolean, typography: Typography) {
+        NextcloudNativeTheme(darkTheme = darkTheme, typography = typography) {
             NextcloudAppBackground {
                 NextcloudMediaViewer(
                     media = listOf(tiffFile),

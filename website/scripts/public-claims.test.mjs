@@ -28,6 +28,8 @@ test("machine-readable product claims present the stable complete product experi
   assert.doesNotMatch(app, /releases\/latest/);
   assert.match(app, /Your Nextcloud deserves/);
   assert.match(app, /Available for/);
+  assert.match(app, /class="platform-pending"[^>]*>.*<span>macOS<\/span>/);
+  assert.match(app, /class="platform-pending"[^>]*>.*<span>iOS<\/span>/);
   assert.match(app, /AGPL-3\.0-or-later/);
   assert.doesNotMatch(app, /No Obiente account|No hosted intermediary|Obiente never carries your data/);
   assert.match(app, /Built by <strong>Obiente<\/strong>\. Independent and/);

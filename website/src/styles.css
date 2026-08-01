@@ -2780,6 +2780,10 @@ h1 span {
   white-space: nowrap;
 }
 
+.hero-availability .platform-pending {
+  opacity: 0.42;
+}
+
 .hero-availability svg {
   flex: 0 0 auto;
   color: var(--muted);

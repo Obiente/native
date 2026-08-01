@@ -4,6 +4,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -170,6 +171,7 @@ fun isNextcloudDarkTheme(preference: ThemePreference): Boolean = when (preferenc
 @Composable
 fun NextcloudNativeTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    typography: Typography = NextcloudTypography,
     content: @Composable () -> Unit,
 ) {
     val colorScheme = if (darkTheme) NextcloudDarkColorScheme else NextcloudLightColorScheme
@@ -179,7 +181,7 @@ fun NextcloudNativeTheme(
     ) {
         MaterialTheme(
             colorScheme = colorScheme,
-            typography = NextcloudTypography,
+            typography = typography,
             shapes = NextcloudShapes,
             content = content,
         )

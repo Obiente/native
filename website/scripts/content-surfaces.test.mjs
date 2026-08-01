@@ -321,6 +321,10 @@ test("capture freshness tracks renderer build configuration", async () => {
 });
 
 test("visual QA and mobile navigation are driven by registered captures", async () => {
+  const indexHtml = await readFile(
+    path.join(websiteRoot, "index.html"),
+    "utf8",
+  );
   const appSource = await readFile(
     path.join(websiteRoot, "src", "App.vue"),
     "utf8",
@@ -360,7 +364,14 @@ test("visual QA and mobile navigation are driven by registered captures", async 
   assert.match(appSource, /capture\.pullRequest/u);
   assert.match(appSource, /capture\.issue/u);
   assert.match(appSource, /visualQaGroups/u);
-  assert.match(appSource, /const themePreference = ref\("system"\)/u);
+  assert.doesNotMatch(appSource, /class="doc-heading visual-qa-heading"\s+data-reveal/u);
+  assert.doesNotMatch(appSource, /class="visual-qa-group"\s+data-reveal/u);
+  assert.match(indexHtml, /window\.__NEXTCLOUD_NATIVE_THEME__/u);
+  assert.ok(indexHtml.indexOf("__NEXTCLOUD_NATIVE_THEME__") < indexHtml.indexOf("<body>"));
+  assert.match(indexHtml, /localStorage\.getItem\("nextcloud-native-theme"\)/u);
+  assert.match(indexHtml, /document\.documentElement\.dataset\.theme = resolved/u);
+  assert.match(appSource, /const themePreference = ref\(initialTheme\.preference\)/u);
+  assert.match(appSource, /const systemTheme = ref\(initialTheme\.system\)/u);
   assert.match(appSource, /window\.matchMedia\("\(prefers-color-scheme: light\)"\)/u);
   assert.match(appSource, /nextcloud-native-theme/u);
   assert.match(appSource, /homepage-overview-desktop-dark/u);

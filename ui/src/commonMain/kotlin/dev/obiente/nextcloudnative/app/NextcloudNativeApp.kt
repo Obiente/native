@@ -68,6 +68,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
@@ -111,6 +112,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import dev.obiente.nextcloudnative.app.design.NextcloudNavigationRail
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
+import dev.obiente.nextcloudnative.app.design.NextcloudDesktopMasterDetail
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudWorkspaceCapabilities
@@ -120,6 +122,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import dev.obiente.nextcloudnative.app.design.NextcloudTypography
 import dev.obiente.nextcloudnative.app.design.isNextcloudDarkTheme
 import dev.obiente.nextcloudnative.app.design.resolveNextcloudRootShellLayout
 import dev.obiente.nextcloudnative.app.design.resolveNextcloudCollectionNavigationMode
@@ -790,8 +793,9 @@ fun NextcloudNativeMarketingCapture(
     assets: MarketingCaptureAssets,
     fixture: MarketingDemoFixture = nextcloudNativeMarketingFixture,
     darkTheme: Boolean = scenario.darkTheme,
+    typography: Typography = NextcloudTypography,
 ) {
-    NextcloudNativeTheme(darkTheme = darkTheme) {
+    NextcloudNativeTheme(darkTheme = darkTheme, typography = typography) {
         NextcloudAppBackground {
             val desktop = scenario.presentation == NextcloudPresentation.Desktop
             CompositionLocalProvider(
@@ -839,14 +843,7 @@ fun NextcloudNativeMarketingCapture(
                     )
                     MarketingCaptureScenario.HomepageConversationsDesktopDark,
                     MarketingCaptureScenario.HomepageConversationsDesktopLight,
-                    -> ChatScreen(
-                        services = assets.services,
-                        session = marketingHomepageSession,
-                        userId = marketingHomepageTalkUserId,
-                        room = marketingHomepageTalkRoom,
-                        onBack = {},
-                        onOpenAttachment = {},
-                    )
+                    -> MarketingDesktopConversationsScenario(fixture, assets)
                     MarketingCaptureScenario.HomepageAppsDesktopDark,
                     MarketingCaptureScenario.HomepageAppsDesktopLight,
                     MarketingCaptureScenario.AdaptiveApp,
@@ -903,6 +900,45 @@ fun NextcloudNativeMarketingCapture(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MarketingDesktopConversationsScenario(
+    fixture: MarketingDemoFixture,
+    assets: MarketingCaptureAssets,
+) {
+    RootShell(
+        presentation = NextcloudPresentation.Desktop,
+        selected = NextcloudDestination.Apps,
+        onSelected = {},
+        identity = NextcloudDesktopIdentity(
+            displayName = fixture.displayName,
+            cloudName = fixture.cloudName,
+            avatar = assets.avatar,
+        ),
+    ) {
+        NextcloudDesktopMasterDetail(
+            masterWidthDp = 340,
+            master = {
+                TalkScreen(
+                    services = assets.services,
+                    session = marketingHomepageSession,
+                    onBack = {},
+                    onOpenRoom = {},
+                )
+            },
+            detail = {
+                ChatScreen(
+                    services = assets.services,
+                    session = marketingHomepageSession,
+                    userId = marketingHomepageTalkUserId,
+                    room = marketingHomepageTalkRoom,
+                    onBack = {},
+                    onOpenAttachment = {},
+                )
+            },
+        )
     }
 }
 

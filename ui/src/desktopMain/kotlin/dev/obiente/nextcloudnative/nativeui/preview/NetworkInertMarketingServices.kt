@@ -9,6 +9,7 @@ import dev.obiente.nextcloudnative.app.marketingHomepageCachedFileListing
 import dev.obiente.nextcloudnative.app.marketingHomepageFileListing
 import dev.obiente.nextcloudnative.app.marketingHomepageFileOfflineAvailability
 import dev.obiente.nextcloudnative.app.marketingHomepageTalkPage
+import dev.obiente.nextcloudnative.app.marketingHomepageTalkRoom
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Proxy
 
@@ -35,6 +36,7 @@ internal fun networkInertMarketingServices(
                 else -> marketingHomepageFileListing
             }
             "loadFileOfflineAvailability" -> marketingHomepageFileOfflineAvailability
+            "listTalkRooms" -> listOf(marketingHomepageTalkRoom)
             "listTalkMessagePage" -> marketingHomepageTalkPage
             "getSupportsFileOfflineStorage" -> true
             "getExternalFileHandoffSupport" -> ExternalFileHandoffSupport.Unsupported(

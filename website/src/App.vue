@@ -52,8 +52,11 @@ const githubUrl = "https://github.com/Obiente/nc-native";
 const captureByScenario = new Map(
   marketingCaptures.map((capture) => [capture.scenario, capture]),
 );
-const themePreference = ref("system");
-const systemTheme = ref("dark");
+const initialTheme = typeof window === "undefined"
+  ? { preference: "system", system: "dark" }
+  : window.__NEXTCLOUD_NATIVE_THEME__ ?? { preference: "system", system: "dark" };
+const themePreference = ref(initialTheme.preference);
+const systemTheme = ref(initialTheme.system);
 const resolvedTheme = computed(() =>
   themePreference.value === "system" ? systemTheme.value : themePreference.value,
 );
@@ -578,10 +581,10 @@ const frequentlyAsked = [
                   <p>Available for</p>
                   <ul>
                     <li><WindowsLogo :size="21" weight="fill" aria-hidden="true" /><span>Windows</span></li>
-                    <li><AppleLogo :size="21" weight="fill" aria-hidden="true" /><span>macOS</span></li>
+                    <li class="platform-pending"><AppleLogo :size="21" weight="fill" aria-hidden="true" /><span>macOS</span></li>
                     <li><LinuxLogo :size="21" weight="fill" aria-hidden="true" /><span>Linux</span></li>
                     <li><AndroidLogo :size="21" weight="fill" aria-hidden="true" /><span>Android</span></li>
-                    <li><DeviceMobile :size="21" weight="fill" aria-hidden="true" /><span>iOS</span></li>
+                    <li class="platform-pending"><DeviceMobile :size="21" weight="fill" aria-hidden="true" /><span>iOS</span></li>
                   </ul>
                 </div>
               </div>
@@ -889,7 +892,7 @@ const frequentlyAsked = [
       </template>
 
       <section v-else-if="isVisualQa" class="visual-qa-page section-width">
-        <header class="doc-heading visual-qa-heading" data-reveal>
+        <header class="doc-heading visual-qa-heading">
           <p class="eyebrow">Synthetic Compose catalog</p>
           <h1>Visual QA</h1>
           <p>
@@ -979,7 +982,6 @@ const frequentlyAsked = [
             v-for="group in visualQaGroups"
             :key="group.label"
             class="visual-qa-group"
-            data-reveal
           >
             <header>
               <h2>{{ group.label }}</h2>

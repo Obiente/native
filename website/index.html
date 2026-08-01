@@ -3,6 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (() => {
+        const preferences = ["system", "light", "dark"];
+        let preference = "system";
+        try {
+          const saved = window.localStorage.getItem("nextcloud-native-theme");
+          if (preferences.includes(saved)) preference = saved;
+        } catch {
+          preference = "system";
+        }
+        const system = window.matchMedia("(prefers-color-scheme: light)").matches
+          ? "light"
+          : "dark";
+        const resolved = preference === "system" ? system : preference;
+        window.__NEXTCLOUD_NATIVE_THEME__ = { preference, system, resolved };
+        document.documentElement.dataset.theme = resolved;
+        document.documentElement.style.colorScheme = resolved;
+      })();
+    </script>
     <!--app-head-start-->
     <meta name="description" content="One genuinely native client for your complete Nextcloud account, with files, photos, conversations, calendars, installed apps, offline work, and sync." />
     <meta property="og:type" content="website" />

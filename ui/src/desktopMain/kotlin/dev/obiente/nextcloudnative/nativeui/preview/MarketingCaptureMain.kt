@@ -1,12 +1,17 @@
 package dev.obiente.nextcloudnative.nativeui.preview
 
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.material3.Typography
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.platform.Font
 import androidx.compose.ui.unit.Density
 import dev.obiente.nextcloudnative.app.MarketingCaptureAssets
 import dev.obiente.nextcloudnative.app.MarketingCaptureVariant
 import dev.obiente.nextcloudnative.app.NextcloudNativeMarketingCapture
+import dev.obiente.nextcloudnative.app.design.NextcloudTypography
 import dev.obiente.nextcloudnative.app.marketingCaptureVariants
 import dev.obiente.nextcloudnative.app.registryEntry
 import dev.obiente.nextcloudnative.app.validateMarketingCaptureRegistry
@@ -70,14 +75,16 @@ fun main(arguments: Array<String>) {
                 previewBytesByFileId = loadHomepageFilePreviews(repositoryRoot),
             ),
         )
+        val typography = deterministicCaptureTypography(repositoryRoot)
         marketingCaptureVariants.zip(outputs).forEach { (variant, output) ->
             capture(
                 output = output,
                 width = variant.width,
                 height = variant.height,
-                density = Density(variant.density),
+                density = Density(variant.density, fontScale = CAPTURE_FONT_SCALE),
                 variant = variant,
                 assets = assets,
+                typography = typography,
             )
         }
         writeCaptureManifest(
@@ -128,6 +135,7 @@ private fun capture(
     density: Density,
     variant: MarketingCaptureVariant,
     assets: MarketingCaptureAssets,
+    typography: Typography,
 ) {
     Files.createDirectories(output.parent)
     val scenario = variant.scenario
@@ -143,12 +151,13 @@ private fun capture(
         coroutineContext = Dispatchers.Unconfined,
     ) {
         when {
-            rawMediaCapture != null -> rawMediaCapture.Content(variant.theme.darkTheme)
-            nativeTiffCapture != null -> nativeTiffCapture.Content(variant.theme.darkTheme)
+            rawMediaCapture != null -> rawMediaCapture.Content(variant.theme.darkTheme, typography)
+            nativeTiffCapture != null -> nativeTiffCapture.Content(variant.theme.darkTheme, typography)
             else -> NextcloudNativeMarketingCapture(
                 scenario = scenario,
                 assets = assets,
                 darkTheme = variant.theme.darkTheme,
+                typography = typography,
             )
         }
     }
@@ -181,6 +190,52 @@ private fun capture(
 
 private const val CAPTURE_WARM_UP_FRAMES = 3
 private const val ISOLATED_MEDIA_WARM_UP_FRAMES = 8
+private const val CAPTURE_FONT_SCALE = 1f
+
+internal fun deterministicCaptureTypography(repositoryRoot: Path): Typography {
+    val fontDirectory = repositoryRoot.resolve(
+        "ui/src/desktopMain/resources/marketing/fonts",
+    )
+    val fontFamily = FontFamily(
+        Font(fontDirectory.resolve("NotoSans-Regular.ttf").toFile(), FontWeight.Normal),
+        Font(fontDirectory.resolve("NotoSans-Medium.ttf").toFile(), FontWeight.Medium),
+        Font(fontDirectory.resolve("NotoSans-SemiBold.ttf").toFile(), FontWeight.SemiBold),
+        Font(fontDirectory.resolve("NotoSans-Bold.ttf").toFile(), FontWeight.Bold),
+    )
+    fun androidx.compose.ui.text.TextStyle.pinned() = copy(fontFamily = fontFamily)
+    return NextcloudTypography.copy(
+        displayLarge = NextcloudTypography.displayLarge.pinned(),
+        displayMedium = NextcloudTypography.displayMedium.pinned(),
+        displaySmall = NextcloudTypography.displaySmall.pinned(),
+        headlineLarge = NextcloudTypography.headlineLarge.pinned(),
+        headlineMedium = NextcloudTypography.headlineMedium.pinned(),
+        headlineSmall = NextcloudTypography.headlineSmall.pinned(),
+        titleLarge = NextcloudTypography.titleLarge.pinned(),
+        titleMedium = NextcloudTypography.titleMedium.pinned(),
+        titleSmall = NextcloudTypography.titleSmall.pinned(),
+        bodyLarge = NextcloudTypography.bodyLarge.pinned(),
+        bodyMedium = NextcloudTypography.bodyMedium.pinned(),
+        bodySmall = NextcloudTypography.bodySmall.pinned(),
+        labelLarge = NextcloudTypography.labelLarge.pinned(),
+        labelMedium = NextcloudTypography.labelMedium.pinned(),
+        labelSmall = NextcloudTypography.labelSmall.pinned(),
+        displayLargeEmphasized = NextcloudTypography.displayLargeEmphasized.pinned(),
+        displayMediumEmphasized = NextcloudTypography.displayMediumEmphasized.pinned(),
+        displaySmallEmphasized = NextcloudTypography.displaySmallEmphasized.pinned(),
+        headlineLargeEmphasized = NextcloudTypography.headlineLargeEmphasized.pinned(),
+        headlineMediumEmphasized = NextcloudTypography.headlineMediumEmphasized.pinned(),
+        headlineSmallEmphasized = NextcloudTypography.headlineSmallEmphasized.pinned(),
+        titleLargeEmphasized = NextcloudTypography.titleLargeEmphasized.pinned(),
+        titleMediumEmphasized = NextcloudTypography.titleMediumEmphasized.pinned(),
+        titleSmallEmphasized = NextcloudTypography.titleSmallEmphasized.pinned(),
+        bodyLargeEmphasized = NextcloudTypography.bodyLargeEmphasized.pinned(),
+        bodyMediumEmphasized = NextcloudTypography.bodyMediumEmphasized.pinned(),
+        bodySmallEmphasized = NextcloudTypography.bodySmallEmphasized.pinned(),
+        labelLargeEmphasized = NextcloudTypography.labelLargeEmphasized.pinned(),
+        labelMediumEmphasized = NextcloudTypography.labelMediumEmphasized.pinned(),
+        labelSmallEmphasized = NextcloudTypography.labelSmallEmphasized.pinned(),
+    )
+}
 
 private fun loadObienteAvatar(): ImageBitmap {
     val bytes = requireNotNull(
