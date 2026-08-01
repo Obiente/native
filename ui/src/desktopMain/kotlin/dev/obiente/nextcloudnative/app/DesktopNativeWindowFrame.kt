@@ -26,9 +26,16 @@ internal fun applyWindowsNativeWindowTheme(
     darkTheme: Boolean,
 ): Int {
     val enabled = IntByReference(if (darkTheme) 1 else 0)
-    return api.DwmSetWindowAttribute(
+    val currentResult = api.DwmSetWindowAttribute(
         windowHandle,
         DWMWA_USE_IMMERSIVE_DARK_MODE,
+        enabled.pointer,
+        Int.SIZE_BYTES,
+    )
+    if (currentResult >= 0) return currentResult
+    return api.DwmSetWindowAttribute(
+        windowHandle,
+        DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY,
         enabled.pointer,
         Int.SIZE_BYTES,
     )
@@ -50,3 +57,4 @@ internal interface WindowsDesktopWindowApi : StdCallLibrary {
 }
 
 internal const val DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+internal const val DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY = 19

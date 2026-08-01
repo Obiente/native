@@ -21,9 +21,25 @@ class DesktopNativeWindowFrameTest {
         assertEquals(0, api.value)
     }
 
-    private class RecordingWindowsDesktopWindowApi : WindowsDesktopWindowApi {
+    @Test
+    fun `Windows native frame retries the legacy dark mode attribute`() {
+        val api = RecordingWindowsDesktopWindowApi(rejectCurrentAttribute = true)
+        val handle = HWND(Pointer.createConstant(42L))
+
+        assertEquals(0, applyWindowsNativeWindowTheme(api, handle, darkTheme = true))
+        assertEquals(
+            listOf(DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY),
+            api.attributes,
+        )
+        assertEquals(1, api.value)
+    }
+
+    private class RecordingWindowsDesktopWindowApi(
+        private val rejectCurrentAttribute: Boolean = false,
+    ) : WindowsDesktopWindowApi {
         var window: HWND? = null
         var attribute: Int? = null
+        val attributes = mutableListOf<Int>()
         var value: Int? = null
         var valueSize: Int? = null
 
@@ -35,8 +51,10 @@ class DesktopNativeWindowFrameTest {
         ): Int {
             this.window = window
             this.attribute = attribute
+            attributes += attribute
             this.value = value.getInt(0L)
             this.valueSize = valueSize
+            if (rejectCurrentAttribute && attribute == DWMWA_USE_IMMERSIVE_DARK_MODE) return -1
             return 0
         }
     }
