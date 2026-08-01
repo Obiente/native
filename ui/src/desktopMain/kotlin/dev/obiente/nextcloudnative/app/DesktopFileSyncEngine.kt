@@ -363,6 +363,8 @@ internal class DesktopFileSyncEngine(
             is FileSyncOperation.Upload -> {
                 val source = requireNotNull(work.observedLocal)
                 val replacingType = work.observedRemote?.kind?.let { it != source.kind } == true
+                var exactLocal: LocalSyncEntry? = null
+                var exactRemote: RemoteSyncEntry? = null
                 if (source.kind == SyncEntryKind.Directory && replacingType) {
                     remote.replaceWithDirectory(
                         operation.relativePath,
@@ -372,8 +374,8 @@ internal class DesktopFileSyncEngine(
                     remote.createDirectory(operation.relativePath, operation.expectedRemoteEtag)
                 } else {
                     withStagingFile("upload") { staged ->
-                        local.stageForUpload(operation.relativePath, staged, MAX_SYNC_FILE_BYTES)
-                        if (replacingType) {
+                        exactLocal = local.stageForUpload(operation.relativePath, staged, MAX_SYNC_FILE_BYTES)
+                        val uploaded = if (replacingType) {
                             remote.replaceWithFile(
                                 operation.relativePath,
                                 staged,
@@ -382,13 +384,39 @@ internal class DesktopFileSyncEngine(
                         } else {
                             remote.writeFile(operation.relativePath, staged, operation.expectedRemoteEtag)
                         }
+                        withStagingFile("verify-upload") { verified ->
+                            exactRemote = remote.stageDownload(
+                                operation.relativePath,
+                                uploaded.etag,
+                                verified,
+                                MAX_SYNC_FILE_BYTES,
+                            )
+                            require(filesMatch(staged, verified)) {
+                                "The uploaded server file does not match the staged local generation."
+                            }
+                        }
                     }
                 }
-                synchronizedResult(operation.relativePath, local, remote)
+                if (source.kind == SyncEntryKind.File) {
+                    FileSyncExecutionSuccess(
+                        synchronizedBaselines = listOf(
+                            FileSyncBaseline(
+                                operation.relativePath,
+                                SyncEntryKind.File,
+                                requireNotNull(exactLocal).revision,
+                                requireNotNull(exactRemote).etag,
+                            ),
+                        ),
+                    )
+                } else {
+                    synchronizedResult(operation.relativePath, local, remote)
+                }
             }
             is FileSyncOperation.Download -> {
                 val source = requireNotNull(work.observedRemote)
                 val replacingType = work.observedLocal?.kind?.let { it != source.kind } == true
+                var exactLocal: LocalSyncEntry? = null
+                var exactRemote: RemoteSyncEntry? = null
                 if (source.kind == SyncEntryKind.Directory && replacingType) {
                     local.replaceWithDirectory(
                         operation.relativePath,
@@ -398,8 +426,13 @@ internal class DesktopFileSyncEngine(
                     local.createDirectory(operation.relativePath, operation.expectedLocalRevision)
                 } else {
                     withStagingFile("download") { staged ->
-                        remote.stageDownload(operation.relativePath, source.etag, staged, MAX_SYNC_FILE_BYTES)
-                        if (replacingType) {
+                        exactRemote = remote.stageDownload(
+                            operation.relativePath,
+                            source.etag,
+                            staged,
+                            MAX_SYNC_FILE_BYTES,
+                        )
+                        exactLocal = if (replacingType) {
                             local.replaceWithFile(
                                 operation.relativePath,
                                 staged,
@@ -410,7 +443,20 @@ internal class DesktopFileSyncEngine(
                         }
                     }
                 }
-                synchronizedResult(operation.relativePath, local, remote)
+                if (source.kind == SyncEntryKind.File) {
+                    FileSyncExecutionSuccess(
+                        synchronizedBaselines = listOf(
+                            FileSyncBaseline(
+                                operation.relativePath,
+                                SyncEntryKind.File,
+                                requireNotNull(exactLocal).revision,
+                                requireNotNull(exactRemote).etag,
+                            ),
+                        ),
+                    )
+                } else {
+                    synchronizedResult(operation.relativePath, local, remote)
+                }
             }
             is FileSyncOperation.DeleteLocal -> {
                 local.delete(operation.relativePath, operation.expectedLocalRevision)

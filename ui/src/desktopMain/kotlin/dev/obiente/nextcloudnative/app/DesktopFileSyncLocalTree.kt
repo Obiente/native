@@ -70,12 +70,14 @@ internal class DesktopFileSyncLocalTree(root: File) {
                 private fun add(path: Path, attrs: BasicFileAttributes, kind: SyncEntryKind) {
                     require(result.size < MAX_ENTRIES) { "The desktop folder contains too many entries." }
                     val relative = relative(path)
+                    val contentDigest = path.takeIf { kind == SyncEntryKind.File }?.let(::sha256File)
                     result += DesktopLocalSyncDocument(
                         LocalSyncEntry(
                             relativePath = relative,
                             kind = kind,
-                            revision = revision(path, attrs),
+                            revision = revision(path, attrs, contentDigest),
                             size = attrs.size().takeIf { kind == SyncEntryKind.File },
+                            contentHash = contentDigest?.let { "sha256:$it" },
                         ),
                         path,
                     )
@@ -95,12 +97,14 @@ internal class DesktopFileSyncLocalTree(root: File) {
             attrs.isRegularFile -> SyncEntryKind.File
             else -> error("The local item is not a regular file or folder.")
         }
+        val contentDigest = path.takeIf { kind == SyncEntryKind.File }?.let(::sha256File)
         return DesktopLocalSyncDocument(
             LocalSyncEntry(
                 relativePath,
                 kind,
-                revision(path, attrs),
+                revision(path, attrs, contentDigest),
                 attrs.size().takeIf { kind == SyncEntryKind.File },
+                contentDigest?.let { "sha256:$it" },
             ),
             path,
         )
@@ -136,7 +140,7 @@ internal class DesktopFileSyncLocalTree(root: File) {
         }
     }
 
-    fun writeFile(relativePath: String, source: File, expectedLocalRevision: String?) {
+    fun writeFile(relativePath: String, source: File, expectedLocalRevision: String?): LocalSyncEntry {
         val destination = safePath(relativePath)
         val current = resolve(relativePath)
         if (expectedLocalRevision == null) {
@@ -149,10 +153,10 @@ internal class DesktopFileSyncLocalTree(root: File) {
         }
         val parent = requireNotNull(destination.parent)
         Files.createDirectories(parent)
-        publishFileReplacement(destination, current, source)
+        return publishFileReplacement(destination, current, source)
     }
 
-    fun replaceWithFile(relativePath: String, source: File, expectedLocalRevision: String) {
+    fun replaceWithFile(relativePath: String, source: File, expectedLocalRevision: String): LocalSyncEntry {
         val destination = safePath(relativePath)
         val current = requireNotNull(resolve(relativePath)) { "The local item was already removed." }
         require(current.entry.revision == expectedLocalRevision) {
@@ -161,7 +165,7 @@ internal class DesktopFileSyncLocalTree(root: File) {
         require(current.entry.kind == SyncEntryKind.Directory) {
             "The local item type changed after the sync scan."
         }
-        publishFileReplacement(destination, current, source)
+        return publishFileReplacement(destination, current, source)
     }
 
     fun replaceWithDirectory(relativePath: String, expectedLocalRevision: String) {
@@ -195,8 +199,9 @@ internal class DesktopFileSyncLocalTree(root: File) {
         destination: Path,
         current: DesktopLocalSyncDocument?,
         source: File,
-    ) {
+    ): LocalSyncEntry {
         val parent = requireNotNull(destination.parent)
+        val expectedContentHash = "sha256:${sha256File(source.toPath())}"
         val token = UUID.randomUUID().toString()
         val staged = parent.resolve(".${destination.fileName}.nextcloud-native-download-$token")
         val backup = parent.resolve(".${destination.fileName}.nextcloud-native-backup-$token")
@@ -209,6 +214,14 @@ internal class DesktopFileSyncLocalTree(root: File) {
                 protected = true
             }
             move(staged, destination, replace = false)
+            val published = requireNotNull(resolve(relative(destination))) {
+                "The published local file disappeared."
+            }.entry
+            require(published.kind == SyncEntryKind.File && published.contentHash == expectedContentHash) {
+                "The local file changed while its synchronized revision was being recorded."
+            }
+            if (protected) deleteOwnedPath(backup)
+            return published
         } catch (failure: Throwable) {
             Files.deleteIfExists(staged)
             if (protected && !Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
@@ -216,7 +229,6 @@ internal class DesktopFileSyncLocalTree(root: File) {
             }
             throw failure
         }
-        if (protected) deleteOwnedPath(backup)
     }
 
     fun delete(relativePath: String, expectedLocalRevision: String) {
@@ -234,18 +246,23 @@ internal class DesktopFileSyncLocalTree(root: File) {
             MAX_DEPTH,
             object : SimpleFileVisitor<Path>() {
                 override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
-                    if (dir == root || BACKUP_MARKER !in dir.fileName.toString()) {
+                    val owned = ownedRecoveryPath(dir)
+                    if (dir == root || owned?.kind != OwnedRecoveryKind.Backup) {
                         return FileVisitResult.CONTINUE
                     }
                     restoreBackupWhenDestinationIsMissing(dir)
-                    return FileVisitResult.SKIP_SUBTREE
+                    return if (Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
+                        FileVisitResult.CONTINUE
+                    } else {
+                        FileVisitResult.SKIP_SUBTREE
+                    }
                 }
 
                 override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
-                    val name = file.fileName.toString()
-                    when {
-                        DOWNLOAD_MARKER in name -> Files.deleteIfExists(file)
-                        BACKUP_MARKER in name -> restoreBackupWhenDestinationIsMissing(file)
+                    when (ownedRecoveryPath(file)?.kind) {
+                        OwnedRecoveryKind.Download -> Files.deleteIfExists(file)
+                        OwnedRecoveryKind.Backup -> restoreBackupWhenDestinationIsMissing(file)
+                        null -> Unit
                     }
                     return FileVisitResult.CONTINUE
                 }
@@ -254,20 +271,41 @@ internal class DesktopFileSyncLocalTree(root: File) {
     }
 
     private fun restoreBackupWhenDestinationIsMissing(backup: Path) {
-        val name = backup.fileName.toString()
-        val finalName = name.removePrefix(".").substringBefore(BACKUP_MARKER)
-        if (finalName.isBlank()) return
-        val finalPath = requireNotNull(backup.parent).resolve(finalName)
+        val owned = ownedRecoveryPath(backup)?.takeIf { it.kind == OwnedRecoveryKind.Backup } ?: return
+        val finalPath = requireNotNull(backup.parent).resolve(owned.destinationName)
         if (!Files.exists(finalPath, LinkOption.NOFOLLOW_LINKS)) move(backup, finalPath, replace = false)
     }
 
-    private fun isOwnedRecoveryPath(path: Path): Boolean {
+    private fun ownedRecoveryPath(path: Path): OwnedRecoveryPath? {
         val name = path.fileName.toString()
-        return DOWNLOAD_MARKER in name || BACKUP_MARKER in name
+        if (!name.startsWith('.')) return null
+        val candidates = listOf(
+            OwnedRecoveryKind.Download to DOWNLOAD_MARKER,
+            OwnedRecoveryKind.Backup to BACKUP_MARKER,
+        )
+        return candidates.firstNotNullOfOrNull { (kind, marker) ->
+            val markerIndex = name.lastIndexOf(marker)
+            if (markerIndex <= 1) return@firstNotNullOfOrNull null
+            val token = name.substring(markerIndex + marker.length)
+            if (runCatching { UUID.fromString(token) }.isFailure) return@firstNotNullOfOrNull null
+            val destinationName = name.substring(1, markerIndex)
+            destinationName.takeIf(String::isNotBlank)?.let { OwnedRecoveryPath(kind, it) }
+        }
+    }
+
+    private fun isOwnedRecoveryPath(path: Path): Boolean {
+        val owned = ownedRecoveryPath(path) ?: return false
+        return when (owned.kind) {
+            OwnedRecoveryKind.Download -> true
+            OwnedRecoveryKind.Backup -> !Files.exists(
+                requireNotNull(path.parent).resolve(owned.destinationName),
+                LinkOption.NOFOLLOW_LINKS,
+            )
+        }
     }
 
     private fun deleteOwnedPath(path: Path) {
-        require(path.startsWith(root) && BACKUP_MARKER in path.fileName.toString())
+        require(path.startsWith(root) && ownedRecoveryPath(path)?.kind == OwnedRecoveryKind.Backup)
         if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) path.toFile().deleteRecursively()
         else Files.deleteIfExists(path)
     }
@@ -282,21 +320,36 @@ internal class DesktopFileSyncLocalTree(root: File) {
     private fun relative(path: Path): String =
         root.relativize(path.toAbsolutePath().normalize()).joinToString("/") { it.toString() }
 
-    private fun revision(path: Path, attrs: BasicFileAttributes): String {
+    private fun revision(path: Path, attrs: BasicFileAttributes, contentDigest: String?): String {
         val fingerprint = buildString {
             append(attrs.fileKey()?.toString().orEmpty())
             append('\u0000')
-            append(attrs.lastModifiedTime().toMillis())
+            append(attrs.lastModifiedTime())
             append('\u0000')
             append(attrs.size())
             append('\u0000')
             append(attrs.isDirectory)
             append('\u0000')
             append(relative(path))
+            append('\u0000')
+            append(contentDigest.orEmpty())
         }
         return "desktop-" + MessageDigest.getInstance("SHA-256")
             .digest(fingerprint.encodeToByteArray())
             .joinToString("") { "%02x".format(it) }
+    }
+
+    private fun sha256File(path: Path): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        Files.newInputStream(path).use { input ->
+            val buffer = ByteArray(BUFFER_BYTES)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun move(source: Path, destination: Path, replace: Boolean) {
@@ -339,3 +392,10 @@ internal class DesktopFileSyncLocalTree(root: File) {
         const val BACKUP_MARKER = ".nextcloud-native-backup-"
     }
 }
+
+private enum class OwnedRecoveryKind { Download, Backup }
+
+private data class OwnedRecoveryPath(
+    val kind: OwnedRecoveryKind,
+    val destinationName: String,
+)

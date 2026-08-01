@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Files
+import java.nio.file.attribute.FileTime
 import kotlin.io.path.createDirectories
 import kotlin.io.path.writeText
 import kotlin.test.Test
@@ -60,14 +61,77 @@ class DesktopFileSyncLocalTreeTest {
         val root = Files.createTempDirectory("desktop-sync-recover-")
         try {
             root.resolve("Notes").createDirectories()
-            root.resolve("Notes/.today.md.nextcloud-native-backup-token").writeText("protected")
-            root.resolve("Notes/.draft.md.nextcloud-native-download-token").writeText("partial")
+            root.resolve("Notes/.today.md.nextcloud-native-backup-4d6f8828-7d52-4f2d-945b-f46aa4c97b41")
+                .writeText("protected")
+            root.resolve("Notes/.draft.md.nextcloud-native-download-801e8c87-592d-4d1d-9d77-61383e22bd3a")
+                .writeText("partial")
 
             DesktopFileSyncLocalTree(root.toFile()).scan()
 
             assertEquals("protected", root.resolve("Notes/today.md").toFile().readText())
-            assertFalse(Files.exists(root.resolve("Notes/.draft.md.nextcloud-native-download-token")))
+            assertFalse(
+                Files.exists(
+                    root.resolve("Notes/.draft.md.nextcloud-native-download-801e8c87-592d-4d1d-9d77-61383e22bd3a"),
+                ),
+            )
             assertTrue(Files.exists(root.resolve("Notes")))
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `marker like user files are preserved unless they carry an owned uuid suffix`() {
+        val root = Files.createTempDirectory("desktop-sync-owned-stage-")
+        try {
+            root.resolve(".notes.nextcloud-native-download-archive").writeText("keep")
+            root.resolve(".notes.nextcloud-native-backup-personal").writeText("keep too")
+
+            val entries = DesktopFileSyncLocalTree(root.toFile()).scan().map { it.entry.relativePath }
+
+            assertTrue(".notes.nextcloud-native-download-archive" in entries)
+            assertTrue(".notes.nextcloud-native-backup-personal" in entries)
+            assertTrue(Files.exists(root.resolve(".notes.nextcloud-native-download-archive")))
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `completed replacement backup remains visible for explicit recovery`() {
+        val root = Files.createTempDirectory("desktop-sync-visible-backup-")
+        try {
+            root.resolve("notes.txt").writeText("published")
+            val backup = ".notes.txt.nextcloud-native-backup-0b88c03f-55d1-4ccb-b92e-aa8ee32caf65"
+            root.resolve(backup).writeText("protected original")
+
+            val entries = DesktopFileSyncLocalTree(root.toFile()).scan().map { it.entry.relativePath }
+
+            assertTrue("notes.txt" in entries)
+            assertTrue(backup in entries)
+            assertEquals("protected original", root.resolve(backup).toFile().readText())
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `same size edits with a preserved timestamp change the local revision`() {
+        val root = Files.createTempDirectory("desktop-sync-content-revision-")
+        try {
+            val file = root.resolve("notes.txt")
+            file.writeText("first")
+            val fixedTime = FileTime.fromMillis(1_700_000_000_000L)
+            Files.setLastModifiedTime(file, fixedTime)
+            val tree = DesktopFileSyncLocalTree(root.toFile())
+            val before = requireNotNull(tree.resolve("notes.txt")).entry
+
+            file.writeText("later")
+            Files.setLastModifiedTime(file, fixedTime)
+            val after = requireNotNull(tree.resolve("notes.txt")).entry
+
+            assertTrue(before.revision != after.revision)
+            assertTrue(before.contentHash != after.contentHash)
         } finally {
             root.toFile().deleteRecursively()
         }

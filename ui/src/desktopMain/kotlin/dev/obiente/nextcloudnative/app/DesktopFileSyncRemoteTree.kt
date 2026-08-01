@@ -58,6 +58,9 @@ internal class DesktopFileSyncRemoteTree(
             ?.let { it.copy(entry = it.entry.copy(relativePath = relativePath)) }
     }
 
+    override fun resolveFile(relativePath: String): RemoteSyncEntry? =
+        resolve(relativePath)?.takeIf { !it.isDirectory }?.entry
+
     fun list(relativeDirectoryPath: String): List<DesktopRemoteSyncDocument> {
         val normalizedDirectory = relativeDirectoryPath.trim('/')
         if (normalizedDirectory.isNotBlank()) requireValidSyncPath(normalizedDirectory)
@@ -256,9 +259,10 @@ internal class DesktopFileSyncRemoteTree(
             }
         }
         if (recovered) documents = rawListDirectory(path)
+        val listedPaths = documents.mapTo(hashSetOf()) { it.entry.relativePath }
         return documents
             .filterNot { isDesktopOwnedUploadStage(it.entry.relativePath) }
-            .filterNot { desktopOwnedBackupDestination(it.entry.relativePath) != null }
+            .filterNot { backup -> shouldSuppressDesktopOwnedBackup(backup.entry.relativePath, listedPaths) }
             .also { require(it.size <= MAX_CHILDREN) { "A Nextcloud folder contains too many entries." } }
     }
 
@@ -460,6 +464,14 @@ internal fun desktopOwnedBackupDestination(relativePath: String): String? {
     if (destinationName.isBlank()) return null
     val parent = relativePath.substringBeforeLast('/', "")
     return listOf(parent, destinationName).filter(String::isNotBlank).joinToString("/")
+}
+
+internal fun shouldSuppressDesktopOwnedBackup(
+    relativePath: String,
+    listedPaths: Set<String>,
+): Boolean {
+    val destination = desktopOwnedBackupDestination(relativePath) ?: return false
+    return destination !in listedPaths
 }
 
 internal fun parseDesktopSyncDav(bytes: ByteArray, userId: String): List<DesktopRemoteSyncDocument> {

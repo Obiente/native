@@ -23,6 +23,8 @@ internal data class DesktopLinuxWritebackRecoveryResult(
 )
 
 internal interface LinuxVirtualWritebackRemote {
+    fun resolveFile(relativePath: String): RemoteSyncEntry?
+
     fun stageDownload(
         relativePath: String,
         expectedRemoteEtag: String,
@@ -50,6 +52,17 @@ internal class DesktopLinuxVirtualFileWritebackStore(
         require(existing == null || existing.path == path)
         val directory = root.apply {
             check(isDirectory || mkdirs()) { "Could not create Linux virtual-file recovery storage." }
+        }
+        if (existing != null && !truncate) {
+            require(existing.size <= MAX_WRITEBACK_BYTES) {
+                "The Linux virtual file is too large for editable staging."
+            }
+            require(
+                linuxWritebackFitsCapacity(
+                    remoteBytes = existing.size,
+                    availableBytes = directory.usableSpace.coerceAtLeast(0L),
+                ),
+            ) { "There is not enough free space to stage this Linux virtual-file edit safely." }
         }
         val stage = File.createTempFile("writeback-", ".stage", directory)
         val manifestFile = File(directory, stage.name + ".json")
@@ -200,7 +213,18 @@ internal class DesktopLinuxVirtualFileWritebackStore(
                 recovered += 1
                 return@forEach
             }
+            val recoveredRemote = matchingRemoteGeneration(tree, manifest.path, stage)
+            if (recoveredRemote != null) {
+                onCommitted(manifest.path)
+                manifestFile.delete()
+                stage.delete()
+                recovered += 1
+                return@forEach
+            }
             runCatching { tree.writeFile(manifest.path, stage, manifest.expectedRemoteRevision) }
+                .recoverCatching { failure ->
+                    matchingRemoteGeneration(tree, manifest.path, stage) ?: throw failure
+                }
                 .onSuccess {
                     onCommitted(manifest.path)
                     manifestFile.delete()
@@ -210,6 +234,27 @@ internal class DesktopLinuxVirtualFileWritebackStore(
                 .onFailure { retained += 1 }
         }
         return DesktopLinuxWritebackRecoveryResult(recovered, retained)
+    }
+
+    private fun matchingRemoteGeneration(
+        tree: LinuxVirtualWritebackRemote,
+        path: String,
+        stage: File,
+    ): RemoteSyncEntry? {
+        val remote = tree.resolveFile(path)
+            ?.takeIf { it.kind == SyncEntryKind.File && it.size == stage.length() }
+            ?: return null
+        val downloaded = File.createTempFile("reconcile-", ".stage", root)
+        return try {
+            val verified = tree.stageDownload(path, remote.etag, downloaded, MAX_WRITEBACK_BYTES)
+            verified.takeIf {
+                it.etag == remote.etag &&
+                    downloaded.length() == stage.length() &&
+                    Files.mismatch(downloaded.toPath(), stage.toPath()) == -1L
+            }
+        } finally {
+            downloaded.delete()
+        }
     }
 
     private fun saveManifest(destination: File, manifest: WritebackManifest) {
@@ -242,6 +287,17 @@ internal class DesktopLinuxVirtualFileWritebackStore(
         const val MAX_MANIFEST_BYTES = 64 * 1024
     }
 }
+
+internal fun linuxWritebackFitsCapacity(
+    remoteBytes: Long,
+    availableBytes: Long,
+    reserveBytes: Long = DEFAULT_VIRTUAL_FILE_MINIMUM_FREE_BYTES,
+): Boolean =
+    remoteBytes >= 0L &&
+        availableBytes >= 0L &&
+        reserveBytes >= 0L &&
+        availableBytes >= remoteBytes &&
+        availableBytes - remoteBytes >= reserveBytes
 
 internal fun defaultDesktopLinuxWritebackStore(session: NextcloudSession): DesktopLinuxVirtualFileWritebackStore {
     val xdgData = System.getenv("XDG_DATA_HOME")?.takeIf(String::isNotBlank)

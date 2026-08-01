@@ -835,6 +835,10 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.FileSyncStatusMobile -> MarketingFileSyncStatusMobileScenario()
                     MarketingCaptureScenario.FileSyncStatusDesktop -> MarketingFileSyncStatusDesktopScenario()
                     MarketingCaptureScenario.FileSyncSetupDesktop -> MarketingFileSyncSetupDesktopScenario()
+                    MarketingCaptureScenario.FileSyncSelectionDesktop,
+                    MarketingCaptureScenario.FileSyncSelectionMobile,
+                    ->
+                        MarketingFileSyncSelectionScenario(assets.services)
                     MarketingCaptureScenario.VirtualFileStorageMobile -> MarketingVirtualFileStorageMobileScenario()
                     MarketingCaptureScenario.VirtualFileStorageDesktop -> MarketingVirtualFileStorageDesktopScenario()
                     MarketingCaptureScenario.DesktopStartupSettings ->

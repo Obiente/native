@@ -573,6 +573,23 @@ internal class AndroidNextcloudServices(
         )
     }
 
+    private fun notifyDocumentsDocumentChanged(session: NextcloudSession, path: String) {
+        appContext.contentResolver.notifyChange(
+            DocumentsContract.buildDocumentUri(
+                NEXTCLOUD_DOCUMENTS_AUTHORITY,
+                NextcloudDocumentIds.documentId(session, path),
+            ),
+            null,
+        )
+        appContext.contentResolver.notifyChange(
+            DocumentsContract.buildChildDocumentsUri(
+                NEXTCLOUD_DOCUMENTS_AUTHORITY,
+                NextcloudDocumentIds.documentId(session, NextcloudDocumentIds.parentPath(path)),
+            ),
+            null,
+        )
+    }
+
     override suspend fun beginLogin(serverUrl: String): LoginChallenge = withContext(Dispatchers.IO) {
         val baseUrl = normalizeServerUrl(serverUrl)
         val response = request(method = "POST", url = "$baseUrl/index.php/login/v2")
@@ -742,7 +759,10 @@ internal class AndroidNextcloudServices(
                         source = pending.staging,
                         expectedEtag = pending.expectedRemoteEtag,
                     )
-                }.onSuccess { pending.complete() }
+                    virtualFileCache.invalidate(session, pending.remotePath)
+                    notifyDocumentsDocumentChanged(session, pending.remotePath)
+                    pending.complete()
+                }
             }
         }
         val pendingWritebacks = androidDocumentPendingWritebackCount(appContext, session)

@@ -76,4 +76,12 @@ class DesktopFileSyncRemoteTreeTest {
         assertEquals(null, desktopOwnedBackupDestination("Photos/.today.md.nextcloud-native-backup-not-a-uuid"))
         assertEquals(null, desktopOwnedBackupDestination("Photos/user-backup"))
     }
+
+    @Test
+    fun `completed replacement backup is exposed when its destination also exists`() {
+        val backup = "Photos/.today.md.nextcloud-native-backup-123e4567-e89b-12d3-a456-426614174000"
+
+        assertEquals(false, shouldSuppressDesktopOwnedBackup(backup, setOf(backup, "Photos/today.md")))
+        assertEquals(true, shouldSuppressDesktopOwnedBackup(backup, setOf(backup)))
+    }
 }

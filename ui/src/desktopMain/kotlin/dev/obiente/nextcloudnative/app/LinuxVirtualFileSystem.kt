@@ -24,6 +24,7 @@ internal data class LinuxVirtualFileNode(
 internal interface LinuxVirtualFileReadHandle : AutoCloseable {
     val size: Long
     fun read(offset: Long, length: Int): ByteArray
+    fun readdress(path: String) = Unit
 }
 
 internal interface LinuxVirtualFileWriteHandle : AutoCloseable {
@@ -72,18 +73,20 @@ internal class DesktopNextcloudVirtualFileBackend(
     override fun open(node: LinuxVirtualFileNode): LinuxVirtualFileReadHandle {
         require(!node.directory)
         require(node.size > 0L)
-        val source = services.openFileRangeSession(
-            session = session,
-            userId = userId,
-            path = node.path,
-            size = node.size,
-            expectedEtag = node.remoteRevision,
-        )
-        rangeCache.acquire(accountId, node.path)
         return object : LinuxVirtualFileReadHandle {
-            override val size: Long = source.size
+            private var currentPath = node.path
+            private var source = openRangeSource(currentPath)
+            private var closed = false
 
+            init {
+                rangeCache.acquire(accountId, currentPath)
+            }
+
+            override val size: Long = node.size
+
+            @Synchronized
             override fun read(offset: Long, length: Int): ByteArray {
+                check(!closed)
                 require(offset >= 0L && length > 0 && offset + length <= size)
                 val firstBlock = offset / RANGE_BLOCK_BYTES
                 val lastBlock = (offset + length - 1L) / RANGE_BLOCK_BYTES
@@ -93,7 +96,7 @@ internal class DesktopNextcloudVirtualFileBackend(
                     val blockLength = minOf(RANGE_BLOCK_BYTES, size - blockOffset).toInt()
                     val bytes = rangeCache.readBlock(
                         accountId = accountId,
-                        path = node.path,
+                        path = currentPath,
                         remoteRevision = node.remoteRevision,
                         fileSize = size,
                         offset = blockOffset,
@@ -101,7 +104,7 @@ internal class DesktopNextcloudVirtualFileBackend(
                     ) ?: runBlocking(Dispatchers.IO) { source.read(blockOffset, blockLength) }.also { fetched ->
                         rangeCache.storeBlock(
                             accountId = accountId,
-                            path = node.path,
+                            path = currentPath,
                             remoteRevision = node.remoteRevision,
                             fileSize = size,
                             offset = blockOffset,
@@ -120,10 +123,36 @@ internal class DesktopNextcloudVirtualFileBackend(
                 return destination
             }
 
-            override fun close() {
-                source.close()
-                rangeCache.release(accountId, node.path)
+            @Synchronized
+            override fun readdress(path: String) {
+                check(!closed)
+                val normalized = path.linuxVirtualPath()
+                if (normalized == currentPath) return
+                val replacement = openRangeSource(normalized)
+                rangeCache.acquire(accountId, normalized)
+                val previousSource = source
+                val previousPath = currentPath
+                source = replacement
+                currentPath = normalized
+                runCatching(previousSource::close)
+                rangeCache.release(accountId, previousPath)
             }
+
+            @Synchronized
+            override fun close() {
+                if (closed) return
+                closed = true
+                source.close()
+                rangeCache.release(accountId, currentPath)
+            }
+
+            private fun openRangeSource(path: String) = services.openFileRangeSession(
+                session = session,
+                userId = userId,
+                path = path,
+                size = node.size,
+                expectedEtag = node.remoteRevision,
+            )
         }
     }
 
@@ -194,12 +223,13 @@ internal class LinuxNextcloudVirtualFileSystem(
 ) : FuseStubFS() {
     private val nextHandle = AtomicLong(1L)
     private val readHandles = ConcurrentHashMap<Long, LinuxVirtualFileReadHandle>()
-    private val writeHandles = ConcurrentHashMap<Long, LinuxVirtualFileWriteHandle>()
-    private val pendingCreatedFiles = ConcurrentHashMap<String, Long>()
+    private val readHandlePaths = ConcurrentHashMap<Long, String>()
+    private val writeHandles = ConcurrentHashMap<Long, LinuxOpenWriteReference>()
+    private val pendingCreatedFiles = ConcurrentHashMap<String, LinuxSharedWriteHandle>()
 
     override fun getattr(path: String, stat: FileStat): Int = fuseResult {
         val normalized = path.linuxVirtualPath()
-        val pending = pendingCreatedFiles[normalized]?.let(writeHandles::get)
+        val pending = pendingCreatedFiles[normalized]?.delegate
         val node = backend.resolve(normalized)
             ?: pending?.let { LinuxVirtualFileNode(normalized, normalized.substringAfterLast('/'), false, it.size, "pending") }
             ?: return -ErrorCodes.ENOENT()
@@ -242,14 +272,20 @@ internal class LinuxNextcloudVirtualFileSystem(
 
     override fun open(path: String, fileInfo: FuseFileInfo): Int = fuseResult {
         val normalized = path.linuxVirtualPath()
-        val node = backend.resolve(normalized) ?: return -ErrorCodes.ENOENT()
-        if (node.directory) return -ErrorCodes.EISDIR()
         val flags = fileInfo.flags.intValue()
         val writeAccess = flags and OPEN_ACCESS_MASK != OPEN_READ_ONLY
+        pendingCreatedFiles[normalized]?.let { pending ->
+            if (writeAccess && flags and OPEN_TRUNCATE != 0) pending.delegate.truncate(0L)
+            fileInfo.fh.set(registerWriteHandle(pending, writable = writeAccess))
+            return 0
+        }
+        val node = backend.resolve(normalized) ?: return -ErrorCodes.ENOENT()
+        if (node.directory) return -ErrorCodes.EISDIR()
         if (writeAccess) {
-            val id = nextHandle.getAndIncrement()
-            writeHandles[id] = backend.openWrite(normalized, node, truncate = flags and OPEN_TRUNCATE != 0)
-            fileInfo.fh.set(id)
+            val shared = LinuxSharedWriteHandle(
+                backend.openWrite(normalized, node, truncate = flags and OPEN_TRUNCATE != 0),
+            )
+            fileInfo.fh.set(registerWriteHandle(shared, writable = true))
             return 0
         }
         if (node.size == 0L) {
@@ -258,6 +294,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         }
         val id = nextHandle.getAndIncrement()
         readHandles[id] = backend.open(node)
+        readHandlePaths[id] = normalized
         fileInfo.fh.set(id)
         0
     }
@@ -273,7 +310,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         val id = fileInfo.fh.get()
         if (id == EMPTY_FILE_HANDLE) return 0
         val handle = readHandles[id]
-        val writeHandle = writeHandles[id]
+        val writeHandle = writeHandles[id]?.shared?.delegate
         if (handle == null && writeHandle == null) return -ErrorCodes.EBADF()
         val handleSize = handle?.size ?: requireNotNull(writeHandle).size
         if (offset >= handleSize) return 0
@@ -288,20 +325,15 @@ internal class LinuxNextcloudVirtualFileSystem(
         val id = fileInfo.fh.get()
         if (id != EMPTY_FILE_HANDLE) {
             readHandles.remove(id)?.close()
-            val write = writeHandles.remove(id)
-            if (write != null) {
-                try {
-                    write.close()
-                } finally {
-                    pendingCreatedFiles.entries.removeIf { it.value == id }
-                }
-            }
+            readHandlePaths.remove(id)
+            releaseWriteHandle(id)
         }
         0
     }
 
     override fun access(path: String, mask: Int): Int = fuseResult {
-        if (backend.resolve(path.linuxVirtualPath()) == null) -ErrorCodes.ENOENT() else 0
+        val normalized = path.linuxVirtualPath()
+        if (pendingCreatedFiles.containsKey(normalized) || backend.resolve(normalized) != null) 0 else -ErrorCodes.ENOENT()
     }
 
     override fun create(path: String, mode: Long, fi: FuseFileInfo?): Int = fuseResult {
@@ -310,13 +342,14 @@ internal class LinuxNextcloudVirtualFileSystem(
         val parent = backend.resolve(normalized.substringBeforeLast('/', ""))
             ?: return -ErrorCodes.ENOENT()
         if (!parent.directory) return -ErrorCodes.ENOTDIR()
-        if (backend.resolve(normalized) != null || pendingCreatedFiles.containsKey(normalized)) {
-            return -ErrorCodes.EEXIST()
+        synchronized(pendingCreatedFiles) {
+            if (backend.resolve(normalized) != null || pendingCreatedFiles.containsKey(normalized)) {
+                return -ErrorCodes.EEXIST()
+            }
+            val shared = LinuxSharedWriteHandle(backend.openWrite(normalized, existing = null, truncate = true))
+            pendingCreatedFiles[normalized] = shared
+            fileInfo.fh.set(registerWriteHandle(shared, writable = true))
         }
-        val id = nextHandle.getAndIncrement()
-        writeHandles[id] = backend.openWrite(normalized, existing = null, truncate = true)
-        pendingCreatedFiles[normalized] = id
-        fileInfo.fh.set(id)
         0
     }
 
@@ -355,11 +388,17 @@ internal class LinuxNextcloudVirtualFileSystem(
         } else {
             backend.move(source, destination)
         }
+        readdressReadHandles(sourcePath, destination)
         0
     }
 
     override fun truncate(path: String, size: Long): Int = fuseResult {
         val normalized = path.linuxVirtualPath()
+        pendingCreatedFiles[normalized]?.let { pending ->
+            pending.delegate.truncate(size)
+            pending.delegate.flush()
+            return 0
+        }
         val existing = backend.resolve(normalized) ?: return -ErrorCodes.ENOENT()
         if (existing.directory) return -ErrorCodes.EISDIR()
         backend.openWrite(normalized, existing, truncate = false).use { handle ->
@@ -371,14 +410,15 @@ internal class LinuxNextcloudVirtualFileSystem(
 
     override fun write(path: String, buf: Pointer, size: Long, offset: Long, fi: FuseFileInfo): Int = fuseResult {
         if (offset < 0L || size < 0L || size > Int.MAX_VALUE) return -ErrorCodes.EINVAL()
-        val handle = writeHandles[fi.fh.get()] ?: return -ErrorCodes.EBADF()
+        val reference = writeHandles[fi.fh.get()] ?: return -ErrorCodes.EBADF()
+        if (!reference.writable) return -ErrorCodes.EBADF()
         val bytes = ByteArray(size.toInt())
         buf.get(0L, bytes, 0, bytes.size)
-        handle.write(offset, bytes)
+        reference.shared.delegate.write(offset, bytes)
     }
 
     override fun flush(path: String, fi: FuseFileInfo): Int = fuseResult {
-        writeHandles[fi.fh.get()]?.flush()
+        writeHandles[fi.fh.get()]?.shared?.delegate?.flush()
         0
     }
 
@@ -396,11 +436,58 @@ internal class LinuxNextcloudVirtualFileSystem(
 
     fun unmount() {
         readHandles.values.forEach { runCatching(it::close) }
-        writeHandles.values.forEach { runCatching(it::close) }
+        writeHandles.values.map(LinuxOpenWriteReference::shared).distinct().forEach { shared ->
+            runCatching(shared.delegate::close)
+        }
         readHandles.clear()
+        readHandlePaths.clear()
         writeHandles.clear()
         pendingCreatedFiles.clear()
         umount()
+    }
+
+    private fun registerWriteHandle(shared: LinuxSharedWriteHandle, writable: Boolean): Long {
+        synchronized(shared) {
+            check(!shared.closed)
+            shared.referenceCount += 1
+        }
+        val id = nextHandle.getAndIncrement()
+        writeHandles[id] = LinuxOpenWriteReference(shared, writable)
+        return id
+    }
+
+    private fun releaseWriteHandle(id: Long) {
+        val reference = writeHandles.remove(id) ?: return
+        val shared = reference.shared
+        val close = synchronized(shared) {
+            check(shared.referenceCount > 0)
+            shared.referenceCount -= 1
+            if (shared.referenceCount == 0 && !shared.closed) {
+                shared.closed = true
+                true
+            } else {
+                false
+            }
+        }
+        if (close) {
+            try {
+                shared.delegate.close()
+            } finally {
+                pendingCreatedFiles.entries.removeIf { it.value === shared }
+            }
+        }
+    }
+
+    private fun readdressReadHandles(sourcePath: String, destinationPath: String) {
+        readHandlePaths.entries.toList().forEach { (id, openPath) ->
+            val movedPath = when {
+                openPath == sourcePath -> destinationPath
+                openPath.startsWith("$sourcePath/") -> destinationPath + openPath.removePrefix(sourcePath)
+                else -> return@forEach
+            }
+            readHandles[id]?.readdress(movedPath)
+            readHandlePaths.replace(id, openPath, movedPath)
+        }
     }
 
     private fun deletePath(path: String, expectDirectory: Boolean): Int = fuseResult {
@@ -438,6 +525,18 @@ internal class LinuxNextcloudVirtualFileSystem(
         const val OPEN_TRUNCATE = 0x200
     }
 }
+
+private class LinuxSharedWriteHandle(
+    val delegate: LinuxVirtualFileWriteHandle,
+) {
+    var referenceCount: Int = 0
+    var closed: Boolean = false
+}
+
+private data class LinuxOpenWriteReference(
+    val shared: LinuxSharedWriteHandle,
+    val writable: Boolean,
+)
 
 private fun String.linuxVirtualPath(): String {
     val normalized = trim('/')

@@ -869,8 +869,8 @@ class DesktopNextcloudServices(
     override fun loadStartOnLoginPreference(): Boolean = preferences.getBoolean(KEY_START_ON_LOGIN, true)
 
     override fun saveStartOnLoginPreference(enabled: Boolean): String? {
-        preferences.putBoolean(KEY_START_ON_LOGIN, enabled)
         val result = startOnLoginController.configure(enabled)
+        if (result.configured) preferences.putBoolean(KEY_START_ON_LOGIN, enabled)
         return result.message.takeUnless { result.configured }
     }
 
@@ -1203,9 +1203,27 @@ class DesktopNextcloudServices(
         check(process.waitFor() == 0) { "Could not store the session in the desktop keyring." }
         preferences.put(KEY_SERVER, session.serverUrl)
         preferences.put(KEY_LOGIN, session.loginName)
+        startDesktopSyncLifecycle()
     }
 
     override fun clearSession() {
+        synchronized(this) {
+            backgroundFileSyncJob?.cancel()
+            backgroundFileSyncJob = null
+        }
+        synchronized(virtualFileProviderLock) {
+            runCatching { linuxVirtualFileSystem?.unmount() }
+            linuxVirtualFileSystem = null
+            linuxVirtualFileMountIdentity = null
+            linuxVirtualFileFailure = null
+            runCatching { windowsCloudFilesProvider?.close() }
+            windowsCloudFilesProvider = null
+            windowsCloudFilesIdentity = null
+            windowsCloudFilesFailure = null
+        }
+        mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
+            phase = DesktopFileSyncTrayPhase.Idle,
+        )
         val server = preferences.get(KEY_SERVER, null)
         val login = preferences.get(KEY_LOGIN, null)
         if (server != null && login != null) secretTool("clear", server, login)

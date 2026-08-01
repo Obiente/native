@@ -93,6 +93,51 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun `new populated local directory uploads every descendant parent first`() {
+        val root = createTempDirectory("windows-cloud-local-tree-")
+        val directory = root.resolve("Projects")
+        val nested = directory.resolve("Launch")
+        nested.toFile().mkdirs()
+        nested.resolve("brief.txt").writeBytes("ready".encodeToByteArray())
+        val backend = FakeBackend("remote".encodeToByteArray())
+        val api = FakeApi(expectedConversions = 3)
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+
+        provider.localEntryChanged(directory)
+
+        assertTrue(api.awaitConversions())
+        assertEquals(
+            listOf("mkdir:Projects", "mkdir:Projects/Launch", "upload:Projects/Launch/brief.txt"),
+            backend.operations,
+        )
+        assertEquals(WindowsCloudPlaceholderState.InSync, api.placeholderState(nested.resolve("brief.txt")))
+        provider.close()
+    }
+
+    @Test
+    fun `ambiguous local create reconciles exact remote bytes before placeholder conversion`() {
+        val root = createTempDirectory("windows-cloud-ambiguous-create-")
+        val local = root.resolve("Notes/recovered.txt")
+        local.parent.toFile().mkdirs()
+        local.writeBytes("saved once".encodeToByteArray())
+        val backend = FakeBackend(
+            source = "remote".encodeToByteArray(),
+            expectedUploads = 1,
+            failAfterUpload = true,
+        )
+        val api = FakeApi(expectedConversions = 1)
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+
+        provider.localEntryChanged(local)
+
+        assertTrue(backend.awaitUploads())
+        assertTrue(api.awaitConversions())
+        assertEquals(WindowsCloudPlaceholderState.InSync, api.placeholderState(local))
+        assertEquals("Notes/recovered.txt", backend.resolve("Notes/recovered.txt")?.path)
+        provider.close()
+    }
+
+    @Test
     fun `startup invalidates hydrated bytes when the remote generation changed`() {
         val root = createTempDirectory("windows-cloud-refresh-")
         val local = root.resolve("example.raf")
@@ -189,6 +234,7 @@ class WindowsCloudFilesProviderTest {
         private val listed: List<WindowsCloudFileIdentity> = emptyList(),
         expectedUploads: Int = 0,
         private val blockFirstUpload: Boolean = false,
+        private val failAfterUpload: Boolean = false,
     ) : WindowsCloudFilesBackend {
         override val accountId: String = "account-01"
         private val uploadLatch = CountDownLatch(expectedUploads)
@@ -198,18 +244,25 @@ class WindowsCloudFilesProviderTest {
         var lastExpectedRemoteRevision: String? = null
         val uploadedBytes = mutableListOf<ByteArray>()
         val uploadExpectedRevisions = mutableListOf<String?>()
+        val operations = mutableListOf<String>()
+        private val remoteIdentities = mutableMapOf<String, WindowsCloudFileIdentity>()
+        private val remoteContents = mutableMapOf<String, ByteArray>()
 
-        override fun resolve(path: String): WindowsCloudFileIdentity? = null
+        override fun resolve(path: String): WindowsCloudFileIdentity? = synchronized(this) {
+            remoteIdentities[path]
+        }
         override fun list(path: String): List<WindowsCloudFileIdentity> =
             listed.filter { it.path.substringBeforeLast('/', "") == path }
 
-        override fun open(identity: WindowsCloudFileIdentity): WindowsCloudFileReadHandle =
-            object : WindowsCloudFileReadHandle {
-                override val size: Long = source.size.toLong()
+        override fun open(identity: WindowsCloudFileIdentity): WindowsCloudFileReadHandle {
+            val bytes = synchronized(this) { remoteContents[identity.path]?.copyOf() } ?: source
+            return object : WindowsCloudFileReadHandle {
+                override val size: Long = bytes.size.toLong()
                 override fun read(offset: Long, length: Int): ByteArray =
-                    source.copyOfRange(offset.toInt(), offset.toInt() + length)
+                    bytes.copyOfRange(offset.toInt(), offset.toInt() + length)
                 override fun close() = Unit
             }
+        }
 
         override fun upload(
             path: String,
@@ -224,16 +277,27 @@ class WindowsCloudFilesProviderTest {
                 uploadExpectedRevisions += expectedRemoteRevision
                 uploadedBytes.size
             }
+            val uploaded = WindowsCloudFileIdentity(accountId, path, "\"uploaded-$uploadNumber\"", bytes.size.toLong(), false)
+            synchronized(this) {
+                operations += "upload:$path"
+                remoteIdentities[path] = uploaded
+                remoteContents[path] = bytes.copyOf()
+            }
             if (blockFirstUpload && uploadNumber == 1) {
                 firstUploadStarted.countDown()
                 check(firstUploadRelease.await(5, TimeUnit.SECONDS))
             }
             uploadLatch.countDown()
-            return WindowsCloudFileIdentity(accountId, path, "\"uploaded-$uploadNumber\"", bytes.size.toLong(), false)
+            if (failAfterUpload && uploadNumber == 1) error("Simulated lost create response")
+            return uploaded
         }
 
-        override fun createDirectory(path: String): WindowsCloudFileIdentity =
-            WindowsCloudFileIdentity(accountId, path, "\"directory\"", 0L, true)
+        override fun createDirectory(path: String): WindowsCloudFileIdentity = synchronized(this) {
+            WindowsCloudFileIdentity(accountId, path, "\"directory\"", 0L, true).also { created ->
+                operations += "mkdir:$path"
+                remoteIdentities[path] = created
+            }
+        }
 
         override fun delete(identity: WindowsCloudFileIdentity) = Unit
         override fun move(identity: WindowsCloudFileIdentity, destinationPath: String): WindowsCloudFileIdentity =

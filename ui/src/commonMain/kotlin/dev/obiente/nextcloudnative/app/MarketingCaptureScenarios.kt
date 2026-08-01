@@ -102,6 +102,18 @@ enum class MarketingCaptureScenario(
         MarketingCapturePurpose.StateCoverage, "linux", "wide",
         width = 1_440, height = 900, density = 1f,
     ),
+    FileSyncSelectionDesktop(
+        "file-sync-selection-desktop", "file-sync-selection-desktop.png", NextcloudPresentation.Desktop,
+        "File sync", "Selective sync browser", "Verified folders and files",
+        MarketingCapturePurpose.StateCoverage, "linux", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    FileSyncSelectionMobile(
+        "file-sync-selection-mobile", "file-sync-selection-mobile.png", NextcloudPresentation.Adaptive,
+        "File sync", "Selective sync browser", "Verified folders and files",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 2_200, density = 2.625f,
+    ),
     VirtualFileStorageMobile(
         "virtual-file-storage-mobile", "virtual-file-storage-mobile.png", NextcloudPresentation.Adaptive,
         "Virtual files", "Storage rules", "Automatic cleanup with protected pins",
@@ -939,6 +951,25 @@ internal fun MarketingFileSyncSetupDesktopScenario() {
             modifier = Modifier.fillMaxWidth().widthIn(max = 920.dp).heightIn(max = 760.dp),
             initialStep = FileSyncSetupStep.Rules,
             syntheticScopeSummary = "18,742 files - 123.4 GB - 2,511 RAW",
+        )
+    }
+}
+
+@Composable
+internal fun MarketingFileSyncSelectionScenario(services: NextcloudPlatformServices) {
+    Box(
+        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
+        contentAlignment = Alignment.Center,
+    ) {
+        RemoteFileSyncSelectionDialog(
+            services = services,
+            session = NextcloudSession("https://cloud.invalid", "alex@example.invalid", "fixture"),
+            userId = "alex",
+            remoteRootPath = "Photos/Studio",
+            initialSelection = listOf("RAW/Day 1"),
+            onDismiss = {},
+            onSelected = {},
+            embedded = true,
         )
     }
 }

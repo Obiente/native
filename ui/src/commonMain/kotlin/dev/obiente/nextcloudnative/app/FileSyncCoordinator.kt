@@ -517,10 +517,20 @@ private fun resolveDecisionOperation(
         )
     }
     FileSyncDecisionChoice.PropagateDeletion -> when (work.decision?.reason) {
-        FileSyncDecisionReason.LocalDeletion ->
+        FileSyncDecisionReason.LocalDeletion -> if (
+            pair.configuration.hasPartialDirectoryView() && work.observedRemote?.kind == SyncEntryKind.Directory
+        ) {
+            FileSyncOperation.Skipped(work.relativePath, PARTIAL_DIRECTORY_DECISION_REASON)
+        } else {
             FileSyncOperation.DeleteRemote(work.relativePath, requireNotNull(work.observedRemote).etag)
-        FileSyncDecisionReason.RemoteDeletion ->
+        }
+        FileSyncDecisionReason.RemoteDeletion -> if (
+            pair.configuration.hasPartialDirectoryView() && work.observedLocal?.kind == SyncEntryKind.Directory
+        ) {
+            FileSyncOperation.Skipped(work.relativePath, PARTIAL_DIRECTORY_DECISION_REASON)
+        } else {
             FileSyncOperation.DeleteLocal(work.relativePath, requireNotNull(work.observedLocal).revision)
+        }
         else -> error("There is no deletion to propagate.")
     }
     FileSyncDecisionChoice.RestoreMissing -> when (work.decision?.reason) {
@@ -533,6 +543,12 @@ private fun resolveDecisionOperation(
     FileSyncDecisionChoice.Skip ->
         FileSyncOperation.Skipped(work.relativePath, "Skipped by the user for this observed generation.")
 }
+
+private fun FileSyncConfiguration.hasPartialDirectoryView(): Boolean =
+    selectedPaths.isNotEmpty() || ignoredPatterns.isNotEmpty()
+
+private const val PARTIAL_DIRECTORY_DECISION_REASON =
+    "Directory deletion is paused because selective or ignored items may exist below it."
 
 private fun FileSyncWorkItem.sameGeneration(
     planned: FileSyncOperation,

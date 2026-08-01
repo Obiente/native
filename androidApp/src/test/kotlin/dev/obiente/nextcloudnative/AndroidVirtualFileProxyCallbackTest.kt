@@ -5,9 +5,17 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AndroidVirtualFileProxyCallbackTest {
+    @Test
+    fun `hydration capacity preserves the configured free space reserve`() {
+        assertTrue(androidHydrationFitsCapacity(sizeBytes = 40L, availableBytes = 140L, reserveBytes = 100L))
+        assertFalse(androidHydrationFitsCapacity(sizeBytes = 41L, availableBytes = 140L, reserveBytes = 100L))
+        assertFalse(androidHydrationFitsCapacity(sizeBytes = Long.MAX_VALUE, availableBytes = Long.MAX_VALUE, reserveBytes = 1L))
+    }
+
     @Test
     fun `seekable reads hydrate aligned blocks and publish only a complete generation`() {
         val sourceBytes = "0123456789".encodeToByteArray()

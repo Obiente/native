@@ -203,13 +203,13 @@ internal class DesktopVirtualRangeCache(
     }
 
     private fun save(accountId: String, index: RangeCacheIndex) {
-        index.requireValid()
         val directory = accountDirectory(accountId).apply {
             check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
         }
         val bounded = index.copy(
             blocks = index.blocks.sortedByDescending(CachedRangeBlock::lastAccessedAtEpochMillis).take(MAX_BLOCKS),
         )
+        bounded.requireValid()
         val encoded = rangeCacheJson.encodeToString(bounded).encodeToByteArray()
         require(encoded.size <= MAX_INDEX_BYTES)
         publishBytes(directory, INDEX_FILE, encoded)

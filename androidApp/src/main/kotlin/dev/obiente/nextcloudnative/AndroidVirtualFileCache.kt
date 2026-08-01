@@ -115,6 +115,37 @@ internal class AndroidVirtualFileCache(context: Context) {
     fun canCacheHydration(sizeBytes: Long): Boolean = sizeBytes in 0L..MAX_VIRTUAL_FILE_BYTES
 
     @Synchronized
+    fun prepareHydration(
+        session: dev.obiente.nextcloudnative.app.NextcloudSession,
+        sizeBytes: Long,
+    ): File? {
+        if (!canCacheHydration(sizeBytes)) return null
+        check(root.isDirectory || root.mkdirs()) { "Could not create virtual file cache storage." }
+        val policy = loadPolicy()
+        val availableBefore = root.usableSpace.coerceAtLeast(0L)
+        val requiredBeforeHydration = if (sizeBytes > Long.MAX_VALUE - policy.minimumFreeSpaceBytes) {
+            Long.MAX_VALUE
+        } else {
+            sizeBytes + policy.minimumFreeSpaceBytes
+        }
+        val requestedBytes = (requiredBeforeHydration - availableBefore).coerceAtLeast(0L)
+        if (requestedBytes > 0L && policy.automaticCleanup) {
+            applyEviction(NextcloudDocumentIds.accountKey(session), requestedBytes)
+        }
+        return if (
+            androidHydrationFitsCapacity(
+                sizeBytes = sizeBytes,
+                availableBytes = root.usableSpace.coerceAtLeast(0L),
+                reserveBytes = policy.minimumFreeSpaceBytes,
+            )
+        ) {
+            createHydrationStagingFile()
+        } else {
+            null
+        }
+    }
+
+    @Synchronized
     fun publishHydration(
         session: dev.obiente.nextcloudnative.app.NextcloudSession,
         file: NextcloudFile,
@@ -493,3 +524,14 @@ internal class AndroidVirtualFileCache(context: Context) {
         const val MAX_VIRTUAL_FILE_BYTES = 2L * 1024L * 1024L * 1024L
     }
 }
+
+internal fun androidHydrationFitsCapacity(
+    sizeBytes: Long,
+    availableBytes: Long,
+    reserveBytes: Long,
+): Boolean =
+    sizeBytes >= 0L &&
+        availableBytes >= 0L &&
+        reserveBytes >= 0L &&
+        availableBytes >= sizeBytes &&
+        availableBytes - sizeBytes >= reserveBytes

@@ -9,12 +9,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -730,6 +732,281 @@ internal fun RemoteFolderPickerDialog(
     )
 }
 
+internal fun fileSyncSelectionRelativePath(remoteRootPath: String, absolutePath: String): String? {
+    val root = canonicalRemoteFolderPath(remoteRootPath) ?: return null
+    val absolute = canonicalRemoteFolderPath(absolutePath) ?: return null
+    return when {
+        root.isEmpty() && absolute.isNotEmpty() -> absolute
+        root.isNotEmpty() && absolute.startsWith("$root/") -> absolute.removePrefix("$root/")
+        else -> null
+    }?.takeIf { relative -> runCatching { requireValidSyncPath(relative) }.isSuccess }
+}
+
+@Composable
+internal fun RemoteFileSyncSelectionDialog(
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+    userId: String,
+    remoteRootPath: String,
+    initialSelection: List<String>,
+    onDismiss: () -> Unit,
+    onSelected: (List<String>) -> Unit,
+    embedded: Boolean = false,
+) {
+    val root = remember(remoteRootPath) { canonicalRemoteFolderPath(remoteRootPath).orEmpty() }
+    var currentRelativePath by rememberSaveable(root) { mutableStateOf("") }
+    var selectedPaths by rememberSaveable(root, initialSelection) {
+        mutableStateOf(initialSelection.distinct().sorted())
+    }
+    var files by remember(session, userId, root) { mutableStateOf<List<NextcloudFile>?>(null) }
+    var networkConfirmed by remember(session, userId, root) { mutableStateOf(false) }
+    var loading by remember(session, userId, root) { mutableStateOf(true) }
+    var error by remember(session, userId, root) { mutableStateOf<String?>(null) }
+    var loadAttempt by rememberSaveable(session.serverUrl, session.loginName, userId, root) {
+        mutableStateOf(0)
+    }
+    val absoluteCurrentPath = remember(root, currentRelativePath) {
+        listOf(root, currentRelativePath).filter(String::isNotEmpty).joinToString("/")
+    }
+
+    LaunchedEffect(session, userId, absoluteCurrentPath, loadAttempt) {
+        loading = true
+        files = null
+        networkConfirmed = false
+        error = null
+        runCatching { services.listFilesWithSource(session, userId, absoluteCurrentPath) }
+            .rethrowRemoteFolderCancellation()
+            .onSuccess { listing ->
+                files = listing.files
+                networkConfirmed = listing.source == NextcloudFileListingSource.Network
+                if (!networkConfirmed) error = "Connect to Nextcloud to verify selectable items."
+            }
+            .onFailure { failure ->
+                error = failure.message ?: "Could not open this mapped Nextcloud folder."
+            }
+        loading = false
+    }
+
+    val visibleItems = remember(files, absoluteCurrentPath, root) {
+        files.orEmpty().asSequence()
+            .filter { file ->
+                canonicalRemoteFolderPath(file.path) == file.path &&
+                    remoteFolderParentPath(file.path) == absoluteCurrentPath
+            }
+            .mapNotNull { file ->
+                fileSyncSelectionRelativePath(root, file.path)?.let { relative -> file to relative }
+            }
+            .distinctBy { (_, relative) -> relative }
+            .sortedWith(compareBy<Pair<NextcloudFile, String>> { !it.first.isDirectory }.thenBy { it.first.name.lowercase() })
+            .toList()
+    }
+    val breadcrumbs = remember(currentRelativePath) { remoteFolderBreadcrumbs(currentRelativePath) }
+
+    fun toggle(relativePath: String) {
+        selectedPaths = if (relativePath in selectedPaths) {
+            selectedPaths - relativePath
+        } else if (selectedPaths.size < MAX_FILE_SYNC_SELECTION_PATHS) {
+            (selectedPaths + relativePath).distinct().sorted()
+        } else {
+            selectedPaths
+        }
+    }
+
+    val pickerText: @Composable () -> Unit = {
+        LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 590.dp),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                item(key = "selection-summary") {
+                    Text(
+                        if (selectedPaths.isEmpty()) {
+                            "Nothing selected yet. Leaving the selection empty syncs the whole mapped folder."
+                        } else if (selectedPaths.size == 1) {
+                            "1 verified item selected"
+                        } else {
+                            "${selectedPaths.size} verified items selected"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (selectedPaths.isNotEmpty()) {
+                    item(key = "selected-items") {
+                        Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+                            selectedPaths.take(MAX_VISIBLE_SYNC_SELECTIONS).forEach { selected ->
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    shape = RoundedCornerShape(NextcloudRadii.Small),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(
+                                            start = NextcloudSpacing.Medium,
+                                            end = NextcloudSpacing.XSmall,
+                                        ),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(
+                                            NextcloudIcons.CheckCircle,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                        Text(
+                                            selected,
+                                            modifier = Modifier.weight(1f).padding(horizontal = NextcloudSpacing.Small),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        TextButton(onClick = { toggle(selected) }) { Text("Remove") }
+                                    }
+                                }
+                            }
+                            if (selectedPaths.size > MAX_VISIBLE_SYNC_SELECTIONS) {
+                                Text(
+                                    "+${selectedPaths.size - MAX_VISIBLE_SYNC_SELECTIONS} more selected",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+                item(key = "selection-breadcrumbs") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        breadcrumbs.forEachIndexed { index, breadcrumb ->
+                            if (index > 0) Text(" / ", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (breadcrumb.path == currentRelativePath) {
+                                Text(
+                                    if (index == 0) "Mapped folder" else breadcrumb.label,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            } else {
+                                TextButton(onClick = { currentRelativePath = breadcrumb.path }) {
+                                    Text(
+                                        if (index == 0) "Mapped folder" else breadcrumb.label,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                if (currentRelativePath.isNotEmpty() && networkConfirmed) {
+                    item(key = "select-current-folder:$currentRelativePath") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable { toggle(currentRelativePath) }
+                                .padding(vertical = NextcloudSpacing.Small),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = currentRelativePath in selectedPaths,
+                                onCheckedChange = { toggle(currentRelativePath) },
+                            )
+                            Text("Select this folder", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+                when {
+                    loading -> item(key = "selection-loading") {
+                        Row(Modifier.fillMaxWidth().padding(NextcloudSpacing.Large), Arrangement.Center) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        }
+                    }
+                    files == null || !networkConfirmed -> item(key = "selection-error") {
+                        PickerMessage(
+                            message = error ?: "Could not verify this folder.",
+                            parentPath = currentRelativePath.takeIf(String::isNotEmpty)?.substringBeforeLast('/', ""),
+                            onParent = { currentRelativePath = it },
+                            onRetry = { loadAttempt += 1 },
+                        )
+                    }
+                    visibleItems.isEmpty() -> item(key = "selection-empty") {
+                        Text(
+                            "No folders or files are available here.",
+                            modifier = Modifier.padding(NextcloudSpacing.Large),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    else -> items(visibleItems, key = { (_, relative) -> "sync-selection:$relative" }) { (file, relative) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .clickable {
+                                    if (file.isDirectory) currentRelativePath = relative else toggle(relative)
+                                }
+                                .padding(vertical = NextcloudSpacing.Small),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        ) {
+                            Checkbox(
+                                checked = relative in selectedPaths,
+                                onCheckedChange = { toggle(relative) },
+                            )
+                            Icon(
+                                if (file.isDirectory) NextcloudIcons.Folder else NextcloudIcons.File,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(file.name, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (file.isDirectory) {
+                                Icon(NextcloudIcons.ChevronRight, contentDescription = "Open folder")
+                            }
+                        }
+                        HorizontalDivider()
+                    }
+                }
+        }
+    }
+    val confirmButton: @Composable () -> Unit = {
+        Button(enabled = !loading && error == null, onClick = { onSelected(selectedPaths) }) {
+            Text("Use selection")
+        }
+    }
+    val dismissButton: @Composable () -> Unit = {
+        TextButton(onClick = onDismiss) { Text("Cancel") }
+    }
+    if (embedded) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().widthIn(max = 720.dp),
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(NextcloudRadii.Large),
+            tonalElevation = 6.dp,
+            shadowElevation = 12.dp,
+        ) {
+            Column(
+                modifier = Modifier.padding(NextcloudSpacing.XLarge),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            ) {
+                Text("Choose what syncs", style = MaterialTheme.typography.headlineSmall)
+                pickerText()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    dismissButton()
+                    confirmButton()
+                }
+            }
+        }
+    } else {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Choose what syncs") },
+            text = pickerText,
+            confirmButton = confirmButton,
+            dismissButton = dismissButton,
+        )
+    }
+}
+
 @Composable
 private fun PickerMessage(
     message: String,
@@ -760,3 +1037,4 @@ private fun PickerMessage(
 private const val MAX_REMOTE_FOLDER_PATH_LENGTH = 8_192
 private const val MAX_REMOTE_FOLDER_NAME_LENGTH = 255
 private const val MAX_REMOTE_FOLDER_SEARCH_LENGTH = 256
+private const val MAX_VISIBLE_SYNC_SELECTIONS = 4

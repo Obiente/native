@@ -785,6 +785,7 @@ internal fun GuidedAddFolderSyncDialog(
     busy: Boolean,
     onDismiss: () -> Unit,
     onChooseDestination: () -> Unit,
+    onChooseSelectedPaths: () -> Unit = {},
     onConfigurationChanged: (FileSyncConfiguration) -> Unit,
     onAdd: () -> Unit,
 ) {
@@ -806,6 +807,7 @@ internal fun GuidedAddFolderSyncDialog(
                 busy = busy,
                 onDismiss = onDismiss,
                 onChooseDestination = onChooseDestination,
+                onChooseSelectedPaths = onChooseSelectedPaths,
                 onConfigurationChanged = onConfigurationChanged,
                 onAdd = onAdd,
                     modifier = if (compact) {
@@ -831,6 +833,7 @@ internal fun FileSyncSetupSurface(
     busy: Boolean,
     onDismiss: () -> Unit,
     onChooseDestination: () -> Unit,
+    onChooseSelectedPaths: () -> Unit = {},
     onConfigurationChanged: (FileSyncConfiguration) -> Unit,
     onAdd: () -> Unit,
     modifier: Modifier = Modifier,
@@ -873,6 +876,7 @@ internal fun FileSyncSetupSurface(
                                 mediaPreviewLoading = mediaPreviewLoading,
                                 mediaPreviewError = mediaPreviewError,
                                 onChooseDestination = onChooseDestination,
+                                onChooseSelectedPaths = onChooseSelectedPaths,
                                 onConfigurationChanged = onConfigurationChanged,
                                 syntheticScopeSummary = syntheticScopeSummary,
                                 modifier = Modifier.weight(1f),
@@ -893,6 +897,7 @@ internal fun FileSyncSetupSurface(
                             mediaPreviewLoading = mediaPreviewLoading,
                             mediaPreviewError = mediaPreviewError,
                             onChooseDestination = onChooseDestination,
+                            onChooseSelectedPaths = onChooseSelectedPaths,
                             onConfigurationChanged = onConfigurationChanged,
                             syntheticScopeSummary = syntheticScopeSummary,
                             modifier = Modifier.weight(1f),
@@ -961,7 +966,7 @@ private fun FileSyncStepRail(
         }
         Spacer(Modifier.height(NextcloudSpacing.Medium))
         Text(
-            "You can change every option later. Setup never deletes existing files.",
+            "Review each option before adding the sync. Setup never deletes existing files.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1014,6 +1019,7 @@ private fun FileSyncStepContent(
     mediaPreviewLoading: Boolean,
     mediaPreviewError: String?,
     onChooseDestination: () -> Unit,
+    onChooseSelectedPaths: () -> Unit,
     onConfigurationChanged: (FileSyncConfiguration) -> Unit,
     syntheticScopeSummary: String?,
     modifier: Modifier = Modifier,
@@ -1041,6 +1047,7 @@ private fun FileSyncStepContent(
             FileSyncSetupStep.Rules -> FileSyncRulesStep(
                 configuration = configuration,
                 onConfigurationChanged = onConfigurationChanged,
+                onChooseSelectedPaths = onChooseSelectedPaths,
                 syntheticScopeSummary = syntheticScopeSummary,
             )
             FileSyncSetupStep.Review -> FileSyncReviewStep(
@@ -1133,6 +1140,7 @@ private fun FileSyncDirectionStep(
 private fun FileSyncRulesStep(
     configuration: FileSyncConfiguration,
     onConfigurationChanged: (FileSyncConfiguration) -> Unit,
+    onChooseSelectedPaths: () -> Unit,
     syntheticScopeSummary: String?,
 ) {
     var customEditorVisible by rememberSaveable {
@@ -1164,7 +1172,7 @@ private fun FileSyncRulesStep(
         Text(if (customEditorVisible) "Hide custom rules" else "Customize rules")
     }
     if (customEditorVisible) {
-        StructuredFileSyncRulesEditor(configuration, onConfigurationChanged)
+        StructuredFileSyncRulesEditor(configuration, onConfigurationChanged, onChooseSelectedPaths)
     }
 }
 
@@ -1302,15 +1310,17 @@ private fun FileSyncScopeSummary(configuration: FileSyncConfiguration, synthetic
 private fun StructuredFileSyncRulesEditor(
     configuration: FileSyncConfiguration,
     onConfigurationChanged: (FileSyncConfiguration) -> Unit,
+    onChooseSelectedPaths: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large)) {
-        FileSyncRuleListEditor(
-            title = "Selected folders and files",
-            supporting = "Leave empty to include the whole folder.",
-            placeholder = "Shoots/2026",
+        FileSyncSelectionEditor(
             values = configuration.selectedPaths,
-            validate = { value -> runCatching { requireValidSyncPath(value) }.isSuccess },
-            onValuesChanged = { onConfigurationChanged(configuration.copy(selectedPaths = it)) },
+            onChoose = onChooseSelectedPaths,
+            onRemove = { removed ->
+                onConfigurationChanged(
+                    configuration.copy(selectedPaths = configuration.selectedPaths - removed),
+                )
+            },
         )
         FileSyncRuleListEditor(
             title = "Ignored files",
@@ -1331,6 +1341,44 @@ private fun StructuredFileSyncRulesEditor(
                 onConfigurationChanged(configuration.copy(priorityRules = values.map(::FileSyncPriorityRule)))
             },
         )
+    }
+}
+
+@Composable
+private fun FileSyncSelectionEditor(
+    values: List<String>,
+    onChoose: () -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+        Text("Selected folders and files", style = MaterialTheme.typography.labelLarge)
+        Text(
+            "Choose verified items from the mapped Nextcloud folder. Leave empty to include everything.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        values.forEach { value ->
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(NextcloudRadii.Small),
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = NextcloudSpacing.Medium, end = NextcloudSpacing.XSmall),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(NextcloudIcons.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(NextcloudSpacing.Small))
+                    Text(value, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    TextButton(onClick = { onRemove(value) }) { Text("Remove") }
+                }
+            }
+        }
+        OutlinedButton(onClick = onChoose) {
+            Icon(NextcloudIcons.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(NextcloudSpacing.Small))
+            Text(if (values.isEmpty()) "Choose folders or files" else "Change selection")
+        }
     }
 }
 

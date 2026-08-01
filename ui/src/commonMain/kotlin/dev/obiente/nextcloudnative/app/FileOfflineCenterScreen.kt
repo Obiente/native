@@ -90,6 +90,9 @@ internal fun FileOfflineCenterScreen(
     var remoteFolderPickerVisible by rememberSaveable(session.serverUrl, session.loginName, userId) {
         mutableStateOf(false)
     }
+    var syncSelectionPickerVisible by rememberSaveable(session.serverUrl, session.loginName, userId) {
+        mutableStateOf(false)
+    }
     val pendingLocalRoot = pendingLocalRootJson?.let { encoded ->
         runCatching { fileSyncSetupJson.decodeFromString<FileSyncLocalRoot>(encoded) }.getOrNull()
     }
@@ -372,6 +375,7 @@ internal fun FileOfflineCenterScreen(
                                                 defaultFileSyncConfiguration(isMediaSuggestion = false)
                                             }?.let { fileSyncSetupJson.encodeToString(it) }
                                             remoteFolderPickerVisible = false
+                                            syncSelectionPickerVisible = false
                                         }
                                         .onFailure { failure ->
                                             actionMessage = failure.message ?: "Could not select a local folder."
@@ -390,6 +394,7 @@ internal fun FileOfflineCenterScreen(
                                     defaultFileSyncConfiguration(isMediaSuggestion = true),
                                 )
                                 remoteFolderPickerVisible = false
+                                syncSelectionPickerVisible = false
                             }
                         },
                         onRequestMediaPermission = {
@@ -543,14 +548,47 @@ internal fun FileOfflineCenterScreen(
                 }
             },
             onSelected = { selectedPath ->
+                if (pendingRemotePath != selectedPath) {
+                    pendingSyncConfiguration?.let { configuration ->
+                        pendingSyncConfigurationJson = fileSyncSetupJson.encodeToString(
+                            configuration.copy(selectedPaths = emptyList()),
+                        )
+                    }
+                }
                 pendingRemotePath = selectedPath
                 remoteFolderPickerVisible = false
             },
         )
     }
 
+    val selectionConfiguration = pendingSyncConfiguration
+    val selectionRemoteRoot = pendingRemotePath
+    if (
+        syncSelectionPickerVisible &&
+        selectionConfiguration != null &&
+        selectionRemoteRoot != null
+    ) {
+        RemoteFileSyncSelectionDialog(
+            services = services,
+            session = session,
+            userId = userId,
+            remoteRootPath = selectionRemoteRoot,
+            initialSelection = selectionConfiguration.selectedPaths,
+            onDismiss = { syncSelectionPickerVisible = false },
+            onSelected = { selectedPaths ->
+                pendingSyncConfigurationJson = fileSyncSetupJson.encodeToString(
+                    selectionConfiguration.copy(selectedPaths = selectedPaths),
+                )
+                syncSelectionPickerVisible = false
+            },
+        )
+    }
+
     pendingLocalRoot?.takeIf {
-        !remoteFolderPickerVisible && pendingRemotePath != null && pendingSyncConfiguration != null
+        !remoteFolderPickerVisible &&
+            !syncSelectionPickerVisible &&
+            pendingRemotePath != null &&
+            pendingSyncConfiguration != null
     }?.let { localRoot ->
         AddFolderSyncDialog(
             localRoot = localRoot,
@@ -568,10 +606,14 @@ internal fun FileOfflineCenterScreen(
                     pendingRemotePath = null
                     pendingSyncConfigurationJson = null
                     pendingMediaPreview = null
+                    syncSelectionPickerVisible = false
                 }
             },
             onChooseDestination = {
                 if (syncBusyPairId == null) remoteFolderPickerVisible = true
+            },
+            onChooseSelectedPaths = {
+                if (syncBusyPairId == null) syncSelectionPickerVisible = true
             },
             onConfigurationChanged = { pendingSyncConfigurationJson = fileSyncSetupJson.encodeToString(it) },
             onAdd = {
@@ -597,6 +639,7 @@ internal fun FileOfflineCenterScreen(
                             pendingRemotePath = null
                             pendingSyncConfigurationJson = null
                             pendingMediaPreview = null
+                            syncSelectionPickerVisible = false
                             refreshAttempt += 1
                         }
                     }.onFailure { failure ->
@@ -1113,6 +1156,7 @@ internal fun AddFolderSyncDialog(
     busy: Boolean,
     onDismiss: () -> Unit,
     onChooseDestination: () -> Unit,
+    onChooseSelectedPaths: () -> Unit,
     onConfigurationChanged: (FileSyncConfiguration) -> Unit,
     onAdd: () -> Unit,
 ) {
@@ -1127,6 +1171,7 @@ internal fun AddFolderSyncDialog(
         busy = busy,
         onDismiss = onDismiss,
         onChooseDestination = onChooseDestination,
+        onChooseSelectedPaths = onChooseSelectedPaths,
         onConfigurationChanged = onConfigurationChanged,
         onAdd = onAdd,
     )

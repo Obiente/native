@@ -213,7 +213,7 @@
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.png",
         "ui/src/desktopMain/resources/marketing/raw-render-fixture.svg"
     ],
-    "captureSourceSha256": "417cb216129b57c36b01769a7021ac476d4c24de2f5dbef53b591d56e44b1d06",
+    "captureSourceSha256": "d9c1d5cfb1aec2ca2cc80039d07ed7ee989c90c584120a8eee3923648056ef3e",
     "avatarSha256": "a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d",
     "captures": [
         {
@@ -326,7 +326,35 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "83d7b44bc7c6571336ff70d3f3024aabdaf7172ddc61d55ddddfb6c9debf3e36"
+            "sha256": "3fd752198caec382feecf3b6bb7cbc29bef310f9ad17b2dfdf6595defe4dbcff"
+        },
+        {
+            "scenario": "file-sync-selection-desktop",
+            "file": "file-sync-selection-desktop.png",
+            "width": 1440,
+            "height": 900,
+            "density": 1.0,
+            "feature": "File sync",
+            "surface": "Selective sync browser",
+            "state": "Verified folders and files",
+            "purpose": "state-coverage",
+            "platform": "linux",
+            "viewport": "wide",
+            "sha256": "93d9c093a96d06166c399cd0ca152350a10c49d520a5a8dbd4d84b1ada0e3502"
+        },
+        {
+            "scenario": "file-sync-selection-mobile",
+            "file": "file-sync-selection-mobile.png",
+            "width": 1080,
+            "height": 2200,
+            "density": 2.625,
+            "feature": "File sync",
+            "surface": "Selective sync browser",
+            "state": "Verified folders and files",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "319abb2fa2e0de0fe1a91f04e69b60e8eea1074321a9566212d4f8a603502cff"
         },
         {
             "scenario": "virtual-file-storage-mobile",

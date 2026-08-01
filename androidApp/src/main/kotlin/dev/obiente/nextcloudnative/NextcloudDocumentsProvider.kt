@@ -225,11 +225,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             size = size,
             expectedEtag = etag,
         )
-        val staging = if (virtualFiles.canCacheHydration(size)) {
-            virtualFiles.createHydrationStagingFile()
-        } else {
-            null
-        }
+        val staging = virtualFiles.prepareHydration(session, size)
         val callback = AndroidVirtualFileProxyCallback(
             source = rangeSession,
             staging = staging,

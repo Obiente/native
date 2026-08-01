@@ -161,6 +161,37 @@ class FileSyncCoordinatorTest {
     }
 
     @Test
+    fun `selective directory deletion choice remains non destructive`() {
+        var state = state(
+            baselines = listOf(
+                FileSyncBaseline("Photos", SyncEntryKind.Directory, "local-dir", "remote-dir"),
+            ),
+            configuration = FileSyncConfiguration(
+                deviceLabel = "Workstation",
+                selectedPaths = listOf("Photos/Shared"),
+            ),
+        )
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = listOf(RemoteSyncEntry("Photos", SyncEntryKind.Directory, "remote-dir")),
+            nowEpochMillis = 10,
+        )
+        val workId = state.pair().workItems.single().id
+
+        state = resolveFileSyncDecision(
+            state,
+            PAIR_ID,
+            workId,
+            FileSyncDecisionChoice.PropagateDeletion,
+        )
+
+        assertIs<FileSyncOperation.Skipped>(state.pair().workItems.single().operation)
+        assertNull(claimNextFileSyncOperation(state, PAIR_ID, 20).command)
+    }
+
+    @Test
     fun `keep both requires verified convergence for every generated path`() {
         var state = state(baselines = listOf(baseline("daily.note.md", "l1", "r1")))
         state = scanFileSyncPair(

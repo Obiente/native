@@ -448,7 +448,7 @@ internal class WindowsCloudFilesProvider(
         }
     }
 
-    /** Handles regular local files that do not have a Cloud Files identity yet. */
+    /** Handles local files or complete directory trees that do not have Cloud Files identities yet. */
     fun localEntryChanged(path: Path) {
         val normalized = path.toAbsolutePath().normalize()
         if (!normalized.startsWith(root.toAbsolutePath().normalize()) || normalized == root) return
@@ -456,7 +456,7 @@ internal class WindowsCloudFilesProvider(
         val relative = root.toAbsolutePath().normalize().relativize(normalized)
             .joinToString("/") { it.toString() }.windowsCloudPath()
         submitPathOperation(relative) {
-            uploadLocalEntry(normalized, relative)
+            if (Files.isDirectory(normalized)) uploadLocalTree(normalized) else uploadLocalEntry(normalized, relative)
         }
     }
 
@@ -691,8 +691,17 @@ internal class WindowsCloudFilesProvider(
                     key.pollEvents().forEach { event ->
                         if (event.kind() == StandardWatchEventKinds.OVERFLOW) return@forEach
                         val child = directory.resolve(event.context() as Path).toAbsolutePath().normalize()
-                        if (event.kind() == StandardWatchEventKinds.ENTRY_CREATE && Files.isDirectory(child)) {
-                            runCatching { child.registerForWindowsCloudChanges(watcher) }
+                        if (
+                            event.kind() == StandardWatchEventKinds.ENTRY_CREATE &&
+                            Files.isDirectory(child) &&
+                            !Files.isSymbolicLink(child)
+                        ) {
+                            runCatching {
+                                Files.walk(child).use { descendants ->
+                                    descendants.filter { path -> Files.isDirectory(path) && !Files.isSymbolicLink(path) }
+                                        .forEach { descendant -> descendant.registerForWindowsCloudChanges(watcher) }
+                                }
+                            }
                         }
                         if (event.kind() != StandardWatchEventKinds.ENTRY_DELETE) scheduleLocalChange(child)
                     }
@@ -766,21 +775,99 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun uploadLocalEntry(localPath: Path, relativePath: String) {
-        pendingWritebacks += relativePath
-        val uploaded = if (Files.isDirectory(localPath)) {
-            backend.createDirectory(relativePath)
-        } else {
-            backend.upload(relativePath, localPath.toFile(), expectedRemoteRevision = null)
+        require(localPath.toAbsolutePath().normalize().startsWith(root.toAbsolutePath().normalize()))
+        require(!Files.isSymbolicLink(localPath)) { "Windows Cloud Files does not import symbolic links." }
+        require(Files.isDirectory(localPath) || Files.isRegularFile(localPath)) {
+            "Windows Cloud Files only imports regular files and folders."
         }
-        knownIdentities[relativePath] = uploaded
-        api.convertToPlaceholder(localPath, placeholder(uploaded))
-        api.markInSync(localPath)
-        pendingWritebacks -= relativePath
+        pendingWritebacks += relativePath
+        try {
+            val uploaded = try {
+                if (Files.isDirectory(localPath)) {
+                    backend.createDirectory(relativePath)
+                } else {
+                    backend.upload(relativePath, localPath.toFile(), expectedRemoteRevision = null)
+                }
+            } catch (failure: Throwable) {
+                val reconciled = runCatching { backend.resolve(relativePath) }.getOrNull()
+                    ?.takeIf { identity -> localEntryMatches(identity, localPath, relativePath) }
+                if (reconciled == null) throw failure
+                reconciled
+            }
+            knownIdentities[relativePath] = uploaded
+            api.convertToPlaceholder(localPath, placeholder(uploaded))
+            api.markInSync(localPath)
+        } finally {
+            pendingWritebacks -= relativePath
+        }
+    }
+
+    private fun uploadLocalTree(localDirectory: Path) {
+        val absoluteRoot = root.toAbsolutePath().normalize()
+        val normalizedDirectory = localDirectory.toAbsolutePath().normalize()
+        require(normalizedDirectory.startsWith(absoluteRoot) && normalizedDirectory != absoluteRoot)
+        val entries = Files.walk(normalizedDirectory).use { paths ->
+            paths.limit(MAX_RECOVERY_IDENTITIES.toLong() + 1L)
+                .sorted(compareBy<Path> { it.nameCount })
+                .toList()
+        }
+        require(entries.size <= MAX_RECOVERY_IDENTITIES) {
+            "The new Windows folder contains too many entries to import safely."
+        }
+        entries.forEach { entry ->
+            val normalized = entry.toAbsolutePath().normalize()
+            require(normalized.startsWith(normalizedDirectory) && !Files.isSymbolicLink(normalized)) {
+                "The new Windows folder contains an unsafe entry."
+            }
+            if (Files.exists(normalized) && api.placeholderState(normalized) == WindowsCloudPlaceholderState.Absent) {
+                val relative = absoluteRoot.relativize(normalized)
+                    .joinToString("/") { it.toString() }.windowsCloudPath()
+                uploadLocalEntry(normalized, relative)
+            }
+        }
+    }
+
+    private fun localEntryMatches(
+        identity: WindowsCloudFileIdentity,
+        localPath: Path,
+        relativePath: String,
+    ): Boolean {
+        if (identity.accountId != backend.accountId || identity.path != relativePath) return false
+        val localDirectory = Files.isDirectory(localPath)
+        if (identity.directory != localDirectory) return false
+        if (localDirectory) return true
+        if (!Files.isRegularFile(localPath) || identity.size != Files.size(localPath)) return false
+        if (identity.size == 0L) return true
+        return runCatching {
+            backend.open(identity).use remoteUse@ { remote ->
+                if (remote.size != identity.size) return@remoteUse false
+                Files.newInputStream(localPath).buffered().use localUse@ { local ->
+                    var offset = 0L
+                    val localBuffer = ByteArray(RECONCILIATION_CHUNK_BYTES)
+                    while (offset < identity.size) {
+                        val length = minOf(localBuffer.size.toLong(), identity.size - offset).toInt()
+                        var localCount = 0
+                        while (localCount < length) {
+                            val read = local.read(localBuffer, localCount, length - localCount)
+                            if (read < 0) return@localUse false
+                            localCount += read
+                        }
+                        val remoteBytes = remote.read(offset, length)
+                        if (remoteBytes.size != length || !remoteBytes.contentEquals(localBuffer.copyOf(length))) {
+                            return@localUse false
+                        }
+                        offset += length
+                    }
+                    local.read() == -1
+                }
+            }
+        }.getOrDefault(false)
     }
 
     private companion object {
         const val LOCAL_CHANGE_SETTLE_MILLIS = 750L
         const val MAX_RECOVERY_IDENTITIES = 20_000
+        const val RECONCILIATION_CHUNK_BYTES = 1024 * 1024
     }
 }
 

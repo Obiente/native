@@ -66,6 +66,33 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `pending created file can be reopened with an independent read handle`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        val runtime = Runtime.getSystemRuntime()
+        val creator = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val reader = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val input = runtime.memoryManager.allocateDirect(5)
+        input.put(0L, "draft".encodeToByteArray(), 0, 5)
+
+        assertEquals(0, fileSystem.create("/Photos/draft.txt", 0L, creator))
+        assertEquals(5, fileSystem.write("/Photos/draft.txt", input, 5L, 0L, creator))
+        assertEquals(0, fileSystem.access("/Photos/draft.txt", 0))
+        assertEquals(0, fileSystem.open("/Photos/draft.txt", reader))
+        val output = runtime.memoryManager.allocateDirect(5)
+        assertEquals(5, fileSystem.read("/Photos/draft.txt", output, 5L, 0L, reader))
+        assertContentEquals(
+            "draft".encodeToByteArray(),
+            ByteArray(5).also { bytes -> output.get(0L, bytes, 0, bytes.size) },
+        )
+
+        assertEquals(0, fileSystem.release("/Photos/draft.txt", creator))
+        assertEquals(null, backend.resolve("Photos/draft.txt"))
+        assertEquals(0, fileSystem.release("/Photos/draft.txt", reader))
+        assertContentEquals("draft".encodeToByteArray(), backend.fileBytes("Photos/draft.txt"))
+    }
+
+    @Test
     fun `directory and namespace mutations validate parents`() {
         val backend = MutableFixtureBackend()
         val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
@@ -88,6 +115,25 @@ class LinuxVirtualFileSystemTest {
         assertEquals(0, fileSystem.rename("/Photos/.notes.txt.tmp", "/Photos/notes.txt"))
         assertEquals(null, backend.resolve("Photos/.notes.txt.tmp"))
         assertContentEquals("new".encodeToByteArray(), backend.fileBytes("Photos/notes.txt"))
+    }
+
+    @Test
+    fun `open read handle follows a remote rename until release`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        backend.addFile("Photos/open.txt", "read after rename".encodeToByteArray())
+        val runtime = Runtime.getSystemRuntime()
+        val fileInfo = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+
+        assertEquals(0, fileSystem.open("/Photos/open.txt", fileInfo))
+        assertEquals(0, fileSystem.rename("/Photos/open.txt", "/Photos/renamed.txt"))
+        val output = runtime.memoryManager.allocateDirect(17)
+        assertEquals(17, fileSystem.read("/Photos/renamed.txt", output, 17L, 0L, fileInfo))
+        assertContentEquals(
+            "read after rename".encodeToByteArray(),
+            ByteArray(17).also { bytes -> output.get(0L, bytes, 0, bytes.size) },
+        )
+        assertEquals(0, fileSystem.release("/Photos/renamed.txt", fileInfo))
     }
 
     @Test
@@ -218,7 +264,20 @@ class LinuxVirtualFileSystemTest {
             }
         }
 
-        override fun open(node: LinuxVirtualFileNode): LinuxVirtualFileReadHandle = error("Not used.")
+        override fun open(node: LinuxVirtualFileNode): LinuxVirtualFileReadHandle =
+            object : LinuxVirtualFileReadHandle {
+                private var currentPath = node.path
+                override val size: Long = node.size
+
+                override fun read(offset: Long, length: Int): ByteArray =
+                    requireNotNull(contents[currentPath]).copyOfRange(offset.toInt(), offset.toInt() + length)
+
+                override fun readdress(path: String) {
+                    currentPath = path
+                }
+
+                override fun close() = Unit
+            }
 
         override fun openWrite(
             path: String,
@@ -255,7 +314,8 @@ class LinuxVirtualFileSystemTest {
                 }
 
                 override fun close() {
-                    if (failClose) error("Synthetic close-time writeback failure")
+                    if (failClose) error("Simulated close-time writeback failure")
+                    flush()
                 }
             }
         }
