@@ -740,7 +740,7 @@ fun NextcloudNativeMarketingCapture(
     assets: MarketingCaptureAssets,
     fixture: MarketingDemoFixture = nextcloudNativeMarketingFixture,
 ) {
-    NextcloudNativeTheme(darkTheme = true) {
+    NextcloudNativeTheme(darkTheme = scenario.darkTheme) {
         NextcloudAppBackground {
             val desktop = scenario.presentation == NextcloudPresentation.Desktop
             CompositionLocalProvider(
@@ -751,6 +751,10 @@ fun NextcloudNativeMarketingCapture(
                 ),
             ) {
                 when (scenario) {
+                    MarketingCaptureScenario.HomepageOverviewDesktopDark,
+                    MarketingCaptureScenario.HomepageOverviewDesktopLight,
+                    MarketingCaptureScenario.HomepageOverviewMobileDark,
+                    MarketingCaptureScenario.HomepageOverviewMobileLight,
                     MarketingCaptureScenario.DesktopHome,
                     MarketingCaptureScenario.MobileHome,
                     -> {
@@ -767,6 +771,33 @@ fun NextcloudNativeMarketingCapture(
                             MarketingHomeDashboardScenario(scenario, fixture)
                         }
                     }
+                    MarketingCaptureScenario.HomepageFilesDesktopDark,
+                    MarketingCaptureScenario.HomepageFilesDesktopLight,
+                    -> FilesScreen(
+                        services = assets.services,
+                        session = marketingHomepageSession,
+                        userId = marketingHomepageTalkUserId,
+                        fileSharing = nextcloudNativeMarketingFileShareFixture.capabilities,
+                        path = "",
+                        layout = FileLayout.Grid,
+                        onLayoutChanged = {},
+                        onBack = {},
+                        onOpenFolder = {},
+                        onOpenFile = { _, _ -> },
+                        onFileAction = { _, _, _ -> },
+                    )
+                    MarketingCaptureScenario.HomepageConversationsDesktopDark,
+                    MarketingCaptureScenario.HomepageConversationsDesktopLight,
+                    -> ChatScreen(
+                        services = assets.services,
+                        session = marketingHomepageSession,
+                        userId = marketingHomepageTalkUserId,
+                        room = marketingHomepageTalkRoom,
+                        onBack = {},
+                        onOpenAttachment = {},
+                    )
+                    MarketingCaptureScenario.HomepageAppsDesktopDark,
+                    MarketingCaptureScenario.HomepageAppsDesktopLight,
                     MarketingCaptureScenario.AdaptiveApp,
                     MarketingCaptureScenario.AdaptiveAppMobile,
                     MarketingCaptureScenario.AdaptiveAppCollectionMobile,
@@ -778,6 +809,8 @@ fun NextcloudNativeMarketingCapture(
                     -> MarketingPhotoTimelineFailureScenario(scenario)
                     MarketingCaptureScenario.PhotoFolderBrowserMobile,
                     MarketingCaptureScenario.PhotoFolderBrowserDesktop,
+                    MarketingCaptureScenario.HomepagePhotosDesktopDark,
+                    MarketingCaptureScenario.HomepagePhotosDesktopLight,
                     -> MarketingPhotoFolderScenario(scenario, assets)
                     MarketingCaptureScenario.ObsidianSync -> MarketingObsidianSyncScenario()
                     MarketingCaptureScenario.MediaBackup -> MarketingMediaBackupScenario()
@@ -801,6 +834,8 @@ fun NextcloudNativeMarketingCapture(
                     -> MarketingMediaTransferScenario(scenario)
                     MarketingCaptureScenario.DeckBoardDesktop,
                     MarketingCaptureScenario.DeckBoardMobile,
+                    MarketingCaptureScenario.HomepagePlanningDesktopDark,
+                    MarketingCaptureScenario.HomepagePlanningDesktopLight,
                     -> MarketingDeckBoardScenario()
                 }
             }

@@ -486,9 +486,8 @@ watch([query, area, status, platform], () => {
 .roadmap-ledger {
   margin-top: 30px;
   overflow: hidden;
-  border: 1px solid var(--outline);
-  border-radius: var(--radius-large);
-  background: var(--surface-low);
+  border-block: 1px solid var(--outline);
+  background: transparent;
 }
 
 .ledger-heading {
@@ -496,7 +495,7 @@ watch([query, area, status, platform], () => {
   align-items: flex-end;
   justify-content: space-between;
   gap: 30px;
-  padding: 22px 26px;
+  padding: 22px 0;
   border-bottom: 1px solid var(--outline);
 }
 
@@ -539,7 +538,7 @@ watch([query, area, status, platform], () => {
   display: flex;
   align-items: center;
   gap: 24px;
-  padding: 0 26px;
+  padding: 0;
   border-bottom: 1px solid var(--outline);
   color: var(--muted);
   font-size: 10px;
@@ -555,7 +554,7 @@ watch([query, area, status, platform], () => {
   display: grid;
   grid-template-columns: minmax(250px, 0.7fr) minmax(420px, 1.3fr);
   gap: 34px;
-  padding: 20px 26px;
+  padding: 20px 0;
   border-bottom: 1px solid var(--outline);
 }
 
@@ -651,7 +650,7 @@ watch([query, area, status, platform], () => {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  padding: 0 26px;
+  padding: 0;
   cursor: pointer;
   list-style: none;
 }
@@ -663,7 +662,7 @@ watch([query, area, status, platform], () => {
 
 .ledger-disclosure > summary:hover,
 .ledger-disclosure > summary:focus-visible {
-  background: #15181e;
+  background: var(--surface-low);
 }
 
 .ledger-disclosure > summary > span {
@@ -691,7 +690,7 @@ watch([query, area, status, platform], () => {
 }
 
 .disclosure-body {
-  padding: 0 26px 24px;
+  padding: 0 0 24px;
 }
 
 .section-tool,
@@ -708,7 +707,7 @@ watch([query, area, status, platform], () => {
 }
 
 .workstream-section {
-  padding: 22px 26px 24px;
+  padding: 22px 0 24px;
   border-bottom: 1px solid var(--outline);
 }
 
@@ -752,7 +751,7 @@ watch([query, area, status, platform], () => {
   min-height: 34px;
   align-items: center;
   border-bottom: 1px solid var(--outline);
-  color: #85838d;
+  color: var(--text-subtle);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -769,7 +768,7 @@ watch([query, area, status, platform], () => {
   min-height: 54px;
   align-items: center;
   border-bottom: 1px solid var(--outline);
-  color: #c7c4cc;
+  color: var(--text-soft);
   font-size: 10px;
   line-height: 1.4;
 }
@@ -787,7 +786,7 @@ watch([query, area, status, platform], () => {
 .workstream-row:focus-visible,
 .issue-record > summary:hover,
 .issue-record > summary:focus-visible {
-  background: #15181e;
+  background: var(--surface-low);
 }
 
 .release-row > strong,
@@ -816,7 +815,7 @@ watch([query, area, status, platform], () => {
 
 .feature-name small {
   overflow: hidden;
-  color: #85838d;
+  color: var(--text-subtle);
   font-size: 9px;
   font-weight: 500;
   text-overflow: ellipsis;
@@ -921,14 +920,14 @@ watch([query, area, status, platform], () => {
   gap: 10px 22px;
   padding: 11px 16px;
   border-bottom: 1px solid var(--outline);
-  background: #111319;
+  background: var(--surface-low);
   color: var(--muted);
   font-size: 9px;
 }
 
 .issue-record-details strong {
   margin-right: 4px;
-  color: #b7b4bd;
+  color: var(--text-soft);
 }
 
 .issue-record-details a {
@@ -951,7 +950,7 @@ watch([query, area, status, platform], () => {
   min-width: 0;
   display: grid;
   gap: 6px;
-  color: #85838d;
+  color: var(--text-subtle);
   font-size: 9px;
   font-weight: 700;
 }
@@ -1026,11 +1025,11 @@ watch([query, area, status, platform], () => {
 }
 
 .roadmap-fallback-note {
-  padding: 13px 26px;
+  padding: 13px 0;
 }
 
 .completed-section {
-  padding: 22px 26px 24px;
+  padding: 22px 0 24px;
   border-bottom: 1px solid var(--outline);
 }
 
@@ -1161,7 +1160,6 @@ watch([query, area, status, platform], () => {
 @media (max-width: 780px) {
   .roadmap-ledger {
     margin-top: 22px;
-    border-radius: var(--radius-surface);
   }
 
   .ledger-heading {

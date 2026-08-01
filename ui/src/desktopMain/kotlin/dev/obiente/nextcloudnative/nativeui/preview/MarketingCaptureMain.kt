@@ -65,7 +65,10 @@ fun main(arguments: Array<String>) {
         val assets = MarketingCaptureAssets(
             avatar = loadObienteAvatar(),
             mediaPreview = loadMarketingMediaPreview(),
-            services = networkInertMarketingServices(loadRawCaptureFixture()),
+            services = networkInertMarketingServices(
+                fallbackPreviewBytes = loadRawCaptureFixture(),
+                previewBytesByFileId = loadHomepageFilePreviews(repositoryRoot),
+            ),
         )
         marketingCaptureScenarios.zip(outputs).forEach { (scenario, output) ->
             capture(
@@ -145,7 +148,9 @@ private fun capture(
         }
     }
     try {
-        scene.render().close()
+        repeat(CAPTURE_WARM_UP_FRAMES) {
+            scene.render().close()
+        }
         val rendered = scene.render()
         rawMediaCapture?.verify()
         nativeTiffCapture?.verify()
@@ -160,6 +165,8 @@ private fun capture(
     }
 }
 
+private const val CAPTURE_WARM_UP_FRAMES = 3
+
 private fun loadObienteAvatar(): ImageBitmap {
     val bytes = requireNotNull(
         object {}.javaClass.getResourceAsStream("/marketing/obiente-avatar.png"),
@@ -169,6 +176,14 @@ private fun loadObienteAvatar(): ImageBitmap {
 
 private fun loadMarketingMediaPreview(): ImageBitmap =
     Image.makeFromEncoded(loadRawCaptureFixture()).toComposeImageBitmap()
+
+private fun loadHomepageFilePreviews(repositoryRoot: Path): Map<Long, ByteArray> = mapOf(
+    5_101L to "website/public/demo-media/field-notes.webp",
+    5_102L to "website/public/demo-media/forest-trail.webp",
+    5_103L to "website/public/demo-media/north-sea.webp",
+).mapValues { (_, relativePath) ->
+    Files.readAllBytes(repositoryRoot.resolve(relativePath))
+}
 
 private fun writeCaptureManifest(
     captureDirectory: Path,

@@ -132,6 +132,28 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   ]) {
     assert.ok(captureScenarios.has(requiredScenario));
   }
+  const homepageCaptures = manifest.captures.filter(
+    (capture) => capture.feature === "Homepage",
+  );
+  const homepageCaptureBases = new Set(
+    homepageCaptures.map((capture) =>
+      capture.scenario.replace(/-(?:dark|light)$/u, ""),
+    ),
+  );
+  assert.equal(homepageCaptures.length, 14);
+  assert.deepEqual(homepageCaptureBases, new Set([
+    "homepage-overview-desktop",
+    "homepage-overview-mobile",
+    "homepage-files-desktop",
+    "homepage-photos-desktop",
+    "homepage-conversations-desktop",
+    "homepage-planning-desktop",
+    "homepage-apps-desktop",
+  ]));
+  for (const base of homepageCaptureBases) {
+    assert.ok(captureScenarios.has(`${base}-dark`));
+    assert.ok(captureScenarios.has(`${base}-light`));
+  }
   assert.equal(captureScenarios.size, marketingCaptures.length);
   assert.deepEqual(
     marketingCaptures.map((capture) => capture.path),
@@ -185,8 +207,19 @@ test("marketing screenshots are rendered offscreen without an Android device", a
         relative.startsWith(
           "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/",
         ) ||
-        relative.startsWith("ui/src/desktopMain/resources/marketing/"),
+        relative.startsWith("ui/src/desktopMain/resources/marketing/") ||
+        relative.startsWith("website/public/demo-media/"),
     ),
+  );
+  assert.deepEqual(
+    manifest.captureSources.filter((relative) =>
+      relative.startsWith("website/public/demo-media/"),
+    ),
+    [
+      "website/public/demo-media/field-notes.webp",
+      "website/public/demo-media/forest-trail.webp",
+      "website/public/demo-media/north-sea.webp",
+    ],
   );
   for (const capture of manifest.captures) {
     const bytes = await readFile(
@@ -300,14 +333,85 @@ test("visual QA and mobile navigation are driven by registered captures", async 
     (appSource.match(/:aria-pressed=/gu) ?? []).length,
     3,
   );
-  assert.match(appSource, /class="hero-mobile-capture"/u);
+  assert.match(appSource, /class="product-hero-mobile"/u);
   assert.match(appSource, /:src="mobileHomeCapture\.websitePath"/u);
+  assert.match(appSource, /class="product-hero-desktop"/u);
+  assert.match(appSource, /:src="heroDesktopCapture\.websitePath"/u);
   assert.match(appSource, /capture\.purpose === visualQaPurpose\.value/u);
   assert.match(appSource, /capture\.pullRequest/u);
   assert.match(appSource, /capture\.issue/u);
   assert.match(appSource, /visualQaGroups/u);
+  assert.match(appSource, /const themePreference = ref\("system"\)/u);
+  assert.match(appSource, /window\.matchMedia\("\(prefers-color-scheme: light\)"\)/u);
+  assert.match(appSource, /nextcloud-native-theme/u);
+  assert.match(appSource, /homepage-overview-desktop-dark/u);
+  assert.match(appSource, /homepage-overview-desktop-light/u);
+  assert.match(styles, /:root\[data-theme="light"\]/u);
+  assert.match(appSource, /<Transition name="capture-swap">/u);
+  assert.match(appSource, /Real native UI\. Synthetic private data\./u);
+  assert.match(appSource, /window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)/u);
+  assert.match(styles, /\.motion-enhanced \[data-reveal\]/u);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/u);
+  assert.doesNotMatch(styles, /animation(?:-iteration-count)?:\s*[^;{}]*infinite/u);
   assert.doesNotMatch(
     appSource,
-    /class="hero-mobile-capture"[\s\S]*?src="\/screenshots\/mobile-home\.png"/u,
+    /class="product-hero-mobile"[\s\S]*?src="\/screenshots\/mobile-home\.png"/u,
+  );
+});
+
+test("homepage captures route synthetic fixtures through production app surfaces", async () => {
+  const appSource = await readFile(
+    path.join(
+      repositoryRoot,
+      "ui",
+      "src",
+      "commonMain",
+      "kotlin",
+      "dev",
+      "obiente",
+      "nextcloudnative",
+      "app",
+      "NextcloudNativeApp.kt",
+    ),
+    "utf8",
+  );
+  const sourceFiles = await discoverCaptureSources();
+
+  assert.match(appSource, /HomepageFilesDesktopDark,[\s\S]*?FilesScreen\(/u);
+  assert.match(appSource, /HomepageConversationsDesktopDark,[\s\S]*?ChatScreen\(/u);
+  assert.match(appSource, /HomepagePhotosDesktopDark,[\s\S]*?MarketingPhotoFolderScenario\(scenario, assets\)/u);
+  assert.match(appSource, /HomepagePlanningDesktopDark,[\s\S]*?MarketingDeckBoardScenario\(\)/u);
+  assert.match(appSource, /HomepageAppsDesktopDark,[\s\S]*?MarketingAdaptiveAppScenario\(scenario\)/u);
+  assert.doesNotMatch(appSource, /MarketingHomepageFilesScenario|MarketingHomepageConversationsScenario/u);
+  assert.ok(
+    !sourceFiles.some((relative) => relative.endsWith("HomepageMarketingCaptureScenarios.kt")),
+  );
+});
+
+test("project pages expose repository provenance through an editorial visual system", async () => {
+  const [appSource, styles, roadmapStyles, articleRoadmapStyles] = await Promise.all([
+    readFile(path.join(websiteRoot, "src", "App.vue"), "utf8"),
+    readFile(path.join(websiteRoot, "src", "styles.css"), "utf8"),
+    readFile(
+      path.join(websiteRoot, "src", "components", "RoadmapDashboard.vue"),
+      "utf8",
+    ),
+    readFile(
+      path.join(websiteRoot, "src", "components", "ArticleRoadmap.vue"),
+      "utf8",
+    ),
+  ]);
+
+  assert.ok((appSource.match(/class="page-record"/gu) ?? []).length >= 5);
+  assert.match(appSource, /View article source/u);
+  assert.match(appSource, /Browse article sources/u);
+  assert.match(appSource, /Inspect capture manifest/u);
+  assert.match(appSource, /View source history/u);
+  assert.match(styles, /\.news-index-grid \.news-card\s*\{[^}]*border-radius:\s*0;/su);
+  assert.match(styles, /\.visual-qa-filters button\s*\{[^}]*border-radius:\s*5px;/su);
+  assert.match(styles, /\.doc-sidebar\s*\{[^}]*border-right:\s*1px solid var\(--outline\);/su);
+  assert.doesNotMatch(
+    `${roadmapStyles}\n${articleRoadmapStyles}`,
+    /#15181e|#85838d|#c7c4cc|#111319|#b7b4bd/iu,
   );
 });

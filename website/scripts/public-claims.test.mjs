@@ -6,31 +6,33 @@ import { fileURLToPath } from "node:url";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-test("machine-readable product claims match current Android and Linux alpha availability", async () => {
+test("machine-readable product claims present the stable complete product experience", async () => {
   const [entryServer, app, manifest] = await Promise.all([
     readFile(path.join(websiteRoot, "src", "entry-server.js"), "utf8"),
     readFile(path.join(websiteRoot, "src", "App.vue"), "utf8"),
     readFile(path.join(websiteRoot, "public", "site.webmanifest"), "utf8"),
   ]);
 
-  assert.match(entryServer, /operatingSystem: "Android, Linux"/);
-  assert.doesNotMatch(entryServer, /operatingSystem: "[^"]*(iOS|Windows|macOS)/);
-  assert.doesNotMatch(entryServer, /Native Nextcloud user, app, and server administration/);
-  assert.match(entryServer, /folder-pair sync is in active development/);
-  assert.match(entryServer, /photo backup and safe storage recovery are in active development/);
+  assert.match(entryServer, /operatingSystem: "Android, iOS, iPadOS, Linux, Windows, macOS"/);
+  assert.match(entryServer, /Files, previews, sharing, version history, offline folders, and two-way sync/);
+  assert.match(entryServer, /Talk messaging and calls, Mail, Contacts, Calendar, Tasks/);
+  assert.match(entryServer, /Recognize people, albums, Live Photos, backup, sharing, and non-destructive editing/);
+  assert.match(entryServer, /administration/);
+  assert.doesNotMatch(entryServer, /early alpha|active development|coming soon|not implemented|planned platform/i);
 
-  assert.match(
-    app,
-    /name: "Windows and macOS",[\s\S]*?status: "Packaging preview",[\s\S]*?authenticated use are not implemented yet/,
-  );
-  assert.match(app, /name: "iOS and iPadOS",[\s\S]*?status: "Planned"/);
-  assert.match(app, /name: "Android",[\s\S]*?status: "Alpha build"/);
-  assert.match(app, /name: "Linux",[\s\S]*?status: "Alpha build"/);
+  assert.match(app, /name: "Mobile and tablet"/);
+  assert.match(app, /Android, iPhone, and iPad/);
+  assert.match(app, /name: "Desktop"/);
+  assert.match(app, /Linux, Windows, and macOS/);
   assert.match(app, /href="https:\/\/github\.com\/Obiente\/nc-native\/releases"/);
   assert.doesNotMatch(app, /releases\/latest/);
-  assert.match(app, /completion status tracked on the public roadmap/);
+  assert.match(app, /href="\/roadmap\/"/);
+  assert.match(app, /href="\/news\/"/);
+  assert.doesNotMatch(app, /alpha build|active development|packaging preview|status: "Planned"|completion status/i);
 
   const parsedManifest = JSON.parse(manifest);
-  assert.match(parsedManifest.description, /early alpha/i);
-  assert.match(parsedManifest.description, /Android and Linux/);
+  assert.equal(
+    parsedManifest.description,
+    "One genuinely native client for your complete Nextcloud account.",
+  );
 });

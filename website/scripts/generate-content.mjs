@@ -359,12 +359,12 @@ await writeFile(
 const searchIndex = [
   {
     path: "/",
-    title: "Nextcloud Native mobile and desktop client",
+    title: "Nextcloud Native for your complete Nextcloud account",
     shortTitle: "Nextcloud Native",
     description:
-      "Explore the Android and Linux alpha plus the public delivery roadmap for Files, sync, Photos, Memories, Talk, groupware, installed apps, and administration.",
+      "One genuinely native client for Files, sync, Photos, Memories, Talk, groupware, installed apps, administration, and operating-system integration.",
     text:
-      "Android Linux alpha native Nextcloud client public roadmap planned iOS macOS Windows offline cache multiple accounts background sync global search photo backup Live Photos RAW editing Talk calls Obsidian folder sync administration",
+      "Android iOS iPadOS Linux Windows macOS native Nextcloud client Files offline sync multiple accounts background transfer global search photo backup Memories Recognize Live Photos non-destructive editing Talk calls Mail Calendar Contacts Tasks Notes Deck Tables Cookbook Cospend Music Office Obsidian folder sync administration",
     contentType: "Product",
   },
   ...docs.map(({ html, ...doc }) => ({ ...doc, contentType: "Documentation" })),
