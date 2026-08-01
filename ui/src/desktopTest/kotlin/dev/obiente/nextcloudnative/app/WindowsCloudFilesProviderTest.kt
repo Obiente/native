@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -14,6 +15,54 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class WindowsCloudFilesProviderTest {
+    @Test
+    fun `native provider creates a readable directory placeholder on Windows`() {
+        if (!isWindowsDesktop()) return
+        val root = createTempDirectory("windows-cloud-native-")
+        val directory = WindowsCloudFileIdentity(
+            accountId = "account-01",
+            path = "Apps",
+            remoteRevision = "\"directory-etag\"",
+            size = 0L,
+            directory = true,
+        )
+        val childDirectory = directory.copy(
+            path = "Apps/Calendar",
+            remoteRevision = "\"child-directory-etag\"",
+        )
+        val childFile = directory.copy(
+            path = "Apps/readme.txt",
+            remoteRevision = "\"child-file-etag\"",
+            size = 5L,
+            directory = false,
+        )
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(
+                ByteArray(5),
+                listed = listOf(directory, childDirectory, childFile),
+            ),
+            api = JnaWindowsCloudFilesApi(),
+        )
+
+        try {
+            provider.start()
+            Files.newDirectoryStream(root.resolve("Apps")).use { entries ->
+                assertEquals(
+                    setOf("Calendar", "readme.txt"),
+                    entries.mapTo(linkedSetOf()) { it.fileName.toString() },
+                )
+            }
+            Files.newDirectoryStream(root.resolve("Apps/Calendar")).use { entries ->
+                assertFalse(entries.iterator().hasNext())
+            }
+            assertEquals(5L, Files.size(root.resolve("Apps/readme.txt")))
+        } finally {
+            runCatching { provider.removeSyncRoot() }
+            root.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun accountRemovalDisconnectsAndUnregistersTheSyncRoot() {
         val root = createTempDirectory("windows-cloud-remove")
