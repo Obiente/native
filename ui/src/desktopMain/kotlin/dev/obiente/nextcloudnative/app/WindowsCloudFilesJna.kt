@@ -171,7 +171,11 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
     ) {
         val native = NativePlaceholderArray(placeholders)
         execute(info, CF_OPERATION_TYPE_TRANSFER_PLACEHOLDERS, PLACEHOLDER_PARAMETERS_SIZE) { parameters ->
-            parameters.setInt(PLACEHOLDERS_FLAGS_OFFSET, 0)
+            parameters.setInt(
+                PLACEHOLDERS_FLAGS_OFFSET,
+                CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_STOP_ON_ERROR or
+                    CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_DISABLE_ON_DEMAND_POPULATION,
+            )
             parameters.setInt(PLACEHOLDERS_STATUS_OFFSET, STATUS_SUCCESS)
             parameters.setLong(PLACEHOLDERS_TOTAL_OFFSET, placeholders.size.toLong())
             parameters.setPointer(PLACEHOLDERS_ARRAY_OFFSET, native.firstPointer)
@@ -515,6 +519,8 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         const val CF_PLACEHOLDER_STATE_PLACEHOLDER = 0x1
         const val CF_PLACEHOLDER_STATE_IN_SYNC = 0x8
         const val CF_CREATE_FLAG_STOP_ON_ERROR = 0x1
+        const val CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_STOP_ON_ERROR = 0x1
+        const val CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_DISABLE_ON_DEMAND_POPULATION = 0x2
         const val CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC = 0x2
         const val CF_UPDATE_FLAG_MARK_IN_SYNC = 0x2
         const val CF_UPDATE_FLAG_DEHYDRATE = 0x4
