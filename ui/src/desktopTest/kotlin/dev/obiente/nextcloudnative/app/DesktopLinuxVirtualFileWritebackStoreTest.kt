@@ -15,6 +15,8 @@ class DesktopLinuxVirtualFileWritebackStoreTest {
         assertTrue(linuxWritebackFitsCapacity(remoteBytes = 40L, availableBytes = 140L, reserveBytes = 100L))
         assertFalse(linuxWritebackFitsCapacity(remoteBytes = 41L, availableBytes = 140L, reserveBytes = 100L))
         assertFalse(linuxWritebackFitsCapacity(remoteBytes = Long.MAX_VALUE, availableBytes = Long.MAX_VALUE, reserveBytes = 1L))
+        assertTrue(linuxWritebackGrowthFitsCapacity(currentBytes = 40L, targetBytes = 50L, availableBytes = 110L, reserveBytes = 100L))
+        assertFalse(linuxWritebackGrowthFitsCapacity(currentBytes = 40L, targetBytes = 51L, availableBytes = 110L, reserveBytes = 100L))
     }
 
     @Test
@@ -22,7 +24,7 @@ class DesktopLinuxVirtualFileWritebackStoreTest {
         val directory = Files.createTempDirectory("linux-writeback-").toFile()
         try {
             val remote = FakeWritebackRemote("before".encodeToByteArray(), "etag-1")
-            val store = DesktopLinuxVirtualFileWritebackStore(directory)
+            val store = DesktopLinuxVirtualFileWritebackStore(directory, minimumFreeSpaceBytes = { 0L })
             val node = LinuxVirtualFileNode("Notes/today.txt", "today.txt", false, 6L, "etag-1")
             val handle = store.open("Notes/today.txt", node, truncate = false, tree = remote) {}
 
@@ -39,13 +41,46 @@ class DesktopLinuxVirtualFileWritebackStoreTest {
     }
 
     @Test
+    fun `dirty recovery intent is durable before staged bytes can change`() {
+        val directory = Files.createTempDirectory("linux-writeback-order-").toFile()
+        try {
+            val remote = FakeWritebackRemote("before".encodeToByteArray(), "etag-1")
+            var interruptMutation = true
+            val store = DesktopLinuxVirtualFileWritebackStore(
+                directory,
+                minimumFreeSpaceBytes = { 0L },
+                afterDirtyIntentPersisted = {
+                    if (interruptMutation) {
+                        interruptMutation = false
+                        error("Simulated process interruption before mutation")
+                    }
+                },
+            )
+            val node = LinuxVirtualFileNode("Notes/today.txt", "today.txt", false, 6L, "etag-1")
+            val handle = store.open("Notes/today.txt", node, truncate = false, tree = remote) {}
+
+            assertFails { handle.write(0L, "after!".encodeToByteArray()) }
+
+            assertTrue(store.pendingWritebacks().single().dirty)
+            val stage = directory.listFiles().orEmpty().single { it.name.endsWith(".stage") }
+            assertContentEquals("before".encodeToByteArray(), stage.readBytes())
+
+            assertEquals(6, handle.write(0L, "after!".encodeToByteArray()))
+            handle.close()
+            assertContentEquals("after!".encodeToByteArray(), remote.content)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `failed conflict-safe upload remains recoverable after close`() {
         val directory = Files.createTempDirectory("linux-writeback-").toFile()
         try {
             val remote = FakeWritebackRemote("before".encodeToByteArray(), "etag-1").apply {
                 failWrites = true
             }
-            val store = DesktopLinuxVirtualFileWritebackStore(directory)
+            val store = DesktopLinuxVirtualFileWritebackStore(directory, minimumFreeSpaceBytes = { 0L })
             val node = LinuxVirtualFileNode("Notes/today.txt", "today.txt", false, 6L, "etag-1")
             val handle = store.open("Notes/today.txt", node, truncate = false, tree = remote) {}
             handle.write(0L, "local!".encodeToByteArray())
@@ -83,7 +118,7 @@ class DesktopLinuxVirtualFileWritebackStoreTest {
             val remote = FakeWritebackRemote("before".encodeToByteArray(), "etag-1").apply {
                 failAfterWrite = true
             }
-            val store = DesktopLinuxVirtualFileWritebackStore(directory)
+            val store = DesktopLinuxVirtualFileWritebackStore(directory, minimumFreeSpaceBytes = { 0L })
             val node = LinuxVirtualFileNode("Notes/today.txt", "today.txt", false, 6L, "etag-1")
             val handle = store.open("Notes/today.txt", node, truncate = false, tree = remote) {}
             handle.write(0L, "saved!".encodeToByteArray())

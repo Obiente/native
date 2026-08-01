@@ -750,8 +750,17 @@ internal class AndroidNextcloudServices(
         val documentWritebacks = androidDocumentPendingWritebacks(appContext, session)
         if (documentWritebacks.isNotEmpty()) {
             val webDav = NextcloudDocumentWebDav(cloudMutationsAllowed = appContext.cloudMutationGate())
-            documentWritebacks.forEach { pending ->
+            documentWritebacks.forEach { discovered ->
+                val pending = claimAndroidDocumentPendingWritebackForRecovery(
+                    appContext,
+                    session,
+                    discovered.remotePath,
+                ) ?: return@forEach
                 runCatching {
+                    requireAndroidDocumentStagedWritebackCapacity(
+                        stagedBytes = pending.staging.length(),
+                        availableBytes = pending.staging.parentFile?.usableSpace ?: 0L,
+                    )
                     webDav.replaceFileAtomically(
                         session = session,
                         userId = userId,
@@ -762,7 +771,7 @@ internal class AndroidNextcloudServices(
                     virtualFileCache.invalidate(session, pending.remotePath)
                     notifyDocumentsDocumentChanged(session, pending.remotePath)
                     pending.complete()
-                }
+                }.onFailure { pending.releaseActive() }
             }
         }
         val pendingWritebacks = androidDocumentPendingWritebackCount(appContext, session)

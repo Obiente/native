@@ -387,32 +387,37 @@ internal class LinuxNextcloudVirtualFileSystem(
     override fun rmdir(path: String): Int = deletePath(path, expectDirectory = true)
 
     override fun rename(oldPath: String, newPath: String): Int = fuseResult {
-        val sourcePath = oldPath.linuxVirtualPath()
-        val destination = newPath.linuxVirtualPath()
-        if (sourcePath == destination) return 0
-        if (pendingCreatedFiles.containsKey(sourcePath)) return -ErrorCodes.EBUSY()
-        if (hasOpenWriteHandleWithin(sourcePath) || hasOpenWriteHandleWithin(destination)) {
-            return -ErrorCodes.EBUSY()
-        }
-        val source = visibleNode(sourcePath) ?: return -ErrorCodes.ENOENT()
-        if (pendingDeletedFiles.containsKey(destination)) return -ErrorCodes.EBUSY()
-        val parent = visibleNode(destination.substringBeforeLast('/', ""))
-            ?: return -ErrorCodes.ENOENT()
-        if (!parent.directory) return -ErrorCodes.ENOTDIR()
-        if (pendingCreatedFiles.containsKey(destination)) return -ErrorCodes.EBUSY()
-        val existingDestination = visibleNode(destination)
-        if (existingDestination != null) {
-            if (source.directory && !existingDestination.directory) return -ErrorCodes.ENOTDIR()
-            if (!source.directory && existingDestination.directory) return -ErrorCodes.EISDIR()
-            if (existingDestination.directory && backend.list(destination).isNotEmpty()) {
-                return -ErrorCodes.ENOTEMPTY()
+        synchronized(namespaceLock) {
+            val sourcePath = oldPath.linuxVirtualPath()
+            val destination = newPath.linuxVirtualPath()
+            if (sourcePath == destination) return 0
+            if (pendingCreatedFiles.containsKey(sourcePath)) return -ErrorCodes.EBUSY()
+            if (hasOpenWriteHandleWithin(sourcePath) || hasOpenWriteHandleWithin(destination)) {
+                return -ErrorCodes.EBUSY()
             }
-            backend.moveReplacing(source, existingDestination, destination)
-        } else {
-            backend.move(source, destination)
+            if (hasPendingDeleteWithin(sourcePath) || hasPendingDeleteWithin(destination)) {
+                return -ErrorCodes.EBUSY()
+            }
+            val source = visibleNode(sourcePath) ?: return -ErrorCodes.ENOENT()
+            val parent = visibleNode(destination.substringBeforeLast('/', ""))
+                ?: return -ErrorCodes.ENOENT()
+            if (!parent.directory) return -ErrorCodes.ENOTDIR()
+            if (pendingCreatedFiles.containsKey(destination)) return -ErrorCodes.EBUSY()
+            val existingDestination = visibleNode(destination)
+            if (existingDestination != null) {
+                if (source.directory && !existingDestination.directory) return -ErrorCodes.ENOTDIR()
+                if (!source.directory && existingDestination.directory) return -ErrorCodes.EISDIR()
+                if (existingDestination.directory && backend.list(destination).isNotEmpty()) {
+                    return -ErrorCodes.ENOTEMPTY()
+                }
+                if (hasOpenReadHandleWithin(destination)) return -ErrorCodes.EBUSY()
+                backend.moveReplacing(source, existingDestination, destination)
+            } else {
+                backend.move(source, destination)
+            }
+            readdressReadHandles(sourcePath, destination)
+            0
         }
-        readdressReadHandles(sourcePath, destination)
-        0
     }
 
     override fun truncate(path: String, size: Long): Int = fuseResult {
@@ -518,6 +523,16 @@ internal class LinuxNextcloudVirtualFileSystem(
     private fun hasOpenWriteHandleWithin(path: String): Boolean =
         writeHandles.values.any { reference ->
             reference.shared.path == path || reference.shared.path.startsWith("$path/")
+        }
+
+    private fun hasOpenReadHandleWithin(path: String): Boolean =
+        readHandlePaths.values.any { openPath ->
+            openPath == path || openPath.startsWith("$path/")
+        }
+
+    private fun hasPendingDeleteWithin(path: String): Boolean =
+        pendingDeletedFiles.keys.any { pendingPath ->
+            pendingPath == path || pendingPath.startsWith("$path/")
         }
 
     private fun visibleNode(path: String): LinuxVirtualFileNode? =

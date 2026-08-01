@@ -137,6 +137,25 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `rename replacement waits for an open destination generation`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        backend.addFile("Photos/replacement.txt", "new".encodeToByteArray())
+        backend.addFile("Photos/open.txt", "old generation".encodeToByteArray())
+        val fileInfo = FuseFileInfo.of(Runtime.getSystemRuntime().memoryManager.allocateDirect(256))
+
+        assertEquals(0, fileSystem.open("/Photos/open.txt", fileInfo))
+        assertEquals(
+            -ErrorCodes.EBUSY(),
+            fileSystem.rename("/Photos/replacement.txt", "/Photos/open.txt"),
+        )
+        assertContentEquals("old generation".encodeToByteArray(), backend.fileBytes("Photos/open.txt"))
+        assertEquals(0, fileSystem.release("/Photos/open.txt", fileInfo))
+        assertEquals(0, fileSystem.rename("/Photos/replacement.txt", "/Photos/open.txt"))
+        assertContentEquals("new".encodeToByteArray(), backend.fileBytes("Photos/open.txt"))
+    }
+
+    @Test
     fun `unlink hides a file but defers remote deletion until its read handle closes`() {
         val backend = MutableFixtureBackend()
         val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
@@ -157,6 +176,25 @@ class LinuxVirtualFileSystemTest {
 
         assertEquals(0, fileSystem.release("/Photos/open.txt", fileInfo))
         assertEquals(null, backend.resolve("Photos/open.txt"))
+    }
+
+    @Test
+    fun `parent rename waits for a deferred child delete`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        backend.createDirectory("Photos/Working")
+        backend.addFile("Photos/Working/open.txt", "pending delete".encodeToByteArray())
+        val fileInfo = FuseFileInfo.of(Runtime.getSystemRuntime().memoryManager.allocateDirect(256))
+
+        assertEquals(0, fileSystem.open("/Photos/Working/open.txt", fileInfo))
+        assertEquals(0, fileSystem.unlink("/Photos/Working/open.txt"))
+        assertEquals(
+            -ErrorCodes.EBUSY(),
+            fileSystem.rename("/Photos/Working", "/Photos/Renamed"),
+        )
+        assertEquals(0, fileSystem.release("/Photos/Working/open.txt", fileInfo))
+        assertEquals(null, backend.resolve("Photos/Working/open.txt"))
+        assertEquals(0, fileSystem.rename("/Photos/Working", "/Photos/Renamed"))
     }
 
     @Test

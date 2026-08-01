@@ -10,6 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class WindowsCloudFilesProviderTest {
@@ -203,7 +204,7 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
-    fun `folder rename rebinds every descendant identity without clearing dirty state`() {
+    fun `folder rename rebinds every clean descendant identity`() {
         val root = createTempDirectory("windows-cloud-rename-")
         val destination = root.resolve("Projects/New")
         destination.toFile().mkdirs()
@@ -220,7 +221,7 @@ class WindowsCloudFilesProviderTest {
         val backend = FakeBackend("remote".encodeToByteArray())
         val api = FakeApi(expectedRenames = 1).apply {
             seed(destination, WindowsCloudPlaceholderState.InSync, directoryIdentity)
-            seed(child, WindowsCloudPlaceholderState.Dirty, childIdentity)
+            seed(child, WindowsCloudPlaceholderState.InSync, childIdentity)
         }
         val provider = WindowsCloudFilesProvider(root, backend, api)
 
@@ -229,7 +230,34 @@ class WindowsCloudFilesProviderTest {
         assertTrue(api.awaitRenames())
         assertTrue(api.lastRenameAccepted)
         assertEquals("Projects/New/brief.txt", api.decodedIdentity(child)?.path)
-        assertEquals(WindowsCloudPlaceholderState.Dirty, api.placeholderState(child))
+        assertEquals(WindowsCloudPlaceholderState.InSync, api.placeholderState(child))
+        provider.close()
+    }
+
+    @Test
+    fun `rename rejects a dirty placeholder until writeback completes`() {
+        val root = createTempDirectory("windows-cloud-dirty-rename-")
+        val destination = root.resolve("renamed.txt")
+        destination.writeBytes("local edit".encodeToByteArray())
+        val identity = WindowsCloudFileIdentity(
+            "account-01",
+            "original.txt",
+            "\"file-v1\"",
+            destination.toFile().length(),
+            false,
+        )
+        val backend = FakeBackend("remote".encodeToByteArray())
+        val api = FakeApi(expectedRenames = 1).apply {
+            seed(destination, WindowsCloudPlaceholderState.Dirty, identity)
+        }
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+
+        provider.renameRequested(callbackInfo(identity), destination.toString())
+
+        assertTrue(api.awaitRenames())
+        assertFalse(api.lastRenameAccepted)
+        assertEquals("original.txt", api.decodedIdentity(destination)?.path)
+        assertEquals(WindowsCloudPlaceholderState.Dirty, api.placeholderState(destination))
         provider.close()
     }
 
@@ -312,6 +340,10 @@ class WindowsCloudFilesProviderTest {
         provider.closed(info, deleted = false)
 
         assertTrue(api.awaitConversions())
+        val recoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (provider.summary().pendingWritebackCount != 0 && System.nanoTime() < recoveryDeadline) {
+            Thread.yield()
+        }
         assertEquals(0, provider.summary().pendingWritebackCount)
         assertEquals(0, provider.summary().failedWritebackCount)
         provider.close()

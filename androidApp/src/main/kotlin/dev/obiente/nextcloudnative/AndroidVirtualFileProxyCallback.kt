@@ -125,3 +125,90 @@ internal class AndroidVirtualFileProxyCallback(
         const val DEFAULT_BLOCK_SIZE_BYTES = 1024 * 1024
     }
 }
+
+/** Bounded writable proxy that rejects oversized or reserve-consuming writes before mutation. */
+internal class AndroidWritableFileProxyCallback(
+    private val staging: File,
+    private val onReleased: (Throwable?) -> Unit,
+) : ProxyFileDescriptorCallback() {
+    private val random = RandomAccessFile(staging, "rw")
+    private var released = false
+
+    @Synchronized
+    override fun onGetSize(): Long = random.length()
+
+    @Synchronized
+    override fun onRead(offset: Long, requestedSize: Int, data: ByteArray): Int {
+        requireOpen()
+        if (offset < 0L || requestedSize < 0 || requestedSize > data.size) {
+            throw ErrnoException("document writeback read", OsConstants.EINVAL)
+        }
+        if (offset >= random.length() || requestedSize == 0) return 0
+        val length = minOf(requestedSize.toLong(), random.length() - offset).toInt()
+        random.seek(offset)
+        random.readFully(data, 0, length)
+        return length
+    }
+
+    @Synchronized
+    override fun onWrite(offset: Long, requestedSize: Int, data: ByteArray): Int {
+        requireOpen()
+        if (offset < 0L || requestedSize < 0 || requestedSize > data.size) {
+            throw ErrnoException("document writeback write", OsConstants.EINVAL)
+        }
+        val end = runCatching { Math.addExact(offset, requestedSize.toLong()) }
+            .getOrElse { throw ErrnoException("document writeback write", OsConstants.EFBIG) }
+        if (end > MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES) {
+            throw ErrnoException("document writeback write", OsConstants.EFBIG)
+        }
+        val available = staging.parentFile?.usableSpace?.coerceAtLeast(0L) ?: 0L
+        if (!androidDocumentWriteFitsCapacity(random.length(), end, available)) {
+            throw ErrnoException("document writeback write", OsConstants.ENOSPC)
+        }
+        if (requestedSize == 0) return 0
+        random.seek(offset)
+        random.write(data, 0, requestedSize)
+        return requestedSize
+    }
+
+    @Synchronized
+    override fun onFsync() {
+        requireOpen()
+        random.fd.sync()
+    }
+
+    @Synchronized
+    override fun onRelease() {
+        if (released) return
+        released = true
+        val syncFailure = runCatching { random.fd.sync() }.exceptionOrNull()
+        val closeFailure = runCatching { random.close() }.exceptionOrNull()
+        if (syncFailure != null && closeFailure != null) syncFailure.addSuppressed(closeFailure)
+        val failure = syncFailure ?: closeFailure
+        onReleased(failure)
+    }
+
+    @Synchronized
+    fun abort() {
+        if (released) return
+        released = true
+        runCatching(random::close)
+    }
+
+    private fun requireOpen() {
+        if (released) throw ErrnoException("document writeback", OsConstants.EBADF)
+    }
+}
+
+internal fun androidDocumentWriteFitsCapacity(
+    currentBytes: Long,
+    writeEnd: Long,
+    availableBytes: Long,
+    reserveBytes: Long = MIN_ANDROID_DOCUMENT_FREE_BYTES,
+): Boolean {
+    if (currentBytes < 0L || writeEnd < 0L || availableBytes < 0L || reserveBytes < 0L) return false
+    if (currentBytes > MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES) return false
+    if (writeEnd > MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES) return false
+    val growth = (writeEnd - currentBytes).coerceAtLeast(0L)
+    return availableBytes >= growth && availableBytes - growth >= reserveBytes
+}

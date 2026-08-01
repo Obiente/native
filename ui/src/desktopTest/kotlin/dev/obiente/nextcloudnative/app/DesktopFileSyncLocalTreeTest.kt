@@ -6,6 +6,7 @@ import kotlin.io.path.createDirectories
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -143,7 +144,10 @@ class DesktopFileSyncLocalTreeTest {
         try {
             root.resolve("notes.txt").writeText("unchanged")
             var digestCount = 0
-            val tree = DesktopFileSyncLocalTree(root.toFile()) {
+            val tree = DesktopFileSyncLocalTree(
+                root.toFile(),
+                changeTokenProvider = { "stable-change-token" },
+            ) {
                 digestCount += 1
                 "a".repeat(64)
             }
@@ -158,6 +162,58 @@ class DesktopFileSyncLocalTreeTest {
             assertEquals(1, digestCount)
         } finally {
             root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `missing stable change metadata forces content to be rehashed`() {
+        val root = Files.createTempDirectory("desktop-sync-digest-fail-closed-")
+        try {
+            root.resolve("notes.txt").writeText("unchanged")
+            var digestCount = 0
+            val tree = DesktopFileSyncLocalTree(
+                root.toFile(),
+                changeTokenProvider = { null },
+            ) {
+                digestCount += 1
+                "b".repeat(64)
+            }
+            val first = tree.scan()
+
+            tree.scan(first.associate { it.entry.relativePath to it.entry.revision })
+
+            assertEquals(2, digestCount)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `operations reject an ancestor replaced by a symlink after scan`() {
+        val root = Files.createTempDirectory("desktop-sync-symlink-race-")
+        val outside = Files.createTempDirectory("desktop-sync-outside-")
+        val staged = Files.createTempFile("desktop-sync-upload-", ".tmp").toFile()
+        try {
+            root.resolve("Notes").createDirectories()
+            root.resolve("Notes/today.md").writeText("inside")
+            outside.resolve("today.md").writeText("outside")
+            val tree = DesktopFileSyncLocalTree(root.toFile())
+            val scanned = tree.scan().single { it.entry.relativePath == "Notes/today.md" }
+            Files.move(root.resolve("Notes"), root.resolve("Notes-original"))
+            val linked = runCatching { Files.createSymbolicLink(root.resolve("Notes"), outside) }.isSuccess
+            if (!linked) return
+
+            assertFailsWith<IllegalArgumentException> {
+                tree.stageForUpload("Notes/today.md", staged, maximumBytes = 1024L)
+            }
+            assertFailsWith<IllegalArgumentException> {
+                tree.delete("Notes/today.md", scanned.entry.revision)
+            }
+            assertEquals("outside", outside.resolve("today.md").toFile().readText())
+        } finally {
+            staged.delete()
+            root.toFile().deleteRecursively()
+            outside.toFile().deleteRecursively()
         }
     }
 

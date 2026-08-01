@@ -332,6 +332,7 @@ internal class WindowsCloudFilesProvider(
     private val pendingWritebacks = ConcurrentHashMap.newKeySet<String>()
     private val failedWritebacks = ConcurrentHashMap.newKeySet<String>()
     private val writebackAttempts = ConcurrentHashMap<String, Int>()
+    private val namespaceMutationLock = Any()
     private val localChangeScheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { work ->
         Thread(work, "nextcloud-windows-local-changes").apply { isDaemon = true }
     }
@@ -414,18 +415,20 @@ internal class WindowsCloudFilesProvider(
         if (identity.directory) return
         val localPath = root.resolve(identity.path.replace('/', File.separatorChar)).normalize()
         if (!localPath.startsWith(root) || !Files.exists(localPath)) return
-        if (api.placeholderState(localPath) != WindowsCloudPlaceholderState.Dirty) return
-        pendingWritebacks += identity.path
-        submitPathOperation(identity.path) {
-            val current = api.placeholderIdentity(localPath)
-                ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
-                ?.takeIf { it.accountId == backend.accountId && it.path == identity.path && !it.directory }
-                ?: knownIdentities[identity.path]
-                ?: identity
-            val uploaded = backend.upload(identity.path, localPath.toFile(), current.remoteRevision)
-            knownIdentities[uploaded.path] = uploaded
-            api.updatePlaceholder(localPath, placeholder(uploaded))
-            api.markInSync(localPath)
+        synchronized(namespaceMutationLock) {
+            if (api.placeholderState(localPath) != WindowsCloudPlaceholderState.Dirty) return
+            pendingWritebacks += identity.path
+            submitPathOperation(identity.path) {
+                val current = api.placeholderIdentity(localPath)
+                    ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
+                    ?.takeIf { it.accountId == backend.accountId && it.path == identity.path && !it.directory }
+                    ?: knownIdentities[identity.path]
+                    ?: identity
+                val uploaded = backend.upload(identity.path, localPath.toFile(), current.remoteRevision)
+                knownIdentities[uploaded.path] = uploaded
+                api.updatePlaceholder(localPath, placeholder(uploaded))
+                api.markInSync(localPath)
+            }
         }
     }
 
@@ -442,16 +445,21 @@ internal class WindowsCloudFilesProvider(
 
     override fun renameRequested(info: WindowsCloudCallbackInfo, targetPath: String) {
         executor.execute {
-            val accepted = runCatching {
-                val identity = requireIdentity(info, expectDirectory = null)
-                val destination = relativePath(targetPath)
-                val moved = backend.move(identity, destination)
-                knownIdentities.remove(identity.path)
-                knownIdentities[moved.path] = moved
-                val destinationPath = root.resolve(destination.replace('/', File.separatorChar))
-                api.updatePlaceholder(destinationPath, placeholder(moved))
-                if (identity.directory) rebindMovedDescendants(identity, moved, destinationPath)
-            }.isSuccess
+            val accepted = synchronized(namespaceMutationLock) {
+                runCatching {
+                    val identity = requireIdentity(info, expectDirectory = null)
+                    val destination = relativePath(targetPath)
+                    val destinationPath = root.resolve(destination.replace('/', File.separatorChar)).normalize()
+                    require(!hasUncommittedChangeWithin(identity.path, destinationPath)) {
+                        "The Windows placeholder cannot be renamed until its local changes are uploaded."
+                    }
+                    val moved = backend.move(identity, destination)
+                    knownIdentities.remove(identity.path)
+                    knownIdentities[moved.path] = moved
+                    api.updatePlaceholder(destinationPath, placeholder(moved), preserveSyncState = true)
+                    if (identity.directory) rebindMovedDescendants(identity, moved, destinationPath)
+                }.isSuccess
+            }
             api.acknowledgeRename(info, accepted)
         }
     }
@@ -867,6 +875,25 @@ internal class WindowsCloudFilesProvider(
                         preserveSyncState = true,
                     )
                 }
+        }
+    }
+
+    private fun hasUncommittedChangeWithin(sourcePath: String, localDestination: Path): Boolean {
+        val pending = sequenceOf(
+            pendingWritebacks.asSequence(),
+            failedWritebacks.asSequence(),
+            pathOperations.asSequence(),
+            synchronized(queuedPathOperations) { queuedPathOperations.keys.toList().asSequence() },
+        ).flatten().any { path -> path == sourcePath || path.startsWith("$sourcePath/") }
+        if (pending) return true
+        if (!Files.exists(localDestination, LinkOption.NOFOLLOW_LINKS)) return false
+        if (!Files.isDirectory(localDestination, LinkOption.NOFOLLOW_LINKS)) {
+            return api.placeholderState(localDestination) == WindowsCloudPlaceholderState.Dirty
+        }
+        return Files.walk(localDestination).use { paths ->
+            paths.anyMatch { path ->
+                !Files.isSymbolicLink(path) && api.placeholderState(path) == WindowsCloudPlaceholderState.Dirty
+            }
         }
     }
 

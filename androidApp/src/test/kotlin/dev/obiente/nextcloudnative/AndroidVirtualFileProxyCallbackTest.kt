@@ -6,9 +6,63 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class AndroidVirtualFileProxyCallbackTest {
+    @Test
+    fun `active child writeback blocks parent and exact path mutations`() {
+        assertTrue(
+            androidDocumentWritebackPathBlocksMutation(
+                "Projects/Active/notes.txt",
+                "Projects/Active",
+            ),
+        )
+        assertTrue(
+            androidDocumentWritebackPathBlocksMutation(
+                "Projects/Active/notes.txt",
+                "Projects/Active/notes.txt",
+            ),
+        )
+        assertFalse(
+            androidDocumentWritebackPathBlocksMutation(
+                "Projects/Active/notes.txt",
+                "Projects/Archive",
+            ),
+        )
+    }
+
+    @Test
+    fun `writable proxy capacity preserves the limit and free space reserve`() {
+        assertTrue(androidDocumentWriteFitsCapacity(40L, 50L, 110L, reserveBytes = 100L))
+        assertFalse(androidDocumentWriteFitsCapacity(40L, 51L, 110L, reserveBytes = 100L))
+        assertFalse(
+            androidDocumentWriteFitsCapacity(
+                currentBytes = MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES,
+                writeEnd = MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES + 1L,
+                availableBytes = Long.MAX_VALUE,
+            ),
+        )
+    }
+
+    @Test
+    fun `writable proxy rejects oversized writes before changing staged bytes`() {
+        val staging = Files.createTempFile("writable-proxy-", ".stage").toFile().apply {
+            writeText("retained")
+        }
+        var releaseFailure: Throwable? = null
+        val callback = AndroidWritableFileProxyCallback(staging) { failure -> releaseFailure = failure }
+
+        assertFailsWith<android.system.ErrnoException> {
+            callback.onWrite(MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES, 1, byteArrayOf(1))
+        }
+        assertEquals("retained", staging.readText())
+
+        callback.onRelease()
+        assertEquals(null, releaseFailure)
+        staging.delete()
+    }
+
     @Test
     fun `hydration capacity preserves the configured free space reserve`() {
         assertTrue(androidHydrationFitsCapacity(sizeBytes = 40L, availableBytes = 140L, reserveBytes = 100L))

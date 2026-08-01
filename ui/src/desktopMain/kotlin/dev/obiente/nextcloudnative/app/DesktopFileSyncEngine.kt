@@ -246,6 +246,7 @@ internal class DesktopFileSyncEngine(
         shouldContinue: () -> Boolean,
         resetExhaustedFailures: Boolean,
     ): FileSyncCenterActionResult {
+        reclaimDesktopFileSyncStages(stagingRoot)
         var persisted = store.load()
         val initialPair = persisted.coordinator.pairs.firstOrNull { it.id == pairId }
             ?: return FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
@@ -636,7 +637,9 @@ internal class DesktopFileSyncEngine(
 
     private inline fun <T> withStagingFile(prefix: String, block: (File) -> T): T {
         check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
-        val file = File.createTempFile("$prefix-", ".tmp", stagingRoot)
+        require(prefix in DESKTOP_FILE_SYNC_STAGE_PREFIXES)
+        val file = File(stagingRoot, "nextcloud-native-$prefix-${UUID.randomUUID()}.tmp")
+        check(file.createNewFile()) { "Could not create sync staging file." }
         return try {
             block(file)
         } finally {
@@ -688,6 +691,31 @@ internal class DesktopFileSyncEngine(
         const val MAX_SYNC_FILE_BYTES = 8L * 1024L * 1024L * 1024L
     }
 }
+
+internal fun reclaimDesktopFileSyncStages(stagingRoot: File): Int {
+    if (!stagingRoot.isDirectory) return 0
+    return stagingRoot.listFiles().orEmpty().count { candidate ->
+        if (!Files.isRegularFile(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)) return@count false
+        val name = candidate.name
+        val prefix = DESKTOP_FILE_SYNC_STAGE_PREFIXES.firstOrNull { ownedPrefix ->
+            name.startsWith("nextcloud-native-$ownedPrefix-")
+        } ?: return@count false
+        val token = name.removePrefix("nextcloud-native-$prefix-").removeSuffix(".tmp")
+        if (!name.endsWith(".tmp") || runCatching { UUID.fromString(token) }.isFailure) return@count false
+        candidate.delete()
+    }
+}
+
+private val DESKTOP_FILE_SYNC_STAGE_PREFIXES = setOf(
+    "upload",
+    "verify-upload",
+    "download",
+    "keep-local",
+    "keep-remote",
+    "verify-local-conflict",
+    "verify-remote-conflict",
+    "verify-local-original",
+)
 
 internal fun requiredDesktopDownloadFreeBytes(
     downloadBytes: Long,

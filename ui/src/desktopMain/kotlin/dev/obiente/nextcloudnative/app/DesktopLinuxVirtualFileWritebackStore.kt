@@ -3,9 +3,11 @@ package dev.obiente.nextcloudnative.app
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
+import java.nio.channels.FileChannel
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -38,6 +40,8 @@ internal interface LinuxVirtualWritebackRemote {
 /** Durable local staging for editable Linux virtual files. */
 internal class DesktopLinuxVirtualFileWritebackStore(
     private val root: File,
+    private val minimumFreeSpaceBytes: () -> Long = { DEFAULT_VIRTUAL_FILE_MINIMUM_FREE_BYTES },
+    private val afterDirtyIntentPersisted: () -> Unit = {},
 ) {
     @Synchronized
     fun open(
@@ -61,6 +65,7 @@ internal class DesktopLinuxVirtualFileWritebackStore(
                 linuxWritebackFitsCapacity(
                     remoteBytes = existing.size,
                     availableBytes = directory.usableSpace.coerceAtLeast(0L),
+                    reserveBytes = minimumFreeSpaceBytes(),
                 ),
             ) { "There is not enough free space to stage this Linux virtual-file edit safely." }
         }
@@ -80,11 +85,14 @@ internal class DesktopLinuxVirtualFileWritebackStore(
             }
             val random = RandomAccessFile(stage, "rw")
             try {
-                if (truncate) random.setLength(0L)
                 saveManifest(
                     manifestFile,
                     WritebackManifest(path, expectedRevision, stagedAt, dirty, stage.name),
                 )
+                if (truncate) {
+                    afterDirtyIntentPersisted()
+                    random.setLength(0L)
+                }
             } catch (failure: Throwable) {
                 runCatching(random::close)
                 throw failure
@@ -109,14 +117,14 @@ internal class DesktopLinuxVirtualFileWritebackStore(
                 override fun write(offset: Long, bytes: ByteArray): Int {
                     check(!closed)
                     require(offset >= 0L && bytes.isNotEmpty())
-                    require(offset + bytes.size <= MAX_WRITEBACK_BYTES)
+                    val end = runCatching { Math.addExact(offset, bytes.size.toLong()) }
+                        .getOrElse { throw IllegalArgumentException("The Linux virtual file exceeds the writeback limit.") }
+                    require(end <= MAX_WRITEBACK_BYTES)
+                    requireGrowthCapacity(end)
+                    markDirtyBeforeMutation()
+                    requireGrowthCapacity(end)
                     random.seek(offset)
                     random.write(bytes)
-                    dirty = true
-                    saveManifest(
-                        manifestFile,
-                        WritebackManifest(path, expectedRevision, stagedAt, true, stage.name),
-                    )
                     return bytes.size
                 }
 
@@ -124,12 +132,31 @@ internal class DesktopLinuxVirtualFileWritebackStore(
                 override fun truncate(size: Long) {
                     check(!closed)
                     require(size in 0L..MAX_WRITEBACK_BYTES)
+                    requireGrowthCapacity(size)
+                    markDirtyBeforeMutation()
+                    requireGrowthCapacity(size)
                     random.setLength(size)
-                    dirty = true
+                }
+
+                private fun requireGrowthCapacity(targetBytes: Long) {
+                    require(
+                        linuxWritebackGrowthFitsCapacity(
+                            currentBytes = random.length(),
+                            targetBytes = targetBytes,
+                            availableBytes = directory.usableSpace.coerceAtLeast(0L),
+                            reserveBytes = minimumFreeSpaceBytes(),
+                        ),
+                    ) { "There is not enough free space to grow this Linux virtual-file edit safely." }
+                }
+
+                private fun markDirtyBeforeMutation() {
+                    if (dirty) return
                     saveManifest(
                         manifestFile,
                         WritebackManifest(path, expectedRevision, stagedAt, true, stage.name),
                     )
+                    dirty = true
+                    afterDirtyIntentPersisted()
                 }
 
                 @Synchronized
@@ -277,6 +304,11 @@ internal class DesktopLinuxVirtualFileWritebackStore(
             } catch (_: AtomicMoveNotSupportedException) {
                 Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
+            if (System.getProperty("os.name").equals("Linux", ignoreCase = true)) {
+                FileChannel.open(root.toPath(), StandardOpenOption.READ).use { directory ->
+                    directory.force(true)
+                }
+            }
         } finally {
             temporary.delete()
         }
@@ -298,6 +330,17 @@ internal fun linuxWritebackFitsCapacity(
         reserveBytes >= 0L &&
         availableBytes >= remoteBytes &&
         availableBytes - remoteBytes >= reserveBytes
+
+internal fun linuxWritebackGrowthFitsCapacity(
+    currentBytes: Long,
+    targetBytes: Long,
+    availableBytes: Long,
+    reserveBytes: Long = DEFAULT_VIRTUAL_FILE_MINIMUM_FREE_BYTES,
+): Boolean {
+    if (currentBytes < 0L || targetBytes < 0L || availableBytes < 0L || reserveBytes < 0L) return false
+    val growth = (targetBytes - currentBytes).coerceAtLeast(0L)
+    return availableBytes >= growth && availableBytes - growth >= reserveBytes
+}
 
 internal fun defaultDesktopLinuxWritebackStore(session: NextcloudSession): DesktopLinuxVirtualFileWritebackStore {
     val xdgData = System.getenv("XDG_DATA_HOME")?.takeIf(String::isNotBlank)
