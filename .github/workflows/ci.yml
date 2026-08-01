@@ -196,24 +196,34 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.rust == 'true'
         run: cargo test --locked
 
-      - name: Test contract acquisition
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.contract == 'true'
-        run: ./gradlew --no-daemon :contractAcquisition:test
-
-      - name: Test and build desktop
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.desktop == 'true'
+      - name: Test and build selected Gradle scopes
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outputs.contract == 'true' ||
+          steps.changes.outputs.desktop == 'true' ||
+          steps.changes.outputs.android == 'true'
+        env:
+          RUN_CONTRACT: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.contract == 'true' }}
+          RUN_DESKTOP: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.desktop == 'true' }}
+          RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.android == 'true' }}
         run: |
-          ./gradlew --no-daemon \
-            :ui:desktopTest \
-            :ui:createDistributable
-
-      - name: Test and build Android
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.android == 'true'
-        run: |
-          ./gradlew --no-daemon \
-            :androidApp:testDebugUnitTest \
-            :androidApp:verifyReleaseLintGate \
-            :androidApp:assembleDebug
+          set -euo pipefail
+          gradle_tasks=()
+          if [[ "${RUN_CONTRACT}" == "true" ]]; then
+            gradle_tasks+=(":contractAcquisition:test")
+          fi
+          if [[ "${RUN_DESKTOP}" == "true" ]]; then
+            gradle_tasks+=(":ui:desktopTest" ":ui:createDistributable")
+          fi
+          if [[ "${RUN_ANDROID}" == "true" ]]; then
+            gradle_tasks+=(
+              ":androidApp:testDebugUnitTest"
+              ":androidApp:verifyReleaseLintGate"
+              ":androidApp:assembleDebug"
+            )
+          fi
+          printf 'Selected Gradle tasks: %s\n' "${gradle_tasks[*]}"
+          ./gradlew --no-daemon "${gradle_tasks[@]}"
 
       - name: Upload Linux desktop app
         if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.desktop == 'true'
