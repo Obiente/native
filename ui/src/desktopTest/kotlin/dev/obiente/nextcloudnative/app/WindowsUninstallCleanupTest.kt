@@ -108,7 +108,6 @@ class WindowsUninstallCleanupTest {
         val preferences = Preferences.userRoot().node("windows-root-migration-test-${UUID.randomUUID()}")
         val home = Files.createTempDirectory("windows-root-migration-home").toFile()
         val legacyRoot = home.resolve("Nextcloud Native").resolve("c".repeat(64))
-        val currentRoot = desktopWindowsCloudFilesRoot("c".repeat(64), home)
         assertTrue(legacyRoot.mkdirs())
         val api = RecordingWindowsCloudFilesApi()
         try {
@@ -117,7 +116,6 @@ class WindowsUninstallCleanupTest {
             unregisterSupersededWindowsCloudFilesRoot(
                 preferences = preferences,
                 accountId = "c".repeat(64),
-                currentRoot = currentRoot.toPath(),
                 userHome = home,
                 api = api,
             )
@@ -136,7 +134,6 @@ class WindowsUninstallCleanupTest {
         val preferences = Preferences.userRoot().node("windows-root-account-test-${UUID.randomUUID()}")
         val home = Files.createTempDirectory("windows-root-account-home").toFile()
         val otherRoot = desktopWindowsCloudFilesRoot("a".repeat(64), home)
-        val currentRoot = desktopWindowsCloudFilesRoot("b".repeat(64), home)
         val api = RecordingWindowsCloudFilesApi()
         try {
             preferences.put("windows-cloud-files-root", otherRoot.absolutePath)
@@ -144,12 +141,37 @@ class WindowsUninstallCleanupTest {
             unregisterSupersededWindowsCloudFilesRoot(
                 preferences = preferences,
                 accountId = "b".repeat(64),
-                currentRoot = currentRoot.toPath(),
                 userHome = home,
                 api = api,
             )
 
             assertEquals(null, api.unregisteredRoot)
+            assertEquals(otherRoot.absolutePath, preferences.get("windows-cloud-files-root", null))
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun activationFindsItsLegacyRootAfterAnotherAccountReplacesTheSavedPointer() {
+        val preferences = Preferences.userRoot().node("windows-root-derived-test-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-root-derived-home").toFile()
+        val otherRoot = desktopWindowsCloudFilesRoot("a".repeat(64), home)
+        val legacyRoot = home.resolve("Nextcloud Native").resolve("b".repeat(64))
+        assertTrue(legacyRoot.mkdirs())
+        val api = RecordingWindowsCloudFilesApi()
+        try {
+            preferences.put("windows-cloud-files-root", otherRoot.absolutePath)
+
+            unregisterSupersededWindowsCloudFilesRoot(
+                preferences = preferences,
+                accountId = "b".repeat(64),
+                userHome = home,
+                api = api,
+            )
+
+            assertEquals(legacyRoot.toPath(), api.unregisteredRoot)
             assertEquals(otherRoot.absolutePath, preferences.get("windows-cloud-files-root", null))
         } finally {
             preferences.removeNode()

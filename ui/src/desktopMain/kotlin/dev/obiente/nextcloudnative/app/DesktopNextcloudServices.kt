@@ -156,18 +156,22 @@ internal fun desktopWindowsCloudFilesRoot(
 internal fun unregisterSupersededWindowsCloudFilesRoot(
     preferences: Preferences,
     accountId: String,
-    currentRoot: Path,
     userHome: File,
     api: WindowsCloudFilesApi,
 ) {
     require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    val savedRoot = preferences.get(KEY_WINDOWS_CLOUD_FILES_ROOT, null)?.let(::File) ?: return
-    val normalizedSavedRoot = validatedWindowsCloudFilesRoot(savedRoot, userHome)
-    val savedAccountId = normalizedSavedRoot.fileName.toString().removeSuffix(WINDOWS_CLOUD_FILES_ROOT_SUFFIX)
-    if (savedAccountId != accountId) return
-    if (normalizedSavedRoot == currentRoot.toAbsolutePath().normalize()) return
-    api.unregisterSyncRoot(normalizedSavedRoot)
-    preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
+    val legacyRoot = validatedWindowsCloudFilesRoot(
+        File(File(userHome, "Nextcloud Native"), accountId),
+        userHome,
+    )
+    if (!Files.exists(legacyRoot)) return
+    api.unregisterSyncRoot(legacyRoot)
+    val savedRoot = preferences.get(KEY_WINDOWS_CLOUD_FILES_ROOT, null)
+        ?.let(::File)
+        ?.toPath()
+        ?.toAbsolutePath()
+        ?.normalize()
+    if (savedRoot == legacyRoot) preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
 }
 
 internal fun unregisterWindowsCloudFilesRootForUninstall(
@@ -720,7 +724,6 @@ class DesktopNextcloudServices(
                     unregisterSupersededWindowsCloudFilesRoot(
                         preferences = preferences,
                         accountId = accountId,
-                        currentRoot = root,
                         userHome = File(System.getProperty("user.home")),
                         api = api,
                     )
