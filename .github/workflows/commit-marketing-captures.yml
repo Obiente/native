@@ -1,0 +1,171 @@
+name: Commit marketing captures
+
+on:
+  workflow_run:
+    workflows:
+      - Refresh marketing captures
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: marketing-capture-commit-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    name: Validate marketing captures
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.refresh.outputs.changed }}
+      head_ref: ${{ steps.refresh.outputs.head_ref }}
+      head_sha: ${{ steps.refresh.outputs.head_sha }}
+    steps:
+      - name: Download prepared capture patch
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          name: marketing-capture-refresh
+          path: ${{ runner.temp }}/marketing-capture-refresh
+
+      - name: Validate capture refresh metadata
+        id: refresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          artifact_directory="${RUNNER_TEMP}/marketing-capture-refresh"
+          metadata="${artifact_directory}/metadata.json"
+          patch="${artifact_directory}/captures.patch"
+          unexpected_entry="$(find "${artifact_directory}" -mindepth 1 -maxdepth 1 \
+            ! -name metadata.json ! -name captures.patch -print -quit)"
+          if [[ -n "${unexpected_entry}" ]]; then
+            printf 'Capture refresh artifact contains an unexpected entry: %s\n' "${unexpected_entry}" >&2
+            exit 1
+          fi
+          if [[ ! -f "${metadata}" || -L "${metadata}" || ! -f "${patch}" || -L "${patch}" ]]; then
+            printf 'Capture refresh artifact must contain regular metadata and patch files.\n' >&2
+            exit 1
+          fi
+          metadata_size="$(stat --printf='%s' -- "${metadata}")"
+          patch_size="$(stat --printf='%s' -- "${patch}")"
+          if [[ "${metadata_size}" -eq 0 || "${metadata_size}" -gt 16384 || "${patch_size}" -gt 104857600 ]]; then
+            printf 'Capture refresh artifact exceeds its allowed metadata or patch size.\n' >&2
+            exit 1
+          fi
+          state="$(jq -er '.state | select(. == "current" or . == "changed")' "${metadata}")"
+          repository="$(jq -er '.repository | strings' "${metadata}")"
+          head_ref="$(jq -er '.headRef | strings' "${metadata}")"
+          head_sha="$(jq -er '.headSha | strings' "${metadata}")"
+          author="$(jq -er '.author | strings' "${metadata}")"
+          pull_request="$(jq -er '.pullRequest | numbers' "${metadata}")"
+          if [[ "${repository}" != "${GITHUB_REPOSITORY}" || "${head_sha}" != "${RUN_HEAD_SHA}" ]]; then
+            printf 'Capture refresh metadata does not match the completed workflow run.\n' >&2
+            exit 1
+          fi
+          if ! git check-ref-format --branch "${head_ref}" >/dev/null; then
+            printf 'Capture refresh metadata contains an invalid head branch.\n' >&2
+            exit 1
+          fi
+          pull_request_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pull_request}")"
+          if [[ "$(jq -r '.state' <<<"${pull_request_json}")" != 'open' ||
+                "$(jq -r '.head.repo.full_name' <<<"${pull_request_json}")" != "${repository}" ||
+                "$(jq -r '.head.ref' <<<"${pull_request_json}")" != "${head_ref}" ||
+                "$(jq -r '.head.sha' <<<"${pull_request_json}")" != "${head_sha}" ||
+                "$(jq -r '.user.login' <<<"${pull_request_json}")" != "${author}" ||
+                ( "${state}" == 'changed' && "${author}" == 'dependabot[bot]' ) ]]; then
+            printf 'Capture refresh metadata does not match an eligible open pull request.\n' >&2
+            exit 1
+          fi
+          if [[ "${state}" == 'current' && "${patch_size}" -ne 0 ]]; then
+            printf 'A current capture artifact must contain an empty patch.\n' >&2
+            exit 1
+          fi
+          if [[ "${state}" == 'changed' && ( "${patch_size}" -eq 0 || "${patch_size}" -gt 104857600 ) ]]; then
+            printf 'A changed capture artifact must contain a bounded non-empty patch.\n' >&2
+            exit 1
+          fi
+          printf 'changed=%s\n' "$([[ "${state}" == 'changed' ]] && printf true || printf false)" >>"${GITHUB_OUTPUT}"
+          printf 'head_ref=%s\n' "${head_ref}" >>"${GITHUB_OUTPUT}"
+          printf 'head_sha=%s\n' "${head_sha}" >>"${GITHUB_OUTPUT}"
+
+  commit:
+    name: Commit marketing captures
+    needs: inspect
+    if: needs.inspect.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    environment: capture-automation
+    timeout-minutes: 10
+    steps:
+      - name: Download validated capture patch
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          name: marketing-capture-refresh
+          path: ${{ runner.temp }}/marketing-capture-refresh
+
+      - name: Create repository-scoped Obiente Automations token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ vars.OBIENTE_AUTOMATIONS_APP_ID }}
+          private-key: ${{ secrets.OBIENTE_AUTOMATIONS_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Check out exact pull request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          repository: ${{ github.repository }}
+          ref: ${{ needs.inspect.outputs.head_sha }}
+
+      - name: Validate and commit capture patch
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          HEAD_REF: ${{ needs.inspect.outputs.head_ref }}
+        run: |
+          set -euo pipefail
+          patch="${RUNNER_TEMP}/marketing-capture-refresh/captures.patch"
+          git apply --check --binary "${patch}"
+          git apply --index --binary "${patch}"
+          change_count=0
+          while IFS= read -r -d '' path; do
+            change_count=$((change_count + 1))
+            if [[ "${path}" != website/public/screenshots/* ]]; then
+              printf 'Capture patch attempted to modify a disallowed path: %s\n' "${path}" >&2
+              exit 1
+            fi
+            if [[ -e "${path}" && ( ! -f "${path}" || -L "${path}" ) ]]; then
+              printf 'Capture patch produced a non-regular file: %s\n' "${path}" >&2
+              exit 1
+            fi
+            mode="$(git ls-files --stage -- "${path}" | awk 'NR == 1 { print $1 }')"
+            if [[ -n "${mode}" && "${mode}" != '100644' ]]; then
+              printf 'Capture patch produced an unsafe file mode for %s: %s\n' "${path}" "${mode}" >&2
+              exit 1
+            fi
+          done < <(git diff --cached --name-only -z)
+          if [[ "${change_count}" -eq 0 ]]; then
+            printf 'Capture patch did not produce any staged changes.\n' >&2
+            exit 1
+          fi
+          bot_id="$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq '.id')"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git commit -m 'chore(website): refresh marketing captures'
+          git push origin "HEAD:refs/heads/${HEAD_REF}"

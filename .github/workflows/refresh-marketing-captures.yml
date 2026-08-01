@@ -28,8 +28,7 @@ on:
       - "website/scripts/verify-marketing-captures.mjs"
 
 permissions:
-  actions: write
-  contents: write
+  contents: read
 
 concurrency:
   group: marketing-captures-${{ github.event.pull_request.number }}
@@ -44,6 +43,7 @@ jobs:
       - name: Check out pull request head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -74,38 +74,62 @@ jobs:
       - name: Regenerate captures
         run: ./gradlew --no-daemon --max-workers=1 :ui:captureMarketingScreenshots
 
-      - name: Commit capture changes
+      - name: Prepare capture refresh artifact
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GH_TOKEN: ${{ github.token }}
           HEAD_AUTHOR: ${{ github.event.pull_request.user.login }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          if [[ -z "$(git status --porcelain --untracked-files=all -- website/public/screenshots)" ]]; then
-            printf 'Marketing captures already match this pull request.\n'
-            exit 0
+          artifact_directory="${RUNNER_TEMP}/marketing-capture-refresh"
+          mkdir -p -- "${artifact_directory}"
+          capture_status="$(git status --porcelain --untracked-files=all -- website/public/screenshots)"
+          outside_status="$(git status --porcelain --untracked-files=all -- . ':(exclude)website/public/screenshots/**')"
+          if [[ -n "${outside_status}" ]]; then
+            printf 'Capture regeneration modified files outside the screenshot directory.\n' >&2
+            printf '%s\n' "${outside_status}" >&2
+            exit 1
           fi
-          if [[ "${HEAD_REPOSITORY}" != "${GITHUB_REPOSITORY}" || "${HEAD_AUTHOR}" == 'dependabot[bot]' ]]; then
+          state='current'
+          if [[ -z "${capture_status}" ]]; then
+            printf 'Marketing captures already match this pull request.\n'
+            : >"${artifact_directory}/captures.patch"
+          elif [[ "${HEAD_REPOSITORY}" != "${GITHUB_REPOSITORY}" || "${HEAD_AUTHOR}" == 'dependabot[bot]' ]]; then
             printf 'Marketing captures changed, but this pull request is read-only to workflows.\n' >&2
             printf 'Run tools/capture-marketing-screenshots.sh and commit the results.\n' >&2
             exit 1
+          else
+            state='changed'
+            if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+            fi
+            node tools/changelog-fragments.mjs check-diff \
+              --base "${BASE_SHA}" \
+              --head HEAD
+            git add --intent-to-add --all -- website/public/screenshots
+            git diff --binary --full-index -- website/public/screenshots >"${artifact_directory}/captures.patch"
+            if [[ ! -s "${artifact_directory}/captures.patch" ]]; then
+              printf 'Capture changes were detected but no patch was produced.\n' >&2
+              exit 1
+            fi
           fi
-          if ! git diff --quiet -- . ':(exclude)website/public/screenshots/**'; then
-            printf 'Capture regeneration modified files outside the screenshot directory.\n' >&2
-            git status --short
-            exit 1
-          fi
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git fetch --no-tags --depth=1 origin "${BASE_SHA}"
-          fi
-          node tools/changelog-fragments.mjs check-diff \
-            --base "${BASE_SHA}" \
-            --head HEAD
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- website/public/screenshots
-          git commit -m 'chore(website): refresh marketing captures'
-          git push origin "HEAD:${HEAD_REF}"
-          gh workflow run ci.yml --repo "${GITHUB_REPOSITORY}" --ref "${HEAD_REF}"
+          jq -n \
+            --arg state "${state}" \
+            --arg repository "${HEAD_REPOSITORY}" \
+            --arg headRef "${HEAD_REF}" \
+            --arg headSha "${HEAD_SHA}" \
+            --arg author "${HEAD_AUTHOR}" \
+            --argjson pullRequest "${PULL_REQUEST_NUMBER}" \
+            '{state: $state, repository: $repository, headRef: $headRef, headSha: $headSha, author: $author, pullRequest: $pullRequest}' \
+            >"${artifact_directory}/metadata.json"
+
+      - name: Upload capture refresh artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: marketing-capture-refresh
+          path: ${{ runner.temp }}/marketing-capture-refresh
+          if-no-files-found: error
+          retention-days: 1
