@@ -13,6 +13,20 @@ import kotlin.test.assertIs
 
 class DesktopAppUpdatesTest {
     @Test
+    fun windowsInstallerMetadataPreservesTheInternetTrustBoundary() {
+        val source = "https://github.com/Obiente/nc-native/releases/download/v1/NextcloudNative.msi"
+        val notes = "https://github.com/Obiente/nc-native/releases/tag/v1"
+
+        assertEquals(
+            "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=$source\r\nReferrerUrl=$notes\r\n",
+            windowsZoneIdentifier(source, notes),
+        )
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            windowsZoneIdentifier("https://example.invalid/package.msi\r\nZoneId=0", notes)
+        }
+    }
+
+    @Test
     fun linuxTargetDetectionSelectsOnlyAnUnambiguousNativePackage() {
         assertEquals(
             DesktopUpdateTarget("linux", "rpm", "x86_64"),
@@ -38,7 +52,11 @@ class DesktopAppUpdatesTest {
             DesktopUpdateTarget("linux", "rpm", "x86_64"),
             detectDesktopUpdateTarget("Linux", "amd64", false, false, installedPackageFormat = "rpm"),
         )
-        assertNull(detectDesktopUpdateTarget("Windows 11", "amd64", false, false, null))
+        assertEquals(
+            DesktopUpdateTarget("windows", "msi", "x86_64"),
+            detectDesktopUpdateTarget("Windows 11", "amd64", false, false, null),
+        )
+        assertNull(detectDesktopUpdateTarget("Windows 11", "arm64", false, false, null))
         assertNull(detectDesktopUpdateTarget("Linux", "riscv64", false, true, null))
         assertNull(detectDesktopUpdateTarget("Linux", "amd64", true, true, null))
         assertNull(detectDesktopUpdateTarget("Linux", "amd64", false, false, null))
@@ -59,7 +77,7 @@ class DesktopAppUpdatesTest {
     }
 
     @Test
-    fun onlyPackagedReleaseBuildsOfferDirectLinuxUpdates() {
+    fun onlyPackagedReleaseBuildsOfferDirectNativePackageUpdates() {
         val node = Preferences.userRoot().node("desktop-update-test-${UUID.randomUUID()}")
         val directory = Files.createTempDirectory("desktop-update-support-test").toFile()
         try {
@@ -107,6 +125,21 @@ class DesktopAppUpdatesTest {
             assertFalse(distributionManaged.support().canCheckDirectUpdates)
             assertTrue(distributionManaged.support().explanation.contains("distribution-managed"))
             assertEquals(6L * 60L * 60L * 1_000L, DESKTOP_APP_UPDATE_CHECK_INTERVAL_MILLIS)
+            val windowsRelease = DesktopAppUpdater(
+                preferences = node,
+                buildIdentity = DesktopUpdateBuildIdentity(
+                    versionName = "0.1.0-alpha.1",
+                    versionCode = 1,
+                    packageVersion = "1.0.1",
+                    releaseBuild = true,
+                    directPackageUpdates = true,
+                ),
+                target = DesktopUpdateTarget("windows", "msi", "x86_64"),
+                updateDirectory = directory,
+                openInstaller = {},
+            )
+            assertEquals(AppDistributionChannel.DirectDesktopPackage, windowsRelease.support().channel)
+            assertTrue(windowsRelease.support().canCheckDirectUpdates)
         } finally {
             node.removeNode()
             directory.deleteRecursively()

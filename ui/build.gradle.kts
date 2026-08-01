@@ -14,6 +14,7 @@ val linuxJpackageTemplates = rootProject.layout.projectDirectory.dir("release/li
 val generatedJpackageResources = layout.buildDirectory.dir("generated/jpackage-resources")
 val debPackageDirectory = layout.buildDirectory.dir("compose/binaries/main/deb")
 val rpmPackageDirectory = layout.buildDirectory.dir("compose/binaries/main/rpm")
+val msiPackageDirectory = layout.buildDirectory.dir("compose/binaries/main/msi")
 val debPackageSucceededMarker = layout.buildDirectory.file("compose/tmp/packageDeb.succeeded")
 val rpmPackageSucceededMarker = layout.buildDirectory.file("compose/tmp/packageRpm.succeeded")
 
@@ -174,6 +175,11 @@ compose.desktop {
             }
             windows {
                 iconFile.set(project.file("src/desktopMain/resources/nextcloud-native.ico"))
+                menu = true
+                menuGroup = "Nextcloud Native"
+                shortcut = true
+                perUserInstall = true
+                upgradeUuid = "81237d85-c511-47a7-b8dc-c87a5f5c5823"
             }
             macOS {
                 packageVersion = ncMacosPackageVersion
@@ -214,6 +220,33 @@ val repackageRpmWithMetadata by tasks.registering(Exec::class) {
     )
 }
 
+val repackageMsiWithUninstallCleanup by tasks.registering(Exec::class) {
+    inputs.file(rootProject.file("tools/repackage-msi-with-uninstall-cleanup.ps1"))
+    doNotTrackState("Rebuilds the packageMsi artifact with an uninstall cleanup action.")
+    onlyIf {
+        System.getProperty("os.name").startsWith("Windows", ignoreCase = true) &&
+            msiPackageDirectory.get().asFile.listFiles().orEmpty().any { it.extension.equals("msi", true) }
+    }
+    commandLine(
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        rootProject.file("tools/repackage-msi-with-uninstall-cleanup.ps1"),
+        "-PackageDirectory",
+        msiPackageDirectory.get().asFile,
+        "-ArgumentsFile",
+        layout.buildDirectory.file("compose/tmp/packageMsi.args.txt").get().asFile,
+        "-JpackageResourceDirectory",
+        layout.buildDirectory.dir("compose/tmp/resources").get().asFile,
+        "-GeneratedResourceDirectory",
+        layout.buildDirectory.dir("generated/jpackage-resources/windows").get().asFile,
+        "-AppImage",
+        layout.buildDirectory.dir("compose/binaries/main/app/NextcloudNative").get().asFile,
+        "-Jpackage",
+        File(System.getProperty("java.home"), "bin/jpackage.exe"),
+    )
+}
+
 tasks.matching { task -> task.name in setOf("packageDeb", "packageRpm") }.configureEach {
     val marker = if (name == "packageDeb") debPackageSucceededMarker else rpmPackageSucceededMarker
     doFirst { marker.get().asFile.delete() }
@@ -227,6 +260,11 @@ tasks.matching { task -> task.name in setOf("packageDeb", "packageRpm") }.config
         dependsOn(prepareLinuxJpackageResources, "createDistributable")
         finalizedBy(repackageRpmWithMetadata)
     }
+}
+
+tasks.matching { task -> task.name == "packageMsi" }.configureEach {
+    dependsOn("createDistributable")
+    finalizedBy(repackageMsiWithUninstallCleanup)
 }
 
 val desktopCaptureCompilation = kotlin.targets

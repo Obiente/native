@@ -119,11 +119,22 @@ export function composeNightlyReleaseNotes({
     lines.push(`| ${row.label} | ${row.packages} | ${status} |`);
   }
 
+  if (availablePlatforms.has("windows")) {
+    lines.push(
+      "",
+      "## Windows installation",
+      "",
+      "The Windows MSI is currently unsigned. Windows may show a Microsoft Defender SmartScreen warning. After confirming that the download came from this release, choose `More info > Run anyway` to continue. Managed devices may block unsigned installers.",
+      "",
+      `Verify build provenance with \`gh attestation verify <downloaded-msi> --repo ${repository}\` and compare the file with \`SHA256SUMS\` when it is available.`,
+    );
+  }
+
   lines.push(
     "",
     "## Updating",
     "",
-    "Direct Android APK and Linux package installs can check the Nightly channel from Settings > App updates. Updates are never downloaded or installed silently. Store-managed installations continue to update through their store.",
+    "Direct Android APK, Linux package, and Windows MSI installs can check the Nightly channel from Settings > App updates. Updates are never downloaded or installed silently. Store-managed installations continue to update through their store.",
     "",
     "## Build identity",
     "",

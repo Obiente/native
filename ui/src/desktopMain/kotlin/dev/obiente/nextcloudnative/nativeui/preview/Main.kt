@@ -28,6 +28,7 @@ import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
 import dev.obiente.nextcloudnative.app.NextcloudNativeApp
 import dev.obiente.nextcloudnative.app.ThemePreference
 import dev.obiente.nextcloudnative.app.tooltip
+import dev.obiente.nextcloudnative.app.unregisterWindowsCloudFilesRootForUninstall
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import java.awt.SystemTray
@@ -39,7 +40,12 @@ import java.awt.event.WindowEvent
 import javax.imageio.ImageIO
 import kotlinx.coroutines.launch
 
-fun main() = application {
+fun main(arguments: Array<String>) {
+    if (arguments.contentEquals(arrayOf("--unregister-windows-sync-root"))) {
+        unregisterWindowsCloudFilesRootForUninstall()
+        return
+    }
+    application {
     val themePreference = remember { mutableStateOf(ThemePreference.System) }
     val services = remember {
         DesktopNextcloudServices { preference ->
@@ -188,6 +194,7 @@ fun main() = application {
                 presentation = NextcloudPresentation.Desktop,
             )
         }
+    }
     }
 }
 

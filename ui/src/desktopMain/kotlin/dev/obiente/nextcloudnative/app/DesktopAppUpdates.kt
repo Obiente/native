@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
+import com.sun.jna.platform.win32.Shell32
+import com.sun.jna.platform.win32.WinUser
 import java.awt.Desktop
 import java.io.File
 import java.io.IOException
@@ -51,12 +53,19 @@ internal fun detectDesktopUpdateTarget(
     rpmMarker: Boolean = File("/etc/redhat-release").isFile || File("/etc/fedora-release").isFile,
     installedPackageFormat: String? = detectInstalledDesktopPackageFormat(osName),
 ): DesktopUpdateTarget? {
-    if (!osName.startsWith("Linux", ignoreCase = true)) return null
     val normalizedArchitecture = when (architecture.lowercase()) {
         "amd64", "x86_64" -> "x86_64"
         "aarch64", "arm64" -> "aarch64"
         else -> return null
     }
+    if (osName.startsWith("Windows", ignoreCase = true)) {
+        return if (normalizedArchitecture == "x86_64") {
+            DesktopUpdateTarget("windows", "msi", normalizedArchitecture)
+        } else {
+            null
+        }
+    }
+    if (!osName.startsWith("Linux", ignoreCase = true)) return null
     val format = installedPackageFormat?.takeIf { it in DESKTOP_LINUX_PACKAGE_FORMATS }
         ?: when {
             rpmMarker && !debianMarker -> "rpm"
@@ -106,6 +115,7 @@ internal class DesktopAppUpdater(
     private val target: DesktopUpdateTarget? = detectDesktopUpdateTarget(),
     private val updateDirectory: File = defaultDesktopUpdateDirectory(),
     private val client: OkHttpClient = buildDesktopUpdateHttpClient(),
+    private val prepareInstaller: (File, DesktopDirectRelease) -> Unit = ::prepareDesktopPackageInstaller,
     private val openInstaller: (File) -> Unit = ::openDesktopPackageInstaller,
 ) {
     private val mutableCheckResult = MutableStateFlow<AppUpdateCheckResult?>(null)
@@ -130,7 +140,7 @@ internal class DesktopAppUpdater(
             currentVersionCode = buildIdentity.versionCode,
             canCheckDirectUpdates = canUpdate,
             explanation = if (canUpdate) {
-                "This Linux package checks the selected release channel, matches downloads to its advertised " +
+                "This native package checks the selected release channel, matches downloads to its advertised " +
                     "checksum, and uses your system installer."
             } else {
                 "Development, distribution-managed, and unsupported desktop packages are updated through " +
@@ -278,6 +288,7 @@ internal class DesktopAppUpdater(
                 packageFile.toPath(),
                 StandardCopyOption.REPLACE_EXISTING,
             )
+            prepareInstaller(packageFile, desktopRelease)
             openInstaller(packageFile)
             mutableInstallState.value = AppUpdateInstallState.ConfirmationOpened(
                 desktopRelease.versionName,
@@ -517,6 +528,12 @@ internal fun isTrustedDesktopReleaseAssetRedirect(url: String): Boolean {
 }
 
 private fun defaultDesktopUpdateDirectory(): File {
+    if (System.getProperty("os.name", "").startsWith("Windows", ignoreCase = true)) {
+        val localAppData = System.getenv("LOCALAPPDATA")?.takeIf(String::isNotBlank)
+            ?.let(::File)
+            ?: File(System.getProperty("user.home"), "AppData/Local")
+        return File(localAppData, "Nextcloud Native/Cache/App Updates")
+    }
     val cacheRoot = System.getenv("XDG_CACHE_HOME")
         ?.takeIf(String::isNotBlank)
         ?.let(::File)
@@ -524,7 +541,41 @@ private fun defaultDesktopUpdateDirectory(): File {
     return File(cacheRoot, "nextcloud-native/app-updates")
 }
 
+private fun prepareDesktopPackageInstaller(
+    packageFile: File,
+    release: DesktopDirectRelease,
+) {
+    if (!System.getProperty("os.name", "").startsWith("Windows", ignoreCase = true)) return
+    val zoneIdentifier = File("${packageFile.absolutePath}:Zone.Identifier")
+    zoneIdentifier.writeText(
+        windowsZoneIdentifier(
+            sourceUrl = release.asset.url,
+            referrerUrl = release.releaseNotesUrl,
+        ),
+        Charsets.UTF_8,
+    )
+    check(zoneIdentifier.isFile) { "Windows could not attach Internet-zone metadata to the update package." }
+}
+
+internal fun windowsZoneIdentifier(sourceUrl: String, referrerUrl: String): String {
+    require(sourceUrl.startsWith("https://") && '\r' !in sourceUrl && '\n' !in sourceUrl)
+    require(referrerUrl.startsWith("https://") && '\r' !in referrerUrl && '\n' !in referrerUrl)
+    return "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=$sourceUrl\r\nReferrerUrl=$referrerUrl\r\n"
+}
+
 private fun openDesktopPackageInstaller(packageFile: File) {
+    if (System.getProperty("os.name", "").startsWith("Windows", ignoreCase = true)) {
+        val result = Shell32.INSTANCE.ShellExecute(
+            null,
+            "open",
+            packageFile.absolutePath,
+            null,
+            null,
+            WinUser.SW_SHOWNORMAL,
+        )
+        check(result.toLong() > 32L) { "Windows could not open the verified update package." }
+        return
+    }
     if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
         Desktop.getDesktop().open(packageFile)
     } else {

@@ -62,3 +62,22 @@ test("nightly notes reject an untrusted source URL", () => {
     /sourceRunUrl must be a GitHub Actions run URL/,
   );
 });
+
+test("nightly notes disclose the unsigned Windows installation path", () => {
+  const notes = composeNightlyReleaseNotes({
+    ...baseOptions,
+    availablePlatforms: new Set(["windows"]),
+  });
+
+  assert.match(notes, /## Windows installation/);
+  assert.match(notes, /currently unsigned/);
+  assert.match(notes, /More info > Run anyway/);
+  assert.match(
+    notes,
+    /Windows MSI installs can check the Nightly channel from Settings > App updates/,
+  );
+  assert.match(
+    notes,
+    /gh attestation verify <downloaded-msi> --repo Obiente\/nc-native/,
+  );
+});

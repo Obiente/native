@@ -135,6 +135,7 @@ private enum class DesktopFileSyncRunSource {
 private const val MAX_DOCUMENT_TEMPLATE_ID_LENGTH = 256
 private const val MAX_DOCUMENT_TEMPLATE_NAME_LENGTH = 512
 private const val MAX_DOCUMENT_TEMPLATE_EXTENSION_LENGTH = 32
+private const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
 
 private fun isLinuxDesktop(): Boolean =
     System.getProperty("os.name").orEmpty().lowercase().contains("linux")
@@ -142,9 +143,39 @@ private fun isLinuxDesktop(): Boolean =
 private fun desktopLinuxVirtualFileMountPoint(): File =
     File(System.getProperty("user.home"), "Nextcloud Native")
 
-private fun desktopWindowsCloudFilesRoot(accountId: String): File {
+internal fun desktopWindowsCloudFilesRoot(
+    accountId: String,
+    userHome: File = File(System.getProperty("user.home")),
+): File {
     require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    return File(File(System.getProperty("user.home"), "Nextcloud Native"), accountId)
+    return File(File(userHome, "Nextcloud Native"), accountId)
+}
+
+internal fun unregisterWindowsCloudFilesRootForUninstall(
+    preferences: Preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative"),
+    userHome: File = File(System.getProperty("user.home")),
+    apiFactory: () -> WindowsCloudFilesApi = ::JnaWindowsCloudFilesApi,
+) {
+    val savedRoot = preferences.get(KEY_WINDOWS_CLOUD_FILES_ROOT, null)?.let(::File)
+    val sessionRoot = preferences.get("server", null)?.let { server ->
+        preferences.get("login", null)?.let { login ->
+            val accountId = desktopFileCacheAccountId(NextcloudSession(server, login, "unused"))
+            desktopWindowsCloudFilesRoot(accountId, userHome)
+        }
+    }
+    val root = savedRoot ?: sessionRoot ?: return
+    val expectedParent = File(userHome, "Nextcloud Native").toPath().toAbsolutePath().normalize()
+    val normalizedRoot = root.toPath().toAbsolutePath().normalize()
+    check(normalizedRoot.parent == expectedParent && normalizedRoot.fileName.toString().let { name ->
+        name.length == 64 && name.all { it in '0'..'9' || it in 'a'..'f' }
+    }) { "The stored Windows Cloud Files root is invalid." }
+    val api = apiFactory()
+    try {
+        api.unregisterSyncRoot(normalizedRoot)
+        preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
+    } finally {
+        api.close()
+    }
 }
 
 private fun virtualFileProviderPreferenceKey(accountId: String): String {
@@ -420,6 +451,7 @@ class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
 ) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
+    private val secretStore = defaultDesktopSecretStore()
     private val appUpdater = DesktopAppUpdater(preferences.node("app-updates-v1"))
     private val httpClient = OkHttpClient()
     private val noRedirectHttpClient = httpClient.newBuilder()
@@ -666,6 +698,7 @@ class DesktopNextcloudServices(
                     windowsCloudFilesProvider = provider
                     windowsCloudFilesIdentity = accountId
                     windowsCloudFilesFailure = null
+                    preferences.put(KEY_WINDOWS_CLOUD_FILES_ROOT, root.toAbsolutePath().toString())
                     preferences.putBoolean(virtualFileProviderPreferenceKey(accountId), true)
                 } catch (failure: Throwable) {
                     runCatching(provider::close)
@@ -1253,17 +1286,19 @@ class DesktopNextcloudServices(
     override fun loadSession(): NextcloudSession? {
         val server = preferences.get(KEY_SERVER, null) ?: return null
         val login = preferences.get(KEY_LOGIN, null) ?: return null
-        val password = secretTool("lookup", server, login) ?: return null
+        val password = secretStore.load(desktopSessionSecretReference(server, login))
+            ?.decodeToString()
+            ?.takeIf(String::isNotBlank)
+            ?: return null
         return NextcloudSession(server, login, password)
     }
 
     override fun saveSession(session: NextcloudSession) {
-        val process = ProcessBuilder(
-            "secret-tool", "store", "--label=Nextcloud Native app password",
-            "application", APP_ID, "server", session.serverUrl, "login", session.loginName,
-        ).start()
-        process.outputStream.bufferedWriter().use { it.write(session.appPassword) }
-        check(process.waitFor() == 0) { "Could not store the session in the desktop keyring." }
+        secretStore.save(
+            reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
+            username = session.loginName,
+            secret = session.appPassword.encodeToByteArray(),
+        )
         preferences.put(KEY_SERVER, session.serverUrl)
         preferences.put(KEY_LOGIN, session.loginName)
         startDesktopSyncLifecycle()
@@ -1279,17 +1314,29 @@ class DesktopNextcloudServices(
             linuxVirtualFileSystem = null
             linuxVirtualFileMountIdentity = null
             linuxVirtualFileFailure = null
-            runCatching { windowsCloudFilesProvider?.close() }
-            windowsCloudFilesProvider = null
-            windowsCloudFilesIdentity = null
-            windowsCloudFilesFailure = null
+            try {
+                if (windowsCloudFilesProvider != null) {
+                    windowsCloudFilesProvider?.removeSyncRoot()
+                    preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
+                } else if (isWindowsDesktop()) {
+                    unregisterWindowsCloudFilesRootForUninstall(preferences)
+                }
+                windowsCloudFilesProvider = null
+                windowsCloudFilesIdentity = null
+                windowsCloudFilesFailure = null
+            } catch (failure: Throwable) {
+                windowsCloudFilesFailure = failure.message ?: "Could not remove the Windows Cloud Files root."
+                throw failure
+            }
         }
         mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
             phase = DesktopFileSyncTrayPhase.Idle,
         )
         val server = preferences.get(KEY_SERVER, null)
         val login = preferences.get(KEY_LOGIN, null)
-        if (server != null && login != null) secretTool("clear", server, login)
+        if (server != null && login != null) {
+            secretStore.clear(desktopSessionSecretReference(server, login))
+        }
         preferences.remove(KEY_SERVER)
         preferences.remove(KEY_LOGIN)
     }
@@ -2816,14 +2863,6 @@ class DesktopNextcloudServices(
         require(uri.scheme == "https" && !uri.host.isNullOrBlank()) { "Enter a valid secure https:// server address." }
         return candidate.trimEnd('/').removeSuffix("/index.php")
     }
-
-    private fun secretTool(command: String, server: String, login: String): String? = runCatching {
-        val process = ProcessBuilder(
-            "secret-tool", command, "application", APP_ID, "server", server, "login", login,
-        ).start()
-        val value = process.inputStream.bufferedReader().use { it.readText().trim() }
-        if (process.waitFor() == 0) value.takeIf(String::isNotBlank) else null
-    }.getOrNull()
 
     private fun JSONArray.toAppEntries(): List<NextcloudAppEntry> = buildList {
         for (index in 0 until length()) {

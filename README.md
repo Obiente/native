@@ -154,7 +154,7 @@ The dependency gates and data-safety criteria are in
 | --- | --- |
 | Android | Active application target, routine emulator and physical-device QA, signed APK/AAB prereleases |
 | Linux | Primary interactive desktop development target, distributable plus RPM/DEB prereleases |
-| Windows | Early MSI packaging artifact; native Credential Manager login storage and supported authenticated use are not implemented yet |
+| Windows | x86-64 MSI, native Credential Manager login storage, and Cloud Files sync under active prerelease qualification |
 | macOS | Early DMG packaging artifact; native Keychain login storage and supported authenticated use are not implemented yet |
 | iOS / iPadOS | Planned platform target; no supported launcher is shipped yet |
 
@@ -200,10 +200,13 @@ Releases remain below `1.0.0` and are marked as prereleases until the published
 product, data-loss, security, and platform gates pass.
 
 Android release artifacts are signed with the project's protected release key.
-Desktop packages are provided per successful platform build. Windows and macOS
-packages currently prove packaging only and do not yet have their required
-native credential-store login integration. Read each release's known
-limitations before installing over an existing test build.
+Desktop packages are provided per successful platform build. Windows MSI
+packages use native Credential Manager storage, include keyless GitHub build
+provenance, and are currently unsigned, so SmartScreen may require choosing
+`More info > Run anyway`. macOS packages still prove packaging only and do not
+yet have native Keychain login integration.
+Read each release's known limitations before installing over an existing test
+build.
 
 ## Build from source
 

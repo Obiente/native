@@ -25,7 +25,7 @@ class DesktopStartOnLoginTest {
         assertTrue(controller.configure(enabled = true).configured)
         val entry = File(root, ".config/autostart/nextcloud-native.desktop")
         assertTrue(entry.isFile)
-        assertTrue(entry.readText().contains("Exec=\"${launcher.absolutePath}\""))
+        assertTrue(entry.readText().contains("Exec=${desktopEntryExecArgument(launcher.absolutePath)}"))
         assertFalse(entry.readText().contains("Terminal=true"))
 
         assertTrue(controller.configure(enabled = false).configured)
