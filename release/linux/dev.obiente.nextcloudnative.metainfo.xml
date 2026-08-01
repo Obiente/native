@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
   <id>dev.obiente.nextcloudnative</id>
+  <pkgname>nextcloudnative</pkgname>
   <name>Nextcloud Native</name>
   <summary>One native client for your complete Nextcloud account</summary>
   <metadata_license>CC0-1.0</metadata_license>
@@ -8,6 +9,7 @@
   <developer id="dev.obiente">
     <name>Obiente</name>
   </developer>
+  <icon type="stock">dev.obiente.nextcloudnative</icon>
   <launchable type="desktop-id">nextcloudnative-NextcloudNative.desktop</launchable>
   <provides>
     <binary>NextcloudNative</binary>
@@ -38,19 +40,19 @@
   </description>
   <screenshots>
     <screenshot type="default">
-      <image type="source">https://nc-native.obiente.dev/screenshots/desktop-home.png</image>
+      <image type="source" width="1440" height="900">https://nc-native.obiente.dev/screenshots/desktop-home.png</image>
       <caption>A native desktop workspace for a complete Nextcloud account</caption>
     </screenshot>
     <screenshot>
-      <image type="source">https://nc-native.obiente.dev/screenshots/photo-folder-browser-desktop.png</image>
+      <image type="source" width="1440" height="900">https://nc-native.obiente.dev/screenshots/photo-folder-browser-desktop.png</image>
       <caption>Native photo and folder browsing</caption>
     </screenshot>
     <screenshot>
-      <image type="source">https://nc-native.obiente.dev/screenshots/transfer-desktop-active.png</image>
+      <image type="source" width="1280" height="800">https://nc-native.obiente.dev/screenshots/transfer-desktop-active.png</image>
       <caption>Visible file transfer and synchronization progress</caption>
     </screenshot>
     <screenshot>
-      <image type="source">https://nc-native.obiente.dev/screenshots/deck-board-desktop.png</image>
+      <image type="source" width="1440" height="900">https://nc-native.obiente.dev/screenshots/deck-board-desktop.png</image>
       <caption>A native Nextcloud Deck board</caption>
     </screenshot>
   </screenshots>
