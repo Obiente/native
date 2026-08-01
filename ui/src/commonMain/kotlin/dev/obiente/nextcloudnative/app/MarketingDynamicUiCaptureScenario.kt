@@ -251,7 +251,9 @@ internal fun MarketingDynamicUiScenario(
     fixture: MarketingDynamicUiFixture = marketingDynamicUiFixture,
 ) {
     require(
-        scenario == MarketingCaptureScenario.AdaptiveApp ||
+        scenario == MarketingCaptureScenario.HomepageAppsDesktopDark ||
+            scenario == MarketingCaptureScenario.HomepageAppsDesktopLight ||
+            scenario == MarketingCaptureScenario.AdaptiveApp ||
             scenario == MarketingCaptureScenario.AdaptiveAppMobile ||
             scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile ||
             scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
@@ -265,6 +267,19 @@ internal fun MarketingDynamicUiScenario(
             MarketingDynamicContextMenuCapture(
                 fixture = fixture,
                 modifier = Modifier.weight(1f),
+            )
+        } else if (
+            scenario == MarketingCaptureScenario.HomepageAppsDesktopDark ||
+            scenario == MarketingCaptureScenario.HomepageAppsDesktopLight
+        ) {
+            GenericNativeAppScreen(
+                schema = marketingDynamicUiSchema,
+                view = marketingDynamicListView,
+                state = NativeScreenState.Ready(marketingDynamicWorkItemRecords),
+                actionExecutor = marketingCaptureActionExecutor,
+                modifier = Modifier.weight(1f),
+                datasetContext = marketingDynamicDatasetContext,
+                showCollectionCreateAction = true,
             )
         } else if (desktop) {
             MarketingDynamicDesktopCapture(fixture, Modifier.weight(1f))

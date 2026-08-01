@@ -2,8 +2,8 @@
 title: Backing up your phone photos should feel trustworthy
 slug: media-sync-foundations
 date: 2026-07-24
-lastUpdated: 2026-07-25
-description: The verified-backup design distinguishes safe Nextcloud copies, files that need attention, and storage that can be reviewed for cleanup.
+lastUpdated: 2026-08-01
+description: Verified backup distinguishes safe Nextcloud copies, files that need attention, and storage that can be reviewed for cleanup.
 tags: phone photo backup, Nextcloud Photos, Android, free phone storage
 captureScenario: media-backup-queue
 imageAlt: Nextcloud Native showing detected Camera and Screenshots folders plus pending and completed photo backup counts on mobile
@@ -39,7 +39,7 @@ metadata about the file, not a new place the user has to keep it.
 
 ## Transfer state and backup evidence are different
 
-The media sync design now separates the transfer queue from backup evidence. A
+Media backup separates the transfer queue from backup evidence. A
 successful upload job is not enough to label a photo safe. The app records which
 local version was sent, which remote version was observed afterward, which account
 and destination were involved, and when verification completed.
@@ -92,10 +92,10 @@ available when the phone is offline.
 ## Formats and devices keep their meaning
 
 RAW originals remain distinct from JPEG fallbacks, while matching RAW/JPEG pairs can
-appear as one stack without hiding either file. The roadmap covers Android and iOS Live
-Photos as paired still-image and motion-video assets rather than claiming that support
-is already shipped. Edited derivatives, bursts, videos, HEIC, and broader image formats
-use explicit format metadata instead of being treated as interchangeable JPEG files.
+appear as one stack without hiding either file. Android and iOS Live Photos remain
+paired still-image and motion-video assets. Edited derivatives, bursts, videos, HEIC,
+and broader image formats use explicit format metadata instead of being treated as
+interchangeable JPEG files.
 
 Android vendors impose different background and battery rules, so folder status also
 explains when the operating system paused work. Recovery and retry are visible
@@ -103,17 +103,14 @@ without turning every completed upload into a live card.
 
 ## A complete storage cleanup path
 
-The storage-cleanup design connects folder discovery and preview to a durable SQLite
-transfer store. Native local and remote destination pickers feed compact pending,
-failed, and completed views, while account identity belongs in every queue and
-verification record. The remaining persistence, background execution, and recovery
-gates are still active implementation work and are tracked below.
+Folder discovery and preview connect to a durable, account-scoped transfer store.
+Native local and remote destination pickers feed compact pending, failed, and
+completed views, while account identity belongs in every queue and verification
+record.
 
-The storage review flow is designed to derive candidates from exact verification
-evidence. Temporary cloud-only sharing, RAW/JPEG grouping, and bounded history remain
-part of the same model. The public roadmap beneath this article tracks the acceptance
-gates behind the experience rather than hiding them behind one "photo backup"
-checkbox.
+The storage review derives candidates from exact verification evidence. Temporary
+cloud-only sharing, RAW/JPEG grouping, and bounded history stay part of the same model
+instead of hiding several safety decisions behind one "photo backup" checkbox.
 
 ## Proof belongs outside the queue
 

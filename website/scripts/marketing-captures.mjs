@@ -13,6 +13,7 @@ export const captureManifestPath = path.join(
   "capture-manifest.json",
 );
 const captureInventoryRelativePath = "tools/marketing-capture-inputs.txt";
+const captureThemes = ["dark", "light"];
 
 export async function readCaptureManifest() {
   const manifest = JSON.parse(await readFile(captureManifestPath, "utf8"));
@@ -37,7 +38,7 @@ export function validateCaptureManifest(manifest) {
     ],
     "Capture manifest",
   );
-  requireValue(manifest.schemaVersion === 2, "schemaVersion must be 2");
+  requireValue(manifest.schemaVersion === 3, "schemaVersion must be 3");
   requireValue(
     manifest.renderer === "Compose ImageComposeScene",
     "renderer must identify ImageComposeScene",
@@ -70,7 +71,9 @@ export function validateCaptureManifest(manifest) {
     requireObject(capture, "Capture");
     const expectedCaptureKeys = [
       "scenario",
+      "baseScenario",
       "file",
+      "theme",
       "width",
       "height",
       "density",
@@ -86,6 +89,11 @@ export function validateCaptureManifest(manifest) {
     if (capture.issue !== undefined) expectedCaptureKeys.push("issue");
     requireExactKeys(capture, expectedCaptureKeys, "Capture");
     requireSlug(capture.scenario, "capture scenario");
+    requireSlug(capture.baseScenario, `${capture.scenario} baseScenario`);
+    requireValue(
+      captureThemes.includes(capture.theme),
+      `${capture.scenario} theme must be dark or light`,
+    );
     requireValue(
       !scenarios.has(capture.scenario),
       `Duplicate capture scenario: ${capture.scenario}`,
@@ -122,6 +130,40 @@ export function validateCaptureManifest(manifest) {
       requirePositiveInteger(capture.issue, `${capture.scenario} issue`);
     }
   }
+  const capturesByBase = new Map();
+  for (const capture of manifest.captures) {
+    const pair = capturesByBase.get(capture.baseScenario) ?? [];
+    pair.push(capture);
+    capturesByBase.set(capture.baseScenario, pair);
+  }
+  for (const [baseScenario, pair] of capturesByBase) {
+    requireValue(
+      pair.length === captureThemes.length &&
+        captureThemes.every(
+          (theme) => pair.filter((capture) => capture.theme === theme).length === 1,
+        ),
+      `${baseScenario} must declare exactly one dark and one light capture`,
+    );
+    const [reference, candidate] = pair;
+    for (const field of [
+      "width",
+      "height",
+      "density",
+      "feature",
+      "surface",
+      "state",
+      "purpose",
+      "platform",
+      "viewport",
+      "pullRequest",
+      "issue",
+    ]) {
+      requireValue(
+        candidate[field] === reference[field],
+        `${baseScenario} theme variants must share ${field}`,
+      );
+    }
+  }
   return manifest;
 }
 
@@ -137,18 +179,31 @@ export function websiteCapturePath(manifest, capture) {
 }
 
 export function articleCapture(manifest, scenario, sourceLabel) {
-  const capture = manifest.captures.find((candidate) => candidate.scenario === scenario);
-  if (!capture) {
+  return articleCapturePair(manifest, scenario, sourceLabel).dark;
+}
+
+export function articleCapturePair(manifest, baseScenario, sourceLabel) {
+  const captures = manifest.captures.filter(
+    (candidate) => candidate.baseScenario === baseScenario,
+  );
+  if (captures.length === 0) {
     throw new Error(
       `${sourceLabel}: captureScenario must reference a declared Compose capture.`,
     );
   }
-  if (capture.purpose !== "showcase") {
+  if (captures.some((capture) => capture.purpose !== "showcase")) {
     throw new Error(
       `${sourceLabel}: captureScenario must reference a showcase capture, not state coverage.`,
     );
   }
-  return capture;
+  const dark = captures.find((capture) => capture.theme === "dark");
+  const light = captures.find((capture) => capture.theme === "light");
+  if (!dark || !light) {
+    throw new Error(
+      `${sourceLabel}: captureScenario must provide both dark and light captures.`,
+    );
+  }
+  return { dark, light };
 }
 
 export async function verifyCaptureAssets(manifest) {
