@@ -180,6 +180,7 @@ jobs:
             -PncMacosPackageVersion="${RELEASE_DESKTOP_VERSION}" \
             -PncVersionName="${GITHUB_REF_NAME#v}" \
             -PncVersionCode="${{ needs.authorize-signing.outputs.version-code }}" \
+            -PncAppStreamReleaseDate="$(git show -s --format=%cs HEAD)" \
             -PncDesktopReleaseBuild=true \
             -PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}" \
             ${{ matrix.tasks }}
