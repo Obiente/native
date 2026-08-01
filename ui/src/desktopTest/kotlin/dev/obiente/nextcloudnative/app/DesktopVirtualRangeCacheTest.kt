@@ -7,6 +7,24 @@ import kotlin.test.assertEquals
 
 class DesktopVirtualRangeCacheTest {
     @Test
+    fun `combined automatic cache budget is shared while pinned Windows bytes are excluded`() {
+        assertEquals(
+            7L,
+            combinedAutomaticCacheExcess(
+                maximumBytes = 20L,
+                completeFileBytes = 9L,
+                rangeBytes = 8L,
+                windowsCachedBytes = 15L,
+                windowsPinnedBytes = 5L,
+            ),
+        )
+        assertEquals(
+            0L,
+            combinedAutomaticCacheExcess(20L, 5L, 5L, windowsCachedBytes = 15L, windowsPinnedBytes = 5L),
+        )
+    }
+
+    @Test
     fun `exact revision blocks survive cache restart`() {
         val directory = Files.createTempDirectory("virtual-range-cache-").toFile()
         try {

@@ -94,22 +94,26 @@ internal class DesktopNextcloudVirtualFileBackend(
                 for (block in firstBlock..lastBlock) {
                     val blockOffset = block * RANGE_BLOCK_BYTES
                     val blockLength = minOf(RANGE_BLOCK_BYTES, size - blockOffset).toInt()
-                    val bytes = rangeCache.readBlock(
-                        accountId = accountId,
-                        path = currentPath,
-                        remoteRevision = node.remoteRevision,
-                        fileSize = size,
-                        offset = blockOffset,
-                        length = blockLength,
-                    ) ?: runBlocking(Dispatchers.IO) { source.read(blockOffset, blockLength) }.also { fetched ->
-                        rangeCache.storeBlock(
+                    val bytes = runCatching {
+                        rangeCache.readBlock(
                             accountId = accountId,
                             path = currentPath,
                             remoteRevision = node.remoteRevision,
                             fileSize = size,
                             offset = blockOffset,
-                            bytes = fetched,
+                            length = blockLength,
                         )
+                    }.getOrNull() ?: runBlocking(Dispatchers.IO) { source.read(blockOffset, blockLength) }.also { fetched ->
+                        runCatching {
+                            rangeCache.storeBlock(
+                                accountId = accountId,
+                                path = currentPath,
+                                remoteRevision = node.remoteRevision,
+                                fileSize = size,
+                                offset = blockOffset,
+                                bytes = fetched,
+                            )
+                        }
                     }
                     val copyStart = maxOf(offset, blockOffset)
                     val copyEnd = minOf(offset + length, blockOffset + blockLength)
@@ -284,6 +288,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         if (writeAccess) {
             val shared = LinuxSharedWriteHandle(
                 backend.openWrite(normalized, node, truncate = flags and OPEN_TRUNCATE != 0),
+                normalized,
             )
             fileInfo.fh.set(registerWriteHandle(shared, writable = true))
             return 0
@@ -346,7 +351,10 @@ internal class LinuxNextcloudVirtualFileSystem(
             if (backend.resolve(normalized) != null || pendingCreatedFiles.containsKey(normalized)) {
                 return -ErrorCodes.EEXIST()
             }
-            val shared = LinuxSharedWriteHandle(backend.openWrite(normalized, existing = null, truncate = true))
+            val shared = LinuxSharedWriteHandle(
+                backend.openWrite(normalized, existing = null, truncate = true),
+                normalized,
+            )
             pendingCreatedFiles[normalized] = shared
             fileInfo.fh.set(registerWriteHandle(shared, writable = true))
         }
@@ -372,6 +380,9 @@ internal class LinuxNextcloudVirtualFileSystem(
         val destination = newPath.linuxVirtualPath()
         if (sourcePath == destination) return 0
         if (pendingCreatedFiles.containsKey(sourcePath)) return -ErrorCodes.EBUSY()
+        if (hasOpenWriteHandleWithin(sourcePath) || hasOpenWriteHandleWithin(destination)) {
+            return -ErrorCodes.EBUSY()
+        }
         val source = backend.resolve(sourcePath) ?: return -ErrorCodes.ENOENT()
         val parent = backend.resolve(destination.substringBeforeLast('/', ""))
             ?: return -ErrorCodes.ENOENT()
@@ -490,6 +501,11 @@ internal class LinuxNextcloudVirtualFileSystem(
         }
     }
 
+    private fun hasOpenWriteHandleWithin(path: String): Boolean =
+        writeHandles.values.any { reference ->
+            reference.shared.path == path || reference.shared.path.startsWith("$path/")
+        }
+
     private fun deletePath(path: String, expectDirectory: Boolean): Int = fuseResult {
         val normalized = path.linuxVirtualPath()
         if (pendingCreatedFiles.containsKey(normalized)) return -ErrorCodes.EBUSY()
@@ -528,6 +544,7 @@ internal class LinuxNextcloudVirtualFileSystem(
 
 private class LinuxSharedWriteHandle(
     val delegate: LinuxVirtualFileWriteHandle,
+    val path: String,
 ) {
     var referenceCount: Int = 0
     var closed: Boolean = false

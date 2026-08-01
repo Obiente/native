@@ -137,6 +137,22 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `rename refuses a directory containing an open write handle`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        backend.createDirectory("Photos/Working")
+        backend.addFile("Photos/Working/notes.txt", "draft".encodeToByteArray())
+        val fileInfo = FuseFileInfo.of(Runtime.getSystemRuntime().memoryManager.allocateDirect(256)).apply {
+            flags.set(1L)
+        }
+
+        assertEquals(0, fileSystem.open("/Photos/Working/notes.txt", fileInfo))
+        assertEquals(-ErrorCodes.EBUSY(), fileSystem.rename("/Photos/Working", "/Photos/Renamed"))
+        assertEquals(0, fileSystem.release("/Photos/Working/notes.txt", fileInfo))
+        assertEquals(0, fileSystem.rename("/Photos/Working", "/Photos/Renamed"))
+    }
+
+    @Test
     fun `rmdir refuses a non empty remote directory`() {
         val backend = MutableFixtureBackend()
         val fileSystem = LinuxNextcloudVirtualFileSystem(backend)

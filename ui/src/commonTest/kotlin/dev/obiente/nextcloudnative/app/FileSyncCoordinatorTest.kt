@@ -192,6 +192,31 @@ class FileSyncCoordinatorTest {
     }
 
     @Test
+    fun `explicit recovery resets only failures that exhausted automatic retries`() {
+        var coordinator = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            localEntries = listOf(local("retry.txt", "local-v1")),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10,
+        )
+        val workId = coordinator.pair().workItems.single().id
+        repeat(MAX_FILE_SYNC_ATTEMPTS) { attempt ->
+            coordinator = claimNextFileSyncOperation(coordinator, PAIR_ID, attempt.toLong()).state
+            coordinator = failFileSyncOperation(coordinator, PAIR_ID, workId, "Temporary failure")
+            if (attempt + 1 < MAX_FILE_SYNC_ATTEMPTS) {
+                coordinator = retryFileSyncOperation(coordinator, PAIR_ID, workId)
+            }
+        }
+
+        val reset = resetExhaustedFileSyncOperations(coordinator, PAIR_ID).pair().workItems.single()
+
+        assertEquals(FileSyncExecutionState.Ready, reset.state)
+        assertEquals(0, reset.attemptCount)
+        assertNull(reset.failureMessage)
+    }
+
+    @Test
     fun `keep both requires verified convergence for every generated path`() {
         var state = state(baselines = listOf(baseline("daily.note.md", "l1", "r1")))
         state = scanFileSyncPair(

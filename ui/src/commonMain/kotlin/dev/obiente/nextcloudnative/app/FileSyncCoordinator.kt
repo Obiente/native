@@ -455,6 +455,27 @@ fun retryFileSyncOperation(
     }
 }
 
+/** Explicit user recovery for work that exhausted the automatic retry budget. */
+fun resetExhaustedFileSyncOperations(
+    state: FileSyncCoordinatorState,
+    pairId: String,
+): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
+    pair.copy(
+        workItems = pair.workItems.map { work ->
+            if (work.state == FileSyncExecutionState.Failed && work.attemptCount >= MAX_FILE_SYNC_ATTEMPTS) {
+                work.copy(
+                    state = FileSyncExecutionState.Ready,
+                    attemptCount = 0,
+                    lastAttemptEpochMillis = null,
+                    failureMessage = null,
+                )
+            } else {
+                work
+            }
+        },
+    )
+}
+
 internal fun recoverInterruptedFileSyncWork(state: FileSyncCoordinatorState): FileSyncCoordinatorState =
     state.copy(
         pairs = state.pairs.map { pair ->

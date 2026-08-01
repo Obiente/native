@@ -22,6 +22,7 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -344,7 +345,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         mode: String,
         signal: CancellationSignal?,
     ): ParcelFileDescriptor {
-        val recovered = androidDocumentPendingWriteback(context, session, file.path)
+        val recovered = claimAndroidDocumentPendingWriteback(context, session, file.path)
         val writeback = recovered ?: createDurableWriteback(session, file, requireMutationEtag(file))
         val expectedEtag = writeback.expectedRemoteEtag
         val staging = writeback.staging
@@ -369,17 +370,17 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 }
             }
             signal?.throwIfCanceled()
-            if (recovered == null) writeback.markReady()
+            if (recovered == null) writeback.markReadyAndActive()
             return ParcelFileDescriptor.open(
                 staging,
                 descriptorMode(mode),
                 WRITE_HANDLER,
             ) { closeError ->
-                if (closeError != null) {
-                    retainFailedWriteback(writeback, closeError)
-                    return@open
-                }
                 try {
+                    if (closeError != null) {
+                        retainFailedWriteback(writeback, closeError)
+                        return@open
+                    }
                     check(staging.length() <= MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES) {
                         "The edited file exceeds the ${formatByteLimit(MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES)} limit."
                     }
@@ -394,10 +395,12 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                     notifyDocumentChanged(session, file.path)
                 } catch (failure: Throwable) {
                     retainFailedWriteback(writeback, failure)
+                } finally {
+                    writeback.releaseActive()
                 }
             }
         } catch (failure: Throwable) {
-            if (recovered == null) writeback.discard()
+            if (recovered == null) writeback.discard() else writeback.releaseActive()
             throw failure
         }
     }
@@ -720,7 +723,7 @@ internal data class AndroidDocumentPendingWriteback(
         require(staging.isFile && manifest.isFile)
     }
 
-    fun markReady() {
+    fun markReadyAndActive() = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
         val payload = JSONObject(manifest.readText()).put("ready", true).toString().encodeToByteArray()
         val temporary = File.createTempFile("manifest-", ".tmp", manifest.parentFile)
         try {
@@ -738,18 +741,25 @@ internal data class AndroidDocumentPendingWriteback(
             } catch (_: AtomicMoveNotSupportedException) {
                 Files.move(temporary.toPath(), manifest.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
+            ACTIVE_ANDROID_DOCUMENT_WRITEBACKS += manifest.activeWritebackKey()
         } finally {
             temporary.delete()
         }
     }
 
-    fun complete() {
+    fun complete() = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
         if (staging.delete()) manifest.delete()
+        ACTIVE_ANDROID_DOCUMENT_WRITEBACKS -= manifest.activeWritebackKey()
     }
 
-    fun discard() {
+    fun discard() = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
         manifest.delete()
         staging.delete()
+        ACTIVE_ANDROID_DOCUMENT_WRITEBACKS -= manifest.activeWritebackKey()
+    }
+
+    fun releaseActive() = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
+        ACTIVE_ANDROID_DOCUMENT_WRITEBACKS -= manifest.activeWritebackKey()
     }
 }
 
@@ -760,12 +770,14 @@ internal fun androidDocumentPendingWritebackCount(context: android.content.Conte
 internal fun androidDocumentPendingWritebacks(
     context: android.content.Context,
     session: NextcloudSession,
-): List<AndroidDocumentPendingWriteback> {
+): List<AndroidDocumentPendingWriteback> = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
     val root = File(context.filesDir, "documents-recovery")
     if (!root.isDirectory) return emptyList()
     val account = NextcloudDocumentIds.accountKey(session)
     return root.listFiles().orEmpty().mapNotNull { manifest ->
         parseAndroidDocumentWriteback(root, manifest, account)
+    }.filterNot { writeback ->
+        writeback.manifest.activeWritebackKey() in ACTIVE_ANDROID_DOCUMENT_WRITEBACKS
     }.sortedBy { writeback -> writeback.manifest.lastModified() }
 }
 
@@ -773,14 +785,27 @@ internal fun androidDocumentPendingWriteback(
     context: android.content.Context?,
     session: NextcloudSession,
     remotePath: String,
-): AndroidDocumentPendingWriteback? {
+): AndroidDocumentPendingWriteback? = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
     val root = context?.let { File(it.filesDir, "documents-recovery") } ?: return null
     if (!root.isDirectory) return null
     val account = NextcloudDocumentIds.accountKey(session)
     return root.listFiles().orEmpty().asSequence()
         .mapNotNull { manifest -> parseAndroidDocumentWriteback(root, manifest, account) }
         .filter { writeback -> writeback.remotePath == remotePath }
+        .filterNot { writeback ->
+            writeback.manifest.activeWritebackKey() in ACTIVE_ANDROID_DOCUMENT_WRITEBACKS
+        }
         .maxByOrNull { writeback -> writeback.manifest.lastModified() }
+}
+
+private fun claimAndroidDocumentPendingWriteback(
+    context: android.content.Context?,
+    session: NextcloudSession,
+    remotePath: String,
+): AndroidDocumentPendingWriteback? = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
+    androidDocumentPendingWriteback(context, session, remotePath)?.also { writeback ->
+        ACTIVE_ANDROID_DOCUMENT_WRITEBACKS += writeback.manifest.activeWritebackKey()
+    }
 }
 
 private fun parseAndroidDocumentWriteback(
@@ -810,20 +835,26 @@ private fun parseAndroidDocumentWriteback(
 }.getOrNull()
 
 /** Removes writeback transactions that could not reach the close-ready state before process death. */
-internal fun cleanupIncompleteAndroidDocumentWritebacks(context: android.content.Context): Int {
-    val root = File(context.filesDir, "documents-recovery")
-    if (!root.isDirectory) return 0
-    val files = root.listFiles().orEmpty().filter(File::isFile)
-    val retainedNames = files.mapNotNull { manifest ->
-        parseAndroidDocumentWriteback(root, manifest, expectedAccount = null)
-    }.flatMapTo(hashSetOf()) { writeback ->
-        listOf(writeback.staging.name, writeback.manifest.name)
+internal fun cleanupIncompleteAndroidDocumentWritebacks(context: android.content.Context): Int =
+    synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
+        val root = File(context.filesDir, "documents-recovery")
+        if (!root.isDirectory) return 0
+        val files = root.listFiles().orEmpty().filter(File::isFile)
+        val retainedNames = files.mapNotNull { manifest ->
+            parseAndroidDocumentWriteback(root, manifest, expectedAccount = null)
+        }.flatMapTo(hashSetOf()) { writeback ->
+            listOf(writeback.staging.name, writeback.manifest.name)
+        }
+        return files.count { file ->
+            val owned =
+                (file.name.startsWith("writeback-") && file.name.endsWith(".stage")) ||
+                    (file.name.startsWith("writeback-") && file.name.endsWith(".stage.json")) ||
+                    (file.name.startsWith("manifest-") && file.name.endsWith(".tmp"))
+            owned && file.name !in retainedNames && file.delete()
+        }
     }
-    return files.count { file ->
-        val owned =
-            (file.name.startsWith("writeback-") && file.name.endsWith(".stage")) ||
-                (file.name.startsWith("writeback-") && file.name.endsWith(".stage.json")) ||
-                (file.name.startsWith("manifest-") && file.name.endsWith(".tmp"))
-        owned && file.name !in retainedNames && file.delete()
-    }
-}
+
+private fun File.activeWritebackKey(): String = absoluteFile.normalize().path
+
+private val ANDROID_DOCUMENT_WRITEBACK_LOCK = Any()
+private val ACTIVE_ANDROID_DOCUMENT_WRITEBACKS = ConcurrentHashMap.newKeySet<String>()

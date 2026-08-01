@@ -183,8 +183,9 @@ internal class DesktopFileSyncEngine(
         pairId: String,
         onProgress: (DesktopFileSyncProgressEvent) -> Unit = {},
         shouldContinue: () -> Boolean = { true },
+        resetExhaustedFailures: Boolean = false,
     ): FileSyncCenterActionResult = lock.withLock {
-        runPairLocked(session, userId, pairId, onProgress, shouldContinue)
+        runPairLocked(session, userId, pairId, onProgress, shouldContinue, resetExhaustedFailures)
     }
 
     suspend fun resolveConflictAndRun(
@@ -210,7 +211,7 @@ internal class DesktopFileSyncEngine(
             )
         }
         store.save(current.copy(coordinator = resolved))
-        runPairLocked(session, userId, pairId, onProgress, shouldContinue)
+        runPairLocked(session, userId, pairId, onProgress, shouldContinue, resetExhaustedFailures = true)
     }
 
     private fun runPairLocked(
@@ -219,6 +220,7 @@ internal class DesktopFileSyncEngine(
         pairId: String,
         onProgress: (DesktopFileSyncProgressEvent) -> Unit,
         shouldContinue: () -> Boolean,
+        resetExhaustedFailures: Boolean,
     ): FileSyncCenterActionResult {
         var persisted = store.load()
         val initialPair = persisted.coordinator.pairs.firstOrNull { it.id == pairId }
@@ -233,7 +235,10 @@ internal class DesktopFileSyncEngine(
         val includes: (String, SyncEntryKind) -> Boolean = { path, kind ->
             initialPair.configuration.includesSyncPath(path, kind)
         }
-        val localEntries = local.scan(includes).map(DesktopLocalSyncDocument::entry)
+        val cachedLocalRevisions = initialPair.baselines.mapNotNull { baseline ->
+            baseline.localRevision?.let { revision -> baseline.relativePath to revision }
+        }.toMap()
+        val localEntries = local.scan(cachedLocalRevisions, includes).map(DesktopLocalSyncDocument::entry)
         val remoteEntries = remote.scan(includes).map(DesktopRemoteSyncDocument::entry)
         persisted = persisted.copy(
             coordinator = scanFileSyncPair(
@@ -244,6 +249,11 @@ internal class DesktopFileSyncEngine(
                 System.currentTimeMillis(),
             ),
         )
+        if (resetExhaustedFailures) {
+            persisted = persisted.copy(
+                coordinator = resetExhaustedFileSyncOperations(persisted.coordinator, pairId),
+            )
+        }
         persisted.coordinator.pairs.first { it.id == pairId }.workItems
             .filter { it.state == FileSyncExecutionState.Failed && it.attemptCount < MAX_FILE_SYNC_ATTEMPTS }
             .forEach { work ->

@@ -172,6 +172,37 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun `local placeholder inventory includes hydrated files absent from bounded remote traversal`() {
+        val root = createTempDirectory("windows-cloud-local-inventory-")
+        val local = root.resolve("Archive/cached.raf")
+        local.parent.toFile().mkdirs()
+        local.writeBytes("hydrated bytes".encodeToByteArray())
+        val identity = WindowsCloudFileIdentity(
+            "account-01",
+            "Archive/cached.raf",
+            "\"etag-01\"",
+            local.toFile().length(),
+            false,
+        )
+        val backend = FakeBackend("remote".encodeToByteArray())
+        val api = FakeApi(expectedIdentityReads = 1).apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, identity)
+        }
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+
+        provider.start()
+
+        assertTrue(api.awaitIdentityReads())
+        val inventoryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (provider.summary().cachedBytes != local.toFile().length() && System.nanoTime() < inventoryDeadline) {
+            Thread.yield()
+        }
+        assertEquals(local.toFile().length(), provider.summary().cachedBytes)
+        assertEquals(1, provider.summary().hydratedFileCount)
+        provider.close()
+    }
+
+    @Test
     fun `folder rename rebinds every descendant identity without clearing dirty state`() {
         val root = createTempDirectory("windows-cloud-rename-")
         val destination = root.resolve("Projects/New")
@@ -342,10 +373,12 @@ class WindowsCloudFilesProviderTest {
         expectedTransfers: Int = 0,
         expectedConversions: Int = 0,
         expectedRenames: Int = 0,
+        expectedIdentityReads: Int = 0,
     ) : WindowsCloudFilesApi {
         private val transferLatch = CountDownLatch(expectedTransfers)
         private val conversionLatch = CountDownLatch(expectedConversions)
         private val renameLatch = CountDownLatch(expectedRenames)
+        private val identityReadLatch = CountDownLatch(expectedIdentityReads)
         private val states = HashMap<Path, WindowsCloudPlaceholderState>()
         private val identities = HashMap<Path, ByteArray>()
         val transfers = mutableListOf<Pair<Long, ByteArray>>()
@@ -377,7 +410,9 @@ class WindowsCloudFilesProviderTest {
         }
         override fun lastAccessedAtEpochMillis(path: Path): Long = 1L
         override fun isPinned(path: Path): Boolean = false
-        override fun placeholderIdentity(path: Path): ByteArray? = identities[path]?.copyOf()
+        override fun placeholderIdentity(path: Path): ByteArray? = identities[path]?.copyOf().also {
+            identityReadLatch.countDown()
+        }
         override fun updatePlaceholder(
             path: Path,
             placeholder: WindowsCloudPlaceholder,
@@ -401,6 +436,7 @@ class WindowsCloudFilesProviderTest {
         fun awaitTransfers(): Boolean = transferLatch.await(5, TimeUnit.SECONDS)
         fun awaitConversions(): Boolean = conversionLatch.await(5, TimeUnit.SECONDS)
         fun awaitRenames(): Boolean = renameLatch.await(5, TimeUnit.SECONDS)
+        fun awaitIdentityReads(): Boolean = identityReadLatch.await(5, TimeUnit.SECONDS)
 
         fun decodedIdentity(path: Path): WindowsCloudFileIdentity? =
             placeholderIdentity(path)?.let(WindowsCloudFileIdentityCodec::decode)

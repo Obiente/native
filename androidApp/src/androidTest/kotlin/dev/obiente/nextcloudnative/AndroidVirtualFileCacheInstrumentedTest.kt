@@ -145,6 +145,38 @@ class AndroidVirtualFileCacheInstrumentedTest {
     }
 
     @Test
+    fun activeDocumentWritebackIsHiddenUntilItsDescriptorReleasesIt() {
+        val recovery = File(context.filesDir, "documents-recovery").apply { mkdirs() }
+        val stage = File(recovery, "writeback-active.stage").apply { writeText("open edit") }
+        val manifest = File(recovery, stage.name + ".json").apply {
+            writeText(
+                JSONObject()
+                    .put("version", 1)
+                    .put("account", NextcloudDocumentIds.accountKey(session))
+                    .put("path", "Notes/open.md")
+                    .put("etag", "\"v1\"")
+                    .put("displayName", "open.md")
+                    .put("stage", stage.name)
+                    .put("startedAt", 10L)
+                    .put("ready", false)
+                    .toString(),
+            )
+        }
+        val active = AndroidDocumentPendingWriteback(
+            stage,
+            manifest,
+            NextcloudDocumentIds.accountKey(session),
+            "Notes/open.md",
+            "\"v1\"",
+        )
+
+        active.markReadyAndActive()
+        assertEquals(0, androidDocumentPendingWritebackCount(context, session))
+        active.releaseActive()
+        assertEquals(1, androidDocumentPendingWritebackCount(context, session))
+    }
+
+    @Test
     fun corruptedSameLengthBlobIsRejectedAndRemoved() {
         val cache = AndroidVirtualFileCache(context)
         val bytes = "first payload".encodeToByteArray()

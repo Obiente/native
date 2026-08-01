@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit
 import java.util.prefs.Preferences
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -395,6 +396,26 @@ internal suspend fun executeDesktopDynamicApiGet(
     )
 }
 
+internal fun combinedAutomaticCacheExcess(
+    maximumBytes: Long,
+    completeFileBytes: Long,
+    rangeBytes: Long,
+    windowsCachedBytes: Long,
+    windowsPinnedBytes: Long,
+): Long {
+    require(maximumBytes > 0L)
+    require(listOf(completeFileBytes, rangeBytes, windowsCachedBytes, windowsPinnedBytes).all { it >= 0L })
+    require(windowsPinnedBytes <= windowsCachedBytes)
+    val total = listOf(
+        completeFileBytes,
+        rangeBytes,
+        windowsCachedBytes - windowsPinnedBytes,
+    ).fold(0L) { accumulated, bytes ->
+        if (bytes > Long.MAX_VALUE - accumulated) Long.MAX_VALUE else accumulated + bytes
+    }
+    return (total - maximumBytes).coerceAtLeast(0L)
+}
+
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
 ) : NextcloudPlatformServices, AutoCloseable {
@@ -503,8 +524,7 @@ class DesktopNextcloudServices(
         ) {
             runCatching { activateVirtualFileProvider(session, userId) }
         }
-        fileReadCache.freeUpVirtualFiles(accountId, requestedBytesToFree = 0L)
-        virtualRangeCache.freeUp(accountId, requestedBytes = 0L)
+        enforceCombinedVirtualFileCachePolicy(accountId, fileReadCache.loadPolicy())
         val cache = fileReadCache.virtualFileSummary(accountId)
         val ranges = virtualRangeCache.summary(accountId)
         val linux = isLinuxDesktop()
@@ -513,12 +533,7 @@ class DesktopNextcloudServices(
             (linux && linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) ||
                 (windows && windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId)
         }
-        val windowsSummary = synchronized(virtualFileProviderLock) {
-            windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }?.let { provider ->
-                provider.enforcePolicy(cache.policy)
-                provider.summary()
-            }
-        }
+        val windowsSummary = windowsVirtualFileSummary(accountId)
         val writebacks = defaultDesktopLinuxWritebackStore(session).pendingWritebacks()
         VirtualFileStorageSnapshot(
             support = if (linux || windows) VirtualFileStorageSupport.Available else VirtualFileStorageSupport.CacheOnly,
@@ -577,12 +592,7 @@ class DesktopNextcloudServices(
         policy: VirtualFileCachePolicy,
     ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
         fileReadCache.savePolicy(policy)
-        virtualRangeCache.freeUp(desktopFileCacheAccountId(session), requestedBytes = 0L)
-        synchronized(virtualFileProviderLock) {
-            windowsCloudFilesProvider?.takeIf {
-                windowsCloudFilesIdentity == desktopFileCacheAccountId(session)
-            }?.enforcePolicy(policy)
-        }
+        enforceCombinedVirtualFileCachePolicy(desktopFileCacheAccountId(session), policy)
         VirtualFileStorageActionResult.Completed("Virtual file storage rules saved.")
     }
 
@@ -797,6 +807,7 @@ class DesktopNextcloudServices(
                     pairId,
                     onProgress = ::publishFileSyncProgress,
                     shouldContinue = { !isFileSyncPaused() },
+                    resetExhaustedFailures = true,
                 )
             } finally {
                 runCatching {
@@ -937,25 +948,34 @@ class DesktopNextcloudServices(
         try {
             var failures = 0
             var waitingForConditions = 0
-            val runtimeConditions = if (source == DesktopFileSyncRunSource.Tray) {
-                null
-            } else {
-                desktopFileSyncRuntimeConditions()
-            }
             initial.pairs.forEach { pair ->
                 if (isFileSyncPaused()) return@forEach
-                if (runtimeConditions != null && !runtimeConditions.allows(pair.configuration)) {
+                fun runtimeAllowsPair(): Boolean =
+                    source == DesktopFileSyncRunSource.Tray ||
+                        desktopFileSyncRuntimeConditions().allows(pair.configuration)
+                if (!runtimeAllowsPair()) {
                     waitingForConditions += 1
                     return@forEach
                 }
-                val result = fileSyncEngine.runPair(
-                    session,
-                    userId,
-                    pair.id,
-                    onProgress = ::publishFileSyncProgress,
-                    shouldContinue = { !isFileSyncPaused() },
-                )
+                val result = try {
+                    fileSyncEngine.runPair(
+                        session,
+                        userId,
+                        pair.id,
+                        onProgress = ::publishFileSyncProgress,
+                        shouldContinue = { !isFileSyncPaused() && runtimeAllowsPair() },
+                        resetExhaustedFailures = source == DesktopFileSyncRunSource.Tray,
+                    )
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (_: Throwable) {
+                    failures += 1
+                    return@forEach
+                }
                 if (result is FileSyncCenterActionResult.Rejected) failures += 1
+                if (source != DesktopFileSyncRunSource.Tray && !runtimeAllowsPair()) {
+                    waitingForConditions += 1
+                }
             }
             if (failures == 0) {
                 FileSyncCenterActionResult.Completed(
@@ -978,6 +998,43 @@ class DesktopNextcloudServices(
         }
         }
     }
+
+    private fun enforceCombinedVirtualFileCachePolicy(
+        accountId: String,
+        policy: VirtualFileCachePolicy,
+    ) {
+        fileReadCache.freeUpVirtualFiles(accountId, requestedBytesToFree = 0L)
+        virtualRangeCache.freeUp(accountId, requestedBytes = 0L)
+        synchronized(virtualFileProviderLock) {
+            windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }?.enforcePolicy(policy)
+        }
+        if (!policy.automaticCleanup) return
+        val maximumBytes = policy.maximumCacheBytes ?: return
+        fun currentExcess(): Long {
+            val windows = windowsVirtualFileSummary(accountId)
+            return combinedAutomaticCacheExcess(
+                maximumBytes,
+                fileReadCache.virtualFileSummary(accountId).cachedBytes,
+                virtualRangeCache.summary(accountId).cachedBytes,
+                windows?.cachedBytes ?: 0L,
+                windows?.pinnedBytes ?: 0L,
+            )
+        }
+        var excess = currentExcess()
+        if (excess == 0L) return
+        synchronized(virtualFileProviderLock) {
+            windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }?.freeUpSpace(excess)
+        }
+        excess = currentExcess()
+        if (excess > 0L) virtualRangeCache.freeUp(accountId, excess)
+        excess = currentExcess()
+        if (excess > 0L) fileReadCache.freeUpVirtualFiles(accountId, excess)
+    }
+
+    private fun windowsVirtualFileSummary(accountId: String): WindowsCloudFilesSummary? =
+        synchronized(virtualFileProviderLock) {
+            windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }?.summary()
+        }
 
     private fun publishFileSyncTraySnapshot(
         center: FileSyncCenterSnapshot,

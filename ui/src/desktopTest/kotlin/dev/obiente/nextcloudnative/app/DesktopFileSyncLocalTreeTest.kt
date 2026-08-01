@@ -138,6 +138,30 @@ class DesktopFileSyncLocalTreeTest {
     }
 
     @Test
+    fun `unchanged files reuse the persisted digest when change metadata is stable`() {
+        val root = Files.createTempDirectory("desktop-sync-digest-cache-")
+        try {
+            root.resolve("notes.txt").writeText("unchanged")
+            var digestCount = 0
+            val tree = DesktopFileSyncLocalTree(root.toFile()) {
+                digestCount += 1
+                "a".repeat(64)
+            }
+            val first = tree.scan()
+            val cachedRevisions = first.associate { document ->
+                document.entry.relativePath to document.entry.revision
+            }
+
+            val second = tree.scan(cachedRevisions)
+
+            assertEquals(first.map { it.entry }, second.map { it.entry })
+            assertEquals(1, digestCount)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `directory to file replacement protects the original until complete bytes are published`() {
         val root = Files.createTempDirectory("desktop-sync-type-replace-")
         val source = Files.createTempFile("desktop-sync-source-", ".tmp")

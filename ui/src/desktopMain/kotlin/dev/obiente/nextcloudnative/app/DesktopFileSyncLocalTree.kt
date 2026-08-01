@@ -22,7 +22,10 @@ internal data class DesktopLocalSyncDocument(
 )
 
 /** Revision-guarded, symlink-rejecting local filesystem adapter for desktop folder sync. */
-internal class DesktopFileSyncLocalTree(root: File) {
+internal class DesktopFileSyncLocalTree(
+    root: File,
+    private val contentDigester: (Path) -> String = ::desktopSha256File,
+) {
     private val root = root.toPath().toAbsolutePath().normalize()
 
     init {
@@ -33,6 +36,7 @@ internal class DesktopFileSyncLocalTree(root: File) {
     }
 
     fun scan(
+        cachedLocalRevisions: Map<String, String> = emptyMap(),
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
     ): List<DesktopLocalSyncDocument> {
         recoverOwnedStagingFiles()
@@ -70,12 +74,16 @@ internal class DesktopFileSyncLocalTree(root: File) {
                 private fun add(path: Path, attrs: BasicFileAttributes, kind: SyncEntryKind) {
                     require(result.size < MAX_ENTRIES) { "The desktop folder contains too many entries." }
                     val relative = relative(path)
-                    val contentDigest = path.takeIf { kind == SyncEntryKind.File }?.let(::sha256File)
+                    val metadata = metadataDigest(path, attrs)
+                    val contentDigest = path.takeIf { kind == SyncEntryKind.File }?.let {
+                        reusableContentDigest(cachedLocalRevisions[relative], metadata)
+                            ?: contentDigester(path)
+                    }
                     result += DesktopLocalSyncDocument(
                         LocalSyncEntry(
                             relativePath = relative,
                             kind = kind,
-                            revision = revision(path, attrs, contentDigest),
+                            revision = revision(metadata.value, contentDigest),
                             size = attrs.size().takeIf { kind == SyncEntryKind.File },
                             contentHash = contentDigest?.let { "sha256:$it" },
                         ),
@@ -97,12 +105,13 @@ internal class DesktopFileSyncLocalTree(root: File) {
             attrs.isRegularFile -> SyncEntryKind.File
             else -> error("The local item is not a regular file or folder.")
         }
-        val contentDigest = path.takeIf { kind == SyncEntryKind.File }?.let(::sha256File)
+        val metadata = metadataDigest(path, attrs)
+        val contentDigest = path.takeIf { kind == SyncEntryKind.File }?.let(contentDigester)
         return DesktopLocalSyncDocument(
             LocalSyncEntry(
                 relativePath,
                 kind,
-                revision(path, attrs, contentDigest),
+                revision(metadata.value, contentDigest),
                 attrs.size().takeIf { kind == SyncEntryKind.File },
                 contentDigest?.let { "sha256:$it" },
             ),
@@ -201,7 +210,7 @@ internal class DesktopFileSyncLocalTree(root: File) {
         source: File,
     ): LocalSyncEntry {
         val parent = requireNotNull(destination.parent)
-        val expectedContentHash = "sha256:${sha256File(source.toPath())}"
+        val expectedContentHash = "sha256:${contentDigester(source.toPath())}"
         val token = UUID.randomUUID().toString()
         val staged = parent.resolve(".${destination.fileName}.nextcloud-native-download-$token")
         val backup = parent.resolve(".${destination.fileName}.nextcloud-native-backup-$token")
@@ -311,11 +320,16 @@ internal class DesktopFileSyncLocalTree(root: File) {
     private fun relative(path: Path): String =
         root.relativize(path.toAbsolutePath().normalize()).joinToString("/") { it.toString() }
 
-    private fun revision(path: Path, attrs: BasicFileAttributes, contentDigest: String?): String {
+    private fun metadataDigest(path: Path, attrs: BasicFileAttributes): LocalMetadataDigest {
+        val changeTime = runCatching {
+            Files.getAttribute(path, "unix:ctime", LinkOption.NOFOLLOW_LINKS).toString()
+        }.getOrNull()
         val fingerprint = buildString {
             append(attrs.fileKey()?.toString().orEmpty())
             append('\u0000')
             append(attrs.lastModifiedTime())
+            append('\u0000')
+            append(changeTime.orEmpty())
             append('\u0000')
             append(attrs.size())
             append('\u0000')
@@ -323,24 +337,23 @@ internal class DesktopFileSyncLocalTree(root: File) {
             append('\u0000')
             append(relative(path))
             append('\u0000')
-            append(contentDigest.orEmpty())
         }
-        return "desktop-" + MessageDigest.getInstance("SHA-256")
+        val digest = MessageDigest.getInstance("SHA-256")
             .digest(fingerprint.encodeToByteArray())
             .joinToString("") { "%02x".format(it) }
+        return LocalMetadataDigest(digest, reusable = changeTime != null)
     }
 
-    private fun sha256File(path: Path): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        Files.newInputStream(path).use { input ->
-            val buffer = ByteArray(BUFFER_BYTES)
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                digest.update(buffer, 0, count)
-            }
+    private fun revision(metadataDigest: String, contentDigest: String?): String =
+        "$REVISION_PREFIX:$metadataDigest:${contentDigest.orEmpty()}"
+
+    private fun reusableContentDigest(previousRevision: String?, metadata: LocalMetadataDigest): String? {
+        if (previousRevision == null || !metadata.reusable) return null
+        val fields = previousRevision.split(':')
+        if (fields.size != 3 || fields[0] != REVISION_PREFIX || fields[1] != metadata.value) return null
+        return fields[2].takeIf { digest ->
+            digest.length == SHA256_HEX_LENGTH && digest.all { it in '0'..'9' || it in 'a'..'f' }
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun move(source: Path, destination: Path, replace: Boolean) {
@@ -376,12 +389,29 @@ internal class DesktopFileSyncLocalTree(root: File) {
     }
 
     private companion object {
+        const val REVISION_PREFIX = "desktop-v2"
+        const val SHA256_HEX_LENGTH = 64
         const val MAX_ENTRIES = 20_000
         const val MAX_DEPTH = 64
         const val BUFFER_BYTES = 64 * 1024
         const val DOWNLOAD_MARKER = ".nextcloud-native-download-"
         const val BACKUP_MARKER = ".nextcloud-native-backup-"
     }
+}
+
+private data class LocalMetadataDigest(val value: String, val reusable: Boolean)
+
+private fun desktopSha256File(path: Path): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    Files.newInputStream(path).use { input ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
 private enum class OwnedRecoveryKind { Download, Backup }

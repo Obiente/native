@@ -6,6 +6,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardWatchEventKinds
 import java.nio.file.WatchService
@@ -709,7 +710,7 @@ internal class WindowsCloudFilesProvider(
                         if (event.kind() != StandardWatchEventKinds.ENTRY_DELETE) scheduleLocalChange(child)
                     }
                 }
-                if (!key.reset()) return@Thread
+                if (!key.reset()) continue
             }
         }, "nextcloud-windows-cloud-files-watcher").apply {
             isDaemon = true
@@ -730,7 +731,7 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun recoverLocalChanges() {
-        recoverDirtyPlaceholders()
+        recoverLocalPlaceholders()
         val pendingDirectories = ArrayDeque<String>()
         pendingDirectories += ""
         var discovered = 0
@@ -758,24 +759,24 @@ internal class WindowsCloudFilesProvider(
         }
     }
 
-    private fun recoverDirtyPlaceholders() {
+    private fun recoverLocalPlaceholders() {
         runCatching {
             Files.walk(root).use { paths ->
-                paths.filter { path ->
-                    path != root &&
-                        !Files.isSymbolicLink(path) &&
-                        Files.isRegularFile(path) &&
-                        api.placeholderState(path) == WindowsCloudPlaceholderState.Dirty
-                }.forEach { local ->
+                paths.filter { path -> path != root && !Files.isSymbolicLink(path) }.forEach { local ->
+                    val state = api.placeholderState(local)
+                    if (state == WindowsCloudPlaceholderState.Absent) return@forEach
+                    val directory = Files.isDirectory(local, LinkOption.NOFOLLOW_LINKS)
+                    if (!directory && !Files.isRegularFile(local, LinkOption.NOFOLLOW_LINKS)) return@forEach
                     val original = api.placeholderIdentity(local)
                         ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
                         ?.takeIf { identity ->
                             identity.accountId == backend.accountId &&
-                                !identity.directory &&
+                                identity.directory == directory &&
                                 localPath(identity).toAbsolutePath().normalize() == local.toAbsolutePath().normalize()
                         }
                         ?: return@forEach
                     knownIdentities[original.path] = original
+                    if (state != WindowsCloudPlaceholderState.Dirty || original.directory) return@forEach
                     pendingWritebacks += original.path
                     submitPathOperation(original.path) {
                         val current = requireNotNull(api.placeholderIdentity(local)) {
