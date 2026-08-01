@@ -178,9 +178,11 @@ internal fun unregisterWindowsCloudFilesRootForUninstall(
     }
 }
 
-private fun virtualFileProviderPreferenceKey(accountId: String): String {
-    require(accountId.isNotBlank() && accountId.length <= 128)
-    return "virtual-file-provider-active.$accountId"
+internal fun virtualFileProviderPreferenceKey(accountId: String): String {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return "vfp-active.$accountId".also { key ->
+        check(key.length <= Preferences.MAX_KEY_LENGTH)
+    }
 }
 
 internal fun documentTemplatesRelativePath(editorId: String, creatorId: String): String {
