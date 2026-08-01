@@ -23,23 +23,48 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-
-      - name: Detect app build changes
+      - name: Detect build scopes
         id: changes
         uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         with:
           filters: |
-            app:
+            rust:
               - ".github/workflows/ci.yml"
-              - "androidApp/**"
-              - "contractAcquisition/**"
-              - "ui/**"
               - "src/**"
               - "tests/**"
               - "Cargo.toml"
               - "Cargo.lock"
+            contract:
+              - ".github/workflows/ci.yml"
+              - "contractAcquisition/**"
+              - "build.gradle.kts"
+              - "settings.gradle.kts"
+              - "gradle.properties"
+              - "gradle/**"
+              - "gradlew"
+              - "gradlew.bat"
+            desktop:
+              - ".github/workflows/ci.yml"
+              - "contractAcquisition/**"
+              - "ui/build.gradle.kts"
+              - "ui/src/commonMain/**"
+              - "ui/src/commonTest/**"
+              - "ui/src/desktopMain/**"
+              - "ui/src/desktopTest/**"
+              - "build.gradle.kts"
+              - "settings.gradle.kts"
+              - "gradle.properties"
+              - "gradle/**"
+              - "gradlew"
+              - "gradlew.bat"
+            android:
+              - ".github/workflows/ci.yml"
+              - "androidApp/**"
+              - "contractAcquisition/**"
+              - "ui/build.gradle.kts"
+              - "ui/src/commonMain/**"
+              - "ui/src/androidMain/**"
+              - "ui/src/androidUnitTest/**"
               - "build.gradle.kts"
               - "settings.gradle.kts"
               - "gradle.properties"
@@ -62,6 +87,9 @@ jobs:
               - "website/public/screenshots/**"
               - "website/scripts/marketing-captures.mjs"
               - "website/scripts/verify-marketing-captures.mjs"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Check repository hygiene
         run: |
@@ -118,21 +146,34 @@ jobs:
             --head "${HEAD_SHA}"
 
       - name: Set up JDK 21
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.app == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outputs.contract == 'true' ||
+          steps.changes.outputs.desktop == 'true' ||
+          steps.changes.outputs.android == 'true'
         uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
         with:
           distribution: temurin
           java-version: "21"
-          cache: gradle
+
+      - name: Set up Gradle build cache
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outputs.contract == 'true' ||
+          steps.changes.outputs.desktop == 'true' ||
+          steps.changes.outputs.android == 'true'
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
 
       - name: Install Linux virtual filesystem runtime
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.app == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.desktop == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --yes libfuse2t64
 
       - name: Cache Cargo dependencies and build output
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.app == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.rust == 'true'
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
@@ -144,30 +185,38 @@ jobs:
             ${{ runner.os }}-cargo-v1-
 
       - name: Set up Android SDK
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.app == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.android == 'true'
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
 
       - name: Install Android platform
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.app == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.android == 'true'
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
 
       - name: Test semantic compiler
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.app == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.rust == 'true'
         run: cargo test --locked
 
-      - name: Test shared UI and build desktop plus Android
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.app == 'true'
+      - name: Test contract acquisition
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.contract == 'true'
+        run: ./gradlew --no-daemon :contractAcquisition:test
+
+      - name: Test and build desktop
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.desktop == 'true'
         run: |
           ./gradlew --no-daemon \
-            :contractAcquisition:test \
             :ui:desktopTest \
+            :ui:createDistributable
+
+      - name: Test and build Android
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.android == 'true'
+        run: |
+          ./gradlew --no-daemon \
             :androidApp:testDebugUnitTest \
             :androidApp:verifyReleaseLintGate \
-            :ui:createDistributable \
             :androidApp:assembleDebug
 
       - name: Upload Linux desktop app
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.app == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.desktop == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nextcloud-native-linux
@@ -176,7 +225,7 @@ jobs:
           retention-days: 7
 
       - name: Upload Android debug APK
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.app == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.android == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nextcloud-native-android-debug
@@ -185,5 +234,10 @@ jobs:
           retention-days: 7
 
       - name: Report skipped app build
-        if: github.event_name != 'workflow_dispatch' && steps.changes.outputs.app != 'true'
-        run: echo "No app source or build-system changes; compilation was skipped." >>"${GITHUB_STEP_SUMMARY}"
+        if: >-
+          github.event_name != 'workflow_dispatch' &&
+          steps.changes.outputs.rust != 'true' &&
+          steps.changes.outputs.contract != 'true' &&
+          steps.changes.outputs.desktop != 'true' &&
+          steps.changes.outputs.android != 'true'
+        run: echo "No compiler, contract, desktop, Android, or build-system changes; compilation was skipped." >>"${GITHUB_STEP_SUMMARY}"
