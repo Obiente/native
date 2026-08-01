@@ -46,6 +46,12 @@ class AppUpdateChannelsTest {
                 AndroidUpdateChannel.Nightly,
             ),
         )
+        assertTrue(
+            canSelectAppUpdateChannel(
+                directSupport.copy(channel = AppDistributionChannel.DirectDesktopPackage),
+                AndroidUpdateChannel.Nightly,
+            ),
+        )
     }
 
     @Test
@@ -61,6 +67,7 @@ class AppUpdateChannelsTest {
         val nightly = presentation.options.single { it.channel == AndroidUpdateChannel.Nightly }
         assertTrue(nightly.selected)
         assertTrue(nightly.enabled)
+        assertTrue(nightly.description.contains("signed APK"))
         assertTrue(nightly.description.contains("less stable"))
         listOf(AndroidUpdateChannel.Beta, AndroidUpdateChannel.Stable).forEach { channel ->
             val option = presentation.options.single { it.channel == channel }
@@ -78,6 +85,20 @@ class AppUpdateChannelsTest {
         assertFalse(storePresentation.selectorVisible)
         assertFalse(storePresentation.selectorEnabled)
         assertTrue(storePresentation.options.none { it.enabled })
+
+        val desktopPresentation = appUpdateChannelPresentation(
+            directSupport.copy(channel = AppDistributionChannel.DirectDesktopPackage),
+            selectedChannel = AndroidUpdateChannel.Nightly,
+        )
+        assertTrue(desktopPresentation.options.none { it.description.contains("signed", ignoreCase = true) })
+    }
+
+    @Test
+    fun updateReviewRequestsAreOfferedOnceEvenWithoutAnAccountSession() {
+        assertNull(unhandledAppUpdateReviewRequest(requested = 0L, handled = 0L))
+        assertEquals(1L, unhandledAppUpdateReviewRequest(requested = 1L, handled = 0L))
+        assertNull(unhandledAppUpdateReviewRequest(requested = 1L, handled = 1L))
+        assertEquals(2L, unhandledAppUpdateReviewRequest(requested = 2L, handled = 1L))
     }
 
     @Test

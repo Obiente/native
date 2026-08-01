@@ -382,12 +382,28 @@ interface NextcloudPlatformServices {
      */
     fun saveAppUpdateChannel(channel: AndroidUpdateChannel): Boolean = false
 
+    fun loadAppUpdatePreferences(): AppUpdatePreferences = AppUpdatePreferences()
+
+    fun saveAppUpdatePreferences(preferences: AppUpdatePreferences): Boolean = false
+
+    /** True only when the platform can currently deliver the dedicated app-update notification. */
+    fun appUpdateNotificationDeliveryAllowed(): Boolean = false
+
+    /** Requests runtime, app-wide, or app-update-channel notification access as appropriate. */
+    fun requestAppUpdateNotificationDelivery(): Boolean = false
+
+    /** Periodic check interval while this app process is running, or null for platform-owned scheduling. */
+    fun appUpdateAutomaticCheckIntervalMillis(): Long? = null
+
+    fun observeAppUpdateCheckResult(): Flow<AppUpdateCheckResult?> = flowOf(null)
+
     suspend fun checkForAppUpdate(
         channel: AndroidUpdateChannel = loadAppUpdateChannel(),
+        automatic: Boolean = false,
     ): AppUpdateCheckResult =
         AppUpdateCheckResult.Unavailable(appUpdateSupport())
 
-    /** Observable direct-APK download, verification, cancellation, and retry state. */
+    /** Observable direct-package download, verification, cancellation, and retry state. */
     fun observeAppUpdateInstallState(): Flow<AppUpdateInstallState> =
         flowOf(AppUpdateInstallState.Idle)
 
@@ -396,10 +412,10 @@ interface NextcloudPlatformServices {
      *
      * Implementations may never silently install or invoke this for store-owned installs.
      */
-    suspend fun beginAppUpdate(release: AndroidDirectRelease): AppUpdateInstallResult =
+    suspend fun beginAppUpdate(release: AppUpdateRelease): AppUpdateInstallResult =
         AppUpdateInstallResult.Rejected("Direct app updates are unavailable on this platform.")
 
-    /** Cancels the active direct-APK download while retaining a safe resumable partial file. */
+    /** Cancels the active direct-package download; the result states whether a partial can resume. */
     fun cancelAppUpdate(): Boolean = false
 
     /** True only when this platform has durable app-private offline file storage and execution. */

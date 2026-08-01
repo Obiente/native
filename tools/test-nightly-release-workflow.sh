@@ -4,7 +4,7 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 nightly="$project_root/.github/workflows/nightly.yml"
 prerelease="$project_root/.github/workflows/prerelease.yml"
-promotion="$project_root/tools/promote-android-update-channel.sh"
+promotion="$project_root/tools/promote-app-update-channel.sh"
 temporary_directory="$(mktemp -d)"
 trap 'rm -r -- "$temporary_directory"' EXIT
 
@@ -23,7 +23,7 @@ require_text "$nightly" 'github.event.workflow_run.event == '\''push'\'''
 require_text "$nightly" 'github.event.workflow_run.head_branch == '\''main'\'''
 require_text "$nightly" 'github.event.workflow_run.head_repository.full_name == github.repository'
 require_text "$nightly" 'group: nightly-release-${{ github.event.workflow_run.head_sha }}'
-require_text "$nightly" 'group: android-nightly-channel'
+require_text "$nightly" 'group: app-nightly-channel'
 require_text "$nightly" 'A curated prerelease already owns this source commit.'
 require_text "$nightly" 'ref: ${{ github.event.workflow_run.head_sha }}'
 require_text "$nightly" 'environment: prerelease'
@@ -40,10 +40,16 @@ require_text "$nightly" 'tools/derive-desktop-package-version.sh'
 require_text "$nightly" 'source_sequence="$(git rev-list --count "${SOURCE_SHA}")"'
 require_text "$nightly" '-PncDesktopPackageVersion="${NIGHTLY_DESKTOP_VERSION}"'
 require_text "$nightly" '-PncMacosPackageVersion="${NIGHTLY_DESKTOP_VERSION}"'
+require_text "$nightly" '-PncDesktopReleaseBuild=true'
+require_text "$nightly" '-PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}"'
+require_text "$nightly" 'direct_updates: "true"'
 require_text "$nightly" 'name: nextcloud-native-${{ matrix.platform }}'
 require_text "$nightly" 'name: nextcloud-native-android'
 require_text "$nightly" 'tools/stage-nightly-assets.sh artifacts dist'
 require_text "$nightly" 'tools/count-nightly-platforms.sh'
+require_text "$nightly" 'node tools/nightly-release-notes.mjs'
+require_text "$nightly" '--available "${available_platforms}"'
+require_text "$nightly" '--source-sha "${NIGHTLY_SHA}"'
 require_text "$nightly" '-PncVersionName="${NIGHTLY_VERSION}"'
 require_text "$nightly" '-PncVersionCode="${NIGHTLY_VERSION_CODE}"'
 require_text "$nightly" ':androidApp:verifyReleaseLintGate'
@@ -67,8 +73,10 @@ require_text "$nightly" 'cat "${tag_ref_error}" >&2'
 require_text "$nightly" 'canonical-release-assets'
 require_text "$nightly" 'if [[ "${canonical_successful}" -ge 3 ]]; then'
 require_text "$nightly" 'if: needs.stage-assets.outputs.already-published != '\''true'\'''
-require_text "$nightly" 'tools/promote-android-update-channel.sh'
+require_text "$nightly" 'tools/promote-app-update-channel.sh'
 require_text "$nightly" 'tools/verify-android-update-manifest-assets.sh'
+require_text "$nightly" 'tools/verify-desktop-update-manifest-assets.sh'
+require_text "$nightly" 'if tools/has-direct-linux-update-assets.sh "${canonical}"; then'
 require_text "$nightly" 'channel-nightly'
 require_text "$nightly" '--draft'
 require_text "$nightly" '--draft=false'
@@ -82,19 +90,22 @@ fi
 require_text "$prerelease" 'tools/derive-android-version-code.sh'
 require_text "$prerelease" '-PncVersionCode="${RELEASE_VERSION_CODE}"'
 require_text "$prerelease" 'group: prerelease-release-${{ github.ref }}'
-require_text "$prerelease" 'group: android-prerelease-channel'
+require_text "$prerelease" 'group: app-prerelease-channel'
 require_text "$prerelease" 'tools/derive-desktop-package-version.sh'
 require_text "$prerelease" 'source_sequence="$(git rev-list --count "${GITHUB_SHA}")"'
 require_text "$prerelease" '-PncDesktopPackageVersion="${RELEASE_DESKTOP_VERSION}"'
 require_text "$prerelease" '-PncMacosPackageVersion="${RELEASE_DESKTOP_VERSION}"'
+require_text "$prerelease" '-PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}"'
 require_text "$prerelease" 'Require protected Android signing secrets'
 require_text "$prerelease" 'if [[ -z "${!secret_name}" ]]; then'
 require_text "$prerelease" 'tools/verify-android-artifact-metadata.sh'
 require_text "$prerelease" 'tools/verify-android-app-bundle-metadata.sh'
 require_text "$prerelease" 'bundletool-all-1.18.3.jar'
 require_text "$prerelease" 'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29'
-require_text "$prerelease" 'tools/promote-android-update-channel.sh'
+require_text "$prerelease" 'tools/promote-app-update-channel.sh'
 require_text "$prerelease" 'tools/verify-android-update-manifest-assets.sh'
+require_text "$prerelease" 'tools/verify-desktop-update-manifest-assets.sh'
+require_text "$prerelease" 'if tools/has-direct-linux-update-assets.sh "${canonical}"; then'
 require_text "$prerelease" 'channel-prerelease'
 require_text "$prerelease" 'already-published: ${{ steps.release.outputs.already-published }}'
 require_text "$prerelease" 'Published prerelease ${GITHUB_REF_NAME} is immutable; no assets or metadata were changed.'
@@ -103,11 +114,20 @@ require_text "$prerelease" 'canonical-release-assets'
 require_text "$prerelease" 'if: needs.stage-assets.outputs.already-published != '\''true'\'''
 require_text "$promotion" 'channel-prerelease)'
 require_text "$promotion" 'channel-nightly)'
-require_text "$promotion" 'current_code >= candidate_code'
+require_text "$promotion" 'if .versionCode >= $candidate then "keep" else "replace" end'
+if grep -Eq '\(\([^)]*current_code|\(\([^)]*candidate_codes' "$promotion"; then
+    echo "Update pointer version codes must not reach shell arithmetic." >&2
+    exit 1
+fi
 require_text "$promotion" 'pointer_state'
 require_text "$promotion" '--clobber'
 require_text "$promotion" 'test "$release_state" = $'\''false\ttrue\t'\''"$immutable_tag"'
 bash -n "$promotion"
+
+for workflow in "$nightly" "$prerelease"; do
+    [[ "$(grep -Fc 'direct_updates: "true"' "$workflow")" -eq 1 ]]
+    [[ "$(grep -Fc 'direct_updates: "false"' "$workflow")" -eq 2 ]]
+done
 
 if grep -Fq 'cmp "${asset}" "${RUNNER_TEMP}/existing/${name}"' "$nightly"; then
     echo "Draft recovery must retain previously staged package assets." >&2
@@ -183,5 +203,6 @@ jq -e --arg tag "$tag" --argjson code "$version_code" '
 "$project_root/tools/test-android-artifact-metadata.sh"
 "$project_root/tools/test-android-update-manifest-assets.sh"
 "$project_root/tools/test-nightly-asset-staging.sh"
+node --test "$project_root/tools/nightly-release-notes.test.mjs"
 
 printf 'Nightly publisher and immutable update-manifest checks passed.\n'
