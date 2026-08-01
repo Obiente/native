@@ -2,7 +2,7 @@
   "source": "github-snapshot",
   "syncState": "snapshot",
   "projectUrl": "https://github.com/orgs/Obiente/projects/4",
-  "updatedAt": "2026-08-01T20:54:14Z",
+  "updatedAt": "2026-08-01T21:34:33Z",
   "epics": [
     {
       "number": 10,
@@ -166,7 +166,7 @@
       "priority": "P1",
       "area": "Platform",
       "status": "Todo",
-      "milestone": null,
+      "milestone": "0.5 Adaptive apps",
       "progress": {
         "total": 5,
         "completed": 0,
@@ -184,7 +184,7 @@
         "needs-protocol-review",
         "epic"
       ],
-      "updatedAt": "2026-07-24T20:46:23Z",
+      "updatedAt": "2026-08-01T21:34:11Z",
       "closedAt": null
     }
   ],
@@ -1191,7 +1191,7 @@
       "url": "https://github.com/Obiente/nc-native/issues/286",
       "priority": "P0",
       "area": "Files and sync",
-      "status": "Todo",
+      "status": "In Progress",
       "milestone": "0.2 Safe sync and media",
       "progress": {
         "total": 0,
@@ -3275,7 +3275,7 @@
       "priority": "P1",
       "area": "UX",
       "status": "Todo",
-      "milestone": null,
+      "milestone": "0.6 Platform polish",
       "progress": {
         "total": 0,
         "completed": 0,
@@ -3291,7 +3291,7 @@
         "platform:desktop",
         "needs-design"
       ],
-      "updatedAt": "2026-07-24T20:25:31Z",
+      "updatedAt": "2026-08-01T21:34:09Z",
       "closedAt": null
     },
     {
@@ -3302,7 +3302,7 @@
       "priority": "P1",
       "area": "Platform",
       "status": "Todo",
-      "milestone": null,
+      "milestone": "0.5 Adaptive apps",
       "progress": {
         "total": 5,
         "completed": 0,
@@ -3320,7 +3320,7 @@
         "needs-protocol-review",
         "epic"
       ],
-      "updatedAt": "2026-07-24T20:46:23Z",
+      "updatedAt": "2026-08-01T21:34:11Z",
       "closedAt": null
     },
     {
@@ -3331,7 +3331,7 @@
       "priority": "P1",
       "area": "Platform",
       "status": "Todo",
-      "milestone": null,
+      "milestone": "0.5 Adaptive apps",
       "progress": {
         "total": 0,
         "completed": 0,
@@ -3347,7 +3347,7 @@
         "platform:desktop",
         "needs-protocol-review"
       ],
-      "updatedAt": "2026-07-24T20:46:40Z",
+      "updatedAt": "2026-08-01T21:34:16Z",
       "closedAt": null
     },
     {
@@ -3358,7 +3358,7 @@
       "priority": "P1",
       "area": "Platform",
       "status": "Todo",
-      "milestone": null,
+      "milestone": "0.5 Adaptive apps",
       "progress": {
         "total": 0,
         "completed": 0,
@@ -3374,7 +3374,7 @@
         "platform:desktop",
         "needs-protocol-review"
       ],
-      "updatedAt": "2026-07-24T20:46:51Z",
+      "updatedAt": "2026-08-01T21:34:24Z",
       "closedAt": null
     },
     {
@@ -3385,7 +3385,7 @@
       "priority": "P1",
       "area": "Platform",
       "status": "Todo",
-      "milestone": null,
+      "milestone": "0.5 Adaptive apps",
       "progress": {
         "total": 0,
         "completed": 0,
@@ -3402,7 +3402,7 @@
         "needs-design",
         "needs-protocol-review"
       ],
-      "updatedAt": "2026-07-24T20:47:04Z",
+      "updatedAt": "2026-08-01T21:34:26Z",
       "closedAt": null
     },
     {
@@ -3413,7 +3413,7 @@
       "priority": "P1",
       "area": "Platform",
       "status": "Todo",
-      "milestone": null,
+      "milestone": "0.5 Adaptive apps",
       "progress": {
         "total": 0,
         "completed": 0,
@@ -3430,7 +3430,7 @@
         "platform:desktop",
         "needs-protocol-review"
       ],
-      "updatedAt": "2026-07-24T20:47:15Z",
+      "updatedAt": "2026-08-01T21:34:31Z",
       "closedAt": null
     },
     {
@@ -3441,7 +3441,7 @@
       "priority": "P1",
       "area": "Platform",
       "status": "Todo",
-      "milestone": null,
+      "milestone": "0.5 Adaptive apps",
       "progress": {
         "total": 0,
         "completed": 0,
@@ -3458,7 +3458,7 @@
         "platform:desktop",
         "needs-protocol-review"
       ],
-      "updatedAt": "2026-07-24T20:47:28Z",
+      "updatedAt": "2026-08-01T21:34:33Z",
       "closedAt": null
     },
     {
@@ -4610,9 +4610,9 @@
       "description": "Fast contract acquisition and useful semantic interfaces for arbitrary Nextcloud apps.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-08-01T00:03:06Z",
-      "open": 26,
-      "closed": 6
+      "updatedAt": "2026-08-01T21:34:33Z",
+      "open": 32,
+      "closed": 5
     },
     {
       "number": 5,
@@ -4621,8 +4621,8 @@
       "description": "Responsive mobile and desktop UX, reliability, accessibility, performance, and platform integration.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-08-01T20:35:45Z",
-      "open": 35,
+      "updatedAt": "2026-08-01T21:34:10Z",
+      "open": 36,
       "closed": 36
     },
     {
@@ -4632,9 +4632,9 @@
       "description": "Security, CI, signed packages, documentation, and contributor-ready stable release work.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-08-01T20:49:50Z",
+      "updatedAt": "2026-08-01T21:19:41Z",
       "open": 14,
-      "closed": 19
+      "closed": 20
     }
   ]
 }
