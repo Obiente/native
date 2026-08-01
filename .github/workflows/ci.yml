@@ -89,6 +89,7 @@ jobs:
               - "website/scripts/verify-marketing-captures.mjs"
             linux_repositories:
               - ".github/workflows/ci.yml"
+              - "tools/build-appstream-catalog.py"
               - "tools/build-linux-package-repositories.sh"
               - "tools/test-linux-package-repositories.sh"
 
@@ -106,7 +107,7 @@ jobs:
           steps.changes.outputs.linux_repositories == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes apt-utils createrepo-c dpkg-dev gnupg rpm
+          sudo apt-get install --yes appstream apt-utils cpio createrepo-c dpkg-dev gnupg rpm
 
       - name: Test signed Linux package repositories
         if: >-

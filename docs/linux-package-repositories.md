@@ -12,6 +12,9 @@ a directory containing the complete retained set of `.deb` and `.rpm` files:
   `Release.gpg`, and `InRelease` metadata;
 - an RPM repository with signed packages, `createrepo_c` metadata, and a signed
   `repomd.xml`;
+- AppStream catalogs for APT DEP-11 and RPM repository metadata, allowing
+  software centers to load the application name, icon, screenshots, and
+  version-specific release details before installation;
 - an exported public certificate, fingerprint, checksums, and example
   `nextcloud-native.sources` and `nextcloud-native.repo` client configuration.
 
@@ -37,8 +40,8 @@ Never commit the secret key or its backup.
 
 ## Build a repository snapshot
 
-Install `apt-ftparchive`, `createrepo_c`, `dpkg-deb`, GnuPG, RPM, and
-`rpmsign`, then run:
+Install AppStream, `apt-ftparchive`, `cpio`, `createrepo_c`, `dpkg-deb`,
+GnuPG, RPM, and `rpmsign`, then run:
 
 ```bash
 export NC_LINUX_REPOSITORY_SIGNING_FINGERPRINT=FULL_40_CHARACTER_FINGERPRINT

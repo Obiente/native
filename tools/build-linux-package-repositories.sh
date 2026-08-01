@@ -34,12 +34,17 @@ if [[ ! "$signing_fingerprint" =~ ^[A-Fa-f0-9]{40}$ ]]; then
 fi
 signing_fingerprint="${signing_fingerprint^^}"
 
-for required_command in apt-ftparchive createrepo_c dpkg-deb gpg gzip rpm rpmsign; do
+for required_command in \
+    appstreamcli apt-ftparchive cpio createrepo_c dpkg-deb gpg gzip \
+    modifyrepo_c python3 rpm rpm2cpio rpmsign; do
     if ! command -v "$required_command" >/dev/null 2>&1; then
         printf '%s is required to build the Linux package repositories.\n' "$required_command" >&2
         exit 2
     fi
 done
+project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+temporary="$(mktemp -d)"
+trap 'rm -r -- "$temporary"' EXIT
 
 mapfile -d '' deb_packages < <(
     find "$package_directory" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z
@@ -103,6 +108,43 @@ for architecture in "${apt_architecture_names[@]}"; do
         apt-ftparchive --arch "$architecture" packages pool
     ) >"$index_directory/Packages"
     gzip --best --no-name --keep "$index_directory/Packages"
+
+    mapfile -d '' architecture_packages < <(
+        find "$apt_root/pool/main/n/nextcloudnative" -maxdepth 1 -type f -name '*.deb' -print0 |
+            sort -zV
+    )
+    catalog_arguments=()
+    package_index=0
+    for package in "${architecture_packages[@]}"; do
+        if [[ "$(dpkg-deb --field "$package" Architecture)" != "$architecture" ]]; then
+            continue
+        fi
+        package_version="$(dpkg-deb --field "$package" Version)"
+        appstream_version="${package_version%-*}"
+        package_root="$temporary/deb-$architecture-$package_index"
+        dpkg-deb --extract "$package" "$package_root"
+        metadata="$package_root/usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml"
+        if [[ ! -f "$metadata" ]]; then
+            printf 'DEB package is missing Nextcloud Native AppStream metadata: %s\n' \
+                "$package" >&2
+            exit 1
+        fi
+        catalog_arguments+=("$appstream_version" "$metadata")
+        package_index=$((package_index + 1))
+    done
+    if [[ "${#catalog_arguments[@]}" -eq 0 ]]; then
+        printf 'No Nextcloud Native DEB package is available for %s.\n' "$architecture" >&2
+        exit 1
+    fi
+    catalog_xml="$temporary/apt-$architecture.xml"
+    python3 "$project_root/tools/build-appstream-catalog.py" \
+        "$catalog_xml" "nextcloud-native-$channel" "${catalog_arguments[@]}"
+    appstreamcli validate --no-net "$catalog_xml"
+    dep11_directory="$apt_root/dists/$channel/main/dep11"
+    mkdir -p "$dep11_directory"
+    appstreamcli convert --format=yaml \
+        "$catalog_xml" "$dep11_directory/Components-$architecture.yml"
+    gzip --best --no-name "$dep11_directory/Components-$architecture.yml"
 done
 
 release_directory="$apt_root/dists/$channel"
@@ -164,7 +206,48 @@ done
 mapfile -t rpm_architecture_names < <(printf '%s\n' "${!rpm_architectures[@]}" | sort)
 for architecture in "${rpm_architecture_names[@]}"; do
     architecture_root="$rpm_root/$architecture"
-    createrepo_c --checksum sha256 --simple-md-filenames "$architecture_root"
+    createrepo_c \
+        --checksum sha256 \
+        --general-compress-type=gz \
+        --simple-md-filenames \
+        "$architecture_root"
+    mapfile -d '' architecture_packages < <(
+        find "$architecture_root/Packages" -maxdepth 1 -type f -name '*.rpm' -print0 |
+            sort -zV
+    )
+    catalog_arguments=()
+    package_index=0
+    for package in "${architecture_packages[@]}"; do
+        if [[ "$(rpm -qp --queryformat '%{NAME}' "$package")" != nextcloudnative ]]; then
+            continue
+        fi
+        package_version="$(rpm -qp --queryformat '%{VERSION}' "$package")"
+        metadata="$temporary/rpm-$architecture-$package_index.metainfo.xml"
+        rpm2cpio "$package" |
+            cpio -i --quiet --to-stdout \
+                ./usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml \
+                >"$metadata"
+        if [[ ! -s "$metadata" ]]; then
+            printf 'RPM package is missing Nextcloud Native AppStream metadata: %s\n' \
+                "$package" >&2
+            exit 1
+        fi
+        catalog_arguments+=("$package_version" "$metadata")
+        package_index=$((package_index + 1))
+    done
+    if [[ "${#catalog_arguments[@]}" -eq 0 ]]; then
+        printf 'No Nextcloud Native RPM package is available for %s.\n' "$architecture" >&2
+        exit 1
+    fi
+    catalog_xml="$temporary/rpm-$architecture.xml"
+    python3 "$project_root/tools/build-appstream-catalog.py" \
+        "$catalog_xml" "nextcloud-native-$channel" "${catalog_arguments[@]}"
+    appstreamcli validate --no-net "$catalog_xml"
+    modifyrepo_c \
+        --compress-type=gz \
+        --mdtype=appstream \
+        "$catalog_xml" \
+        "$architecture_root/repodata"
     gpg --batch --yes --local-user "$signing_fingerprint" --digest-algo SHA256 \
         --armor --detach-sign --output "$architecture_root/repodata/repomd.xml.asc" \
         "$architecture_root/repodata/repomd.xml"

@@ -2,7 +2,9 @@
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-for required_command in apt-ftparchive apt-get createrepo_c dpkg-deb gpg rpm rpmbuild rpmsign; do
+for required_command in \
+    appstreamcli apt-ftparchive apt-get cpio createrepo_c dpkg-deb gpg \
+    modifyrepo_c python3 rpm rpm2cpio rpmbuild rpmsign; do
     if ! command -v "$required_command" >/dev/null 2>&1; then
         printf '%s is required to test Linux package repositories.\n' "$required_command" >&2
         exit 2
@@ -13,11 +15,19 @@ temporary="$(mktemp -d)"
 trap 'rm -r -- "$temporary"' EXIT
 packages="$temporary/packages"
 mkdir -p "$packages"
+fixture_metadata="$temporary/dev.obiente.nextcloudnative.metainfo.xml"
+python3 "$project_root/tools/render-linux-appstream-metadata.py" \
+    "$project_root/release/linux/dev.obiente.nextcloudnative.metainfo.xml" \
+    "$fixture_metadata" 1.2.3 1.2.3 2026-08-01
 
 for package_name in nextcloudnative nextcloud-native-vfs; do
     deb_root="$temporary/deb-$package_name"
     mkdir -p "$deb_root/DEBIAN" "$deb_root/usr/share/$package_name"
     printf 'fixture\n' >"$deb_root/usr/share/$package_name/test.txt"
+    if [[ "$package_name" == nextcloudnative ]]; then
+        install -D -m 0644 "$fixture_metadata" \
+            "$deb_root/usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml"
+    fi
     cat >"$deb_root/DEBIAN/control" <<EOF
 Package: $package_name
 Version: 1.2.3-1
@@ -34,8 +44,15 @@ done
 rpm_top="$temporary/rpmbuild"
 mkdir -p "$rpm_top/BUILD" "$rpm_top/BUILDROOT" "$rpm_top/RPMS" \
     "$rpm_top/SOURCES" "$rpm_top/SPECS" "$rpm_top/SRPMS"
+cp "$fixture_metadata" "$rpm_top/SOURCES/dev.obiente.nextcloudnative.metainfo.xml"
 for package_name in nextcloudnative nextcloud-native-vfs; do
     spec="$rpm_top/SPECS/$package_name.spec"
+    extra_install=""
+    extra_files=""
+    if [[ "$package_name" == nextcloudnative ]]; then
+        extra_install=$'mkdir -p %{buildroot}/usr/share/metainfo\ninstall -m 0644 %{_sourcedir}/dev.obiente.nextcloudnative.metainfo.xml %{buildroot}/usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml'
+        extra_files=/usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml
+    fi
     cat >"$spec" <<EOF
 Name: $package_name
 Version: 1.2.3
@@ -50,9 +67,11 @@ Repository integration fixture.
 %install
 mkdir -p %{buildroot}/usr/share/$package_name
 printf 'fixture\\n' >%{buildroot}/usr/share/$package_name/test.txt
+$extra_install
 
 %files
 /usr/share/$package_name/test.txt
+$extra_files
 EOF
     rpmbuild --define "_topdir $rpm_top" -bb "$spec" >/dev/null
 done
@@ -78,6 +97,14 @@ grep -Fxq 'Package: nextcloudnative' \
 grep -Fxq 'Package: nextcloud-native-vfs' \
     "$output/apt/dists/prerelease/main/binary-amd64/Packages"
 grep -Fxq 'Architectures: amd64' "$output/apt/dists/prerelease/Release"
+grep -Fq 'main/dep11/Components-amd64.yml.gz' \
+    "$output/apt/dists/prerelease/Release"
+gzip --decompress --stdout \
+    "$output/apt/dists/prerelease/main/dep11/Components-amd64.yml.gz" |
+    grep -Fq 'dev.obiente.nextcloudnative'
+gzip --decompress --stdout \
+    "$output/apt/dists/prerelease/main/dep11/Components-amd64.yml.gz" |
+    grep -Fq '1.2.3'
 gpg --batch --verify \
     "$output/apt/dists/prerelease/Release.gpg" \
     "$output/apt/dists/prerelease/Release" >/dev/null 2>&1
@@ -102,6 +129,24 @@ gzip --decompress --stdout "$output/rpm/x86_64/repodata/primary.xml.gz" |
     grep -Fq '<name>nextcloudnative</name>'
 gzip --decompress --stdout "$output/rpm/x86_64/repodata/primary.xml.gz" |
     grep -Fq '<name>nextcloud-native-vfs</name>'
+grep -Fq 'type="appstream"' "$output/rpm/x86_64/repodata/repomd.xml"
+rpm_appstream_href="$(python3 - "$output/rpm/x86_64/repodata/repomd.xml" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+namespace = {"repo": "http://linux.duke.edu/metadata/repo"}
+root = ET.parse(sys.argv[1]).getroot()
+entries = root.findall("repo:data[@type='appstream']/repo:location", namespace)
+assert len(entries) == 1
+print(entries[0].attrib["href"])
+PY
+)"
+[[ "$rpm_appstream_href" =~ ^repodata/[A-Za-z0-9._-]+\.gz$ ]]
+rpm_appstream_catalog="$output/rpm/x86_64/$rpm_appstream_href"
+gzip --decompress --stdout "$rpm_appstream_catalog" |
+    grep -Fq '<id>dev.obiente.nextcloudnative</id>'
+gzip --decompress --stdout "$rpm_appstream_catalog" |
+    grep -Fq '<release version="1.2.3"'
 gpg --batch --verify \
     "$output/rpm/x86_64/repodata/repomd.xml.asc" \
     "$output/rpm/x86_64/repodata/repomd.xml" >/dev/null 2>&1
