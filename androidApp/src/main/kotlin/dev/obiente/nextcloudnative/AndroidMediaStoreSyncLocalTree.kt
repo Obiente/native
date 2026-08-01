@@ -53,8 +53,12 @@ internal class AndroidMediaStoreSyncLocalTree(
         require(root.isDirectory && root.canRead()) { "The detected media folder is unavailable." }
     }
 
-    override fun scan(): List<AndroidLocalSyncDocument> {
-        return mediaFolderSyncFiles(root).map { file -> file.toSyncDocument(file.name) }
+    override fun scan(
+        includes: (relativePath: String, kind: SyncEntryKind) -> Boolean,
+    ): List<AndroidLocalSyncDocument> {
+        return mediaFolderSyncFiles(root)
+            .map { file -> file.toSyncDocument(file.name) }
+            .filter { document -> includes(document.entry.relativePath, document.entry.kind) }
     }
 
     override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {

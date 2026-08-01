@@ -73,6 +73,7 @@ class MarketingCaptureOwnershipTest {
                 expectedCaptureSources = listOf("source.kt"),
                 expectedCaptureSourceSha256 = "1".repeat(64),
                 expectedAvatarSha256 = "2".repeat(64),
+                preservedFileNames = emptySet(),
             )
 
             writePng(staged.resolve(entry.fileName), entry.width + 1, entry.height)
@@ -84,6 +85,7 @@ class MarketingCaptureOwnershipTest {
                     listOf("source.kt"),
                     "1".repeat(64),
                     "2".repeat(64),
+                    emptySet(),
                 )
             }
 
@@ -96,6 +98,7 @@ class MarketingCaptureOwnershipTest {
                     listOf("source.kt"),
                     "1".repeat(64),
                     "2".repeat(64),
+                    emptySet(),
                 )
             }
         }
@@ -187,6 +190,7 @@ class MarketingCaptureOwnershipTest {
             listOf("source.kt"),
             "1".repeat(64),
             "2".repeat(64),
+            emptySet(),
         )
     }
 

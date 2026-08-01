@@ -74,7 +74,18 @@ fun DynamicAppDescriptor.validationErrors(): List<String> = buildList {
         }
     }
     actions.forEach { action ->
-        if (action.resourceId !in resourcesById) add("Missing resource reference: ${action.resourceId}")
+        val resource = resourcesById[action.resourceId]
+        if (resource == null) {
+            add("Missing resource reference: ${action.resourceId}")
+        } else {
+            val resourceFieldIds = resource.fields.mapTo(mutableSetOf(), DynamicField::id)
+            action.responseFieldIds.filter { it !in resourceFieldIds }.forEach {
+                add("Missing response field reference: ${action.resourceId}.$it")
+            }
+        }
+        if (action.binding.method != HttpMethod.GET && action.responseFieldIds.isNotEmpty()) {
+            add("Mutation action declares read-response fields: ${action.id}")
+        }
         if (!action.binding.path.isSafeRelativePath()) {
             add("Invalid action endpoint: ${action.binding.path}")
         } else if (endpointPolicy.approvedApiPrefixes.none { action.binding.path.matchesPrefix(it) }) {
@@ -95,6 +106,28 @@ fun DynamicAppDescriptor.validationErrors(): List<String> = buildList {
                 !fallback.fallbackOnly -> add("Fallback action is not hidden: $fallbackId")
             }
         }
+        action.resultRecoveryActionId?.let { recoveryId ->
+            val recovery = actionsById[recoveryId]
+            when {
+                recovery == null -> add("Missing result recovery action reference: $recoveryId")
+                action.binding.method != HttpMethod.PUT ->
+                    add("Result recovery is only valid for idempotent PUT: ${action.id}")
+                recovery.binding.method != HttpMethod.GET ||
+                    recovery.intent !in setOf(ActionIntent.read, ActionIntent.list) ||
+                    recovery.risk != ActionRisk.readOnly ->
+                    add("Result recovery must target a read-only GET: ${action.id} -> $recoveryId")
+                recovery.binding.path != action.binding.path ->
+                    add("Result recovery must use the exact mutation route: ${action.id} -> $recoveryId")
+                recovery.binding.body != null ->
+                    add("Result recovery GET cannot declare a request body: $recoveryId")
+                recovery.binding.queryParameters.any(HttpParameter::required) ->
+                    add("Result recovery requires unsupported query input: $recoveryId")
+                recovery.fallbackOnly -> add("Result recovery action is hidden: $recoveryId")
+                action.provenance.none(Provenance::isTrustedResultRecoveryEvidence) ||
+                    recovery.provenance.none(Provenance::isTrustedResultRecoveryEvidence) ->
+                    add("Result recovery requires trusted mutation and read evidence: ${action.id} -> $recoveryId")
+            }
+        }
         if (action.fallbackOnly && action.binding.method != HttpMethod.GET) {
             add("Hidden fallback action is not read-only: ${action.id}")
         }
@@ -112,6 +145,12 @@ fun DynamicAppDescriptor.validationErrors(): List<String> = buildList {
         }
     }
 }
+
+private fun Provenance.isTrustedResultRecoveryEvidence(): Boolean =
+    kind in setOf(
+        ProvenanceKind.verifiedAppPackage,
+        ProvenanceKind.appStoreLinkedSourceTag,
+    )
 
 fun DynamicAppDescriptor.requireValid(): DynamicAppDescriptor {
     val errors = validationErrors()

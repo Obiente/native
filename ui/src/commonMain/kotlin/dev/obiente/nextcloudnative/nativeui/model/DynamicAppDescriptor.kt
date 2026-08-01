@@ -169,6 +169,7 @@ data class FormField(
     val required: Boolean,
     val format: String? = null,
     val enumValues: List<String>? = null,
+    val repeatableObjectInput: RepeatableObjectInputSpec? = null,
 )
 
 @Serializable
@@ -184,10 +185,20 @@ data class DynamicAction(
     val fallbackActionIds: List<String> = emptyList(),
     /** True when this action exists only as a runtime fallback and must not become a UI surface. */
     val fallbackOnly: Boolean = false,
+    /**
+     * Fields declared by this action's successful read-response item schema.
+     *
+     * This is deliberately action-local: [DynamicResource.fields] may also contain fields merged
+     * from mutation request bodies and therefore cannot authorize record identities for writes.
+     */
+    val responseFieldIds: List<String> = emptyList(),
+    /** Exact same-route GET action used to reconcile an idempotent replacement result. */
+    val resultRecoveryActionId: String? = null,
     val capabilityIds: List<String> = emptyList(),
     val permissionIds: List<String> = emptyList(),
     val confidence: Confidence,
     val provenance: List<Provenance> = emptyList(),
+    val effect: ActionEffect = ActionEffect.unspecified,
 )
 
 @Serializable

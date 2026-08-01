@@ -152,7 +152,7 @@ private fun resolveMailActionTarget(
  * observed `id`, UUID, name, or protocol identifiers are never accepted.
  */
 private fun NativeRecord.mailActionBindingValues(action: ActionSpec): Map<String, String>? {
-    if (actionSafeIdentity) return actionBindingValues(allowUnsafeIdentity = true)
+    if (actionSafeIdentity) return safeActionBindingValues(allowUnsafeIdentity = true)
     if (!canResolveUnsafeActionIdentity()) return null
     if (action.evidence.none { evidence ->
             evidence.source in setOf(EvidenceSource.verifiedAppPackage, EvidenceSource.appStoreLinkedSourceTag)
@@ -167,7 +167,8 @@ private fun NativeRecord.mailActionBindingValues(action: ActionSpec): Map<String
         ?.value
         ?.takeIf { value -> value.toLongOrNull()?.let { it > 0 } == true }
         ?: return null
-    return actionBindingValues(allowUnsafeIdentity = true) + ("id" to databaseId)
+    val provenanceValues = safeActionBindingValues(allowUnsafeIdentity = false) ?: return null
+    return safeActionBindingValues(provenanceValues, mapOf("id" to databaseId))
 }
 
 private data class RankedMailPlan(
@@ -184,6 +185,7 @@ private fun ActionSpec.toBooleanStateCandidate(
 ): RankedMailPlan? {
     val matchingFields = binding.bodyFieldNames.filter { it.mailSemanticId() in directFieldNames }
     val fieldName = matchingFields.singleOrNull() ?: return null
+    if (binding.hasFlatMailActionCollision(fieldName)) return null
     val semantic = "$id $label ${binding.operationId} ${binding.path} $fieldName".mailSemanticWords()
     if (semantic.none { it in MAIL_STATE_ACTION_WORDS }) return null
     val wireState = when (fieldName.mailSemanticId()) {
@@ -191,7 +193,7 @@ private fun ActionSpec.toBooleanStateCandidate(
         else -> desiredState.toString()
     }
     val available = bindingValues.keys + fieldName
-    if (!binding.canResolveRequiredMailValues(available)) return null
+    if (!binding.canResolveRequiredMailValues(available, resourceId)) return null
     val rank = when {
         "mark" in semantic -> 500
         "set" in semantic -> 450
@@ -218,8 +220,9 @@ private fun ActionSpec.toArchiveCandidate(
     if (semantic.none { it in MAIL_MOVE_ACTION_WORDS }) return null
     val destinationFields = binding.bodyFieldNames.filter { it.mailSemanticId() in MAIL_DESTINATION_FIELDS }
     val destinationField = destinationFields.singleOrNull() ?: return null
+    if (binding.hasFlatMailActionCollision(destinationField)) return null
     val available = bindingValues.keys + destinationField
-    if (!binding.canResolveRequiredMailValues(available)) return null
+    if (!binding.canResolveRequiredMailValues(available, resourceId)) return null
     val rank = when {
         "archive" in semantic -> 600
         "move" in semantic -> 550
@@ -248,9 +251,10 @@ private fun ActionSpec.toFlagsMapStateCandidate(
         .filter { field -> field.mailSemanticId() in setOf("flags", "flagchanges", "states") }
         .singleOrNull()
         ?: return null
+    if (binding.hasFlatMailActionCollision(fieldName)) return null
     val semantic = "$id $label ${binding.operationId} ${binding.path} $fieldName".mailSemanticWords()
     if (semantic.none { it in MAIL_STATE_ACTION_WORDS } || "flags" !in semantic && "flag" !in semantic) return null
-    if (!binding.canResolveRequiredMailValues(bindingValues.keys + fieldName)) return null
+    if (!binding.canResolveRequiredMailValues(bindingValues.keys + fieldName, resourceId)) return null
     return RankedMailPlan(
         plan = NativeMailMessageActionPlan(
             kind = kind,
@@ -268,7 +272,7 @@ private fun ActionSpec.toDeleteCandidate(bindingValues: Map<String, String>): Ra
     }
     val semantic = "$id $label ${binding.operationId} ${binding.path}".mailSemanticWords()
     if (semantic.none { it in MAIL_DELETE_ACTION_WORDS }) return null
-    if (!binding.canResolveRequiredMailValues(bindingValues.keys)) return null
+    if (!binding.canResolveRequiredMailValues(bindingValues.keys, resourceId)) return null
     return RankedMailPlan(
         plan = NativeMailMessageActionPlan(
             kind = NativeMailMessageActionKind.Delete,
@@ -282,6 +286,13 @@ private fun ActionSpec.toDeleteCandidate(bindingValues: Map<String, String>): Ra
             else -> 500
         },
     )
+}
+
+private fun dev.obiente.nextcloudnative.nativeui.model.ApiBinding.hasFlatMailActionCollision(
+    submittedBodyField: String,
+): Boolean {
+    val submitted = submittedBodyField.mailSemanticId()
+    return (pathParameterNames + queryParameterNames).any { it.mailSemanticId() == submitted }
 }
 
 private fun NativeDatasetContext.uniqueArchiveMailboxId(
@@ -342,11 +353,14 @@ private fun NativeRecord.isArchiveMailbox(): Boolean {
 
 private fun dev.obiente.nextcloudnative.nativeui.model.ApiBinding.canResolveRequiredMailValues(
     available: Set<String>,
+    actionResourceId: String,
 ): Boolean {
     val normalized = available.mapTo(mutableSetOf(), String::mailSemanticId)
     fun String.resolvable(): Boolean {
         val name = mailSemanticId()
-        return name in normalized || name.endsWith("id") && "id" in normalized
+        if (name in normalized) return true
+        if ("id" !in normalized || !name.endsWith("id")) return false
+        return name.removeSuffix("id").sameMailActionResource(actionResourceId)
     }
     return requiredPathParameterNames.all(String::resolvable) &&
         requiredQueryParameterNames.all(String::resolvable) &&

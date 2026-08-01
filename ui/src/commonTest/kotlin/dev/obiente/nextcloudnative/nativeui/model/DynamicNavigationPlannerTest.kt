@@ -38,6 +38,57 @@ class DynamicNavigationPlannerTest {
     }
 
     @Test
+    fun `interactive autocomplete collection is a picker source rather than an app root`() {
+        val autocomplete = action(
+            id = "user-autocomplete",
+            resourceId = "users",
+            intent = ActionIntent.list,
+        ).copy(
+            label = "Autocomplete users",
+            binding = DynamicHttpBinding(
+                method = HttpMethod.GET,
+                path = "/api/users/autocomplete",
+                queryParameters = listOf(
+                    HttpParameter(
+                        name = "search",
+                        required = false,
+                        schema = buildJsonObject {},
+                        source = ParameterSource.userInput,
+                    ),
+                    HttpParameter(
+                        name = "limit",
+                        required = false,
+                        schema = buildJsonObject {},
+                        source = ParameterSource.userInput,
+                    ),
+                ),
+            ),
+        )
+        val ordinaryUsers = autocomplete.copy(
+            id = "list-users",
+            label = "Users",
+            binding = autocomplete.binding.copy(path = "/api/users"),
+        )
+        val helperDescriptor = hierarchyDescriptor().copy(
+            resources = listOf(resource("users")),
+            layouts = listOf(layout("users", autocomplete.id)),
+            actions = listOf(autocomplete),
+            links = emptyList(),
+            forms = emptyList(),
+        )
+        val ordinaryDescriptor = helperDescriptor.copy(
+            layouts = listOf(layout("users", ordinaryUsers.id)),
+            actions = listOf(ordinaryUsers),
+        )
+
+        assertTrue(helperDescriptor.planDynamicNavigation().rootDestinations.isEmpty())
+        assertEquals(
+            listOf("users"),
+            ordinaryDescriptor.planDynamicNavigation().rootDestinations.map(DynamicNavigationDestination::resourceId),
+        )
+    }
+
+    @Test
     fun `Cospend projects lead to bills and members with strict record context`() {
         val descriptor = hierarchyDescriptor()
 
@@ -88,6 +139,212 @@ class DynamicNavigationPlannerTest {
     }
 
     @Test
+    fun `coincidental context field cannot authorize an unrelated mutation form`() {
+        val updateProfile = action(
+            "update-profile",
+            "profiles",
+            ActionIntent.update,
+            "userId",
+            method = HttpMethod.PATCH,
+        )
+        val descriptor = hierarchyDescriptor().copy(
+            app = AppIdentity("workspace", "Workspace", "test"),
+            resources = listOf(resource("projects"), resource("profiles")),
+            layouts = emptyList(),
+            links = emptyList(),
+            forms = listOf(
+                form("update-profile.form", "Update profile", "profiles", updateProfile.id),
+            ),
+            actions = listOf(updateProfile),
+        )
+
+        val plan = descriptor.planDynamicNavigation(
+            DynamicResourceRecordContext(
+                resourceId = "projects",
+                recordId = "project-7",
+                fieldValues = mapOf("userId" to "user-4"),
+            ),
+        )
+
+        assertTrue(plan.contextualFormActions.isEmpty())
+    }
+
+    @Test
+    fun `verified file upload form is contextual only with complete trusted route bindings`() {
+        val listPhotos = action(
+            "list-photos",
+            "photos",
+            ActionIntent.list,
+            "houseId",
+        ).copy(confidence = Confidence.verified)
+        val uploadPhoto = action(
+            "upload-photo",
+            "photos",
+            ActionIntent.execute,
+            "houseId",
+            method = HttpMethod.POST,
+            body = HttpBody(
+                contentType = "multipart/form-data",
+                required = true,
+                schema = buildJsonObject {
+                    put("type", JsonPrimitive("object"))
+                    put(
+                        "properties",
+                        buildJsonObject {
+                            put(
+                                "image",
+                                buildJsonObject {
+                                    put("type", JsonPrimitive("string"))
+                                    put("format", JsonPrimitive("binary"))
+                                },
+                            )
+                        },
+                    )
+                },
+            ),
+        ).copy(
+            effect = ActionEffect.upload,
+            confidence = Confidence.verified,
+        )
+        val uploadForm = form(
+            id = "upload-photo.form",
+            title = "Upload",
+            resourceId = "photos",
+            actionId = uploadPhoto.id,
+        ).copy(
+            fields = listOf(
+                FormField(
+                    fieldId = "image",
+                    label = "Image",
+                    kind = FieldKind.file,
+                    required = true,
+                ),
+            ),
+            confidence = Confidence.verified,
+        )
+        val photoLayout = layout("photos", listPhotos.id).copy(
+            confidence = Confidence.verified,
+        )
+        val descriptor = hierarchyDescriptor().copy(
+            resources = listOf(
+                resource("houses").copy(confidence = Confidence.verified),
+                resource("photos").copy(confidence = Confidence.verified),
+            ),
+            layouts = listOf(photoLayout),
+            links = emptyList(),
+            forms = listOf(uploadForm),
+            actions = listOf(listPhotos, uploadPhoto),
+        )
+        val trustedContext = DynamicResourceRecordContext(
+            resourceId = "houses",
+            recordId = "house-7",
+            parameterValues = mapOf("houseId" to "house-7"),
+            currentLayoutId = photoLayout.id,
+        )
+
+        assertEquals(
+            mapOf("houseId" to "house-7"),
+            descriptor.planDynamicNavigation(trustedContext)
+                .contextualFormActions
+                .single { action -> action.actionId == uploadPhoto.id }
+                .pathParameterValues,
+        )
+        assertTrue(
+            descriptor.planDynamicNavigation(
+                trustedContext.copy(
+                    parameterValues = emptyMap(),
+                    actionSafeIdentity = false,
+                ),
+            ).contextualFormActions.isEmpty(),
+        )
+        assertTrue(
+            descriptor.copy(forms = listOf(uploadForm.copy(confidence = Confidence.high)))
+                .planDynamicNavigation(trustedContext)
+                .contextualFormActions
+                .isEmpty(),
+        )
+    }
+
+    @Test
+    fun `cross-resource singleton update requires one verified active detail read surface`() {
+        val readPreferences = action(
+            "read-preferences",
+            "preferences",
+            ActionIntent.read,
+            "houseId",
+        ).copy(confidence = Confidence.verified)
+        val updatePreferences = action(
+            "update-preferences",
+            "preferences",
+            ActionIntent.update,
+            "houseId",
+            method = HttpMethod.PATCH,
+        ).copy(confidence = Confidence.verified)
+        val preferencesLayout = layout("preferences", readPreferences.id).copy(
+            id = "preferences.detail",
+            kind = LayoutKind.detail,
+            confidence = Confidence.verified,
+        )
+        val preferencesForm = form(
+            id = "update-preferences.form",
+            title = "Preferences",
+            resourceId = "preferences",
+            actionId = updatePreferences.id,
+        ).copy(
+            fields = listOf(
+                FormField(
+                    fieldId = "enabled",
+                    label = "Enabled",
+                    kind = FieldKind.boolean,
+                    required = true,
+                ),
+            ),
+            confidence = Confidence.verified,
+        )
+        val descriptor = hierarchyDescriptor().copy(
+            resources = listOf(
+                resource("houses").copy(confidence = Confidence.verified),
+                resource("preferences").copy(
+                    collection = false,
+                    confidence = Confidence.verified,
+                ),
+            ),
+            layouts = listOf(preferencesLayout),
+            links = emptyList(),
+            forms = listOf(preferencesForm),
+            actions = listOf(readPreferences, updatePreferences),
+        )
+        val activePreferences = DynamicResourceRecordContext(
+            resourceId = "houses",
+            recordId = "house-7",
+            parameterValues = mapOf("houseId" to "house-7"),
+            currentLayoutId = preferencesLayout.id,
+        )
+
+        assertEquals(
+            listOf(updatePreferences.id),
+            descriptor.planDynamicNavigation(activePreferences)
+                .contextualFormActions
+                .map(DynamicNavigationFormAction::actionId),
+        )
+        assertTrue(
+            descriptor.copy(
+                layouts = listOf(preferencesLayout.copy(kind = LayoutKind.list)),
+            ).planDynamicNavigation(activePreferences)
+                .contextualFormActions
+                .isEmpty(),
+        )
+        assertTrue(
+            descriptor.planDynamicNavigation(
+                activePreferences.copy(
+                    parameterValues = emptyMap(),
+                    actionSafeIdentity = false,
+                ),
+            ).contextualFormActions.isEmpty(),
+        )
+    }
+
+    @Test
     fun `ephemeral map identity can open read children but cannot authorize forms`() {
         val plan = hierarchyDescriptor().planDynamicNavigation(
             DynamicResourceRecordContext(
@@ -102,6 +359,299 @@ class DynamicNavigationPlannerTest {
             plan.contextualChildDestinations.map(DynamicNavigationDestination::resourceId).toSet(),
         )
         assertTrue(plan.contextualFormActions.isEmpty())
+    }
+
+    @Test
+    fun `conflicting record provenance keeps read navigation but withholds every contextual write`() {
+        val plan = hierarchyDescriptor().planDynamicNavigation(
+            DynamicResourceRecordContext(
+                resourceId = "projects",
+                recordId = "project-7",
+                parameterValues = mapOf("projectId" to "project-7"),
+                actionSafeIdentity = true,
+                actionBindingProvenanceValid = false,
+            ),
+        )
+
+        assertEquals(
+            setOf("bills", "members"),
+            plan.contextualChildDestinations.mapTo(mutableSetOf()) { it.resourceId },
+        )
+        assertTrue(plan.contextualFormActions.isEmpty())
+    }
+
+    @Test
+    fun `record capabilities gate same-record forms without blocking a verified child create`() {
+        val deleteProject = action(
+            "delete-project",
+            "projects",
+            ActionIntent.delete,
+            "projectId",
+            method = HttpMethod.DELETE,
+        )
+        val capabilityFields = listOf(
+            "readOnly",
+            "writable",
+            "canWrite",
+            "canEdit",
+            "canUpdate",
+            "canDelete",
+        ).map { fieldId ->
+            DynamicField(
+                id = fieldId,
+                label = fieldId,
+                kind = FieldKind.boolean,
+                required = false,
+                readOnly = true,
+                nullable = false,
+                multiple = false,
+                confidence = Confidence.high,
+            )
+        }
+        val baseline = hierarchyDescriptor()
+        val descriptor = baseline.copy(
+            resources = baseline.resources.map { resource ->
+                resource.takeUnless { it.id == "projects" }
+                    ?: resource.copy(fields = capabilityFields)
+            },
+            forms = baseline.forms + form(
+                "delete-project.form",
+                "Delete project",
+                "projects",
+                deleteProject.id,
+            ),
+            actions = baseline.actions + deleteProject,
+        )
+        val baseContext = DynamicResourceRecordContext(
+            resourceId = "projects",
+            recordId = "project-7",
+            parameterValues = mapOf("projectId" to "project-7"),
+        )
+
+        fun contextualFormIds(fieldValues: Map<String, String?>): Set<String> =
+            descriptor.planDynamicNavigation(baseContext.copy(fieldValues = fieldValues))
+                .contextualFormActions
+                .mapTo(mutableSetOf(), DynamicNavigationFormAction::formId)
+
+        val allowed = mapOf(
+            "readOnly" to "false",
+            "writable" to "true",
+            "canWrite" to "true",
+            "canEdit" to "true",
+            "canUpdate" to "true",
+            "canDelete" to "true",
+        )
+        assertEquals(
+            setOf("create-bill.form", "delete-project.form", "edit-project.form"),
+            contextualFormIds(allowed),
+        )
+        assertEquals(
+            setOf("create-bill.form"),
+            contextualFormIds(allowed + ("readOnly" to "true")),
+        )
+        assertEquals(
+            setOf("create-bill.form"),
+            contextualFormIds(
+                allowed + mapOf(
+                    "canEdit" to "false",
+                    "canUpdate" to "false",
+                    "canDelete" to "false",
+                ),
+            ),
+        )
+        assertEquals(
+            setOf("create-bill.form"),
+            contextualFormIds(emptyMap()),
+        )
+
+        fun descriptorWithScopedCapabilities(vararg fieldIds: String): DynamicAppDescriptor =
+            descriptor.copy(
+                resources = descriptor.resources.map { resource ->
+                    resource.takeUnless { it.id == "projects" }
+                        ?: resource.copy(
+                            fields = capabilityFields.filter { field -> field.id in fieldIds },
+                        )
+                },
+            )
+
+        fun scopedContextualFormIds(
+            scopedDescriptor: DynamicAppDescriptor,
+            fieldValues: Map<String, String?>,
+        ): Set<String> = scopedDescriptor
+            .planDynamicNavigation(baseContext.copy(fieldValues = fieldValues))
+            .contextualFormActions
+            .mapTo(mutableSetOf(), DynamicNavigationFormAction::formId)
+
+        val deleteOnly = descriptorWithScopedCapabilities("canDelete")
+        assertEquals(
+            setOf("create-bill.form", "delete-project.form"),
+            scopedContextualFormIds(deleteOnly, mapOf("canDelete" to "true")),
+        )
+
+        val editOnly = descriptorWithScopedCapabilities("canEdit")
+        assertEquals(
+            setOf("create-bill.form", "edit-project.form"),
+            scopedContextualFormIds(editOnly, mapOf("canEdit" to "true")),
+        )
+
+        val noScopedCapabilities = descriptorWithScopedCapabilities()
+        assertEquals(
+            setOf("create-bill.form", "delete-project.form", "edit-project.form"),
+            scopedContextualFormIds(noScopedCapabilities, emptyMap()),
+        )
+    }
+
+    @Test
+    fun `declared child create can bind one required parent body field from record context`() {
+        val listCollections = action("list-collections", "collections", ActionIntent.list)
+        val listEntries = action("list-entries", "entries", ActionIntent.list, "collectionId")
+        val createEntry = action(
+            id = "create-entry",
+            resourceId = "entries",
+            intent = ActionIntent.create,
+            method = HttpMethod.POST,
+            body = HttpBody(
+                contentType = "application/json",
+                required = true,
+                schema = buildJsonObject {
+                    put("type", "object")
+                    put(
+                        "properties",
+                        buildJsonObject {
+                            put("collectionId", buildJsonObject { put("type", "integer") })
+                            put("title", buildJsonObject { put("type", "string") })
+                        },
+                    )
+                    put(
+                        "required",
+                        buildJsonArray {
+                            add(JsonPrimitive("collectionId"))
+                            add(JsonPrimitive("title"))
+                        },
+                    )
+                },
+            ),
+        )
+        val descriptor = hierarchyDescriptor().copy(
+            app = AppIdentity("shared-lists", "Shared lists", "test"),
+            resources = listOf(resource("collections"), resource("entries")),
+            layouts = listOf(
+                layout("collections", listCollections.id),
+                layout("entries", listEntries.id),
+            ),
+            links = listOf(
+                actionLink("collections.entries", "Entries", "collections", listEntries.id),
+            ),
+            forms = listOf(
+                DynamicForm(
+                    id = "create-entry.form",
+                    title = "Create entry",
+                    resourceId = "entries",
+                    actionId = createEntry.id,
+                    fields = listOf(
+                        FormField("collectionId", "Collection", FieldKind.integer, required = true),
+                        FormField("title", "Title", FieldKind.string, required = true),
+                    ),
+                    confidence = Confidence.high,
+                ),
+            ),
+            actions = listOf(listCollections, listEntries, createEntry),
+        )
+
+        val action = descriptor.planDynamicNavigation(
+            DynamicResourceRecordContext(
+                resourceId = "collections",
+                recordId = "collection-7",
+            ),
+        ).contextualFormActions.single()
+
+        assertEquals("create-entry.form", action.formId)
+        assertEquals(mapOf("collectionId" to "collection-7"), action.pathParameterValues)
+    }
+
+    @Test
+    fun `body scoped child create is withheld without a declared relationship or safe parent identity`() {
+        val listCollections = action("list-collections", "collections", ActionIntent.list)
+        val listEntries = action("list-entries", "entries", ActionIntent.list, "collectionId")
+        val createEntry = action(
+            id = "create-entry",
+            resourceId = "entries",
+            intent = ActionIntent.create,
+            method = HttpMethod.POST,
+            body = HttpBody(
+                contentType = "application/json",
+                required = true,
+                schema = buildJsonObject {
+                    put("type", "object")
+                    put(
+                        "properties",
+                        buildJsonObject {
+                            put("collectionId", buildJsonObject { put("type", "integer") })
+                        },
+                    )
+                    put(
+                        "required",
+                        buildJsonArray {
+                            add(JsonPrimitive("collectionId"))
+                        },
+                    )
+                },
+            ),
+        )
+        val createForm = DynamicForm(
+            id = "create-entry.form",
+            title = "Create entry",
+            resourceId = "entries",
+            actionId = createEntry.id,
+            fields = listOf(
+                FormField("collectionId", "Collection", FieldKind.integer, required = true),
+            ),
+            confidence = Confidence.high,
+        )
+        val descriptor = hierarchyDescriptor().copy(
+            app = AppIdentity("shared-lists", "Shared lists", "test"),
+            resources = listOf(resource("collections"), resource("entries")),
+            layouts = listOf(
+                layout("collections", listCollections.id),
+                layout("entries", listEntries.id),
+            ),
+            links = listOf(
+                actionLink("collections.entries", "Entries", "collections", listEntries.id),
+            ),
+            forms = listOf(createForm),
+            actions = listOf(listCollections, listEntries, createEntry),
+        )
+        val selectedCollection = DynamicResourceRecordContext(
+            resourceId = "collections",
+            recordId = "collection-7",
+        )
+
+        assertTrue(
+            descriptor.copy(links = emptyList())
+                .planDynamicNavigation(selectedCollection)
+                .contextualFormActions
+                .isEmpty(),
+        )
+        assertTrue(
+            descriptor.planDynamicNavigation(
+                selectedCollection.copy(
+                    parameterValues = mapOf("collectionId" to "collection-7"),
+                    actionSafeIdentity = false,
+                ),
+            ).contextualFormActions.isEmpty(),
+        )
+        assertTrue(
+            descriptor.copy(
+                links = descriptor.links + actionLink(
+                    "collections.entries.alternate",
+                    "Alternate entries",
+                    "collections",
+                    listEntries.id,
+                ),
+            ).planDynamicNavigation(selectedCollection)
+                .contextualFormActions
+                .isEmpty(),
+        )
     }
 
     @Test
@@ -463,7 +1013,7 @@ class DynamicNavigationPlannerTest {
     }
 
     @Test
-    fun `semantic container routing is app neutral and refuses ambiguous mailbox children`() {
+    fun `semantic container routing keeps archives secondary and refuses ambiguous active mailboxes`() {
         val descriptor = hierarchyDescriptor().copy(
             app = AppIdentity("communications", "Communications", "test"),
             resources = listOf(resource("accounts"), resource("mailboxes"), resource("messages")),
@@ -494,7 +1044,7 @@ class DynamicNavigationPlannerTest {
         assertEquals("mailboxes", mailbox.resourceId)
         assertEquals("messages", descriptor.preferredSemanticContextualChild(mailboxContext)?.resourceId)
 
-        val ambiguous = descriptor.copy(
+        val withArchive = descriptor.copy(
             resources = descriptor.resources + resource("archivedMailboxes"),
             layouts = descriptor.layouts + layout("archivedMailboxes", "list-archived-mailboxes"),
             links = descriptor.links + actionLink(
@@ -511,7 +1061,240 @@ class DynamicNavigationPlannerTest {
             ),
         )
 
-        assertNull(ambiguous.preferredSemanticContextualChild(accountContext))
+        assertEquals(
+            "mailboxes",
+            withArchive.preferredSemanticContextualChild(accountContext)?.resourceId,
+        )
+
+        val ambiguousActive = descriptor.copy(
+            resources = descriptor.resources + resource("sharedMailboxes"),
+            layouts = descriptor.layouts + layout("sharedMailboxes", "list-shared-mailboxes"),
+            links = descriptor.links + actionLink(
+                "accounts.shared-mailboxes",
+                "Shared mailboxes",
+                "accounts",
+                "list-shared-mailboxes",
+            ),
+            actions = descriptor.actions + action(
+                "list-shared-mailboxes",
+                "sharedMailboxes",
+                ActionIntent.list,
+                "accountId",
+            ),
+        )
+
+        assertNull(ambiguousActive.preferredSemanticContextualChild(accountContext))
+    }
+
+    @Test
+    fun `semantic content containers prefer their unique declared child collection`() {
+        listOf(
+            "lists" to "items",
+            "checklists" to "entries",
+            "projects" to "tasks",
+            "containers" to "entries",
+        ).forEach { (parentResourceId, childResourceId) ->
+            val parentAction = action("read-$parentResourceId", parentResourceId, ActionIntent.list)
+            val childAction = action("read-$childResourceId", childResourceId, ActionIntent.list, "id")
+            val descriptor = hierarchyDescriptor().copy(
+                app = AppIdentity("workspace", "Workspace", "test"),
+                resources = listOf(resource(parentResourceId), resource(childResourceId)),
+                layouts = listOf(
+                    layout(parentResourceId, parentAction.id),
+                    layout(childResourceId, childAction.id),
+                ),
+                links = listOf(
+                    actionLink(
+                        "$parentResourceId.$childResourceId",
+                        childResourceId,
+                        parentResourceId,
+                        childAction.id,
+                    ),
+                ),
+                forms = emptyList(),
+                actions = listOf(parentAction, childAction),
+            )
+            val context = DynamicResourceRecordContext(
+                resourceId = parentResourceId,
+                recordId = "selected-record",
+            )
+
+            val preferred = assertNotNull(descriptor.preferredSemanticContextualChild(context))
+
+            assertEquals(childResourceId, preferred.resourceId)
+            assertEquals(mapOf("id" to "selected-record"), preferred.pathParameterValues)
+        }
+    }
+
+    @Test
+    fun `relationship containers prefer their unique declared list collection`() {
+        val parent = action("read-spaces", "spaces", ActionIntent.list)
+        val lists = action("read-lists", "lists", ActionIntent.list, "id")
+        val categories = action("read-categories", "categories", ActionIntent.list, "id")
+        val items = action("read-items", "items", ActionIntent.list, "id")
+        val notes = action("read-notes", "notes", ActionIntent.list, "id")
+        val descriptor = hierarchyDescriptor().copy(
+            app = AppIdentity("organizer", "Organizer", "test"),
+            resources = listOf(
+                resource("spaces"),
+                resource("lists"),
+                resource("categories"),
+                resource("items"),
+                resource("notes"),
+            ),
+            layouts = listOf(
+                layout("spaces", parent.id),
+                layout("lists", lists.id),
+                layout("categories", categories.id),
+                layout("items", items.id),
+                layout("notes", notes.id),
+            ),
+            links = listOf(
+                actionLink("spaces.lists", "Lists", "spaces", lists.id),
+                actionLink("spaces.categories", "Categories", "spaces", categories.id),
+                actionLink("spaces.items", "Items", "spaces", items.id),
+                actionLink("spaces.notes", "Notes", "spaces", notes.id),
+            ),
+            forms = emptyList(),
+            actions = listOf(parent, lists, categories, items, notes),
+        )
+        val context = DynamicResourceRecordContext("spaces", "selected-space")
+
+        val preferred = assertNotNull(descriptor.preferredSemanticContextualChild(context))
+
+        assertEquals("lists", preferred.resourceId)
+        assertEquals(mapOf("id" to "selected-space"), preferred.pathParameterValues)
+    }
+
+    @Test
+    fun `equally meaningful declared content children remain explicit`() {
+        val parent = action("read-checklists", "checklists", ActionIntent.list)
+        val items = action("read-items", "items", ActionIntent.list, "id")
+        val tasks = action("read-tasks", "tasks", ActionIntent.list, "id")
+        val descriptor = hierarchyDescriptor().copy(
+            app = AppIdentity("workspace", "Workspace", "test"),
+            resources = listOf(resource("checklists"), resource("items"), resource("tasks")),
+            layouts = listOf(
+                layout("checklists", parent.id),
+                layout("items", items.id),
+                layout("tasks", tasks.id),
+            ),
+            links = listOf(
+                actionLink("checklists.items", "Items", "checklists", items.id),
+                actionLink("checklists.tasks", "Tasks", "checklists", tasks.id),
+            ),
+            forms = emptyList(),
+            actions = listOf(parent, items, tasks),
+        )
+        val context = DynamicResourceRecordContext("checklists", "selected-record")
+
+        assertNull(descriptor.preferredSemanticContextualChild(context))
+        assertEquals(
+            setOf("items", "tasks"),
+            descriptor.planDynamicNavigation(context).contextualChildDestinations
+                .mapTo(mutableSetOf(), DynamicNavigationDestination::resourceId),
+        )
+    }
+
+    @Test
+    fun `declared content child with missing context is not preferred`() {
+        val parent = action("read-projects", "projects", ActionIntent.list)
+        val child = action("read-tasks", "tasks", ActionIntent.list, "id", "scope")
+        val descriptor = hierarchyDescriptor().copy(
+            app = AppIdentity("workspace", "Workspace", "test"),
+            resources = listOf(resource("projects"), resource("tasks")),
+            layouts = listOf(layout("projects", parent.id), layout("tasks", child.id)),
+            links = listOf(actionLink("projects.tasks", "Tasks", "projects", child.id)),
+            forms = emptyList(),
+            actions = listOf(parent, child),
+        )
+        val context = DynamicResourceRecordContext("projects", "selected-record")
+
+        assertNull(descriptor.preferredSemanticContextualChild(context))
+        assertTrue(descriptor.planDynamicNavigation(context).contextualChildDestinations.isEmpty())
+        assertEquals(
+            listOf("scope"),
+            descriptor.explainDynamicChildNavigation(context)
+                .single { it.actionId == child.id }
+                .missingContextParameters,
+        )
+    }
+
+    @Test
+    fun `inherited ancestor identity does not turn sibling collections into record sections`() {
+        val lists = action("read-lists", "lists", ActionIntent.list)
+        val items = action(
+            "read-items",
+            "items",
+            ActionIntent.list,
+            "houseId",
+            "listId",
+        )
+        val categories = action("read-categories", "categories", ActionIntent.list, "id")
+        val descriptor = hierarchyDescriptor().copy(
+            app = AppIdentity("workspace", "Workspace", "test"),
+            resources = listOf(resource("lists"), resource("items"), resource("categories")),
+            layouts = listOf(
+                layout("lists", lists.id),
+                layout("items", items.id),
+                layout("categories", categories.id),
+            ),
+            links = listOf(
+                actionLink("lists.items", "Items", "lists", items.id),
+                actionLink("lists.categories", "Categories", "lists", categories.id),
+            ),
+            forms = emptyList(),
+            actions = listOf(lists, items, categories),
+        )
+        val context = DynamicResourceRecordContext(
+            resourceId = "lists",
+            recordId = "list-9",
+            fieldValues = mapOf(
+                "id" to "list-9",
+                "listId" to "list-9",
+                "houseId" to "house-7",
+            ),
+            parameterValues = mapOf("id" to "house-7"),
+        )
+
+        assertEquals(
+            listOf("items"),
+            descriptor.planDynamicNavigation(context).contextualChildDestinations
+                .map(DynamicNavigationDestination::resourceId),
+        )
+        assertEquals(
+            DynamicChildCandidateStatus.ancestorOnlyContext,
+            descriptor.explainDynamicChildNavigation(context)
+                .single { diagnostic -> diagnostic.actionId == categories.id }
+                .status,
+        )
+    }
+
+    @Test
+    fun `declared content relationship cycle is never preferred`() {
+        val parents = action("read-lists", "lists", ActionIntent.list, "id")
+        val children = action("read-items", "items", ActionIntent.list, "id")
+        val descriptor = hierarchyDescriptor().copy(
+            app = AppIdentity("workspace", "Workspace", "test"),
+            resources = listOf(resource("lists"), resource("items")),
+            layouts = listOf(layout("lists", parents.id), layout("items", children.id)),
+            links = listOf(
+                actionLink("a.items.lists", "Lists", "items", parents.id),
+                actionLink("z.lists.items", "Items", "lists", children.id),
+            ),
+            forms = emptyList(),
+            actions = listOf(parents, children),
+        )
+        val context = DynamicResourceRecordContext("lists", "selected-record")
+
+        assertNull(descriptor.preferredSemanticContextualChild(context))
+        assertTrue(descriptor.planDynamicNavigation(context).contextualChildDestinations.isEmpty())
+        assertEquals(
+            DynamicChildCandidateStatus.cycle,
+            descriptor.explainDynamicChildNavigation(context)
+                .single { it.actionId == children.id }
+                .status,
+        )
     }
 
     @Test
@@ -547,6 +1330,70 @@ class DynamicNavigationPlannerTest {
 
         assertEquals("recipes", preferred.resourceId)
         assertEquals(mapOf("category" to "sweet"), preferred.pathParameterValues)
+    }
+
+    @Test
+    fun `taxonomy records do not auto open unrelated helper or technical collections`() {
+        listOf(
+            Triple("categories", "metadata", true),
+            Triple("tags", "summaries", false),
+        ).forEach { (parentResourceId, childResourceId, technical) ->
+            val parent = action("read-$parentResourceId", parentResourceId, ActionIntent.list)
+            val child = action("read-$childResourceId", childResourceId, ActionIntent.list, "id")
+            val descriptor = hierarchyDescriptor().copy(
+                app = AppIdentity("organizer", "Organizer", "test"),
+                resources = listOf(resource(parentResourceId), resource(childResourceId)),
+                layouts = listOf(
+                    layout(parentResourceId, parent.id),
+                    layout(childResourceId, child.id),
+                ),
+                links = listOf(
+                    actionLink(
+                        "$parentResourceId.$childResourceId",
+                        childResourceId,
+                        parentResourceId,
+                        child.id,
+                    ),
+                ),
+                forms = emptyList(),
+                actions = listOf(parent, child),
+            )
+            val context = DynamicResourceRecordContext(parentResourceId, "selected-record")
+            val explicitChild = descriptor.planDynamicNavigation(context)
+                .contextualChildDestinations
+                .single()
+
+            assertEquals(technical, descriptor.isSecondaryTechnicalDestination(context, explicitChild))
+            assertNull(descriptor.preferredSemanticContextualChild(context))
+        }
+    }
+
+    @Test
+    fun `archived and deleted collections remain explicit secondary sections`() {
+        listOf("archive", "archivedItems", "deletedEntries", "trash").forEach { childResourceId ->
+            val parent = action("read-lists", "lists", ActionIntent.list)
+            val child = action("read-$childResourceId", childResourceId, ActionIntent.list, "id")
+            val descriptor = hierarchyDescriptor().copy(
+                app = AppIdentity("workspace", "Workspace", "test"),
+                resources = listOf(resource("lists"), resource(childResourceId)),
+                layouts = listOf(
+                    layout("lists", parent.id),
+                    layout(childResourceId, child.id),
+                ),
+                links = listOf(
+                    actionLink("lists.$childResourceId", childResourceId, "lists", child.id),
+                ),
+                forms = emptyList(),
+                actions = listOf(parent, child),
+            )
+            val context = DynamicResourceRecordContext("lists", "selected-record")
+            val explicitChild = descriptor.planDynamicNavigation(context)
+                .contextualChildDestinations
+                .single()
+
+            assertTrue(descriptor.isSecondaryTechnicalDestination(context, explicitChild))
+            assertNull(descriptor.preferredSemanticContextualChild(context))
+        }
     }
 
     @Test

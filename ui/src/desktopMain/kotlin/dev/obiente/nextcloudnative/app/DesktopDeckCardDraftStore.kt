@@ -10,7 +10,6 @@ import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
-import java.util.concurrent.TimeUnit
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -24,7 +23,7 @@ import org.json.JSONObject
  */
 internal class DesktopDeckCardDraftStore(
     private val root: File = desktopDeckDraftDirectory(),
-    private val keyProvider: DesktopDeckDraftKeyProvider = SecretToolDeckDraftKeyProvider(),
+    private val keyProvider: DesktopDeckDraftKeyProvider = PlatformDeckDraftKeyProvider(),
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
     private val random: SecureRandom = SecureRandom(),
 ) {
@@ -297,8 +296,8 @@ internal fun interface DesktopDeckDraftKeyProvider {
     fun encryptionKey(): ByteArray
 }
 
-internal class SecretToolDeckDraftKeyProvider(
-    private val processTimeoutSeconds: Long = 10L,
+internal class PlatformDeckDraftKeyProvider(
+    private val secretStore: DesktopSecretStore = defaultDesktopSecretStore(),
     private val random: SecureRandom = SecureRandom(),
 ) : DesktopDeckDraftKeyProvider {
     @Volatile
@@ -318,57 +317,25 @@ internal class SecretToolDeckDraftKeyProvider(
     private fun create(): ByteArray {
         val generated = ByteArray(DesktopDeckCardDraftStore.AES_KEY_BYTES).also(random::nextBytes)
         val encoded = Base64.getEncoder().encodeToString(generated)
-        val process = ProcessBuilder(
-            "secret-tool",
-            "store",
-            "--label=Nextcloud Native Deck draft encryption",
-            "application",
-            APPLICATION_ID,
-            "purpose",
-            KEY_PURPOSE,
-            "schema",
-            KEY_SCHEMA,
+        secretStore.save(
+            reference = desktopDeckDraftSecretReference(),
+            username = null,
+            secret = encoded.encodeToByteArray(),
         )
-            .redirectError(ProcessBuilder.Redirect.DISCARD)
-            .start()
-        process.outputStream.bufferedWriter().use { it.write(encoded) }
-        check(process.waitFor(processTimeoutSeconds, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            "Timed out while storing the desktop Deck draft key."
-        }
-        check(process.exitValue() == 0) { "Could not store the desktop Deck draft key." }
         return lookup() ?: generated
     }
 
     private fun lookup(): ByteArray? {
-        val process = runCatching {
-            ProcessBuilder(
-                "secret-tool",
-                "lookup",
-                "application",
-                APPLICATION_ID,
-                "purpose",
-                KEY_PURPOSE,
-                "schema",
-                KEY_SCHEMA,
-            )
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start()
-        }.getOrElse { return null }
-        if (!process.waitFor(processTimeoutSeconds, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            error("Timed out while loading the desktop Deck draft key.")
-        }
-        if (process.exitValue() != 0) return null
-        val encoded = process.inputStream.readNBytes(MAX_ENCODED_KEY_BYTES).decodeToString().trim()
+        val encoded = secretStore.load(desktopDeckDraftSecretReference())
+            ?.let { value -> value.copyOf(minOf(value.size, MAX_ENCODED_KEY_BYTES)) }
+            ?.decodeToString()
+            ?.trim()
+            ?: return null
         if (encoded.isBlank()) return null
         return runCatching { Base64.getDecoder().decode(encoded) }.getOrNull()
     }
 
     private companion object {
-        const val APPLICATION_ID = "dev.obiente.nextcloudnative"
-        const val KEY_PURPOSE = "deck-card-drafts"
-        const val KEY_SCHEMA = "1"
         const val MAX_ENCODED_KEY_BYTES = 128
     }
 }

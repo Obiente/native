@@ -18,6 +18,7 @@ import dev.obiente.nextcloudnative.app.PlatformCapabilityStatus
 internal class AndroidPlatformCapabilities(
     private val context: Context,
     private val activity: Activity?,
+    private val requestPermissions: ((Array<String>) -> Boolean)?,
 ) {
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
@@ -40,10 +41,8 @@ internal class AndroidPlatformCapabilities(
             )
             return true
         }
-        val permissions = capability.permissions(Build.VERSION.SDK_INT)
-        if (permissions.isEmpty()) return false
-        val host = activity ?: return false
         if (state(capability) == PlatformCapabilityState.Blocked) {
+            val host = activity ?: return false
             host.startActivity(
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                     data = Uri.fromParts("package", context.packageName, null)
@@ -51,9 +50,12 @@ internal class AndroidPlatformCapabilities(
             )
             return true
         }
+        val permissions = capability.permissions(Build.VERSION.SDK_INT)
+        if (permissions.isEmpty()) return false
+        activity ?: return false
+        val request = requestPermissions ?: return false
         preferences.edit().putBoolean(capability.requestedKey(), true).apply()
-        ActivityCompat.requestPermissions(host, permissions.toTypedArray(), capability.requestCode())
-        return true
+        return request(permissions.toTypedArray())
     }
 
     private fun state(capability: PlatformCapability): PlatformCapabilityState {
@@ -66,7 +68,16 @@ internal class AndroidPlatformCapabilities(
         }
         if (capability == PlatformCapability.BackgroundSync) return PlatformCapabilityState.Granted
         val permissions = capability.permissions(Build.VERSION.SDK_INT)
-        if (permissions.isEmpty()) return PlatformCapabilityState.Granted
+        if (permissions.isEmpty()) {
+            return if (
+                capability == PlatformCapability.Notifications &&
+                !notificationPermissionAllowed(context)
+            ) {
+                PlatformCapabilityState.Blocked
+            } else {
+                PlatformCapabilityState.Granted
+            }
+        }
         val hasPermission = if (capability == PlatformCapability.MediaLibrary) {
             hasMediaLibraryAccess(Build.VERSION.SDK_INT) { permission ->
                 ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
@@ -77,6 +88,12 @@ internal class AndroidPlatformCapabilities(
             }
         }
         if (hasPermission) {
+            if (
+                capability == PlatformCapability.Notifications &&
+                !notificationPermissionAllowed(context)
+            ) {
+                return PlatformCapabilityState.Blocked
+            }
             return PlatformCapabilityState.Granted
         }
         val wasRequested = preferences.getBoolean(capability.requestedKey(), false)
@@ -140,7 +157,6 @@ private fun PlatformCapability.description(): String = when (this) {
     PlatformCapability.AllFilesAccess -> "Optional access for syncing arbitrary folders such as an Obsidian vault."
 }
 
-private fun PlatformCapability.requestCode(): Int = 8400 + ordinal
 private fun PlatformCapability.requestedKey(): String = "capability_requested_${name.lowercase()}"
 
 private const val PREFERENCES = "platform_capabilities"
