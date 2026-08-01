@@ -576,11 +576,39 @@ private fun openDesktopPackageInstaller(packageFile: File) {
         check(result.toLong() > 32L) { "Windows could not open the verified update package." }
         return
     }
+    val nativeCommand = linuxNativePackageInstallerCommand(packageFile)
+    if (nativeCommand != null) {
+        check(Files.isRegularFile(packageFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            "The verified Linux update package is no longer a regular file."
+        }
+        ProcessBuilder(nativeCommand).inheritIO().start()
+        return
+    }
     if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
         Desktop.getDesktop().open(packageFile)
     } else {
         ProcessBuilder("xdg-open", packageFile.absolutePath).start()
     }
+}
+
+internal fun linuxNativePackageInstallerCommand(
+    packageFile: File,
+    executableAvailable: (File) -> Boolean = { executable -> executable.isFile && executable.canExecute() },
+): List<String>? {
+    if (!packageFile.name.endsWith(".rpm", ignoreCase = true)) return null
+    val authorizationBroker = File("/usr/bin/pkexec")
+    if (!executableAvailable(authorizationBroker)) return null
+    val packageManager = File("/usr/bin/dnf5")
+    if (!executableAvailable(packageManager)) return null
+    return listOf(
+        authorizationBroker.absolutePath,
+        "--disable-internal-agent",
+        packageManager.absolutePath,
+        "--assumeyes",
+        "install",
+        "--no-allow-downgrade",
+        packageFile.toPath().toAbsolutePath().normalize().toString(),
+    )
 }
 
 private fun File.sha256(): String {

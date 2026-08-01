@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.File
 import java.nio.file.Files
 import java.util.UUID
 import java.util.prefs.Preferences
@@ -12,6 +13,32 @@ import kotlin.test.assertTrue
 import kotlin.test.assertIs
 
 class DesktopAppUpdatesTest {
+    @Test
+    fun rpmUpdatesUseAnAuthorizedNativePackageManagerWithoutShellParsing() {
+        val packageFile = File("/tmp/update path;still-one-argument.rpm")
+        val pkexec = File("/usr/bin/pkexec")
+        val dnf5 = File("/usr/bin/dnf5")
+
+        assertEquals(
+            listOf(
+                pkexec.absolutePath,
+                "--disable-internal-agent",
+                dnf5.absolutePath,
+                "--assumeyes",
+                "install",
+                "--no-allow-downgrade",
+                packageFile.toPath().toAbsolutePath().normalize().toString(),
+            ),
+            linuxNativePackageInstallerCommand(packageFile) { executable ->
+                executable == pkexec || executable == dnf5
+            },
+        )
+        assertNull(linuxNativePackageInstallerCommand(packageFile) { executable -> executable == dnf5 })
+        assertNull(
+            linuxNativePackageInstallerCommand(File("/tmp/nextcloudnative.deb")) { true },
+        )
+    }
+
     @Test
     fun windowsInstallerMetadataPreservesTheInternetTrustBoundary() {
         val source = "https://github.com/Obiente/nc-native/releases/download/v1/NextcloudNative.msi"
