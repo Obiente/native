@@ -48,6 +48,10 @@ require_text "$commit_workflow" 'git apply --index --binary "${patch}"'
 require_text "$commit_workflow" 'if [[ "${path}" != website/public/screenshots/* ]]; then'
 require_text "$commit_workflow" 'git config user.name "${APP_SLUG}[bot]"'
 require_text "$commit_workflow" "git commit -m 'chore(website): refresh marketing captures'"
+require_text "$commit_workflow" 'PULL_REQUEST_NUMBER: ${{ needs.inspect.outputs.pull_request }}'
+require_text "$commit_workflow" 'READ_TOKEN: ${{ github.token }}'
+require_text "$commit_workflow" 'GH_TOKEN="${READ_TOKEN}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}"'
+require_text "$commit_workflow" 'Capture refresh authorization changed before publication.'
 require_text "$commit_workflow" 'git push origin "HEAD:refs/heads/${HEAD_REF}"'
 
 for stale_gate in \
@@ -84,9 +88,13 @@ for untrusted_execution in './gradlew' 'npm ' 'node '; do
 done
 
 guard_line="$(grep -nF 'if [[ "${path}" != website/public/screenshots/* ]]; then' "$commit_workflow" | cut -d: -f1)"
+commit_line="$(grep -nF "git commit -m 'chore(website): refresh marketing captures'" "$commit_workflow" | cut -d: -f1)"
+revalidation_line="$(grep -nF 'Capture refresh authorization changed before publication.' "$commit_workflow" | cut -d: -f1)"
 push_line="$(grep -nF 'git push origin "HEAD:refs/heads/${HEAD_REF}"' "$commit_workflow" | cut -d: -f1)"
-if [[ -z "$guard_line" || -z "$push_line" || "$guard_line" -ge "$push_line" ]]; then
-    printf 'The capture path guard must execute before bot pushes.\n' >&2
+if [[ -z "$guard_line" || -z "$commit_line" || -z "$revalidation_line" || -z "$push_line" ||
+      "$guard_line" -ge "$commit_line" || "$commit_line" -ge "$revalidation_line" ||
+      "$revalidation_line" -ge "$push_line" ]]; then
+    printf 'The capture path guard, commit, and authorization revalidation must execute before bot pushes.\n' >&2
     exit 1
 fi
 

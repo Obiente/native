@@ -29,6 +29,7 @@ jobs:
       changed: ${{ steps.refresh.outputs.changed }}
       head_ref: ${{ steps.refresh.outputs.head_ref }}
       head_sha: ${{ steps.refresh.outputs.head_sha }}
+      pull_request: ${{ steps.refresh.outputs.pull_request }}
     steps:
       - name: Download prepared capture patch
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -99,6 +100,7 @@ jobs:
           printf 'changed=%s\n' "$([[ "${state}" == 'changed' ]] && printf true || printf false)" >>"${GITHUB_OUTPUT}"
           printf 'head_ref=%s\n' "${head_ref}" >>"${GITHUB_OUTPUT}"
           printf 'head_sha=%s\n' "${head_sha}" >>"${GITHUB_OUTPUT}"
+          printf 'pull_request=%s\n' "${pull_request}" >>"${GITHUB_OUTPUT}"
 
   commit:
     name: Commit marketing captures
@@ -138,6 +140,9 @@ jobs:
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           HEAD_REF: ${{ needs.inspect.outputs.head_ref }}
+          HEAD_SHA: ${{ needs.inspect.outputs.head_sha }}
+          PULL_REQUEST_NUMBER: ${{ needs.inspect.outputs.pull_request }}
+          READ_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           patch="${RUNNER_TEMP}/marketing-capture-refresh/captures.patch"
@@ -168,4 +173,12 @@ jobs:
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           git commit -m 'chore(website): refresh marketing captures'
+          pull_request_json="$(GH_TOKEN="${READ_TOKEN}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}")"
+          if [[ "$(jq -r '.state' <<<"${pull_request_json}")" != 'open' ||
+                "$(jq -r '.head.repo.full_name' <<<"${pull_request_json}")" != "${GITHUB_REPOSITORY}" ||
+                "$(jq -r '.head.ref' <<<"${pull_request_json}")" != "${HEAD_REF}" ||
+                "$(jq -r '.head.sha' <<<"${pull_request_json}")" != "${HEAD_SHA}" ]]; then
+            printf 'Capture refresh authorization changed before publication.\n' >&2
+            exit 1
+          fi
           git push origin "HEAD:refs/heads/${HEAD_REF}"
