@@ -30,10 +30,17 @@ require_text "$workflow" 'node tools/changelog-fragments.mjs check-diff'
 require_text "$workflow" "git commit -m 'chore(website): refresh marketing captures'"
 require_text "$workflow" 'git push origin "HEAD:${HEAD_REF}"'
 require_text "$workflow" 'gh workflow run ci.yml'
-require_text "$ci" 'Verify deterministic marketing capture regeneration'
-require_text "$ci" 'website/public/demo-media/**'
-require_text "$ci" 'git diff --exit-code -- website/public/screenshots'
-require_text "$ci" 'steps.changes.outputs.capture_inputs == '\''true'\'''
+
+for stale_gate in \
+    'Verify marketing capture freshness' \
+    'Verify deterministic marketing capture regeneration' \
+    'git diff --exit-code -- website/public/screenshots' \
+    "steps.changes.outputs.capture_inputs == 'true'"; do
+    if grep -Fq -- "$stale_gate" "$ci"; then
+        printf 'Build and test must not block on stale marketing captures: %s\n' "$stale_gate" >&2
+        exit 1
+    fi
+done
 
 if grep -Fq 'pull_request_target:' "$workflow"; then
     printf 'Capture automation must not execute pull request code with pull_request_target.\n' >&2

@@ -71,25 +71,6 @@ jobs:
               - "gradle/**"
               - "gradlew"
               - "gradlew.bat"
-            capture_inputs:
-              - ".github/workflows/ci.yml"
-              - ".github/workflows/refresh-marketing-captures.yml"
-              - "tools/marketing-capture-inputs.txt"
-              - "build.gradle.kts"
-              - "settings.gradle.kts"
-              - "gradle.properties"
-              - "gradle/libs.versions.toml"
-              - "gradle/wrapper/gradle-wrapper.properties"
-              - "ui/build.gradle.kts"
-              - "ui/src/commonMain/**"
-              - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/**"
-              - "ui/src/desktopMain/resources/marketing/**"
-              - "website/package.json"
-              - "website/package-lock.json"
-              - "website/public/demo-media/**"
-              - "website/public/screenshots/**"
-              - "website/scripts/marketing-captures.mjs"
-              - "website/scripts/verify-marketing-captures.mjs"
             linux_repositories:
               - ".github/workflows/ci.yml"
               - "tools/build-appstream-catalog.py"
@@ -120,28 +101,6 @@ jobs:
           github.event_name == 'workflow_dispatch' ||
           steps.changes.outputs.linux_repositories == 'true'
         run: bash tools/test-linux-package-repositories.sh
-
-      - name: Set up Node.js for capture verification
-        if: >-
-          github.event_name == 'workflow_dispatch' ||
-          steps.changes.outputs.capture_inputs == 'true'
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: website/package-lock.json
-
-      - name: Install capture verification dependencies
-        if: >-
-          github.event_name == 'workflow_dispatch' ||
-          steps.changes.outputs.capture_inputs == 'true'
-        run: npm ci --prefix website
-
-      - name: Verify marketing capture freshness
-        if: >-
-          github.event_name == 'workflow_dispatch' ||
-          steps.changes.outputs.capture_inputs == 'true'
-        run: node website/scripts/verify-marketing-captures.mjs
 
       - name: Require a changelog fragment
         if: >-
@@ -175,8 +134,7 @@ jobs:
           github.event_name == 'workflow_dispatch' ||
           steps.changes.outputs.contract == 'true' ||
           steps.changes.outputs.desktop == 'true' ||
-          steps.changes.outputs.android == 'true' ||
-          steps.changes.outputs.capture_inputs == 'true'
+          steps.changes.outputs.android == 'true'
         uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
         with:
           distribution: temurin
@@ -187,8 +145,7 @@ jobs:
           github.event_name == 'workflow_dispatch' ||
           steps.changes.outputs.contract == 'true' ||
           steps.changes.outputs.desktop == 'true' ||
-          steps.changes.outputs.android == 'true' ||
-          steps.changes.outputs.capture_inputs == 'true'
+          steps.changes.outputs.android == 'true'
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
         with:
           cache-read-only: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
@@ -196,19 +153,10 @@ jobs:
       - name: Install Linux virtual filesystem runtime
         if: >-
           github.event_name == 'workflow_dispatch' ||
-          steps.changes.outputs.desktop == 'true' ||
-          steps.changes.outputs.capture_inputs == 'true'
+          steps.changes.outputs.desktop == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --yes libfuse2t64
-
-      - name: Verify deterministic marketing capture regeneration
-        if: >-
-          github.event_name == 'workflow_dispatch' ||
-          steps.changes.outputs.capture_inputs == 'true'
-        run: |
-          ./gradlew --no-daemon --max-workers=1 :ui:captureMarketingScreenshots
-          git diff --exit-code -- website/public/screenshots
 
       - name: Cache Cargo dependencies and build output
         if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.rust == 'true'
