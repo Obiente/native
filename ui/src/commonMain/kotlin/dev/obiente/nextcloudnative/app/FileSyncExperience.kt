@@ -1403,6 +1403,7 @@ private fun FileSyncAdvancedSettings(
     configuration: FileSyncConfiguration,
     onConfigurationChanged: (FileSyncConfiguration) -> Unit,
 ) {
+    var deviceLabelDraft by remember(configuration.deviceLabel) { mutableStateOf(configuration.deviceLabel) }
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large)) {
         FileSyncSettingChoices(
             title = "When both copies changed",
@@ -1433,11 +1434,22 @@ private fun FileSyncAdvancedSettings(
             onSelected = { onConfigurationChanged(configuration.copy(powerPolicy = it)) },
         )
         OutlinedTextField(
-            value = configuration.deviceLabel,
-            onValueChange = { onConfigurationChanged(configuration.copy(deviceLabel = it.take(128))) },
+            value = deviceLabelDraft,
+            onValueChange = { value ->
+                deviceLabelDraft = value.take(128)
+                if (deviceLabelDraft.isNotBlank()) {
+                    onConfigurationChanged(configuration.copy(deviceLabel = deviceLabelDraft))
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Device label for conflict copies") },
             singleLine = true,
+            isError = deviceLabelDraft.isBlank(),
+            supportingText = if (deviceLabelDraft.isBlank()) {
+                { Text("Enter a device label before continuing.") }
+            } else {
+                null
+            },
         )
     }
 }

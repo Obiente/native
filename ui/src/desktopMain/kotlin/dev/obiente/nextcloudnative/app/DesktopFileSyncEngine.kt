@@ -122,12 +122,13 @@ internal class DesktopFileSyncEngine(
         val accountId = desktopFileCacheAccountId(session)
         val current = store.load()
         if (current.coordinator.pairs.any { pair ->
-                pair.accountId == accountId && pair.remoteRootPath == normalizedRemote &&
-                    current.roots.firstOrNull { it.id == pair.localRootId }?.absolutePath == canonical.absolutePath
-            }
-        ) {
+                if (pair.accountId != accountId) return@any false
+                val existingRoot = current.roots.firstOrNull { it.id == pair.localRootId } ?: return@any true
+                desktopSyncRootsOverlap(existingRoot.absolutePath, canonical.absolutePath) ||
+                    desktopSyncRemoteRootsOverlap(pair.remoteRootPath, normalizedRemote)
+            }) {
             return@withLock FileSyncCenterActionResult.Rejected(
-                "That local and Nextcloud folder pair already exists.",
+                "This folder overlaps another local or Nextcloud sync mapping. Choose separate roots.",
             )
         }
         val rootId = UUID.randomUUID().toString()
@@ -478,6 +479,19 @@ internal class DesktopFileSyncEngine(
     private companion object {
         const val MAX_SYNC_FILE_BYTES = 8L * 1024L * 1024L * 1024L
     }
+}
+
+internal fun desktopSyncRootsOverlap(first: String, second: String): Boolean {
+    val firstPath = File(first).toPath().toAbsolutePath().normalize()
+    val secondPath = File(second).toPath().toAbsolutePath().normalize()
+    return firstPath == secondPath || firstPath.startsWith(secondPath) || secondPath.startsWith(firstPath)
+}
+
+internal fun desktopSyncRemoteRootsOverlap(first: String, second: String): Boolean {
+    val left = first.trim('/')
+    val right = second.trim('/')
+    return left.isEmpty() || right.isEmpty() ||
+        left == right || left.startsWith("$right/") || right.startsWith("$left/")
 }
 
 private fun desktopFileSyncStagingDirectory(): File {

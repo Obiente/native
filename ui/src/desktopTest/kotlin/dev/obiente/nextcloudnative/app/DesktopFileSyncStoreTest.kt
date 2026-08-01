@@ -4,6 +4,8 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class DesktopFileSyncStoreTest {
     @Test
@@ -50,6 +52,23 @@ class DesktopFileSyncStoreTest {
             assertEquals(expected.roots, restored.roots)
         } finally {
             directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `sync mapping overlap detects local and remote ancestry`() {
+        val root = Files.createTempDirectory("desktop-sync-overlap-")
+        try {
+            val child = Files.createDirectories(root.resolve("child"))
+            val sibling = Files.createDirectories(root.resolveSibling(root.fileName.toString() + "-sibling"))
+            assertTrue(desktopSyncRootsOverlap(root.toString(), child.toString()))
+            assertFalse(desktopSyncRootsOverlap(root.toString(), sibling.toString()))
+            assertTrue(desktopSyncRemoteRootsOverlap("", "Photos"))
+            assertTrue(desktopSyncRemoteRootsOverlap("Photos", "Photos/RAW"))
+            assertFalse(desktopSyncRemoteRootsOverlap("Photos", "Documents"))
+            sibling.toFile().deleteRecursively()
+        } finally {
+            root.toFile().deleteRecursively()
         }
     }
 }

@@ -200,7 +200,12 @@ internal interface WindowsCloudFilesApi : AutoCloseable {
     fun allocatedBytes(path: Path): Long
     fun lastAccessedAtEpochMillis(path: Path): Long
     fun isPinned(path: Path): Boolean
-    fun updatePlaceholder(path: Path, placeholder: WindowsCloudPlaceholder)
+    fun placeholderIdentity(path: Path): ByteArray?
+    fun updatePlaceholder(
+        path: Path,
+        placeholder: WindowsCloudPlaceholder,
+        invalidateContent: Boolean = false,
+    )
     fun convertToPlaceholder(path: Path, placeholder: WindowsCloudPlaceholder)
     fun markInSync(path: Path)
     fun dehydrate(path: Path): Long
@@ -558,16 +563,39 @@ internal class WindowsCloudFilesProvider(
 
     private fun populateDirectory(relativePath: String, localDirectory: Path) {
         val identities = backend.list(relativePath)
-        identities.forEach { identity -> knownIdentities[identity.path] = identity }
         val missing = ArrayList<WindowsCloudPlaceholder>()
         identities.forEach { identity ->
             val localPath = localDirectory.resolve(identity.path.substringAfterLast('/'))
             when (api.placeholderState(localPath)) {
                 WindowsCloudPlaceholderState.Absent -> {
-                    if (!Files.exists(localPath)) missing += placeholder(identity)
+                    if (!Files.exists(localPath)) {
+                        missing += placeholder(identity)
+                        knownIdentities[identity.path] = identity
+                    }
                 }
-                WindowsCloudPlaceholderState.InSync -> api.updatePlaceholder(localPath, placeholder(identity))
-                WindowsCloudPlaceholderState.Dirty -> Unit // Preserve unsynced local edits for close-time writeback.
+                WindowsCloudPlaceholderState.InSync -> {
+                    val previous = api.placeholderIdentity(localPath)
+                        ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
+                    val changed = previous == null ||
+                        previous.accountId != identity.accountId ||
+                        previous.path != identity.path ||
+                        previous.remoteRevision != identity.remoteRevision ||
+                        previous.size != identity.size ||
+                        previous.directory != identity.directory
+                    api.updatePlaceholder(
+                        localPath,
+                        placeholder(identity),
+                        invalidateContent = changed && !identity.directory,
+                    )
+                    knownIdentities[identity.path] = identity
+                }
+                WindowsCloudPlaceholderState.Dirty -> {
+                    val previous = api.placeholderIdentity(localPath)
+                        ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
+                    if (previous != null && previous.accountId == backend.accountId && previous.path == identity.path) {
+                        knownIdentities[identity.path] = previous
+                    }
+                }
             }
         }
         api.createPlaceholders(localDirectory, missing)
@@ -676,7 +704,15 @@ internal class WindowsCloudFilesProvider(
                     if (!identity.directory) {
                         pendingWritebacks += identity.path
                         submitPathOperation(identity.path) {
-                            val uploaded = backend.upload(identity.path, local.toFile(), identity.remoteRevision)
+                            val original = requireNotNull(api.placeholderIdentity(local)) {
+                                "The dirty Windows placeholder has no recoverable identity."
+                            }.let(WindowsCloudFileIdentityCodec::decode)
+                            require(
+                                original.accountId == backend.accountId &&
+                                    original.path == identity.path &&
+                                    !original.directory,
+                            ) { "The dirty Windows placeholder identity is not safe to recover." }
+                            val uploaded = backend.upload(identity.path, local.toFile(), original.remoteRevision)
                             knownIdentities[uploaded.path] = uploaded
                             api.updatePlaceholder(local, placeholder(uploaded))
                             api.markInSync(local)

@@ -27,7 +27,10 @@ class AndroidVirtualFileProxyCallbackTest {
             source = source,
             staging = staging,
             blockSizeBytes = 4,
-            publishCompleteHydration = { file -> published = file.readBytes() },
+            publishCompleteHydration = { file ->
+                published = file.readBytes()
+                true
+            },
         )
 
         val middle = ByteArray(2)
@@ -63,7 +66,7 @@ class AndroidVirtualFileProxyCallbackTest {
                 },
             ),
             staging = null,
-            publishCompleteHydration = {},
+            publishCompleteHydration = { true },
             blockSizeBytes = 4,
         )
 
@@ -72,5 +75,25 @@ class AndroidVirtualFileProxyCallbackTest {
         assertContentEquals("ghi".encodeToByteArray(), destination)
         assertEquals(listOf(6L to 3), ranges)
         callback.onRelease()
+    }
+
+    @Test
+    fun `failed publication leaves staging disposable on release`() {
+        val bytes = "abcd".encodeToByteArray()
+        val staging = Files.createTempFile("virtual-proxy-failed-", ".part").toFile()
+        val callback = AndroidVirtualFileProxyCallback(
+            source = NextcloudFileRangeSession(
+                size = bytes.size.toLong(),
+                readBlock = { offset, length -> bytes.copyOfRange(offset.toInt(), offset.toInt() + length) },
+            ),
+            staging = staging,
+            publishCompleteHydration = { false },
+            blockSizeBytes = 4,
+        )
+
+        assertEquals(4, callback.onRead(0L, 4, ByteArray(4)))
+        callback.onRelease()
+
+        assertTrue(!staging.exists())
     }
 }

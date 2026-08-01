@@ -225,10 +225,43 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         findData.dwFileAttributes and FILE_ATTRIBUTE_PINNED != 0
     }
 
-    override fun updatePlaceholder(path: Path, placeholder: WindowsCloudPlaceholder) {
-        withFileHandle(path, write = true) { handle ->
+    override fun placeholderIdentity(path: Path): ByteArray? {
+        if (!Files.exists(path)) return null
+        return runCatching {
+            withFileHandle(path, write = false) { handle ->
+                val buffer = Memory(CF_STANDARD_INFO_BUFFER_BYTES.toLong()).apply { clear() }
+                val returned = IntByReference()
+                checkHResult(
+                    cldApi.CfGetPlaceholderInfo(
+                        handle,
+                        CF_PLACEHOLDER_INFO_STANDARD,
+                        buffer,
+                        CF_STANDARD_INFO_BUFFER_BYTES,
+                        returned,
+                    ),
+                    "read a Windows Cloud Files placeholder identity",
+                )
+                val identityLength = buffer.getInt(CF_STANDARD_INFO_IDENTITY_LENGTH_OFFSET.toLong())
+                require(identityLength in 1..MAX_PLACEHOLDER_IDENTITY_BYTES)
+                require(
+                    CF_STANDARD_INFO_IDENTITY_OFFSET + identityLength <= returned.value &&
+                        CF_STANDARD_INFO_IDENTITY_OFFSET + identityLength <= CF_STANDARD_INFO_BUFFER_BYTES,
+                )
+                buffer.getByteArray(CF_STANDARD_INFO_IDENTITY_OFFSET.toLong(), identityLength)
+            }
+        }.getOrNull()
+    }
+
+    override fun updatePlaceholder(
+        path: Path,
+        placeholder: WindowsCloudPlaceholder,
+        invalidateContent: Boolean,
+    ) {
+        withFileHandle(path, write = true, exclusive = invalidateContent) { handle ->
             val metadata = placeholder.metadata()
             val identity = placeholder.identity.nativeMemory()
+            val flags = CF_UPDATE_FLAG_MARK_IN_SYNC or CF_UPDATE_FLAG_VERIFY_IN_SYNC or
+                if (invalidateContent) CF_UPDATE_FLAG_DEHYDRATE else 0
             checkHResult(
                 cldApi.CfUpdatePlaceholder(
                     handle,
@@ -237,7 +270,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
                     placeholder.identity.size,
                     null,
                     0,
-                    CF_UPDATE_FLAG_MARK_IN_SYNC,
+                    flags,
                     null,
                     null,
                 ),
@@ -355,11 +388,16 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         checkHResult(cldApi.CfExecute(operation, parameters), "complete a Windows Cloud Files callback")
     }
 
-    private inline fun <T> withFileHandle(path: Path, write: Boolean, block: (WinNT.HANDLE) -> T): T {
+    private inline fun <T> withFileHandle(
+        path: Path,
+        write: Boolean,
+        exclusive: Boolean = false,
+        block: (WinNT.HANDLE) -> T,
+    ): T {
         val handle = Kernel32.INSTANCE.CreateFile(
             path.toAbsolutePath().toString(),
-            if (write) WinNT.GENERIC_WRITE else WinNT.GENERIC_READ,
-            WinNT.FILE_SHARE_READ or WinNT.FILE_SHARE_WRITE or WinNT.FILE_SHARE_DELETE,
+            if (write) WinNT.GENERIC_WRITE else WinNT.FILE_READ_ATTRIBUTES,
+            if (exclusive) 0 else WinNT.FILE_SHARE_READ or WinNT.FILE_SHARE_WRITE or WinNT.FILE_SHARE_DELETE,
             null,
             WinNT.OPEN_EXISTING,
             WinNT.FILE_FLAG_BACKUP_SEMANTICS,
@@ -462,7 +500,14 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         const val CF_CREATE_FLAG_STOP_ON_ERROR = 0x1
         const val CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC = 0x2
         const val CF_UPDATE_FLAG_MARK_IN_SYNC = 0x2
+        const val CF_UPDATE_FLAG_DEHYDRATE = 0x4
+        const val CF_UPDATE_FLAG_VERIFY_IN_SYNC = 0x1
         const val CF_CONVERT_FLAG_MARK_IN_SYNC = 0x1
+        const val CF_PLACEHOLDER_INFO_STANDARD = 1
+        const val MAX_PLACEHOLDER_IDENTITY_BYTES = 4_096
+        const val CF_STANDARD_INFO_IDENTITY_LENGTH_OFFSET = 56
+        const val CF_STANDARD_INFO_IDENTITY_OFFSET = 60
+        const val CF_STANDARD_INFO_BUFFER_BYTES = CF_STANDARD_INFO_IDENTITY_OFFSET + MAX_PLACEHOLDER_IDENTITY_BYTES
         const val CF_IN_SYNC_STATE_IN_SYNC = 1
         const val FILE_ATTRIBUTE_PINNED = 0x0008_0000
 
@@ -495,6 +540,13 @@ internal interface CldApi : StdCallLibrary {
     fun CfCreatePlaceholders(path: WString, placeholders: Pointer?, count: Int, flags: Int, processed: IntByReference): Int
     fun CfExecute(operationInfo: Pointer, operationParameters: Pointer): Int
     fun CfGetPlaceholderStateFromFindData(findData: Pointer): Int
+    fun CfGetPlaceholderInfo(
+        handle: WinNT.HANDLE,
+        infoClass: Int,
+        infoBuffer: Pointer,
+        infoBufferLength: Int,
+        returnedLength: IntByReference?,
+    ): Int
     fun CfUpdatePlaceholder(
         handle: WinNT.HANDLE,
         metadata: CfFsMetadata?,

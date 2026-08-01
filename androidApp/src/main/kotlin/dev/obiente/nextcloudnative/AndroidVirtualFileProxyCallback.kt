@@ -21,7 +21,7 @@ import kotlinx.coroutines.runBlocking
 internal class AndroidVirtualFileProxyCallback(
     private val source: NextcloudFileRangeSession,
     private val staging: File?,
-    private val publishCompleteHydration: (File) -> Unit,
+    private val publishCompleteHydration: (File) -> Boolean,
     private val blockSizeBytes: Int = DEFAULT_BLOCK_SIZE_BYTES,
 ) : ProxyFileDescriptorCallback() {
     private val cancelled = AtomicBoolean(false)
@@ -118,8 +118,7 @@ internal class AndroidVirtualFileProxyCallback(
         if (published || hydratedBlockCount != blockCount) return
         random.fd.sync()
         val target = staging ?: return
-        publishCompleteHydration(target)
-        published = true
+        published = publishCompleteHydration(target)
     }
 
     private companion object {

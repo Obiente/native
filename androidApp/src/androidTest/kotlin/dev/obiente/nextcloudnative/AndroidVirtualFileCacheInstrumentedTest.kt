@@ -111,4 +111,45 @@ class AndroidVirtualFileCacheInstrumentedTest {
         stage.delete()
         assertEquals(0, androidDocumentPendingWritebackCount(context, session))
     }
+
+    @Test
+    fun corruptedSameLengthBlobIsRejectedAndRemoved() {
+        val cache = AndroidVirtualFileCache(context)
+        val bytes = "first payload".encodeToByteArray()
+        val file = NextcloudFile(
+            path = "Notes/digest.txt",
+            name = "digest.txt",
+            isDirectory = false,
+            mimeType = "text/plain",
+            size = bytes.size.toLong(),
+            lastModified = null,
+            fileId = 7L,
+            hasPreview = false,
+            etag = "\"digest-v1\"",
+        )
+        cache.publishHydration(
+            session,
+            file,
+            cache.createHydrationStagingFile().apply { writeBytes(bytes) },
+        )
+        val lease = requireNotNull(cache.acquire(session, file.path, file.etag))
+        lease.content.writeBytes("other payload".encodeToByteArray())
+        lease.release()
+
+        assertNull(cache.acquire(session, file.path, file.etag))
+    }
+
+    @Test
+    fun writebackAdmissionPreservesAFreeSpaceReserve() {
+        requireAndroidDocumentWritebackCapacity(
+            remoteSize = 64L * 1024L * 1024L,
+            availableBytes = 1024L * 1024L * 1024L,
+        )
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            requireAndroidDocumentWritebackCapacity(
+                remoteSize = 700L * 1024L * 1024L,
+                availableBytes = 1024L * 1024L * 1024L,
+            )
+        }
+    }
 }

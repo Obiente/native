@@ -54,4 +54,14 @@ class DesktopFileSyncRemoteTreeTest {
             )
         }
     }
+
+    @Test
+    fun `only exact provider owned upload stages are suppressed`() {
+        assertEquals(
+            true,
+            isDesktopOwnedUploadStage("Photos/.nextcloud-native-123e4567-e89b-12d3-a456-426614174000.upload"),
+        )
+        assertEquals(false, isDesktopOwnedUploadStage("Photos/.nextcloud-native-not-a-uuid.upload"))
+        assertEquals(false, isDesktopOwnedUploadStage("Photos/user-upload.upload"))
+    }
 }

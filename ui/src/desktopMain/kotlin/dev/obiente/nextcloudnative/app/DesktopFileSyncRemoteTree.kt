@@ -170,6 +170,7 @@ internal class DesktopFileSyncRemoteTree(
         val parent = path.trim('/')
         return parseDesktopSyncDav(response, userId)
             .filter { it.entry.relativePath.substringBeforeLast('/', "") == parent }
+            .filterNot { isDesktopOwnedUploadStage(it.entry.relativePath) }
             .also { require(it.size <= MAX_CHILDREN) { "A Nextcloud folder contains too many entries." } }
     }
 
@@ -263,6 +264,13 @@ internal class DesktopFileSyncRemoteTree(
             </d:prop></d:propfind>
         """.trimIndent()
     }
+}
+
+internal fun isDesktopOwnedUploadStage(relativePath: String): Boolean {
+    val name = relativePath.substringAfterLast('/')
+    if (!name.startsWith(".nextcloud-native-") || !name.endsWith(".upload")) return false
+    val token = name.removePrefix(".nextcloud-native-").removeSuffix(".upload")
+    return runCatching { UUID.fromString(token) }.isSuccess
 }
 
 internal fun parseDesktopSyncDav(bytes: ByteArray, userId: String): List<DesktopRemoteSyncDocument> {

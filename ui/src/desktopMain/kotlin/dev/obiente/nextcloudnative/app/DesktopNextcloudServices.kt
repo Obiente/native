@@ -140,8 +140,10 @@ private fun isLinuxDesktop(): Boolean =
 private fun desktopLinuxVirtualFileMountPoint(): File =
     File(System.getProperty("user.home"), "Nextcloud Native")
 
-private fun desktopWindowsCloudFilesRoot(): File =
-    File(System.getProperty("user.home"), "Nextcloud Native")
+private fun desktopWindowsCloudFilesRoot(accountId: String): File {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return File(File(System.getProperty("user.home"), "Nextcloud Native"), accountId)
+}
 
 private fun virtualFileProviderPreferenceKey(accountId: String): String {
     require(accountId.isNotBlank() && accountId.length <= 128)
@@ -560,7 +562,7 @@ class DesktopNextcloudServices(
             },
             providerLocation = when {
                 linux -> desktopLinuxVirtualFileMountPoint().absolutePath
-                windows -> desktopWindowsCloudFilesRoot().absolutePath
+                windows -> desktopWindowsCloudFilesRoot(accountId).absolutePath
                 else -> null
             },
             pendingWritebackCount = writebacks.size + (windowsSummary?.pendingWritebackCount ?: 0),
@@ -625,13 +627,13 @@ class DesktopNextcloudServices(
             if (isWindowsDesktop()) {
                 if (windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId) {
                     return@withContext VirtualFileStorageActionResult.Completed(
-                        "Windows Cloud Files are already connected at ${desktopWindowsCloudFilesRoot().absolutePath}.",
+                        "Windows Cloud Files are already connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
                     )
                 }
                 windowsCloudFilesProvider?.close()
                 windowsCloudFilesProvider = null
                 windowsCloudFilesIdentity = null
-                val root = desktopWindowsCloudFilesRoot().toPath()
+                val root = desktopWindowsCloudFilesRoot(accountId).toPath()
                 val provider = WindowsCloudFilesProvider(
                     root = root,
                     backend = DesktopNextcloudWindowsCloudFilesBackend(
@@ -653,7 +655,7 @@ class DesktopNextcloudServices(
                     throw failure
                 }
                 return@withContext VirtualFileStorageActionResult.Completed(
-                    "Windows Cloud Files connected at ${desktopWindowsCloudFilesRoot().absolutePath}.",
+                    "Windows Cloud Files connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
                 )
             }
             if (linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) {
@@ -932,8 +934,18 @@ class DesktopNextcloudServices(
         )
         try {
             var failures = 0
+            var waitingForConditions = 0
+            val runtimeConditions = if (source == DesktopFileSyncRunSource.Tray) {
+                null
+            } else {
+                desktopFileSyncRuntimeConditions()
+            }
             initial.pairs.forEach { pair ->
                 if (isFileSyncPaused()) return@forEach
+                if (runtimeConditions != null && !runtimeConditions.allows(pair.configuration)) {
+                    waitingForConditions += 1
+                    return@forEach
+                }
                 val result = fileSyncEngine.runPair(
                     session,
                     userId,
@@ -944,7 +956,13 @@ class DesktopNextcloudServices(
                 if (result is FileSyncCenterActionResult.Rejected) failures += 1
             }
             if (failures == 0) {
-                FileSyncCenterActionResult.Completed("All desktop sync folders were checked.")
+                FileSyncCenterActionResult.Completed(
+                    if (waitingForConditions == 0) {
+                        "All desktop sync folders were checked."
+                    } else {
+                        "$waitingForConditions desktop sync folder(s) are waiting for their network or power rules."
+                    },
+                )
             } else {
                 FileSyncCenterActionResult.Rejected("$failures desktop sync folders need attention.")
             }

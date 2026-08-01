@@ -236,6 +236,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             publishCompleteHydration = { complete ->
                 runCatching { virtualFiles.publishHydration(session, file, complete) }
                     .onFailure { failure -> Log.w(LOG_TAG, "Virtual file cache publish failed", failure) }
+                    .getOrDefault(false)
             },
         )
         signal?.setOnCancelListener(callback::cancel)
@@ -352,6 +353,13 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val staging = writeback.staging
         try {
             if (recovered == null && mode !in TRUNCATING_OPEN_MODES) {
+                val remoteSize = file.size ?: throw FileNotFoundException(
+                    "Nextcloud did not provide a file size for safe editable staging.",
+                )
+                requireAndroidDocumentWritebackCapacity(
+                    remoteSize = remoteSize,
+                    availableBytes = staging.parentFile?.usableSpace ?: 0L,
+                )
                 staging.outputStream().use { output ->
                     webDav.readFile(
                         session = session,
@@ -392,7 +400,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 }
             }
         } catch (failure: Throwable) {
-            writeback.discard()
+            if (recovered == null) writeback.discard()
             throw failure
         }
     }
@@ -663,7 +671,6 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         const val LOG_TAG = "NextcloudDocuments"
         const val STAGING_DIRECTORY = "documents-staging"
         const val RECOVERY_DIRECTORY = "documents-recovery"
-        const val MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES = 256L * 1024L * 1024L * 1024L
         const val MAX_WRITEBACK_MANIFEST_BYTES = 64 * 1024
         val SUPPORTED_OPEN_MODES = setOf("r", "w", "wt", "wa", "rw", "rwt")
         val TRUNCATING_OPEN_MODES = setOf("wt", "rwt")
@@ -686,6 +693,19 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             DocumentsContract.Document.COLUMN_SIZE,
             DocumentsContract.Document.COLUMN_LAST_MODIFIED,
         )
+    }
+}
+
+internal const val MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES = 2L * 1024L * 1024L * 1024L
+internal const val MIN_ANDROID_DOCUMENT_FREE_BYTES = 512L * 1024L * 1024L
+
+internal fun requireAndroidDocumentWritebackCapacity(remoteSize: Long, availableBytes: Long) {
+    require(remoteSize >= 0L && availableBytes >= 0L)
+    require(remoteSize <= MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES) {
+        "The file is too large for editable Android staging."
+    }
+    require(remoteSize <= (availableBytes - MIN_ANDROID_DOCUMENT_FREE_BYTES).coerceAtLeast(0L)) {
+        "There is not enough free space to stage this edit safely."
     }
 }
 

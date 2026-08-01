@@ -208,20 +208,19 @@ internal class LinuxNextcloudVirtualFileSystem(
         val normalized = path.linuxVirtualPath()
         val directory = backend.resolve(normalized) ?: return -ErrorCodes.ENOENT()
         if (!directory.directory) return -ErrorCodes.ENOTDIR()
-        filler.apply(buffer, ".", null, 0L)
-        filler.apply(buffer, "..", null, 0L)
         val visibleNames = LinkedHashSet<String>()
-        backend.list(normalized).forEach { node ->
-            visibleNames += node.name
-            filler.apply(buffer, node.name, null, 0L)
-        }
+        backend.list(normalized).forEach { node -> visibleNames += node.name }
         pendingCreatedFiles.keys
             .asSequence()
             .filter { pending -> pending.substringBeforeLast('/', "") == normalized }
             .map { pending -> pending.substringAfterLast('/') }
             .filter(visibleNames::add)
-            .sorted()
-            .forEach { pendingName -> filler.apply(buffer, pendingName, null, 0L) }
+            .toList()
+        val entries = listOf(".", "..") + visibleNames.sorted()
+        if (offset < 0L || offset > entries.size.toLong()) return -ErrorCodes.EINVAL()
+        for (index in offset.toInt() until entries.size) {
+            if (filler.apply(buffer, entries[index], null, index.toLong() + 1L) != 0) break
+        }
         0
     }
 
@@ -269,17 +268,20 @@ internal class LinuxNextcloudVirtualFileSystem(
         bytes.size
     }
 
-    override fun release(path: String, fileInfo: FuseFileInfo): Int {
+    override fun release(path: String, fileInfo: FuseFileInfo): Int = fuseResult {
         val id = fileInfo.fh.get()
         if (id != EMPTY_FILE_HANDLE) {
             readHandles.remove(id)?.close()
             val write = writeHandles.remove(id)
             if (write != null) {
-                runCatching(write::close)
-                pendingCreatedFiles.entries.removeIf { it.value == id }
+                try {
+                    write.close()
+                } finally {
+                    pendingCreatedFiles.entries.removeIf { it.value == id }
+                }
             }
         }
-        return 0
+        0
     }
 
     override fun access(path: String, mask: Int): Int = fuseResult {
@@ -382,6 +384,13 @@ internal class LinuxNextcloudVirtualFileSystem(
         val node = backend.resolve(normalized) ?: return -ErrorCodes.ENOENT()
         if (node.directory != expectDirectory) {
             return if (expectDirectory) -ErrorCodes.ENOTDIR() else -ErrorCodes.EISDIR()
+        }
+        if (expectDirectory) {
+            val hasRemoteChildren = backend.list(normalized).isNotEmpty()
+            val hasPendingChildren = pendingCreatedFiles.keys.any { pending ->
+                pending.substringBeforeLast('/', "") == normalized
+            }
+            if (hasRemoteChildren || hasPendingChildren) return -ErrorCodes.ENOTEMPTY()
         }
         backend.delete(node)
         0

@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
 import jnr.ffi.Runtime
+import jnr.ffi.Pointer
+import java.nio.ByteBuffer
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -76,6 +78,58 @@ class LinuxVirtualFileSystemTest {
         assertEquals(null, backend.resolve("Archive"))
     }
 
+    @Test
+    fun `rmdir refuses a non empty remote directory`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        backend.createDirectory("Photos/Trips")
+        backend.addFile("Photos/Trips/photo.raf", "raw".encodeToByteArray())
+
+        assertEquals(-ErrorCodes.ENOTEMPTY(), fileSystem.rmdir("/Photos/Trips"))
+        assertTrue(backend.resolve("Photos/Trips/photo.raf") != null)
+    }
+
+    @Test
+    fun `readdir resumes from the supplied continuation offset`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        backend.addFile("Photos/a.raf", byteArrayOf(1))
+        backend.addFile("Photos/b.raf", byteArrayOf(2))
+        val runtime = Runtime.getSystemRuntime()
+        val buffer = runtime.memoryManager.allocateDirect(8)
+        val fileInfo = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val firstPage = mutableListOf<Pair<String, Long>>()
+        val firstFiller = ru.serce.jnrfuse.FuseFillDir { _: Pointer, name: ByteBuffer, _, nextOffset: Long ->
+            if (firstPage.size == 2) return@FuseFillDir 1
+            firstPage += name.fuseName() to nextOffset
+            0
+        }
+
+        assertEquals(0, fileSystem.readdir("/Photos", buffer, firstFiller, 0L, fileInfo))
+        val secondPage = mutableListOf<String>()
+        val secondFiller = ru.serce.jnrfuse.FuseFillDir { _: Pointer, name: ByteBuffer, _, _ ->
+            secondPage += name.fuseName()
+            0
+        }
+        assertEquals(
+            0,
+            fileSystem.readdir("/Photos", buffer, secondFiller, firstPage.last().second, fileInfo),
+        )
+        assertEquals(listOf(".", ".."), firstPage.map { it.first })
+        assertEquals(listOf("a.raf", "b.raf"), secondPage)
+    }
+
+    @Test
+    fun `release reports a close time writeback failure`() {
+        val backend = MutableFixtureBackend(failClose = true)
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        val runtime = Runtime.getSystemRuntime()
+        val fileInfo = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+
+        assertEquals(0, fileSystem.create("/Photos/failed.raf", 0L, fileInfo))
+        assertEquals(-ErrorCodes.EIO(), fileSystem.release("/Photos/failed.raf", fileInfo))
+    }
+
     private fun fixtureBackend(
         bytes: ByteArray,
         onOpen: () -> () -> Unit,
@@ -128,7 +182,9 @@ class LinuxVirtualFileSystemTest {
         }
     }
 
-    private class MutableFixtureBackend : LinuxVirtualFileBackend {
+    private class MutableFixtureBackend(
+        private val failClose: Boolean = false,
+    ) : LinuxVirtualFileBackend {
         private val nodes = linkedMapOf(
             "" to LinuxVirtualFileNode("", "Nextcloud", true, 0L, "root"),
             "Photos" to LinuxVirtualFileNode("Photos", "Photos", true, 0L, "photos-etag"),
@@ -180,7 +236,9 @@ class LinuxVirtualFileSystemTest {
                     )
                 }
 
-                override fun close() = Unit
+                override fun close() {
+                    if (failClose) error("Synthetic close-time writeback failure")
+                }
             }
         }
 
@@ -204,5 +262,23 @@ class LinuxVirtualFileSystemTest {
         }
 
         fun fileBytes(path: String): ByteArray = requireNotNull(contents[path])
+
+        fun addFile(path: String, bytes: ByteArray) {
+            contents[path] = bytes.copyOf()
+            nodes[path] = LinuxVirtualFileNode(
+                path = path,
+                name = path.substringAfterLast('/'),
+                directory = false,
+                size = bytes.size.toLong(),
+                remoteRevision = "etag-${bytes.size}",
+            )
+        }
     }
+}
+
+private fun ByteBuffer.fuseName(): String {
+    val copy = duplicate()
+    val bytes = ByteArray(copy.remaining())
+    copy.get(bytes)
+    return bytes.takeWhile { it != 0.toByte() }.toByteArray().decodeToString()
 }

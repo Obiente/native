@@ -69,7 +69,7 @@ internal class AndroidVirtualFileCache(context: Context) {
                 (expectedRemoteEtag == null || entry.remoteEtag == expectedRemoteEtag)
         } ?: return null
         val blob = File(accountDirectory(accountId), record.blobName)
-        if (!record.isValidBlob(blob)) {
+        if (!runCatching { record.isValidBlob(blob) }.getOrDefault(false)) {
             removeInvalidRecord(accountId, state, record, blob)
             return null
         }
@@ -377,7 +377,9 @@ internal class AndroidVirtualFileCache(context: Context) {
     }
 
     private fun CachedVirtualFile.isValidBlob(file: File): Boolean =
-        file.isFile && file.length() == sizeBytes
+        file.isFile &&
+            file.length() == sizeBytes &&
+            localRevision == "sha256:${file.sha256Hex()}"
 
     private fun CachedVirtualFile.toNextcloudFile(): NextcloudFile = NextcloudFile(
         path = path,
