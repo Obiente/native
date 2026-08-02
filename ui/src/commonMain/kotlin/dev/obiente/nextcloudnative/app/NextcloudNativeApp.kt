@@ -9998,6 +9998,7 @@ private fun AppUpdateSettingsCard(
     var notificationEnablePending by remember(services) { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }
     var installing by remember { mutableStateOf(false) }
+    var pendingInstallConfirmation by remember { mutableStateOf<AppUpdateRelease?>(null) }
     var installMessage by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(
         appUpdateNotificationDeliveryAllowed,
@@ -10029,6 +10030,8 @@ private fun AppUpdateSettingsCard(
             installMessage = when (val install = services.beginAppUpdate(release)) {
                 AppUpdateInstallResult.ConfirmationOpened ->
                     "The system installer opened the update confirmation."
+                AppUpdateInstallResult.Installed ->
+                    "The update was installed. Restart Nextcloud Native to use the new version."
                 is AppUpdateInstallResult.Cancelled ->
                     if (install.canResume) {
                         "Download paused. You can resume it without starting over."
@@ -10040,6 +10043,40 @@ private fun AppUpdateSettingsCard(
             }
             installing = false
         }
+    }
+    fun requestInstall(release: AppUpdateRelease) {
+        if (support.channel == AppDistributionChannel.DirectDesktopPackage) {
+            pendingInstallConfirmation = release
+        } else {
+            beginInstall(release)
+        }
+    }
+    pendingInstallConfirmation?.let { release ->
+        AlertDialog(
+            onDismissRequest = { pendingInstallConfirmation = null },
+            title = { Text("Install app update?") },
+            text = {
+                Text(
+                    "Nextcloud Native will download and verify version ${release.versionName}, then ask " +
+                        "the system package service to install it. Restart the app after installation.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingInstallConfirmation = null
+                        beginInstall(release)
+                    },
+                ) {
+                    Text("Install update")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingInstallConfirmation = null }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
     Surface(
         modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Small),
@@ -10228,10 +10265,12 @@ private fun AppUpdateSettingsCard(
                         when (state) {
                             is AppUpdateInstallState.Downloading -> state.versionCode == release.versionCode
                             is AppUpdateInstallState.Verifying -> state.versionCode == release.versionCode
+                            is AppUpdateInstallState.Installing -> state.versionCode == release.versionCode
                             is AppUpdateInstallState.PermissionRequired -> state.versionCode == release.versionCode
                             is AppUpdateInstallState.Cancelled -> state.versionCode == release.versionCode
                             is AppUpdateInstallState.Failed -> state.versionCode == release.versionCode
                             is AppUpdateInstallState.ConfirmationOpened -> state.versionCode == release.versionCode
+                            is AppUpdateInstallState.Installed -> state.versionCode == release.versionCode
                             AppUpdateInstallState.Idle -> false
                         }
                     } ?: AppUpdateInstallState.Idle
@@ -10278,6 +10317,14 @@ private fun AppUpdateSettingsCard(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        is AppUpdateInstallState.Installing -> {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            Text(
+                                "Waiting for the system package service to finish installation...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         is AppUpdateInstallState.Cancelled -> {
                             Text(
                                 if (releaseState.canResume) {
@@ -10289,7 +10336,7 @@ private fun AppUpdateSettingsCard(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Button(
-                                onClick = { beginInstall(release) },
+                                onClick = { requestInstall(release) },
                                 enabled = !installing,
                             ) {
                                 Text(if (releaseState.canResume) "Resume download" else "Retry download")
@@ -10302,7 +10349,7 @@ private fun AppUpdateSettingsCard(
                                 color = MaterialTheme.colorScheme.error,
                             )
                             Button(
-                                onClick = { beginInstall(release) },
+                                onClick = { requestInstall(release) },
                                 enabled = !installing,
                             ) {
                                 Text(if (releaseState.canResume) "Resume download" else "Retry download")
@@ -10325,14 +10372,19 @@ private fun AppUpdateSettingsCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = NextcloudTheme.colors.success,
                         )
+                        is AppUpdateInstallState.Installed -> Text(
+                            "The update was installed. Restart Nextcloud Native to use the new version.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NextcloudTheme.colors.success,
+                        )
                         AppUpdateInstallState.Idle -> Button(
-                            onClick = { beginInstall(release) },
+                            onClick = { requestInstall(release) },
                             enabled = !installing,
                         ) {
                             if (installing) {
                                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                             } else {
-                                Text("Download, verify, and review")
+                                Text("Download, verify, and install")
                             }
                         }
                     }
