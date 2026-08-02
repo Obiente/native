@@ -5,6 +5,9 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopVirtualRangeCacheTest {
@@ -61,6 +64,24 @@ class DesktopVirtualRangeCacheTest {
             cache.release(ACCOUNT_ID, "Photos/example.raf")
             cache.freeUp(ACCOUNT_ID, 4L)
             assertEquals(0L, cache.summary(ACCOUNT_ID).cachedBytes)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `invalidation defers an active range until its final lease closes`() {
+        val directory = Files.createTempDirectory("virtual-range-invalidation-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.storeBlock(ACCOUNT_ID, "Photos/open.raf", "e1", 4L, 0L, "data".encodeToByteArray())
+            cache.acquire(ACCOUNT_ID, "Photos/open.raf")
+
+            cache.invalidate(ACCOUNT_ID, "Photos")
+            assertNotNull(cache.readBlock(ACCOUNT_ID, "Photos/open.raf", "e1", 4L, 0L, 4))
+
+            cache.release(ACCOUNT_ID, "Photos/open.raf")
+            assertNull(cache.readBlock(ACCOUNT_ID, "Photos/open.raf", "e1", 4L, 0L, 4))
         } finally {
             directory.deleteRecursively()
         }
@@ -126,6 +147,52 @@ class DesktopVirtualRangeCacheTest {
                 restarted.loadFolderHydrationStatuses(ACCOUNT_ID).single().phase,
             )
             assertEquals(0L, restarted.summary(ACCOUNT_ID).cachedBytes)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `retrying hydration preserves nested online-only exclusions`() {
+        val directory = Files.createTempDirectory("virtual-range-retry-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Archive", VirtualFolderRetention.Automatic)
+            cache.setFolderHydrationStatus(
+                ACCOUNT_ID,
+                VirtualFolderHydrationStatus("Photos", VirtualFolderHydrationPhase.Failed, "Network unavailable."),
+            )
+
+            cache.retryFolderHydration(ACCOUNT_ID, "Photos")
+
+            assertEquals(VirtualFolderRetention.Automatic, cache.loadFolderRetention(ACCOUNT_ID)
+                .retentionFor("Photos/Archive/old.raf"))
+            assertEquals(VirtualFolderHydrationPhase.Queued, cache.loadFolderHydrationStatuses(ACCOUNT_ID).single().phase)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a failed refresh preserves durable offline availability`() {
+        val directory = Files.createTempDirectory("virtual-range-refresh-status-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderHydrationStatus(
+                ACCOUNT_ID,
+                VirtualFolderHydrationStatus(
+                    "Photos",
+                    VirtualFolderHydrationPhase.AvailableOffline,
+                    refreshFailure = "Server unavailable.",
+                ),
+            )
+
+            val restarted = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            val status = restarted.loadFolderHydrationStatuses(ACCOUNT_ID).single()
+            assertEquals(VirtualFolderHydrationPhase.AvailableOffline, status.phase)
+            assertEquals("Server unavailable.", status.refreshFailure)
         } finally {
             directory.deleteRecursively()
         }
@@ -245,6 +312,75 @@ class DesktopVirtualRangeCacheTest {
                 "data".encodeToByteArray(),
                 cache.readBlock(ACCOUNT_ID, "Photos/Album/photo.raf", "etag-2", 8L, 4L, 4),
             )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `complete revision validation rejects a missing block blob`() {
+        val directory = Files.createTempDirectory("virtual-range-coverage-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.storeBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 8L, 0L, "left".encodeToByteArray())
+            cache.storeBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 8L, 4L, "rght".encodeToByteArray())
+            assertTrue(cache.hasCompleteRevision(ACCOUNT_ID, "Photos/photo.raf", "e1", 8L))
+            directory.resolve(ACCOUNT_ID).listFiles().orEmpty().first { it.extension == "block" }.delete()
+
+            assertFalse(cache.hasCompleteRevision(ACCOUNT_ID, "Photos/photo.raf", "e1", 8L))
+            assertEquals(0L, cache.summary(ACCOUNT_ID).cachedBytes)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `retained metadata remains available beyond the disposable listing bound`() {
+        val directory = Files.createTempDirectory("virtual-range-retained-metadata-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            val snapshots = buildMap {
+                put("Photos", LinuxVirtualDirectorySnapshot(emptyList(), 42L))
+                repeat(300) { index ->
+                    val path = "Photos/Album-$index"
+                    put(
+                        path,
+                        LinuxVirtualDirectorySnapshot(
+                            listOf(LinuxVirtualFileNode("$path/photo.jpg", "photo.jpg", false, 4L, "e$index")),
+                            42L,
+                        ),
+                    )
+                }
+            }
+            cache.publishRetainedListings(ACCOUNT_ID, "Photos", snapshots)
+
+            val restarted = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            assertEquals("e299", restarted.loadRetainedListing(ACCOUNT_ID, "Photos/Album-299")
+                ?.nodes?.single()?.remoteRevision)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `startup recovery removes abandoned stages but preserves an active staging lease`() {
+        val directory = Files.createTempDirectory("virtual-range-stage-recovery-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            val active = cache.beginRevisionStaging(ACCOUNT_ID, "Photos/active.raf", "e1", 4L)
+            active.store(0L, "data".encodeToByteArray())
+            val accountDirectory = directory.resolve(ACCOUNT_ID)
+            val activeStage = accountDirectory.listFiles().orEmpty().single { it.extension == "stage" }
+            val abandonedId = "00000000-0000-0000-0000-000000000001"
+            val abandoned = accountDirectory.resolve("range-revision.$abandonedId.1.stage").apply { writeText("stale") }
+            accountDirectory.resolve("range-revision.$abandonedId.lock").writeText("")
+
+            DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }.summary(ACCOUNT_ID)
+
+            assertFalse(abandoned.exists())
+            assertTrue(activeStage.exists())
+            active.close()
         } finally {
             directory.deleteRecursively()
         }

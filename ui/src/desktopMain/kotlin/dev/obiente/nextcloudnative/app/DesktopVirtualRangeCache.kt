@@ -2,10 +2,12 @@ package dev.obiente.nextcloudnative.app
 
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.util.UUID
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -27,6 +29,8 @@ internal class DesktopVirtualRangeCache(
     private val policy: () -> VirtualFileCachePolicy,
 ) {
     private val activePaths = mutableMapOf<FileOfflineKey, Int>()
+    private val deferredInvalidationPaths = mutableSetOf<FileOfflineKey>()
+    private val recoveredAccounts = mutableSetOf<String>()
 
     init {
         require(maximumIndexBytes in 1L..MAX_INDEX_BYTES)
@@ -64,7 +68,12 @@ internal class DesktopVirtualRangeCache(
     fun release(accountId: String, path: String) {
         val key = FileOfflineKey(accountId, path)
         val remaining = activePaths.getOrDefault(key, 1) - 1
-        if (remaining <= 0) activePaths.remove(key) else activePaths[key] = remaining
+        if (remaining <= 0) {
+            activePaths.remove(key)
+            if (deferredInvalidationPaths.remove(key)) removeExactPath(accountId, key.relativePath)
+        } else {
+            activePaths[key] = remaining
+        }
     }
 
     @Synchronized
@@ -164,10 +173,29 @@ internal class DesktopVirtualRangeCache(
 
     @Synchronized
     fun invalidate(accountId: String, path: String) {
+        invalidateRangeBlocks(accountId, path, invalidateRetainedMetadata = true)
+    }
+
+    @Synchronized
+    fun invalidateDisposableRanges(accountId: String, path: String) {
+        invalidateRangeBlocks(accountId, path, invalidateRetainedMetadata = false)
+    }
+
+    private fun invalidateRangeBlocks(accountId: String, path: String, invalidateRetainedMetadata: Boolean) {
         val normalized = FileOfflineKey(accountId, path).relativePath
+        if (invalidateRetainedMetadata) invalidateRetainedListings(accountId, normalized)
         val current = load(accountId)
-        val removed = current.blocks.filter { block ->
+        val candidates = current.blocks.filter { block ->
             block.path == normalized || block.path.startsWith("$normalized/")
+        }
+        val removed = candidates.filter { block ->
+            val key = FileOfflineKey(accountId, block.path)
+            if (activePaths.getOrDefault(key, 0) > 0) {
+                deferredInvalidationPaths += key
+                false
+            } else {
+                true
+            }
         }
         removed.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }
         if (removed.isNotEmpty()) save(accountId, current.copy(blocks = current.blocks.filterNot { it in removed }))
@@ -182,13 +210,45 @@ internal class DesktopVirtualRangeCache(
         loadRetention(accountId).hydration.map(CachedVirtualFolderHydration::toDomain)
 
     @Synchronized
-    fun cachedBytesForRevision(accountId: String, path: String, remoteRevision: String, fileSize: Long): Long {
+    fun hasCompleteRevision(accountId: String, path: String, remoteRevision: String, fileSize: Long): Boolean {
         val normalized = FileOfflineKey(accountId, path).relativePath
-        return load(accountId).blocks.asSequence()
+        val index = load(accountId)
+        val records = index.blocks.asSequence()
             .filter { block ->
                 block.path == normalized && block.remoteRevision == remoteRevision && block.fileSize == fileSize
             }
-            .sumOf { block -> block.length.toLong() }
+            .sortedBy(CachedRangeBlock::offset)
+            .toList()
+        var expectedOffset = 0L
+        val complete = records.isNotEmpty() && records.all { block ->
+            if (block.offset != expectedOffset) return@all false
+            val blob = File(accountDirectory(accountId), block.blobName)
+            if (
+                !blob.isFile ||
+                blob.length() != block.length.toLong() ||
+                runCatching { sha256Hex(blob) }.getOrNull() != block.sha256
+            ) {
+                return@all false
+            }
+            expectedOffset += block.length
+            true
+        } && expectedOffset == fileSize
+        if (!complete && records.isNotEmpty()) {
+            records.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }
+            save(accountId, index.copy(blocks = index.blocks.filterNot { block -> block in records }))
+        }
+        return complete
+    }
+
+    fun requireAvailable() {
+        val cacheRoot = root.toPath().toAbsolutePath().normalize()
+        val parent = requireNotNull(cacheRoot.parent)
+        require(
+            Files.isDirectory(parent, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(parent) &&
+                Files.isDirectory(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(cacheRoot),
+        ) { "Reconnect the selected virtual-file storage drive before changing its location." }
     }
 
     @Synchronized
@@ -255,6 +315,121 @@ internal class DesktopVirtualRangeCache(
         )
     }
 
+    @Synchronized
+    fun retryFolderHydration(accountId: String, path: String) {
+        val normalized = FileOfflineKey(accountId, path).relativePath
+        val retention = loadFolderRetention(accountId)
+        require(
+            retention.rules.any { rule ->
+                rule.relativePath == normalized && rule.retention == VirtualFolderRetention.KeepOnDevice
+            },
+        ) { "Only an explicitly retained folder can be retried." }
+        val currentStatus = loadFolderHydrationStatuses(accountId)
+            .firstOrNull { status -> status.relativePath == normalized }
+        setFolderHydrationStatus(
+            accountId,
+            VirtualFolderHydrationStatus(
+                normalized,
+                if (currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline) {
+                    VirtualFolderHydrationPhase.AvailableOffline
+                } else {
+                    VirtualFolderHydrationPhase.Queued
+                },
+            ),
+        )
+    }
+
+    @Synchronized
+    fun loadRetainedListing(accountId: String, path: String): LinuxVirtualDirectorySnapshot? {
+        val normalized = path.trim('/')
+        val covered = loadFolderRetention(accountId).rules.any { rule ->
+            rule.retention == VirtualFolderRetention.KeepOnDevice &&
+                (
+                    normalized.isEmpty() ||
+                        normalized == rule.relativePath ||
+                        normalized.startsWith("${rule.relativePath}/") ||
+                        rule.relativePath.startsWith("$normalized/")
+                    )
+        }
+        if (!covered) return null
+        val reference = loadRetainedMetadataIndex(accountId).listings.firstOrNull { it.path == normalized }
+            ?: return null
+        val blob = File(accountDirectory(accountId), reference.blobName)
+        if (!blob.isFile || blob.length() !in 1L..MAX_RETAINED_LISTING_BYTES) return null
+        return runCatching {
+            val encoded = blob.readBytes()
+            require(sha256Hex(encoded) == reference.sha256)
+            rangeCacheJson.decodeFromString<RetainedDirectoryListing>(encoded.decodeToString())
+                .also { listing -> listing.requireValid(normalized) }
+                .toSnapshot()
+        }.getOrNull()
+    }
+
+    @Synchronized
+    fun publishRetainedListings(
+        accountId: String,
+        retainedRoot: String,
+        snapshots: Map<String, LinuxVirtualDirectorySnapshot>,
+    ) {
+        val normalizedRoot = FileOfflineKey(accountId, retainedRoot).relativePath
+        require(snapshots.isNotEmpty() && normalizedRoot in snapshots)
+        require(snapshots.size <= MAX_RETAINED_LISTINGS)
+        val directory = accountDirectory(accountId).apply {
+            check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
+        }
+        val published = snapshots.map { (path, snapshot) ->
+            val normalized = path.trim('/')
+            RetainedDirectoryListing.fromSnapshot(normalized, snapshot).let { listing ->
+                val encoded = rangeCacheJson.encodeToString(listing).encodeToByteArray()
+                require(encoded.size.toLong() <= MAX_RETAINED_LISTING_BYTES) {
+                    "A retained folder listing is too large to publish safely."
+                }
+                val hash = sha256Hex(encoded)
+                val blobName = "$hash.listing"
+                val blob = File(directory, blobName)
+                if (!blob.isFile || runCatching { sha256Hex(blob) }.getOrNull() != hash) {
+                    publishBytes(directory, blobName, encoded)
+                }
+                RetainedListingReference(normalized, blobName, hash)
+            }
+        }
+        val publishedPaths = published.mapTo(hashSetOf(), RetainedListingReference::path)
+        val current = loadRetainedMetadataIndex(accountId)
+        val next = RetainedMetadataIndex(
+            listings = (
+                current.listings.filterNot { reference ->
+                    reference.path == normalizedRoot ||
+                        reference.path.startsWith("$normalizedRoot/") ||
+                        reference.path in publishedPaths
+                } + published
+                ).sortedBy(RetainedListingReference::path),
+        )
+        try {
+            saveRetainedMetadataIndex(accountId, next)
+        } catch (failure: Throwable) {
+            val previouslyReferenced = current.listings.mapTo(hashSetOf(), RetainedListingReference::blobName)
+            published.asSequence()
+                .filterNot { reference -> reference.blobName in previouslyReferenced }
+                .forEach { reference -> File(directory, reference.blobName).delete() }
+            throw failure
+        }
+    }
+
+    @Synchronized
+    fun invalidateRetainedListings(accountId: String, path: String) {
+        val normalized = FileOfflineKey(accountId, path).relativePath
+        val parent = normalized.substringBeforeLast('/', "")
+        val current = loadRetainedMetadataIndex(accountId)
+        val next = current.copy(
+            listings = current.listings.filterNot { reference ->
+                reference.path == normalized ||
+                    reference.path.startsWith("$normalized/") ||
+                    reference.path == parent
+            },
+        )
+        if (next != current) saveRetainedMetadataIndex(accountId, next)
+    }
+
     /** Releases only inactive, automatic blocks in the selected subtree. */
     @Synchronized
     fun dehydrateFolder(accountId: String, path: String, protectedPaths: Set<String>): Long {
@@ -269,6 +444,7 @@ internal class DesktopVirtualRangeCache(
             .filter { candidate -> candidate !in protectedPaths }
             .filter { candidate -> activePaths.getOrDefault(FileOfflineKey(accountId, candidate), 0) == 0 }
             .toSet()
+        invalidateRetainedListings(accountId, normalized)
         if (removablePaths.isEmpty()) return 0L
         val removed = current.blocks.filter { block -> block.path in removablePaths }
         removed.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }
@@ -377,6 +553,33 @@ internal class DesktopVirtualRangeCache(
         }
     }
 
+    private fun loadRetainedMetadataIndex(accountId: String): RetainedMetadataIndex {
+        val file = File(accountDirectory(accountId), RETAINED_METADATA_INDEX_FILE)
+        if (!file.isFile || file.length() !in 1L..MAX_RETAINED_METADATA_INDEX_BYTES) {
+            return RetainedMetadataIndex()
+        }
+        return runCatching {
+            rangeCacheJson.decodeFromString<RetainedMetadataIndex>(file.readText()).also { it.requireValid() }
+        }.getOrElse { RetainedMetadataIndex() }
+    }
+
+    private fun saveRetainedMetadataIndex(accountId: String, index: RetainedMetadataIndex) {
+        index.requireValid()
+        val encoded = rangeCacheJson.encodeToString(index).encodeToByteArray()
+        require(encoded.size.toLong() <= MAX_RETAINED_METADATA_INDEX_BYTES) {
+            "The retained virtual-folder metadata index is too large."
+        }
+        val directory = accountDirectory(accountId).apply {
+            check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
+        }
+        publishBytes(directory, RETAINED_METADATA_INDEX_FILE, encoded)
+        val referenced = index.listings.mapTo(hashSetOf(), RetainedListingReference::blobName)
+        directory.listFiles().orEmpty().asSequence()
+            .filter { file -> file.isFile && file.extension == "listing" && file.name !in referenced }
+            .take(MAX_RETAINED_LISTINGS)
+            .forEach(File::delete)
+    }
+
     private fun save(accountId: String, index: RangeCacheIndex) {
         val directory = accountDirectory(accountId).apply {
             check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
@@ -436,6 +639,13 @@ internal class DesktopVirtualRangeCache(
         save(accountId, index.copy(blocks = index.blocks.filterNot { it == record }))
     }
 
+    private fun removeExactPath(accountId: String, path: String) {
+        val current = load(accountId)
+        val removed = current.blocks.filter { block -> block.path == path }
+        removed.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }
+        if (removed.isNotEmpty()) save(accountId, current.copy(blocks = current.blocks.filterNot { it in removed }))
+    }
+
     internal inner class RevisionStaging internal constructor(
         private val accountId: String,
         private val path: String,
@@ -443,6 +653,14 @@ internal class DesktopVirtualRangeCache(
         private val fileSize: Long,
         private val directory: File,
     ) : AutoCloseable {
+        private val stageId = UUID.randomUUID().toString()
+        private val leaseFile = File(directory, "range-revision.$stageId.lock")
+        private val leaseChannel = RandomAccessFile(leaseFile, "rw").channel
+        private val lease = leaseChannel.tryLock() ?: run {
+            leaseChannel.close()
+            leaseFile.delete()
+            error("Could not lock the revision staging session.")
+        }
         private val staged = linkedMapOf<Long, StagedRangeBlock>()
         private var closed = false
 
@@ -463,7 +681,7 @@ internal class DesktopVirtualRangeCache(
                 cachedAtEpochMillis = nowEpochMillis,
                 lastAccessedAtEpochMillis = nowEpochMillis,
             )
-            val temporary = File.createTempFile("range-revision.", ".stage", directory)
+            val temporary = File.createTempFile("range-revision.$stageId.", ".stage", directory)
             try {
                 FileOutputStream(temporary).use { output ->
                     output.write(bytes)
@@ -493,6 +711,7 @@ internal class DesktopVirtualRangeCache(
             )
             closed = true
             staged.clear()
+            closeLease()
             return true
         }
 
@@ -502,6 +721,13 @@ internal class DesktopVirtualRangeCache(
             closed = true
             staged.values.forEach { stagedBlock -> stagedBlock.temporary.delete() }
             staged.clear()
+            closeLease()
+        }
+
+        private fun closeLease() {
+            runCatching(lease::release)
+            runCatching(leaseChannel::close)
+            leaseFile.delete()
         }
     }
 
@@ -551,7 +777,45 @@ internal class DesktopVirtualRangeCache(
 
     private fun accountDirectory(accountId: String): File {
         require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-        return File(root, accountId)
+        return File(root, accountId).also { directory ->
+            if (directory.isDirectory && recoveredAccounts.add(accountId)) {
+                recoverStaleRevisionStages(directory)
+            }
+        }
+    }
+
+    private fun recoverStaleRevisionStages(directory: File) {
+        val candidates = directory.listFiles().orEmpty().asSequence()
+            .filter { file ->
+                file.isFile &&
+                    !Files.isSymbolicLink(file.toPath()) &&
+                    file.name.startsWith("range-revision.") &&
+                    file.name.endsWith(".stage")
+            }
+            .take(MAX_STALE_REVISION_STAGES_PER_RECOVERY)
+            .toList()
+        val byStageId = candidates.groupBy { file ->
+            REVISION_STAGE_FILE.matchEntire(file.name)?.groupValues?.get(1)
+        }
+        byStageId[null].orEmpty().forEach(File::delete)
+        byStageId.filterKeys { it != null }.forEach { (stageId, files) ->
+            val leaseFile = File(directory, "range-revision.$stageId.lock")
+            if (!leaseFile.isFile || Files.isSymbolicLink(leaseFile.toPath())) {
+                files.forEach(File::delete)
+                return@forEach
+            }
+            runCatching {
+                RandomAccessFile(leaseFile, "rw").channel.use { channel ->
+                    val lock = try {
+                        channel.tryLock()
+                    } catch (_: java.nio.channels.OverlappingFileLockException) {
+                        null
+                    } ?: return@use
+                    lock.use { files.forEach(File::delete) }
+                }
+                if (files.none(File::exists)) leaseFile.delete()
+            }
+        }
     }
 
     private fun publishBytes(directory: File, name: String, bytes: ByteArray) {
@@ -600,10 +864,18 @@ internal class DesktopVirtualRangeCache(
     private companion object {
         const val INDEX_FILE = "range-index-v1.json"
         const val RETENTION_INDEX_FILE = "folder-retention-v1.json"
+        const val RETAINED_METADATA_INDEX_FILE = "retained-metadata-v1.json"
         const val MAX_INDEX_BYTES = 16L * 1024L * 1024L
         const val MAX_RETENTION_INDEX_BYTES = 1024L * 1024L
+        const val MAX_RETAINED_METADATA_INDEX_BYTES = 16L * 1024L * 1024L
+        const val MAX_RETAINED_LISTING_BYTES = 16L * 1024L * 1024L
+        const val MAX_RETAINED_LISTINGS = 20_000
         const val MAX_BLOCKS = 20_000
         const val MAX_BLOCK_BYTES = 4 * 1024 * 1024
+        const val MAX_STALE_REVISION_STAGES_PER_RECOVERY = 1_024
+        val REVISION_STAGE_FILE = Regex(
+            "range-revision\\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\..+\\.stage",
+        )
     }
 }
 
@@ -639,18 +911,104 @@ private data class VirtualFolderRetentionIndex(
 )
 
 @Serializable
+private data class RetainedMetadataIndex(
+    val version: Int = 1,
+    val listings: List<RetainedListingReference> = emptyList(),
+) {
+    fun requireValid() {
+        require(version == 1 && listings.size <= 20_000)
+        require(listings.map(RetainedListingReference::path).distinct().size == listings.size)
+        listings.forEach(RetainedListingReference::requireValid)
+    }
+}
+
+@Serializable
+private data class RetainedListingReference(
+    val path: String,
+    val blobName: String,
+    val sha256: String,
+) {
+    fun requireValid() {
+        if (path.isNotEmpty()) FileOfflineKey("account", path)
+        require(blobName.length == 72 && blobName.endsWith(".listing"))
+        require(sha256.length == 64 && sha256.all { it in '0'..'9' || it in 'a'..'f' })
+        require(blobName == "$sha256.listing")
+    }
+}
+
+@Serializable
+private data class RetainedDirectoryListing(
+    val version: Int = 1,
+    val path: String,
+    val fetchedAtEpochMillis: Long,
+    val nodes: List<RetainedVirtualFileNode>,
+) {
+    fun requireValid(expectedPath: String) {
+        require(version == 1 && path == expectedPath && fetchedAtEpochMillis >= 0L)
+        if (path.isNotEmpty()) FileOfflineKey("account", path)
+        require(nodes.size <= 50_000)
+        require(nodes.map(RetainedVirtualFileNode::path).distinct().size == nodes.size)
+        nodes.forEach(RetainedVirtualFileNode::requireValid)
+    }
+
+    fun toSnapshot() = LinuxVirtualDirectorySnapshot(
+        nodes = nodes.map(RetainedVirtualFileNode::toDomain),
+        fetchedAtEpochMillis = fetchedAtEpochMillis,
+    )
+
+    companion object {
+        fun fromSnapshot(path: String, snapshot: LinuxVirtualDirectorySnapshot) = RetainedDirectoryListing(
+            path = path,
+            fetchedAtEpochMillis = snapshot.fetchedAtEpochMillis,
+            nodes = snapshot.nodes.map(RetainedVirtualFileNode.Companion::fromDomain),
+        ).also { it.requireValid(path) }
+    }
+}
+
+@Serializable
+private data class RetainedVirtualFileNode(
+    val path: String,
+    val name: String,
+    val directory: Boolean,
+    val size: Long,
+    val remoteRevision: String,
+) {
+    fun requireValid() {
+        FileOfflineKey("account", path)
+        require(name.isNotBlank() && name.none(Char::isISOControl))
+        require(size >= 0L)
+        require(remoteRevision.isNotBlank() && remoteRevision.none(Char::isISOControl))
+    }
+
+    fun toDomain() = LinuxVirtualFileNode(path, name, directory, size, remoteRevision)
+
+    companion object {
+        fun fromDomain(node: LinuxVirtualFileNode) = RetainedVirtualFileNode(
+            node.path,
+            node.name,
+            node.directory,
+            node.size,
+            node.remoteRevision,
+        )
+    }
+}
+
+@Serializable
 private data class CachedVirtualFolderHydration(
     val relativePath: String,
     val phase: VirtualFolderHydrationPhase,
     val detail: String? = null,
+    val refreshFailure: String? = null,
 ) {
-    fun toDomain(): VirtualFolderHydrationStatus = VirtualFolderHydrationStatus(relativePath, phase, detail)
+    fun toDomain(): VirtualFolderHydrationStatus =
+        VirtualFolderHydrationStatus(relativePath, phase, detail, refreshFailure)
 
     companion object {
         fun fromDomain(status: VirtualFolderHydrationStatus) = CachedVirtualFolderHydration(
             status.relativePath,
             status.phase,
             status.detail,
+            status.refreshFailure,
         )
     }
 }
@@ -690,6 +1048,19 @@ private fun sha256Hex(value: String): String = sha256Hex(value.encodeToByteArray
 
 private fun sha256Hex(value: ByteArray): String = MessageDigest.getInstance("SHA-256")
     .digest(value).joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+private fun sha256Hex(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().buffered().use { input ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+}
 
 private val rangeCacheJson = Json {
     encodeDefaults = true

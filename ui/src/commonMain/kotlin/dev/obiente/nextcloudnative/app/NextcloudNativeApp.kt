@@ -724,6 +724,7 @@ fun NextcloudNativeApp(
     navigationRequest: NextcloudNativeNavigationRequest? = null,
     onNavigationRequestHandled: (Long) -> Unit = {},
 ) {
+    val scope = rememberCoroutineScope()
     var themePreference by remember { mutableStateOf(services.loadThemePreference()) }
     var handledAppUpdateReviewRequest by rememberSaveable { mutableStateOf(0L) }
     var handledNavigationRequestSequence by remember { mutableStateOf(0L) }
@@ -797,8 +798,10 @@ fun NextcloudNativeApp(
                         themePreference = selected
                     },
                     onLoggedOut = {
-                        services.clearSession()
-                        session = null
+                        scope.launch {
+                            services.clearSession()
+                            session = null
+                        }
                     },
                 )
             }

@@ -25,7 +25,10 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.prefs.Preferences
 import javax.swing.JFileChooser
 import javax.xml.parsers.DocumentBuilderFactory
@@ -45,11 +48,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.HttpUrl
+import okhttp3.Call
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -143,6 +146,7 @@ private const val MAX_DOCUMENT_TEMPLATE_NAME_LENGTH = 512
 private const val MAX_DOCUMENT_TEMPLATE_EXTENSION_LENGTH = 32
 private const val VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES = 1024 * 1024
 private const val MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES = 1_000_000
+private const val MAX_VIRTUAL_FOLDER_STABILITY_ATTEMPTS = 3
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX = "wcfr."
 private const val KEY_VIRTUAL_FILE_ROOT_PREFIX = "vfp-root."
@@ -604,6 +608,7 @@ class DesktopNextcloudServices(
     private val virtualRangeCaches = mutableMapOf<String, DesktopVirtualRangeCache>()
     private val virtualFolderHydrationJobs = mutableMapOf<String, Job>()
     private val virtualFolderHydrationMutex = Mutex()
+    private val activeFileRangeSessions = ConcurrentHashMap.newKeySet<NextcloudFileRangeSession>()
     @Volatile
     private var sessionClearing = false
     private val virtualFileProviderLock = Any()
@@ -659,6 +664,7 @@ class DesktopNextcloudServices(
                     VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Queued),
                 )
             }
+            val wasAvailableOffline = currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline
             virtualFolderHydrationJobs[jobKey] = serviceScope.launch(Dispatchers.IO) {
                 try {
                     virtualFolderHydrationMutex.withLock {
@@ -666,33 +672,15 @@ class DesktopNextcloudServices(
                             cache.loadFolderRetention(accountId).retentionFor(relativePath) !=
                             VirtualFolderRetention.KeepOnDevice
                         ) return@withLock
-                        cache.setFolderHydrationStatus(
-                            accountId,
-                            VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Downloading),
-                        )
+                        if (!wasAvailableOffline) {
+                            cache.setFolderHydrationStatus(
+                                accountId,
+                                VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Downloading),
+                            )
+                        }
                         val tree = DesktopFileSyncRemoteTree(session, userId, "")
                         val writebacks = defaultDesktopLinuxWritebackStore(session)
                         val metadataStore = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId)
-                        fun authoritativeListing(parent: String): List<DesktopRemoteSyncDocument> {
-                            val documents = tree.list(parent)
-                            reconcileVirtualRangeChildren(
-                                cache = cache,
-                                accountId = accountId,
-                                parent = parent,
-                                documents = documents,
-                                protectedPaths = writebacks.pendingWritebacks()
-                                    .mapTo(hashSetOf(), DesktopLinuxPendingWriteback::path),
-                            )
-                            metadataStore.store(
-                                parent,
-                                LinuxVirtualDirectorySnapshot(
-                                    nodes = documents.map(DesktopRemoteSyncDocument::toLinuxVirtualFileNode),
-                                    fetchedAtEpochMillis = System.currentTimeMillis(),
-                                ),
-                            )
-                            return documents
-                        }
-                        retainedFolderAncestorListings(relativePath).forEach(::authoritativeListing)
                         val backend = DesktopNextcloudVirtualFileBackend(
                             session = session,
                             userId = userId,
@@ -702,83 +690,119 @@ class DesktopNextcloudServices(
                             tree = tree,
                             requireDurableCacheWrites = true,
                         )
-                        val pending = ArrayDeque<String>().apply { add(relativePath) }
-                        var discoveredEntries = 0
-                        while (pending.isNotEmpty()) {
-                            val parent = pending.removeFirst()
-                            if (
-                                cache.loadFolderRetention(accountId).retentionFor(parent) !=
-                                VirtualFolderRetention.KeepOnDevice
-                            ) continue
-                            authoritativeListing(parent).forEach { document ->
-                                discoveredEntries += 1
-                                check(discoveredEntries <= MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES) {
-                                    "The selected virtual folder contains too many entries for one reconciliation pass."
-                                }
-                                val fullPath = document.entry.relativePath
+                        var stableListings: LinkedHashMap<String, List<DesktopRemoteSyncDocument>>? = null
+                        var attempt = 0
+                        while (stableListings == null && attempt < MAX_VIRTUAL_FOLDER_STABILITY_ATTEMPTS) {
+                            attempt += 1
+                            val listings = linkedMapOf<String, List<DesktopRemoteSyncDocument>>()
+                            fun loadListing(parent: String): List<DesktopRemoteSyncDocument> =
+                                tree.list(parent).also { documents -> listings[parent] = documents }
+
+                            retainedFolderAncestorListings(relativePath).forEach(::loadListing)
+                            val pending = ArrayDeque<String>().apply { add(relativePath) }
+                            var discoveredEntries = 0
+                            while (pending.isNotEmpty()) {
+                                currentCoroutineContext().ensureActive()
+                                val parent = pending.removeFirst()
                                 if (
-                                    cache.loadFolderRetention(accountId).retentionFor(fullPath) !=
+                                    cache.loadFolderRetention(accountId).retentionFor(parent) !=
                                     VirtualFolderRetention.KeepOnDevice
-                                ) return@forEach
-                                if (document.isDirectory) {
-                                    pending.add(fullPath)
-                                    return@forEach
-                                }
-                                val size = requireNotNull(document.entry.size) {
-                                    "The server did not provide a size for $fullPath."
-                                }
-                                if (size == 0L) return@forEach
-                                val reserve = fileReadCache.loadPolicy().minimumFreeSpaceBytes
-                                val remaining = (
-                                    size - cache.cachedBytesForRevision(accountId, fullPath, document.entry.etag, size)
-                                ).coerceAtLeast(0L)
-                                if (remaining == 0L) return@forEach
-                                val required = if (Long.MAX_VALUE - remaining < reserve) {
-                                    Long.MAX_VALUE
-                                } else {
-                                    remaining + reserve
-                                }
-                                check(cache.summary(accountId).availableFreeBytes >= required) {
-                                    "There is not enough free space to finish keeping $relativePath offline."
-                                }
-                                val node = LinuxVirtualFileNode(
-                                    path = fullPath,
-                                    name = fullPath.substringAfterLast('/'),
-                                    directory = false,
-                                    size = size,
-                                    remoteRevision = document.entry.etag,
-                                )
-                                backend.open(node).use { handle ->
-                                    var offset = 0L
-                                    while (offset < size) {
-                                        currentCoroutineContext().ensureActive()
-                                        val length = minOf(
-                                            VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES.toLong(),
-                                            size - offset,
-                                        ).toInt()
-                                        handle.read(offset, length)
-                                        offset += length
+                                ) continue
+                                loadListing(parent).forEach { document ->
+                                    discoveredEntries += 1
+                                    check(discoveredEntries <= MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES) {
+                                        "The selected virtual folder contains too many entries for one reconciliation pass."
+                                    }
+                                    val fullPath = document.entry.relativePath
+                                    if (
+                                        cache.loadFolderRetention(accountId).retentionFor(fullPath) !=
+                                        VirtualFolderRetention.KeepOnDevice
+                                    ) return@forEach
+                                    if (document.isDirectory) {
+                                        pending.add(fullPath)
+                                        return@forEach
+                                    }
+                                    val size = requireNotNull(document.entry.size) {
+                                        "The server did not provide a size for $fullPath."
+                                    }
+                                    if (size == 0L || cache.hasCompleteRevision(
+                                            accountId,
+                                            fullPath,
+                                            document.entry.etag,
+                                            size,
+                                        )
+                                    ) return@forEach
+                                    val reserve = fileReadCache.loadPolicy().minimumFreeSpaceBytes
+                                    val required = if (Long.MAX_VALUE - size < reserve) Long.MAX_VALUE else size + reserve
+                                    check(cache.summary(accountId).availableFreeBytes >= required) {
+                                        "There is not enough free space to finish keeping $relativePath offline."
+                                    }
+                                    val node = document.toLinuxVirtualFileNode()
+                                    backend.open(node).use { handle ->
+                                        var offset = 0L
+                                        while (offset < size) {
+                                            currentCoroutineContext().ensureActive()
+                                            val length = minOf(
+                                                VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES.toLong(),
+                                                size - offset,
+                                            ).toInt()
+                                            handle.read(offset, length)
+                                            offset += length
+                                        }
+                                    }
+                                    check(cache.hasCompleteRevision(accountId, fullPath, document.entry.etag, size)) {
+                                        "Could not persist every block required for offline use."
                                     }
                                 }
-                                check(
-                                    cache.cachedBytesForRevision(accountId, fullPath, document.entry.etag, size) == size,
-                                ) { "Could not persist every block required for offline use." }
                             }
+                            val stable = listings.all { (parent, documents) ->
+                                currentCoroutineContext().ensureActive()
+                                tree.list(parent).hydrationGeneration() == documents.hydrationGeneration()
+                            }
+                            if (stable) stableListings = listings
+                        }
+                        val verifiedListings = checkNotNull(stableListings) {
+                            "The selected folder kept changing while it was prepared for offline use. Try again shortly."
                         }
                         if (
-                            cache.loadFolderRetention(accountId).rules.any { rule ->
+                            cache.loadFolderRetention(accountId).rules.none { rule ->
                                 rule.relativePath == relativePath &&
                                     rule.retention == VirtualFolderRetention.KeepOnDevice
                             }
-                        ) {
-                            cache.setFolderHydrationStatus(
-                                accountId,
-                                VirtualFolderHydrationStatus(
-                                    relativePath,
-                                    VirtualFolderHydrationPhase.AvailableOffline,
-                                ),
+                        ) return@withLock
+                        verifiedListings.values.asSequence().flatten()
+                            .filterNot(DesktopRemoteSyncDocument::isDirectory)
+                            .filter { document ->
+                                cache.loadFolderRetention(accountId).retentionFor(document.entry.relativePath) ==
+                                    VirtualFolderRetention.KeepOnDevice
+                            }
+                            .forEach { document ->
+                                val size = requireNotNull(document.entry.size)
+                                check(size == 0L || cache.hasCompleteRevision(
+                                    accountId,
+                                    document.entry.relativePath,
+                                    document.entry.etag,
+                                    size,
+                                )) { "Offline file validation failed before the folder could be published." }
+                            }
+                        val publishedAt = System.currentTimeMillis()
+                        val snapshots = verifiedListings.mapValues { (_, documents) ->
+                            LinuxVirtualDirectorySnapshot(
+                                nodes = documents.map(DesktopRemoteSyncDocument::toLinuxVirtualFileNode),
+                                fetchedAtEpochMillis = publishedAt,
                             )
                         }
+                        cache.publishRetainedListings(accountId, relativePath, snapshots)
+                        snapshots.forEach(metadataStore::store)
+                        val protectedPaths = writebacks.pendingWritebacks()
+                            .mapTo(hashSetOf(), DesktopLinuxPendingWriteback::path)
+                        verifiedListings.forEach { (parent, documents) ->
+                            reconcileVirtualRangeChildren(cache, accountId, parent, documents, protectedPaths)
+                        }
+                        cache.setFolderHydrationStatus(
+                            accountId,
+                            VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.AvailableOffline),
+                        )
                     }
                 } catch (cancellation: CancellationException) {
                     if (
@@ -786,7 +810,7 @@ class DesktopNextcloudServices(
                             rule.relativePath == relativePath && rule.retention == VirtualFolderRetention.KeepOnDevice
                         }
                     ) {
-                        runCatching {
+                        if (!wasAvailableOffline) runCatching {
                             cache.setFolderHydrationStatus(
                                 accountId,
                                 VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Queued),
@@ -795,14 +819,24 @@ class DesktopNextcloudServices(
                     }
                     throw cancellation
                 } catch (failure: Throwable) {
-                    runCatching {
+                    val safeFailure = failure.message?.filterNot(Char::isISOControl)?.take(256)
+                        ?.takeIf(String::isNotBlank) ?: "Offline download failed and can be retried."
+                    if (wasAvailableOffline) runCatching {
+                        cache.setFolderHydrationStatus(
+                            accountId,
+                            VirtualFolderHydrationStatus(
+                                relativePath,
+                                VirtualFolderHydrationPhase.AvailableOffline,
+                                refreshFailure = safeFailure,
+                            ),
+                        )
+                    } else runCatching {
                         cache.setFolderHydrationStatus(
                             accountId,
                             VirtualFolderHydrationStatus(
                                 relativePath,
                                 VirtualFolderHydrationPhase.Failed,
-                                failure.message?.filterNot(Char::isISOControl)?.take(256)?.takeIf(String::isNotBlank)
-                                    ?: "Offline download failed and can be retried.",
+                                safeFailure,
                             ),
                         )
                     }
@@ -1185,7 +1219,11 @@ class DesktopNextcloudServices(
                         rangeCache = virtualRangeCache(accountId),
                         writebacks = writebackStore,
                     ),
-                    store = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId),
+                    store = RetainedLinuxVirtualMetadataStore(
+                        rangeCache = virtualRangeCache(accountId),
+                        accountId = accountId,
+                        fallback = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId),
+                    ),
                 ),
             )
             try {
@@ -1269,6 +1307,7 @@ class DesktopNextcloudServices(
                 return@withContext VirtualFileStorageActionResult.Completed("Virtual files already use $target.")
             }
             val currentCache = virtualRangeCache(accountId)
+            currentCache.requireAvailable()
             if (
                 currentCache.summary(accountId).cachedBytes > 0L ||
                 currentCache.loadFolderRetention(accountId).rules.isNotEmpty()
@@ -1335,7 +1374,33 @@ class DesktopNextcloudServices(
         }
     }
 
+    override suspend fun retryVirtualFolderHydration(
+        session: NextcloudSession,
+        userId: String,
+        relativePath: String,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        if (!isLinuxDesktop()) {
+            return@withContext VirtualFileStorageActionResult.Unsupported(
+                "Selective virtual folders are not available on this desktop platform yet.",
+            )
+        }
+        val normalized = FileOfflineKey("account", relativePath).relativePath
+        val accountId = desktopFileCacheAccountId(session)
+        val cache = virtualRangeCache(accountId)
+        runCatching { cache.retryFolderHydration(accountId, normalized) }
+            .getOrElse { failure ->
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    failure.message ?: "This folder is no longer selected for offline use.",
+                )
+            }
+        scheduleVirtualFolderHydration(session, userId, normalized, accountId, cache)
+        VirtualFileStorageActionResult.Completed(
+            "${normalized.substringAfterLast('/')} will retry downloading in the background.",
+        )
+    }
+
     override fun close() {
+        activeFileRangeSessions.toList().forEach { source -> runCatching(source::close) }
         serviceScope.cancel()
         synchronized(virtualFileProviderLock) {
             runCatching { linuxVirtualFileSystem?.unmount() }
@@ -1861,7 +1926,7 @@ class DesktopNextcloudServices(
         startDesktopSyncLifecycle()
     }
 
-    override fun clearSession() {
+    override suspend fun clearSession() = withContext(Dispatchers.IO) {
         sessionClearing = true
         val accountId = loadSession()?.let(::desktopFileCacheAccountId)
         val syncJob = synchronized(this) {
@@ -1869,10 +1934,9 @@ class DesktopNextcloudServices(
             backgroundFileSyncJob = null
             active
         }
-        runBlocking(Dispatchers.IO) {
-            syncJob?.cancelAndJoin()
-            accountId?.let { cancelAllVirtualFolderHydration(it) }
-        }
+        activeFileRangeSessions.toList().forEach { source -> runCatching(source::close) }
+        syncJob?.cancelAndJoin()
+        accountId?.let { cancelAllVirtualFolderHydration(it) }
         synchronized(virtualFileProviderLock) {
             runCatching { linuxVirtualFileSystem?.unmount() }
             linuxVirtualFileSystem = null
@@ -2299,33 +2363,88 @@ class DesktopNextcloudServices(
         offset: Long,
         length: Int,
         expectedEtag: String,
-    ): ByteArray = withContext(Dispatchers.IO) {
-        require(offset >= 0L) { "The file range offset must not be negative." }
-        require(length > 0) { "The file range length must be greater than zero." }
+    ): ByteArray = openFileRangeSession(
+        session,
+        userId,
+        path,
+        Math.addExact(offset, length.toLong()),
+        expectedEtag,
+    ).use { source ->
+        source.read(offset, length)
+    }
+
+    override fun openFileRangeSession(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        size: Long,
+        expectedEtag: String,
+    ): NextcloudFileRangeSession {
+        require(size > 0L)
+        check(!sessionClearing) { "The account session is closing." }
         val safeEtag = requireSafeFileRangeEtag(expectedEtag)
-        val endInclusive = Math.addExact(offset, length.toLong() - 1L)
-        val response = request(
-            "GET",
-            buildNextcloudFileUrl(session.serverUrl, userId, path),
-            session,
-            headers = mapOf(
-                "Accept" to "application/octet-stream",
-                "Range" to "bytes=$offset-$endInclusive",
-                "If-Match" to safeEtag,
-            ),
-            maxResponseBytes = length.toLong(),
-            client = noRedirectHttpClient,
+        val closed = AtomicBoolean(false)
+        val activeCall = AtomicReference<Call?>(null)
+        lateinit var rangeSession: NextcloudFileRangeSession
+        rangeSession = NextcloudFileRangeSession(
+            size = size,
+            readBlock = { offset, length ->
+                withContext(Dispatchers.IO) {
+                    check(!closed.get()) { "The file range session is closed." }
+                    require(offset >= 0L) { "The file range offset must not be negative." }
+                    require(length > 0) { "The file range length must be greater than zero." }
+                    require(offset <= size && length.toLong() <= size - offset) {
+                        "The requested file range exceeds the file size."
+                    }
+                    val endInclusive = Math.addExact(offset, length.toLong() - 1L)
+                    val builder = Request.Builder()
+                        .url(buildNextcloudFileUrl(session.serverUrl, userId, path))
+                        .get()
+                        .header("Accept", "application/octet-stream")
+                        .header("Range", "bytes=$offset-$endInclusive")
+                        .header("If-Match", safeEtag)
+                        .header("User-Agent", USER_AGENT)
+                    val encoded = Base64.getEncoder()
+                        .encodeToString("${session.loginName}:${session.appPassword}".toByteArray())
+                    builder.header("Authorization", "Basic $encoded")
+                    val call = noRedirectHttpClient.newCall(builder.build())
+                    check(activeCall.compareAndSet(null, call)) { "Only one file range read can run at a time." }
+                    if (closed.get()) call.cancel()
+                    try {
+                        call.execute().use { response ->
+                            check(response.code == 206) {
+                                "The server did not honor the bounded file range request (HTTP ${response.code})."
+                            }
+                            check(isExactHttpByteContentRange(response.header("Content-Range"), offset, endInclusive)) {
+                                "The server returned a different file range than requested."
+                            }
+                            val responseBody = response.body
+                            val contentLength = responseBody.contentLength()
+                            check(contentLength == -1L || contentLength == length.toLong()) {
+                                "The server returned an incomplete file range."
+                            }
+                            responseBody.byteStream().readBounded(length.toLong()).also { bytes ->
+                                check(bytes.size == length) { "The server returned an incomplete file range." }
+                            }
+                        }
+                    } finally {
+                        activeCall.compareAndSet(call, null)
+                    }
+                }
+            },
+            closeBlock = {
+                if (closed.compareAndSet(false, true)) {
+                    activeCall.get()?.cancel()
+                    activeFileRangeSessions.remove(rangeSession)
+                }
+            },
         )
-        check(response.status == 206) {
-            "The server did not honor the bounded file range request (HTTP ${response.status})."
+        activeFileRangeSessions += rangeSession
+        if (sessionClearing) {
+            rangeSession.close()
+            error("The account session is closing.")
         }
-        check(isExactHttpByteContentRange(response.contentRange, offset, endInclusive)) {
-            "The server returned a different file range than requested."
-        }
-        check(response.body.size == length) {
-            "The server returned an incomplete file range."
-        }
-        response.body
+        return rangeSession
     }
 
     override suspend fun downloadMemoriesFileRange(
@@ -3540,6 +3659,23 @@ internal fun retainedFolderAncestorListings(relativePath: String): List<String> 
     }
 }
 
+private data class VirtualFolderListingGeneration(
+    val path: String,
+    val directory: Boolean,
+    val remoteRevision: String,
+    val size: Long?,
+)
+
+private fun List<DesktopRemoteSyncDocument>.hydrationGeneration(): List<VirtualFolderListingGeneration> =
+    map { document ->
+        VirtualFolderListingGeneration(
+            path = document.entry.relativePath,
+            directory = document.isDirectory,
+            remoteRevision = document.entry.etag,
+            size = document.entry.size,
+        )
+    }.sortedBy(VirtualFolderListingGeneration::path)
+
 internal fun reconcileVirtualRangeChildren(
     cache: DesktopVirtualRangeCache,
     accountId: String,
@@ -3553,7 +3689,7 @@ internal fun reconcileVirtualRangeChildren(
         .filterNot { missing ->
             protectedPaths.any { protected -> protected == missing || protected.startsWith("$missing/") }
         }
-        .forEach { missing -> cache.invalidate(accountId, missing) }
+        .forEach { missing -> cache.invalidateDisposableRanges(accountId, missing) }
 }
 
 internal fun parseDesktopFileVersionDavRecords(xml: ByteArray): List<FileVersionDavRecord> {

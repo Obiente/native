@@ -464,7 +464,7 @@ interface NextcloudPlatformServices {
 
     fun saveSession(session: NextcloudSession)
 
-    fun clearSession()
+    suspend fun clearSession()
 
     /** Loads one bounded, account-scoped unsaved Deck editor draft from app-private storage. */
     suspend fun loadDeckCardDraft(
@@ -655,6 +655,15 @@ interface NextcloudPlatformServices {
         userId: String,
         relativePath: String,
         retention: VirtualFolderRetention,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "Selective virtual folders are not available on this platform.",
+    )
+
+    /** Retries hydration without rewriting the folder-retention tree. */
+    suspend fun retryVirtualFolderHydration(
+        session: NextcloudSession,
+        userId: String,
+        relativePath: String,
     ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
         "Selective virtual folders are not available on this platform.",
     )

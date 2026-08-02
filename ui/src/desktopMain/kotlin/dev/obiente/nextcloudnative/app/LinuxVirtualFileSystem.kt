@@ -126,6 +126,22 @@ internal class DesktopLinuxVirtualMetadataStore(
     override fun invalidate(path: String) = cache.invalidate(accountId, path)
 }
 
+internal class RetainedLinuxVirtualMetadataStore(
+    private val rangeCache: DesktopVirtualRangeCache,
+    private val accountId: String,
+    private val fallback: LinuxVirtualMetadataStore,
+) : LinuxVirtualMetadataStore {
+    override fun load(path: String): LinuxVirtualDirectorySnapshot? =
+        rangeCache.loadRetainedListing(accountId, path) ?: fallback.load(path)
+
+    override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = fallback.store(path, snapshot)
+
+    override fun invalidate(path: String) {
+        rangeCache.invalidateRetainedListings(accountId, path)
+        fallback.invalidate(path)
+    }
+}
+
 /**
  * Coalesces directory reads and serves a persisted snapshot before refreshing stale metadata.
  *

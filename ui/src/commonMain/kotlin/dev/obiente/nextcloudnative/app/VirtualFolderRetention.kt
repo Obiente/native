@@ -21,12 +21,19 @@ data class VirtualFolderHydrationStatus(
     val relativePath: String,
     val phase: VirtualFolderHydrationPhase,
     val detail: String? = null,
+    val refreshFailure: String? = null,
 ) {
     init {
         require(relativePath.isNotEmpty())
         FileOfflineKey("account", relativePath)
         require(detail == null || detail.isNotBlank() && detail.length <= MAX_VIRTUAL_FOLDER_HYDRATION_DETAIL_LENGTH)
         require(phase == VirtualFolderHydrationPhase.Failed || detail == null)
+        require(
+            refreshFailure == null ||
+                phase == VirtualFolderHydrationPhase.AvailableOffline &&
+                refreshFailure.isNotBlank() &&
+                refreshFailure.length <= MAX_VIRTUAL_FOLDER_HYDRATION_DETAIL_LENGTH
+        )
     }
 }
 

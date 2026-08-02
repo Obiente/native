@@ -52,6 +52,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -282,6 +283,23 @@ internal fun FileOfflineCenterScreen(
         }
     }
 
+    fun retryVirtualFolderHydration(path: String) {
+        if (virtualStorageBusy) return
+        virtualStorageBusy = true
+        actionMessage = null
+        scope.launch {
+            runCatching { services.retryVirtualFolderHydration(session, userId, path) }
+                .onSuccess { result ->
+                    actionMessage = result.virtualFileStorageMessage()
+                    refreshAttempt += 1
+                }
+                .onFailure { failure ->
+                    actionMessage = failure.message ?: "Could not retry this offline folder."
+                }
+            virtualStorageBusy = false
+        }
+    }
+
     LaunchedEffect(session, userId, refreshAttempt) {
         if (userId.isBlank()) {
             loading = false
@@ -302,7 +320,16 @@ internal fun FileOfflineCenterScreen(
         if (userId.isBlank() || !services.supportsVirtualFileStorage) return@LaunchedEffect
         virtualStorageLoading = true
         try {
-            virtualStorage = services.loadVirtualFileStorage(session, userId)
+            do {
+                val loaded = services.loadVirtualFileStorage(session, userId)
+                virtualStorage = loaded
+                virtualStorageLoading = false
+                val hydrationActive = loaded.folderHydrationStatuses.any { status ->
+                    status.phase == VirtualFolderHydrationPhase.Queued ||
+                        status.phase == VirtualFolderHydrationPhase.Downloading
+                }
+                if (hydrationActive) delay(VIRTUAL_STORAGE_HYDRATION_POLL_MILLIS)
+            } while (hydrationActive)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
@@ -469,7 +496,7 @@ internal fun FileOfflineCenterScreen(
                             setVirtualFolderRetention(path, VirtualFolderRetention.Automatic)
                         },
                         onRetryFolder = { path ->
-                            setVirtualFolderRetention(path, VirtualFolderRetention.KeepOnDevice)
+                            retryVirtualFolderHydration(path)
                         },
                     )
                 }
@@ -790,6 +817,8 @@ internal fun FileOfflineCenterScreen(
         )
     }
 }
+
+private const val VIRTUAL_STORAGE_HYDRATION_POLL_MILLIS = 750L
 
 @Composable
 internal fun FolderSyncSection(
@@ -1490,7 +1519,10 @@ internal fun VirtualFileStorageCard(
                                             when (status?.phase) {
                                                 VirtualFolderHydrationPhase.Queued -> "Waiting to download"
                                                 VirtualFolderHydrationPhase.Downloading -> "Downloading for offline use"
-                                                VirtualFolderHydrationPhase.AvailableOffline -> "Available offline"
+                                                VirtualFolderHydrationPhase.AvailableOffline ->
+                                                    status.refreshFailure?.let { failure ->
+                                                        "Available offline. Latest refresh needs attention: $failure"
+                                                    } ?: "Available offline"
                                                 VirtualFolderHydrationPhase.Failed ->
                                                     status.detail ?: "Download needs attention"
                                                 null -> "Waiting to check offline content"
@@ -1506,7 +1538,10 @@ internal fun VirtualFileStorageCard(
                                         )
                                     }
                                     Column(horizontalAlignment = Alignment.End) {
-                                        if (status?.phase == VirtualFolderHydrationPhase.Failed) {
+                                        if (
+                                            status?.phase == VirtualFolderHydrationPhase.Failed ||
+                                            status?.refreshFailure != null
+                                        ) {
                                             TextButton(enabled = !busy, onClick = { onRetryFolder(rule.relativePath) }) {
                                                 Text("Retry")
                                             }
