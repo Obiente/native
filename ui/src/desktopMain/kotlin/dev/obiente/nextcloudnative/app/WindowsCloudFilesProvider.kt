@@ -202,7 +202,7 @@ internal enum class WindowsCloudPlaceholderState {
 }
 
 internal interface WindowsCloudFilesApi : AutoCloseable {
-    fun registerSyncRoot(root: Path, syncRootIdentity: ByteArray)
+    fun registerSyncRoot(root: Path, displayName: String, syncRootIdentity: ByteArray)
     fun unregisterSyncRoot(root: Path)
     fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long
     fun disconnect(connectionKey: Long)
@@ -247,6 +247,7 @@ internal data class WindowsCloudFilesSummary(
 
 internal interface WindowsCloudFilesBackend {
     val accountId: String
+    val displayName: String
     fun resolve(path: String): WindowsCloudFileIdentity?
     fun list(path: String): List<WindowsCloudFileIdentity>
     fun open(identity: WindowsCloudFileIdentity): WindowsCloudFileReadHandle
@@ -263,6 +264,7 @@ internal class DesktopNextcloudWindowsCloudFilesBackend(
     private val tree: DesktopFileSyncRemoteTree = DesktopFileSyncRemoteTree(session, userId, ""),
 ) : WindowsCloudFilesBackend {
     override val accountId: String = desktopFileCacheAccountId(session)
+    override val displayName: String = windowsCloudShellDisplayName(session)
 
     override fun resolve(path: String): WindowsCloudFileIdentity? =
         tree.resolve(path.windowsCloudPath())?.toWindowsIdentity()
@@ -364,7 +366,7 @@ internal class WindowsCloudFilesProvider(
         Files.createDirectories(root)
         check(!Files.isSymbolicLink(root)) { "The Windows Cloud Files root cannot be a symlink." }
         val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
-        api.registerSyncRoot(root, WindowsCloudFileIdentityCodec.encode(rootIdentity))
+        api.registerSyncRoot(root, backend.displayName, WindowsCloudFileIdentityCodec.encode(rootIdentity))
         connection.set(api.connect(root, this))
         try {
             populateDirectory("", root)

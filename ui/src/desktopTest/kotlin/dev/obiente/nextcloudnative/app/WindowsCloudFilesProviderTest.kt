@@ -691,6 +691,7 @@ class WindowsCloudFilesProviderTest {
         @Volatile var uploadFailuresRemaining: Int = 0,
     ) : WindowsCloudFilesBackend {
         override val accountId: String = "account-01"
+        override val displayName: String = "Nextcloud Native - account@example.test"
         private val uploadLatch = CountDownLatch(expectedUploads)
         private val firstUploadStarted = CountDownLatch(if (blockFirstUpload) 1 else 0)
         private val firstUploadRelease = CountDownLatch(if (blockFirstUpload) 1 else 0)
@@ -796,7 +797,7 @@ class WindowsCloudFilesProviderTest {
         var closed = false
         val lifecycleEvents = mutableListOf<String>()
 
-        override fun registerSyncRoot(root: Path, syncRootIdentity: ByteArray) {
+        override fun registerSyncRoot(root: Path, displayName: String, syncRootIdentity: ByteArray) {
             lifecycleEvents += "register"
         }
         override fun unregisterSyncRoot(root: Path) {

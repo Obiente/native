@@ -34,25 +34,25 @@ internal class JnaWindowsCloudFilesApi(
         kernelFiles = Native.load("kernel32", KernelFileApi::class.java)
     }
 
-    override fun registerSyncRoot(root: Path, syncRootIdentity: ByteArray) {
+    override fun registerSyncRoot(root: Path, displayName: String, syncRootIdentity: ByteArray) {
         val rootIdentity = WindowsCloudFileIdentityCodec.decode(syncRootIdentity)
         require(rootIdentity.directory && rootIdentity.path.isEmpty() && rootIdentity.remoteRevision == "root")
         migrateWindowsSyncRootRegistration(
             shellAvailable = shellRegistrar.available,
             unregisterCloudFilesRoot = { unregisterCloudFilesRoot(root) },
             registerBrandedShellRoot = {
-                shellRegistrar.register(root, rootIdentity.accountId, syncRootIdentity)
+                shellRegistrar.register(root, rootIdentity.accountId, displayName, syncRootIdentity)
             },
-            registerCloudFilesRoot = { registerCloudFilesRoot(root, syncRootIdentity) },
+            registerCloudFilesRoot = { registerCloudFilesRoot(root, displayName, syncRootIdentity) },
         )
     }
 
-    private fun registerCloudFilesRoot(root: Path, syncRootIdentity: ByteArray) {
+    private fun registerCloudFilesRoot(root: Path, displayName: String, syncRootIdentity: ByteArray) {
         val identity = syncRootIdentity.nativeMemory()
         try {
             val registration = CfSyncRegistration().apply {
                 structSize = size()
-                providerName = WString("Nextcloud Native")
+                providerName = WString(displayName)
                 providerVersion = WString("0.1.0")
                 syncRootIdentityPointer = identity
                 syncRootIdentityLength = syncRootIdentity.size
@@ -92,7 +92,7 @@ internal class JnaWindowsCloudFilesApi(
 
     override fun unregisterSyncRoot(root: Path) {
         val accountId = windowsCloudShellAccountId(root)
-        if (accountId != null && shellRegistrar.available && shellRegistrar.unregister(accountId)) return
+        if (accountId != null && shellRegistrar.available && shellRegistrar.unregister(root, accountId)) return
         val result = cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString()))
         if (result in SYNC_ROOT_ALREADY_UNREGISTERED_RESULTS) return
         checkHResult(result, "unregister the Windows Cloud Files root")

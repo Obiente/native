@@ -6,6 +6,22 @@ const PROVIDER_ID: &str = "Obiente.NextcloudNative";
 const ACCOUNT_ID_LENGTH: usize = 64;
 #[cfg(any(windows, test))]
 const MAX_SYNC_ROOT_IDENTITY_BYTES: usize = 4_096;
+#[cfg(any(windows, test))]
+const MAX_DISPLAY_NAME_CHARACTERS: usize = 128;
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct OwnedPathConflict;
+
+#[cfg(windows)]
+impl std::fmt::Display for OwnedPathConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an owned Cloud Files registration already uses this path")
+    }
+}
+
+#[cfg(windows)]
+impl std::error::Error for OwnedPathConflict {}
 
 #[cfg(any(windows, test))]
 fn valid_account_id(value: &str) -> bool {
@@ -13,6 +29,12 @@ fn valid_account_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(any(windows, test))]
+fn valid_display_name(value: &str) -> bool {
+    let count = value.encode_utf16().count();
+    (1..=MAX_DISPLAY_NAME_CHARACTERS).contains(&count) && !value.chars().any(char::is_control)
 }
 
 #[cfg(any(windows, test))]
@@ -77,7 +99,10 @@ fn sid_string(bytes: &[u8]) -> Option<String> {
 
 #[cfg(windows)]
 mod platform {
-    use super::{PROVIDER_ID, decode_identity_hex, sid_string, valid_account_id};
+    use super::{
+        OwnedPathConflict, PROVIDER_ID, decode_identity_hex, sid_string, valid_account_id,
+        valid_display_name,
+    };
     use std::ffi::{OsStr, OsString};
     use std::mem::size_of;
     use std::path::{Path, PathBuf};
@@ -195,11 +220,15 @@ mod platform {
     fn register(
         root: PathBuf,
         account_id: String,
+        display_name: String,
         icon: PathBuf,
         identity_hex: String,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if !valid_account_id(&account_id) {
             return Err("invalid account identity".into());
+        }
+        if !valid_display_name(&display_name) {
+            return Err("invalid display name".into());
         }
         validate_registration_paths(&root, &icon)?;
         let identity = decode_identity_hex(&identity_hex)?;
@@ -208,19 +237,29 @@ mod platform {
         icon_resource_value.push(icon.as_os_str());
         icon_resource_value.push(OsStr::new("\",0"));
         let icon_resource = HSTRING::from(&icon_resource_value);
-        let display_name = HSTRING::from("Nextcloud Native");
+        let display_name = HSTRING::from(display_name);
         let context = CryptographicBuffer::CreateFromByteArray(&identity)?;
 
         let id = sync_root_id(&account_id)?;
         if let Ok(existing) = StorageProviderSyncRootManager::GetSyncRootInformationForId(&id) {
-            if existing.Path()?.Path()? == root_path
-                && existing.DisplayNameResource()? == display_name
+            if existing.Path()?.Path()? != root_path {
+                return Err("the account is registered at a different sync root path".into());
+            }
+            if existing.DisplayNameResource()? == display_name
                 && existing.IconResource()? == icon_resource
                 && CryptographicBuffer::Compare(&existing.Context()?, &context)?
             {
                 return Ok(());
             }
             StorageProviderSyncRootManager::Unregister(&id)?;
+        }
+        for existing in StorageProviderSyncRootManager::GetCurrentSyncRoots()? {
+            if existing.Id()? != id
+                && existing.ProviderId()? == PROVIDER_GUID
+                && existing.Path()?.Path()? == root_path
+            {
+                return Err(Box::new(OwnedPathConflict));
+            }
         }
 
         let info = StorageProviderSyncRootInfo::new()?;
@@ -249,11 +288,19 @@ mod platform {
         Ok(())
     }
 
-    fn unregister(account_id: String) -> Result<(), Box<dyn std::error::Error>> {
+    fn unregister(root: PathBuf, account_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if !root.is_absolute() {
+            return Err("invalid sync root".into());
+        }
         if !valid_account_id(&account_id) {
             return Err("invalid account identity".into());
         }
-        StorageProviderSyncRootManager::Unregister(&sync_root_id(&account_id)?)?;
+        let id = sync_root_id(&account_id)?;
+        let existing = StorageProviderSyncRootManager::GetSyncRootInformationForId(&id)?;
+        if existing.Path()?.Path()? != HSTRING::from(root.as_path()) {
+            return Err("the registered sync root path does not match".into());
+        }
+        StorageProviderSyncRootManager::Unregister(&id)?;
         Ok(())
     }
 
@@ -278,6 +325,10 @@ mod platform {
                     .next()
                     .and_then(|value| value.into_string().ok())
                     .ok_or("invalid account identity")?;
+                let display_name = values
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or("invalid display name")?;
                 let icon = values
                     .next()
                     .map(PathBuf::from)
@@ -289,9 +340,13 @@ mod platform {
                 if values.next().is_some() {
                     return Err("unexpected arguments".into());
                 }
-                register(root, account_id, icon, identity_hex)
+                register(root, account_id, display_name, icon, identity_hex)
             }
             Some("unregister") => {
+                let root = values
+                    .next()
+                    .map(PathBuf::from)
+                    .ok_or("missing sync root")?;
                 let account_id = values
                     .next()
                     .and_then(|value| value.into_string().ok())
@@ -299,7 +354,7 @@ mod platform {
                 if values.next().is_some() {
                     return Err("unexpected arguments".into());
                 }
-                unregister(account_id)
+                unregister(root, account_id)
             }
             _ => Err("unsupported command".into()),
         }
@@ -309,9 +364,13 @@ mod platform {
 #[cfg(windows)]
 fn main() {
     let arguments = std::env::args_os().skip(1).collect();
-    if platform::run(arguments).is_err() {
+    if let Err(failure) = platform::run(arguments) {
         eprintln!("Windows shell registration failed.");
-        std::process::exit(1);
+        std::process::exit(if failure.is::<OwnedPathConflict>() {
+            3
+        } else {
+            1
+        });
     }
 }
 
@@ -331,6 +390,16 @@ mod tests {
         assert!(!valid_account_id(&"A5".repeat(32)));
         assert!(!valid_account_id(&"a5".repeat(31)));
         assert!(!valid_account_id(&format!("{}g", "a".repeat(63))));
+    }
+
+    #[test]
+    fn accepts_only_bounded_non_control_display_names() {
+        assert!(valid_display_name("Nextcloud Native - ada@cloud.example"));
+        assert!(!valid_display_name(""));
+        assert!(!valid_display_name("Nextcloud Native\nmalformed"));
+        assert!(!valid_display_name(
+            &"n".repeat(MAX_DISPLAY_NAME_CHARACTERS + 1)
+        ));
     }
 
     #[test]

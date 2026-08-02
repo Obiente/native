@@ -1,14 +1,26 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 internal interface WindowsCloudShellRegistrar {
     val available: Boolean
-    fun register(root: Path, accountId: String, syncRootIdentity: ByteArray): Boolean
-    fun unregister(accountId: String): Boolean
+    fun register(
+        root: Path,
+        accountId: String,
+        displayName: String,
+        syncRootIdentity: ByteArray,
+    ): WindowsShellRegistrationResult
+    fun unregister(root: Path, accountId: String): Boolean
+}
+
+internal enum class WindowsShellRegistrationResult {
+    Registered,
+    OwnedPathConflict,
+    Failed,
 }
 
 internal class PackagedWindowsCloudShellRegistrar(
@@ -25,34 +37,47 @@ internal class PackagedWindowsCloudShellRegistrar(
     override val available: Boolean
         get() = helper?.isFile == true && icon?.isFile == true
 
-    override fun register(root: Path, accountId: String, syncRootIdentity: ByteArray): Boolean {
+    override fun register(
+        root: Path,
+        accountId: String,
+        displayName: String,
+        syncRootIdentity: ByteArray,
+    ): WindowsShellRegistrationResult {
         requireWindowsShellAccountId(accountId)
+        requireWindowsShellDisplayName(displayName)
         require(syncRootIdentity.isNotEmpty() && syncRootIdentity.size <= MAX_SYNC_ROOT_IDENTITY_BYTES)
         val normalizedRoot = root.toAbsolutePath().normalize()
         require(Files.isDirectory(normalizedRoot) && !Files.isSymbolicLink(normalizedRoot))
-        val executable = helper?.takeIf(File::isFile) ?: return false
-        val iconResource = icon?.takeIf(File::isFile) ?: return false
-        return runCatching {
+        val executable = helper?.takeIf(File::isFile) ?: return WindowsShellRegistrationResult.Failed
+        val iconResource = icon?.takeIf(File::isFile) ?: return WindowsShellRegistrationResult.Failed
+        val exitCode = runCatching {
             processRunner(
                 listOf(
                     executable.absolutePath,
                     "register",
                     normalizedRoot.toString(),
                     accountId,
+                    displayName,
                     iconResource.absolutePath,
                     syncRootIdentity.lowercaseHex(),
                 ),
                 REGISTRATION_TIMEOUT_SECONDS,
-            ) == 0
-        }.getOrDefault(false)
+            )
+        }.getOrNull()
+        return when (exitCode) {
+            0 -> WindowsShellRegistrationResult.Registered
+            WINDOWS_SHELL_OWNED_PATH_CONFLICT_EXIT_CODE -> WindowsShellRegistrationResult.OwnedPathConflict
+            else -> WindowsShellRegistrationResult.Failed
+        }
     }
 
-    override fun unregister(accountId: String): Boolean {
+    override fun unregister(root: Path, accountId: String): Boolean {
         requireWindowsShellAccountId(accountId)
+        val normalizedRoot = root.toAbsolutePath().normalize()
         val executable = helper?.takeIf(File::isFile) ?: return false
         return runCatching {
             processRunner(
-                listOf(executable.absolutePath, "unregister", accountId),
+                listOf(executable.absolutePath, "unregister", normalizedRoot.toString(), accountId),
                 REGISTRATION_TIMEOUT_SECONDS,
             ) == 0
         }.getOrDefault(false)
@@ -72,13 +97,23 @@ internal enum class WindowsSyncRootRegistrationMode {
 internal fun migrateWindowsSyncRootRegistration(
     shellAvailable: Boolean,
     unregisterCloudFilesRoot: () -> Boolean,
-    registerBrandedShellRoot: () -> Boolean,
+    registerBrandedShellRoot: () -> WindowsShellRegistrationResult,
     registerCloudFilesRoot: () -> Unit,
 ): WindowsSyncRootRegistrationMode {
     if (shellAvailable) {
-        if (registerBrandedShellRoot()) return WindowsSyncRootRegistrationMode.BrandedShell
-        if (unregisterCloudFilesRoot() && registerBrandedShellRoot()) {
-            return WindowsSyncRootRegistrationMode.BrandedShell
+        when (registerBrandedShellRoot()) {
+            WindowsShellRegistrationResult.Registered -> {
+                return WindowsSyncRootRegistrationMode.BrandedShell
+            }
+            WindowsShellRegistrationResult.OwnedPathConflict -> {
+                if (
+                    unregisterCloudFilesRoot() &&
+                    registerBrandedShellRoot() == WindowsShellRegistrationResult.Registered
+                ) {
+                    return WindowsSyncRootRegistrationMode.BrandedShell
+                }
+            }
+            WindowsShellRegistrationResult.Failed -> Unit
         }
     }
     registerCloudFilesRoot()
@@ -93,6 +128,49 @@ internal fun windowsCloudShellAccountId(root: Path): String? {
 
 private fun requireWindowsShellAccountId(accountId: String) {
     require(isWindowsShellAccountId(accountId))
+}
+
+private fun requireWindowsShellDisplayName(displayName: String) {
+    require(
+        displayName.isNotBlank() &&
+            displayName.length <= WINDOWS_SHELL_DISPLAY_NAME_MAX_CHARACTERS &&
+            displayName.none(Char::isISOControl),
+    )
+}
+
+internal fun windowsCloudShellDisplayName(session: NextcloudSession): String {
+    val login = session.loginName.windowsShellLabelPart(WINDOWS_SHELL_ACCOUNT_LABEL_PART_MAX_CHARACTERS)
+    val host = runCatching { URI(session.serverUrl).host.orEmpty() }
+        .getOrDefault("")
+        .lowercase()
+        .windowsShellLabelPart(WINDOWS_SHELL_ACCOUNT_LABEL_PART_MAX_CHARACTERS)
+    val accountLabel = when {
+        login.isNotEmpty() && host.isNotEmpty() -> "$login@$host"
+        login.isNotEmpty() -> login
+        host.isNotEmpty() -> host
+        else -> "account"
+    }
+    return "Nextcloud Native - $accountLabel"
+}
+
+private fun String.windowsShellLabelPart(maxCharacters: Int): String =
+    trim()
+        .filterNot(Char::isISOControl)
+        .replace(Regex("\\s+"), " ")
+        .takeWholeCodePoints(maxCharacters)
+
+private fun String.takeWholeCodePoints(maxCharacters: Int): String {
+    if (length <= maxCharacters) return this
+    val end = if (
+        maxCharacters > 0 &&
+        this[maxCharacters - 1].isHighSurrogate() &&
+        this[maxCharacters].isLowSurrogate()
+    ) {
+        maxCharacters - 1
+    } else {
+        maxCharacters
+    }
+    return substring(0, end)
 }
 
 private fun isWindowsShellAccountId(accountId: String): Boolean =
@@ -122,4 +200,7 @@ private fun runWindowsShellRegistrar(command: List<String>, timeoutSeconds: Long
 private const val WINDOWS_CLOUD_ROOT_GENERATION_SUFFIX = "-v2"
 internal const val WINDOWS_SHELL_REGISTRAR_NAME = "NextcloudNativeShellRegistrar.exe"
 internal const val WINDOWS_SHELL_ICON_NAME = "NextcloudNative.ico"
+internal const val WINDOWS_SHELL_OWNED_PATH_CONFLICT_EXIT_CODE = 3
+private const val WINDOWS_SHELL_DISPLAY_NAME_MAX_CHARACTERS = 128
+private const val WINDOWS_SHELL_ACCOUNT_LABEL_PART_MAX_CHARACTERS = 48
 private const val HEX_DIGITS = "0123456789abcdef"
