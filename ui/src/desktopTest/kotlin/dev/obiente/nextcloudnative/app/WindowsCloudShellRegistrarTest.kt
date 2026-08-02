@@ -1,11 +1,15 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class WindowsCloudShellRegistrarTest {
@@ -159,16 +163,77 @@ class WindowsCloudShellRegistrarTest {
 
     @Test
     fun createsBoundedAccountSpecificDisplayNamesWithoutSecrets() {
-        val first = windowsCloudShellDisplayName(
-            NextcloudSession("https://cloud.example/nextcloud", "ada", "secret-one"),
-        )
-        val second = windowsCloudShellDisplayName(
-            NextcloudSession("https://cloud.example/nextcloud", "grace", "secret-two"),
-        )
+        val firstSession = NextcloudSession("https://cloud.example/nextcloud", "ada", "secret-one")
+        val secondSession = NextcloudSession("https://cloud.example/nextcloud", "grace", "secret-two")
+        val first = windowsCloudShellDisplayName(firstSession)
+        val second = windowsCloudShellDisplayName(secondSession)
 
-        assertEquals("Nextcloud Native - ada@cloud.example", first)
-        assertEquals("Nextcloud Native - grace@cloud.example", second)
+        assertEquals(
+            "Nextcloud Native - ada@cloud.example [${desktopFileCacheAccountId(firstSession).take(12)}]",
+            first,
+        )
+        assertEquals(
+            "Nextcloud Native - grace@cloud.example [${desktopFileCacheAccountId(secondSession).take(12)}]",
+            second,
+        )
         assertFalse(first.contains("secret"))
         assertTrue(first.length <= 128)
+    }
+
+    @Test
+    fun distinguishesServersThatShareAHostAndLogin() {
+        val first = windowsCloudShellDisplayName(
+            NextcloudSession("https://cloud.example:8443/one", "ada", "secret-one"),
+        )
+        val second = windowsCloudShellDisplayName(
+            NextcloudSession("https://cloud.example:9443/two", "ada", "secret-two"),
+        )
+
+        assertTrue(first.startsWith("Nextcloud Native - ada@cloud.example ["))
+        assertTrue(second.startsWith("Nextcloud Native - ada@cloud.example ["))
+        assertNotEquals(first, second)
+        assertFalse(first.contains("secret"))
+        assertFalse(second.contains("secret"))
+    }
+
+    @Test
+    fun waitsForForcedRegistrarTerminationBeforeReturning() {
+        val process = StubbornRegistrarProcess()
+
+        terminateWindowsShellRegistrar(process)
+
+        assertTrue(process.destroyCalled)
+        assertTrue(process.destroyForciblyCalled)
+        assertTrue(process.waitedForForcedExit)
+        assertFalse(process.isAlive)
+    }
+
+    private class StubbornRegistrarProcess : Process() {
+        var destroyCalled = false
+        var destroyForciblyCalled = false
+        var waitedForForcedExit = false
+        private var alive = true
+
+        override fun getOutputStream(): OutputStream = OutputStream.nullOutputStream()
+        override fun getInputStream(): InputStream = InputStream.nullInputStream()
+        override fun getErrorStream(): InputStream = InputStream.nullInputStream()
+        override fun waitFor(): Int {
+            waitedForForcedExit = true
+            alive = false
+            return 137
+        }
+        override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = false
+        override fun exitValue(): Int {
+            check(!alive)
+            return 137
+        }
+        override fun destroy() {
+            destroyCalled = true
+        }
+        override fun destroyForcibly(): Process {
+            destroyForciblyCalled = true
+            return this
+        }
+        override fun isAlive(): Boolean = alive
     }
 }

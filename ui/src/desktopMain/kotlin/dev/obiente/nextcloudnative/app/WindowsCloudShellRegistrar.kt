@@ -139,6 +139,8 @@ private fun requireWindowsShellDisplayName(displayName: String) {
 }
 
 internal fun windowsCloudShellDisplayName(session: NextcloudSession): String {
+    val accountId = desktopFileCacheAccountId(session)
+    requireWindowsShellAccountId(accountId)
     val login = session.loginName.windowsShellLabelPart(WINDOWS_SHELL_ACCOUNT_LABEL_PART_MAX_CHARACTERS)
     val host = runCatching { URI(session.serverUrl).host.orEmpty() }
         .getOrDefault("")
@@ -150,7 +152,7 @@ internal fun windowsCloudShellDisplayName(session: NextcloudSession): String {
         host.isNotEmpty() -> host
         else -> "account"
     }
-    return "Nextcloud Native - $accountLabel"
+    return "Nextcloud Native - $accountLabel [${accountId.take(WINDOWS_SHELL_ACCOUNT_TAG_CHARACTERS)}]"
 }
 
 private fun String.windowsShellLabelPart(maxCharacters: Int): String =
@@ -191,10 +193,38 @@ private fun runWindowsShellRegistrar(command: List<String>, timeoutSeconds: Long
         .redirectOutput(ProcessBuilder.Redirect.DISCARD)
         .redirectError(ProcessBuilder.Redirect.DISCARD)
         .start()
-    if (process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) return process.exitValue()
-    process.destroy()
-    if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
+    val completed = try {
+        process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+    } catch (_: InterruptedException) {
+        terminateWindowsShellRegistrar(process)
+        Thread.currentThread().interrupt()
+        return null
+    }
+    if (completed) return process.exitValue()
+    terminateWindowsShellRegistrar(process)
     return null
+}
+
+internal fun terminateWindowsShellRegistrar(process: Process) {
+    var interrupted = false
+    runCatching { process.destroy() }
+    val exitedDuringGrace = try {
+        process.waitFor(WINDOWS_SHELL_TERMINATION_GRACE_SECONDS, TimeUnit.SECONDS)
+    } catch (_: InterruptedException) {
+        interrupted = true
+        false
+    }
+    if (!exitedDuringGrace && process.isAlive) {
+        runCatching { process.destroyForcibly() }
+        while (process.isAlive) {
+            try {
+                process.waitFor()
+            } catch (_: InterruptedException) {
+                interrupted = true
+            }
+        }
+    }
+    if (interrupted) Thread.currentThread().interrupt()
 }
 
 private const val WINDOWS_CLOUD_ROOT_GENERATION_SUFFIX = "-v2"
@@ -202,5 +232,7 @@ internal const val WINDOWS_SHELL_REGISTRAR_NAME = "NextcloudNativeShellRegistrar
 internal const val WINDOWS_SHELL_ICON_NAME = "NextcloudNative.ico"
 internal const val WINDOWS_SHELL_OWNED_PATH_CONFLICT_EXIT_CODE = 3
 private const val WINDOWS_SHELL_DISPLAY_NAME_MAX_CHARACTERS = 128
-private const val WINDOWS_SHELL_ACCOUNT_LABEL_PART_MAX_CHARACTERS = 48
+private const val WINDOWS_SHELL_ACCOUNT_LABEL_PART_MAX_CHARACTERS = 44
+private const val WINDOWS_SHELL_ACCOUNT_TAG_CHARACTERS = 12
+private const val WINDOWS_SHELL_TERMINATION_GRACE_SECONDS = 2L
 private const val HEX_DIGITS = "0123456789abcdef"
