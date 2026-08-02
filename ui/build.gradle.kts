@@ -53,6 +53,30 @@ val buildWindowsShellRegistrar by tasks.registering(Exec::class) {
     )
 }
 
+val stageWindowsShellAssets by tasks.registering {
+    group = "distribution"
+    description = "Adds the supported Windows Explorer integration to the desktop application image."
+    dependsOn(buildWindowsShellRegistrar)
+    inputs.file(windowsShellRegistrar)
+    inputs.file(windowsShellIcon)
+    val appImage = layout.buildDirectory.dir("compose/binaries/main/app/NextcloudNative")
+    val packagedRegistrar = appImage.map { it.file("NextcloudNativeShellRegistrar.exe") }
+    val packagedIcon = appImage.map { it.file("NextcloudNative.ico") }
+    outputs.files(packagedRegistrar, packagedIcon)
+    onlyIf { System.getProperty("os.name").startsWith("Windows", ignoreCase = true) }
+    doLast {
+        val image = appImage.get().asFile
+        check(image.resolve("NextcloudNative.exe").isFile) {
+            "The Windows application image is unavailable for shell asset staging."
+        }
+        windowsShellRegistrar.asFile.copyTo(packagedRegistrar.get().asFile, overwrite = true)
+        windowsShellIcon.asFile.copyTo(packagedIcon.get().asFile, overwrite = true)
+        check(packagedRegistrar.get().asFile.isFile && packagedIcon.get().asFile.isFile) {
+            "The Windows shell registration helper or icon was not added to the application image."
+        }
+    }
+}
+
 val prepareLinuxAppStreamMetadata by tasks.registering(Exec::class) {
     inputs.file(linuxAppStreamMetadata)
     inputs.file(rootProject.file("tools/render-linux-appstream-metadata.py"))
@@ -283,10 +307,8 @@ val repackageRpmWithMetadata by tasks.registering(Exec::class) {
 }
 
 val repackageMsiWithUninstallCleanup by tasks.registering(Exec::class) {
-    dependsOn(buildWindowsShellRegistrar)
+    dependsOn(stageWindowsShellAssets)
     inputs.file(rootProject.file("tools/repackage-msi-with-uninstall-cleanup.ps1"))
-    inputs.file(windowsShellRegistrar)
-    inputs.file(windowsShellIcon)
     doNotTrackState("Rebuilds the packageMsi artifact with an uninstall cleanup action.")
     onlyIf {
         System.getProperty("os.name").startsWith("Windows", ignoreCase = true) &&
@@ -309,10 +331,6 @@ val repackageMsiWithUninstallCleanup by tasks.registering(Exec::class) {
         layout.buildDirectory.dir("compose/binaries/main/app/NextcloudNative").get().asFile,
         "-Jpackage",
         File(System.getProperty("java.home"), "bin/jpackage.exe"),
-        "-ShellRegistrar",
-        windowsShellRegistrar.asFile,
-        "-ShellIcon",
-        windowsShellIcon.asFile,
     )
 }
 
@@ -332,8 +350,12 @@ tasks.matching { task -> task.name in setOf("packageDeb", "packageRpm") }.config
 }
 
 tasks.matching { task -> task.name == "packageMsi" }.configureEach {
-    dependsOn("createDistributable")
+    dependsOn("createDistributable", stageWindowsShellAssets)
     finalizedBy(repackageMsiWithUninstallCleanup)
+}
+
+tasks.matching { task -> task.name == "createDistributable" }.configureEach {
+    finalizedBy(stageWindowsShellAssets)
 }
 
 val desktopCaptureCompilation = kotlin.targets

@@ -8,6 +8,7 @@ nightly_notes="$project_root/tools/nightly-release-notes.mjs"
 promotion="$project_root/tools/promote-app-update-channel.sh"
 msi_repackager="$project_root/tools/repackage-msi-with-uninstall-cleanup.ps1"
 msi_verifier="$project_root/tools/verify-windows-package.ps1"
+ui_build="$project_root/ui/build.gradle.kts"
 temporary_directory="$(mktemp -d)"
 trap 'rm -r -- "$temporary_directory"' EXIT
 
@@ -162,6 +163,9 @@ require_text "$msi_repackager" 'NextcloudNativeShellRegistrar.exe'
 require_text "$msi_repackager" 'NextcloudNative.ico'
 require_text "$msi_verifier" 'NextcloudNativeShellRegistrar.exe'
 require_text "$msi_verifier" 'NextcloudNative.ico'
+require_text "$ui_build" 'val stageWindowsShellAssets by tasks.registering'
+require_text "$ui_build" 'finalizedBy(stageWindowsShellAssets)'
+require_text "$ui_build" 'dependsOn("createDistributable", stageWindowsShellAssets)'
 if grep -Fq 'Join-Path $AppImage "lib/app/.jpackage.xml"' "$msi_repackager"; then
     echo "Windows MSI repackaging must use the Windows jpackage metadata layout." >&2
     exit 1
