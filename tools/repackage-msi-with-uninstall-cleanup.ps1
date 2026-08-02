@@ -15,13 +15,27 @@ param(
     [string]$AppImage,
 
     [Parameter(Mandatory = $true)]
-    [string]$Jpackage
+    [string]$Jpackage,
+
+    [Parameter(Mandatory = $true)]
+    [string]$ShellRegistrar,
+
+    [Parameter(Mandatory = $true)]
+    [string]$ShellIcon
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-foreach ($path in @($PackageDirectory, $ArgumentsFile, $JpackageResourceDirectory, $AppImage, $Jpackage)) {
+foreach ($path in @(
+    $PackageDirectory,
+    $ArgumentsFile,
+    $JpackageResourceDirectory,
+    $AppImage,
+    $Jpackage,
+    $ShellRegistrar,
+    $ShellIcon
+)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required MSI packaging input does not exist: $path"
     }
@@ -74,6 +88,15 @@ if ($name -ne "NextcloudNative" -or
     -not (Test-Path -LiteralPath (Join-Path $AppImage "NextcloudNative.exe") -PathType Leaf) -or
     -not (Test-Path -LiteralPath (Join-Path $AppImage "app/.jpackage.xml") -PathType Leaf)) {
     throw "The captured package metadata or application image is invalid."
+}
+
+$packagedShellRegistrar = Join-Path $AppImage "NextcloudNativeShellRegistrar.exe"
+$packagedShellIcon = Join-Path $AppImage "NextcloudNative.ico"
+Copy-Item -LiteralPath $ShellRegistrar -Destination $packagedShellRegistrar -Force
+Copy-Item -LiteralPath $ShellIcon -Destination $packagedShellIcon -Force
+if (-not (Test-Path -LiteralPath $packagedShellRegistrar -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $packagedShellIcon -PathType Leaf)) {
+    throw "The Windows shell registration helper or icon was not added to the application image."
 }
 
 if (Test-Path -LiteralPath $GeneratedResourceDirectory) {

@@ -176,6 +176,12 @@ jobs:
           java-version: "21"
           cache: gradle
 
+      - name: Set up Rust for Windows packaging
+        if: matrix.platform == 'windows'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
       - name: Build native desktop package
         shell: bash
         env:

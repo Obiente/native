@@ -18,7 +18,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
 /** 64-bit Windows CldApi.dll binding kept behind [WindowsCloudFilesApi] for deterministic tests. */
-internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
+internal class JnaWindowsCloudFilesApi(
+    private val shellRegistrar: WindowsCloudShellRegistrar = PackagedWindowsCloudShellRegistrar(),
+) : WindowsCloudFilesApi {
     private val cldApi: CldApi
     private val kernelFiles: KernelFileApi
     private val callbacksByConnection = ConcurrentHashMap<Long, CallbackLifetime>()
@@ -33,46 +35,72 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
     }
 
     override fun registerSyncRoot(root: Path, syncRootIdentity: ByteArray) {
-        val identity = syncRootIdentity.nativeMemory()
-        val registration = CfSyncRegistration().apply {
-            structSize = size()
-            providerName = WString("Nextcloud Native")
-            providerVersion = WString("0.1.0")
-            syncRootIdentityPointer = identity
-            syncRootIdentityLength = syncRootIdentity.size
-            fileIdentity = identity
-            fileIdentityLength = syncRootIdentity.size
-            providerId = Guid.GUID("{6D456713-7D9A-4A39-90CE-127998DE42D7}")
-            write()
-        }
-        val policies = CfSyncPolicies().apply {
-            structSize = size()
-            hydration = CfPolicy(CF_HYDRATION_POLICY_PROGRESSIVE, CF_HYDRATION_POLICY_MODIFIER_AUTO_DEHYDRATION_ALLOWED)
-            population = CfPolicy(CF_POPULATION_POLICY_FULL, 0)
-            inSync = CF_INSYNC_POLICY_TRACK_FILE_CREATION_TIME or
-                CF_INSYNC_POLICY_TRACK_FILE_LAST_WRITE_TIME or
-                CF_INSYNC_POLICY_TRACK_DIRECTORY_CREATION_TIME or
-                CF_INSYNC_POLICY_TRACK_DIRECTORY_LAST_WRITE_TIME
-            hardLink = CF_HARDLINK_POLICY_NONE
-            placeholderManagement = CF_PLACEHOLDER_MANAGEMENT_POLICY_DEFAULT
-            write()
-        }
-        checkHResult(
-            cldApi.CfRegisterSyncRoot(
-                WString(root.toAbsolutePath().toString()),
-                registration,
-                policies,
-                CF_REGISTER_FLAG_UPDATE or CF_REGISTER_FLAG_MARK_IN_SYNC_ON_ROOT,
-            ),
-            "register the Windows Cloud Files root",
+        val rootIdentity = WindowsCloudFileIdentityCodec.decode(syncRootIdentity)
+        require(rootIdentity.directory && rootIdentity.path.isEmpty() && rootIdentity.remoteRevision == "root")
+        migrateWindowsSyncRootRegistration(
+            shellAvailable = shellRegistrar.available,
+            unregisterCloudFilesRoot = { unregisterCloudFilesRoot(root) },
+            registerBrandedShellRoot = {
+                shellRegistrar.register(root, rootIdentity.accountId, syncRootIdentity)
+            },
+            registerCloudFilesRoot = { registerCloudFilesRoot(root, syncRootIdentity) },
         )
-        identity.clear()
+    }
+
+    private fun registerCloudFilesRoot(root: Path, syncRootIdentity: ByteArray) {
+        val identity = syncRootIdentity.nativeMemory()
+        try {
+            val registration = CfSyncRegistration().apply {
+                structSize = size()
+                providerName = WString("Nextcloud Native")
+                providerVersion = WString("0.1.0")
+                syncRootIdentityPointer = identity
+                syncRootIdentityLength = syncRootIdentity.size
+                fileIdentity = identity
+                fileIdentityLength = syncRootIdentity.size
+                providerId = Guid.GUID("{6D456713-7D9A-4A39-90CE-127998DE42D7}")
+                write()
+            }
+            val policies = CfSyncPolicies().apply {
+                structSize = size()
+                hydration = CfPolicy(
+                    CF_HYDRATION_POLICY_PROGRESSIVE,
+                    CF_HYDRATION_POLICY_MODIFIER_AUTO_DEHYDRATION_ALLOWED,
+                )
+                population = CfPolicy(CF_POPULATION_POLICY_FULL, 0)
+                inSync = CF_INSYNC_POLICY_TRACK_FILE_CREATION_TIME or
+                    CF_INSYNC_POLICY_TRACK_FILE_LAST_WRITE_TIME or
+                    CF_INSYNC_POLICY_TRACK_DIRECTORY_CREATION_TIME or
+                    CF_INSYNC_POLICY_TRACK_DIRECTORY_LAST_WRITE_TIME
+                hardLink = CF_HARDLINK_POLICY_NONE
+                placeholderManagement = CF_PLACEHOLDER_MANAGEMENT_POLICY_DEFAULT
+                write()
+            }
+            checkHResult(
+                cldApi.CfRegisterSyncRoot(
+                    WString(root.toAbsolutePath().toString()),
+                    registration,
+                    policies,
+                    CF_REGISTER_FLAG_UPDATE or CF_REGISTER_FLAG_MARK_IN_SYNC_ON_ROOT,
+                ),
+                "register the Windows Cloud Files root",
+            )
+        } finally {
+            identity.clear()
+        }
     }
 
     override fun unregisterSyncRoot(root: Path) {
+        val accountId = windowsCloudShellAccountId(root)
+        if (accountId != null && shellRegistrar.available && shellRegistrar.unregister(accountId)) return
         val result = cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString()))
         if (result in SYNC_ROOT_ALREADY_UNREGISTERED_RESULTS) return
         checkHResult(result, "unregister the Windows Cloud Files root")
+    }
+
+    private fun unregisterCloudFilesRoot(root: Path): Boolean {
+        val result = cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString()))
+        return result >= 0 || result in SYNC_ROOT_ALREADY_UNREGISTERED_RESULTS
     }
 
     override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long {

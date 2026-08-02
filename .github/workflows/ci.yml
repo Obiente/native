@@ -253,6 +253,9 @@ jobs:
           filters: |
             windows:
               - ".github/workflows/ci.yml"
+              - "Cargo.toml"
+              - "Cargo.lock"
+              - "src/bin/nextcloud-native-shell-registrar.rs"
               - "contractAcquisition/**"
               - "release/windows/**"
               - "tools/create-winget-manifests.ps1"
@@ -269,6 +272,12 @@ jobs:
               - "gradle/**"
               - "gradlew"
               - "gradlew.bat"
+
+      - name: Set up Rust
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: x86_64-pc-windows-msvc
 
       - name: Set up JDK 21
         if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'

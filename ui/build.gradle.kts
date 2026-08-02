@@ -26,6 +26,32 @@ val rpmPackageDirectory = layout.buildDirectory.dir("compose/binaries/main/rpm")
 val msiPackageDirectory = layout.buildDirectory.dir("compose/binaries/main/msi")
 val debPackageSucceededMarker = layout.buildDirectory.file("compose/tmp/packageDeb.succeeded")
 val rpmPackageSucceededMarker = layout.buildDirectory.file("compose/tmp/packageRpm.succeeded")
+val windowsShellRegistrar = rootProject.layout.projectDirectory.file(
+    "target/x86_64-pc-windows-msvc/release/nextcloud-native-shell-registrar.exe",
+)
+val windowsShellIcon = project.layout.projectDirectory.file("src/desktopMain/resources/nextcloud-native.ico")
+
+val buildWindowsShellRegistrar by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the supported Windows Explorer sync-root registration helper."
+    inputs.file(rootProject.file("Cargo.toml"))
+    inputs.file(rootProject.file("Cargo.lock"))
+    inputs.file(rootProject.file("src/bin/nextcloud-native-shell-registrar.rs"))
+    outputs.file(windowsShellRegistrar)
+    onlyIf { System.getProperty("os.name").startsWith("Windows", ignoreCase = true) }
+    workingDir(rootProject.projectDir)
+    environment("RUSTFLAGS", "-Ctarget-feature=+crt-static")
+    commandLine(
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--bin",
+        "nextcloud-native-shell-registrar",
+    )
+}
 
 val prepareLinuxAppStreamMetadata by tasks.registering(Exec::class) {
     inputs.file(linuxAppStreamMetadata)
@@ -257,7 +283,10 @@ val repackageRpmWithMetadata by tasks.registering(Exec::class) {
 }
 
 val repackageMsiWithUninstallCleanup by tasks.registering(Exec::class) {
+    dependsOn(buildWindowsShellRegistrar)
     inputs.file(rootProject.file("tools/repackage-msi-with-uninstall-cleanup.ps1"))
+    inputs.file(windowsShellRegistrar)
+    inputs.file(windowsShellIcon)
     doNotTrackState("Rebuilds the packageMsi artifact with an uninstall cleanup action.")
     onlyIf {
         System.getProperty("os.name").startsWith("Windows", ignoreCase = true) &&
@@ -280,6 +309,10 @@ val repackageMsiWithUninstallCleanup by tasks.registering(Exec::class) {
         layout.buildDirectory.dir("compose/binaries/main/app/NextcloudNative").get().asFile,
         "-Jpackage",
         File(System.getProperty("java.home"), "bin/jpackage.exe"),
+        "-ShellRegistrar",
+        windowsShellRegistrar.asFile,
+        "-ShellIcon",
+        windowsShellIcon.asFile,
     )
 }
 
