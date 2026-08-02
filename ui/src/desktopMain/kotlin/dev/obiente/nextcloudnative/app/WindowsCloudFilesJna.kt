@@ -101,16 +101,14 @@ internal class JnaWindowsCloudFilesApi(
                 }
             }
         }
-        val rootWasMissing = Files.notExists(root)
         val result = cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString()))
-        if (isWindowsCloudFilesRootAbsentResult(result, rootMissing = rootWasMissing)) return
+        if (isWindowsCloudFilesRootAbsentResult(result, rootMissing = Files.notExists(root))) return
         checkHResult(result, "unregister the Windows Cloud Files root")
     }
 
     private fun unregisterCloudFilesRoot(root: Path): Boolean {
-        val rootWasMissing = Files.notExists(root)
         val result = cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString()))
-        return result >= 0 || isWindowsCloudFilesRootAbsentResult(result, rootMissing = rootWasMissing)
+        return result >= 0 || isWindowsCloudFilesRootAbsentResult(result, rootMissing = Files.notExists(root))
     }
 
     override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long {

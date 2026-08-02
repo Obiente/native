@@ -119,11 +119,22 @@ internal fun migrateWindowsSyncRootRegistration(
                 return WindowsSyncRootRegistrationMode.BrandedShell
             }
             WindowsShellRegistrationResult.OwnedPathConflict -> {
-                if (
-                    unregisterCloudFilesRoot() &&
-                    registerBrandedShellRoot() == WindowsShellRegistrationResult.Registered
-                ) {
-                    return WindowsSyncRootRegistrationMode.BrandedShell
+                if (unregisterCloudFilesRoot()) {
+                    when (registerBrandedShellRoot()) {
+                        WindowsShellRegistrationResult.Registered -> {
+                            return WindowsSyncRootRegistrationMode.BrandedShell
+                        }
+                        WindowsShellRegistrationResult.UnsafeConflict -> {
+                            error(
+                                "Windows refused to replace a Cloud Files registration with " +
+                                    "conflicting ownership or path metadata.",
+                            )
+                        }
+                        WindowsShellRegistrationResult.OwnedPathConflict -> {
+                            error("The owned Windows Cloud Files path conflict persisted after cleanup.")
+                        }
+                        WindowsShellRegistrationResult.Failed -> Unit
+                    }
                 }
             }
             WindowsShellRegistrationResult.UnsafeConflict -> {

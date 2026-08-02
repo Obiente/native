@@ -159,6 +159,46 @@ class WindowsCloudShellRegistrarTest {
     }
 
     @Test
+    fun unsafeConflictDuringOwnedPathRetryDoesNotFallBack() {
+        var attempts = 0
+        var fallbackAttempted = false
+
+        assertFailsWith<IllegalStateException> {
+            migrateWindowsSyncRootRegistration(
+                shellAvailable = true,
+                unregisterCloudFilesRoot = { true },
+                registerBrandedShellRoot = {
+                    if (attempts++ == 0) {
+                        WindowsShellRegistrationResult.OwnedPathConflict
+                    } else {
+                        WindowsShellRegistrationResult.UnsafeConflict
+                    }
+                },
+                registerCloudFilesRoot = { fallbackAttempted = true },
+            )
+        }
+
+        assertEquals(2, attempts)
+        assertFalse(fallbackAttempted)
+    }
+
+    @Test
+    fun repeatedOwnedPathConflictDoesNotFallBack() {
+        var fallbackAttempted = false
+
+        assertFailsWith<IllegalStateException> {
+            migrateWindowsSyncRootRegistration(
+                shellAvailable = true,
+                unregisterCloudFilesRoot = { true },
+                registerBrandedShellRoot = { WindowsShellRegistrationResult.OwnedPathConflict },
+                registerCloudFilesRoot = { fallbackAttempted = true },
+            )
+        }
+
+        assertFalse(fallbackAttempted)
+    }
+
+    @Test
     fun successfulShellRegistrationDoesNotCreateASecondRegistration() {
         val events = mutableListOf<String>()
         val mode = migrateWindowsSyncRootRegistration(

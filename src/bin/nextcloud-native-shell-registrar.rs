@@ -14,6 +14,14 @@ fn is_windows_absence_hresult(value: i32) -> bool {
     matches!(value as u32, 0x8007_0002 | 0x8007_0003 | 0x8007_0490)
 }
 
+#[cfg(any(windows, test))]
+fn paths_refer_to_same_existing_entry(
+    first: &std::path::Path,
+    second: &std::path::Path,
+) -> std::io::Result<bool> {
+    Ok(first.canonicalize()? == second.canonicalize()?)
+}
+
 #[cfg(windows)]
 #[derive(Debug)]
 struct OwnedPathConflict;
@@ -134,8 +142,8 @@ fn sid_string(bytes: &[u8]) -> Option<String> {
 mod platform {
     use super::{
         OwnedPathConflict, PROVIDER_ID, RegistrationNotFound, UnsafeRegistrationConflict,
-        decode_identity_hex, is_windows_absence_hresult, sid_string, valid_account_id,
-        valid_display_name,
+        decode_identity_hex, is_windows_absence_hresult, paths_refer_to_same_existing_entry,
+        sid_string, valid_account_id, valid_display_name,
     };
     use std::ffi::{OsStr, OsString};
     use std::mem::size_of;
@@ -160,6 +168,13 @@ mod platform {
         PathBuf::from(path.to_os_string())
             .try_exists()
             .map(|exists| !exists)
+    }
+
+    fn registered_path_matches(path: &HSTRING, requested: &Path) -> Result<bool, std::io::Error> {
+        if path == &HSTRING::from(requested) {
+            return Ok(true);
+        }
+        paths_refer_to_same_existing_entry(&PathBuf::from(path.to_os_string()), requested)
     }
 
     fn unregister_owned_registration(id: &HSTRING) -> windows::core::Result<()> {
@@ -294,7 +309,8 @@ mod platform {
                     return Err(Box::new(UnsafeRegistrationConflict));
                 }
                 match existing.Path().and_then(|folder| folder.Path()) {
-                    Ok(existing_path) if existing_path == root_path => {
+                    Ok(existing_path) if registered_path_is_missing(&existing_path)? => {}
+                    Ok(existing_path) if registered_path_matches(&existing_path, &root)? => {
                         if existing.DisplayNameResource()? == display_name
                             && existing.IconResource()? == icon_resource
                             && CryptographicBuffer::Compare(&existing.Context()?, &context)?
@@ -302,7 +318,6 @@ mod platform {
                             return Ok(());
                         }
                     }
-                    Ok(existing_path) if registered_path_is_missing(&existing_path)? => {}
                     Ok(_) => return Err(Box::new(UnsafeRegistrationConflict)),
                     Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
                     Err(failure) => return Err(failure.into()),
@@ -315,7 +330,8 @@ mod platform {
         for existing in StorageProviderSyncRootManager::GetCurrentSyncRoots()? {
             if existing.Id()? != id && existing.ProviderId()? == PROVIDER_GUID {
                 match existing.Path().and_then(|folder| folder.Path()) {
-                    Ok(existing_path) if existing_path == root_path => {
+                    Ok(existing_path) if registered_path_is_missing(&existing_path)? => {}
+                    Ok(existing_path) if registered_path_matches(&existing_path, &root)? => {
                         return Err(Box::new(OwnedPathConflict));
                     }
                     Ok(_) => {}
@@ -370,12 +386,9 @@ mod platform {
             return Err(Box::new(UnsafeRegistrationConflict));
         }
         match existing.Path().and_then(|folder| folder.Path()) {
-            Ok(registered_path) if registered_path != HSTRING::from(root.as_path()) => {
-                if !registered_path_is_missing(&registered_path)? {
-                    return Err(Box::new(UnsafeRegistrationConflict));
-                }
-            }
-            Ok(_) => {}
+            Ok(registered_path) if registered_path_is_missing(&registered_path)? => {}
+            Ok(registered_path) if registered_path_matches(&registered_path, &root)? => {}
+            Ok(_) => return Err(Box::new(UnsafeRegistrationConflict)),
             Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
             Err(failure) => return Err(failure.into()),
         }
@@ -518,5 +531,26 @@ mod tests {
         assert!(is_windows_absence_hresult(0x8007_0490u32 as i32));
         assert!(!is_windows_absence_hresult(0x8007_0005u32 as i32));
         assert!(!is_windows_absence_hresult(0x8007_0057u32 as i32));
+    }
+
+    #[test]
+    fn canonical_paths_identify_the_same_existing_directory() {
+        let base = std::env::temp_dir().join(format!(
+            "nextcloud-native-path-equivalence-{}",
+            std::process::id()
+        ));
+        let child = base.join("child");
+        std::fs::create_dir_all(&child).expect("create path-equivalence fixture");
+
+        let equivalent = child.join(".");
+        assert!(
+            paths_refer_to_same_existing_entry(&child, &equivalent)
+                .expect("compare equivalent paths")
+        );
+        assert!(
+            !paths_refer_to_same_existing_entry(&base, &child).expect("compare distinct paths")
+        );
+
+        std::fs::remove_dir_all(&base).expect("remove path-equivalence fixture");
     }
 }
