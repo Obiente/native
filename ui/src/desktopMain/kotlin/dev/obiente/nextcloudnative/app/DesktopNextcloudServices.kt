@@ -27,6 +27,7 @@ import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.prefs.Preferences
+import javax.swing.JFileChooser
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -34,12 +35,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
@@ -136,15 +140,66 @@ private enum class DesktopFileSyncRunSource {
 private const val MAX_DOCUMENT_TEMPLATE_ID_LENGTH = 256
 private const val MAX_DOCUMENT_TEMPLATE_NAME_LENGTH = 512
 private const val MAX_DOCUMENT_TEMPLATE_EXTENSION_LENGTH = 32
+private const val VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES = 1024 * 1024
+private const val MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES = 1_000_000
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX = "wcfr."
+private const val KEY_VIRTUAL_FILE_ROOT_PREFIX = "vfp-root."
 private const val WINDOWS_CLOUD_FILES_ROOT_SUFFIX = "-v2"
 
 private fun isLinuxDesktop(): Boolean =
     System.getProperty("os.name").orEmpty().lowercase().contains("linux")
 
-private fun desktopLinuxVirtualFileMountPoint(): File =
-    File(System.getProperty("user.home"), "Nextcloud Native")
+private fun desktopVirtualFileProviderLocation(
+    preferences: Preferences,
+    accountId: String,
+    userHome: File = File(System.getProperty("user.home")),
+): VirtualFileProviderLocation {
+    val stored = preferences.get(virtualFileProviderRootPreferenceKey(accountId), null)
+        ?.takeIf { path -> path.length <= Preferences.MAX_VALUE_LENGTH }
+        ?.let(::File)
+        ?.absoluteFile
+        ?.normalize()
+    val folderName = stored?.name?.takeIf(String::isValidVirtualFileProviderFolderName)
+    val parent = stored?.parentFile
+    return if (folderName != null && parent != null) {
+        VirtualFileProviderLocation(parent.absolutePath, folderName)
+    } else {
+        VirtualFileProviderLocation(userHome.absolutePath, "Nextcloud Native")
+    }
+}
+
+private fun desktopLinuxVirtualFileMountPoint(
+    preferences: Preferences,
+    accountId: String,
+): File = desktopVirtualFileProviderLocation(preferences, accountId).let { location ->
+    File(location.parentPath, location.folderName).absoluteFile.normalize()
+}
+
+private fun virtualFileProviderRootPreferenceKey(accountId: String): String {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return "$KEY_VIRTUAL_FILE_ROOT_PREFIX$accountId".also { key -> check(key.length <= Preferences.MAX_KEY_LENGTH) }
+}
+
+internal fun validateDesktopVirtualFileProviderLocation(location: VirtualFileProviderLocation): Path {
+    val parent = File(location.parentPath).toPath().toAbsolutePath().normalize()
+    require(Files.isDirectory(parent, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(parent)) {
+        "Choose an existing local drive or folder, not a symbolic link."
+    }
+    require(Files.isWritable(parent)) { "The selected location is not writable." }
+    val target = parent.resolve(location.folderName).normalize()
+    require(target.parent == parent) { "The virtual file folder must stay inside the selected location." }
+    require(target.toString().length <= Preferences.MAX_VALUE_LENGTH) { "The selected location path is too long." }
+    if (Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+        require(Files.isDirectory(target, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(target)) {
+            "The selected virtual file folder is not a regular directory."
+        }
+        require(Files.list(target).use { entries -> !entries.findAny().isPresent }) {
+            "The selected virtual file folder must be empty before it can be connected."
+        }
+    }
+    return target
+}
 
 internal fun desktopWindowsCloudFilesRoot(
     accountId: String,
@@ -545,7 +600,8 @@ class DesktopNextcloudServices(
         verifiedContractCache = FileVerifiedContractCache(desktopContractCacheDirectory("verified")),
     )
     private val fileReadCache = defaultDesktopFileReadCache()
-    private val virtualRangeCache = defaultDesktopVirtualRangeCache(fileReadCache::loadPolicy)
+    private val virtualRangeCaches = mutableMapOf<String, DesktopVirtualRangeCache>()
+    private val virtualFolderHydrationJobs = mutableMapOf<String, Job>()
     private val virtualFileProviderLock = Any()
     private var linuxVirtualFileSystem: LinuxNextcloudVirtualFileSystem? = null
     private var linuxVirtualFileMountIdentity: String? = null
@@ -562,6 +618,125 @@ class DesktopNextcloudServices(
         executeNextcloudApi(session, request)
     }
     private val externalFileHandoff = DesktopExternalFileHandoff()
+
+    private fun virtualRangeCache(accountId: String): DesktopVirtualRangeCache =
+        synchronized(virtualRangeCaches) {
+            virtualRangeCaches.getOrPut(accountId) {
+                if (isLinuxDesktop()) {
+                    val location = desktopVirtualFileProviderLocation(preferences, accountId)
+                    DesktopVirtualRangeCache(
+                        root = File(location.parentPath, ".nextcloud-native-cache"),
+                        policy = fileReadCache::loadPolicy,
+                        createParentDirectories = false,
+                    )
+                } else {
+                    defaultDesktopVirtualRangeCache(fileReadCache::loadPolicy)
+                }
+            }
+        }
+
+    private fun scheduleVirtualFolderHydration(
+        session: NextcloudSession,
+        userId: String,
+        relativePath: String,
+        accountId: String,
+        cache: DesktopVirtualRangeCache,
+    ) {
+        val jobKey = "$accountId\u0000$relativePath"
+        synchronized(virtualFolderHydrationJobs) {
+            if (virtualFolderHydrationJobs[jobKey]?.isActive == true) return
+            virtualFolderHydrationJobs[jobKey] = serviceScope.launch(Dispatchers.IO) {
+                try {
+                    val tree = DesktopFileSyncRemoteTree(session, userId, "")
+                    val backend = DesktopNextcloudVirtualFileBackend(
+                        session = session,
+                        userId = userId,
+                        services = this@DesktopNextcloudServices,
+                        rangeCache = cache,
+                        writebacks = defaultDesktopLinuxWritebackStore(session),
+                        tree = tree,
+                    )
+                    val pending = ArrayDeque<String>().apply { add(relativePath) }
+                    var discoveredEntries = 0
+                    while (pending.isNotEmpty()) {
+                        val parent = pending.removeFirst()
+                        if (
+                            cache.loadFolderRetention(accountId).retentionFor(parent) !=
+                            VirtualFolderRetention.KeepOnDevice
+                        ) continue
+                        tree.list(parent).forEach { document ->
+                            discoveredEntries += 1
+                            check(discoveredEntries <= MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES) {
+                                "The selected virtual folder contains too many entries for one reconciliation pass."
+                            }
+                            val fullPath = document.entry.relativePath
+                            if (
+                                cache.loadFolderRetention(accountId).retentionFor(fullPath) !=
+                                VirtualFolderRetention.KeepOnDevice
+                            ) return@forEach
+                            if (document.isDirectory) {
+                                pending.add(fullPath)
+                                return@forEach
+                            }
+                            val size = document.entry.size ?: return@forEach
+                            if (size == 0L) return@forEach
+                            val reserve = fileReadCache.loadPolicy().minimumFreeSpaceBytes
+                            val remaining = (
+                                size - cache.cachedBytesForRevision(accountId, fullPath, document.entry.etag, size)
+                            ).coerceAtLeast(0L)
+                            if (remaining == 0L) return@forEach
+                            val required = if (Long.MAX_VALUE - remaining < reserve) {
+                                Long.MAX_VALUE
+                            } else {
+                                remaining + reserve
+                            }
+                            if (cache.summary(accountId).availableFreeBytes < required) return@forEach
+                            val node = LinuxVirtualFileNode(
+                                path = fullPath,
+                                name = fullPath.substringAfterLast('/'),
+                                directory = false,
+                                size = size,
+                                remoteRevision = document.entry.etag,
+                            )
+                            backend.open(node).use { handle ->
+                                var offset = 0L
+                                while (offset < size) {
+                                    currentCoroutineContext().ensureActive()
+                                    val length = minOf(VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES.toLong(), size - offset).toInt()
+                                    handle.read(offset, length)
+                                    offset += length
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    synchronized(virtualFolderHydrationJobs) { virtualFolderHydrationJobs.remove(jobKey) }
+                }
+            }
+        }
+    }
+
+    private suspend fun cancelVirtualFolderHydration(accountId: String, relativePath: String) {
+        val exact = "$accountId\u0000$relativePath"
+        val descendants = "$exact/"
+        val jobs = synchronized(virtualFolderHydrationJobs) {
+            virtualFolderHydrationJobs.filterKeys { key -> key == exact || key.startsWith(descendants) }.values.toList()
+        }
+        jobs.forEach { job -> job.cancelAndJoin() }
+    }
+
+    private suspend fun reconcileConfiguredVirtualFolders() {
+        if (!isLinuxDesktop()) return
+        val session = loadSession() ?: return
+        val accountId = desktopFileCacheAccountId(session)
+        val cache = virtualRangeCache(accountId)
+        val kept = cache.loadFolderRetention(accountId).rules.filter { rule ->
+            rule.retention == VirtualFolderRetention.KeepOnDevice
+        }
+        if (kept.isEmpty()) return
+        val userId = loadServerInfo(session).userId
+        kept.forEach { rule -> scheduleVirtualFolderHydration(session, userId, rule.relativePath, accountId, cache) }
+    }
     private val localUploadPicker = DesktopLocalUploadPicker()
     private val deckCardDrafts = DesktopDeckCardDraftStore()
     private val fileSyncEngine = DesktopFileSyncEngine(
@@ -607,6 +782,8 @@ class DesktopNextcloudServices(
                     if (!isFileSyncPaused()) {
                         runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
                             .onFailure(::publishBackgroundFileSyncFailure)
+                        runCatching { reconcileConfiguredVirtualFolders() }
+                            .onFailure(::publishBackgroundFileSyncFailure)
                     }
                     delay(DESKTOP_FILE_SYNC_INTERVAL_MILLIS)
                 }
@@ -639,9 +816,19 @@ class DesktopNextcloudServices(
         ) {
             runCatching { activateVirtualFileProvider(session, userId) }
         }
-        enforceCombinedVirtualFileCachePolicy(accountId, fileReadCache.loadPolicy())
+        runCatching { enforceCombinedVirtualFileCachePolicy(accountId, fileReadCache.loadPolicy()) }
         val cache = fileReadCache.virtualFileSummary(accountId)
-        val ranges = virtualRangeCache.summary(accountId)
+        val rangeCacheResult = runCatching { virtualRangeCache(accountId) }
+        val rangeCache = rangeCacheResult.getOrNull()
+        val folderRetention = rangeCache?.loadFolderRetention(accountId) ?: VirtualFolderRetentionState()
+        if (rangeCache != null) {
+            folderRetention.rules.filter { rule ->
+                rule.retention == VirtualFolderRetention.KeepOnDevice
+            }.forEach { rule ->
+                scheduleVirtualFolderHydration(session, userId, rule.relativePath, accountId, rangeCache)
+            }
+        }
+        val ranges = rangeCache?.summary(accountId)
         val linux = isLinuxDesktop()
         val windows = isWindowsDesktop()
         val active = synchronized(virtualFileProviderLock) {
@@ -658,21 +845,24 @@ class DesktopNextcloudServices(
                 else -> VirtualFilePlatformIntegration.InAppOnDemandCache
             },
             policy = cache.policy,
-            cachedBytes = cache.cachedBytes + ranges.cachedBytes + (windowsSummary?.cachedBytes ?: 0L),
-            reclaimableBytes = cache.reclaimableBytes + ranges.reclaimableBytes +
+            cachedBytes = cache.cachedBytes + (ranges?.cachedBytes ?: 0L) + (windowsSummary?.cachedBytes ?: 0L),
+            reclaimableBytes = cache.reclaimableBytes + (ranges?.reclaimableBytes ?: 0L) +
                 (windowsSummary?.reclaimableBytes ?: 0L),
-            pinnedBytes = windowsSummary?.pinnedBytes ?: 0L,
-            hydratedFileCount = cache.entryCount + ranges.fileCount +
+            pinnedBytes = (ranges?.pinnedBytes ?: 0L) + (windowsSummary?.pinnedBytes ?: 0L),
+            hydratedFileCount = cache.entryCount + (ranges?.fileCount ?: 0) +
                 (windowsSummary?.hydratedFileCount ?: 0),
-            pinnedFileCount = windowsSummary?.pinnedFileCount ?: 0,
+            pinnedFileCount = (ranges?.pinnedFileCount ?: 0) + (windowsSummary?.pinnedFileCount ?: 0),
             availableFreeBytes = listOfNotNull(
                 cache.availableFreeBytes,
-                ranges.availableFreeBytes,
+                ranges?.availableFreeBytes,
                 windowsSummary?.availableFreeBytes,
             ).minOrNull(),
             storageCapacityBytes = null,
             limitations = buildList {
                 add("Range blocks and complete files share the managed automatic-cleanup policy.")
+                rangeCacheResult.exceptionOrNull()?.let { failure ->
+                    add("The selected virtual-file storage drive is unavailable: ${failure.message ?: "unknown error"}")
+                }
                 linuxVirtualFileFailure?.let { add("The last Linux mount attempt failed: $it") }
                 windowsCloudFilesFailure?.let { add("The last Windows Cloud Files activation failed: $it") }
                 if (windows) {
@@ -691,15 +881,26 @@ class DesktopNextcloudServices(
             providerState = when {
                 (windowsSummary?.failedWritebackCount ?: 0) > 0 -> VirtualFileProviderState.NeedsAttention
                 active -> VirtualFileProviderState.Active
-                linuxVirtualFileFailure != null || windowsCloudFilesFailure != null ->
+                rangeCacheResult.isFailure || linuxVirtualFileFailure != null || windowsCloudFilesFailure != null ->
                     VirtualFileProviderState.NeedsAttention
                 linux || windows -> VirtualFileProviderState.Inactive
                 else -> VirtualFileProviderState.NotApplicable
             },
             providerLocation = when {
-                linux -> desktopLinuxVirtualFileMountPoint().absolutePath
+                linux -> desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath
                 windows -> "Nextcloud Native in File Explorer"
                 else -> null
+            },
+            providerLocationConfiguration = if (linux) {
+                desktopVirtualFileProviderLocation(preferences, accountId)
+            } else {
+                null
+            },
+            providerLocationCanChange = linux && !active,
+            folderRetentionRules = if (linux) {
+                folderRetention.rules
+            } else {
+                emptyList()
             },
             pendingWritebackCount = writebacks.size + (windowsSummary?.pendingWritebackCount ?: 0),
         )
@@ -723,16 +924,16 @@ class DesktopNextcloudServices(
         require(requestedBytes >= 0L)
         val accountId = desktopFileCacheAccountId(session)
         val before = fileReadCache.virtualFileSummary(accountId).cachedBytes +
-            virtualRangeCache.summary(accountId).cachedBytes
+            virtualRangeCache(accountId).summary(accountId).cachedBytes
         val windowsFreed = synchronized(virtualFileProviderLock) {
             windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }
                 ?.freeUpSpace(requestedBytes)
         } ?: 0L
-        val rangePlan = virtualRangeCache.freeUp(accountId, (requestedBytes - windowsFreed).coerceAtLeast(0L))
+        val rangePlan = virtualRangeCache(accountId).freeUp(accountId, (requestedBytes - windowsFreed).coerceAtLeast(0L))
         val remaining = (requestedBytes - windowsFreed - rangePlan.plannedFreedBytes).coerceAtLeast(0L)
         fileReadCache.freeUpVirtualFiles(accountId, remaining)
         val after = fileReadCache.virtualFileSummary(accountId).cachedBytes +
-            virtualRangeCache.summary(accountId).cachedBytes
+            virtualRangeCache(accountId).summary(accountId).cachedBytes
         val freed = windowsFreed + (before - after).coerceAtLeast(0L)
         VirtualFileStorageActionResult.Completed(
             message = if (freed > 0L) {
@@ -833,7 +1034,7 @@ class DesktopNextcloudServices(
             }
             if (linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) {
                 return@withContext VirtualFileStorageActionResult.Completed(
-                    "Virtual files are already mounted at ${desktopLinuxVirtualFileMountPoint().absolutePath}.",
+                    "Virtual files are already mounted at ${desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath}.",
                 )
             }
             if (linuxVirtualFileSystem != null) {
@@ -841,7 +1042,7 @@ class DesktopNextcloudServices(
                 linuxVirtualFileSystem = null
                 linuxVirtualFileMountIdentity = null
             }
-            val mountPoint = desktopLinuxVirtualFileMountPoint().apply {
+            val mountPoint = desktopLinuxVirtualFileMountPoint(preferences, accountId).apply {
                 check(isDirectory || mkdirs()) { "Could not create the virtual-files mount folder." }
             }
             check(!Files.isSymbolicLink(mountPoint.toPath())) { "The virtual-files mount folder cannot be a symlink." }
@@ -851,7 +1052,7 @@ class DesktopNextcloudServices(
             val writebackStore = defaultDesktopLinuxWritebackStore(session)
             writebackStore.recoverPending(
                 tree = DesktopFileSyncRemoteTree(session, userId, ""),
-                onCommitted = { path -> virtualRangeCache.invalidate(accountId, path) },
+                onCommitted = { path -> virtualRangeCache(accountId).invalidate(accountId, path) },
             )
             val fileSystem = LinuxNextcloudVirtualFileSystem(
                 CachingLinuxVirtualFileBackend(
@@ -859,7 +1060,7 @@ class DesktopNextcloudServices(
                         session = session,
                         userId = userId,
                         services = this@DesktopNextcloudServices,
-                        rangeCache = virtualRangeCache,
+                        rangeCache = virtualRangeCache(accountId),
                         writebacks = writebackStore,
                     ),
                     store = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId),
@@ -877,7 +1078,7 @@ class DesktopNextcloudServices(
             }
         }
         VirtualFileStorageActionResult.Completed(
-            "Virtual files mounted at ${desktopLinuxVirtualFileMountPoint().absolutePath}.",
+            "Virtual files mounted at ${desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath}.",
         )
     }
 
@@ -906,6 +1107,94 @@ class DesktopNextcloudServices(
                 "Virtual files unmounted. Cached content and remote files were kept."
             },
         )
+    }
+
+    override suspend fun chooseVirtualFileProviderParent(initialParentPath: String?): String? =
+        withContext(Dispatchers.IO) {
+            val chooser = JFileChooser().apply {
+                dialogTitle = "Choose where Nextcloud Native appears"
+                fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                isAcceptAllFileFilterUsed = false
+                initialParentPath?.let(::File)?.takeIf(File::isDirectory)?.let { currentDirectory = it }
+            }
+            if (chooser.showOpenDialog(null) != JFileChooser.APPROVE_OPTION) return@withContext null
+            val selected = chooser.selectedFile.toPath().toAbsolutePath().normalize()
+            require(Files.isDirectory(selected, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(selected)) {
+                "Choose a regular local drive or folder, not a symbolic link."
+            }
+            selected.toString()
+        }
+
+    override suspend fun saveVirtualFileProviderLocation(
+        session: NextcloudSession,
+        userId: String,
+        location: VirtualFileProviderLocation,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        if (!isLinuxDesktop()) {
+            return@withContext VirtualFileStorageActionResult.Unsupported(
+                "Changing the system virtual-file location is not available on this desktop platform yet.",
+            )
+        }
+        val accountId = desktopFileCacheAccountId(session)
+        synchronized(virtualFileProviderLock) {
+            if (linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "Disconnect the file-manager integration before changing its location.",
+                )
+            }
+            val target = validateDesktopVirtualFileProviderLocation(location)
+            if (target == desktopLinuxVirtualFileMountPoint(preferences, accountId).toPath()) {
+                return@withContext VirtualFileStorageActionResult.Completed("Virtual files already use $target.")
+            }
+            val currentCache = virtualRangeCache(accountId)
+            if (
+                currentCache.summary(accountId).cachedBytes > 0L ||
+                currentCache.loadFolderRetention(accountId).rules.isNotEmpty()
+            ) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "Make kept folders online-only and free disposable content before moving the storage drive.",
+                )
+            }
+            preferences.put(virtualFileProviderRootPreferenceKey(accountId), target.toString())
+            synchronized(virtualRangeCaches) { virtualRangeCaches.remove(accountId) }
+            VirtualFileStorageActionResult.Completed("Virtual files will appear at $target.")
+        }
+    }
+
+    override suspend fun setVirtualFolderRetention(
+        session: NextcloudSession,
+        userId: String,
+        relativePath: String,
+        retention: VirtualFolderRetention,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        if (!isLinuxDesktop()) {
+            return@withContext VirtualFileStorageActionResult.Unsupported(
+                "Selective virtual folders are not available on this desktop platform yet.",
+            )
+        }
+        val normalized = FileOfflineKey("account", relativePath).relativePath
+        val selected = DesktopFileSyncRemoteTree(session, userId, "").resolve(normalized)
+        if (selected == null || !selected.isDirectory) {
+            return@withContext VirtualFileStorageActionResult.Rejected("Choose an existing Nextcloud folder.")
+        }
+        val accountId = desktopFileCacheAccountId(session)
+        val cache = virtualRangeCache(accountId)
+        cache.setFolderRetention(accountId, normalized, retention)
+        if (retention == VirtualFolderRetention.KeepOnDevice) {
+            scheduleVirtualFolderHydration(session, userId, normalized, accountId, cache)
+            VirtualFileStorageActionResult.Completed(
+                "${normalized.substringAfterLast('/')} will be kept on this device. Downloading continues in the background.",
+            )
+        } else {
+            cancelVirtualFolderHydration(accountId, normalized)
+            val protected = defaultDesktopLinuxWritebackStore(session).pendingWritebacks()
+                .mapTo(hashSetOf()) { writeback -> writeback.path }
+            val freed = cache.dehydrateFolder(accountId, normalized, protected)
+            VirtualFileStorageActionResult.Completed(
+                "${normalized.substringAfterLast('/')} is online-only. Safe local content was released.",
+                freedBytes = freed,
+            )
+        }
     }
 
     override fun close() {
@@ -1172,7 +1461,7 @@ class DesktopNextcloudServices(
         policy: VirtualFileCachePolicy,
     ) {
         fileReadCache.freeUpVirtualFiles(accountId, requestedBytesToFree = 0L)
-        virtualRangeCache.freeUp(accountId, requestedBytes = 0L)
+        virtualRangeCache(accountId).freeUp(accountId, requestedBytes = 0L)
         synchronized(virtualFileProviderLock) {
             windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }?.enforcePolicy(policy)
         }
@@ -1180,10 +1469,11 @@ class DesktopNextcloudServices(
         val maximumBytes = policy.maximumCacheBytes ?: return
         fun currentExcess(): Long {
             val windows = windowsVirtualFileSummary(accountId)
+            val ranges = virtualRangeCache(accountId).summary(accountId)
             return combinedAutomaticCacheExcess(
                 maximumBytes,
                 fileReadCache.virtualFileSummary(accountId).cachedBytes,
-                virtualRangeCache.summary(accountId).cachedBytes,
+                ranges.cachedBytes - ranges.pinnedBytes,
                 windows?.cachedBytes ?: 0L,
                 windows?.pinnedBytes ?: 0L,
             )
@@ -1194,7 +1484,7 @@ class DesktopNextcloudServices(
             windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }?.freeUpSpace(excess)
         }
         excess = currentExcess()
-        if (excess > 0L) virtualRangeCache.freeUp(accountId, excess)
+        if (excess > 0L) virtualRangeCache(accountId).freeUp(accountId, excess)
         excess = currentExcess()
         if (excess > 0L) fileReadCache.freeUpVirtualFiles(accountId, excess)
     }

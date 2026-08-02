@@ -25,6 +25,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -113,6 +114,8 @@ internal fun FileOfflineCenterScreen(
     var virtualStorageLoading by remember(session, userId) { mutableStateOf(false) }
     var virtualStorageBusy by remember(session, userId) { mutableStateOf(false) }
     var virtualStorageSettingsVisible by remember(session, userId) { mutableStateOf(false) }
+    var virtualLocationVisible by remember(session, userId) { mutableStateOf(false) }
+    var virtualFolderPickerVisible by remember(session, userId) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun runItemAction(item: FileOfflineCenterItem, remove: Boolean) {
@@ -235,6 +238,46 @@ internal fun FileOfflineCenterScreen(
             }.onFailure { failure ->
                 actionMessage = failure.message ?: "Could not change the virtual file provider."
             }
+            virtualStorageBusy = false
+        }
+    }
+
+    fun saveVirtualFileLocation(location: VirtualFileProviderLocation) {
+        if (virtualStorageBusy) return
+        virtualStorageBusy = true
+        actionMessage = null
+        scope.launch {
+            runCatching { services.saveVirtualFileProviderLocation(session, userId, location) }
+                .onSuccess { result ->
+                    actionMessage = result.virtualFileStorageMessage()
+                    if (result is VirtualFileStorageActionResult.Completed) {
+                        virtualLocationVisible = false
+                        refreshAttempt += 1
+                    }
+                }
+                .onFailure { failure ->
+                    actionMessage = failure.message ?: "Could not change the virtual file location."
+                }
+            virtualStorageBusy = false
+        }
+    }
+
+    fun setVirtualFolderRetention(path: String, retention: VirtualFolderRetention) {
+        if (virtualStorageBusy) return
+        virtualStorageBusy = true
+        actionMessage = null
+        scope.launch {
+            runCatching { services.setVirtualFolderRetention(session, userId, path, retention) }
+                .onSuccess { result ->
+                    actionMessage = result.virtualFileStorageMessage()
+                    if (result is VirtualFileStorageActionResult.Completed) {
+                        virtualFolderPickerVisible = false
+                        refreshAttempt += 1
+                    }
+                }
+                .onFailure { failure ->
+                    actionMessage = failure.message ?: "Could not change folder availability."
+                }
             virtualStorageBusy = false
         }
     }
@@ -420,6 +463,11 @@ internal fun FileOfflineCenterScreen(
                         onFreeUp = ::freeUpVirtualStorage,
                         onActivateProvider = { setVirtualFileProviderActive(true) },
                         onDeactivateProvider = { setVirtualFileProviderActive(false) },
+                        onChangeLocation = { virtualLocationVisible = true },
+                        onChoosePinnedFolder = { virtualFolderPickerVisible = true },
+                        onReleaseFolder = { path ->
+                            setVirtualFolderRetention(path, VirtualFolderRetention.Automatic)
+                        },
                     )
                 }
             }
@@ -529,6 +577,35 @@ internal fun FileOfflineCenterScreen(
                 onSave = ::saveVirtualStoragePolicy,
             )
         }
+    }
+
+    if (virtualLocationVisible) {
+        virtualStorage?.providerLocationConfiguration?.let { current ->
+            VirtualFileProviderLocationDialog(
+                services = services,
+                initial = current,
+                busy = virtualStorageBusy,
+                onDismiss = { if (!virtualStorageBusy) virtualLocationVisible = false },
+                onSave = ::saveVirtualFileLocation,
+            )
+        }
+    }
+
+    if (virtualFolderPickerVisible) {
+        RemoteFolderPickerDialog(
+            services = services,
+            session = session,
+            userId = userId,
+            initialPath = "",
+            onDismiss = { if (!virtualStorageBusy) virtualFolderPickerVisible = false },
+            onSelected = { path ->
+                if (path.isEmpty()) {
+                    actionMessage = "Choose a folder below the Files root."
+                } else {
+                    setVirtualFolderRetention(path, VirtualFolderRetention.KeepOnDevice)
+                }
+            },
+        )
     }
 
     val localRootForDestination = pendingLocalRoot
@@ -1214,6 +1291,9 @@ internal fun VirtualFileStorageCard(
     onFreeUp: () -> Unit,
     onActivateProvider: () -> Unit,
     onDeactivateProvider: () -> Unit,
+    onChangeLocation: () -> Unit,
+    onChoosePinnedFolder: () -> Unit,
+    onReleaseFolder: (String) -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1356,6 +1436,11 @@ internal fun VirtualFileStorageCard(
                                     color = MaterialTheme.colorScheme.error,
                                 )
                             }
+                            if (snapshot.providerLocationCanChange) {
+                                TextButton(enabled = !busy, onClick = onChangeLocation) {
+                                    Text("Change drive or folder")
+                                }
+                            }
                         }
                     }
                     if (snapshot.providerState == VirtualFileProviderState.Active) {
@@ -1365,6 +1450,42 @@ internal fun VirtualFileStorageCard(
                     } else {
                         Button(enabled = !busy, onClick = onActivateProvider) {
                             Text("Connect to file manager")
+                        }
+                    }
+                }
+                if (snapshot.integration == VirtualFilePlatformIntegration.LinuxFilesystemMount) {
+                    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                        Text("Folders kept on this device", style = MaterialTheme.typography.titleSmall)
+                        val pinnedFolders = snapshot.folderRetentionRules.filter { rule ->
+                            rule.retention == VirtualFolderRetention.KeepOnDevice
+                        }
+                        if (pinnedFolders.isEmpty()) {
+                            Text(
+                                "Everything stays visible. Choose only the albums or folders that should also work offline.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            pinnedFolders.forEach { rule ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        rule.relativePath,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    TextButton(enabled = !busy, onClick = { onReleaseFolder(rule.relativePath) }) {
+                                        Text("Make online-only")
+                                    }
+                                }
+                            }
+                        }
+                        OutlinedButton(enabled = !busy, onClick = onChoosePinnedFolder) {
+                            Text("Keep a folder on this device")
                         }
                     }
                 }
@@ -1389,6 +1510,83 @@ internal fun VirtualFileStorageCard(
             }
         }
     }
+}
+
+@Composable
+private fun VirtualFileProviderLocationDialog(
+    services: NextcloudPlatformServices,
+    initial: VirtualFileProviderLocation,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (VirtualFileProviderLocation) -> Unit,
+) {
+    var parentPath by remember(initial) { mutableStateOf(initial.parentPath) }
+    var folderName by remember(initial) { mutableStateOf(initial.folderName) }
+    var choosing by remember { mutableStateOf(false) }
+    var chooserError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val validName = folderName.isValidVirtualFileProviderFolderName()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Choose virtual file location") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+                Text(
+                    "Choose the drive or parent folder, then give the visible Nextcloud folder a clear name.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedTextField(
+                    value = parentPath,
+                    onValueChange = {},
+                    readOnly = true,
+                    singleLine = true,
+                    label = { Text("Drive or parent folder") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedButton(
+                    enabled = !busy && !choosing,
+                    onClick = {
+                        choosing = true
+                        chooserError = null
+                        scope.launch {
+                            runCatching { services.chooseVirtualFileProviderParent(parentPath) }
+                                .onSuccess { selected -> if (selected != null) parentPath = selected }
+                                .onFailure { chooserError = it.message ?: "Could not open the folder chooser." }
+                            choosing = false
+                        }
+                    },
+                ) {
+                    Text(if (choosing) "Choosing..." else "Choose drive or folder")
+                }
+                OutlinedTextField(
+                    value = folderName,
+                    onValueChange = { folderName = it },
+                    singleLine = true,
+                    label = { Text("Folder name") },
+                    isError = folderName.isNotEmpty() && !validName,
+                    supportingText = if (!validName) {
+                        { Text("Use a normal folder name without slashes, trailing spaces, or reserved device names.") }
+                    } else {
+                        null
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                chooserError?.let { error -> Text(error, color = MaterialTheme.colorScheme.error) }
+                Text(
+                    "Current: ${initial.parentPath}/${initial.folderName}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !busy && !choosing && parentPath.isNotBlank() && validName,
+                onClick = { onSave(VirtualFileProviderLocation(parentPath, folderName)) },
+            ) { Text("Use this location") }
+        },
+        dismissButton = { TextButton(enabled = !busy && !choosing, onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable

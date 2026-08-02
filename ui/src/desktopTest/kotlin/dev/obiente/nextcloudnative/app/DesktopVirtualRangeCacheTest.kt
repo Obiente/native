@@ -66,6 +66,39 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `folder retention survives restart and safe release protects active and writeback paths`() {
+        val directory = Files.createTempDirectory("virtual-range-retention-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Album", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/Album/safe.raf", "e1", 4L, 0L, "safe".encodeToByteArray())
+            cache.storeBlock(ACCOUNT_ID, "Photos/Album/open.raf", "e2", 4L, 0L, "open".encodeToByteArray())
+            cache.storeBlock(ACCOUNT_ID, "Photos/Album/dirty.raf", "e3", 5L, 0L, "dirty".encodeToByteArray())
+            cache.acquire(ACCOUNT_ID, "Photos/Album/open.raf")
+
+            val restarted = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            assertEquals(
+                VirtualFolderRetention.KeepOnDevice,
+                restarted.loadFolderRetention(ACCOUNT_ID).retentionFor("Photos/Album/safe.raf"),
+            )
+            assertEquals(13L, restarted.summary(ACCOUNT_ID).pinnedBytes)
+            assertEquals(3, restarted.summary(ACCOUNT_ID).pinnedFileCount)
+
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Album", VirtualFolderRetention.Automatic)
+            assertEquals(
+                4L,
+                cache.dehydrateFolder(ACCOUNT_ID, "Photos/Album", setOf("Photos/Album/dirty.raf")),
+            )
+            assertEquals(9L, cache.summary(ACCOUNT_ID).cachedBytes)
+            cache.release(ACCOUNT_ID, "Photos/Album/open.raf")
+            assertEquals(4L, cache.dehydrateFolder(ACCOUNT_ID, "Photos/Album", setOf("Photos/Album/dirty.raf")))
+            assertEquals(5L, cache.summary(ACCOUNT_ID).cachedBytes)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `oversized range index rejects a block without leaving an orphan blob`() {
         val directory = Files.createTempDirectory("virtual-range-cache-index-").toFile()
         try {

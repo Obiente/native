@@ -637,6 +637,28 @@ interface NextcloudPlatformServices {
         "A system virtual file provider is not available on this platform.",
     )
 
+    /** Opens a native directory chooser for the parent of the visible virtual-file folder. */
+    suspend fun chooseVirtualFileProviderParent(initialParentPath: String?): String? = null
+
+    /** Persists a validated provider location. Active providers must be migrated explicitly. */
+    suspend fun saveVirtualFileProviderLocation(
+        session: NextcloudSession,
+        userId: String,
+        location: VirtualFileProviderLocation,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "Changing the virtual-file location is not available on this platform.",
+    )
+
+    /** Persists recursive virtual-folder retention and schedules hydration or safe release. */
+    suspend fun setVirtualFolderRetention(
+        session: NextcloudSession,
+        userId: String,
+        relativePath: String,
+        retention: VirtualFolderRetention,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "Selective virtual folders are not available on this platform.",
+    )
+
     /** Opens the native folder chooser and persists a least-privilege folder grant. */
     suspend fun chooseFileSyncLocalRoot(initialRootHint: String? = null): FileSyncLocalRoot? = null
 

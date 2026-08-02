@@ -12,7 +12,9 @@ import kotlinx.serialization.json.Json
 internal data class DesktopVirtualRangeCacheSummary(
     val cachedBytes: Long,
     val reclaimableBytes: Long,
+    val pinnedBytes: Long,
     val fileCount: Int,
+    val pinnedFileCount: Int,
     val availableFreeBytes: Long,
 )
 
@@ -20,12 +22,34 @@ internal data class DesktopVirtualRangeCacheSummary(
 internal class DesktopVirtualRangeCache(
     private val root: File,
     private val maximumIndexBytes: Long = MAX_INDEX_BYTES,
+    private val createParentDirectories: Boolean = true,
     private val policy: () -> VirtualFileCachePolicy,
 ) {
     private val activePaths = mutableMapOf<FileOfflineKey, Int>()
 
     init {
         require(maximumIndexBytes in 1L..MAX_INDEX_BYTES)
+        val cacheRoot = root.toPath().toAbsolutePath().normalize()
+        val parent = requireNotNull(cacheRoot.parent)
+        if (createParentDirectories) {
+            Files.createDirectories(parent)
+        } else {
+            require(
+                Files.isDirectory(parent, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                    !Files.isSymbolicLink(parent),
+            ) { "The selected virtual-file storage drive is unavailable." }
+        }
+        if (Files.notExists(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                Files.createDirectory(cacheRoot)
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                // Another app process may have created the same account cache concurrently.
+            }
+        }
+        require(
+            Files.isDirectory(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(cacheRoot),
+        ) { "The desktop virtual range cache must be a regular local directory." }
     }
 
     @Synchronized
@@ -143,6 +167,50 @@ internal class DesktopVirtualRangeCache(
     }
 
     @Synchronized
+    fun loadFolderRetention(accountId: String): VirtualFolderRetentionState =
+        load(accountId).folderRules.toDomain()
+
+    @Synchronized
+    fun cachedBytesForRevision(accountId: String, path: String, remoteRevision: String, fileSize: Long): Long {
+        val normalized = FileOfflineKey(accountId, path).relativePath
+        return load(accountId).blocks.asSequence()
+            .filter { block ->
+                block.path == normalized && block.remoteRevision == remoteRevision && block.fileSize == fileSize
+            }
+            .sumOf { block -> block.length.toLong() }
+    }
+
+    @Synchronized
+    fun setFolderRetention(accountId: String, path: String, retention: VirtualFolderRetention) {
+        val current = load(accountId)
+        val next = current.folderRules.toDomain().withRetention(path, retention)
+        save(current = current, accountId = accountId, folderRetention = next)
+    }
+
+    /** Releases only inactive, automatic blocks in the selected subtree. */
+    @Synchronized
+    fun dehydrateFolder(accountId: String, path: String, protectedPaths: Set<String>): Long {
+        val normalized = FileOfflineKey(accountId, path).relativePath
+        val current = load(accountId)
+        val retention = current.folderRules.toDomain()
+        val removablePaths = current.blocks.asSequence()
+            .map(CachedRangeBlock::path)
+            .distinct()
+            .filter { candidate -> candidate == normalized || candidate.startsWith("$normalized/") }
+            .filter { candidate -> retention.retentionFor(candidate) == VirtualFolderRetention.Automatic }
+            .filter { candidate -> candidate !in protectedPaths }
+            .filter { candidate -> activePaths.getOrDefault(FileOfflineKey(accountId, candidate), 0) == 0 }
+            .toSet()
+        if (removablePaths.isEmpty()) return 0L
+        val removed = current.blocks.filter { block -> block.path in removablePaths }
+        removed.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }
+        save(accountId, current.copy(blocks = current.blocks.filterNot { block -> block.path in removablePaths }))
+        return removed.fold(0L) { total, block ->
+            if (Long.MAX_VALUE - total < block.length) Long.MAX_VALUE else total + block.length
+        }
+    }
+
+    @Synchronized
     fun summary(accountId: String): DesktopVirtualRangeCacheSummary {
         val entries = load(accountId).toDomain(accountId)
         val plan = planVirtualFileEviction(
@@ -154,7 +222,11 @@ internal class DesktopVirtualRangeCache(
         return DesktopVirtualRangeCacheSummary(
             cachedBytes = plan.cachedBytes,
             reclaimableBytes = plan.reclaimableBytes,
+            pinnedBytes = entries
+                .filter { entry -> entry.retention == VirtualFileRetention.Pinned }
+                .sumOf(VirtualFileCacheEntry::sizeBytes),
             fileCount = entries.size,
+            pinnedFileCount = entries.count { entry -> entry.retention == VirtualFileRetention.Pinned },
             availableFreeBytes = root.usableSpace.coerceAtLeast(0L),
         )
     }
@@ -194,7 +266,9 @@ internal class DesktopVirtualRangeCache(
                 sizeBytes = fileBlocks.sumOf(CachedRangeBlock::length).toLong(),
                 cachedAtEpochMillis = fileBlocks.minOf(CachedRangeBlock::cachedAtEpochMillis),
                 lastAccessedAtEpochMillis = fileBlocks.maxOf(CachedRangeBlock::lastAccessedAtEpochMillis),
-                retention = VirtualFileRetention.Automatic,
+                retention = if (
+                    folderRules.toDomain().retentionFor(path) == VirtualFolderRetention.KeepOnDevice
+                ) VirtualFileRetention.Pinned else VirtualFileRetention.Automatic,
                 activeLeaseCount = activePaths.getOrDefault(FileOfflineKey(accountId, path), 0),
             )
         }
@@ -225,6 +299,19 @@ internal class DesktopVirtualRangeCache(
             .filter { it.isFile && it.extension == "block" && it.name !in referenced }
             .forEach(File::delete)
     }
+
+    private fun save(
+        current: RangeCacheIndex,
+        accountId: String,
+        folderRetention: VirtualFolderRetentionState,
+    ) = save(
+        accountId,
+        current.copy(
+            folderRules = folderRetention.rules.map { rule ->
+                CachedVirtualFolderRule(rule.relativePath, rule.retention)
+            },
+        ),
+    )
 
     private fun requireIndexFits(index: RangeCacheIndex) {
         encodedIndex(boundedIndex(index))
@@ -275,6 +362,7 @@ internal class DesktopVirtualRangeCache(
         require(version == 1 && blocks.size <= MAX_BLOCKS)
         require(blocks.map { "${it.path}\u0000${it.offset}" }.distinct().size == blocks.size)
         blocks.forEach(CachedRangeBlock::requireValid)
+        folderRules.toDomain()
     }
 
     private companion object {
@@ -300,7 +388,17 @@ internal fun defaultDesktopVirtualRangeCache(
 private data class RangeCacheIndex(
     val version: Int = 1,
     val blocks: List<CachedRangeBlock> = emptyList(),
+    val folderRules: List<CachedVirtualFolderRule> = emptyList(),
 )
+
+@Serializable
+private data class CachedVirtualFolderRule(
+    val relativePath: String,
+    val retention: VirtualFolderRetention,
+)
+
+private fun List<CachedVirtualFolderRule>.toDomain(): VirtualFolderRetentionState =
+    VirtualFolderRetentionState(map { rule -> VirtualFolderRetentionRule(rule.relativePath, rule.retention) })
 
 @Serializable
 private data class CachedRangeBlock(
