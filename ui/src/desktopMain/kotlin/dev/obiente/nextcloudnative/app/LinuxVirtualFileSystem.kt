@@ -189,6 +189,9 @@ internal class CachingLinuxVirtualFileBackend(
 
     override fun list(path: String): List<LinuxVirtualFileNode> = snapshot(path.linuxVirtualPath()).nodes
 
+    internal fun hasRecordedRefreshFailure(path: String): Boolean =
+        refreshFailures.containsKey(path.linuxVirtualPath())
+
     private fun snapshot(normalized: String): LinuxVirtualDirectorySnapshot {
         synchronized(metadataLock) { snapshots[normalized] }?.let { cached ->
             if (!cached.isFresh(nowEpochMillis(), freshForMillis)) refreshAsync(normalized)

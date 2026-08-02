@@ -472,7 +472,7 @@ class LinuxVirtualFileSystemTest {
         )
 
         assertEquals(listOf("cached.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
-        assertTrue(waitUntil { attempts.get() == 1 })
+        assertTrue(waitUntil { attempts.get() == 1 && cached.hasRecordedRefreshFailure("Photos") })
         repeat(10_000) {
             assertNotNull(cached.resolve("Photos/cached.dat"))
         }
