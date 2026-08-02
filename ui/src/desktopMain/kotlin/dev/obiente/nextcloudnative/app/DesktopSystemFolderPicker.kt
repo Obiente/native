@@ -56,7 +56,19 @@ internal fun desktopFolderPickerCommand(
 ): DesktopFolderPickerCommand? {
     // The caller owns validation. Keep the path in the target platform's syntax so this pure
     // command planner remains testable when cross-compiling Windows artifacts on another OS.
-    val initialPath = initialDirectory?.path?.takeIf(String::isNotBlank)
+    val initialPath = initialDirectory
+        ?.path
+        ?.takeIf(String::isNotBlank)
+        ?.let { path ->
+            when (platform) {
+                DesktopFolderPickerPlatform.Linux,
+                DesktopFolderPickerPlatform.MacOs,
+                -> path.replace('\\', '/')
+                DesktopFolderPickerPlatform.Windows,
+                DesktopFolderPickerPlatform.Unsupported,
+                -> path
+            }
+        }
     return when (platform) {
         DesktopFolderPickerPlatform.Linux -> linuxFolderPickerCommand(
             environment = environment,
@@ -115,7 +127,10 @@ private fun linuxFolderPickerCommand(
                     add("--file-selection")
                     add("--directory")
                     add("--title=Choose a folder to sync")
-                    initialPath?.let { add("--filename=${it.trimEnd(File.separatorChar)}${File.separator}") }
+                    initialPath?.let { path ->
+                        val folder = if (path == "/") path else "${path.trimEnd('/')}/"
+                        add("--filename=$folder")
+                    }
                 },
                 environment = mapOf("GTK_USE_PORTAL" to "1"),
             )
@@ -137,8 +152,14 @@ internal fun desktopFolderPickerPath(output: String): String? = output
     .lineSequence()
     .firstOrNull { it.isNotBlank() }
     ?.trim()
-    ?.removeSuffix(File.separator)
+    ?.let(::trimDesktopFolderPickerPath)
     ?.takeIf(String::isNotBlank)
+
+private fun trimDesktopFolderPickerPath(path: String): String = when {
+    path == "/" -> path
+    WINDOWS_DRIVE_ROOT.matches(path) -> path
+    else -> path.trimEnd('/', '\\')
+}
 
 private fun desktopFolderPickerCommandAvailable(executable: String): Boolean = runCatching {
     val finder = if (desktopFolderPickerPlatform(System.getProperty("os.name").orEmpty()) ==
@@ -165,6 +186,7 @@ private fun runDesktopFolderPickerCommand(command: DesktopFolderPickerCommand): 
 }.getOrNull()
 
 private const val MAX_FOLDER_PICKER_OUTPUT = 16_384
+private val WINDOWS_DRIVE_ROOT = Regex("^[A-Za-z]:[\\\\/]$")
 
 private val WINDOWS_FOLDER_PICKER_SCRIPT = """
     Add-Type -AssemblyName System.Windows.Forms

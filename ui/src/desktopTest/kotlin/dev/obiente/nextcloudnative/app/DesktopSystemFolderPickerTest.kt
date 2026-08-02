@@ -12,7 +12,7 @@ class DesktopSystemFolderPickerTest {
         val command = desktopFolderPickerCommand(
             platform = DesktopFolderPickerPlatform.Linux,
             environment = mapOf("XDG_CURRENT_DESKTOP" to "Hyprland"),
-            initialDirectory = File("/example/Pictures"),
+            initialDirectory = File("\\example\\Pictures"),
             commandAvailable = { it in setOf("zenity", "kdialog") },
         )
 
@@ -54,6 +54,8 @@ class DesktopSystemFolderPickerTest {
     @Test
     fun pickerOutputUsesOnlyTheFirstNonBlankPath() {
         assertEquals("/example/Pictures", desktopFolderPickerPath("\n/example/Pictures/\nignored\n"))
+        assertEquals("/", desktopFolderPickerPath("/\n"))
+        assertEquals("C:\\", desktopFolderPickerPath("C:\\\n"))
         assertNull(desktopFolderPickerPath("\n  \n"))
     }
 }
