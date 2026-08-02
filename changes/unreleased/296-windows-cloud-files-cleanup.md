@@ -1,7 +1,7 @@
 category: fix
 issue: 296
-pull: none
+pull: 297
 platforms: windows
 user-facing: yes
 
-Windows Cloud Files can reconnect, disconnect, migrate, and uninstall cleanly when an obsolete provider root is already missing.
+Windows Cloud Files now repairs stale owned registrations, retries a missing provider connection once, and cleans up safely when a provider root or connection is already absent.

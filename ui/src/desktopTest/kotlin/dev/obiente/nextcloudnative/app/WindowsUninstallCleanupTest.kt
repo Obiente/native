@@ -23,6 +23,13 @@ class WindowsUninstallCleanupTest {
     }
 
     @Test
+    fun cloudFilesDisconnectTreatsOnlyAnAlreadyMissingConnectionAsAbsent() {
+        assertTrue(isWindowsCloudFilesConnectionAbsentResult(0x80070057.toInt()))
+        assertFalse(isWindowsCloudFilesConnectionAbsentResult(0x80070005.toInt()))
+        assertFalse(isWindowsCloudFilesConnectionAbsentResult(0x8007017C.toInt()))
+    }
+
+    @Test
     fun cloudFilesRootUsesTheCurrentProviderMetadataGeneration() {
         val home = Files.createTempDirectory("windows-root-generation-home").toFile()
         try {

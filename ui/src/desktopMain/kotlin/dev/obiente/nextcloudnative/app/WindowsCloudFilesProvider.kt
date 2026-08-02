@@ -363,11 +363,11 @@ internal class WindowsCloudFilesProvider(
 
     fun start() {
         check(connection.get() == 0L) { "The Windows Cloud Files provider is already connected." }
-        Files.createDirectories(root)
-        check(!Files.isSymbolicLink(root)) { "The Windows Cloud Files root cannot be a symlink." }
+        prepareRootDirectory()
         val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
-        api.registerSyncRoot(root, backend.displayName, WindowsCloudFileIdentityCodec.encode(rootIdentity))
-        connection.set(api.connect(root, this))
+        val encodedRootIdentity = WindowsCloudFileIdentityCodec.encode(rootIdentity)
+        api.registerSyncRoot(root, backend.displayName, encodedRootIdentity)
+        connection.set(connectWithRegistrationRecovery(encodedRootIdentity))
         try {
             populateDirectory("", root)
             startLocalWatcher()
@@ -385,6 +385,27 @@ internal class WindowsCloudFilesProvider(
             }
             throw failure
         }
+    }
+
+    private fun connectWithRegistrationRecovery(syncRootIdentity: ByteArray): Long =
+        try {
+            api.connect(root, this)
+        } catch (firstFailure: WindowsCloudFilesOperationException) {
+            if (!isWindowsCloudFilesRegistrationMissingResult(firstFailure.hResult)) throw firstFailure
+            api.unregisterSyncRoot(root)
+            prepareRootDirectory()
+            api.registerSyncRoot(root, backend.displayName, syncRootIdentity)
+            try {
+                api.connect(root, this)
+            } catch (retryFailure: Throwable) {
+                retryFailure.addSuppressed(firstFailure)
+                throw retryFailure
+            }
+        }
+
+    private fun prepareRootDirectory() {
+        Files.createDirectories(root)
+        check(!Files.isSymbolicLink(root)) { "The Windows Cloud Files root cannot be a symlink." }
     }
 
     /** Repairs the legacy namespace and flushes recoverable local writes before changing root generations. */

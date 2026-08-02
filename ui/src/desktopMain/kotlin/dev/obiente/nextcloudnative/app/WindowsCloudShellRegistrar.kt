@@ -14,13 +14,20 @@ internal interface WindowsCloudShellRegistrar {
         displayName: String,
         syncRootIdentity: ByteArray,
     ): WindowsShellRegistrationResult
-    fun unregister(root: Path, accountId: String): Boolean
+    fun unregister(root: Path, accountId: String): WindowsShellUnregistrationResult
 }
 
 internal enum class WindowsShellRegistrationResult {
     Registered,
     OwnedPathConflict,
+    UnsafeConflict,
     Failed,
+}
+
+internal enum class WindowsShellUnregistrationResult {
+    Unregistered,
+    NotFound,
+    Rejected,
 }
 
 internal class PackagedWindowsCloudShellRegistrar(
@@ -67,20 +74,26 @@ internal class PackagedWindowsCloudShellRegistrar(
         return when (exitCode) {
             0 -> WindowsShellRegistrationResult.Registered
             WINDOWS_SHELL_OWNED_PATH_CONFLICT_EXIT_CODE -> WindowsShellRegistrationResult.OwnedPathConflict
+            WINDOWS_SHELL_UNSAFE_CONFLICT_EXIT_CODE -> WindowsShellRegistrationResult.UnsafeConflict
             else -> WindowsShellRegistrationResult.Failed
         }
     }
 
-    override fun unregister(root: Path, accountId: String): Boolean {
+    override fun unregister(root: Path, accountId: String): WindowsShellUnregistrationResult {
         requireWindowsShellAccountId(accountId)
         val normalizedRoot = root.toAbsolutePath().normalize()
-        val executable = helper?.takeIf(File::isFile) ?: return false
-        return runCatching {
+        val executable = helper?.takeIf(File::isFile) ?: return WindowsShellUnregistrationResult.NotFound
+        val exitCode = runCatching {
             processRunner(
                 listOf(executable.absolutePath, "unregister", normalizedRoot.toString(), accountId),
                 REGISTRATION_TIMEOUT_SECONDS,
-            ) == 0
-        }.getOrDefault(false)
+            )
+        }.getOrNull()
+        return when (exitCode) {
+            0 -> WindowsShellUnregistrationResult.Unregistered
+            WINDOWS_SHELL_REGISTRATION_NOT_FOUND_EXIT_CODE -> WindowsShellUnregistrationResult.NotFound
+            else -> WindowsShellUnregistrationResult.Rejected
+        }
     }
 
     private companion object {
@@ -112,6 +125,9 @@ internal fun migrateWindowsSyncRootRegistration(
                 ) {
                     return WindowsSyncRootRegistrationMode.BrandedShell
                 }
+            }
+            WindowsShellRegistrationResult.UnsafeConflict -> {
+                error("Windows refused to replace a Cloud Files registration with conflicting ownership or path metadata.")
             }
             WindowsShellRegistrationResult.Failed -> Unit
         }
@@ -231,6 +247,8 @@ private const val WINDOWS_CLOUD_ROOT_GENERATION_SUFFIX = "-v2"
 internal const val WINDOWS_SHELL_REGISTRAR_NAME = "NextcloudNativeShellRegistrar.exe"
 internal const val WINDOWS_SHELL_ICON_NAME = "NextcloudNative.ico"
 internal const val WINDOWS_SHELL_OWNED_PATH_CONFLICT_EXIT_CODE = 3
+internal const val WINDOWS_SHELL_REGISTRATION_NOT_FOUND_EXIT_CODE = 4
+internal const val WINDOWS_SHELL_UNSAFE_CONFLICT_EXIT_CODE = 5
 private const val WINDOWS_SHELL_DISPLAY_NAME_MAX_CHARACTERS = 128
 private const val WINDOWS_SHELL_ACCOUNT_LABEL_PART_MAX_CHARACTERS = 44
 private const val WINDOWS_SHELL_ACCOUNT_TAG_CHARACTERS = 12

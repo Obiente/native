@@ -157,6 +157,80 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun missingRegistrationDuringConnectIsRepairedAndRetriedOnce() {
+        val root = createTempDirectory("windows-cloud-connect-repair")
+        val api = FakeApi().apply {
+            connectFailures += WindowsCloudFilesOperationException(
+                "connect the Windows Cloud Files provider",
+                0x80070186.toInt(),
+            )
+        }
+        val provider = WindowsCloudFilesProvider(root, FakeBackend(ByteArray(0)), api)
+
+        try {
+            provider.start()
+
+            assertEquals(
+                listOf("register", "connect", "unregister", "register", "connect"),
+                api.lifecycleEvents.take(5),
+            )
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun unsafeConnectFailureDoesNotReplaceTheRegistration() {
+        val root = createTempDirectory("windows-cloud-connect-rejected")
+        val failure = WindowsCloudFilesOperationException(
+            "connect the Windows Cloud Files provider",
+            0x80070005.toInt(),
+        )
+        val api = FakeApi().apply { connectFailures += failure }
+        val provider = WindowsCloudFilesProvider(root, FakeBackend(ByteArray(0)), api)
+
+        try {
+            assertEquals(failure, assertFailsWith<WindowsCloudFilesOperationException> { provider.start() })
+            assertEquals(listOf("register", "connect"), api.lifecycleEvents)
+            assertEquals(null, api.unregisteredRoot)
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun registrationRepairStopsAfterOneFailedRetry() {
+        val root = createTempDirectory("windows-cloud-connect-retry-bounded")
+        val firstFailure = WindowsCloudFilesOperationException(
+            "connect the Windows Cloud Files provider",
+            0x80070003.toInt(),
+        )
+        val retryFailure = WindowsCloudFilesOperationException(
+            "connect the Windows Cloud Files provider",
+            0x80070186.toInt(),
+        )
+        val api = FakeApi().apply {
+            connectFailures += firstFailure
+            connectFailures += retryFailure
+        }
+        val provider = WindowsCloudFilesProvider(root, FakeBackend(ByteArray(0)), api)
+
+        try {
+            assertEquals(retryFailure, assertFailsWith<WindowsCloudFilesOperationException> { provider.start() })
+            assertEquals(listOf(firstFailure), retryFailure.suppressed.toList())
+            assertEquals(
+                listOf("register", "connect", "unregister", "register", "connect"),
+                api.lifecycleEvents,
+            )
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun failedSyncRootRemovalKeepsTheNativeApiAvailableForRetry() {
         val root = createTempDirectory("windows-cloud-remove-retry")
         val api = FakeApi().apply { unregisterFailure = IllegalStateException("in use") }
@@ -792,6 +866,7 @@ class WindowsCloudFilesProviderTest {
         var lastRenameAccepted = false
         var unregisteredRoot: Path? = null
         var unregisterFailure: RuntimeException? = null
+        val connectFailures = mutableListOf<WindowsCloudFilesOperationException>()
         val disconnectAttempts = mutableListOf<Long>()
         var disconnectFailure: RuntimeException? = null
         var closed = false
@@ -802,10 +877,12 @@ class WindowsCloudFilesProviderTest {
         }
         override fun unregisterSyncRoot(root: Path) {
             unregisterFailure?.let { throw it }
+            lifecycleEvents += "unregister"
             unregisteredRoot = root
         }
         override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long {
             lifecycleEvents += "connect"
+            if (connectFailures.isNotEmpty()) throw connectFailures.removeAt(0)
             return 1L
         }
         override fun disconnect(connectionKey: Long) {
