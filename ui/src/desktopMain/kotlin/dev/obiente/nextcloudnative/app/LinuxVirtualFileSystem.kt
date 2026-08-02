@@ -139,6 +139,8 @@ internal class RetainedLinuxVirtualMetadataStore(
 
     override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = fallback.store(path, snapshot)
 
+    override fun retainedPaths(): Set<String>? = fallback.retainedPaths()
+
     override fun invalidate(path: String) {
         rangeCache.invalidateRetainedListings(accountId, path)
         fallback.invalidate(path)
