@@ -194,6 +194,24 @@ class DesktopFileReadCacheTest {
     }
 
     @Test
+    fun `delayed listing cannot replace a request that started later`() = withCache { _, cache ->
+        val accountId = desktopFileCacheAccountId(session())
+        cache.storeListing(accountId, "Photos", listOf(file("Photos/current.jpg", "current")), 200L)
+
+        assertFalse(
+            cache.storeListingUnlessNewer(
+                accountId = accountId,
+                path = "Photos",
+                files = listOf(file("Photos/stale.jpg", "stale")),
+                fetchedAtEpochMillis = 100L,
+                nowEpochMillis = 300L,
+            ),
+        )
+
+        assertEquals("Photos/current.jpg", cache.cachedListing(accountId, "Photos")?.single()?.path)
+    }
+
+    @Test
     fun `decoded account indexes are retained within an LRU bound`() {
         val root = Files.createTempDirectory("ncn-files-cache-accounts-").toFile()
         val preferences = testPreferences(root)
