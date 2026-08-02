@@ -91,6 +91,11 @@ sealed interface AppUpdateInstallState {
         val versionCode: Long,
     ) : AppUpdateInstallState
 
+    data class Installing(
+        val versionName: String,
+        val versionCode: Long,
+    ) : AppUpdateInstallState
+
     data class PermissionRequired(
         val versionName: String,
         val versionCode: Long,
@@ -113,6 +118,11 @@ sealed interface AppUpdateInstallState {
     ) : AppUpdateInstallState
 
     data class ConfirmationOpened(
+        val versionName: String,
+        val versionCode: Long,
+    ) : AppUpdateInstallState
+
+    data class Installed(
         val versionName: String,
         val versionCode: Long,
     ) : AppUpdateInstallState
@@ -231,6 +241,7 @@ sealed interface AppUpdateCheckResult {
 
 sealed interface AppUpdateInstallResult {
     data object ConfirmationOpened : AppUpdateInstallResult
+    data object Installed : AppUpdateInstallResult
     data class Cancelled(val canResume: Boolean) : AppUpdateInstallResult
     data class PermissionRequired(val message: String) : AppUpdateInstallResult
     data class Rejected(val message: String) : AppUpdateInstallResult
