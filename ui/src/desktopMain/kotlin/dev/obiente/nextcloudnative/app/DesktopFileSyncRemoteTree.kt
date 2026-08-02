@@ -308,7 +308,7 @@ internal class DesktopFileSyncRemoteTree(
                 input = response.body.byteStream(),
                 userId = userId,
                 maximumBytes = MAX_DIRECTORY_RESPONSE_BYTES,
-                maximumDocuments = MAX_CHILDREN + MAX_RECOVERY_ITEMS,
+                maximumDocuments = MAX_CHILDREN + MAX_RECOVERY_ITEMS + 1,
             )
         }
 

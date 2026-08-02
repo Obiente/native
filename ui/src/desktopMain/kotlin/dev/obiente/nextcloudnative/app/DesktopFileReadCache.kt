@@ -42,11 +42,13 @@ internal class DesktopFileReadCache(
     private val maximumEntryBytes: Long = DEFAULT_MAXIMUM_ENTRY_BYTES,
     private val preferences: Preferences = Preferences.userRoot()
         .node("dev/obiente/nextcloudnative/virtual-file-cache"),
+    private val maximumLoadedAccountIndexes: Int = DEFAULT_MAXIMUM_LOADED_ACCOUNT_INDEXES,
 ) {
-    private val loadedIndexes = mutableMapOf<String, CacheIndexV1>()
+    private val loadedIndexes = LinkedHashMap<String, CacheIndexV1>(16, 0.75f, true)
     init {
         require(maximumContentBytes > 0L)
         require(maximumEntryBytes in 1L..maximumContentBytes)
+        require(maximumLoadedAccountIndexes > 0)
     }
 
     @Synchronized
@@ -317,7 +319,7 @@ internal class DesktopFileReadCache(
                 decoded.requireValid().bounded()
             }.getOrElse { CacheIndexV1() }
         }
-        loadedIndexes[accountId] = loaded
+        rememberLoadedIndex(accountId, loaded)
         return loaded
     }
 
@@ -329,11 +331,21 @@ internal class DesktopFileReadCache(
         val encoded = cacheJson.encodeToString(bounded).encodeToByteArray()
         require(encoded.size.toLong() <= MAX_INDEX_BYTES) { "The Files cache index is too large." }
         publishBytes(directory, INDEX_FILE_NAME, encoded)
-        loadedIndexes[accountId] = bounded
+        rememberLoadedIndex(accountId, bounded)
         val referenced = bounded.content.mapTo(hashSetOf(), CachedContentV1::blobName)
         directory.listFiles().orEmpty()
             .filter { file -> file.isFile && file.extension == "blob" && file.name !in referenced }
             .forEach(File::delete)
+    }
+
+    private fun rememberLoadedIndex(accountId: String, index: CacheIndexV1) {
+        loadedIndexes[accountId] = index
+        while (loadedIndexes.size > maximumLoadedAccountIndexes) {
+            loadedIndexes.entries.iterator().apply {
+                next()
+                remove()
+            }
+        }
     }
 
     private fun applyEviction(
@@ -449,6 +461,7 @@ internal class DesktopFileReadCache(
         const val MAX_MIME_TYPE_LENGTH = 512
         const val DEFAULT_MAXIMUM_ENTRY_BYTES = 512L * 1024L * 1024L
         const val DEFAULT_MAXIMUM_CONTENT_BYTES = 256L * 1024L * 1024L * 1024L
+        const val DEFAULT_MAXIMUM_LOADED_ACCOUNT_INDEXES = 4
         const val KEY_AUTOMATIC_CLEANUP = "automatic-cleanup"
         const val KEY_MAXIMUM_CACHE_BYTES = "maximum-cache-bytes"
         const val KEY_MINIMUM_FREE_BYTES = "minimum-free-bytes"

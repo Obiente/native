@@ -138,6 +138,29 @@ class DesktopLinuxVirtualFileWritebackStoreTest {
         }
     }
 
+    @Test
+    fun `clean interrupted recovery still invalidates committed metadata`() {
+        val directory = Files.createTempDirectory("linux-writeback-clean-recovery-").toFile()
+        try {
+            val remote = FakeWritebackRemote("before".encodeToByteArray(), "etag-1")
+            val store = DesktopLinuxVirtualFileWritebackStore(directory, minimumFreeSpaceBytes = { 0L })
+            val node = LinuxVirtualFileNode("Notes/today.txt", "today.txt", false, 6L, "etag-1")
+            val interrupted = store.open("Notes/today.txt", node, truncate = false, tree = remote) {}
+            interrupted.write(0L, "saved!".encodeToByteArray())
+            interrupted.flush()
+
+            val invalidated = mutableListOf<String>()
+            assertEquals(
+                DesktopLinuxWritebackRecoveryResult(recoveredCount = 1, retainedCount = 0),
+                DesktopLinuxVirtualFileWritebackStore(directory, minimumFreeSpaceBytes = { 0L })
+                    .recoverPending(remote, invalidated::add),
+            )
+            assertEquals(listOf("Notes/today.txt"), invalidated)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     private class FakeWritebackRemote(
         var content: ByteArray,
         var etag: String,

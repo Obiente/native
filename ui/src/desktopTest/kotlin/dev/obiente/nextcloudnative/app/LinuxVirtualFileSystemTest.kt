@@ -8,6 +8,7 @@ import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -482,7 +483,83 @@ class LinuxVirtualFileSystemTest {
         assertTrue(waitUntil { attempts.get() == 2 })
         repeat(1_000) { cached.list("Photos") }
         assertEquals(2, attempts.get())
+
+        clock.set(5_000L)
+        assertEquals(listOf("cached.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
+        assertTrue(waitUntil { attempts.get() == 3 })
         cached.close()
+    }
+
+    @Test
+    fun `persisting a large snapshot does not block cached metadata reads`() {
+        val delegate = MutableFixtureBackend().apply { addFile("Photos/cached.dat", byteArrayOf(1)) }
+        val persistenceStarted = CountDownLatch(1)
+        val releasePersistence = CountDownLatch(1)
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
+                persistenceStarted.countDown()
+                check(releasePersistence.await(2L, TimeUnit.SECONDS))
+            }
+            override fun invalidate(path: String) = Unit
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = store,
+            freshForMillis = Long.MAX_VALUE,
+        )
+        val reader = Executors.newSingleThreadExecutor()
+        try {
+            assertEquals(listOf("cached.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
+            assertTrue(persistenceStarted.await(2L, TimeUnit.SECONDS))
+            assertNotNull(reader.submit { cached.resolve("Photos/cached.dat") }.get(1L, TimeUnit.SECONDS))
+        } finally {
+            releasePersistence.countDown()
+            reader.shutdownNow()
+            cached.close()
+        }
+    }
+
+    @Test
+    fun `persisted load racing mutation cannot reinstall stale metadata`() {
+        val delegate = MutableFixtureBackend()
+        val stale = LinuxVirtualDirectorySnapshot(
+            listOf(LinuxVirtualFileNode("Old", "Old", true, 0L, "old-etag")),
+            fetchedAtEpochMillis = Long.MAX_VALUE,
+        )
+        val loadStarted = CountDownLatch(1)
+        val releaseLoad = CountDownLatch(1)
+        val invalidationMarked = CountDownLatch(1)
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? {
+                loadStarted.countDown()
+                check(releaseLoad.await(2L, TimeUnit.SECONDS))
+                return stale
+            }
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = Unit
+            override fun invalidate(path: String) = Unit
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = store,
+            freshForMillis = Long.MAX_VALUE,
+            afterPersistedInvalidationMarked = invalidationMarked::countDown,
+        )
+        val workers = Executors.newFixedThreadPool(2)
+        try {
+            val listing = workers.submit<List<String>> { cached.list("").map(LinuxVirtualFileNode::name) }
+            assertTrue(loadStarted.await(2L, TimeUnit.SECONDS))
+            val mutation = workers.submit { cached.createDirectory("Albums") }
+            assertTrue(invalidationMarked.await(2L, TimeUnit.SECONDS))
+            releaseLoad.countDown()
+
+            assertEquals(setOf("Photos", "Albums"), listing.get(2L, TimeUnit.SECONDS).toSet())
+            mutation.get(2L, TimeUnit.SECONDS)
+        } finally {
+            releaseLoad.countDown()
+            workers.shutdownNow()
+            cached.close()
+        }
     }
 
     @Test

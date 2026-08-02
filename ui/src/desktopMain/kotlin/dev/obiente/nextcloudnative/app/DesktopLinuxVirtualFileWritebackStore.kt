@@ -235,6 +235,7 @@ internal class DesktopLinuxVirtualFileWritebackStore(
             val stage = File(root, manifest.stageName)
             if (!stage.isFile) return@forEach
             if (!manifest.dirty) {
+                onCommitted(manifest.path)
                 manifestFile.delete()
                 stage.delete()
                 recovered += 1
