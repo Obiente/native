@@ -198,6 +198,15 @@ internal class CachingLinuxVirtualFileBackend(
     internal fun failedPersistedInvalidationCount(): Int =
         synchronized(metadataLock) { failedPersistedInvalidations.size }
 
+    /**
+     * Invalidates metadata after a mutation committed outside this backend, such as an in-app
+     * Files action or recovery of a durable writeback. This must use the same generation and
+     * persisted-store guards as FUSE mutations so an older refresh cannot republish stale paths.
+     */
+    internal fun invalidateAfterExternalMutation(path: String) {
+        invalidate(path)
+    }
+
     private fun snapshot(normalized: String): LinuxVirtualDirectorySnapshot {
         synchronized(metadataLock) { snapshots[normalized] }?.let { cached ->
             if (!cached.isFresh(nowEpochMillis(), freshForMillis)) refreshAsync(normalized)

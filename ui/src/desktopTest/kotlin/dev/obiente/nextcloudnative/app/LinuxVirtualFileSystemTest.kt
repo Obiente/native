@@ -656,6 +656,89 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `external mutation invalidation discards an older in flight directory refresh`() {
+        val delegate = MutableFixtureBackend().apply {
+            addFile("Photos/existing.dat", byteArrayOf(1))
+        }
+        val blocking = BlockingListBackend(delegate, "Photos")
+        val store = MemoryLinuxVirtualMetadataStore().apply {
+            seed(
+                "Photos",
+                LinuxVirtualDirectorySnapshot(
+                    listOf(LinuxVirtualFileNode("Photos/cached.dat", "cached.dat", false, 1L, "cached-etag")),
+                    fetchedAtEpochMillis = 1L,
+                ),
+            )
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = blocking,
+            store = store,
+            nowEpochMillis = { 10_000L },
+            freshForMillis = 1_000L,
+        )
+
+        assertEquals(listOf("cached.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
+        assertTrue(blocking.started.await(2L, TimeUnit.SECONDS))
+        delegate.createDirectory("Photos/New")
+        cached.invalidateAfterExternalMutation("Photos/New")
+        blocking.release.countDown()
+
+        assertEquals(
+            setOf("existing.dat", "New"),
+            cached.list("Photos").mapTo(mutableSetOf(), LinuxVirtualFileNode::name),
+        )
+        assertTrue(
+            waitUntil {
+                store.snapshot("Photos")?.nodes?.mapTo(mutableSetOf(), LinuxVirtualFileNode::name) ==
+                    setOf("existing.dat", "New")
+            },
+        )
+        assertEquals(2, delegate.listCallCount("Photos"))
+        cached.close()
+    }
+
+    @Test
+    fun `external recovery invalidation keeps a failed persisted tombstone`() {
+        val delegate = MutableFixtureBackend()
+        val stale = LinuxVirtualDirectorySnapshot(
+            nodes = listOf(LinuxVirtualFileNode("Photos", "Photos", true, 0L, "stale-photos")),
+            fetchedAtEpochMillis = 100L,
+        )
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = stale.takeIf { path.isEmpty() }
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean = false
+            override fun invalidate(path: String): Unit = error("Simulated persisted invalidation failure")
+            override fun retainedPaths(): Set<String> = setOf("")
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = store,
+            nowEpochMillis = { 100L },
+            freshForMillis = Long.MAX_VALUE,
+            maximumRetainedDirectories = 1,
+        )
+        try {
+            assertEquals(listOf("Photos"), cached.list("").map(LinuxVirtualFileNode::name))
+            delegate.createDirectory("Albums")
+            cached.invalidateAfterExternalMutation("Albums")
+
+            assertEquals(
+                setOf("Photos", "Albums"),
+                cached.list("").mapTo(mutableSetOf(), LinuxVirtualFileNode::name),
+            )
+            assertEquals(1, cached.failedPersistedInvalidationCount())
+            cached.list("Albums")
+            assertEquals(
+                setOf("Photos", "Albums"),
+                cached.list("").mapTo(mutableSetOf(), LinuxVirtualFileNode::name),
+            )
+            assertEquals(2, delegate.listCallCount(""))
+        } finally {
+            cached.close()
+        }
+    }
+
+    @Test
     fun `failed stale refresh backs off during cached directory enumeration`() {
         val attempts = AtomicInteger(0)
         val delegate = object : LinuxVirtualFileBackend by MutableFixtureBackend() {
