@@ -18,6 +18,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -88,6 +89,7 @@ internal fun MediaViewerActionDialog(
     sharingCapabilities: NextcloudFileSharingCapabilities,
     onDismiss: () -> Unit,
     onSourceRemoved: () -> Unit,
+    onMutationRunningChanged: (Boolean) -> Unit,
 ) {
     when (action) {
         MediaViewerAction.Move, MediaViewerAction.Copy -> MediaTransferDialog(
@@ -98,6 +100,7 @@ internal fun MediaViewerActionDialog(
             services = services,
             onDismiss = onDismiss,
             onMoved = onSourceRemoved,
+            onMutationRunningChanged = onMutationRunningChanged,
         )
         MediaViewerAction.Delete -> MediaDeleteDialog(
             file = file,
@@ -106,6 +109,7 @@ internal fun MediaViewerActionDialog(
             services = services,
             onDismiss = onDismiss,
             onDeleted = onSourceRemoved,
+            onMutationRunningChanged = onMutationRunningChanged,
         )
         MediaViewerAction.AddToAlbum -> MediaAlbumDialog(
             file = file,
@@ -113,6 +117,7 @@ internal fun MediaViewerActionDialog(
             userId = userId,
             services = services,
             onDismiss = onDismiss,
+            onMutationRunningChanged = onMutationRunningChanged,
         )
         MediaViewerAction.ShareNextcloud -> MediaShareDialog(
             file = file,
@@ -120,6 +125,7 @@ internal fun MediaViewerActionDialog(
             services = services,
             capabilities = sharingCapabilities,
             onDismiss = onDismiss,
+            onMutationRunningChanged = onMutationRunningChanged,
         )
         MediaViewerAction.Info -> MediaInformationDialog(
             file = file,
@@ -141,6 +147,7 @@ private fun MediaTransferDialog(
     services: NextcloudPlatformServices,
     onDismiss: () -> Unit,
     onMoved: () -> Unit,
+    onMutationRunningChanged: (Boolean) -> Unit,
 ) {
     val verb = if (moving) "Move" else "Copy"
     var directory by remember(file.path) {
@@ -149,6 +156,7 @@ private fun MediaTransferDialog(
     var name by remember(file.path) { mutableStateOf(file.name) }
     var running by remember(file.path) { mutableStateOf(false) }
     var error by remember(file.path) { mutableStateOf<String?>(null) }
+    MediaMutationRunningEffect(running, onMutationRunningChanged)
     val validationError = fileTransferValidationError(file, directory, name)
     val scope = rememberCoroutineScope()
     AlertDialog(
@@ -234,9 +242,11 @@ private fun MediaDeleteDialog(
     services: NextcloudPlatformServices,
     onDismiss: () -> Unit,
     onDeleted: () -> Unit,
+    onMutationRunningChanged: (Boolean) -> Unit,
 ) {
     var running by remember(file.path) { mutableStateOf(false) }
     var error by remember(file.path) { mutableStateOf<String?>(null) }
+    MediaMutationRunningEffect(running, onMutationRunningChanged)
     val scope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = { if (!running) onDismiss() },
@@ -299,6 +309,7 @@ private fun MediaAlbumDialog(
     userId: String,
     services: NextcloudPlatformServices,
     onDismiss: () -> Unit,
+    onMutationRunningChanged: (Boolean) -> Unit,
 ) {
     val readService = remember(services) { NativeMediaCollectionReadService(services) }
     val mutationService = remember(services) { NativeMediaCollectionMutationService(services) }
@@ -307,6 +318,7 @@ private fun MediaAlbumDialog(
     var plan by remember(file.path) { mutableStateOf<NativeMediaCollectionActionPlan?>(null) }
     var running by remember(file.path) { mutableStateOf(false) }
     var mutationError by remember(file.path) { mutableStateOf<String?>(null) }
+    MediaMutationRunningEffect(running, onMutationRunningChanged)
     val scope = rememberCoroutineScope()
     LaunchedEffect(file.path, session) {
         runCatching { readService.loadCatalog(session) }
@@ -424,6 +436,7 @@ private fun MediaShareDialog(
     services: NextcloudPlatformServices,
     capabilities: NextcloudFileSharingCapabilities,
     onDismiss: () -> Unit,
+    onMutationRunningChanged: (Boolean) -> Unit,
 ) {
     var effectiveCapabilities by remember(file.path, capabilities) { mutableStateOf(capabilities) }
     val supportedTargets = remember(effectiveCapabilities) {
@@ -443,6 +456,7 @@ private fun MediaShareDialog(
     var running by remember(file.path) { mutableStateOf(false) }
     var error by remember(file.path) { mutableStateOf<String?>(null) }
     var notice by remember(file.path) { mutableStateOf<String?>(null) }
+    MediaMutationRunningEffect(running, onMutationRunningChanged)
     val scope = rememberCoroutineScope()
     LaunchedEffect(file.path, session) {
         runCatching { services.listFileShares(session, file.path) }
@@ -535,9 +549,23 @@ private fun MediaShareDialog(
                     shares = shares.orEmpty().filterNot { it.id == revoked.id }
                     notice = "Access revoked"
                 },
+                onMutationRunningChanged = onMutationRunningChanged,
             )
         },
     )
+}
+
+@Composable
+internal fun MediaMutationRunningEffect(
+    running: Boolean,
+    onMutationRunningChanged: (Boolean) -> Unit,
+) {
+    if (running) {
+        DisposableEffect(Unit) {
+            onMutationRunningChanged(true)
+            onDispose { onMutationRunningChanged(false) }
+        }
+    }
 }
 
 @Composable

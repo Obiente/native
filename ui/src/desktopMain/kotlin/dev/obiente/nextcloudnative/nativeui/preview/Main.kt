@@ -114,6 +114,7 @@ fun main(arguments: Array<String>) {
     val trayPopupVisible = remember { mutableStateOf(false) }
     val mainWindow = remember { mutableStateOf<java.awt.Window?>(null) }
     val mainWindowState = rememberWindowState(width = 1_280.dp, height = 820.dp)
+    val focusRequestSequence = remember { mutableStateOf(0L) }
     val navigationSequence = remember { mutableStateOf(0L) }
     val navigationRequest = remember { mutableStateOf<NextcloudNativeNavigationRequest?>(null) }
     val updateFailureSequence = remember { mutableStateOf(if (updateHandoffFailed) 1L else 0L) }
@@ -189,6 +190,7 @@ fun main(arguments: Array<String>) {
         trayPopupVisible.value = false
         mainWindowState.isMinimized = false
         windowVisible.value = true
+        focusRequestSequence.value = nextDesktopFocusRequestSequence(focusRequestSequence.value)
     }
 
     fun activateMainWindow(route: NextcloudNativeRoute) {
@@ -206,7 +208,12 @@ fun main(arguments: Array<String>) {
         }
     }
 
-    LaunchedEffect(windowVisible.value, navigationRequest.value?.sequence, mainWindow.value) {
+    LaunchedEffect(
+        windowVisible.value,
+        navigationRequest.value?.sequence,
+        focusRequestSequence.value,
+        mainWindow.value,
+    ) {
         if (!windowVisible.value) return@LaunchedEffect
         mainWindow.value?.let { window ->
             if (window is Frame) window.extendedState = restoredDesktopFrameState(window.extendedState)
@@ -335,6 +342,9 @@ internal fun shouldClearDesktopNavigationRequest(
     currentRequest: NextcloudNativeNavigationRequest?,
     handledSequence: Long,
 ): Boolean = currentRequest?.sequence == handledSequence
+
+internal fun nextDesktopFocusRequestSequence(current: Long): Long =
+    if (current == Long.MAX_VALUE) 0L else current + 1L
 
 private fun FileSyncCenterActionResult.trayMessage(): String = when (this) {
     is FileSyncCenterActionResult.Completed -> message

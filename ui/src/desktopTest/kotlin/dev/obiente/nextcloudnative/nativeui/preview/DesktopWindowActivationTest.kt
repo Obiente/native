@@ -37,4 +37,10 @@ class DesktopWindowActivationTest {
 
         assertEquals(false, shouldClearDesktopNavigationRequest(request, 4L))
     }
+
+    @Test
+    fun `each activation advances the focus request`() {
+        assertEquals(8L, nextDesktopFocusRequestSequence(7L))
+        assertEquals(0L, nextDesktopFocusRequestSequence(Long.MAX_VALUE))
+    }
 }
