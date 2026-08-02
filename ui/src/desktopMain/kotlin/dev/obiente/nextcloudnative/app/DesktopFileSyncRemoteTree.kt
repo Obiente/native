@@ -522,7 +522,7 @@ private fun parseDesktopSyncDav(
         setProperty(XMLInputFactory.SUPPORT_DTD, false)
         setProperty("javax.xml.stream.isSupportingExternalEntities", false)
         setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, true)
-        setProperty(XMLInputFactory.IS_COALESCING, true)
+        setProperty(XMLInputFactory.IS_COALESCING, false)
     }
     val reader = factory.createXMLStreamReader(BoundedInputStream(input, maximumBytes))
     val documents = ArrayList<DesktopRemoteSyncDocument>()
@@ -547,8 +547,11 @@ private fun parseDesktopSyncDav(
                 XMLStreamConstants.CHARACTERS,
                 XMLStreamConstants.CDATA,
                 -> if (textField != null) {
-                    text.append(reader.text)
-                    require(text.length <= MAX_DAV_PROPERTY_CHARS) { "A DAV property is too large." }
+                    val eventLength = reader.textLength
+                    require(eventLength <= MAX_DAV_PROPERTY_CHARS - text.length) {
+                        "A DAV property is too large."
+                    }
+                    text.append(reader.textCharacters, reader.textStart, eventLength)
                 }
                 XMLStreamConstants.END_ELEMENT -> {
                     if (reader.namespaceURI == DAV_NAMESPACE && reader.localName == textField) {
