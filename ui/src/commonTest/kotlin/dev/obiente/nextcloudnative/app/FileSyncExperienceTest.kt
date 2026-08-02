@@ -25,11 +25,11 @@ class FileSyncExperienceTest {
     @Test
     fun `workspace search matches names paths and directions without changing order`() {
         val pairs = listOf(
-            pair(id = "photos", local = "Studio archive", localPath = "/home/mara/Pictures/Studio", remote = "Photos/Studio"),
+            pair(id = "photos", local = "Studio archive", localPath = "Pictures/Studio", remote = "Photos/Studio"),
             pair(
                 id = "documents",
                 local = "Project documents",
-                localPath = "/home/mara/Nextcloud/Projects",
+                localPath = "Nextcloud/Projects",
                 remote = "Work/Projects",
                 direction = FileSyncDirection.UploadOnly,
             ),
