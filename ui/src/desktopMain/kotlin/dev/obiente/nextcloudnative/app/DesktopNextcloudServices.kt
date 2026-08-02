@@ -548,6 +548,7 @@ class DesktopNextcloudServices(
     private val virtualRangeCache = defaultDesktopVirtualRangeCache(fileReadCache::loadPolicy)
     private val virtualFileProviderLock = Any()
     private var linuxVirtualFileSystem: LinuxNextcloudVirtualFileSystem? = null
+    private var linuxVirtualMetadataBackend: CachingLinuxVirtualFileBackend? = null
     private var linuxVirtualFileMountIdentity: String? = null
     private var linuxVirtualFileFailure: String? = null
     private var windowsCloudFilesProvider: WindowsCloudFilesProvider? = null
@@ -839,6 +840,7 @@ class DesktopNextcloudServices(
             if (linuxVirtualFileSystem != null) {
                 runCatching { linuxVirtualFileSystem?.unmount() }
                 linuxVirtualFileSystem = null
+                linuxVirtualMetadataBackend = null
                 linuxVirtualFileMountIdentity = null
             }
             val mountPoint = desktopLinuxVirtualFileMountPoint().apply {
@@ -849,32 +851,37 @@ class DesktopNextcloudServices(
                 "The virtual-files mount folder must be empty before it can be activated."
             }
             val writebackStore = defaultDesktopLinuxWritebackStore(session)
+            val recoveredWritebackPaths = linkedSetOf<String>()
             writebackStore.recoverPending(
                 tree = DesktopFileSyncRemoteTree(session, userId, ""),
                 onCommitted = { path ->
                     runCatching { virtualRangeCache.invalidate(accountId, path) }
-                    runCatching { fileReadCache.invalidate(accountId, path) }
+                    recoveredWritebackPaths += path
                 },
             )
-            val fileSystem = LinuxNextcloudVirtualFileSystem(
-                CachingLinuxVirtualFileBackend(
-                    delegate = DesktopNextcloudVirtualFileBackend(
-                        session = session,
-                        userId = userId,
-                        services = this@DesktopNextcloudServices,
-                        rangeCache = virtualRangeCache,
-                        writebacks = writebackStore,
-                    ),
-                    store = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId),
+            val metadataBackend = CachingLinuxVirtualFileBackend(
+                delegate = DesktopNextcloudVirtualFileBackend(
+                    session = session,
+                    userId = userId,
+                    services = this@DesktopNextcloudServices,
+                    rangeCache = virtualRangeCache,
+                    writebacks = writebackStore,
                 ),
+                store = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId),
             )
+            recoveredWritebackPaths.forEach(metadataBackend::invalidateAfterExternalMutation)
+            val fileSystem = LinuxNextcloudVirtualFileSystem(metadataBackend)
             try {
                 fileSystem.mountAt(mountPoint.toPath())
                 linuxVirtualFileSystem = fileSystem
+                linuxVirtualMetadataBackend = metadataBackend
                 linuxVirtualFileMountIdentity = accountId
                 linuxVirtualFileFailure = null
                 preferences.putBoolean(virtualFileProviderPreferenceKey(accountId), true)
             } catch (failure: Throwable) {
+                runCatching(fileSystem::unmount).onFailure {
+                    runCatching(metadataBackend::close)
+                }
                 linuxVirtualFileFailure = failure.message ?: "Unknown FUSE mount failure"
                 throw failure
             }
@@ -891,6 +898,7 @@ class DesktopNextcloudServices(
         synchronized(virtualFileProviderLock) {
             linuxVirtualFileSystem?.unmount()
             linuxVirtualFileSystem = null
+            linuxVirtualMetadataBackend = null
             linuxVirtualFileMountIdentity = null
             linuxVirtualFileFailure = null
             windowsCloudFilesProvider?.close()
@@ -916,10 +924,23 @@ class DesktopNextcloudServices(
         synchronized(virtualFileProviderLock) {
             runCatching { linuxVirtualFileSystem?.unmount() }
             linuxVirtualFileSystem = null
+            linuxVirtualMetadataBackend = null
             linuxVirtualFileMountIdentity = null
             runCatching { windowsCloudFilesProvider?.close() }
             windowsCloudFilesProvider = null
             windowsCloudFilesIdentity = null
+        }
+    }
+
+    private fun invalidateDesktopFileMetadata(accountId: String, path: String) {
+        synchronized(virtualFileProviderLock) {
+            val mountedBackend = linuxVirtualMetadataBackend
+                ?.takeIf { linuxVirtualFileMountIdentity == accountId }
+            if (mountedBackend != null) {
+                mountedBackend.invalidateAfterExternalMutation(path)
+            } else {
+                fileReadCache.invalidate(accountId, path)
+            }
         }
     }
 
@@ -1444,6 +1465,7 @@ class DesktopNextcloudServices(
         synchronized(virtualFileProviderLock) {
             runCatching { linuxVirtualFileSystem?.unmount() }
             linuxVirtualFileSystem = null
+            linuxVirtualMetadataBackend = null
             linuxVirtualFileMountIdentity = null
             linuxVirtualFileFailure = null
             try {
@@ -1852,7 +1874,7 @@ class DesktopNextcloudServices(
                 response.status == 304 && cached != null ->
                     NextcloudFileContent(cached.bytes, cached.mimeType, cached.etag)
                 response.status == 404 -> {
-                    runCatching { fileReadCache.invalidate(accountId, path) }
+                    runCatching { invalidateDesktopFileMetadata(accountId, path) }
                     error("The file no longer exists on the server.")
                 }
                 response.status >= 500 && cached != null ->
@@ -2069,7 +2091,7 @@ class DesktopNextcloudServices(
         val etag = response.etag ?: runCatching { loadFileEtag(session, userId, path) }.getOrNull()
         val accountId = desktopFileCacheAccountId(session)
         runCatching {
-            fileReadCache.invalidate(accountId, path)
+            invalidateDesktopFileMetadata(accountId, path)
             etag?.let {
                 fileReadCache.storeContent(
                     accountId,
@@ -2104,7 +2126,7 @@ class DesktopNextcloudServices(
         check(response.status == 201) { "The server did not confirm that a new text file was created." }
         runCatching {
             val accountId = desktopFileCacheAccountId(session)
-            fileReadCache.invalidate(accountId, path)
+            invalidateDesktopFileMetadata(accountId, path)
             response.etag?.let {
                 fileReadCache.storeContent(
                     accountId,
@@ -2132,7 +2154,7 @@ class DesktopNextcloudServices(
         if (response.status !in 200..299) throw fileOperationException(response.status)
         check(response.status == 201) { "The server did not confirm that a new folder was created." }
         runCatching {
-            fileReadCache.invalidate(desktopFileCacheAccountId(session), path)
+            invalidateDesktopFileMetadata(desktopFileCacheAccountId(session), path)
         }
         true
     }
@@ -2161,8 +2183,8 @@ class DesktopNextcloudServices(
         if (response.status !in 200..299) throw fileOperationException(response.status)
         runCatching {
             val accountId = desktopFileCacheAccountId(session)
-            fileReadCache.invalidate(accountId, spec.sourcePath)
-            spec.destinationPath?.let { fileReadCache.invalidate(accountId, it) }
+            invalidateDesktopFileMetadata(accountId, spec.sourcePath)
+            spec.destinationPath?.let { invalidateDesktopFileMetadata(accountId, it) }
         }
         NextcloudFileMutationResult(spec.destinationPath, response.etag)
     }
