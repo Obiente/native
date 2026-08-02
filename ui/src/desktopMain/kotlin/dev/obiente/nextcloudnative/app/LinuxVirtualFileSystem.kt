@@ -55,11 +55,24 @@ internal interface LinuxVirtualFileBackend : AutoCloseable {
     fun createDirectory(path: String)
     fun delete(node: LinuxVirtualFileNode)
     fun move(node: LinuxVirtualFileNode, destinationPath: String)
+    fun move(node: LinuxVirtualFileNode, destinationPath: String, afterRemoteCommit: () -> Unit) {
+        move(node, destinationPath)
+        afterRemoteCommit()
+    }
     fun moveReplacing(
         node: LinuxVirtualFileNode,
         destination: LinuxVirtualFileNode,
         destinationPath: String,
     )
+    fun moveReplacing(
+        node: LinuxVirtualFileNode,
+        destination: LinuxVirtualFileNode,
+        destinationPath: String,
+        afterRemoteCommit: () -> Unit,
+    ) {
+        moveReplacing(node, destination, destinationPath)
+        afterRemoteCommit()
+    }
 
     override fun close() = Unit
 }
@@ -291,9 +304,17 @@ internal class CachingLinuxVirtualFileBackend(
     }
 
     override fun move(node: LinuxVirtualFileNode, destinationPath: String) {
+        move(node, destinationPath) {}
+    }
+
+    override fun move(
+        node: LinuxVirtualFileNode,
+        destinationPath: String,
+        afterRemoteCommit: () -> Unit,
+    ) {
         val destination = destinationPath.linuxVirtualPath()
         try {
-            delegate.move(node, destination)
+            delegate.move(node, destination, afterRemoteCommit)
         } finally {
             invalidate(node.path)
             invalidate(destination)
@@ -305,9 +326,18 @@ internal class CachingLinuxVirtualFileBackend(
         destination: LinuxVirtualFileNode,
         destinationPath: String,
     ) {
+        moveReplacing(node, destination, destinationPath) {}
+    }
+
+    override fun moveReplacing(
+        node: LinuxVirtualFileNode,
+        destination: LinuxVirtualFileNode,
+        destinationPath: String,
+        afterRemoteCommit: () -> Unit,
+    ) {
         val normalized = destinationPath.linuxVirtualPath()
         try {
-            delegate.moveReplacing(node, destination, normalized)
+            delegate.moveReplacing(node, destination, normalized, afterRemoteCommit)
         } finally {
             invalidate(node.path)
             invalidate(normalized)
@@ -827,8 +857,17 @@ internal class DesktopNextcloudVirtualFileBackend(
     }
 
     override fun move(node: LinuxVirtualFileNode, destinationPath: String) {
+        move(node, destinationPath) {}
+    }
+
+    override fun move(
+        node: LinuxVirtualFileNode,
+        destinationPath: String,
+        afterRemoteCommit: () -> Unit,
+    ) {
         val normalized = destinationPath.linuxVirtualPath()
         tree.move(node.path, normalized, node.remoteRevision)
+        afterRemoteCommit()
         runCatching { rangeCache.invalidate(accountId, node.path) }
         runCatching { rangeCache.invalidate(accountId, normalized) }
         afterMutation(node.path)
@@ -840,8 +879,18 @@ internal class DesktopNextcloudVirtualFileBackend(
         destination: LinuxVirtualFileNode,
         destinationPath: String,
     ) {
+        moveReplacing(node, destination, destinationPath) {}
+    }
+
+    override fun moveReplacing(
+        node: LinuxVirtualFileNode,
+        destination: LinuxVirtualFileNode,
+        destinationPath: String,
+        afterRemoteCommit: () -> Unit,
+    ) {
         val normalized = destinationPath.linuxVirtualPath()
         tree.moveReplacing(node.path, normalized, node.remoteRevision, destination.remoteRevision)
+        afterRemoteCommit()
         runCatching { rangeCache.invalidate(accountId, node.path) }
         runCatching { rangeCache.invalidate(accountId, normalized) }
         afterMutation(node.path)
@@ -873,6 +922,7 @@ internal class LinuxNextcloudVirtualFileSystem(
     private val directoryHandles = ConcurrentHashMap<Long, LinuxOpenDirectorySnapshot>()
     private val directoryHandleLock = Any()
     private val directorySnapshotCreationPermits = Semaphore(MAX_CONCURRENT_DIRECTORY_SNAPSHOT_CREATIONS, true)
+    private val pendingDirectorySnapshots = mutableSetOf<LinuxPendingDirectorySnapshot>()
     private var openDirectoryEntries = 0L
     private val pendingCreatedFiles = ConcurrentHashMap<String, LinuxSharedWriteHandle>()
     private val namespaceLock = Any()
@@ -1063,12 +1113,14 @@ internal class LinuxNextcloudVirtualFileSystem(
                     return -ErrorCodes.ENOTEMPTY()
                 }
                 if (hasOpenReadHandleWithin(destination)) return -ErrorCodes.EBUSY()
-                backend.moveReplacing(source, existingDestination, destination)
+                backend.moveReplacing(source, existingDestination, destination) {
+                    readdressOpenNamespace(sourcePath, destination)
+                }
             } else {
-                backend.move(source, destination)
+                backend.move(source, destination) {
+                    readdressOpenNamespace(sourcePath, destination)
+                }
             }
-            readdressReadHandles(sourcePath, destination)
-            readdressDirectoryHandles(sourcePath, destination)
             0
         }
     }
@@ -1172,14 +1224,36 @@ internal class LinuxNextcloudVirtualFileSystem(
 
     private fun openAndRegisterDirectorySnapshot(path: String): Long {
         var acquired = false
+        var pending: LinuxPendingDirectorySnapshot? = null
         try {
             directorySnapshotCreationPermits.acquire()
             acquired = true
-            return registerDirectorySnapshot(openDirectorySnapshot(path))
+            val registration = synchronized(namespaceLock) {
+                LinuxPendingDirectorySnapshot(path.linuxVirtualPath()).also(pendingDirectorySnapshots::add)
+            }
+            pending = registration
+            while (true) {
+                val requestedPath = synchronized(namespaceLock) { registration.path }
+                val snapshot = try {
+                    openDirectorySnapshot(requestedPath)
+                } catch (failure: Throwable) {
+                    if (synchronized(namespaceLock) { registration.path != requestedPath }) continue
+                    throw failure
+                }
+                val registered = synchronized(namespaceLock) {
+                    if (registration.path == requestedPath) {
+                        registerDirectorySnapshot(snapshot.copy(path = requestedPath))
+                    } else {
+                        null
+                    }
+                }
+                if (registered != null) return registered
+            }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             throw LinuxVirtualFileSystemException(ErrorCodes.EINTR())
         } finally {
+            pending?.let { snapshot -> synchronized(namespaceLock) { pendingDirectorySnapshots.remove(snapshot) } }
             if (acquired) directorySnapshotCreationPermits.release()
         }
     }
@@ -1260,6 +1334,17 @@ internal class LinuxNextcloudVirtualFileSystem(
         }
     }
 
+    private fun readdressOpenNamespace(sourcePath: String, destinationPath: String) {
+        check(Thread.holdsLock(namespaceLock))
+        readdressReadHandles(sourcePath, destinationPath)
+        readdressDirectoryHandles(sourcePath, destinationPath)
+        pendingDirectorySnapshots.forEach { pending ->
+            pending.path.readdressWithin(sourcePath, destinationPath)?.let { movedPath ->
+                pending.path = movedPath
+            }
+        }
+    }
+
     private fun String.readdressWithin(sourcePath: String, destinationPath: String): String? = when {
         this == sourcePath -> destinationPath
         startsWith("$sourcePath/") -> destinationPath + removePrefix(sourcePath)
@@ -1329,6 +1414,8 @@ private data class LinuxOpenDirectorySnapshot(
     val path: String,
     val entries: List<LinuxOpenDirectoryEntry>,
 )
+
+private class LinuxPendingDirectorySnapshot(var path: String)
 
 private data class LinuxOpenDirectoryEntry(
     val name: String,
