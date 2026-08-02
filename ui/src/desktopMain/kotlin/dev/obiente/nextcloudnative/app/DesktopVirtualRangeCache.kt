@@ -13,6 +13,8 @@ import java.util.UUID
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
+internal const val MAX_VIRTUAL_FOLDER_RETAINED_LISTINGS = 20_000
+
 internal data class DesktopVirtualRangeCacheSummary(
     val cachedBytes: Long,
     val reclaimableBytes: Long,
@@ -472,7 +474,7 @@ internal class DesktopVirtualRangeCache(
         while (pending.isNotEmpty()) {
             val directory = pending.removeFirst()
             if (!visited.add(directory)) continue
-            if (visited.size > MAX_RETAINED_LISTINGS) return null
+            if (visited.size > MAX_VIRTUAL_FOLDER_RETAINED_LISTINGS) return null
             val listing = loadRetainedListing(accountId, directory, metadataIndex) ?: return null
             listing.nodes.forEach { node ->
                 if (retention.retentionFor(node.path) != VirtualFolderRetention.KeepOnDevice) return@forEach
@@ -529,7 +531,7 @@ internal class DesktopVirtualRangeCache(
     ) {
         val normalizedRoot = FileOfflineKey(accountId, retainedRoot).relativePath
         require(snapshots.isNotEmpty() && normalizedRoot in snapshots)
-        require(snapshots.size <= MAX_RETAINED_LISTINGS)
+        require(snapshots.size <= MAX_VIRTUAL_FOLDER_RETAINED_LISTINGS)
         val directory = writableAccountDirectory(accountId)
         val published = snapshots.map { (path, snapshot) ->
             val normalized = path.trim('/')
@@ -767,7 +769,7 @@ internal class DesktopVirtualRangeCache(
         val referenced = index.listings.mapTo(hashSetOf(), RetainedListingReference::blobName)
         directory.listFiles().orEmpty().asSequence()
             .filter { file -> file.isFile && file.extension == "listing" && file.name !in referenced }
-            .take(MAX_RETAINED_LISTINGS)
+            .take(MAX_VIRTUAL_FOLDER_RETAINED_LISTINGS)
             .forEach(File::delete)
     }
 
@@ -1158,7 +1160,6 @@ internal class DesktopVirtualRangeCache(
         const val MAX_RETAINED_METADATA_INDEX_BYTES = 16L * 1024L * 1024L
         const val MAX_RETAINED_LISTING_BYTES = 16L * 1024L * 1024L
         const val MAX_COMMIT_JOURNAL_BYTES = 2L * 1024L * 1024L
-        const val MAX_RETAINED_LISTINGS = 20_000
         const val MAX_BLOCKS = 20_000
         const val MAX_BLOCK_BYTES = 4 * 1024 * 1024
         val REVISION_STAGE_FILE = Regex(

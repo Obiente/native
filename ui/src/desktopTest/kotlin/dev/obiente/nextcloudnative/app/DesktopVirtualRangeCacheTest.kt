@@ -284,6 +284,14 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `retained directory budget rejects traversal before another listing`() {
+        requireVirtualFolderListingCapacity(99, maximumListings = 100)
+        assertFailsWith<IllegalStateException> {
+            requireVirtualFolderListingCapacity(100, maximumListings = 100)
+        }
+    }
+
+    @Test
     fun `retrying an available folder persists refresh progress`() {
         val directory = Files.createTempDirectory("virtual-range-refresh-progress-").toFile()
         try {
@@ -946,6 +954,10 @@ class DesktopVirtualRangeCacheTest {
             assertEquals("Photos", retainedFolderNavigationChild("", "Photos/2026/August"))
             assertEquals("Photos/2026", retainedFolderNavigationChild("Photos", "Photos/2026/August"))
             assertNull(retainedFolderNavigationChild("Documents", "Photos/2026/August"))
+            assertFalse(isCompleteRetainedTreeListing("", "Photos/2026"))
+            assertFalse(isCompleteRetainedTreeListing("Photos", "Photos/2026"))
+            assertTrue(isCompleteRetainedTreeListing("Photos/2026", "Photos/2026"))
+            assertTrue(isCompleteRetainedTreeListing("Photos/2026/August", "Photos/2026"))
         } finally {
             directory.deleteRecursively()
         }

@@ -72,6 +72,20 @@ data class VirtualFolderRetentionState(
             ?: VirtualFolderRetention.Automatic
     }
 
+    /** Returns the explicit kept root that supplies the effective retention for this path. */
+    fun keepOnDeviceRootFor(relativePath: String): String? {
+        val normalized = FileOfflineKey("account", relativePath).relativePath
+        if (retentionFor(normalized) != VirtualFolderRetention.KeepOnDevice) return null
+        return rules
+            .asSequence()
+            .filter { rule ->
+                rule.retention == VirtualFolderRetention.KeepOnDevice &&
+                    (normalized == rule.relativePath || normalized.startsWith("${rule.relativePath}/"))
+            }
+            .maxByOrNull { rule -> rule.relativePath.length }
+            ?.relativePath
+    }
+
     /** Replaces one subtree's intent and removes rules that can no longer affect its descendants. */
     fun withRetention(relativePath: String, retention: VirtualFolderRetention): VirtualFolderRetentionState {
         val normalized = FileOfflineKey("account", relativePath).relativePath

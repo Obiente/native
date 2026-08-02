@@ -154,6 +154,7 @@ internal class CachingLinuxVirtualFileBackend(
     private val maximumRetainedDirectories: Int = DEFAULT_MAX_RETAINED_DIRECTORIES,
     private val refreshExecutor: ExecutorService = defaultLinuxMetadataRefreshExecutor(),
     private val afterPersistedInvalidationMarked: () -> Unit = {},
+    private val afterMutationInvalidated: (String) -> Unit = {},
 ) : LinuxVirtualFileBackend {
     private val snapshots = LinkedHashMap<String, LinuxVirtualDirectorySnapshot>(16, 0.75f, true)
     private val refreshes = ConcurrentHashMap<String, CompletableFuture<LinuxVirtualDirectorySnapshot?>>()
@@ -278,7 +279,7 @@ internal class CachingLinuxVirtualFileBackend(
                     handle.flush()
                     dirty = false
                 } finally {
-                    if (shouldInvalidate) invalidate(normalized)
+                    if (shouldInvalidate) invalidateMutation(normalized)
                 }
             }
 
@@ -289,7 +290,7 @@ internal class CachingLinuxVirtualFileBackend(
                     handle.close()
                     dirty = false
                 } finally {
-                    if (shouldInvalidate) invalidate(normalized)
+                    if (shouldInvalidate) invalidateMutation(normalized)
                 }
             }
         }
@@ -300,7 +301,7 @@ internal class CachingLinuxVirtualFileBackend(
         try {
             delegate.createDirectory(normalized)
         } finally {
-            invalidate(normalized)
+            invalidateMutation(normalized)
         }
     }
 
@@ -308,7 +309,7 @@ internal class CachingLinuxVirtualFileBackend(
         try {
             delegate.delete(node)
         } finally {
-            invalidate(node.path)
+            invalidateMutation(node.path)
         }
     }
 
@@ -325,8 +326,8 @@ internal class CachingLinuxVirtualFileBackend(
         try {
             delegate.move(node, destination, afterRemoteCommit)
         } finally {
-            invalidate(node.path)
-            invalidate(destination)
+            invalidateMutation(node.path)
+            invalidateMutation(destination)
         }
     }
 
@@ -348,8 +349,8 @@ internal class CachingLinuxVirtualFileBackend(
         try {
             delegate.moveReplacing(node, destination, normalized, afterRemoteCommit)
         } finally {
-            invalidate(node.path)
-            invalidate(normalized)
+            invalidateMutation(node.path)
+            invalidateMutation(normalized)
         }
     }
 
@@ -560,6 +561,11 @@ internal class CachingLinuxVirtualFileBackend(
         }
     }
 
+    private fun invalidateMutation(path: String) {
+        invalidate(path)
+        runCatching { afterMutationInvalidated(path.linuxVirtualPath()) }
+    }
+
     private fun rememberFailedPersistedInvalidation(path: String) {
         check(Thread.holdsLock(metadataLock))
         if (failedPersistedInvalidations.any { failed ->
@@ -704,7 +710,6 @@ internal class DesktopNextcloudVirtualFileBackend(
     private val writebacks: DesktopLinuxVirtualFileWritebackStore,
     private val tree: DesktopFileSyncRemoteTree = DesktopFileSyncRemoteTree(session, userId, ""),
     private val requireDurableCacheWrites: Boolean = false,
-    private val afterMutation: (String) -> Unit = {},
 ) : LinuxVirtualFileBackend {
     private val accountId = desktopFileCacheAccountId(session)
 
@@ -848,7 +853,6 @@ internal class DesktopNextcloudVirtualFileBackend(
         tree = tree,
         onCommitted = { committedPath ->
             runCatching { rangeCache.invalidate(accountId, committedPath) }
-            afterMutation(committedPath)
         },
     )
 
@@ -856,13 +860,11 @@ internal class DesktopNextcloudVirtualFileBackend(
         val normalized = path.linuxVirtualPath()
         tree.createDirectory(normalized, expectedRemoteEtag = null)
         runCatching { rangeCache.invalidate(accountId, normalized) }
-        afterMutation(normalized)
     }
 
     override fun delete(node: LinuxVirtualFileNode) {
         tree.delete(node.path, node.remoteRevision)
         runCatching { rangeCache.invalidate(accountId, node.path) }
-        afterMutation(node.path)
     }
 
     override fun move(node: LinuxVirtualFileNode, destinationPath: String) {
@@ -879,8 +881,6 @@ internal class DesktopNextcloudVirtualFileBackend(
         afterRemoteCommit()
         runCatching { rangeCache.invalidate(accountId, node.path) }
         runCatching { rangeCache.invalidate(accountId, normalized) }
-        afterMutation(node.path)
-        afterMutation(normalized)
     }
 
     override fun moveReplacing(
@@ -902,8 +902,6 @@ internal class DesktopNextcloudVirtualFileBackend(
         afterRemoteCommit()
         runCatching { rangeCache.invalidate(accountId, node.path) }
         runCatching { rangeCache.invalidate(accountId, normalized) }
-        afterMutation(node.path)
-        afterMutation(normalized)
     }
 
     private companion object {

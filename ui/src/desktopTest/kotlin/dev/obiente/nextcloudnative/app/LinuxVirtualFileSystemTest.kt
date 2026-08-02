@@ -23,6 +23,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 import ru.serce.jnrfuse.ErrorCodes
 import ru.serce.jnrfuse.struct.FileStat
 import ru.serce.jnrfuse.struct.FuseFileInfo
@@ -1226,6 +1227,27 @@ class LinuxVirtualFileSystemTest {
         cached.createDirectory("Albums")
         assertEquals(listOf("Photos", "Albums"), cached.list("").map(LinuxVirtualFileNode::name))
         assertEquals(2, delegate.listCallCount(""))
+        cached.close()
+    }
+
+    @Test
+    fun `failed namespace mutation invalidation requests retained folder recovery`() {
+        val failure = IllegalStateException("permission rejected")
+        val delegate = object : LinuxVirtualFileBackend by MutableFixtureBackend() {
+            override fun delete(node: LinuxVirtualFileNode) {
+                throw failure
+            }
+        }
+        val invalidatedMutations = mutableListOf<String>()
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = MemoryLinuxVirtualMetadataStore(),
+            afterMutationInvalidated = invalidatedMutations::add,
+        )
+        val node = LinuxVirtualFileNode("Photos/example.raf", "example.raf", false, 4L, "e1")
+
+        assertEquals(failure, assertFailsWith<IllegalStateException> { cached.delete(node) })
+        assertEquals(listOf("Photos/example.raf"), invalidatedMutations)
         cached.close()
     }
 

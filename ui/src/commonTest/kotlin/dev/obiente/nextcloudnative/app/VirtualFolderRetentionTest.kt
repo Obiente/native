@@ -29,6 +29,20 @@ class VirtualFolderRetentionTest {
     }
 
     @Test
+    fun removingAnOnlineOnlyOverrideResolvesItsExplicitKeptAncestor() {
+        val state = VirtualFolderRetentionState()
+            .withRetention("Photos", VirtualFolderRetention.KeepOnDevice)
+            .withRetention("Photos/Archive", VirtualFolderRetention.Automatic)
+
+        assertEquals(null, state.keepOnDeviceRootFor("Photos/Archive"))
+
+        val retained = state.withRetention("Photos/Archive", VirtualFolderRetention.KeepOnDevice)
+
+        assertEquals(listOf("Photos"), retained.rules.map(VirtualFolderRetentionRule::relativePath))
+        assertEquals("Photos", retained.keepOnDeviceRootFor("Photos/Archive"))
+    }
+
+    @Test
     fun plansHydrationWithoutMakingOpenedFilesSticky() {
         val key = FileOfflineKey("account", "Photos/Album/image.raf")
         val plan = planVirtualFolderRetention(

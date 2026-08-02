@@ -727,6 +727,10 @@ class DesktopNextcloudServices(
                             val ancestorTargets = linkedMapOf<String, Set<String>>()
                             var retainedMetadataEntries = 0
                             fun loadListing(parent: String): List<DesktopRemoteSyncDocument> {
+                                check(parent !in listings) {
+                                    "The selected virtual folder contains a repeated directory path."
+                                }
+                                requireVirtualFolderListingCapacity(listings.size)
                                 val documents = tree.list(parent)
                                 retainedMetadataEntries = nextVirtualFolderRetainedMetadataCount(
                                     retainedMetadataEntries,
@@ -747,6 +751,7 @@ class DesktopNextcloudServices(
                                     retainedFolderNavigationChild(parent, retainedRoot)
                                 }
                                 check(currentTarget in targets)
+                                requireVirtualFolderListingCapacity(listings.size)
                                 val targetDocuments = tree.list(parent).filter { document ->
                                     document.entry.relativePath in targets && document.isDirectory
                                 }
@@ -889,7 +894,9 @@ class DesktopNextcloudServices(
                             val protectedPaths = writebacks.pendingWritebacks()
                                 .mapTo(hashSetOf(), DesktopLinuxPendingWriteback::path)
                             verifiedListings.forEach { (parent, documents) ->
-                                reconcileVirtualRangeChildren(cache, accountId, parent, documents, protectedPaths)
+                                if (isCompleteRetainedTreeListing(parent, relativePath)) {
+                                    reconcileVirtualRangeChildren(cache, accountId, parent, documents, protectedPaths)
+                                }
                             }
                             cache.setFolderHydrationStatus(
                                 accountId,
@@ -1427,15 +1434,15 @@ class DesktopNextcloudServices(
                     services = this@DesktopNextcloudServices,
                     rangeCache = virtualRangeCache(accountId),
                     writebacks = writebackStore,
-                    afterMutation = { path ->
-                        refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
-                    },
                 ),
                 store = RetainedLinuxVirtualMetadataStore(
                     rangeCache = virtualRangeCache(accountId),
                     accountId = accountId,
                     fallback = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId),
                 ),
+                afterMutationInvalidated = { path ->
+                    refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
+                },
             )
             recoveredWritebackPaths.forEach(metadataBackend::invalidateAfterExternalMutation)
             val fileSystem = LinuxNextcloudVirtualFileSystem(metadataBackend)
@@ -1572,14 +1579,18 @@ class DesktopNextcloudServices(
         }
         cache.setFolderRetention(accountId, normalized, retention)
         if (retention == VirtualFolderRetention.KeepOnDevice) {
+            val retainedRoot = checkNotNull(
+                cache.loadFolderRetention(accountId).keepOnDeviceRootFor(normalized),
+            ) { "The selected folder did not resolve to a retained root." }
+            cancelVirtualFolderHydration(accountId, retainedRoot)
             synchronized(virtualFolderMutationLock) {
-                virtualFolderRetryAtEpochMillis.remove("$accountId\u0000$normalized")
+                virtualFolderRetryAtEpochMillis.remove("$accountId\u0000$retainedRoot")
             }
             cache.setFolderHydrationStatus(
                 accountId,
-                VirtualFolderHydrationStatus(normalized, VirtualFolderHydrationPhase.Queued),
+                VirtualFolderHydrationStatus(retainedRoot, VirtualFolderHydrationPhase.Queued),
             )
-            scheduleVirtualFolderHydration(session, userId, normalized, accountId, cache)
+            scheduleVirtualFolderHydration(session, userId, retainedRoot, accountId, cache)
             VirtualFileStorageActionResult.Completed(
                 "${normalized.substringAfterLast('/')} was selected for offline use. Downloading continues in the background.",
             )
@@ -3991,6 +4002,19 @@ internal fun nextVirtualFolderRetainedMetadataCount(
     }
     return currentEntries + additionalEntries
 }
+
+internal fun requireVirtualFolderListingCapacity(
+    currentListings: Int,
+    maximumListings: Int = MAX_VIRTUAL_FOLDER_RETAINED_LISTINGS,
+) {
+    require(currentListings >= 0 && maximumListings > 0)
+    check(currentListings < maximumListings) {
+        "The selected virtual folder contains too many directories to keep on this device safely."
+    }
+}
+
+internal fun isCompleteRetainedTreeListing(listingPath: String, retainedRoot: String): Boolean =
+    listingPath == retainedRoot || listingPath.startsWith("$retainedRoot/")
 
 private data class VirtualFolderListingGeneration(
     val path: String,
