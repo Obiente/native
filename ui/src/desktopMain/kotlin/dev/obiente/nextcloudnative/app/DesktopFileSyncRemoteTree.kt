@@ -272,18 +272,16 @@ internal class DesktopFileSyncRemoteTree(
     private fun listDirectory(path: String): List<DesktopRemoteSyncDocument> {
         var documents = rawListDirectory(path)
         var recovered = false
-        documents.filter { desktopOwnedBackupDestination(it.entry.relativePath) != null }.forEach { backup ->
-            val destination = requireNotNull(desktopOwnedBackupDestination(backup.entry.relativePath))
-            if (documents.none { it.entry.relativePath == destination }) {
-                moveRemoteDocument(backup, destination)
-                recovered = true
-            }
+        val documentsByPath = documents.associateBy { document -> document.entry.relativePath }
+        desktopOwnedBackupRecoveryPlan(documentsByPath.keys, MAX_RECOVERY_ITEMS).forEach { (source, destination) ->
+            moveRemoteDocument(requireNotNull(documentsByPath[source]), destination)
+            recovered = true
         }
         if (recovered) documents = rawListDirectory(path)
-        val listedPaths = documents.mapTo(hashSetOf()) { it.entry.relativePath }
+        val recoveredPaths = documents.mapTo(hashSetOf()) { it.entry.relativePath }
         return documents
             .filterNot { isDesktopOwnedUploadStage(it.entry.relativePath) }
-            .filterNot { backup -> shouldSuppressDesktopOwnedBackup(backup.entry.relativePath, listedPaths) }
+            .filterNot { backup -> shouldSuppressDesktopOwnedBackup(backup.entry.relativePath, recoveredPaths) }
             .also { require(it.size <= MAX_CHILDREN) { "A Nextcloud folder contains too many entries." } }
     }
 
@@ -503,6 +501,19 @@ internal fun shouldSuppressDesktopOwnedBackup(
     return destination !in listedPaths
 }
 
+internal fun desktopOwnedBackupRecoveryPlan(
+    relativePaths: Collection<String>,
+    maximumRecoveryItems: Int,
+): List<Pair<String, String>> {
+    require(maximumRecoveryItems >= 0)
+    val listedPaths = relativePaths.toHashSet()
+    val backups = relativePaths.mapNotNull { source ->
+        desktopOwnedBackupDestination(source)?.let { destination -> source to destination }
+    }
+    require(backups.size <= maximumRecoveryItems) { "A Nextcloud folder contains too many recovery items." }
+    return backups.filterNot { (_, destination) -> destination in listedPaths }
+}
+
 internal fun parseDesktopSyncDav(
     bytes: ByteArray,
     userId: String,
@@ -524,7 +535,7 @@ private fun parseDesktopSyncDav(
         setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, true)
         setProperty(XMLInputFactory.IS_COALESCING, false)
     }
-    val reader = factory.createXMLStreamReader(BoundedInputStream(input, maximumBytes))
+    val reader = factory.createXMLStreamReader(RejectingXmlCdataInputStream(BoundedInputStream(input, maximumBytes)))
     val documents = ArrayList<DesktopRemoteSyncDocument>()
     var response: DesktopDavResponseBuilder? = null
     var textField: String? = null
@@ -642,6 +653,46 @@ private class BoundedInputStream(
     private fun count(bytes: Long) {
         consumed += bytes
         require(consumed <= maximumBytes) { "The server response exceeds its safe size limit." }
+    }
+}
+
+private class RejectingXmlCdataInputStream(input: InputStream) : FilterInputStream(input) {
+    private var matchedPrefixBytes = 0
+
+    override fun read(): Int = super.read().also { value ->
+        if (value >= 0) inspect(value.toByte())
+    }
+
+    override fun read(destination: ByteArray, offset: Int, length: Int): Int =
+        super.read(destination, offset, length).also { read ->
+            if (read > 0) {
+                for (index in offset until offset + read) inspect(destination[index])
+            }
+        }
+
+    override fun skip(requested: Long): Long {
+        if (requested <= 0L) return 0L
+        val buffer = ByteArray(minOf(requested, 64L * 1024L).toInt())
+        var skipped = 0L
+        while (skipped < requested) {
+            val read = read(buffer, 0, minOf(buffer.size.toLong(), requested - skipped).toInt())
+            if (read < 0) break
+            skipped += read
+        }
+        return skipped
+    }
+
+    private fun inspect(value: Byte) {
+        if (value == CDATA_PREFIX[matchedPrefixBytes]) {
+            matchedPrefixBytes += 1
+            require(matchedPrefixBytes < CDATA_PREFIX.size) { "DAV CDATA properties are not supported." }
+        } else {
+            matchedPrefixBytes = if (value == CDATA_PREFIX[0]) 1 else 0
+        }
+    }
+
+    private companion object {
+        val CDATA_PREFIX = "<![CDATA[".encodeToByteArray()
     }
 }
 

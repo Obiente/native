@@ -94,6 +94,20 @@ class DesktopFileSyncRemoteTreeTest {
     }
 
     @Test
+    fun `dav parser rejects cdata before materializing property text`() {
+        assertFails {
+            parseDesktopSyncDav(
+                (
+                    "<d:multistatus xmlns:d=\"DAV:\"><d:response><d:href><![CDATA[" +
+                        "a".repeat(20_000) +
+                        "]]></d:href></d:response></d:multistatus>"
+                    ).encodeToByteArray(),
+                userId = "alice",
+            )
+        }
+    }
+
+    @Test
     fun `only exact provider owned upload stages are suppressed`() {
         assertEquals(
             true,
@@ -113,6 +127,24 @@ class DesktopFileSyncRemoteTreeTest {
         )
         assertEquals(null, desktopOwnedBackupDestination("Photos/.today.md.nextcloud-native-backup-not-a-uuid"))
         assertEquals(null, desktopOwnedBackupDestination("Photos/user-backup"))
+    }
+
+    @Test
+    fun `backup recovery is bounded before orphan processing`() {
+        val first = "Photos/.one.jpg.nextcloud-native-backup-123e4567-e89b-12d3-a456-426614174000"
+        val second = "Photos/.two.jpg.nextcloud-native-backup-123e4567-e89b-12d3-a456-426614174001"
+
+        assertFails {
+            desktopOwnedBackupRecoveryPlan(listOf(first, second), maximumRecoveryItems = 1)
+        }
+        assertEquals(
+            listOf(first to "Photos/one.jpg"),
+            desktopOwnedBackupRecoveryPlan(listOf(first), maximumRecoveryItems = 1),
+        )
+        assertEquals(
+            emptyList(),
+            desktopOwnedBackupRecoveryPlan(listOf(first, "Photos/one.jpg"), maximumRecoveryItems = 1),
+        )
     }
 
     @Test
