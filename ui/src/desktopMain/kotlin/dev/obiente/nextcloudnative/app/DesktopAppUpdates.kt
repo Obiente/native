@@ -7,6 +7,7 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
@@ -629,7 +630,7 @@ internal fun startWindowsInstallerAfterAppExit(
     parentProcessId: Long = ProcessHandle.current().pid(),
     windowsDirectory: File? = System.getenv("SystemRoot")?.takeIf(String::isNotBlank)?.let(::File),
     launcherFile: File? = packagedDesktopLauncherPath()?.let(::File),
-    processStarter: (List<String>) -> Unit = { command -> ProcessBuilder(command).start() },
+    processStarter: (List<String>) -> WindowsInstallerHandoffProcess = ::startWindowsInstallerHandoffProcess,
     readinessWaiter: (File, String) -> Boolean = ::waitForWindowsInstallerHandoffReadiness,
 ) {
     check(parentProcessId > 0L) { "The current Windows process could not be identified." }
@@ -650,8 +651,12 @@ internal fun startWindowsInstallerAfterAppExit(
     val acknowledgement = Files.createTempFile(packageFile.parentFile.toPath(), "installer-ready-", ".ack").toFile()
     Files.delete(acknowledgement.toPath())
     val acknowledgementToken = ByteArray(32).also(SecureRandom()::nextBytes).lowercaseHex()
+    val cancellation = Files.createTempFile(packageFile.parentFile.toPath(), "installer-cancel-", ".ack").toFile()
+    Files.delete(cancellation.toPath())
+    val cancellationToken = ByteArray(32).also(SecureRandom()::nextBytes).lowercaseHex()
+    var handoffProcess: WindowsInstallerHandoffProcess? = null
     try {
-        processStarter(
+        handoffProcess = processStarter(
             windowsInstallerHandoffCommand(
                 powershell = powershell,
                 script = script,
@@ -660,15 +665,65 @@ internal fun startWindowsInstallerAfterAppExit(
                 launcherFile = launcher,
                 acknowledgementFile = acknowledgement,
                 acknowledgementToken = acknowledgementToken,
+                cancellationFile = cancellation,
+                cancellationToken = cancellationToken,
             ),
         )
         check(readinessWaiter(acknowledgement, acknowledgementToken)) {
             "The Windows installer handoff did not confirm that it was ready."
         }
     } catch (failure: Throwable) {
+        val cancellationRecorded = runCatching {
+            Files.writeString(
+                cancellation.toPath(),
+                cancellationToken,
+                Charsets.US_ASCII,
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE,
+            )
+            true
+        }.getOrDefault(false)
+        val processStopped = runCatching { handoffProcess?.cancelAndWait() != false }.getOrDefault(false)
         Files.deleteIfExists(acknowledgement.toPath())
-        Files.deleteIfExists(script.toPath())
+        if (processStopped) {
+            Files.deleteIfExists(cancellation.toPath())
+            Files.deleteIfExists(script.toPath())
+        } else if (!cancellationRecorded) {
+            failure.addSuppressed(
+                IOException("The Windows installer handoff could not be cancelled safely."),
+            )
+        }
         throw failure
+    }
+}
+
+internal fun interface WindowsInstallerHandoffProcess {
+    fun cancelAndWait(): Boolean
+}
+
+private fun startWindowsInstallerHandoffProcess(command: List<String>): WindowsInstallerHandoffProcess {
+    val process = ProcessBuilder(command).start()
+    return WindowsInstallerHandoffProcess {
+        var interrupted = false
+        runCatching { process.destroy() }
+        val exitedNormally = try {
+            process.waitFor(WINDOWS_INSTALLER_HANDOFF_CANCEL_GRACE_SECONDS, TimeUnit.SECONDS)
+        } catch (_: InterruptedException) {
+            interrupted = true
+            false
+        }
+        if (!exitedNormally) {
+            runCatching { process.destroyForcibly() }
+            while (process.isAlive) {
+                try {
+                    process.waitFor()
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
+        !process.isAlive
     }
 }
 
@@ -680,6 +735,8 @@ internal fun windowsInstallerHandoffCommand(
     launcherFile: File,
     acknowledgementFile: File,
     acknowledgementToken: String,
+    cancellationFile: File,
+    cancellationToken: String,
 ): List<String> = listOf(
     powershell.absolutePath,
     "-NoLogo",
@@ -701,6 +758,10 @@ internal fun windowsInstallerHandoffCommand(
     acknowledgementFile.absolutePath,
     "-AcknowledgementToken",
     acknowledgementToken,
+    "-CancellationPath",
+    cancellationFile.absolutePath,
+    "-CancellationToken",
+    cancellationToken,
 )
 
 private fun waitForWindowsInstallerHandoffReadiness(
@@ -814,6 +875,7 @@ internal class DesktopUpdateCancelledException : IOException("Update download ca
 private const val WINDOWS_INSTALLER_HANDOFF_SCRIPT_NAME = "install-after-app-exit.ps1"
 private const val WINDOWS_INSTALLER_HANDOFF_READY_TIMEOUT_SECONDS = 5L
 private const val WINDOWS_INSTALLER_HANDOFF_READY_POLL_MILLIS = 25L
+private const val WINDOWS_INSTALLER_HANDOFF_CANCEL_GRACE_SECONDS = 2L
 private const val WINDOWS_INSTALLER_ACKNOWLEDGEMENT_MAX_BYTES = 128L
 private val WINDOWS_INSTALLER_HANDOFF_SCRIPT = """
     param(
@@ -821,17 +883,37 @@ private val WINDOWS_INSTALLER_HANDOFF_SCRIPT = """
         [Parameter(Mandatory = ${'$'}true)][string]${'$'}InstallerPath,
         [Parameter(Mandatory = ${'$'}true)][string]${'$'}LauncherPath,
         [Parameter(Mandatory = ${'$'}true)][string]${'$'}AcknowledgementPath,
-        [Parameter(Mandatory = ${'$'}true)][string]${'$'}AcknowledgementToken
+        [Parameter(Mandatory = ${'$'}true)][string]${'$'}AcknowledgementToken,
+        [Parameter(Mandatory = ${'$'}true)][string]${'$'}CancellationPath,
+        [Parameter(Mandatory = ${'$'}true)][string]${'$'}CancellationToken
     )
 
     ${'$'}ErrorActionPreference = 'Stop'
+    function Test-HandoffCancellation {
+        if (-not (Test-Path -LiteralPath ${'$'}CancellationPath -PathType Leaf)) {
+            return ${'$'}false
+        }
+        ${'$'}cancellationInfo = Get-Item -LiteralPath ${'$'}CancellationPath -ErrorAction SilentlyContinue
+        if (${'$'}null -eq ${'$'}cancellationInfo -or
+            ${'$'}cancellationInfo.Length -gt 128) {
+            return ${'$'}false
+        }
+        ${'$'}recordedToken = Get-Content -LiteralPath ${'$'}CancellationPath -Raw -ErrorAction SilentlyContinue
+        return ${'$'}recordedToken -eq ${'$'}CancellationToken
+    }
     try {
         if (-not (Test-Path -LiteralPath ${'$'}InstallerPath -PathType Leaf) -or
             -not (Test-Path -LiteralPath ${'$'}LauncherPath -PathType Leaf)) {
             throw 'The verified installer or application launcher is unavailable.'
         }
         Set-Content -LiteralPath ${'$'}AcknowledgementPath -Value ${'$'}AcknowledgementToken -NoNewline -Encoding ascii
+        if (Test-HandoffCancellation) {
+            throw 'The Windows installer handoff was cancelled before application exit.'
+        }
         Wait-Process -Id ${'$'}ParentProcessId -ErrorAction SilentlyContinue
+        if (Test-HandoffCancellation) {
+            throw 'The Windows installer handoff was cancelled before installer launch.'
+        }
         ${'$'}installerProcess = Start-Process -FilePath ${'$'}InstallerPath -PassThru -Wait
         ${'$'}successfulExitCodes = @(0, 1641, 3010)
         if (${'$'}installerProcess.ExitCode -notin ${'$'}successfulExitCodes) {
@@ -844,6 +926,7 @@ private val WINDOWS_INSTALLER_HANDOFF_SCRIPT = """
         }
     } finally {
         Remove-Item -LiteralPath ${'$'}AcknowledgementPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath ${'$'}CancellationPath -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath ${'$'}PSCommandPath -Force -ErrorAction SilentlyContinue
     }
 """.trimIndent() + "\r\n"

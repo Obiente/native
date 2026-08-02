@@ -92,13 +92,20 @@ class DesktopAppUpdatesTest {
         }
         val launcher = directory.resolve("NextcloudNative.exe").apply { writeText("launcher") }
         var command = emptyList<String>()
+        var cancelled = false
         try {
             startWindowsInstallerAfterAppExit(
                 packageFile = packageFile,
                 parentProcessId = 42L,
                 windowsDirectory = windowsDirectory,
                 launcherFile = launcher,
-                processStarter = { command = it },
+                processStarter = {
+                    command = it
+                    WindowsInstallerHandoffProcess {
+                        cancelled = true
+                        true
+                    }
+                },
                 readinessWaiter = { acknowledgement, token ->
                     assertEquals(acknowledgement.absolutePath, command[command.indexOf("-AcknowledgementPath") + 1])
                     assertEquals(token, command[command.indexOf("-AcknowledgementToken") + 1])
@@ -110,6 +117,8 @@ class DesktopAppUpdatesTest {
             assertEquals("42", command[command.indexOf("-ParentProcessId") + 1])
             assertEquals(packageFile.absolutePath, command[command.indexOf("-InstallerPath") + 1])
             assertEquals(launcher.absolutePath, command[command.indexOf("-LauncherPath") + 1])
+            assertTrue(command[command.indexOf("-CancellationPath") + 1].endsWith(".ack"))
+            assertEquals(64, command[command.indexOf("-CancellationToken") + 1].length)
             val script = File(command[command.indexOf("-File") + 1])
             assertTrue(script.isFile)
             assertTrue(script.readText().contains("Wait-Process -Id \$ParentProcessId"))
@@ -117,8 +126,11 @@ class DesktopAppUpdatesTest {
             assertTrue(script.readText().contains("\$successfulExitCodes = @(0, 1641, 3010)"))
             assertTrue(script.readText().contains("\$installerProcess.ExitCode -notin \$successfulExitCodes"))
             assertTrue(script.readText().contains("Set-Content -LiteralPath \$AcknowledgementPath"))
+            assertTrue(script.readText().contains("Test-HandoffCancellation"))
+            assertTrue(script.readText().contains("cancelled before installer launch"))
             assertTrue(script.readText().contains("--update-handoff-failed"))
             assertFalse(script.readText().contains(packageFile.absolutePath))
+            assertFalse(cancelled)
         } finally {
             directory.deleteRecursively()
         }
@@ -135,6 +147,8 @@ class DesktopAppUpdatesTest {
         }
         val launcher = directory.resolve("NextcloudNative.exe").apply { writeText("launcher") }
         var script: File? = null
+        var cancellationObserved = false
+        var processCancelled = false
         try {
             val failure = kotlin.test.assertFailsWith<IllegalStateException> {
                 startWindowsInstallerAfterAppExit(
@@ -142,12 +156,23 @@ class DesktopAppUpdatesTest {
                     parentProcessId = 42L,
                     windowsDirectory = windowsDirectory,
                     launcherFile = launcher,
-                    processStarter = { command -> script = File(command[command.indexOf("-File") + 1]) },
+                    processStarter = { command ->
+                        script = File(command[command.indexOf("-File") + 1])
+                        WindowsInstallerHandoffProcess {
+                            processCancelled = true
+                            val cancellation = File(command[command.indexOf("-CancellationPath") + 1])
+                            val token = command[command.indexOf("-CancellationToken") + 1]
+                            cancellationObserved = cancellation.readText() == token
+                            true
+                        }
+                    },
                     readinessWaiter = { _, _ -> false },
                 )
             }
 
             assertTrue(failure.message.orEmpty().contains("did not confirm"))
+            assertTrue(processCancelled)
+            assertTrue(cancellationObserved)
             assertFalse(requireNotNull(script).exists())
         } finally {
             directory.deleteRecursively()
