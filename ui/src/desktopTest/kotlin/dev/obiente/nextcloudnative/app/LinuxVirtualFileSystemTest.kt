@@ -5,11 +5,19 @@ import jnr.ffi.Pointer
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import java.nio.ByteBuffer
+import java.nio.file.Files
+import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.prefs.Preferences
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import ru.serce.jnrfuse.ErrorCodes
 import ru.serce.jnrfuse.struct.FileStat
@@ -348,6 +356,19 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `directory snapshot indexes large child sets by canonical path`() {
+        val nodes = List(50_000) { index ->
+            val name = "item-${index.toString().padStart(5, '0')}.dat"
+            LinuxVirtualFileNode("Photos/$name", name, false, 1L, "etag-$index")
+        }
+        val snapshot = LinuxVirtualDirectorySnapshot(nodes, fetchedAtEpochMillis = 1L)
+
+        assertEquals(nodes.size, snapshot.nodesByPath.size)
+        assertEquals(nodes.first(), snapshot.nodesByPath[nodes.first().path])
+        assertEquals(nodes.last(), snapshot.nodesByPath[nodes.last().path])
+    }
+
+    @Test
     fun `stale persisted listing is returned while one background refresh replaces it`() {
         val delegate = MutableFixtureBackend().apply {
             addFile("Photos/new-a.dat", byteArrayOf(1))
@@ -378,6 +399,149 @@ class LinuxVirtualFileSystemTest {
         assertEquals(listOf("new-a.dat", "new-b.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
         assertEquals(1, delegate.listCallCount("Photos"))
         cached.close()
+    }
+
+    @Test
+    fun `mutation invalidation discards an older in flight directory refresh`() {
+        val delegate = MutableFixtureBackend().apply {
+            addFile("Photos/existing.dat", byteArrayOf(1))
+        }
+        val blocking = BlockingListBackend(delegate, "Photos")
+        val store = MemoryLinuxVirtualMetadataStore().apply {
+            seed(
+                "Photos",
+                LinuxVirtualDirectorySnapshot(
+                    listOf(LinuxVirtualFileNode("Photos/cached.dat", "cached.dat", false, 1L, "cached-etag")),
+                    fetchedAtEpochMillis = 1L,
+                ),
+            )
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = blocking,
+            store = store,
+            nowEpochMillis = { 10_000L },
+            freshForMillis = 1_000L,
+        )
+
+        assertEquals(listOf("cached.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
+        assertTrue(blocking.started.await(2L, TimeUnit.SECONDS))
+        cached.createDirectory("Photos/New")
+        blocking.release.countDown()
+
+        assertEquals(
+            setOf("existing.dat", "New"),
+            cached.list("Photos").mapTo(mutableSetOf(), LinuxVirtualFileNode::name),
+        )
+        assertTrue(
+            waitUntil {
+                store.snapshot("Photos")?.nodes?.mapTo(mutableSetOf(), LinuxVirtualFileNode::name) ==
+                    setOf("existing.dat", "New")
+            },
+        )
+        assertEquals(2, delegate.listCallCount("Photos"))
+        cached.close()
+    }
+
+    @Test
+    fun `failed stale refresh backs off during cached directory enumeration`() {
+        val attempts = AtomicInteger(0)
+        val delegate = object : LinuxVirtualFileBackend by MutableFixtureBackend() {
+            override fun list(path: String): List<LinuxVirtualFileNode> {
+                attempts.incrementAndGet()
+                error("Simulated offline listing failure")
+            }
+        }
+        val store = MemoryLinuxVirtualMetadataStore().apply {
+            seed(
+                "Photos",
+                LinuxVirtualDirectorySnapshot(
+                    listOf(LinuxVirtualFileNode("Photos/cached.dat", "cached.dat", false, 1L, "cached-etag")),
+                    fetchedAtEpochMillis = 1L,
+                ),
+            )
+        }
+        val clock = AtomicLong(10_000L)
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = store,
+            nowEpochMillis = clock::get,
+            freshForMillis = 1_000L,
+            refreshRetryBaseMillis = 1_000L,
+            refreshRetryMaxMillis = 8_000L,
+        )
+
+        assertEquals(listOf("cached.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
+        assertTrue(waitUntil { attempts.get() == 1 })
+        repeat(10_000) {
+            assertNotNull(cached.resolve("Photos/cached.dat"))
+        }
+        assertEquals(1, attempts.get())
+
+        clock.addAndGet(1_000L)
+        assertEquals(listOf("cached.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
+        assertTrue(waitUntil { attempts.get() == 2 })
+        repeat(1_000) { cached.list("Photos") }
+        assertEquals(2, attempts.get())
+        cached.close()
+    }
+
+    @Test
+    fun `persisted metadata is reused only for the same remote revision`() {
+        val root = Files.createTempDirectory("linux-virtual-metadata-")
+        val preferences = Preferences.userRoot().node(
+            "dev/obiente/nextcloudnative/tests/linux-virtual-metadata/${UUID.randomUUID()}",
+        )
+        try {
+            val cache = DesktopFileReadCache(root.toFile(), preferences = preferences)
+            val accountId = "0".repeat(64)
+            val previous = NextcloudFile(
+                path = "Photos/example.raf",
+                name = "example.raf",
+                isDirectory = false,
+                mimeType = "image/x-raw",
+                size = 5L,
+                lastModified = "2026-08-02T12:00:00Z",
+                fileId = 42L,
+                hasPreview = true,
+                etag = "revision-1",
+                permissions = "RGDNVW",
+                checksums = listOf("SHA256:abc"),
+            )
+            cache.storeListing(accountId, "Photos", listOf(previous), nowEpochMillis = 1L)
+            val store = DesktopLinuxVirtualMetadataStore(cache, accountId)
+
+            store.store(
+                "Photos",
+                LinuxVirtualDirectorySnapshot(
+                    listOf(LinuxVirtualFileNode(previous.path, previous.name, false, 5L, "revision-1")),
+                    fetchedAtEpochMillis = 2L,
+                ),
+            )
+            val unchanged = cache.cachedListing(accountId, "Photos").orEmpty().single()
+            assertEquals("image/x-raw", unchanged.mimeType)
+            assertEquals("RGDNVW", unchanged.permissions)
+            assertEquals(listOf("SHA256:abc"), unchanged.checksums)
+
+            store.store(
+                "Photos",
+                LinuxVirtualDirectorySnapshot(
+                    listOf(LinuxVirtualFileNode(previous.path, previous.name, false, 8L, "revision-2")),
+                    fetchedAtEpochMillis = 3L,
+                ),
+            )
+            val replaced = cache.cachedListing(accountId, "Photos").orEmpty().single()
+            assertEquals("revision-2", replaced.etag)
+            assertEquals(8L, replaced.size)
+            assertNull(replaced.mimeType)
+            assertNull(replaced.lastModified)
+            assertNull(replaced.fileId)
+            assertTrue(!replaced.hasPreview)
+            assertNull(replaced.permissions)
+            assertTrue(replaced.checksums.isEmpty())
+        } finally {
+            runCatching { preferences.removeNode() }
+            root.toFile().deleteRecursively()
+        }
     }
 
     @Test
@@ -609,6 +773,26 @@ class LinuxVirtualFileSystemTest {
 
         fun seed(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
             snapshots[path] = snapshot
+        }
+
+        fun snapshot(path: String): LinuxVirtualDirectorySnapshot? = snapshots[path]
+    }
+
+    private class BlockingListBackend(
+        private val delegate: LinuxVirtualFileBackend,
+        private val blockedPath: String,
+    ) : LinuxVirtualFileBackend by delegate {
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        private val blockNext = AtomicBoolean(true)
+
+        override fun list(path: String): List<LinuxVirtualFileNode> {
+            val snapshot = delegate.list(path)
+            if (path.trim('/') == blockedPath && blockNext.compareAndSet(true, false)) {
+                started.countDown()
+                check(release.await(2L, TimeUnit.SECONDS)) { "Timed out waiting to release the directory listing." }
+            }
+            return snapshot
         }
     }
 
