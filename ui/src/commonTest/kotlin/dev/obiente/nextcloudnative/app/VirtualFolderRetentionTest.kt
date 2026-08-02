@@ -17,6 +17,18 @@ class VirtualFolderRetentionTest {
     }
 
     @Test
+    fun reselectingAnExplicitRulePreservesDescendantOverrides() {
+        val state = VirtualFolderRetentionState()
+            .withRetention("Photos", VirtualFolderRetention.KeepOnDevice)
+            .withRetention("Photos/Archive", VirtualFolderRetention.Automatic)
+
+        val reselected = state.withRetention("Photos", VirtualFolderRetention.KeepOnDevice)
+
+        assertEquals(state, reselected)
+        assertEquals(VirtualFolderRetention.Automatic, reselected.retentionFor("Photos/Archive/old.raf"))
+    }
+
+    @Test
     fun plansHydrationWithoutMakingOpenedFilesSticky() {
         val key = FileOfflineKey("account", "Photos/Album/image.raf")
         val plan = planVirtualFolderRetention(

@@ -145,8 +145,9 @@ private const val MAX_DOCUMENT_TEMPLATE_ID_LENGTH = 256
 private const val MAX_DOCUMENT_TEMPLATE_NAME_LENGTH = 512
 private const val MAX_DOCUMENT_TEMPLATE_EXTENSION_LENGTH = 32
 private const val VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES = 1024 * 1024
-private const val MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES = 1_000_000
+private const val MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES = 100_000
 private const val MAX_VIRTUAL_FOLDER_STABILITY_ATTEMPTS = 3
+private const val VIRTUAL_FOLDER_REFRESH_INTERVAL_MILLIS = 6L * 60L * 60L * 1_000L
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX = "wcfr."
 private const val KEY_VIRTUAL_FILE_ROOT_PREFIX = "vfp-root."
@@ -657,8 +658,14 @@ class DesktopNextcloudServices(
             if (virtualFolderHydrationJobs[jobKey]?.isActive == true) return
             val currentStatus = cache.loadFolderHydrationStatuses(accountId)
                 .firstOrNull { status -> status.relativePath == relativePath }
-            if (currentStatus?.phase == VirtualFolderHydrationPhase.Failed) return
-            if (currentStatus?.phase != VirtualFolderHydrationPhase.AvailableOffline) {
+            val now = System.currentTimeMillis().coerceAtLeast(0L)
+            if (!shouldScheduleVirtualFolderHydration(currentStatus, now)) return
+            if (currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline) {
+                cache.setFolderHydrationStatus(
+                    accountId,
+                    currentStatus.copy(refreshing = true),
+                )
+            } else {
                 cache.setFolderHydrationStatus(
                     accountId,
                     VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Queued),
@@ -695,12 +702,19 @@ class DesktopNextcloudServices(
                         while (stableListings == null && attempt < MAX_VIRTUAL_FOLDER_STABILITY_ATTEMPTS) {
                             attempt += 1
                             val listings = linkedMapOf<String, List<DesktopRemoteSyncDocument>>()
-                            fun loadListing(parent: String): List<DesktopRemoteSyncDocument> =
-                                tree.list(parent).also { documents -> listings[parent] = documents }
+                            var retainedMetadataEntries = 0
+                            fun loadListing(parent: String): List<DesktopRemoteSyncDocument> {
+                                val documents = tree.list(parent)
+                                retainedMetadataEntries = nextVirtualFolderRetainedMetadataCount(
+                                    retainedMetadataEntries,
+                                    documents.size,
+                                )
+                                listings[parent] = documents
+                                return documents
+                            }
 
                             retainedFolderAncestorListings(relativePath).forEach(::loadListing)
                             val pending = ArrayDeque<String>().apply { add(relativePath) }
-                            var discoveredEntries = 0
                             while (pending.isNotEmpty()) {
                                 currentCoroutineContext().ensureActive()
                                 val parent = pending.removeFirst()
@@ -709,10 +723,6 @@ class DesktopNextcloudServices(
                                     VirtualFolderRetention.KeepOnDevice
                                 ) continue
                                 loadListing(parent).forEach { document ->
-                                    discoveredEntries += 1
-                                    check(discoveredEntries <= MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES) {
-                                        "The selected virtual folder contains too many entries for one reconciliation pass."
-                                    }
                                     val fullPath = document.entry.relativePath
                                     if (
                                         cache.loadFolderRetention(accountId).retentionFor(fullPath) !=
@@ -801,7 +811,11 @@ class DesktopNextcloudServices(
                         }
                         cache.setFolderHydrationStatus(
                             accountId,
-                            VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.AvailableOffline),
+                            VirtualFolderHydrationStatus(
+                                relativePath,
+                                VirtualFolderHydrationPhase.AvailableOffline,
+                                verifiedAtEpochMillis = publishedAt,
+                            ),
                         )
                     }
                 } catch (cancellation: CancellationException) {
@@ -820,6 +834,7 @@ class DesktopNextcloudServices(
                                     } else {
                                         VirtualFolderHydrationPhase.Queued
                                     },
+                                    verifiedAtEpochMillis = currentStatus?.verifiedAtEpochMillis,
                                 ),
                             )
                         }
@@ -838,6 +853,7 @@ class DesktopNextcloudServices(
                                 relativePath,
                                 VirtualFolderHydrationPhase.AvailableOffline,
                                 refreshFailure = safeFailure,
+                                verifiedAtEpochMillis = currentStatus.verifiedAtEpochMillis,
                             ),
                         )
                     } else runCatching {
@@ -857,7 +873,7 @@ class DesktopNextcloudServices(
         }
     }
 
-    private fun refreshRetainedFoldersAfterCommit(
+    private fun refreshRetainedFoldersAfterMutation(
         session: NextcloudSession,
         userId: String,
         accountId: String,
@@ -1232,7 +1248,7 @@ class DesktopNextcloudServices(
                 tree = DesktopFileSyncRemoteTree(session, userId, ""),
                 onCommitted = { path ->
                     runCatching { virtualRangeCache(accountId).invalidate(accountId, path) }
-                    refreshRetainedFoldersAfterCommit(session, userId, accountId, path)
+                    refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
                 },
             )
             val fileSystem = LinuxNextcloudVirtualFileSystem(
@@ -1243,8 +1259,8 @@ class DesktopNextcloudServices(
                         services = this@DesktopNextcloudServices,
                         rangeCache = virtualRangeCache(accountId),
                         writebacks = writebackStore,
-                        afterCommitted = { path ->
-                            refreshRetainedFoldersAfterCommit(session, userId, accountId, path)
+                        afterMutation = { path ->
+                            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
                         },
                     ),
                     store = RetainedLinuxVirtualMetadataStore(
@@ -3685,6 +3701,35 @@ internal fun retainedFolderAncestorListings(relativePath: String): List<String> 
             add(current)
         }
     }
+}
+
+internal fun shouldScheduleVirtualFolderHydration(
+    status: VirtualFolderHydrationStatus?,
+    nowEpochMillis: Long,
+    refreshIntervalMillis: Long = VIRTUAL_FOLDER_REFRESH_INTERVAL_MILLIS,
+): Boolean {
+    require(nowEpochMillis >= 0L)
+    require(refreshIntervalMillis > 0L)
+    if (status == null) return true
+    if (status.phase == VirtualFolderHydrationPhase.Failed) return false
+    if (status.phase != VirtualFolderHydrationPhase.AvailableOffline) return true
+    if (status.refreshing) return true
+    val verifiedAt = status.verifiedAtEpochMillis ?: return true
+    val age = nowEpochMillis - verifiedAt
+    return age < 0L || age >= refreshIntervalMillis
+}
+
+internal fun nextVirtualFolderRetainedMetadataCount(
+    currentEntries: Int,
+    additionalEntries: Int,
+    maximumEntries: Int = MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES,
+): Int {
+    require(currentEntries in 0..maximumEntries)
+    require(additionalEntries >= 0)
+    check(additionalEntries <= maximumEntries - currentEntries) {
+        "The selected virtual folder contains too much metadata for one reconciliation pass."
+    }
+    return currentEntries + additionalEntries
 }
 
 private data class VirtualFolderListingGeneration(

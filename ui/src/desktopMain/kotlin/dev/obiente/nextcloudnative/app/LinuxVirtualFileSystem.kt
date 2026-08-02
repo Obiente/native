@@ -624,7 +624,7 @@ internal class DesktopNextcloudVirtualFileBackend(
     private val writebacks: DesktopLinuxVirtualFileWritebackStore,
     private val tree: DesktopFileSyncRemoteTree = DesktopFileSyncRemoteTree(session, userId, ""),
     private val requireDurableCacheWrites: Boolean = false,
-    private val afterCommitted: (String) -> Unit = {},
+    private val afterMutation: (String) -> Unit = {},
 ) : LinuxVirtualFileBackend {
     private val accountId = desktopFileCacheAccountId(session)
 
@@ -768,7 +768,7 @@ internal class DesktopNextcloudVirtualFileBackend(
         tree = tree,
         onCommitted = { committedPath ->
             rangeCache.invalidate(accountId, committedPath)
-            runCatching { afterCommitted(committedPath) }
+            runCatching { afterMutation(committedPath) }
         },
     )
 
@@ -776,11 +776,13 @@ internal class DesktopNextcloudVirtualFileBackend(
         val normalized = path.linuxVirtualPath()
         tree.createDirectory(normalized, expectedRemoteEtag = null)
         rangeCache.invalidate(accountId, normalized)
+        runCatching { afterMutation(normalized) }
     }
 
     override fun delete(node: LinuxVirtualFileNode) {
         tree.delete(node.path, node.remoteRevision)
         rangeCache.invalidate(accountId, node.path)
+        runCatching { afterMutation(node.path) }
     }
 
     override fun move(node: LinuxVirtualFileNode, destinationPath: String) {
@@ -788,6 +790,8 @@ internal class DesktopNextcloudVirtualFileBackend(
         tree.move(node.path, normalized, node.remoteRevision)
         rangeCache.invalidate(accountId, node.path)
         rangeCache.invalidate(accountId, normalized)
+        runCatching { afterMutation(node.path) }
+        runCatching { afterMutation(normalized) }
     }
 
     override fun moveReplacing(
@@ -799,6 +803,8 @@ internal class DesktopNextcloudVirtualFileBackend(
         tree.moveReplacing(node.path, normalized, node.remoteRevision, destination.remoteRevision)
         rangeCache.invalidate(accountId, node.path)
         rangeCache.invalidate(accountId, normalized)
+        runCatching { afterMutation(node.path) }
+        runCatching { afterMutation(normalized) }
     }
 
     private companion object {

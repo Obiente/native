@@ -174,6 +174,25 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `reselecting retained folder preserves nested online-only exclusions`() {
+        val directory = Files.createTempDirectory("virtual-range-reselect-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Archive", VirtualFolderRetention.Automatic)
+
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+
+            assertEquals(
+                VirtualFolderRetention.Automatic,
+                cache.loadFolderRetention(ACCOUNT_ID).retentionFor("Photos/Archive/old.raf"),
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `a failed refresh preserves durable offline availability`() {
         val directory = Files.createTempDirectory("virtual-range-refresh-status-").toFile()
         try {
@@ -194,6 +213,64 @@ class DesktopVirtualRangeCacheTest {
             assertEquals("Server unavailable.", status.refreshFailure)
         } finally {
             directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `available folder verification time survives restart`() {
+        val directory = Files.createTempDirectory("virtual-range-refresh-time-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderHydrationStatus(
+                ACCOUNT_ID,
+                VirtualFolderHydrationStatus(
+                    "Photos",
+                    VirtualFolderHydrationPhase.AvailableOffline,
+                    verifiedAtEpochMillis = 42L,
+                ),
+            )
+
+            val restarted = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+
+            assertEquals(42L, restarted.loadFolderHydrationStatuses(ACCOUNT_ID).single().verifiedAtEpochMillis)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `available folders refresh only after their independent freshness interval`() {
+        val fresh = VirtualFolderHydrationStatus(
+            "Photos",
+            VirtualFolderHydrationPhase.AvailableOffline,
+            verifiedAtEpochMillis = 10_000L,
+        )
+
+        assertFalse(shouldScheduleVirtualFolderHydration(fresh, 10_999L, refreshIntervalMillis = 1_000L))
+        assertTrue(shouldScheduleVirtualFolderHydration(fresh, 11_000L, refreshIntervalMillis = 1_000L))
+        assertTrue(shouldScheduleVirtualFolderHydration(fresh, 9_999L, refreshIntervalMillis = 1_000L))
+        assertTrue(
+            shouldScheduleVirtualFolderHydration(
+                fresh.copy(refreshing = true),
+                10_001L,
+                refreshIntervalMillis = 1_000L,
+            ),
+        )
+        assertFalse(
+            shouldScheduleVirtualFolderHydration(
+                VirtualFolderHydrationStatus("Photos", VirtualFolderHydrationPhase.Failed, "Offline."),
+                20_000L,
+                refreshIntervalMillis = 1_000L,
+            ),
+        )
+    }
+
+    @Test
+    fun `retained metadata budget rejects the next listing before accumulation`() {
+        assertEquals(100, nextVirtualFolderRetainedMetadataCount(40, 60, maximumEntries = 100))
+        assertFailsWith<IllegalStateException> {
+            nextVirtualFolderRetainedMetadataCount(40, 61, maximumEntries = 100)
         }
     }
 
@@ -456,6 +533,66 @@ class DesktopVirtualRangeCacheTest {
             assertEquals(
                 emptyList<LinuxVirtualFileNode>(),
                 requireNotNull(cache.loadRetainedListing(ACCOUNT_ID, "Photos/B")).nodes,
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `refreshing a parent preserves listings required by a nested retained root`() {
+        val directory = Files.createTempDirectory("virtual-range-retained-nested-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Archive", VirtualFolderRetention.Automatic)
+            cache.setFolderRetention(
+                ACCOUNT_ID,
+                "Photos/Archive/Favorites",
+                VirtualFolderRetention.KeepOnDevice,
+            )
+            val archive = LinuxVirtualDirectorySnapshot(
+                listOf(LinuxVirtualFileNode("Photos/Archive/Favorites", "Favorites", true, 0L, "favorites")),
+                42L,
+            )
+            val favorites = LinuxVirtualDirectorySnapshot(
+                listOf(
+                    LinuxVirtualFileNode(
+                        "Photos/Archive/Favorites/kept.raf",
+                        "kept.raf",
+                        false,
+                        4L,
+                        "kept",
+                    ),
+                ),
+                42L,
+            )
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos/Archive/Favorites",
+                mapOf(
+                    "" to LinuxVirtualDirectorySnapshot(emptyList(), 42L),
+                    "Photos" to LinuxVirtualDirectorySnapshot(emptyList(), 42L),
+                    "Photos/Archive" to archive,
+                    "Photos/Archive/Favorites" to favorites,
+                ),
+            )
+
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos",
+                mapOf("Photos" to LinuxVirtualDirectorySnapshot(emptyList(), 43L)),
+            )
+
+            assertEquals(
+                listOf("Favorites"),
+                requireNotNull(cache.loadRetainedListing(ACCOUNT_ID, "Photos/Archive"))
+                    .nodes.map(LinuxVirtualFileNode::name),
+            )
+            assertEquals(
+                listOf("kept.raf"),
+                requireNotNull(cache.loadRetainedListing(ACCOUNT_ID, "Photos/Archive/Favorites"))
+                    .nodes.map(LinuxVirtualFileNode::name),
             )
         } finally {
             directory.deleteRecursively()

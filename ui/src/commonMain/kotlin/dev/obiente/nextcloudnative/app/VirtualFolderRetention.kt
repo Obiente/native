@@ -23,6 +23,7 @@ data class VirtualFolderHydrationStatus(
     val detail: String? = null,
     val refreshFailure: String? = null,
     val refreshing: Boolean = false,
+    val verifiedAtEpochMillis: Long? = null,
 ) {
     init {
         require(relativePath.isNotEmpty())
@@ -36,6 +37,7 @@ data class VirtualFolderHydrationStatus(
                 refreshFailure.length <= MAX_VIRTUAL_FOLDER_HYDRATION_DETAIL_LENGTH
         )
         require(!refreshing || phase == VirtualFolderHydrationPhase.AvailableOffline)
+        require(verifiedAtEpochMillis == null || verifiedAtEpochMillis >= 0L)
     }
 }
 
@@ -70,6 +72,7 @@ data class VirtualFolderRetentionState(
     /** Replaces one subtree's intent and removes rules that can no longer affect its descendants. */
     fun withRetention(relativePath: String, retention: VirtualFolderRetention): VirtualFolderRetentionState {
         val normalized = FileOfflineKey("account", relativePath).relativePath
+        if (rules.any { rule -> rule.relativePath == normalized && rule.retention == retention }) return this
         val inherited = rules
             .filter { rule -> normalized.startsWith("${rule.relativePath}/") }
             .maxByOrNull { rule -> rule.relativePath.length }

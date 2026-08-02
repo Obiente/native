@@ -341,6 +341,7 @@ internal class DesktopVirtualRangeCache(
                     VirtualFolderHydrationPhase.Queued
                 },
                 refreshing = currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline,
+                verifiedAtEpochMillis = currentStatus?.verifiedAtEpochMillis,
             ),
         )
     }
@@ -455,12 +456,24 @@ internal class DesktopVirtualRangeCache(
         }
         val publishedPaths = published.mapTo(hashSetOf(), RetainedListingReference::path)
         val current = loadRetainedMetadataIndex(accountId)
+        val nestedRetainedRoots = loadFolderRetention(accountId).rules.asSequence()
+            .filter { rule ->
+                rule.retention == VirtualFolderRetention.KeepOnDevice &&
+                    rule.relativePath.startsWith("$normalizedRoot/")
+            }
+            .mapTo(hashSetOf(), VirtualFolderRetentionRule::relativePath)
         val next = RetainedMetadataIndex(
             listings = (
                 current.listings.filterNot { reference ->
-                    reference.path == normalizedRoot ||
-                        reference.path.startsWith("$normalizedRoot/") ||
-                        reference.path in publishedPaths
+                    val replacedByPublished = reference.path in publishedPaths
+                    val insidePublishedRoot = reference.path == normalizedRoot ||
+                        reference.path.startsWith("$normalizedRoot/")
+                    val requiredByNestedRoot = nestedRetainedRoots.any { nestedRoot ->
+                        reference.path == nestedRoot ||
+                            reference.path.startsWith("$nestedRoot/") ||
+                            nestedRoot.startsWith("${reference.path}/")
+                    }
+                    replacedByPublished || insidePublishedRoot && !requiredByNestedRoot
                 } + published
                 ).sortedBy(RetainedListingReference::path),
         )
@@ -1084,9 +1097,17 @@ private data class CachedVirtualFolderHydration(
     val detail: String? = null,
     val refreshFailure: String? = null,
     val refreshing: Boolean = false,
+    val verifiedAtEpochMillis: Long? = null,
 ) {
     fun toDomain(): VirtualFolderHydrationStatus =
-        VirtualFolderHydrationStatus(relativePath, phase, detail, refreshFailure, refreshing)
+        VirtualFolderHydrationStatus(
+            relativePath,
+            phase,
+            detail,
+            refreshFailure,
+            refreshing,
+            verifiedAtEpochMillis,
+        )
 
     companion object {
         fun fromDomain(status: VirtualFolderHydrationStatus) = CachedVirtualFolderHydration(
@@ -1095,6 +1116,7 @@ private data class CachedVirtualFolderHydration(
             status.detail,
             status.refreshFailure,
             status.refreshing,
+            status.verifiedAtEpochMillis,
         )
     }
 }
