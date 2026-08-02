@@ -168,16 +168,20 @@ fun main(arguments: Array<String>) {
         desktopTrayIcon?.toolTip = traySnapshot.tooltip()
     }
 
-    fun activateMainWindow(route: NextcloudNativeRoute) {
-        navigationSequence.value += 1L
-        navigationRequest.value = NextcloudNativeNavigationRequest(navigationSequence.value, route)
+    fun showMainWindow() {
         trayPopupVisible.value = false
         mainWindowState.isMinimized = false
         windowVisible.value = true
     }
 
+    fun activateMainWindow(route: NextcloudNativeRoute) {
+        navigationSequence.value += 1L
+        navigationRequest.value = NextcloudNativeNavigationRequest(navigationSequence.value, route)
+        showMainWindow()
+    }
+
     LaunchedEffect(externalActivation.sequence) {
-        if (externalActivation.sequence > 0L) activateMainWindow(NextcloudNativeRoute.Home)
+        if (externalActivation.sequence > 0L) showMainWindow()
     }
 
     LaunchedEffect(windowVisible.value, navigationRequest.value?.sequence, mainWindow.value) {
@@ -194,8 +198,8 @@ fun main(arguments: Array<String>) {
             SwingUtilities.invokeLater {
                 JOptionPane.showMessageDialog(
                     mainWindow.value,
-                    "The Windows installer could not be opened. Nextcloud Native is still available.",
-                    "Update could not start",
+                    "The Windows update did not complete. Nextcloud Native is still available.",
+                    "Update did not complete",
                     JOptionPane.ERROR_MESSAGE,
                 )
             }

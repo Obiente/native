@@ -832,7 +832,11 @@ private val WINDOWS_INSTALLER_HANDOFF_SCRIPT = """
         }
         Set-Content -LiteralPath ${'$'}AcknowledgementPath -Value ${'$'}AcknowledgementToken -NoNewline -Encoding ascii
         Wait-Process -Id ${'$'}ParentProcessId -ErrorAction SilentlyContinue
-        Start-Process -FilePath ${'$'}InstallerPath
+        ${'$'}installerProcess = Start-Process -FilePath ${'$'}InstallerPath -PassThru -Wait
+        ${'$'}successfulExitCodes = @(0, 1641, 3010)
+        if (${'$'}installerProcess.ExitCode -notin ${'$'}successfulExitCodes) {
+            throw "The Windows installer exited with code ${'$'}(${'$'}installerProcess.ExitCode)."
+        }
     } catch {
         if (-not (Get-Process -Id ${'$'}ParentProcessId -ErrorAction SilentlyContinue) -and
             (Test-Path -LiteralPath ${'$'}LauncherPath -PathType Leaf)) {
