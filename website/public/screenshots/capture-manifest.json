@@ -13,6 +13,7 @@
         "tools/marketing-capture-inputs.txt",
         "ui/build.gradle.kts",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivitySemantics.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityWorkspace.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AdminAppManagement.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AppUpdateChannels.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatus.kt",
@@ -235,6 +236,7 @@
         "tools/marketing-capture-inputs.txt": "3c96e83e1ba2d715b1cda9cedf036fc97b78c3ca63b7fc930325ed536940c1f3",
         "ui/build.gradle.kts": "8cb33c7710eec8a1a7be1c3a9f814f9e739d6a0fc832c8da401b8cccdfebedca",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivitySemantics.kt": "fa9a949fdfd07c8f5b7388f10dd6cf21454fdbb165390c7ca5f6a27f4de07c85",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityWorkspace.kt": "c072c29b0bdfe13eb3ca26c1cf057459f1611f9e537961b0247ca1ef7de5b245",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AdminAppManagement.kt": "b11fbc2c93ab17a20f123c8bde25a993c612ffb1b1525329a7e341952fefbf7d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AppUpdateChannels.kt": "2ad7975a0c311c7b5977581b4c63dcc105cfed59840b871cf9f7bead9881bf05",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatus.kt": "c93f3e29607e653aa8d8a541f7e7d843b2b64ccc3096e079180bec6952e31b03",
@@ -268,7 +270,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileIdentityResolution.kt": "f8658c54cf14dec5b60037a27770ea3c2eb06b509bd28d3b9c97c228adfae83a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileIntegrationPlanning.kt": "1421be5a0db7c7d36ad72434e435952d5017ae25db080f2d7eeddc1aea368a1b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenter.kt": "a2686353e00c9add15ca2c1d1f8ed2dcecf8160d87992d055dc7fb2c39e5f3fa",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt": "ce495e749ef608adb1cced8d935bc1e9272095983b8007f9051a58aa3a95b2d6",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt": "9148592e9acd4294961ea8f4974b35e86c3307d93fc90e9abac6d2e23be24995",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineQueue.kt": "f592e2dcf3fde4467f88e30b570f9612126a7d6a63070c2a17819572ceb68e19",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineQueueSnapshot.kt": "1fb930db8f65e0e410af6eaacde0c4f3d071f4115c39f78a4f49a9532b9f7961",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOperations.kt": "1282adb909c54d559d812689ca9f937cda3a1256c1400fd0d0f91ba3a1ace1d6",
@@ -279,7 +281,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCenter.kt": "fbfe7b886aca4317a82e56b0998c52a26b1a26a3bf6cb3325dc05ac088510314",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinator.kt": "2fe5973ce23965206595f7f8941b78402c8aa1b50a69c11ce38ba36232984dd1",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinatorSnapshot.kt": "706879e458b50a394297175834a6e373d2ad1b771bb0c13ab8e8c528b7a5c46b",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt": "24aef4f4994ab9c1f5c30396aeb166408860f42997e23cf3776387534d2b6e4e",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt": "f02ef547b66e738603804f2d60a257aacae31c4287bbd76f1e77a6f6b65abb41",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPlanning.kt": "2aac41272bba43287c033cc06bfd394f1c003e09c11655e34e71d74b34dfde51",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistory.kt": "fc5d0165cc47bf4e54fd92bf860a0b262c3c5213e0a1e35e16e99db0126657c1",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistorySection.kt": "321ecbc2e388ec3e9befa2f7486f5357e02a9e333f7643b901626d15a2674750",
@@ -294,7 +296,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LivePhotos.kt": "380a1f135dd50b1746967a6805b69dd4e48ab77dc864aeef394440c021c223d7",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LocalFileUpload.kt": "7cbabc9eaea160376f3e7ba31cd4b47421741b4ac60363046988fb27b98023a8",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt": "74ed912eef556a53b7eb0008946aa5b4425cb69456bea75368d309a39052a331",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "306d8dd12744e5188aaaf1e3853de5478a693ecf8c9a3fe6875cb108907c1d28",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "4cca0a9a0a3364eb10378a14b1e7f7de943bd53f912689c23e50da320d88b51a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt": "c2fc2afc07443b8b065d11c34a80dfc407a8e2d0866c356da974a188f51a3c15",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt": "d0d144beece62dec0b26f9bc245693386b98752384294b9d90080d54c25d139e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingLivePhotoCaptureScenarios.kt": "20a74e6b425a56b0ba6d32f28b89c5722f2f9569f1dceeaa621f2f226bec9101",
@@ -330,7 +332,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudFileListing.kt": "4372cbb72541993c53169f861ebb00efc306670d41b860cc0c3c010b431f43b4",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt": "53cc22fed51fe03ef0aaab6a3f849222b0dbfb04fac9c4e3a73057b85c524290",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewerActions.kt": "48aaed6948d1423113d300cc3ab86d244ab76e8225e24988e9855edf74553944",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "85da521a4c8e487c97096d8eebfa1d9a55026b44f1d423f427f0401b4c1c943a",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "40317d85dfe19493b032b91e3aca161b093deabcaf5582eb56218b1865ea85bd",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt": "944103dba7d35abd17d21cb2bf5818c19b8148abf6b8d37fcdafdab029abe56b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotesCache.kt": "9223dd455c6a1c35a10769616fceb9dfb2d92ef4d43b0a52c2c29e40f1a196cf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPeople.kt": "cff910ea2cc77211ef81779c49ee0c957851f2b4a3ed32b857b12ded1cee643b",
@@ -378,16 +380,16 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/UnifiedSearchScreen.kt": "94a7220513264679ca270e9f2ef99863a1d0c69c952644196eaa4448c077993a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/VirtualFileCache.kt": "35871fd8e61f8ed89406e36908f39396370b6a656e195f07fd6ba753f704f384",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/VirtualFileStorageCenter.kt": "2567b33099bd17663fc51a43c3389e7364e773834385c615682007c1f473cb24",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShell.kt": "0020fca3b4b11c6b32af256826e8fa9da93235da220d5479e08bcbb0beaee40f",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShellLayout.kt": "98d13d08e23c1472e146b0942222a7e94fc1e9cac23c784a7105ed74dce78a47",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShellShortcuts.kt": "ffcaee09cae76054495de3e5184a40ef969dd98c36778016228fb5ceb689f337",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShell.kt": "9f7c05014c51d9ba8f9b87c12981fd9cf202fd4ca38dca01992879bd1e843ef5",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShellLayout.kt": "3f038c9659eafa9fc9441324e7ee706f8fbc4046f5dceb948b5f07739261cede",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShellShortcuts.kt": "ecdc2f19c7a80d6a090240c33e6207198a1ff50307e6d07daaf02e8745c339b3",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudBoardDragAutoScroll.kt": "3d02c4d8b72cf1db1d7bbaa23747b413e8f053ffa9529c86ff3113c7833794ac",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudBoardDragHandle.kt": "49e48642f5aa179a51e484156a19133e558273ead45158ce19451334580b4fe2",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudCardActions.kt": "2a5c98eebabd22b39c5b282d16894b52d34da2b9234914f395343d7f615d36e2",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudCollectionNavigator.kt": "412bcd8be383ad2cefc12d36c20c0d01dcf4530b25b7c98b56a724cd5c79f768",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudComponents.kt": "2c5bb0d0be1807059ec1a64c74848b64f73ac064200907396663dc98c00570a3",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudComponents.kt": "67456ce0a8008e79cb619b5ec8b77798fe9bd10b7e80da7ad4133c42bb7da05b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudContextMenu.kt": "71e6e3e390b9a898462819e42c3a4bf52deded65b42717913204d29e58a0fe7e",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudIcons.kt": "19d6e9293a58f5d55157179a0e924d5b3b01e0710ef328cc6c432a0afadff9b9",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudIcons.kt": "d9f83110342c3f74c8b5607faf41a4c69a0ddab3fd37a57cb2344a1593774e90",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudTheme.kt": "35cd91c0426ea6b38d1be804416cf0d004919834a952bcef393cb5389e580725",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudTokens.kt": "e40c061f25d8804a463ed4c1da8b14ad6310f95f801c26c2f86545a848209108",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudWorkspaceBreakpoints.kt": "17d16358fd61bd22eb6acd8d39dbde489010db2f9cefabcd8618e66d29d2e326",
@@ -464,7 +466,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "24063e5dbb08bdac28831e948bc2a935abf3504063e4ceb5e32381eb9ffb9568"
+            "sha256": "029bd88016cb45cdfdf06f76893b567a86b4c7eebde3fa60a73714450ee30107"
         },
         {
             "scenario": "homepage-overview-desktop-light",
@@ -480,7 +482,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "08affbf723f613afedc16e9340816a4cd8ab9d5c5b92e38e6b8e3754d7fcb5d8"
+            "sha256": "e1bbe0936fa1c639cc7b8afc031ae15d21fc765afacd98cd874ade2202f501ec"
         },
         {
             "scenario": "homepage-overview-mobile-dark",
@@ -560,7 +562,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "0222cf8131beeff16e5ab0448b8de4e3cf7616520a5781bac015d2755335d5b5"
+            "sha256": "e35854a40c2c4714190786b9f14a14b85e6d3ae8e2ad549e6ffab7c4d995293c"
         },
         {
             "scenario": "homepage-photos-desktop-light",
@@ -576,7 +578,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "1a0a4ca41587d9c16860c1492114e70ea1ff2122c363c8ed80e11ad7d6564d7b"
+            "sha256": "82114a25708cc97aa9e06f8c647658a49973579d2953cc8ad8131bd971bf0fe9"
         },
         {
             "scenario": "homepage-conversations-desktop-dark",
@@ -592,7 +594,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "b2d3f669eb99c20a3fc0bb0071672fdf5c9c49ca904e23a5a7b47318d1d3954d"
+            "sha256": "b44dce7a9f5b7638913c7a7938a0d14667c2532bbcf22d158125dac0e997ef82"
         },
         {
             "scenario": "homepage-conversations-desktop-light",
@@ -608,7 +610,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "c9b9b8271b694ab5499fe1d038e255c2ea3879219d7f709e3d2eb19ebeb642cc"
+            "sha256": "7a511af0a284b09da1502411ec4ae40022831ed3ee38f6fa934431267821f61b"
         },
         {
             "scenario": "homepage-planning-desktop-dark",
@@ -688,7 +690,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "470ab153fe0eb26c9ebec4fb0fe993a1275cfb741caa3cc1ae70afc4bde2b713"
+            "sha256": "ea29625c0e1b353da683b4934bb523decb6014689ce9b4044ebd3c889386f06e"
         },
         {
             "scenario": "desktop-home-light",
@@ -704,7 +706,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "1ba7f87eec390bc130263a360d494bc011e1180375cb05354903d64d3d7d064b"
+            "sha256": "9f6efecb18da43df2f4ad938c8d1795c126e35636eedbb030bb56c5b9988b699"
         },
         {
             "scenario": "mobile-home",
@@ -752,7 +754,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-compact",
-            "sha256": "ad113b0ac2f6b18546dfd416948e972afc556994e57243d5ee21f0a02269589f"
+            "sha256": "1f4ba5a078aa76f76d6cc0e1f2036fedffa7bf27f1b623a12edcfc2e2dd555d0"
         },
         {
             "scenario": "obsidian-vault-sync-light",
@@ -768,7 +770,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-compact",
-            "sha256": "50babf2016a8ddf8f1fed16c56f8badb1c1f1b5100667a1c0bcb738ac09ee243"
+            "sha256": "17c359f5b7a7cabb41a82f1007f4f8bb9d847f4701da024146bb758ddaff9763"
         },
         {
             "scenario": "media-backup-queue",
@@ -784,7 +786,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "580358ca1a06db6ca88e8e3ebf3e3385179b88a4f2319e5436ae701819a8999d"
+            "sha256": "807289373dc0080e3f144bc2904921737b4ed400abd877140d05505acbbde41b"
         },
         {
             "scenario": "media-backup-queue-light",
@@ -800,7 +802,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "7515f8e287755663295d4533c19abaf256367d6d50534ebf59768d6559793fa2"
+            "sha256": "ec1ca45120ee9cfaba73702aab0ad2bc5cf79eda25af9a1048792ffde1a931eb"
         },
         {
             "scenario": "file-sync-rules-mobile",
@@ -848,7 +850,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "1c4814267affb0996186371967f697e75dc718fad315821363a202e7980f82df"
+            "sha256": "deefa93d1383ca96e13f06fdecf0640cd13671ae95a1c8e645a59685e100593f"
         },
         {
             "scenario": "file-sync-status-mobile-light",
@@ -864,7 +866,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "b8ed4aaa5706126d03f08f1696f0d29a3585277b7e1c7e83a3d8d21ada6fac49"
+            "sha256": "ab72f42f0e85702bc33a484e65fe084784f91c5dd953cd5427c0c3850c0ebc4f"
         },
         {
             "scenario": "file-sync-status-desktop",
@@ -872,7 +874,7 @@
             "file": "file-sync-status-desktop.png",
             "theme": "dark",
             "width": 1440,
-            "height": 900,
+            "height": 1145,
             "density": 1.0,
             "feature": "File sync",
             "surface": "Folder sync center",
@@ -880,7 +882,7 @@
             "purpose": "showcase",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "4157231a8b5ec863017f156b4ba950c974854ef3749549c538bb1f3a8018004c"
+            "sha256": "cca9aa07d223b91f56601a26a2e42ff327862c552d2cd761d900e04966b023a6"
         },
         {
             "scenario": "file-sync-status-desktop-light",
@@ -888,7 +890,7 @@
             "file": "file-sync-status-desktop-light.png",
             "theme": "light",
             "width": 1440,
-            "height": 900,
+            "height": 1145,
             "density": 1.0,
             "feature": "File sync",
             "surface": "Folder sync center",
@@ -896,7 +898,39 @@
             "purpose": "showcase",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "be1f07fd28631af3bf02f5081c10e2784c46b1947ab48b7e5659dc8ca1fc6e97"
+            "sha256": "3a2f0f07a9d2475e6e653bdf923db32612cb7469994695dba2ed00b3482cfe7c"
+        },
+        {
+            "scenario": "activity-workspace-desktop",
+            "baseScenario": "activity-workspace-desktop",
+            "file": "activity-workspace-desktop.png",
+            "theme": "dark",
+            "width": 1721,
+            "height": 914,
+            "density": 1.0,
+            "feature": "Activity",
+            "surface": "Attention-first activity workspace",
+            "state": "Grouped automation and actionable events",
+            "purpose": "showcase",
+            "platform": "desktop",
+            "viewport": "wide",
+            "sha256": "d3bede2556bc0dab47ac34f405d28fb19e624eb6eba3093050b84032c98e7f04"
+        },
+        {
+            "scenario": "activity-workspace-desktop-light",
+            "baseScenario": "activity-workspace-desktop",
+            "file": "activity-workspace-desktop-light.png",
+            "theme": "light",
+            "width": 1721,
+            "height": 914,
+            "density": 1.0,
+            "feature": "Activity",
+            "surface": "Attention-first activity workspace",
+            "state": "Grouped automation and actionable events",
+            "purpose": "showcase",
+            "platform": "desktop",
+            "viewport": "wide",
+            "sha256": "1afdb9997054dd7d53da03211debcb5bd47d6606c06e5e3f2f305da4f8aa61c1"
         },
         {
             "scenario": "file-sync-setup-desktop",
@@ -1072,7 +1106,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "7d09486e46635bbef8686eeb60a0f4d12755c55fd3d6839e382719fd168f0165"
+            "sha256": "5e998e6807a00d5a14a4b4bd0857e19ab4c378d874cec70344b97350eb8e38e4"
         },
         {
             "scenario": "desktop-startup-settings-light",
@@ -1088,7 +1122,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "49c2c672f4070accb26303f84d5b0adacb6acb745f526b542b0747f534344096"
+            "sha256": "79cf4e60c9665fb3d7860c4da7a068d55b37a9008bee570db53a8c98c1b082db"
         },
         {
             "scenario": "adaptive-dynamic-data",
@@ -1548,7 +1582,7 @@
             "viewport": "wide",
             "pullRequest": 245,
             "issue": 243,
-            "sha256": "0222cf8131beeff16e5ab0448b8de4e3cf7616520a5781bac015d2755335d5b5"
+            "sha256": "e35854a40c2c4714190786b9f14a14b85e6d3ae8e2ad549e6ffab7c4d995293c"
         },
         {
             "scenario": "photo-folder-browser-desktop-light",
@@ -1566,7 +1600,7 @@
             "viewport": "wide",
             "pullRequest": 245,
             "issue": 243,
-            "sha256": "1a0a4ca41587d9c16860c1492114e70ea1ff2122c363c8ed80e11ad7d6564d7b"
+            "sha256": "82114a25708cc97aa9e06f8c647658a49973579d2953cc8ad8131bd971bf0fe9"
         },
         {
             "scenario": "raw-preview-loading-mobile",
@@ -2193,7 +2227,7 @@
             "platform": "desktop",
             "viewport": "wide",
             "issue": 56,
-            "sha256": "1354bbe3c7d5e24dc7395a5ebecc1cca12f44675018ff3b70f28165a9cc35c67"
+            "sha256": "41209ba32e33afa296c9cecd7fb0ce57032a48b5f6b3bc91a96dc7c5431d7088"
         },
         {
             "scenario": "music-library-playback-error-desktop-light",
@@ -2210,7 +2244,7 @@
             "platform": "desktop",
             "viewport": "wide",
             "issue": 56,
-            "sha256": "28f5c6cb31b859883f87827fd4280a79c03221e70fb3a43d77c2624bb2564a20"
+            "sha256": "163ba5dc8d14c72aa7ed45c84f338128a98d1976ef2f8b84181f49a913dd920a"
         }
     ]
 }

@@ -130,6 +130,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 /** Stable destinations used by the shared bottom navigation. */
 enum class NextcloudDestination {
     Home,
+    FolderSync,
     Apps,
     Activity,
     Settings,
@@ -194,6 +195,7 @@ object NextcloudIcons {
 
     fun destination(destination: NextcloudDestination): ImageVector = when (destination) {
         NextcloudDestination.Home -> Home
+        NextcloudDestination.FolderSync -> Folder
         NextcloudDestination.Apps -> Apps
         NextcloudDestination.Activity -> Activity
         NextcloudDestination.Settings -> Settings

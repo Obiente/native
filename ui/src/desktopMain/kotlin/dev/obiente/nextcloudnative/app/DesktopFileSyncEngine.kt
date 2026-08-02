@@ -5,7 +5,6 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import javax.swing.JFileChooser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -17,21 +16,15 @@ internal class DesktopFileSyncEngine(
     private val store: DesktopFileSyncStore = DesktopFileSyncStore(),
     private val stagingRoot: File = desktopFileSyncStagingDirectory(),
     private val minimumFreeSpaceBytes: () -> Long = { 0L },
+    private val folderPicker: DesktopSystemFolderPicker = DesktopSystemFolderPicker(),
 ) {
     private val selectedRoots = ConcurrentHashMap<String, File>()
     private val lock = Mutex()
 
     suspend fun chooseLocalRoot(initialRootHint: String?): FileSyncLocalRoot? = withContext(Dispatchers.IO) {
-        val chooser = JFileChooser().apply {
-            dialogTitle = "Choose a folder to sync"
-            fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
-            isAcceptAllFileFilterUsed = false
-            initialRootHint?.let { hint ->
-                selectedRoots[hint]?.takeIf(File::isDirectory)?.let { currentDirectory = it }
-            }
-        }
-        if (chooser.showOpenDialog(null) != JFileChooser.APPROVE_OPTION) return@withContext null
-        val selected = chooser.selectedFile.toPath().toAbsolutePath().normalize()
+        val initialDirectory = initialRootHint?.let(selectedRoots::get)?.takeIf(File::isDirectory)
+        val chosen = folderPicker.choose(initialDirectory) ?: return@withContext null
+        val selected = chosen.toPath().toAbsolutePath().normalize()
         require(Files.isDirectory(selected, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(selected)) {
             "Choose a regular local folder, not a symbolic link."
         }

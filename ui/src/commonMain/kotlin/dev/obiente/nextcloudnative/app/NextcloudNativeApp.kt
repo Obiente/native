@@ -266,6 +266,7 @@ private sealed interface Screen {
 
 internal enum class RootDestinationContent {
     HomeWorkspace,
+    FolderSync,
     Apps,
     Activity,
     Settings,
@@ -275,6 +276,7 @@ internal fun rootDestinationContent(
     destination: NextcloudDestination,
 ): RootDestinationContent = when (destination) {
     NextcloudDestination.Home -> RootDestinationContent.HomeWorkspace
+    NextcloudDestination.FolderSync -> RootDestinationContent.FolderSync
     NextcloudDestination.Apps -> RootDestinationContent.Apps
     NextcloudDestination.Activity -> RootDestinationContent.Activity
     NextcloudDestination.Settings -> RootDestinationContent.Settings
@@ -914,6 +916,7 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.FileSyncRulesMobile -> MarketingFileSyncRulesScenario()
                     MarketingCaptureScenario.FileSyncStatusMobile -> MarketingFileSyncStatusMobileScenario()
                     MarketingCaptureScenario.FileSyncStatusDesktop -> MarketingFileSyncStatusDesktopScenario()
+                    MarketingCaptureScenario.ActivityWorkspaceDesktop -> MarketingActivityWorkspaceDesktopScenario()
                     MarketingCaptureScenario.FileSyncSetupDesktop -> MarketingFileSyncSetupDesktopScenario()
                     MarketingCaptureScenario.FileSyncSelectionDesktop,
                     MarketingCaptureScenario.FileSyncSelectionMobile,
@@ -1227,9 +1230,14 @@ private fun AuthenticatedApp(
                 destination = NextcloudDestination.Settings
             }
             NextcloudNativeRoute.SyncCenter -> {
-                returnDestination = NextcloudDestination.Settings
-                destination = NextcloudDestination.Settings
-                screen = Screen.OfflineCenter
+                if (presentation == NextcloudPresentation.Desktop) {
+                    screen = Screen.Root
+                    destination = NextcloudDestination.FolderSync
+                } else {
+                    returnDestination = NextcloudDestination.Settings
+                    destination = NextcloudDestination.Settings
+                    screen = Screen.OfflineCenter
+                }
             }
         }
         onNavigationRequestHandled(request.sequence)
@@ -1434,6 +1442,13 @@ private fun AuthenticatedApp(
                     onSearch = ::openSearch,
                     onSettings = { destination = NextcloudDestination.Settings },
                 )
+                RootDestinationContent.FolderSync -> FileOfflineCenterScreen(
+                    services = services,
+                    session = session,
+                    userId = serverInfo?.userId.orEmpty(),
+                    onBack = { destination = NextcloudDestination.Home },
+                    folderSyncRoot = true,
+                )
                 RootDestinationContent.Apps -> AppsScreen(
                     serverInfo = serverInfo,
                     error = discoveryError,
@@ -1458,7 +1473,14 @@ private fun AuthenticatedApp(
                     platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
                     onThemePreferenceChanged = onThemePreferenceChanged,
                     onAdminApps = { screen = Screen.AdminApps },
-                    onOfflineCenter = { screen = Screen.OfflineCenter },
+                    onOfflineCenter = {
+                        if (presentation == NextcloudPresentation.Desktop) {
+                            screen = Screen.Root
+                            destination = NextcloudDestination.FolderSync
+                        } else {
+                            screen = Screen.OfflineCenter
+                        }
+                    },
                     onTransfers = { screen = Screen.Transfers },
                     onProjectNews = { screen = Screen.ProjectNews },
                     onLoggedOut = onLoggedOut,
@@ -5296,6 +5318,7 @@ private fun ActivityScreen(
     )
     val feed = buildActivityFeedPresentation(timeline.activities, filter)
     val installedAppIds = installedApps.mapTo(linkedSetOf(), NextcloudAppEntry::id)
+    val desktopWorkspace = LocalNextcloudWorkspaceCapabilities.current.isDesktop
 
     fun clearFilters() {
         query = ""
@@ -5342,7 +5365,7 @@ private fun ActivityScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        ProductHeader(title = "Activity")
+        if (!desktopWorkspace) ProductHeader(title = "Activity")
         when {
             !activityInstalled -> Box(
                 modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
@@ -5373,7 +5396,27 @@ private fun ActivityScreen(
                 ErrorMessage(requireNotNull(timeline.error)) { loadAttempt += 1 }
             !timeline.initialized -> LoadingMessage("Loading activity...")
             timeline.activities.isEmpty() -> EmptyMessage("There is no recent activity.")
-            else -> LazyColumn(
+            else -> if (desktopWorkspace) {
+                ActivityDesktopWorkspace(
+                    timeline = timeline,
+                    feed = feed,
+                    query = query,
+                    selectedSemantic = selectedSemantic,
+                    selectedApp = selectedApp,
+                    selectedType = selectedType,
+                    onQueryChanged = { query = it },
+                    onSemanticSelected = { selectedSemanticName = it?.name },
+                    onAppSelected = { selectedApp = it },
+                    onTypeSelected = { selectedType = it },
+                    onClearFilters = ::clearFilters,
+                    onRefresh = { loadAttempt += 1 },
+                    onLoadMore = { olderPageAttempt += 1 },
+                    actionFor = { activity ->
+                        activity.activityOpenAction(installedAppIds, session.serverUrl)
+                    },
+                    onOpenAction = ::openActivityAction,
+                )
+            } else LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
                     start = NextcloudSpacing.XLarge,

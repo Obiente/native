@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -25,6 +26,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
+import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
+import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
@@ -321,7 +325,13 @@ enum class MarketingCaptureScenario(
         "file-sync-status-desktop", "file-sync-status-desktop.png", NextcloudPresentation.Desktop,
         "File sync", "Folder sync center", "Priority queue, conflict, and failure",
         MarketingCapturePurpose.Showcase, "linux", "wide",
-        width = 1_440, height = 900, density = 1f,
+        width = 1_440, height = 1_145, density = 1f,
+    ),
+    ActivityWorkspaceDesktop(
+        "activity-workspace-desktop", "activity-workspace-desktop.png", NextcloudPresentation.Desktop,
+        "Activity", "Attention-first activity workspace", "Grouped automation and actionable events",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_721, height = 914, density = 1f,
     ),
     FileSyncSetupDesktop(
         "file-sync-setup-desktop", "file-sync-setup-desktop.png", NextcloudPresentation.Desktop,
@@ -1163,23 +1173,20 @@ internal fun MarketingFileSyncRulesScenario() {
 
 @Composable
 internal fun MarketingFileSyncStatusDesktopScenario() {
-    Row(modifier = Modifier.fillMaxSize()) {
-        FileOfflineWorkspaceNavigation(
-            selected = FileOfflineWorkspaceSection.FolderSync,
-            onSelected = {},
-            modifier = Modifier.widthIn(min = 220.dp, max = 220.dp).fillMaxSize(),
-        )
-        Column(modifier = Modifier.weight(1f).fillMaxSize()) {
-            ScreenHeader(
-                title = "Folder sync",
-                subtitle = "Mappings, queue health, conflicts, and sync rules",
-                onBack = {},
+    NextcloudDesktopShell(
+        selected = NextcloudDestination.FolderSync,
+        onSelected = {},
+        identity = NextcloudDesktopIdentity("Mara", "cloud.example.com"),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            FileOfflineWorkspaceTabs(
+                selected = FileOfflineWorkspaceSection.FolderSync,
+                onSelected = {},
             )
-            Column(
-                modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Large),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-            ) {
-                FileSyncWorkspace(
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            FileSyncWorkspace(
                 snapshot = FileSyncCenterSnapshot(
                     support = FileSyncCenterSupport.Available,
                     limitation = "Automatic background desktop scheduling is not enabled yet. Use Sync now.",
@@ -1250,7 +1257,7 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                                 ignoredPatterns = listOf("*.tmp"),
                             ),
                             readyCount = 0,
-                            runningCount = 0,
+                            runningCount = 1,
                             conflicts = emptyList(),
                             failedCount = 0,
                             skippedCount = 0,
@@ -1270,7 +1277,7 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                             readyCount = 12,
                             runningCount = 0,
                             conflicts = emptyList(),
-                            failedCount = 1,
+                            failedCount = 0,
                             skippedCount = 0,
                             completedCount = 802,
                             lastScanEpochMillis = 1,
@@ -1284,12 +1291,100 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                 onRun = {},
                 onRemove = {},
                 onResolve = { _, _, _ -> },
-                initialSelectedPairId = "fixture-client",
-                )
-            }
+                initialSelectedPairId = "fixture-studio",
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(
+                    start = NextcloudSpacing.Large,
+                    end = NextcloudSpacing.Large,
+                    bottom = NextcloudSpacing.Large,
+                ),
+                fillAvailableHeight = true,
+            )
         }
     }
 }
+
+@Composable
+internal fun MarketingActivityWorkspaceDesktopScenario() {
+    val activities = remember { marketingActivityFixture() }
+    val timeline = remember(activities) {
+        ActivityTimelineState(
+            activities = activities,
+            initialized = true,
+            nextSince = 120,
+            hasMore = true,
+        )
+    }
+    val feed = remember(activities) { buildActivityFeedPresentation(activities) }
+    NextcloudDesktopShell(
+        selected = NextcloudDestination.Activity,
+        onSelected = {},
+        identity = NextcloudDesktopIdentity("Mara", "cloud.example.com"),
+    ) {
+        ActivityDesktopWorkspace(
+            timeline = timeline,
+            feed = feed,
+            query = "",
+            selectedSemantic = null,
+            selectedApp = null,
+            selectedType = null,
+            onQueryChanged = {},
+            onSemanticSelected = {},
+            onAppSelected = {},
+            onTypeSelected = {},
+            onClearFilters = {},
+            onRefresh = {},
+            onLoadMore = {},
+            actionFor = { activity ->
+                when {
+                    activity.subject.contains("conflict", ignoreCase = true) ->
+                        ActivityOpenAction("Review conflict", appId = "files")
+                    activity.subject.contains("expir", ignoreCase = true) ->
+                        ActivityOpenAction("Extend link", appId = "files")
+                    activity.subject.contains("failed", ignoreCase = true) ->
+                        ActivityOpenAction("Retry upload", appId = "files")
+                    else -> null
+                }
+            },
+            onOpenAction = {},
+        )
+    }
+}
+
+private fun marketingActivityFixture(): List<NextcloudActivity> = listOf(
+    marketingActivity(150, "files", "sync_conflict", "Sync conflict in Project plan 2026.docx", "Both copies changed", "2026-08-02T09:46:00Z"),
+    marketingActivity(149, "files_sharing", "share_expiring", "Public share for Budget Q3.xlsx expires soon", "Shared link expires in 2 days", "2026-08-02T09:31:00Z"),
+    marketingActivity(148, "files", "upload_failed", "Background upload failed for IMG_211830.jpg", "The connection was interrupted", "2026-08-02T09:18:00Z"),
+    marketingActivity(147, "files_sharing", "shared", "Elena Schneider shared Project Phoenix", "Shared with 6 people via link", "2026-08-02T08:58:00Z"),
+    marketingActivity(146, "comments", "comment", "Kai Lind commented on Budget Q3.xlsx", "Please review the updated numbers.", "2026-08-02T08:42:00Z"),
+    marketingActivity(145, "spreed", "mention", "You were mentioned in Campaign Assets", "Can you confirm the final version?", "2026-08-02T08:21:00Z"),
+    marketingActivity(144, "files", "file_changed", "Jonas Lund changed 3 files in Brand Kit", "logo.svg, colors.css, type-scale.md", "2026-08-02T07:48:00Z"),
+    marketingActivity(143, "recognize", "system_tag", "System tag added to Photos/Camera/IMG_201.jpg", null, "2026-08-02T06:15:00Z"),
+    marketingActivity(142, "recognize", "system_tag", "System tag added to Photos/Camera/IMG_202.jpg", null, "2026-08-02T06:14:00Z"),
+    marketingActivity(141, "recognize", "system_tag", "System tag added to Photos/Camera/IMG_203.jpg", null, "2026-08-02T06:14:00Z"),
+    marketingActivity(140, "recognize", "system_tag", "System tag added to Photos/Camera/IMG_204.jpg", null, "2026-08-02T06:13:00Z"),
+    marketingActivity(139, "files", "file_created", "Mara created Field notes.md", "Projects/Research", "2026-08-01T18:24:00Z"),
+)
+
+private fun marketingActivity(
+    id: Long,
+    app: String,
+    type: String,
+    subject: String,
+    message: String?,
+    dateTime: String,
+) = NextcloudActivity(
+    id = id,
+    app = app,
+    type = type,
+    subject = subject,
+    message = message,
+    objectType = null,
+    objectId = null,
+    objectName = null,
+    link = null,
+    icon = null,
+    dateTime = dateTime,
+)
 
 @Composable
 internal fun MarketingFileSyncSetupDesktopScenario() {

@@ -217,7 +217,7 @@ private fun NextcloudDesktopSidebar(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            DefaultNextcloudNavigationItems.forEach { item ->
+            DesktopNextcloudNavigationItems.forEach { item ->
                 NextcloudDesktopNavigationRow(
                     item = item,
                     selected = selected == item.destination,
@@ -366,7 +366,7 @@ private fun NextcloudDesktopCompactRail(
                 modifier = Modifier.padding(vertical = 6.dp),
                 color = MaterialTheme.colorScheme.outlineVariant,
             )
-            DefaultNextcloudNavigationItems.forEach { item ->
+            DesktopNextcloudNavigationItems.forEach { item ->
                 val isSelected = selected == item.destination
                 NextcloudContextMenuArea(
                     items = {

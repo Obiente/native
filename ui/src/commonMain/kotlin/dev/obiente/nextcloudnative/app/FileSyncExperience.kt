@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -97,6 +98,8 @@ internal fun FileSyncWorkspace(
     onRemove: (FileSyncPairSummary) -> Unit,
     onResolve: (FileSyncPairSummary, FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
     initialSelectedPairId: String? = null,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    fillAvailableHeight: Boolean = false,
 ) {
     val pairs = snapshot?.pairs.orEmpty()
     var selectedPairId by rememberSaveable(initialSelectedPairId) { mutableStateOf(initialSelectedPairId) }
@@ -112,14 +115,18 @@ internal fun FileSyncWorkspace(
     }
     val selectedPair = pairs.firstOrNull { it.id == selectedPairId }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+    BoxWithConstraints(modifier = modifier) {
         val desktop = maxWidth >= 940.dp
-        Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+        Column(
+            modifier = if (fillAvailableHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        ) {
             FileSyncWorkspaceHeader(
                 pairs = pairs,
                 loading = loading,
                 actionsEnabled = busyPairId == null,
                 onAdd = onAdd,
+                compact = !desktop,
             )
             snapshot?.limitation?.let { limitation ->
                 FileSyncNotice(limitation)
@@ -128,7 +135,7 @@ internal fun FileSyncWorkspace(
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
             if (!loading && pairs.isEmpty()) {
-                FileSyncEmptyState(onAdd = onAdd)
+                FileSyncEmptyState(onAdd = onAdd, fillAvailableHeight = fillAvailableHeight)
             } else if (pairs.isNotEmpty()) {
                 FileSyncFilters(
                     selected = filter,
@@ -140,8 +147,12 @@ internal fun FileSyncWorkspace(
                 if (desktop) {
                     val inspectedPair = selectedPair ?: visiblePairs.firstOrNull()
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        modifier = if (fillAvailableHeight) {
+                            Modifier.weight(1f).fillMaxWidth()
+                        } else {
+                            Modifier.fillMaxWidth()
+                        },
+                        horizontalArrangement = Arrangement.spacedBy(1.dp),
                         verticalAlignment = Alignment.Top,
                     ) {
                         FileSyncMapTable(
@@ -151,7 +162,11 @@ internal fun FileSyncWorkspace(
                             actionsEnabled = busyPairId == null,
                             onSelect = { selectedPairId = it.id },
                             onRun = onRun,
-                            modifier = Modifier.weight(1.65f),
+                            modifier = if (fillAvailableHeight) {
+                                Modifier.weight(1.9f).fillMaxHeight()
+                            } else {
+                                Modifier.weight(1.9f).heightIn(min = 520.dp, max = 760.dp)
+                            },
                         )
                         FileSyncPairInspector(
                             pair = inspectedPair,
@@ -160,9 +175,14 @@ internal fun FileSyncWorkspace(
                             onRun = { inspectedPair?.let(onRun) },
                             onRemove = { inspectedPair?.let(onRemove) },
                             onResolve = onResolve,
-                            modifier = Modifier.weight(1f),
+                            modifier = if (fillAvailableHeight) {
+                                Modifier.widthIn(min = 308.dp, max = 372.dp).fillMaxHeight()
+                            } else {
+                                Modifier.widthIn(min = 308.dp, max = 372.dp).heightIn(min = 520.dp, max = 760.dp)
+                            },
                         )
                     }
+                    FileSyncDesktopStatusBar(pair = inspectedPair)
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                         visiblePairs.forEach { pair ->
@@ -192,14 +212,17 @@ private fun FileSyncWorkspaceHeader(
     loading: Boolean,
     actionsEnabled: Boolean,
     onAdd: () -> Unit,
+    compact: Boolean,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text("Folder sync", style = MaterialTheme.typography.headlineSmall)
+            if (!compact) {
+                Text("Folder sync", style = MaterialTheme.typography.headlineSmall)
+            }
             Text(
                 when {
                     loading -> "Checking sync health..."
@@ -209,7 +232,7 @@ private fun FileSyncWorkspaceHeader(
                     pairs.isNotEmpty() -> "All folder mappings are ready"
                     else -> "Keep chosen folders in sync with Nextcloud"
                 },
-                style = MaterialTheme.typography.bodyMedium,
+                style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -251,18 +274,17 @@ private fun FileSyncFilters(
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = onSearchQueryChanged,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
                     singleLine = true,
                     leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
                     placeholder = { Text("Search syncs") },
                 )
-                FileSyncListFilter.entries.chunked(3).forEach { filters ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    ) {
-                        filters.forEach { option -> filterChip(option, Modifier.weight(1f), fill = true) }
-                        repeat(3 - filters.size) { Spacer(Modifier.weight(1f)) }
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                ) {
+                    items(FileSyncListFilter.entries, key = FileSyncListFilter::name) { option ->
+                        filterChip(option)
                     }
                 }
             }
@@ -277,7 +299,7 @@ private fun FileSyncFilters(
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = onSearchQueryChanged,
-                    modifier = Modifier.widthIn(min = 220.dp, max = 320.dp),
+                    modifier = Modifier.widthIn(min = 220.dp, max = 320.dp).height(52.dp),
                     singleLine = true,
                     leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
                     placeholder = { Text("Search syncs") },
@@ -339,29 +361,19 @@ private fun FileSyncMapTable(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Row(
-                            modifier = Modifier.weight(1.2f),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                NextcloudIcons.Folder,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
+                        Column(modifier = Modifier.weight(1.2f)) {
+                            Text(
                                 pair.localDisplayName,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    pair.configuration.direction.syncDirectionTitle(),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                pair.configuration.direction.syncDirectionTitle(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                         Text(
                             pair.localRootPath ?: "This device",
@@ -562,7 +574,7 @@ private fun FileSyncPairInspector(
     val selectedTab = FileSyncInspectorTab.entries.firstOrNull { it.name == selectedTabName }
         ?: FileSyncInspectorTab.Overview
     Surface(
-        modifier = modifier.heightIn(min = 520.dp, max = 760.dp),
+        modifier = modifier,
         color = NextcloudTheme.colors.appTile,
         shape = RoundedCornerShape(NextcloudRadii.Card),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -1018,9 +1030,9 @@ private fun FileSyncNotice(message: String) {
 }
 
 @Composable
-private fun FileSyncEmptyState(onAdd: () -> Unit) {
+private fun FileSyncEmptyState(onAdd: () -> Unit, fillAvailableHeight: Boolean) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = if (fillAvailableHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
         color = NextcloudTheme.colors.appTile,
         shape = RoundedCornerShape(NextcloudRadii.Card),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -1041,6 +1053,50 @@ private fun FileSyncEmptyState(onAdd: () -> Unit) {
         }
     }
 }
+
+@Composable
+private fun FileSyncDesktopStatusBar(pair: FileSyncPairSummary?) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(NextcloudRadii.Small),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FileSyncDesktopStatusItem("Sync engine", if (pair?.runningCount.orZero() > 0) "Running" else "Ready")
+            FileSyncDesktopStatusItem("Network", if (pair?.isFileSyncOffline() == true) "Offline" else "Connected")
+            FileSyncDesktopStatusItem("Nextcloud", "Connected")
+            Spacer(Modifier.weight(1f))
+            pair?.let {
+                Text(
+                    "${it.completedCount} files indexed",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FileSyncDesktopStatusItem(label: String, value: String) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(modifier = Modifier.size(8.dp), shape = CircleShape, color = NextcloudTheme.colors.success) {}
+        Column {
+            Text(label, style = MaterialTheme.typography.labelSmall)
+            Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+private fun Int?.orZero(): Int = this ?: 0
 
 @Composable
 internal fun GuidedAddFolderSyncDialog(

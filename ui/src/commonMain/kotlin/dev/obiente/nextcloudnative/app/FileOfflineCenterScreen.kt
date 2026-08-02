@@ -79,6 +79,7 @@ internal fun FileOfflineCenterScreen(
     session: NextcloudSession,
     userId: String,
     onBack: () -> Unit,
+    folderSyncRoot: Boolean = false,
 ) {
     var snapshot by remember(session, userId) { mutableStateOf<FileOfflineCenterSnapshot?>(null) }
     var loading by remember(session, userId) { mutableStateOf(true) }
@@ -178,6 +179,40 @@ internal fun FileOfflineCenterScreen(
             }
             syncBusyPairId = null
         }
+    }
+
+    fun beginAddFolderSync() {
+        if (syncBusyPairId != null) return
+        scope.launch {
+            runCatching { services.chooseFileSyncLocalRoot() }
+                .onSuccess { selected ->
+                    pendingMediaSuggestionJson = null
+                    pendingLocalRootJson = selected?.let { fileSyncSetupJson.encodeToString(it) }
+                    pendingRemotePath = selected?.let { "" }
+                    pendingSyncConfigurationJson = selected
+                        ?.let { defaultFileSyncConfiguration(isMediaSuggestion = false) }
+                        ?.let { fileSyncSetupJson.encodeToString(it) }
+                    remoteFolderPickerVisible = false
+                    syncSelectionPickerVisible = false
+                }
+                .onFailure { failure ->
+                    actionMessage = failure.message ?: "Could not select a local folder."
+                }
+        }
+    }
+
+    fun openMediaSuggestion(suggestion: MediaSyncFolderSuggestion) {
+        if (syncBusyPairId != null) return
+        pendingMediaPreview = null
+        mediaPreviewError = null
+        pendingMediaSuggestionJson = fileSyncSetupJson.encodeToString(suggestion)
+        pendingLocalRootJson = fileSyncSetupJson.encodeToString(suggestion.localRoot)
+        pendingRemotePath = suggestion.suggestedRemoteRootPath
+        pendingSyncConfigurationJson = fileSyncSetupJson.encodeToString(
+            defaultFileSyncConfiguration(isMediaSuggestion = true),
+        )
+        remoteFolderPickerVisible = false
+        syncSelectionPickerVisible = false
     }
 
     fun resolveSyncConflict(target: PendingFileSyncDecision) {
@@ -345,7 +380,128 @@ internal fun FileOfflineCenterScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
+    if (folderSyncRoot) {
+        Column(
+            modifier = Modifier.fillMaxSize().safeDrawingPadding(),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        ) {
+            FileOfflineWorkspaceTabs(
+                selected = selectedWorkspaceSection,
+                onSelected = { selectedWorkspaceSectionName = it.name },
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Column(
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(
+                    start = NextcloudSpacing.Large,
+                    end = NextcloudSpacing.Large,
+                    bottom = NextcloudSpacing.Large,
+                ),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            ) {
+                loadError?.let { error ->
+                    OfflineCenterMessageCard(error, errorTone = true) {
+                        OutlinedButton(onClick = { refreshAttempt += 1 }) { Text("Retry") }
+                    }
+                }
+                actionMessage?.let { message ->
+                    OfflineCenterMessageCard(message, errorTone = false)
+                }
+                when (selectedWorkspaceSection) {
+                    FileOfflineWorkspaceSection.FolderSync -> {
+                        if (services.supportsBidirectionalFileSync) {
+                            FolderSyncSection(
+                                snapshot = syncSnapshot,
+                                loading = syncLoading,
+                                mediaDiscovery = mediaFolderDiscovery,
+                                mediaDiscoveryLoading = mediaDiscoveryLoading,
+                                busyPairId = syncBusyPairId,
+                                onAdd = ::beginAddFolderSync,
+                                onOpenMediaSuggestion = ::openMediaSuggestion,
+                                onRequestMediaPermission = {
+                                    if (services.requestPlatformCapability(PlatformCapability.MediaLibrary)) {
+                                        actionMessage =
+                                            "After allowing access, refresh to discover media folders."
+                                    }
+                                },
+                                onRun = { pair -> runSyncAction(pair.id, remove = false) },
+                                onRemove = { pair -> removeSyncPair = pair },
+                                onResolve = { pair, conflict, choice ->
+                                    pendingSyncDecision = PendingFileSyncDecision(pair, conflict, choice)
+                                },
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                fillAvailableHeight = true,
+                            )
+                        } else {
+                            OfflineCenterMessageCard(
+                                "Folder sync is not available on this platform.",
+                                errorTone = false,
+                            )
+                        }
+                    }
+
+                    FileOfflineWorkspaceSection.OfflineFiles -> {
+                        LazyColumn(
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                        ) {
+                            item { OfflineCenterSummaryCard(snapshot, loading) }
+                            snapshot?.limitations?.takeIf(List<String>::isNotEmpty)?.let { limitations ->
+                                item {
+                                    OfflineCenterLimitationsCard(
+                                        limitations,
+                                        services.supportsBidirectionalFileSync,
+                                    )
+                                }
+                            }
+                            val offlineItems = snapshot?.items.orEmpty()
+                            if (offlineItems.isEmpty() && !loading) {
+                                item {
+                                    OfflineCenterMessageCard(
+                                        "No files are pinned. Use a file's menu in Files and choose \"Make available offline\".",
+                                        errorTone = false,
+                                    )
+                                }
+                            } else {
+                                items(
+                                    items = offlineItems,
+                                    key = { item ->
+                                        "${item.key.accountId.length}:${item.key.accountId}${item.key.relativePath}"
+                                    },
+                                ) { item ->
+                                    OfflineCenterItemCard(
+                                        item = item,
+                                        busy = actionKey == item.key,
+                                        onRetry = { runItemAction(item, remove = false) },
+                                        onRemove = { removeTarget = item },
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    FileOfflineWorkspaceSection.VirtualFiles -> {
+                        if (services.supportsVirtualFileStorage) {
+                            VirtualFileStorageCard(
+                                snapshot = virtualStorage,
+                                loading = virtualStorageLoading,
+                                busy = virtualStorageBusy,
+                                onManage = { virtualStorageSettingsVisible = true },
+                                onFreeUp = ::freeUpVirtualStorage,
+                                onActivateProvider = { setVirtualFileProviderActive(true) },
+                                onDeactivateProvider = { setVirtualFileProviderActive(false) },
+                            )
+                        } else {
+                            OfflineCenterMessageCard(
+                                "Virtual files are not available on this platform.",
+                                errorTone = false,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         ScreenHeader(
             title = selectedWorkspaceSection.title,
             subtitle = selectedWorkspaceSection.subtitle,
@@ -391,43 +547,8 @@ internal fun FileOfflineCenterScreen(
                                         mediaDiscovery = mediaFolderDiscovery,
                                         mediaDiscoveryLoading = mediaDiscoveryLoading,
                                         busyPairId = syncBusyPairId,
-                                        onAdd = {
-                                            if (syncBusyPairId == null) {
-                                                scope.launch {
-                                                    runCatching { services.chooseFileSyncLocalRoot() }
-                                                        .onSuccess { selected ->
-                                                            pendingMediaSuggestionJson = null
-                                                            pendingLocalRootJson = selected?.let {
-                                                                fileSyncSetupJson.encodeToString(it)
-                                                            }
-                                                            pendingRemotePath = selected?.let { "" }
-                                                            pendingSyncConfigurationJson = selected?.let {
-                                                                defaultFileSyncConfiguration(isMediaSuggestion = false)
-                                                            }?.let { fileSyncSetupJson.encodeToString(it) }
-                                                            remoteFolderPickerVisible = false
-                                                            syncSelectionPickerVisible = false
-                                                        }
-                                                        .onFailure { failure ->
-                                                            actionMessage = failure.message
-                                                                ?: "Could not select a local folder."
-                                                        }
-                                                }
-                                            }
-                                        },
-                                        onOpenMediaSuggestion = { suggestion ->
-                                            if (syncBusyPairId == null) {
-                                                pendingMediaPreview = null
-                                                mediaPreviewError = null
-                                                pendingMediaSuggestionJson = fileSyncSetupJson.encodeToString(suggestion)
-                                                pendingLocalRootJson = fileSyncSetupJson.encodeToString(suggestion.localRoot)
-                                                pendingRemotePath = suggestion.suggestedRemoteRootPath
-                                                pendingSyncConfigurationJson = fileSyncSetupJson.encodeToString(
-                                                    defaultFileSyncConfiguration(isMediaSuggestion = true),
-                                                )
-                                                remoteFolderPickerVisible = false
-                                                syncSelectionPickerVisible = false
-                                            }
-                                        },
+                                        onAdd = ::beginAddFolderSync,
+                                        onOpenMediaSuggestion = ::openMediaSuggestion,
                                         onRequestMediaPermission = {
                                             if (services.requestPlatformCapability(PlatformCapability.MediaLibrary)) {
                                                 actionMessage =
@@ -537,6 +658,7 @@ internal fun FileOfflineCenterScreen(
                 }
             }
         }
+    }
     }
 
     removeTarget?.let { item ->
@@ -823,7 +945,7 @@ internal fun FileOfflineWorkspaceNavigation(
 }
 
 @Composable
-private fun FileOfflineWorkspaceTabs(
+internal fun FileOfflineWorkspaceTabs(
     selected: FileOfflineWorkspaceSection,
     onSelected: (FileOfflineWorkspaceSection) -> Unit,
 ) {
@@ -897,8 +1019,13 @@ internal fun FolderSyncSection(
     onRun: (FileSyncPairSummary) -> Unit,
     onRemove: (FileSyncPairSummary) -> Unit,
     onResolve: (FileSyncPairSummary, FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
+    modifier: Modifier = Modifier,
+    fillAvailableHeight: Boolean = false,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+    ) {
         MediaFolderSuggestions(
             discovery = mediaDiscovery,
             loading = mediaDiscoveryLoading,
@@ -914,6 +1041,12 @@ internal fun FolderSyncSection(
             onRun = onRun,
             onRemove = onRemove,
             onResolve = onResolve,
+            modifier = if (fillAvailableHeight) {
+                Modifier.weight(1f).fillMaxWidth()
+            } else {
+                Modifier.fillMaxWidth()
+            },
+            fillAvailableHeight = fillAvailableHeight,
         )
     }
 }

@@ -48,6 +48,14 @@ val DefaultNextcloudNavigationItems = listOf(
     NextcloudNavigationItem(NextcloudDestination.Settings, "Settings"),
 )
 
+val DesktopNextcloudNavigationItems = listOf(
+    NextcloudNavigationItem(NextcloudDestination.Home, "Overview"),
+    NextcloudNavigationItem(NextcloudDestination.FolderSync, "Folder sync"),
+    NextcloudNavigationItem(NextcloudDestination.Activity, "Activity"),
+    NextcloudNavigationItem(NextcloudDestination.Apps, "Apps"),
+    NextcloudNavigationItem(NextcloudDestination.Settings, "Settings"),
+)
+
 @Composable
 fun NextcloudBottomNavigation(
     selected: NextcloudDestination,

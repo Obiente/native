@@ -67,6 +67,7 @@ fun resolveNextcloudRootShellLayout(
                 workspaceMarginDp = 0,
                 contentMaximumWidthDp = when (destination) {
                     NextcloudDestination.Apps -> 1_120
+                    NextcloudDestination.FolderSync -> 1_120
                     else -> 720
                 },
                 supportsAuxiliaryPane = false,

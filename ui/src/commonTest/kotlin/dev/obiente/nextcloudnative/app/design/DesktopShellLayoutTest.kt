@@ -50,6 +50,16 @@ class DesktopShellLayoutTest {
         assertEquals(252, layout.navigationWidthDp)
         assertNull(layout.contentMaximumWidthDp)
         assertTrue(layout.supportsAuxiliaryPane)
+        assertEquals(
+            listOf(
+                NextcloudDestination.Home,
+                NextcloudDestination.FolderSync,
+                NextcloudDestination.Activity,
+                NextcloudDestination.Apps,
+                NextcloudDestination.Settings,
+            ),
+            DesktopNextcloudNavigationItems.map(NextcloudNavigationItem::destination),
+        )
     }
 
     @Test
