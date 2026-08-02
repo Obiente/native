@@ -391,9 +391,15 @@ class DesktopVirtualRangeCacheTest {
             cache.setFolderRetention(ACCOUNT_ID, "Photos/A", VirtualFolderRetention.Automatic)
             cache.dehydrateFolder(ACCOUNT_ID, "Photos/A", emptySet())
 
-            assertEquals(setOf("A", "B"), cache.loadRetainedListing(ACCOUNT_ID, "Photos")
-                ?.nodes?.mapTo(hashSetOf(), LinuxVirtualFileNode::name))
-            assertEquals(emptyList(), cache.loadRetainedListing(ACCOUNT_ID, "Photos/B")?.nodes)
+            assertEquals(
+                setOf("A", "B"),
+                requireNotNull(cache.loadRetainedListing(ACCOUNT_ID, "Photos"))
+                    .nodes.mapTo(hashSetOf(), LinuxVirtualFileNode::name),
+            )
+            assertEquals(
+                emptyList<LinuxVirtualFileNode>(),
+                requireNotNull(cache.loadRetainedListing(ACCOUNT_ID, "Photos/B")).nodes,
+            )
         } finally {
             directory.deleteRecursively()
         }
