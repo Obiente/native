@@ -287,6 +287,13 @@ internal class DesktopVirtualRangeCache(
         val retainedStatusPaths = next.rules.asSequence()
             .filter { rule -> rule.retention == VirtualFolderRetention.KeepOnDevice }
             .mapTo(hashSetOf(), VirtualFolderRetentionRule::relativePath)
+        if (retention == VirtualFolderRetention.KeepOnDevice) {
+            val normalized = FileOfflineKey(accountId, path).relativePath
+            deferredInvalidationPaths.removeIf { key ->
+                key.accountId == accountId &&
+                    (key.relativePath == normalized || key.relativePath.startsWith("$normalized/"))
+            }
+        }
         saveRetention(
             accountId,
             current.copy(
@@ -333,8 +340,65 @@ internal class DesktopVirtualRangeCache(
                 } else {
                     VirtualFolderHydrationPhase.Queued
                 },
+                refreshing = currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline,
             ),
         )
+    }
+
+    @Synchronized
+    fun queueRetainedFoldersForRefresh(accountId: String, path: String): List<String> {
+        val normalized = FileOfflineKey(accountId, path).relativePath
+        val current = loadRetention(accountId)
+        val retention = current.rules.toDomain()
+        if (retention.retentionFor(normalized) != VirtualFolderRetention.KeepOnDevice) return emptyList()
+        val roots = current.rules.asSequence()
+            .filter { rule ->
+                rule.retention == VirtualFolderRetention.KeepOnDevice &&
+                    (normalized == rule.relativePath || normalized.startsWith("${rule.relativePath}/"))
+            }
+            .map(CachedVirtualFolderRule::relativePath)
+            .distinct()
+            .toList()
+        if (roots.isEmpty()) return emptyList()
+        val queued = roots.map { root ->
+            CachedVirtualFolderHydration.fromDomain(
+                VirtualFolderHydrationStatus(root, VirtualFolderHydrationPhase.Queued),
+            )
+        }
+        saveRetention(
+            accountId,
+            current.copy(
+                hydration = current.hydration.filterNot { status -> status.relativePath in roots } + queued,
+            ),
+        )
+        return roots
+    }
+
+    @Synchronized
+    fun hasCompleteRetainedFolder(accountId: String, path: String): Boolean {
+        val normalized = FileOfflineKey(accountId, path).relativePath
+        val retention = loadFolderRetention(accountId)
+        if (retention.retentionFor(normalized) != VirtualFolderRetention.KeepOnDevice) return false
+        val pending = ArrayDeque<String>().apply { add(normalized) }
+        val visited = hashSetOf<String>()
+        while (pending.isNotEmpty()) {
+            val directory = pending.removeFirst()
+            if (!visited.add(directory)) continue
+            if (visited.size > MAX_RETAINED_LISTINGS) return false
+            val listing = loadRetainedListing(accountId, directory) ?: return false
+            listing.nodes.forEach { node ->
+                if (retention.retentionFor(node.path) != VirtualFolderRetention.KeepOnDevice) return@forEach
+                if (node.directory) {
+                    pending.add(node.path)
+                } else if (
+                    node.size > 0L &&
+                    !hasCompleteRevision(accountId, node.path, node.remoteRevision, node.size)
+                ) {
+                    return false
+                }
+            }
+        }
+        return true
     }
 
     @Synchronized
@@ -436,14 +500,20 @@ internal class DesktopVirtualRangeCache(
         val normalized = FileOfflineKey(accountId, path).relativePath
         val current = load(accountId)
         val retention = loadFolderRetention(accountId)
-        val removablePaths = current.blocks.asSequence()
+        val candidates = current.blocks.asSequence()
             .map(CachedRangeBlock::path)
             .distinct()
             .filter { candidate -> candidate == normalized || candidate.startsWith("$normalized/") }
             .filter { candidate -> retention.retentionFor(candidate) == VirtualFolderRetention.Automatic }
             .filter { candidate -> candidate !in protectedPaths }
-            .filter { candidate -> activePaths.getOrDefault(FileOfflineKey(accountId, candidate), 0) == 0 }
             .toSet()
+        candidates.asSequence()
+            .map { candidate -> FileOfflineKey(accountId, candidate) }
+            .filter { key -> activePaths.getOrDefault(key, 0) > 0 }
+            .forEach(deferredInvalidationPaths::add)
+        val removablePaths = candidates.filter { candidate ->
+            activePaths.getOrDefault(FileOfflineKey(accountId, candidate), 0) == 0
+        }.toSet()
         invalidateRetainedListings(accountId, normalized)
         if (removablePaths.isEmpty()) return 0L
         val removed = current.blocks.filter { block -> block.path in removablePaths }
@@ -1013,9 +1083,10 @@ private data class CachedVirtualFolderHydration(
     val phase: VirtualFolderHydrationPhase,
     val detail: String? = null,
     val refreshFailure: String? = null,
+    val refreshing: Boolean = false,
 ) {
     fun toDomain(): VirtualFolderHydrationStatus =
-        VirtualFolderHydrationStatus(relativePath, phase, detail, refreshFailure)
+        VirtualFolderHydrationStatus(relativePath, phase, detail, refreshFailure, refreshing)
 
     companion object {
         fun fromDomain(status: VirtualFolderHydrationStatus) = CachedVirtualFolderHydration(
@@ -1023,6 +1094,7 @@ private data class CachedVirtualFolderHydration(
             status.phase,
             status.detail,
             status.refreshFailure,
+            status.refreshing,
         )
     }
 }

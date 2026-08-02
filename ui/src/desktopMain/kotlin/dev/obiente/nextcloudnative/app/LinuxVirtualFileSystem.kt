@@ -616,6 +616,7 @@ internal class DesktopNextcloudVirtualFileBackend(
     private val writebacks: DesktopLinuxVirtualFileWritebackStore,
     private val tree: DesktopFileSyncRemoteTree = DesktopFileSyncRemoteTree(session, userId, ""),
     private val requireDurableCacheWrites: Boolean = false,
+    private val afterCommitted: (String) -> Unit = {},
 ) : LinuxVirtualFileBackend {
     private val accountId = desktopFileCacheAccountId(session)
 
@@ -757,7 +758,10 @@ internal class DesktopNextcloudVirtualFileBackend(
         existing = existing,
         truncate = truncate,
         tree = tree,
-        onCommitted = { committedPath -> rangeCache.invalidate(accountId, committedPath) },
+        onCommitted = { committedPath ->
+            rangeCache.invalidate(accountId, committedPath)
+            runCatching { afterCommitted(committedPath) }
+        },
     )
 
     override fun createDirectory(path: String) {

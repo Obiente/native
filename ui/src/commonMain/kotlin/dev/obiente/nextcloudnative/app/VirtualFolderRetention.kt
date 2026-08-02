@@ -22,6 +22,7 @@ data class VirtualFolderHydrationStatus(
     val phase: VirtualFolderHydrationPhase,
     val detail: String? = null,
     val refreshFailure: String? = null,
+    val refreshing: Boolean = false,
 ) {
     init {
         require(relativePath.isNotEmpty())
@@ -34,6 +35,7 @@ data class VirtualFolderHydrationStatus(
                 refreshFailure.isNotBlank() &&
                 refreshFailure.length <= MAX_VIRTUAL_FOLDER_HYDRATION_DETAIL_LENGTH
         )
+        require(!refreshing || phase == VirtualFolderHydrationPhase.AvailableOffline)
     }
 }
 

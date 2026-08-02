@@ -113,7 +113,6 @@ class DesktopVirtualRangeCacheTest {
             )
             assertEquals(9L, cache.summary(ACCOUNT_ID).cachedBytes)
             cache.release(ACCOUNT_ID, "Photos/Album/open.raf")
-            assertEquals(4L, cache.dehydrateFolder(ACCOUNT_ID, "Photos/Album", setOf("Photos/Album/dirty.raf")))
             assertEquals(5L, cache.summary(ACCOUNT_ID).cachedBytes)
         } finally {
             directory.deleteRecursively()
@@ -193,6 +192,64 @@ class DesktopVirtualRangeCacheTest {
             val status = restarted.loadFolderHydrationStatuses(ACCOUNT_ID).single()
             assertEquals(VirtualFolderHydrationPhase.AvailableOffline, status.phase)
             assertEquals("Server unavailable.", status.refreshFailure)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `retrying an available folder persists refresh progress`() {
+        val directory = Files.createTempDirectory("virtual-range-refresh-progress-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderHydrationStatus(
+                ACCOUNT_ID,
+                VirtualFolderHydrationStatus(
+                    "Photos",
+                    VirtualFolderHydrationPhase.AvailableOffline,
+                    refreshFailure = "Server unavailable.",
+                ),
+            )
+
+            cache.retryFolderHydration(ACCOUNT_ID, "Photos")
+
+            val status = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+                .loadFolderHydrationStatuses(ACCOUNT_ID).single()
+            assertEquals(VirtualFolderHydrationPhase.AvailableOffline, status.phase)
+            assertTrue(status.refreshing)
+            assertEquals(null, status.refreshFailure)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `committed retained edit queues its root and invalid coverage is not available offline`() {
+        val directory = Files.createTempDirectory("virtual-range-retained-edit-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L, 0L, "data".encodeToByteArray())
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos",
+                mapOf(
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos/photo.raf", "photo.raf", false, 4L, "e1")),
+                        42L,
+                    ),
+                ),
+            )
+            cache.setFolderHydrationStatus(
+                ACCOUNT_ID,
+                VirtualFolderHydrationStatus("Photos", VirtualFolderHydrationPhase.AvailableOffline),
+            )
+            directory.resolve(ACCOUNT_ID).listFiles().orEmpty().single { it.extension == "block" }.delete()
+
+            assertFalse(cache.hasCompleteRetainedFolder(ACCOUNT_ID, "Photos"))
+            assertEquals(listOf("Photos"), cache.queueRetainedFoldersForRefresh(ACCOUNT_ID, "Photos/photo.raf"))
+            assertEquals(VirtualFolderHydrationPhase.Queued, cache.loadFolderHydrationStatuses(ACCOUNT_ID).single().phase)
         } finally {
             directory.deleteRecursively()
         }

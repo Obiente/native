@@ -810,10 +810,17 @@ class DesktopNextcloudServices(
                             rule.relativePath == relativePath && rule.retention == VirtualFolderRetention.KeepOnDevice
                         }
                     ) {
-                        if (!wasAvailableOffline) runCatching {
+                        runCatching {
                             cache.setFolderHydrationStatus(
                                 accountId,
-                                VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Queued),
+                                VirtualFolderHydrationStatus(
+                                    relativePath,
+                                    if (wasAvailableOffline) {
+                                        VirtualFolderHydrationPhase.AvailableOffline
+                                    } else {
+                                        VirtualFolderHydrationPhase.Queued
+                                    },
+                                ),
                             )
                         }
                     }
@@ -821,7 +828,10 @@ class DesktopNextcloudServices(
                 } catch (failure: Throwable) {
                     val safeFailure = failure.message?.filterNot(Char::isISOControl)?.take(256)
                         ?.takeIf(String::isNotBlank) ?: "Offline download failed and can be retried."
-                    if (wasAvailableOffline) runCatching {
+                    val stillAvailableOffline = wasAvailableOffline && runCatching {
+                        cache.hasCompleteRetainedFolder(accountId, relativePath)
+                    }.getOrDefault(false)
+                    if (stillAvailableOffline) runCatching {
                         cache.setFolderHydrationStatus(
                             accountId,
                             VirtualFolderHydrationStatus(
@@ -845,6 +855,18 @@ class DesktopNextcloudServices(
                 }
             }
         }
+    }
+
+    private fun refreshRetainedFoldersAfterCommit(
+        session: NextcloudSession,
+        userId: String,
+        accountId: String,
+        path: String,
+    ) {
+        runCatching { fileReadCache.invalidate(accountId, path) }
+        val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
+        val roots = runCatching { cache.queueRetainedFoldersForRefresh(accountId, path) }.getOrDefault(emptyList())
+        roots.forEach { root -> scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
     }
 
     private suspend fun cancelVirtualFolderHydration(accountId: String, relativePath: String) {
@@ -1210,7 +1232,7 @@ class DesktopNextcloudServices(
                 tree = DesktopFileSyncRemoteTree(session, userId, ""),
                 onCommitted = { path ->
                     runCatching { virtualRangeCache(accountId).invalidate(accountId, path) }
-                    runCatching { fileReadCache.invalidate(accountId, path) }
+                    refreshRetainedFoldersAfterCommit(session, userId, accountId, path)
                 },
             )
             val fileSystem = LinuxNextcloudVirtualFileSystem(
@@ -1221,6 +1243,9 @@ class DesktopNextcloudServices(
                         services = this@DesktopNextcloudServices,
                         rangeCache = virtualRangeCache(accountId),
                         writebacks = writebackStore,
+                        afterCommitted = { path ->
+                            refreshRetainedFoldersAfterCommit(session, userId, accountId, path)
+                        },
                     ),
                     store = RetainedLinuxVirtualMetadataStore(
                         rangeCache = virtualRangeCache(accountId),

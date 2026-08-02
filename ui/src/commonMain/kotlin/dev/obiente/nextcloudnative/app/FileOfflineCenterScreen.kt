@@ -328,7 +328,8 @@ internal fun FileOfflineCenterScreen(
                 virtualStorageLoading = false
                 val hydrationActive = loaded.folderHydrationStatuses.any { status ->
                     status.phase == VirtualFolderHydrationPhase.Queued ||
-                        status.phase == VirtualFolderHydrationPhase.Downloading
+                        status.phase == VirtualFolderHydrationPhase.Downloading ||
+                        status.refreshing
                 }
                 if (hydrationActive) delay(VIRTUAL_STORAGE_HYDRATION_POLL_MILLIS)
             } while (hydrationActive)
@@ -1557,10 +1558,13 @@ internal fun VirtualFileStorageCard(
                                             when (status?.phase) {
                                                 VirtualFolderHydrationPhase.Queued -> "Waiting to download"
                                                 VirtualFolderHydrationPhase.Downloading -> "Downloading for offline use"
-                                                VirtualFolderHydrationPhase.AvailableOffline ->
-                                                    status.refreshFailure?.let { failure ->
+                                                VirtualFolderHydrationPhase.AvailableOffline -> when {
+                                                    status.refreshing -> "Available offline. Checking for updates"
+                                                    status.refreshFailure != null -> status.refreshFailure.let { failure ->
                                                         "Available offline. Latest refresh needs attention: $failure"
-                                                    } ?: "Available offline"
+                                                    }
+                                                    else -> "Available offline"
+                                                }
                                                 VirtualFolderHydrationPhase.Failed ->
                                                     status.detail ?: "Download needs attention"
                                                 null -> "Waiting to check offline content"
