@@ -139,7 +139,7 @@ internal class CachingLinuxVirtualFileBackend(
 ) : LinuxVirtualFileBackend {
     private val snapshots = LinkedHashMap<String, LinuxVirtualDirectorySnapshot>(16, 0.75f, true)
     private val refreshes = ConcurrentHashMap<String, CompletableFuture<LinuxVirtualDirectorySnapshot?>>()
-    private val refreshFailures = ConcurrentHashMap<String, LinuxVirtualRefreshFailure>()
+    private val refreshFailures = LinkedHashMap<String, LinuxVirtualRefreshFailure>(16, 0.75f, true)
     private val metadataLock = Any()
     private val persistedStoreLock = Any()
     private val pendingPersistedInvalidations = mutableMapOf<String, Int>()
@@ -171,7 +171,7 @@ internal class CachingLinuxVirtualFileBackend(
     override fun list(path: String): List<LinuxVirtualFileNode> = snapshot(path.linuxVirtualPath()).nodes
 
     internal fun hasRecordedRefreshFailure(path: String): Boolean =
-        refreshFailures.containsKey(path.linuxVirtualPath())
+        synchronized(metadataLock) { refreshFailures.containsKey(path.linuxVirtualPath()) }
 
     private fun snapshot(normalized: String): LinuxVirtualDirectorySnapshot {
         synchronized(metadataLock) { snapshots[normalized] }?.let { cached ->
@@ -296,6 +296,7 @@ internal class CachingLinuxVirtualFileBackend(
             pendingPersistedInvalidations.clear()
             failedPersistedInvalidations.clear()
             revalidatedPersistedListings.clear()
+            refreshFailures.clear()
         }
         delegate.close()
     }
@@ -316,9 +317,11 @@ internal class CachingLinuxVirtualFileBackend(
     private fun refreshAsync(path: String) {
         if (closed) return
         val now = nowEpochMillis().coerceAtLeast(0L)
-        refreshFailures[path]?.let { failure ->
+        synchronized(metadataLock) { refreshFailures[path] }?.let { failure ->
             if (now < failure.recordedAtEpochMillis) {
-                refreshFailures.remove(path, failure)
+                synchronized(metadataLock) {
+                    if (refreshFailures[path] == failure) refreshFailures.remove(path)
+                }
             } else if (now < failure.retryAtEpochMillis) {
                 return
             }
@@ -353,7 +356,7 @@ internal class CachingLinuxVirtualFileBackend(
                 }
             }
             if (published) {
-                refreshFailures.remove(path)
+                synchronized(metadataLock) { refreshFailures.remove(path) }
                 future.complete(snapshot)
                 persistenceScheduled = persistAsync(path, snapshot, operation)
             } else {
@@ -526,7 +529,8 @@ internal class CachingLinuxVirtualFileBackend(
 
     private fun recordRefreshFailure(path: String) {
         val now = nowEpochMillis().coerceAtLeast(0L)
-        refreshFailures.compute(path) { _, previous ->
+        synchronized(metadataLock) {
+            val previous = refreshFailures[path]
             val failures = (previous?.consecutiveFailures ?: 0).plus(1).coerceAtMost(MAX_BACKOFF_EXPONENT + 1)
             val exponent = (failures - 1).coerceAtMost(MAX_BACKOFF_EXPONENT)
             val multiplier = 1L shl exponent
@@ -535,11 +539,14 @@ internal class CachingLinuxVirtualFileBackend(
             } else {
                 (refreshRetryBaseMillis * multiplier).coerceAtMost(refreshRetryMaxMillis)
             }
-            LinuxVirtualRefreshFailure(
+            refreshFailures[path] = LinuxVirtualRefreshFailure(
                 consecutiveFailures = failures,
                 recordedAtEpochMillis = now,
                 retryAtEpochMillis = if (now > Long.MAX_VALUE - delay) Long.MAX_VALUE else now + delay,
             )
+            while (refreshFailures.size > maximumRetainedDirectories) {
+                refreshFailures.remove(refreshFailures.keys.first())
+            }
         }
     }
 
