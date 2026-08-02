@@ -1011,6 +1011,9 @@ class DesktopNextcloudServices(
     private val deckCardDrafts = DesktopDeckCardDraftStore()
     private val fileSyncEngine = DesktopFileSyncEngine(
         minimumFreeSpaceBytes = { fileReadCache.loadPolicy().minimumFreeSpaceBytes },
+        onRemoteMutationCommitted = { session, _, path ->
+            invalidateDesktopFileMetadata(desktopFileCacheAccountId(session), path)
+        },
     )
     private val startOnLoginController = DesktopStartOnLoginController()
     private val fileSyncRunLock = Mutex()
