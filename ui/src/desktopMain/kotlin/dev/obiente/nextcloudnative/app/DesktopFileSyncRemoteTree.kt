@@ -6,6 +6,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.UUID
 import javax.xml.parsers.DocumentBuilderFactory
@@ -18,6 +20,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 internal data class DesktopRemoteSyncDocument(
     val entry: RemoteSyncEntry,
     val isDirectory: Boolean,
+    val lastModifiedEpochMillis: Long? = null,
 )
 
 /** Recursive, bounded and revision-guarded WebDAV adapter used by desktop sync. */
@@ -456,7 +459,7 @@ internal class DesktopFileSyncRemoteTree(
         val DIRECTORY_PROPERTIES = """
             <?xml version="1.0" encoding="UTF-8"?>
             <d:propfind xmlns:d="DAV:"><d:prop>
-              <d:displayname/><d:getcontentlength/><d:getetag/><d:resourcetype/>
+              <d:displayname/><d:getcontentlength/><d:getetag/><d:getlastmodified/><d:resourcetype/>
             </d:prop></d:propfind>
         """.trimIndent()
     }
@@ -517,11 +520,18 @@ internal fun parseDesktopSyncDav(bytes: ByteArray, userId: String): List<Desktop
                             ?.takeIf { !isDirectory },
                     ),
                     isDirectory,
+                    lastModifiedEpochMillis = response.syncText("getlastmodified")
+                        ?.let(::parseDesktopSyncDavTimestamp),
                 ),
             )
         }
     }
 }
+
+internal fun parseDesktopSyncDavTimestamp(value: String): Long? = runCatching {
+    ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
+        .takeIf { it >= 0L }
+}.getOrNull()
 
 private fun org.w3c.dom.Element.syncText(localName: String): String? =
     getElementsByTagNameNS(DAV_NAMESPACE, localName).item(0)?.textContent?.takeIf(String::isNotBlank)

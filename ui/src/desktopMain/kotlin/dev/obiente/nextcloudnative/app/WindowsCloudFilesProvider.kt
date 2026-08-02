@@ -12,6 +12,7 @@ import java.nio.file.StandardWatchEventKinds
 import java.nio.file.WatchService
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -27,6 +28,7 @@ internal data class WindowsCloudFileIdentity(
     val remoteRevision: String,
     val size: Long,
     val directory: Boolean,
+    val lastModifiedEpochMillis: Long? = null,
 ) {
     init {
         require(accountId.isNotBlank() && accountId.length <= MAX_ACCOUNT_ID_LENGTH)
@@ -34,6 +36,7 @@ internal data class WindowsCloudFileIdentity(
         require(remoteRevision.isNotBlank() && remoteRevision.length <= MAX_REVISION_LENGTH)
         require(size >= 0L)
         require(!directory || size == 0L)
+        require(lastModifiedEpochMillis == null || lastModifiedEpochMillis >= 0L)
     }
 
     private companion object {
@@ -51,6 +54,7 @@ internal object WindowsCloudFileIdentityCodec {
                 output.writeShort(VERSION)
                 output.writeBoolean(identity.directory)
                 output.writeLong(identity.size)
+                output.writeLong(identity.lastModifiedEpochMillis ?: UNKNOWN_MODIFIED_TIME)
                 output.writeBoundedUtf8(identity.accountId, MAX_ACCOUNT_BYTES)
                 output.writeBoundedUtf8(identity.path, MAX_PATH_BYTES)
                 output.writeBoundedUtf8(identity.remoteRevision, MAX_REVISION_BYTES)
@@ -72,14 +76,22 @@ internal object WindowsCloudFileIdentityCodec {
         }
         return DataInputStream(ByteArrayInputStream(payload)).use { input ->
             require(input.readInt() == MAGIC) { "The Windows placeholder identity type is invalid." }
-            require(input.readUnsignedShort() == VERSION) { "The Windows placeholder identity version is unsupported." }
+            val version = input.readUnsignedShort()
+            require(version in MINIMUM_SUPPORTED_VERSION..VERSION) {
+                "The Windows placeholder identity version is unsupported."
+            }
             val directory = input.readBoolean()
             val size = input.readLong()
+            val lastModifiedEpochMillis = if (version >= 2) {
+                input.readLong().takeUnless { it == UNKNOWN_MODIFIED_TIME }
+            } else {
+                null
+            }
             val accountId = input.readBoundedUtf8(MAX_ACCOUNT_BYTES)
             val path = input.readBoundedUtf8(MAX_PATH_BYTES)
             val revision = input.readBoundedUtf8(MAX_REVISION_BYTES)
             require(input.available() == 0) { "The Windows placeholder identity has trailing data." }
-            WindowsCloudFileIdentity(accountId, path, revision, size, directory)
+            WindowsCloudFileIdentity(accountId, path, revision, size, directory, lastModifiedEpochMillis)
         }
     }
 
@@ -100,7 +112,9 @@ internal object WindowsCloudFileIdentityCodec {
     }
 
     private const val MAGIC = 0x4E434656 // NCFV
-    private const val VERSION = 1
+    private const val VERSION = 2
+    private const val MINIMUM_SUPPORTED_VERSION = 1
+    private const val UNKNOWN_MODIFIED_TIME = -1L
     private const val DIGEST_BYTES = 32
     private const val MAX_ACCOUNT_BYTES = 256
     private const val MAX_PATH_BYTES = 3_072
@@ -177,6 +191,7 @@ internal data class WindowsCloudPlaceholder(
         require(name.isNotBlank() && name.none { it == '/' || it == '\\' || it == '\u0000' })
         require(identity.size <= 4_096)
         require(size >= 0L)
+        require(lastModifiedEpochMillis == null || lastModifiedEpochMillis >= 0L)
     }
 }
 
@@ -306,6 +321,7 @@ internal class DesktopNextcloudWindowsCloudFilesBackend(
             remoteRevision = entry.etag,
             size = entry.size ?: 0L,
             directory = isDirectory,
+            lastModifiedEpochMillis = lastModifiedEpochMillis,
         )
 }
 
@@ -339,6 +355,7 @@ internal class WindowsCloudFilesProvider(
         Thread(work, "nextcloud-windows-local-changes").apply { isDaemon = true }
     }
     private val pendingLocalChanges = ConcurrentHashMap<Path, ScheduledFuture<*>>()
+    private val initialRecoveryFinished = CountDownLatch(1)
     @Volatile private var watchService: WatchService? = null
     @Volatile private var watcherThread: Thread? = null
 
@@ -348,10 +365,50 @@ internal class WindowsCloudFilesProvider(
         check(!Files.isSymbolicLink(root)) { "The Windows Cloud Files root cannot be a symlink." }
         val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
         api.registerSyncRoot(root, WindowsCloudFileIdentityCodec.encode(rootIdentity))
-        populateDirectory("", root)
         connection.set(api.connect(root, this))
-        startLocalWatcher()
-        executor.execute(::recoverLocalChanges)
+        try {
+            populateDirectory("", root)
+            startLocalWatcher()
+            executor.execute {
+                try {
+                    recoverLocalChanges()
+                } finally {
+                    initialRecoveryFinished.countDown()
+                }
+            }
+        } catch (failure: Throwable) {
+            val key = connection.get()
+            if (key != 0L && runCatching { api.disconnect(key) }.isSuccess) {
+                connection.compareAndSet(key, 0L)
+            }
+            throw failure
+        }
+    }
+
+    /** Repairs the legacy namespace and flushes recoverable local writes before changing root generations. */
+    fun recoverBeforeRootMigration(timeoutSeconds: Long = 120L) {
+        require(timeoutSeconds > 0L)
+        repairRemotePlaceholderTree()
+        recoverLocalPlaceholders(failClosed = true)
+        recoverUnmanagedLocalEntries(failClosed = true)
+        check(initialRecoveryFinished.await(timeoutSeconds, TimeUnit.SECONDS)) {
+            "Timed out while checking the legacy Windows Cloud Files root for local edits."
+        }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+        while (
+            (pendingWritebacks.isNotEmpty() || pathOperations.isNotEmpty() ||
+                synchronized(queuedPathOperations) { queuedPathOperations.isNotEmpty() }) &&
+            System.nanoTime() < deadline
+        ) {
+            Thread.sleep(25L)
+        }
+        check(failedWritebacks.isEmpty()) {
+            "Local edits in the legacy Windows Cloud Files root could not be uploaded safely."
+        }
+        check(
+            pendingWritebacks.isEmpty() && pathOperations.isEmpty() &&
+                synchronized(queuedPathOperations) { queuedPathOperations.isEmpty() },
+        ) { "Timed out while uploading local edits from the legacy Windows Cloud Files root." }
     }
 
     override fun fetchData(info: WindowsCloudCallbackInfo, requiredOffset: Long, requiredLength: Long) {
@@ -393,9 +450,10 @@ internal class WindowsCloudFilesProvider(
         executor.execute {
             try {
                 val directory = requireIdentity(info, expectDirectory = true)
+                // CFAPI permits returning entries beyond the requested pattern. Returning the complete
+                // directory lets this transfer safely mark on-demand population as finished.
                 val identities = backend.list(directory.path)
                     .filter { !cancellation.get() }
-                    .filter { identity -> pattern.isNullOrBlank() || windowsWildcardMatches(pattern, identity.path.substringAfterLast('/')) }
                 identities.forEach { identity -> knownIdentities[identity.path] = identity }
                 val placeholders = identities.map(::placeholder)
                 if (!cancellation.get()) api.completePlaceholderFetch(info, placeholders)
@@ -662,6 +720,7 @@ internal class WindowsCloudFilesProvider(
         identity = WindowsCloudFileIdentityCodec.encode(identity),
         size = identity.size,
         directory = identity.directory,
+        lastModifiedEpochMillis = identity.lastModifiedEpochMillis,
     )
 
     private fun localPath(identity: WindowsCloudFileIdentity): Path =
@@ -816,7 +875,11 @@ internal class WindowsCloudFilesProvider(
                 if (identity.directory) pendingDirectories += identity.path
             }
         }
-        runCatching {
+        recoverUnmanagedLocalEntries()
+    }
+
+    private fun recoverUnmanagedLocalEntries(failClosed: Boolean = false) {
+        val recover = {
             val unmanaged = Files.walk(root).use { paths ->
                 paths.filter { path -> path != root && Files.exists(path) }
                     .filter { path -> api.placeholderState(path) == WindowsCloudPlaceholderState.Absent }
@@ -826,13 +889,33 @@ internal class WindowsCloudFilesProvider(
             unmanaged.forEach { path ->
                 val relative = root.toAbsolutePath().normalize().relativize(path.toAbsolutePath().normalize())
                     .joinToString("/") { it.toString() }.windowsCloudPath()
-                runCatching { uploadLocalEntry(path, relative) }
+                if (failClosed) uploadLocalEntry(path, relative)
+                else runCatching { uploadLocalEntry(path, relative) }
+            }
+        }
+        if (failClosed) recover() else runCatching(recover)
+    }
+
+    private fun repairRemotePlaceholderTree() {
+        val pendingDirectories = ArrayDeque<Pair<String, Path>>()
+        pendingDirectories += "" to root
+        var repaired = 0
+        while (pendingDirectories.isNotEmpty()) {
+            val (relativePath, localDirectory) = pendingDirectories.removeFirst()
+            populateDirectory(relativePath, localDirectory)
+            val children = backend.list(relativePath)
+            repaired += children.size
+            check(repaired <= MAX_RECOVERY_IDENTITIES) {
+                "The legacy Windows Cloud Files root contains too many remote entries to migrate safely."
+            }
+            children.filter { it.directory }.forEach { child ->
+                pendingDirectories += child.path to localPath(child)
             }
         }
     }
 
-    private fun recoverLocalPlaceholders() {
-        runCatching {
+    private fun recoverLocalPlaceholders(failClosed: Boolean = false) {
+        val recover = {
             Files.walk(root).use { paths ->
                 paths.filter { path -> path != root && !Files.isSymbolicLink(path) }.forEach { local ->
                     val state = api.placeholderState(local)
@@ -849,7 +932,7 @@ internal class WindowsCloudFilesProvider(
                         ?: return@forEach
                     knownIdentities[original.path] = original
                     if (state != WindowsCloudPlaceholderState.Dirty || original.directory) return@forEach
-                    pendingWritebacks += original.path
+                    if (!pendingWritebacks.add(original.path)) return@forEach
                     submitPathOperation(original.path) {
                         val current = requireNotNull(api.placeholderIdentity(local)) {
                             "The dirty Windows placeholder has no recoverable identity."
@@ -867,6 +950,7 @@ internal class WindowsCloudFilesProvider(
                 }
             }
         }
+        if (failClosed) recover() else runCatching(recover)
     }
 
     private fun rebindMovedDescendants(
@@ -1028,8 +1112,11 @@ private class AtomicLongState {
 }
 
 internal fun requireWindowsCloudCallbackPath(root: Path, normalizedPath: String, identityPath: String) {
-    val absoluteRoot = root.toAbsolutePath().normalize()
-    val callbackTarget = Path.of(normalizedPath).toAbsolutePath().normalize()
+    // Windows can report the same directory through a long path in CFAPI while java.io.tmpdir or a
+    // configured root still contains an 8.3 component such as RUNNER~1. Compare real filesystem
+    // paths so the containment check does not reject that legitimate alias.
+    val absoluteRoot = root.windowsCloudRealPath()
+    val callbackTarget = Path.of(normalizedPath).windowsCloudRealPath()
     require(callbackTarget.startsWith(absoluteRoot)) { "The Cloud Files callback escaped its sync root." }
     val relative = if (callbackTarget == absoluteRoot) {
         ""
@@ -1037,6 +1124,16 @@ internal fun requireWindowsCloudCallbackPath(root: Path, normalizedPath: String,
         absoluteRoot.relativize(callbackTarget).joinToString("/") { it.toString() }.windowsCloudPath()
     }
     require(relative == identityPath) { "The Cloud Files callback path does not match its identity." }
+}
+
+private fun Path.windowsCloudRealPath(): Path {
+    val absolute = toAbsolutePath().normalize()
+    var existing = absolute
+    while (!Files.exists(existing, LinkOption.NOFOLLOW_LINKS)) {
+        existing = requireNotNull(existing.parent) { "The Cloud Files callback path has no existing ancestor." }
+    }
+    val realAncestor = existing.toRealPath(LinkOption.NOFOLLOW_LINKS)
+    return if (existing == absolute) realAncestor else realAncestor.resolve(existing.relativize(absolute)).normalize()
 }
 
 private fun windowsWildcardMatches(pattern: String, name: String): Boolean {
