@@ -131,6 +131,36 @@ class DashboardStatusTest {
     }
 
     @Test
+    fun `dashboard items keep distinct entries that share a timestamp cursor`() {
+        val widgets = parseDashboardWidgets(
+            response(
+                """
+                {"activity":{
+                  "id":"activity","title":"Recent activity","order":1,
+                  "item_api_versions":[1],"item_icons_round":false,"reload_interval":0,"buttons":[]
+                }}
+                """.trimIndent(),
+            ),
+        )
+
+        val items = parseDashboardItems(
+            response(
+                """
+                {"activity":[
+                  {"title":"File shared","subtitle":"Reports","link":"/apps/files/one","iconUrl":"","overlayIconUrl":"","sinceId":"2026-08-02T09:30:00Z"},
+                  {"title":"Comment added","subtitle":"Planning","link":"/apps/files/two","iconUrl":"","overlayIconUrl":"","sinceId":"2026-08-02T09:30:00Z"}
+                ]}
+                """.trimIndent(),
+            ),
+            widgets,
+        )
+        val snapshot = NativeDashboardSnapshot(widgets, items)
+
+        assertEquals(listOf("File shared", "Comment added"), items.getValue("activity").map(NativeDashboardItem::title))
+        assertEquals("2026-08-02T09:30:00Z", snapshot.latestSinceIds["activity"])
+    }
+
+    @Test
     fun `status capability and current status preserve presence and expiry shape`() {
         val capabilities = parseUserStatusCapabilities(
             response(
