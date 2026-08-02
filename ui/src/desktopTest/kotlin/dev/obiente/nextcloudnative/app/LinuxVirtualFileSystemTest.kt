@@ -681,6 +681,38 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `authoritative persistence re-enables a listing after failed invalidation`() {
+        val fixture = MutableFixtureBackend()
+        val failRootListing = AtomicBoolean(false)
+        val delegate = object : LinuxVirtualFileBackend by fixture {
+            override fun list(path: String): List<LinuxVirtualFileNode> {
+                if (path.isEmpty() && failRootListing.get()) error("Simulated offline root listing")
+                return fixture.list(path)
+            }
+        }
+        val persisted = MemoryLinuxVirtualMetadataStore()
+        val store = object : LinuxVirtualMetadataStore by persisted {
+            override fun invalidate(path: String): Unit = error("Simulated cache invalidation failure")
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = store,
+            freshForMillis = Long.MAX_VALUE,
+            maximumRetainedDirectories = 1,
+        )
+
+        assertEquals(listOf("Photos"), cached.list("").map(LinuxVirtualFileNode::name))
+        cached.createDirectory("Albums")
+        assertEquals(setOf("Photos", "Albums"), cached.list("").mapTo(hashSetOf(), LinuxVirtualFileNode::name))
+        assertTrue(waitUntil { persisted.snapshot("")?.nodes?.any { it.name == "Albums" } == true })
+        cached.list("Photos")
+        failRootListing.set(true)
+
+        assertEquals(setOf("Photos", "Albums"), cached.list("").mapTo(hashSetOf(), LinuxVirtualFileNode::name))
+        cached.close()
+    }
+
+    @Test
     fun `persisted metadata is reused only for the same remote revision`() {
         val root = Files.createTempDirectory("linux-virtual-metadata-")
         val preferences = Preferences.userRoot().node(

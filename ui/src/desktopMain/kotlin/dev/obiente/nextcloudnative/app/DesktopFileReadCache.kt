@@ -104,11 +104,19 @@ internal class DesktopFileReadCache(
         path: String,
         files: List<NextcloudFile>,
         fetchedAtEpochMillis: Long,
+        nowEpochMillis: Long = System.currentTimeMillis(),
     ): Boolean {
         require(fetchedAtEpochMillis >= 0L)
+        require(nowEpochMillis >= 0L)
         val normalized = path.cachePath()
         val current = load(accountId).listings.firstOrNull { listing -> listing.path == normalized }
-        if (current != null && current.fetchedAtEpochMillis >= fetchedAtEpochMillis) return false
+        if (
+            current != null &&
+            current.fetchedAtEpochMillis <= nowEpochMillis &&
+            current.fetchedAtEpochMillis >= fetchedAtEpochMillis
+        ) {
+            return false
+        }
         storeListing(accountId, normalized, files, fetchedAtEpochMillis)
         return true
     }
