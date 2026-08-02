@@ -402,6 +402,74 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `directory materialization follows a concurrent rename before registration`() {
+        val fixture = MutableFixtureBackend()
+        val backend = BlockingListBackend(fixture, "Photos")
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend, maximumOpenDirectoryEntries = 2)
+        val runtime = Runtime.getSystemRuntime()
+        val opened = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val reopened = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val worker = Executors.newSingleThreadExecutor()
+        try {
+            val opening = worker.submit<Int> { fileSystem.opendir("/Photos", opened) }
+            assertTrue(backend.started.await(2L, TimeUnit.SECONDS))
+            assertEquals(0, fileSystem.rename("/Photos", "/Albums"))
+            backend.release.countDown()
+
+            assertEquals(0, opening.get(2L, TimeUnit.SECONDS))
+            assertEquals(0, fileSystem.releasedir("/Albums", opened))
+            assertEquals(0, fileSystem.opendir("/Albums", reopened))
+            assertEquals(0, fileSystem.releasedir("/Albums", reopened))
+        } finally {
+            backend.release.countDown()
+            worker.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `open read handle is readdressed before rename cache maintenance`() {
+        val fixture = MutableFixtureBackend().apply {
+            addFile("Photos/open.txt", "read during rename".encodeToByteArray())
+        }
+        val maintenanceStarted = CountDownLatch(1)
+        val releaseMaintenance = CountDownLatch(1)
+        val backend = object : LinuxVirtualFileBackend by fixture {
+            override fun move(
+                node: LinuxVirtualFileNode,
+                destinationPath: String,
+                afterRemoteCommit: () -> Unit,
+            ) {
+                fixture.move(node, destinationPath)
+                afterRemoteCommit()
+                maintenanceStarted.countDown()
+                check(releaseMaintenance.await(2L, TimeUnit.SECONDS))
+            }
+        }
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        val runtime = Runtime.getSystemRuntime()
+        val fileInfo = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val output = runtime.memoryManager.allocateDirect(4)
+        val worker = Executors.newSingleThreadExecutor()
+        try {
+            assertEquals(0, fileSystem.open("/Photos/open.txt", fileInfo))
+            val rename = worker.submit<Int> { fileSystem.rename("/Photos/open.txt", "/Photos/renamed.txt") }
+            assertTrue(maintenanceStarted.await(2L, TimeUnit.SECONDS))
+
+            assertEquals(4, fileSystem.read("/Photos/renamed.txt", output, 4L, 0L, fileInfo))
+            assertContentEquals(
+                "read".encodeToByteArray(),
+                ByteArray(4).also { bytes -> output.get(0L, bytes, 0, bytes.size) },
+            )
+            releaseMaintenance.countDown()
+            assertEquals(0, rename.get(2L, TimeUnit.SECONDS))
+            assertEquals(0, fileSystem.release("/Photos/renamed.txt", fileInfo))
+        } finally {
+            releaseMaintenance.countDown()
+            worker.shutdownNow()
+        }
+    }
+
+    @Test
     fun `listing persistence keeps causal order from before the network request`() {
         val root = Files.createTempDirectory("linux-virtual-causal-listing-")
         val preferences = Preferences.userRoot().node(
@@ -1098,9 +1166,14 @@ class LinuxVirtualFileSystemTest {
         val fixture = MutableFixtureBackend()
         val moveCommitted = CountDownLatch(1)
         val backend = object : LinuxVirtualFileBackend by fixture {
-            override fun move(node: LinuxVirtualFileNode, destinationPath: String) {
+            override fun move(
+                node: LinuxVirtualFileNode,
+                destinationPath: String,
+                afterRemoteCommit: () -> Unit,
+            ) {
                 fixture.move(node, destinationPath)
                 moveCommitted.countDown()
+                afterRemoteCommit()
             }
         }
         val releaseLoaded = CountDownLatch(1)
