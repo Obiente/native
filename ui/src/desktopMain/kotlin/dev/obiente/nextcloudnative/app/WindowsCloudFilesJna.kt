@@ -93,14 +93,16 @@ internal class JnaWindowsCloudFilesApi(
     override fun unregisterSyncRoot(root: Path) {
         val accountId = windowsCloudShellAccountId(root)
         if (accountId != null && shellRegistrar.available && shellRegistrar.unregister(root, accountId)) return
+        val rootWasMissing = Files.notExists(root)
         val result = cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString()))
-        if (result in SYNC_ROOT_ALREADY_UNREGISTERED_RESULTS) return
+        if (isWindowsCloudFilesRootAbsentResult(result, rootMissing = rootWasMissing)) return
         checkHResult(result, "unregister the Windows Cloud Files root")
     }
 
     private fun unregisterCloudFilesRoot(root: Path): Boolean {
+        val rootWasMissing = Files.notExists(root)
         val result = cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString()))
-        return result >= 0 || result in SYNC_ROOT_ALREADY_UNREGISTERED_RESULTS
+        return result >= 0 || isWindowsCloudFilesRootAbsentResult(result, rootMissing = rootWasMissing)
     }
 
     override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long {
@@ -567,11 +569,6 @@ internal class JnaWindowsCloudFilesApi(
 
         const val CF_OPERATION_TYPE_TRANSFER_DATA = 0
         const val CF_OPERATION_TYPE_TRANSFER_PLACEHOLDERS = 4
-        val SYNC_ROOT_ALREADY_UNREGISTERED_RESULTS = setOf(
-            0xC000CF13.toInt(), // STATUS_CLOUD_FILE_NOT_UNDER_SYNC_ROOT
-            0xD000CF13.toInt(), // HRESULT_FROM_NT(STATUS_CLOUD_FILE_NOT_UNDER_SYNC_ROOT)
-            0x80070186.toInt(), // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_NOT_UNDER_SYNC_ROOT)
-        )
         const val CF_OPERATION_TYPE_ACK_RENAME = 6
         const val CF_OPERATION_TYPE_ACK_DELETE = 7
         const val STATUS_SUCCESS = 0
@@ -618,6 +615,18 @@ internal class JnaWindowsCloudFilesApi(
         const val ACK_STATUS_OFFSET = PARAMETERS_UNION_OFFSET + 4L
     }
 }
+
+internal fun isWindowsCloudFilesRootAbsentResult(result: Int, rootMissing: Boolean): Boolean =
+    when (result) {
+        0xC000CF13.toInt(), // STATUS_CLOUD_FILE_NOT_UNDER_SYNC_ROOT
+        0xD000CF13.toInt(), // HRESULT_FROM_NT(STATUS_CLOUD_FILE_NOT_UNDER_SYNC_ROOT)
+        0x80070186.toInt(), // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_NOT_UNDER_SYNC_ROOT)
+        -> true
+        0x80070002.toInt(), // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+        0x80070003.toInt(), // HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND)
+        -> rootMissing
+        else -> false
+    }
 
 internal interface CldApi : StdCallLibrary {
     fun CfRegisterSyncRoot(path: WString, registration: CfSyncRegistration, policies: CfSyncPolicies, flags: Int): Int

@@ -11,6 +11,18 @@ import kotlin.test.assertTrue
 
 class WindowsUninstallCleanupTest {
     @Test
+    fun cloudFilesCleanupTreatsOnlyMissingRootsAsAlreadyAbsent() {
+        assertTrue(isWindowsCloudFilesRootAbsentResult(0xC000CF13.toInt(), rootMissing = false))
+        assertTrue(isWindowsCloudFilesRootAbsentResult(0xD000CF13.toInt(), rootMissing = false))
+        assertTrue(isWindowsCloudFilesRootAbsentResult(0x80070186.toInt(), rootMissing = false))
+        assertTrue(isWindowsCloudFilesRootAbsentResult(0x80070002.toInt(), rootMissing = true))
+        assertTrue(isWindowsCloudFilesRootAbsentResult(0x80070003.toInt(), rootMissing = true))
+        assertFalse(isWindowsCloudFilesRootAbsentResult(0x80070003.toInt(), rootMissing = false))
+        assertFalse(isWindowsCloudFilesRootAbsentResult(0x80070005.toInt(), rootMissing = true))
+        assertFalse(isWindowsCloudFilesRootAbsentResult(0x8007017C.toInt(), rootMissing = true))
+    }
+
+    @Test
     fun cloudFilesRootUsesTheCurrentProviderMetadataGeneration() {
         val home = Files.createTempDirectory("windows-root-generation-home").toFile()
         try {

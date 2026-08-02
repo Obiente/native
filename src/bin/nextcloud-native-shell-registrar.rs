@@ -9,6 +9,11 @@ const MAX_SYNC_ROOT_IDENTITY_BYTES: usize = 4_096;
 #[cfg(any(windows, test))]
 const MAX_DISPLAY_NAME_CHARACTERS: usize = 128;
 
+#[cfg(any(windows, test))]
+fn is_windows_absence_hresult(value: i32) -> bool {
+    matches!(value as u32, 0x8007_0002 | 0x8007_0003 | 0x8007_0490)
+}
+
 #[cfg(windows)]
 #[derive(Debug)]
 struct OwnedPathConflict;
@@ -100,8 +105,8 @@ fn sid_string(bytes: &[u8]) -> Option<String> {
 #[cfg(windows)]
 mod platform {
     use super::{
-        OwnedPathConflict, PROVIDER_ID, decode_identity_hex, sid_string, valid_account_id,
-        valid_display_name,
+        OwnedPathConflict, PROVIDER_ID, decode_identity_hex, is_windows_absence_hresult,
+        sid_string, valid_account_id, valid_display_name,
     };
     use std::ffi::{OsStr, OsString};
     use std::mem::size_of;
@@ -297,11 +302,22 @@ mod platform {
         }
         let id = sync_root_id(&account_id)?;
         let existing = StorageProviderSyncRootManager::GetSyncRootInformationForId(&id)?;
-        if existing.Path()?.Path()? != HSTRING::from(root.as_path()) {
-            return Err("the registered sync root path does not match".into());
+        if existing.ProviderId()? != PROVIDER_GUID {
+            return Err("the registered sync root belongs to another provider".into());
         }
-        StorageProviderSyncRootManager::Unregister(&id)?;
-        Ok(())
+        match existing.Path().and_then(|folder| folder.Path()) {
+            Ok(registered_path) if registered_path != HSTRING::from(root.as_path()) => {
+                return Err("the registered sync root path does not match".into());
+            }
+            Ok(_) => {}
+            Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
+            Err(failure) => return Err(failure.into()),
+        }
+        match StorageProviderSyncRootManager::Unregister(&id) {
+            Ok(()) => Ok(()),
+            Err(failure) if is_windows_absence_hresult(failure.code().0) => Ok(()),
+            Err(failure) => Err(failure.into()),
+        }
     }
 
     pub fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn std::error::Error>> {
@@ -427,5 +443,14 @@ mod tests {
             Some("S-1-5-32-544")
         );
         assert_eq!(sid_string(&administrators_sid[..15]), None);
+    }
+
+    #[test]
+    fn classifies_only_missing_windows_objects_as_absent() {
+        assert!(is_windows_absence_hresult(0x8007_0002u32 as i32));
+        assert!(is_windows_absence_hresult(0x8007_0003u32 as i32));
+        assert!(is_windows_absence_hresult(0x8007_0490u32 as i32));
+        assert!(!is_windows_absence_hresult(0x8007_0005u32 as i32));
+        assert!(!is_windows_absence_hresult(0x8007_0057u32 as i32));
     }
 }
