@@ -631,8 +631,15 @@ class LinuxVirtualFileSystemTest {
     @Test
     fun `completed mutation ignores disposable persisted invalidation failure`() {
         val delegate = MutableFixtureBackend()
+        val stale = LinuxVirtualDirectorySnapshot(
+            nodes = listOf(LinuxVirtualFileNode("Photos", "Photos", true, 0L, "stale-photos")),
+            fetchedAtEpochMillis = Long.MAX_VALUE,
+        )
+        val loads = AtomicInteger(0)
         val store = object : LinuxVirtualMetadataStore {
-            override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? =
+                stale.takeIf { path.isEmpty() }.also { loads.incrementAndGet() }
+
             override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = Unit
             override fun invalidate(path: String): Unit = error("Simulated cache publication failure")
         }
@@ -645,6 +652,31 @@ class LinuxVirtualFileSystemTest {
         assertEquals(listOf("Photos"), cached.list("").map(LinuxVirtualFileNode::name))
         cached.createDirectory("Albums")
         assertEquals(setOf("Photos", "Albums"), cached.list("").mapTo(hashSetOf(), LinuxVirtualFileNode::name))
+        assertEquals(1, loads.get())
+        cached.close()
+    }
+
+    @Test
+    fun `write invalidates metadata only once after a committed change`() {
+        val delegate = MutableFixtureBackend().apply { addFile("Photos/draft.txt", "old".encodeToByteArray()) }
+        val invalidations = AtomicInteger(0)
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = Unit
+            override fun invalidate(path: String) {
+                invalidations.incrementAndGet()
+            }
+        }
+        val cached = CachingLinuxVirtualFileBackend(delegate, store)
+        val existing = requireNotNull(delegate.resolve("Photos/draft.txt"))
+        val handle = cached.openWrite(existing.path, existing, truncate = false)
+
+        handle.write(0L, "new".encodeToByteArray())
+        handle.flush()
+        handle.flush()
+        handle.close()
+
+        assertEquals(1, invalidations.get())
         cached.close()
     }
 
