@@ -24,6 +24,7 @@ data class VirtualFolderHydrationStatus(
     val refreshFailure: String? = null,
     val refreshing: Boolean = false,
     val verifiedAtEpochMillis: Long? = null,
+    val refreshRetryAtEpochMillis: Long? = null,
 ) {
     init {
         require(relativePath.isNotEmpty())
@@ -38,6 +39,8 @@ data class VirtualFolderHydrationStatus(
         )
         require(!refreshing || phase == VirtualFolderHydrationPhase.AvailableOffline)
         require(verifiedAtEpochMillis == null || verifiedAtEpochMillis >= 0L)
+        require(refreshRetryAtEpochMillis == null || refreshRetryAtEpochMillis >= 0L)
+        require(refreshRetryAtEpochMillis == null || refreshFailure != null)
     }
 }
 

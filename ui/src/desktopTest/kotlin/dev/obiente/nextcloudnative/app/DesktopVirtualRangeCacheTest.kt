@@ -204,6 +204,7 @@ class DesktopVirtualRangeCacheTest {
                     "Photos",
                     VirtualFolderHydrationPhase.AvailableOffline,
                     refreshFailure = "Server unavailable.",
+                    refreshRetryAtEpochMillis = 1_800_000L,
                 ),
             )
 
@@ -211,6 +212,7 @@ class DesktopVirtualRangeCacheTest {
             val status = restarted.loadFolderHydrationStatuses(ACCOUNT_ID).single()
             assertEquals(VirtualFolderHydrationPhase.AvailableOffline, status.phase)
             assertEquals("Server unavailable.", status.refreshFailure)
+            assertEquals(1_800_000L, status.refreshRetryAtEpochMillis)
         } finally {
             directory.deleteRecursively()
         }
@@ -264,6 +266,13 @@ class DesktopVirtualRangeCacheTest {
                 refreshIntervalMillis = 1_000L,
             ),
         )
+        val backedOff = fresh.copy(
+            refreshFailure = "Server unavailable.",
+            refreshRetryAtEpochMillis = 20_000L,
+        )
+        assertFalse(shouldScheduleVirtualFolderHydration(backedOff, 19_999L, refreshIntervalMillis = 1_000L))
+        assertTrue(shouldScheduleVirtualFolderHydration(backedOff, 20_000L, refreshIntervalMillis = 1_000L))
+        assertTrue(shouldScheduleVirtualFolderHydration(backedOff, 9_999L, refreshIntervalMillis = 1_000L))
     }
 
     @Test
@@ -327,6 +336,61 @@ class DesktopVirtualRangeCacheTest {
             assertFalse(cache.hasCompleteRetainedFolder(ACCOUNT_ID, "Photos"))
             assertEquals(listOf("Photos"), cache.queueRetainedFoldersForRefresh(ACCOUNT_ID, "Photos/photo.raf"))
             assertEquals(VirtualFolderHydrationPhase.Queued, cache.loadFolderHydrationStatuses(ACCOUNT_ID).single().phase)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `mutating an ancestor queues every nested retained root`() {
+        val directory = Files.createTempDirectory("virtual-range-retained-ancestor-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/2026", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderHydrationStatus(
+                ACCOUNT_ID,
+                VirtualFolderHydrationStatus("Photos/2026", VirtualFolderHydrationPhase.AvailableOffline),
+            )
+
+            assertEquals(listOf("Photos/2026"), cache.queueRetainedFoldersForRefresh(ACCOUNT_ID, "Photos"))
+            assertEquals(VirtualFolderHydrationPhase.Queued, cache.loadFolderHydrationStatuses(ACCOUNT_ID).single().phase)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `nested retained folder is incomplete without its durable navigation ancestors`() {
+        val directory = Files.createTempDirectory("virtual-range-retained-navigation-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/2026", VirtualFolderRetention.KeepOnDevice)
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos/2026",
+                mapOf("Photos/2026" to LinuxVirtualDirectorySnapshot(emptyList(), 42L)),
+            )
+
+            assertFalse(cache.hasCompleteRetainedFolder(ACCOUNT_ID, "Photos/2026"))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `corrupt retention intent blocks eviction instead of converting pins to cache`() {
+        val directory = Files.createTempDirectory("virtual-range-corrupt-retention-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L, 0L, "data".encodeToByteArray())
+            val accountDirectory = directory.resolve(ACCOUNT_ID)
+            val block = accountDirectory.listFiles().orEmpty().single { it.extension == "block" }
+            accountDirectory.resolve("folder-retention-v1.json").writeText("not-json")
+
+            val restarted = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            assertFailsWith<Throwable> { restarted.freeUp(ACCOUNT_ID, 4L) }
+            assertTrue(block.exists())
         } finally {
             directory.deleteRecursively()
         }
@@ -446,6 +510,51 @@ class DesktopVirtualRangeCacheTest {
                 "data".encodeToByteArray(),
                 cache.readBlock(ACCOUNT_ID, "Photos/Album/photo.raf", "etag-2", 8L, 4L, 4),
             )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `staged replacement waits while a previous generation is open`() {
+        val directory = Files.createTempDirectory("virtual-range-open-generation-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L, 0L, "old!".encodeToByteArray())
+            cache.acquire(ACCOUNT_ID, "Photos/photo.raf")
+            cache.acquire(ACCOUNT_ID, "Photos/photo.raf")
+
+            cache.beginRevisionStaging(ACCOUNT_ID, "Photos/photo.raf", "e2", 4L).use { staging ->
+                staging.store(0L, "new!".encodeToByteArray())
+                assertFailsWith<IllegalStateException> { staging.commitIfComplete() }
+            }
+
+            assertContentEquals(
+                "old!".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L, 0L, 4),
+            )
+            assertNull(cache.readBlock(ACCOUNT_ID, "Photos/photo.raf", "e2", 4L, 0L, 4))
+            cache.release(ACCOUNT_ID, "Photos/photo.raf")
+            cache.release(ACCOUNT_ID, "Photos/photo.raf")
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `revision coverage validates many files from one index snapshot`() {
+        val directory = Files.createTempDirectory("virtual-range-batch-coverage-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.storeBlock(ACCOUNT_ID, "Photos/a.raf", "a1", 4L, 0L, "aaaa".encodeToByteArray())
+            cache.storeBlock(ACCOUNT_ID, "Photos/b.raf", "b1", 4L, 0L, "bbbb".encodeToByteArray())
+            val expected = listOf(
+                VirtualRangeRevision("Photos/a.raf", "a1", 4L),
+                VirtualRangeRevision("Photos/b.raf", "b1", 4L),
+            )
+
+            assertEquals(expected.toSet(), cache.completeRevisions(ACCOUNT_ID, expected))
         } finally {
             directory.deleteRecursively()
         }
@@ -681,6 +790,9 @@ class DesktopVirtualRangeCacheTest {
                 cache.readBlock(ACCOUNT_ID, "Photos/dirty.raf", "e3", 5L, 0L, 5),
             )
             assertEquals(listOf("", "Photos", "Photos/2026"), retainedFolderAncestorListings("Photos/2026/August"))
+            assertEquals("Photos", retainedFolderNavigationChild("", "Photos/2026/August"))
+            assertEquals("Photos/2026", retainedFolderNavigationChild("Photos", "Photos/2026/August"))
+            assertNull(retainedFolderNavigationChild("Documents", "Photos/2026/August"))
         } finally {
             directory.deleteRecursively()
         }

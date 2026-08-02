@@ -252,19 +252,23 @@ internal class CachingLinuxVirtualFileBackend(
 
             @Synchronized
             override fun flush() {
-                handle.flush()
-                if (dirty) {
-                    invalidate(normalized)
+                val shouldInvalidate = dirty
+                try {
+                    handle.flush()
                     dirty = false
+                } finally {
+                    if (shouldInvalidate) invalidate(normalized)
                 }
             }
 
             @Synchronized
             override fun close() {
-                handle.close()
-                if (dirty) {
-                    invalidate(normalized)
+                val shouldInvalidate = dirty
+                try {
+                    handle.close()
                     dirty = false
+                } finally {
+                    if (shouldInvalidate) invalidate(normalized)
                 }
             }
         }
@@ -272,20 +276,29 @@ internal class CachingLinuxVirtualFileBackend(
 
     override fun createDirectory(path: String) {
         val normalized = path.linuxVirtualPath()
-        delegate.createDirectory(normalized)
-        invalidate(normalized)
+        try {
+            delegate.createDirectory(normalized)
+        } finally {
+            invalidate(normalized)
+        }
     }
 
     override fun delete(node: LinuxVirtualFileNode) {
-        delegate.delete(node)
-        invalidate(node.path)
+        try {
+            delegate.delete(node)
+        } finally {
+            invalidate(node.path)
+        }
     }
 
     override fun move(node: LinuxVirtualFileNode, destinationPath: String) {
         val destination = destinationPath.linuxVirtualPath()
-        delegate.move(node, destination)
-        invalidate(node.path)
-        invalidate(destination)
+        try {
+            delegate.move(node, destination)
+        } finally {
+            invalidate(node.path)
+            invalidate(destination)
+        }
     }
 
     override fun moveReplacing(
@@ -294,9 +307,12 @@ internal class CachingLinuxVirtualFileBackend(
         destinationPath: String,
     ) {
         val normalized = destinationPath.linuxVirtualPath()
-        delegate.moveReplacing(node, destination, normalized)
-        invalidate(node.path)
-        invalidate(normalized)
+        try {
+            delegate.moveReplacing(node, destination, normalized)
+        } finally {
+            invalidate(node.path)
+            invalidate(normalized)
+        }
     }
 
     @Synchronized

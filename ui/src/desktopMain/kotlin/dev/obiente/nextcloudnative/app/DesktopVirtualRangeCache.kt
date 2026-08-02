@@ -20,6 +20,18 @@ internal data class DesktopVirtualRangeCacheSummary(
     val availableFreeBytes: Long,
 )
 
+internal data class VirtualRangeRevision(
+    val relativePath: String,
+    val remoteRevision: String,
+    val fileSize: Long,
+) {
+    init {
+        FileOfflineKey("account", relativePath)
+        require(remoteRevision.isNotBlank() && remoteRevision.none(Char::isISOControl))
+        require(fileSize > 0L)
+    }
+}
+
 /** Persistent exact-revision block cache used by the Linux virtual filesystem. */
 internal class DesktopVirtualRangeCache(
     private val root: File,
@@ -211,31 +223,55 @@ internal class DesktopVirtualRangeCache(
 
     @Synchronized
     fun hasCompleteRevision(accountId: String, path: String, remoteRevision: String, fileSize: Long): Boolean {
-        val normalized = FileOfflineKey(accountId, path).relativePath
+        val revision = VirtualRangeRevision(
+            FileOfflineKey(accountId, path).relativePath,
+            remoteRevision,
+            fileSize,
+        )
+        return revision in completeRevisions(accountId, listOf(revision))
+    }
+
+    @Synchronized
+    fun completeRevisions(
+        accountId: String,
+        revisions: Collection<VirtualRangeRevision>,
+    ): Set<VirtualRangeRevision> {
+        if (revisions.isEmpty()) return emptySet()
+        val expected = revisions.toHashSet()
         val index = load(accountId)
-        val records = index.blocks.asSequence()
-            .filter { block ->
-                block.path == normalized && block.remoteRevision == remoteRevision && block.fileSize == fileSize
+        val recordsByRevision = index.blocks.asSequence()
+            .mapNotNull { block ->
+                val revision = VirtualRangeRevision(block.path, block.remoteRevision, block.fileSize)
+                if (revision in expected) revision to block else null
             }
-            .sortedBy(CachedRangeBlock::offset)
-            .toList()
-        var expectedOffset = 0L
-        val complete = records.isNotEmpty() && records.all { block ->
-            if (block.offset != expectedOffset) return@all false
-            val blob = File(accountDirectory(accountId), block.blobName)
-            if (
-                !blob.isFile ||
-                blob.length() != block.length.toLong() ||
-                runCatching { sha256Hex(blob) }.getOrNull() != block.sha256
-            ) {
-                return@all false
+            .groupBy({ it.first }, { it.second })
+        val complete = linkedSetOf<VirtualRangeRevision>()
+        val invalidRecords = hashSetOf<CachedRangeBlock>()
+        expected.forEach { revision ->
+            val records = recordsByRevision[revision].orEmpty().sortedBy(CachedRangeBlock::offset)
+            var expectedOffset = 0L
+            val valid = records.isNotEmpty() && records.all { block ->
+                if (block.offset != expectedOffset) return@all false
+                val blob = File(accountDirectory(accountId), block.blobName)
+                if (
+                    !blob.isFile ||
+                    blob.length() != block.length.toLong() ||
+                    runCatching { sha256Hex(blob) }.getOrNull() != block.sha256
+                ) {
+                    return@all false
+                }
+                expectedOffset += block.length
+                true
+            } && expectedOffset == revision.fileSize
+            if (valid) {
+                complete += revision
+            } else {
+                invalidRecords += records
             }
-            expectedOffset += block.length
-            true
-        } && expectedOffset == fileSize
-        if (!complete && records.isNotEmpty()) {
-            records.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }
-            save(accountId, index.copy(blocks = index.blocks.filterNot { block -> block in records }))
+        }
+        if (invalidRecords.isNotEmpty()) {
+            invalidRecords.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }
+            save(accountId, index.copy(blocks = index.blocks.filterNot(invalidRecords::contains)))
         }
         return complete
     }
@@ -350,12 +386,14 @@ internal class DesktopVirtualRangeCache(
     fun queueRetainedFoldersForRefresh(accountId: String, path: String): List<String> {
         val normalized = FileOfflineKey(accountId, path).relativePath
         val current = loadRetention(accountId)
-        val retention = current.rules.toDomain()
-        if (retention.retentionFor(normalized) != VirtualFolderRetention.KeepOnDevice) return emptyList()
         val roots = current.rules.asSequence()
             .filter { rule ->
                 rule.retention == VirtualFolderRetention.KeepOnDevice &&
-                    (normalized == rule.relativePath || normalized.startsWith("${rule.relativePath}/"))
+                    (
+                        normalized == rule.relativePath ||
+                            normalized.startsWith("${rule.relativePath}/") ||
+                            rule.relativePath.startsWith("$normalized/")
+                        )
             }
             .map(CachedVirtualFolderRule::relativePath)
             .distinct()
@@ -380,26 +418,31 @@ internal class DesktopVirtualRangeCache(
         val normalized = FileOfflineKey(accountId, path).relativePath
         val retention = loadFolderRetention(accountId)
         if (retention.retentionFor(normalized) != VirtualFolderRetention.KeepOnDevice) return false
+        val metadataIndex = loadRetainedMetadataIndex(accountId)
+        if (retainedFolderAncestorListings(normalized).any { ancestor ->
+                loadRetainedListing(accountId, ancestor, metadataIndex) == null
+            }
+        ) return false
         val pending = ArrayDeque<String>().apply { add(normalized) }
         val visited = hashSetOf<String>()
+        val revisions = mutableListOf<VirtualRangeRevision>()
         while (pending.isNotEmpty()) {
             val directory = pending.removeFirst()
             if (!visited.add(directory)) continue
             if (visited.size > MAX_RETAINED_LISTINGS) return false
-            val listing = loadRetainedListing(accountId, directory) ?: return false
+            val listing = loadRetainedListing(accountId, directory, metadataIndex) ?: return false
             listing.nodes.forEach { node ->
                 if (retention.retentionFor(node.path) != VirtualFolderRetention.KeepOnDevice) return@forEach
                 if (node.directory) {
                     pending.add(node.path)
-                } else if (
-                    node.size > 0L &&
-                    !hasCompleteRevision(accountId, node.path, node.remoteRevision, node.size)
-                ) {
-                    return false
-                }
+                } else if (node.size > 0L) revisions += VirtualRangeRevision(
+                    node.path,
+                    node.remoteRevision,
+                    node.size,
+                )
             }
         }
-        return true
+        return completeRevisions(accountId, revisions).size == revisions.distinct().size
     }
 
     @Synchronized
@@ -415,8 +458,15 @@ internal class DesktopVirtualRangeCache(
                     )
         }
         if (!covered) return null
-        val reference = loadRetainedMetadataIndex(accountId).listings.firstOrNull { it.path == normalized }
-            ?: return null
+        return loadRetainedListing(accountId, normalized, loadRetainedMetadataIndex(accountId))
+    }
+
+    private fun loadRetainedListing(
+        accountId: String,
+        normalized: String,
+        index: RetainedMetadataIndex,
+    ): LinuxVirtualDirectorySnapshot? {
+        val reference = index.listings.firstOrNull { it.path == normalized } ?: return null
         val blob = File(accountDirectory(accountId), reference.blobName)
         if (!blob.isFile || blob.length() !in 1L..MAX_RETAINED_LISTING_BYTES) return null
         return runCatching {
@@ -622,11 +672,14 @@ internal class DesktopVirtualRangeCache(
     private fun loadRetention(accountId: String): VirtualFolderRetentionIndex {
         val directory = accountDirectory(accountId)
         val file = File(directory, RETENTION_INDEX_FILE)
-        if (file.isFile && file.length() in 1L..MAX_RETENTION_INDEX_BYTES) {
-            runCatching {
-                return rangeCacheJson.decodeFromString<VirtualFolderRetentionIndex>(file.readText()).also { index ->
-                    index.requireValid()
-                }
+        if (Files.exists(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            require(
+                file.isFile &&
+                    !Files.isSymbolicLink(file.toPath()) &&
+                    file.length() in 1L..MAX_RETENTION_INDEX_BYTES
+            ) { "The virtual-folder retention index is unreadable." }
+            return rangeCacheJson.decodeFromString<VirtualFolderRetentionIndex>(file.readText()).also { index ->
+                index.requireValid()
             }
         }
         val legacy = load(accountId).folderRules
@@ -814,6 +867,9 @@ internal class DesktopVirtualRangeCache(
         path: String,
         staged: List<StagedRangeBlock>,
     ) {
+        check(activePaths.getOrDefault(FileOfflineKey(accountId, path), 0) <= 1) {
+            "The previous retained revision is still open. The refresh will retry after it closes."
+        }
         val current = load(accountId)
         val records = staged.map(StagedRangeBlock::record)
         val next = current.copy(blocks = current.blocks.filterNot { block -> block.path == path } + records)
@@ -882,35 +938,53 @@ internal class DesktopVirtualRangeCache(
     }
 
     private fun recoverStaleRevisionStages(directory: File) {
-        val candidates = directory.listFiles().orEmpty().asSequence()
-            .filter { file ->
-                file.isFile &&
-                    !Files.isSymbolicLink(file.toPath()) &&
-                    file.name.startsWith("range-revision.") &&
-                    file.name.endsWith(".stage")
-            }
-            .take(MAX_STALE_REVISION_STAGES_PER_RECOVERY)
-            .toList()
-        val byStageId = candidates.groupBy { file ->
-            REVISION_STAGE_FILE.matchEntire(file.name)?.groupValues?.get(1)
-        }
-        byStageId[null].orEmpty().forEach(File::delete)
-        byStageId.filterKeys { it != null }.forEach { (stageId, files) ->
-            val leaseFile = File(directory, "range-revision.$stageId.lock")
-            if (!leaseFile.isFile || Files.isSymbolicLink(leaseFile.toPath())) {
-                files.forEach(File::delete)
-                return@forEach
-            }
-            runCatching {
-                RandomAccessFile(leaseFile, "rw").channel.use { channel ->
-                    val lock = try {
-                        channel.tryLock()
-                    } catch (_: java.nio.channels.OverlappingFileLockException) {
-                        null
-                    } ?: return@use
-                    lock.use { files.forEach(File::delete) }
+        Files.newDirectoryStream(directory.toPath()).use { entries ->
+            entries.forEach { path ->
+                if (
+                    !Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+                    !path.fileName.toString().startsWith("range-revision.") ||
+                    !path.fileName.toString().endsWith(".stage")
+                ) return@forEach
+                val stageId = REVISION_STAGE_FILE.matchEntire(path.fileName.toString())?.groupValues?.get(1)
+                if (stageId == null) {
+                    Files.deleteIfExists(path)
+                    return@forEach
                 }
-                if (files.none(File::exists)) leaseFile.delete()
+                val leaseFile = directory.toPath().resolve("range-revision.$stageId.lock")
+                if (!Files.isRegularFile(leaseFile, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    Files.deleteIfExists(path)
+                }
+            }
+        }
+        Files.newDirectoryStream(directory.toPath(), "range-revision.*.lock").use { leases ->
+            leases.forEach { leaseFile ->
+                if (!Files.isRegularFile(leaseFile, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return@forEach
+                val stageId = REVISION_LEASE_FILE.matchEntire(leaseFile.fileName.toString())?.groupValues?.get(1)
+                    ?: return@forEach
+                runCatching {
+                    var acquired = false
+                    RandomAccessFile(leaseFile.toFile(), "rw").channel.use { channel ->
+                        val lock = try {
+                            channel.tryLock()
+                        } catch (_: java.nio.channels.OverlappingFileLockException) {
+                            null
+                        } ?: return@use
+                        lock.use {
+                            Files.newDirectoryStream(
+                                directory.toPath(),
+                                "range-revision.$stageId.*.stage",
+                            ).use { stages ->
+                                stages.forEach { stage ->
+                                    if (Files.isRegularFile(stage, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                                        Files.deleteIfExists(stage)
+                                    }
+                                }
+                            }
+                            acquired = true
+                        }
+                    }
+                    if (acquired) Files.deleteIfExists(leaseFile)
+                }
             }
         }
     }
@@ -969,9 +1043,11 @@ internal class DesktopVirtualRangeCache(
         const val MAX_RETAINED_LISTINGS = 20_000
         const val MAX_BLOCKS = 20_000
         const val MAX_BLOCK_BYTES = 4 * 1024 * 1024
-        const val MAX_STALE_REVISION_STAGES_PER_RECOVERY = 20_000
         val REVISION_STAGE_FILE = Regex(
             "range-revision\\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\..+\\.stage",
+        )
+        val REVISION_LEASE_FILE = Regex(
+            "range-revision\\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\.lock",
         )
     }
 }
@@ -1098,6 +1174,7 @@ private data class CachedVirtualFolderHydration(
     val refreshFailure: String? = null,
     val refreshing: Boolean = false,
     val verifiedAtEpochMillis: Long? = null,
+    val refreshRetryAtEpochMillis: Long? = null,
 ) {
     fun toDomain(): VirtualFolderHydrationStatus =
         VirtualFolderHydrationStatus(
@@ -1107,6 +1184,7 @@ private data class CachedVirtualFolderHydration(
             refreshFailure,
             refreshing,
             verifiedAtEpochMillis,
+            refreshRetryAtEpochMillis,
         )
 
     companion object {
@@ -1117,6 +1195,7 @@ private data class CachedVirtualFolderHydration(
             status.refreshFailure,
             status.refreshing,
             status.verifiedAtEpochMillis,
+            status.refreshRetryAtEpochMillis,
         )
     }
 }

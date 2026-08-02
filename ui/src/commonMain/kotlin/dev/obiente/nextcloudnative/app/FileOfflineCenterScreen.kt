@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -1541,55 +1542,69 @@ internal fun VirtualFileStorageCard(
                             val hydrationByPath = snapshot.folderHydrationStatuses.associateBy(
                                 VirtualFolderHydrationStatus::relativePath,
                             )
-                            pinnedFolders.forEach { rule ->
-                                val status = hydrationByPath[rule.relativePath]
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            rule.relativePath,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        Text(
-                                            when (status?.phase) {
-                                                VirtualFolderHydrationPhase.Queued -> "Waiting to download"
-                                                VirtualFolderHydrationPhase.Downloading -> "Downloading for offline use"
-                                                VirtualFolderHydrationPhase.AvailableOffline -> when {
-                                                    status.refreshing -> "Available offline. Checking for updates"
-                                                    status.refreshFailure != null -> status.refreshFailure.let { failure ->
-                                                        "Available offline. Latest refresh needs attention: $failure"
+                            LazyColumn(
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp),
+                                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            ) {
+                                items(
+                                    items = pinnedFolders,
+                                    key = VirtualFolderRetentionRule::relativePath,
+                                ) { rule ->
+                                    val status = hydrationByPath[rule.relativePath]
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                rule.relativePath,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                when (status?.phase) {
+                                                    VirtualFolderHydrationPhase.Queued -> "Waiting to download"
+                                                    VirtualFolderHydrationPhase.Downloading -> "Downloading for offline use"
+                                                    VirtualFolderHydrationPhase.AvailableOffline -> when {
+                                                        status.refreshing -> "Available offline. Checking for updates"
+                                                        status.refreshFailure != null -> status.refreshFailure.let { failure ->
+                                                            "Available offline. Latest refresh needs attention: $failure"
+                                                        }
+                                                        else -> "Available offline"
                                                     }
-                                                    else -> "Available offline"
-                                                }
-                                                VirtualFolderHydrationPhase.Failed ->
-                                                    status.detail ?: "Download needs attention"
-                                                null -> "Waiting to check offline content"
-                                            },
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = if (status?.phase == VirtualFolderHydrationPhase.Failed) {
-                                                MaterialTheme.colorScheme.error
-                                            } else {
-                                                MaterialTheme.colorScheme.onSurfaceVariant
-                                            },
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                                    Column(horizontalAlignment = Alignment.End) {
-                                        if (
-                                            status?.phase == VirtualFolderHydrationPhase.Failed ||
-                                            status?.refreshFailure != null
-                                        ) {
-                                            TextButton(enabled = !busy, onClick = { onRetryFolder(rule.relativePath) }) {
-                                                Text("Retry")
-                                            }
+                                                    VirtualFolderHydrationPhase.Failed ->
+                                                        status.detail ?: "Download needs attention"
+                                                    null -> "Waiting to check offline content"
+                                                },
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = if (status?.phase == VirtualFolderHydrationPhase.Failed) {
+                                                    MaterialTheme.colorScheme.error
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                                },
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
                                         }
-                                        TextButton(enabled = !busy, onClick = { onReleaseFolder(rule.relativePath) }) {
-                                            Text("Make online-only")
+                                        Column(horizontalAlignment = Alignment.End) {
+                                            if (
+                                                status?.phase == VirtualFolderHydrationPhase.Failed ||
+                                                status?.refreshFailure != null
+                                            ) {
+                                                TextButton(
+                                                    enabled = !busy,
+                                                    onClick = { onRetryFolder(rule.relativePath) },
+                                                ) {
+                                                    Text("Retry")
+                                                }
+                                            }
+                                            TextButton(
+                                                enabled = !busy,
+                                                onClick = { onReleaseFolder(rule.relativePath) },
+                                            ) {
+                                                Text("Make online-only")
+                                            }
                                         }
                                     }
                                 }
@@ -1693,7 +1708,13 @@ private fun VirtualFileProviderLocationDialog(
         confirmButton = {
             Button(
                 enabled = !busy && !choosing && parentPath.isNotBlank() && validName,
-                onClick = { onSave(VirtualFileProviderLocation(parentPath, folderName)) },
+                onClick = {
+                    runCatching { VirtualFileProviderLocation(parentPath, folderName) }
+                        .onSuccess(onSave)
+                        .onFailure { failure ->
+                            chooserError = failure.message ?: "Choose a valid local folder location."
+                        }
+                },
             ) { Text("Use this location") }
         },
         dismissButton = { TextButton(enabled = !busy && !choosing, onClick = onDismiss) { Text("Cancel") } },
