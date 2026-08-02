@@ -58,6 +58,26 @@ class DesktopFileSyncRemoteTreeTest {
     }
 
     @Test
+    fun `dav parser rejects excess documents while streaming`() {
+        val responses = (1..3).joinToString("") { index ->
+            """
+            <d:response>
+              <d:href>/remote.php/dav/files/alice/Photos/$index.jpg</d:href>
+              <d:propstat><d:prop><d:getetag>etag-$index</d:getetag></d:prop></d:propstat>
+            </d:response>
+            """.trimIndent()
+        }
+
+        assertFails {
+            parseDesktopSyncDav(
+                "<d:multistatus xmlns:d=\"DAV:\">$responses</d:multistatus>".encodeToByteArray(),
+                userId = "alice",
+                maximumDocuments = 2,
+            )
+        }
+    }
+
+    @Test
     fun `only exact provider owned upload stages are suppressed`() {
         assertEquals(
             true,

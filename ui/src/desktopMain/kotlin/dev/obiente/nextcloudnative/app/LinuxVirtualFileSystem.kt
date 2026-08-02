@@ -112,7 +112,7 @@ internal class DesktopLinuxVirtualMetadataStore(
                 etag = node.remoteRevision,
             )
         }
-        cache.storeListing(accountId, path, files, snapshot.fetchedAtEpochMillis)
+        cache.storeListingUnlessNewer(accountId, path, files, snapshot.fetchedAtEpochMillis)
     }
 
     override fun invalidate(path: String) = cache.invalidate(accountId, path)
@@ -132,9 +132,11 @@ internal class CachingLinuxVirtualFileBackend(
     private val freshForMillis: Long = DEFAULT_FRESH_MILLIS,
     private val refreshRetryBaseMillis: Long = DEFAULT_REFRESH_RETRY_BASE_MILLIS,
     private val refreshRetryMaxMillis: Long = DEFAULT_REFRESH_RETRY_MAX_MILLIS,
+    private val maximumRetainedMetadataEntries: Int = DEFAULT_MAX_RETAINED_METADATA_ENTRIES,
+    private val maximumRetainedDirectories: Int = DEFAULT_MAX_RETAINED_DIRECTORIES,
     private val refreshExecutor: ExecutorService = defaultLinuxMetadataRefreshExecutor(),
 ) : LinuxVirtualFileBackend {
-    private val snapshots = ConcurrentHashMap<String, LinuxVirtualDirectorySnapshot>()
+    private val snapshots = LinkedHashMap<String, LinuxVirtualDirectorySnapshot>(16, 0.75f, true)
     private val refreshes = ConcurrentHashMap<String, CompletableFuture<LinuxVirtualDirectorySnapshot?>>()
     private val refreshFailures = ConcurrentHashMap<String, LinuxVirtualRefreshFailure>()
     private val invalidationGenerations = mutableMapOf<String, Long>()
@@ -147,6 +149,8 @@ internal class CachingLinuxVirtualFileBackend(
         require(freshForMillis >= 0L)
         require(refreshRetryBaseMillis > 0L)
         require(refreshRetryMaxMillis >= refreshRetryBaseMillis)
+        require(maximumRetainedMetadataEntries > 0)
+        require(maximumRetainedDirectories > 0)
     }
 
     override fun resolve(path: String): LinuxVirtualFileNode? {
@@ -159,9 +163,9 @@ internal class CachingLinuxVirtualFileBackend(
     override fun list(path: String): List<LinuxVirtualFileNode> = snapshot(path.linuxVirtualPath()).nodes
 
     private fun snapshot(normalized: String): LinuxVirtualDirectorySnapshot {
-        val cached = snapshots[normalized] ?: synchronized(metadataLock) {
+        val cached = synchronized(metadataLock) {
             snapshots[normalized] ?: store.load(normalized)?.also { restored ->
-                snapshots[normalized] = restored
+                retainSnapshot(normalized, restored)
             }
         }
         if (cached != null) {
@@ -274,7 +278,7 @@ internal class CachingLinuxVirtualFileBackend(
             )
             val published = synchronized(metadataLock) {
                 if (!closed && invalidationGenerations.getOrDefault(path, 0L) == invalidationGeneration) {
-                    snapshots[path] = snapshot
+                    retainSnapshot(path, snapshot)
                     true
                 } else {
                     false
@@ -331,7 +335,23 @@ internal class CachingLinuxVirtualFileBackend(
                 snapshots.remove(cachedPath)
                 refreshFailures.remove(cachedPath)
             }
-            store.invalidate(normalized)
+        }
+        runCatching { store.invalidate(normalized) }
+    }
+
+    private fun retainSnapshot(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
+        check(Thread.holdsLock(metadataLock))
+        snapshots[path] = snapshot
+        var retainedEntries = snapshots.values.sumOf { retained -> retained.nodes.size }
+        val iterator = snapshots.entries.iterator()
+        while (
+            (retainedEntries > maximumRetainedMetadataEntries || snapshots.size > maximumRetainedDirectories) &&
+            snapshots.size > 1 &&
+            iterator.hasNext()
+        ) {
+            val evicted = iterator.next()
+            retainedEntries -= evicted.value.nodes.size
+            iterator.remove()
         }
     }
 
@@ -362,6 +382,8 @@ internal class CachingLinuxVirtualFileBackend(
         const val DEFAULT_FRESH_MILLIS = 5_000L
         const val DEFAULT_REFRESH_RETRY_BASE_MILLIS = 1_000L
         const val DEFAULT_REFRESH_RETRY_MAX_MILLIS = 60_000L
+        const val DEFAULT_MAX_RETAINED_METADATA_ENTRIES = 100_000
+        const val DEFAULT_MAX_RETAINED_DIRECTORIES = 512
         const val MAX_BACKOFF_EXPONENT = 30
         val ROOT_NODE = LinuxVirtualFileNode("", "Nextcloud", true, 0L, "root")
     }
@@ -745,6 +767,7 @@ internal class LinuxNextcloudVirtualFileSystem(
                 backend.move(source, destination)
             }
             readdressReadHandles(sourcePath, destination)
+            readdressDirectoryHandles(sourcePath, destination)
             0
         }
     }
@@ -899,6 +922,19 @@ internal class LinuxNextcloudVirtualFileSystem(
             readHandles[id]?.readdress(movedPath)
             readHandlePaths.replace(id, openPath, movedPath)
         }
+    }
+
+    private fun readdressDirectoryHandles(sourcePath: String, destinationPath: String) {
+        directoryHandles.entries.toList().forEach { (id, snapshot) ->
+            val movedPath = snapshot.path.readdressWithin(sourcePath, destinationPath) ?: return@forEach
+            directoryHandles.replace(id, snapshot, snapshot.copy(path = movedPath))
+        }
+    }
+
+    private fun String.readdressWithin(sourcePath: String, destinationPath: String): String? = when {
+        this == sourcePath -> destinationPath
+        startsWith("$sourcePath/") -> destinationPath + removePrefix(sourcePath)
+        else -> null
     }
 
     private fun hasOpenWriteHandleWithin(path: String): Boolean =

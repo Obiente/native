@@ -486,6 +486,52 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `metadata snapshots evict least recently used directories within the global budget`() {
+        val delegate = MutableFixtureBackend().apply {
+            addFile("Photos/one.dat", byteArrayOf(1))
+            createDirectory("Albums")
+            addFile("Albums/two.dat", byteArrayOf(2))
+        }
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = Unit
+            override fun invalidate(path: String) = Unit
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = store,
+            freshForMillis = Long.MAX_VALUE,
+            maximumRetainedMetadataEntries = 1,
+        )
+
+        assertEquals(listOf("one.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
+        assertEquals(listOf("two.dat"), cached.list("Albums").map(LinuxVirtualFileNode::name))
+        assertEquals(listOf("one.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
+        assertEquals(2, delegate.listCallCount("Photos"))
+        cached.close()
+    }
+
+    @Test
+    fun `completed mutation ignores disposable persisted invalidation failure`() {
+        val delegate = MutableFixtureBackend()
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = Unit
+            override fun invalidate(path: String): Unit = error("Simulated cache publication failure")
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = store,
+            freshForMillis = Long.MAX_VALUE,
+        )
+
+        assertEquals(listOf("Photos"), cached.list("").map(LinuxVirtualFileNode::name))
+        cached.createDirectory("Albums")
+        assertEquals(setOf("Photos", "Albums"), cached.list("").mapTo(hashSetOf(), LinuxVirtualFileNode::name))
+        cached.close()
+    }
+
+    @Test
     fun `persisted metadata is reused only for the same remote revision`() {
         val root = Files.createTempDirectory("linux-virtual-metadata-")
         val preferences = Preferences.userRoot().node(
@@ -538,6 +584,17 @@ class LinuxVirtualFileSystemTest {
             assertTrue(!replaced.hasPreview)
             assertNull(replaced.permissions)
             assertTrue(replaced.checksums.isEmpty())
+
+            val authoritative = previous.copy(name = "authoritative.raf", etag = "revision-3")
+            cache.storeListing(accountId, "Photos", listOf(authoritative), nowEpochMillis = 10L)
+            store.store(
+                "Photos",
+                LinuxVirtualDirectorySnapshot(
+                    listOf(LinuxVirtualFileNode(previous.path, previous.name, false, 9L, "revision-older")),
+                    fetchedAtEpochMillis = 4L,
+                ),
+            )
+            assertEquals(authoritative, cache.cachedListing(accountId, "Photos").orEmpty().single())
         } finally {
             runCatching { preferences.removeNode() }
             root.toFile().deleteRecursively()
@@ -558,6 +615,21 @@ class LinuxVirtualFileSystemTest {
         assertEquals(listOf("Photos", "Albums"), cached.list("").map(LinuxVirtualFileNode::name))
         assertEquals(2, delegate.listCallCount(""))
         cached.close()
+    }
+
+    @Test
+    fun `renaming an open directory readdresses its retained handle`() {
+        val backend = MutableFixtureBackend()
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        val runtime = Runtime.getSystemRuntime()
+        val buffer = runtime.memoryManager.allocateDirect(8)
+        val fileInfo = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val filler = ru.serce.jnrfuse.FuseFillDir { _, _, _, _ -> 0 }
+
+        assertEquals(0, fileSystem.opendir("/Photos", fileInfo))
+        assertEquals(0, fileSystem.rename("/Photos", "/Albums"))
+        assertEquals(0, fileSystem.readdir("/Albums", buffer, filler, 0L, fileInfo))
+        assertEquals(0, fileSystem.releasedir("/Albums", fileInfo))
     }
 
     @Test
