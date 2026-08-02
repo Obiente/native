@@ -59,6 +59,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -3440,14 +3441,18 @@ private fun GenericRecordCollection(
     val insights = remember(resource, records) { nativeDatasetInsights(resource, records) }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val compactViewport = !datasetInsightsDefaultExpanded(maxWidth.value, maxHeight.value)
-        Column(modifier = Modifier.fillMaxSize()) {
-            insights?.let {
-                DatasetInsightsDisclosure(
-                    insights = it,
-                    compact = compactViewport,
-                    initiallyExpanded = !compactViewport,
-                    stateKey = "collection:${resource.id}",
-                )
+        val showDesktopOverview = LocalNextcloudWorkspaceCapabilities.current.isDesktop &&
+            maxWidth >= 980.dp && records.isNotEmpty()
+        val collectionContent: @Composable ColumnScope.() -> Unit = {
+            if (!showDesktopOverview) {
+                insights?.let {
+                    DatasetInsightsDisclosure(
+                        insights = it,
+                        compact = compactViewport,
+                        initiallyExpanded = !compactViewport,
+                        stateKey = "collection:${resource.id}",
+                    )
+                }
             }
             GenericRecordList(
                 resource = resource,
@@ -3478,6 +3483,178 @@ private fun GenericRecordCollection(
                 loadMoreError = loadMoreError,
             )
         }
+        if (showDesktopOverview) {
+            Row(modifier = Modifier.fillMaxSize()) {
+                Column(modifier = Modifier.weight(1f), content = collectionContent)
+                VerticalDivider(
+                    modifier = Modifier.fillMaxHeight(),
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                )
+                GenericDesktopCollectionOverview(
+                    resource = resource,
+                    records = records,
+                    insights = insights,
+                    canOpenItems = onSelectRecord != null,
+                    modifier = Modifier.width(304.dp).fillMaxHeight(),
+                )
+            }
+        } else {
+            Column(modifier = Modifier.fillMaxSize(), content = collectionContent)
+        }
+    }
+}
+
+@Composable
+private fun GenericDesktopCollectionOverview(
+    resource: ResourceSpec,
+    records: List<NativeRecord>,
+    insights: NativeDatasetInsights?,
+    canOpenItems: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val facets = remember(resource, records) { inferNativeDatasetFacets(resource, records) }
+    val visibleFields = remember(resource) {
+        resource.fields.filterNot { field -> field.id.equals("id", ignoreCase = true) }
+    }
+    Column(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+            .verticalScroll(rememberScrollState())
+            .padding(NextcloudSpacing.Large),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+            Text(
+                "Overview",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "${records.size} ${if (records.size == 1) "item" else "items"} in ${resource.name}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = RoundedCornerShape(NextcloudRadii.Card),
+        ) {
+            Column(
+                modifier = Modifier.padding(NextcloudSpacing.Medium),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            ) {
+                GenericOverviewMetric(
+                    label = "Items",
+                    value = records.size.toString(),
+                )
+                insights?.let { summary ->
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    GenericOverviewMetric(
+                        label = summary.measure.label,
+                        value = formatNativeMetric(summary.measure, summary.total),
+                    )
+                }
+                visibleFields.count(FieldSpec::required).takeIf { it > 0 }?.let { requiredCount ->
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    GenericOverviewMetric(
+                        label = "Required details",
+                        value = requiredCount.toString(),
+                    )
+                }
+            }
+        }
+
+        facets.take(2).forEach { facet ->
+            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                Text(
+                    facet.field.label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                facet.options.take(5).forEach { option ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            option.label,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = MaterialTheme.shapes.extraLarge,
+                        ) {
+                            Text(
+                                option.count.toString(),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (facets.isEmpty() && visibleFields.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                Text(
+                    "Available details",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                visibleFields.take(5).forEach { field ->
+                    Text(
+                        field.label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+
+        if (canOpenItems) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(NextcloudRadii.Card),
+            ) {
+                Text(
+                    "Select an item to open its full workspace and available actions.",
+                    modifier = Modifier.padding(NextcloudSpacing.Medium),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GenericOverviewMetric(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 

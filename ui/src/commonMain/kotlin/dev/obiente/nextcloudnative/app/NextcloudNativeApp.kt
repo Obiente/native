@@ -1857,7 +1857,7 @@ private fun AppUpdateAvailableBanner(
 private fun RootShell(
     presentation: NextcloudPresentation,
     selected: NextcloudDestination,
-    desktopWorkspaceKind: NextcloudDesktopWorkspaceKind,
+    desktopWorkspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
     onSelected: (NextcloudDestination) -> Unit,
     identity: NextcloudDesktopIdentity?,
     content: @Composable () -> Unit,

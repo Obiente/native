@@ -1109,17 +1109,23 @@ internal fun MarketingFileSyncRulesScenario() {
 
 @Composable
 internal fun MarketingFileSyncStatusDesktopScenario() {
-    Column(modifier = Modifier.fillMaxSize()) {
-        ScreenHeader(
-            title = "Folder sync",
-            subtitle = "Linux workstation",
-            onBack = {},
+    Row(modifier = Modifier.fillMaxSize()) {
+        FileOfflineWorkspaceNavigation(
+            selected = FileOfflineWorkspaceSection.FolderSync,
+            onSelected = {},
+            modifier = Modifier.widthIn(min = 220.dp, max = 220.dp).fillMaxSize(),
         )
-        Column(
-            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-        ) {
-            FileSyncWorkspace(
+        Column(modifier = Modifier.weight(1f).fillMaxSize()) {
+            ScreenHeader(
+                title = "Folder sync",
+                subtitle = "Mappings, queue health, conflicts, and sync rules",
+                onBack = {},
+            )
+            Column(
+                modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Large),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+            ) {
+                FileSyncWorkspace(
                 snapshot = FileSyncCenterSnapshot(
                     support = FileSyncCenterSupport.Available,
                     limitation = "Automatic background desktop scheduling is not enabled yet. Use Sync now.",
@@ -1225,7 +1231,8 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                 onRemove = {},
                 onResolve = { _, _, _ -> },
                 initialSelectedPairId = "fixture-client",
-            )
+                )
+            }
         }
     }
 }
