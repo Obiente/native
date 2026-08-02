@@ -512,7 +512,12 @@ class LinuxVirtualFileSystemTest {
         try {
             assertEquals(listOf("cached.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
             assertTrue(persistenceStarted.await(2L, TimeUnit.SECONDS))
-            assertNotNull(reader.submit { cached.resolve("Photos/cached.dat") }.get(1L, TimeUnit.SECONDS))
+            assertEquals(
+                listOf("cached.dat"),
+                reader.submit<List<String>> {
+                    cached.list("Photos").map(LinuxVirtualFileNode::name)
+                }.get(1L, TimeUnit.SECONDS),
+            )
         } finally {
             releasePersistence.countDown()
             reader.shutdownNow()
