@@ -8,6 +8,7 @@ import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -63,7 +64,10 @@ class WindowsCloudShellRegistrarTest {
         }
 
         assertFalse(registrar.available)
-        assertFalse(registrar.unregister(installation.toPath(), "a5".repeat(32)))
+        assertEquals(
+            WindowsShellUnregistrationResult.NotFound,
+            registrar.unregister(installation.toPath(), "a5".repeat(32)),
+        )
         assertFalse(invoked)
     }
 
@@ -85,7 +89,7 @@ class WindowsCloudShellRegistrarTest {
             WindowsShellRegistrationResult.OwnedPathConflict,
             registrar.register(root, accountId, "Nextcloud Native - ada@cloud.example", byteArrayOf(1)),
         )
-        assertTrue(registrar.unregister(root, accountId))
+        assertEquals(WindowsShellUnregistrationResult.Unregistered, registrar.unregister(root, accountId))
         assertEquals(
             listOf(
                 installation.resolve(WINDOWS_SHELL_REGISTRAR_NAME).absolutePath,
@@ -95,6 +99,24 @@ class WindowsCloudShellRegistrarTest {
             ),
             invocations.last(),
         )
+    }
+
+    @Test
+    fun distinguishesMissingRegistrationsFromUnsafeUnregistrationFailures() {
+        val installation = createTempDirectory("nextcloud-shell-unregister-results").toFile()
+        val launcher = installation.resolve("NextcloudNative.exe").apply { writeText("launcher") }
+        installation.resolve(WINDOWS_SHELL_REGISTRAR_NAME).writeText("helper")
+        installation.resolve(WINDOWS_SHELL_ICON_NAME).writeText("icon")
+        val root = installation.resolve("Cloud root").toPath().createDirectories()
+        val accountId = "b7".repeat(32)
+        var exitCode = WINDOWS_SHELL_REGISTRATION_NOT_FOUND_EXIT_CODE
+        val registrar = PackagedWindowsCloudShellRegistrar(launcher.absolutePath) { _, _ -> exitCode }
+
+        assertEquals(WindowsShellUnregistrationResult.NotFound, registrar.unregister(root, accountId))
+        exitCode = WINDOWS_SHELL_UNSAFE_CONFLICT_EXIT_CODE
+        assertEquals(WindowsShellUnregistrationResult.Rejected, registrar.unregister(root, accountId))
+        exitCode = 1
+        assertEquals(WindowsShellUnregistrationResult.Rejected, registrar.unregister(root, accountId))
     }
 
     @Test
@@ -137,6 +159,46 @@ class WindowsCloudShellRegistrarTest {
     }
 
     @Test
+    fun unsafeConflictDuringOwnedPathRetryDoesNotFallBack() {
+        var attempts = 0
+        var fallbackAttempted = false
+
+        assertFailsWith<IllegalStateException> {
+            migrateWindowsSyncRootRegistration(
+                shellAvailable = true,
+                unregisterCloudFilesRoot = { true },
+                registerBrandedShellRoot = {
+                    if (attempts++ == 0) {
+                        WindowsShellRegistrationResult.OwnedPathConflict
+                    } else {
+                        WindowsShellRegistrationResult.UnsafeConflict
+                    }
+                },
+                registerCloudFilesRoot = { fallbackAttempted = true },
+            )
+        }
+
+        assertEquals(2, attempts)
+        assertFalse(fallbackAttempted)
+    }
+
+    @Test
+    fun repeatedOwnedPathConflictDoesNotFallBack() {
+        var fallbackAttempted = false
+
+        assertFailsWith<IllegalStateException> {
+            migrateWindowsSyncRootRegistration(
+                shellAvailable = true,
+                unregisterCloudFilesRoot = { true },
+                registerBrandedShellRoot = { WindowsShellRegistrationResult.OwnedPathConflict },
+                registerCloudFilesRoot = { fallbackAttempted = true },
+            )
+        }
+
+        assertFalse(fallbackAttempted)
+    }
+
+    @Test
     fun successfulShellRegistrationDoesNotCreateASecondRegistration() {
         val events = mutableListOf<String>()
         val mode = migrateWindowsSyncRootRegistration(
@@ -151,6 +213,22 @@ class WindowsCloudShellRegistrarTest {
 
         assertEquals(WindowsSyncRootRegistrationMode.BrandedShell, mode)
         assertEquals(listOf("shell"), events)
+    }
+
+    @Test
+    fun unsafeRegistrationConflictDoesNotFallBackToPathBasedRegistration() {
+        var fallbackAttempted = false
+
+        assertFailsWith<IllegalStateException> {
+            migrateWindowsSyncRootRegistration(
+                shellAvailable = true,
+                unregisterCloudFilesRoot = { true },
+                registerBrandedShellRoot = { WindowsShellRegistrationResult.UnsafeConflict },
+                registerCloudFilesRoot = { fallbackAttempted = true },
+            )
+        }
+
+        assertFalse(fallbackAttempted)
     }
 
     @Test

@@ -9,6 +9,19 @@ const MAX_SYNC_ROOT_IDENTITY_BYTES: usize = 4_096;
 #[cfg(any(windows, test))]
 const MAX_DISPLAY_NAME_CHARACTERS: usize = 128;
 
+#[cfg(any(windows, test))]
+fn is_windows_absence_hresult(value: i32) -> bool {
+    matches!(value as u32, 0x8007_0002 | 0x8007_0003 | 0x8007_0490)
+}
+
+#[cfg(any(windows, test))]
+fn paths_refer_to_same_existing_entry(
+    first: &std::path::Path,
+    second: &std::path::Path,
+) -> std::io::Result<bool> {
+    Ok(first.canonicalize()? == second.canonicalize()?)
+}
+
 #[cfg(windows)]
 #[derive(Debug)]
 struct OwnedPathConflict;
@@ -22,6 +35,34 @@ impl std::fmt::Display for OwnedPathConflict {
 
 #[cfg(windows)]
 impl std::error::Error for OwnedPathConflict {}
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct RegistrationNotFound;
+
+#[cfg(windows)]
+impl std::fmt::Display for RegistrationNotFound {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the Cloud Files registration was not found")
+    }
+}
+
+#[cfg(windows)]
+impl std::error::Error for RegistrationNotFound {}
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct UnsafeRegistrationConflict;
+
+#[cfg(windows)]
+impl std::fmt::Display for UnsafeRegistrationConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the Cloud Files registration cannot be changed safely")
+    }
+}
+
+#[cfg(windows)]
+impl std::error::Error for UnsafeRegistrationConflict {}
 
 #[cfg(any(windows, test))]
 fn valid_account_id(value: &str) -> bool {
@@ -100,8 +141,9 @@ fn sid_string(bytes: &[u8]) -> Option<String> {
 #[cfg(windows)]
 mod platform {
     use super::{
-        OwnedPathConflict, PROVIDER_ID, decode_identity_hex, sid_string, valid_account_id,
-        valid_display_name,
+        OwnedPathConflict, PROVIDER_ID, RegistrationNotFound, UnsafeRegistrationConflict,
+        decode_identity_hex, is_windows_absence_hresult, paths_refer_to_same_existing_entry,
+        sid_string, valid_account_id, valid_display_name,
     };
     use std::ffi::{OsStr, OsString};
     use std::mem::size_of;
@@ -122,6 +164,26 @@ mod platform {
     use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize};
     use windows::core::{Error as WindowsError, GUID, HSTRING, Result as WindowsResult};
 
+    fn registered_path_is_missing(path: &HSTRING) -> Result<bool, std::io::Error> {
+        PathBuf::from(path.to_os_string())
+            .try_exists()
+            .map(|exists| !exists)
+    }
+
+    fn registered_path_matches(path: &HSTRING, requested: &Path) -> Result<bool, std::io::Error> {
+        if path == &HSTRING::from(requested) {
+            return Ok(true);
+        }
+        paths_refer_to_same_existing_entry(&PathBuf::from(path.to_os_string()), requested)
+    }
+
+    fn unregister_owned_registration(id: &HSTRING) -> windows::core::Result<()> {
+        match StorageProviderSyncRootManager::Unregister(id) {
+            Ok(()) => Ok(()),
+            Err(failure) if is_windows_absence_hresult(failure.code().0) => Ok(()),
+            Err(failure) => Err(failure),
+        }
+    }
     const PROVIDER_GUID: GUID = GUID::from_u128(0x6d456713_7d9a_4a39_90ce_127998de42d7);
 
     struct OwnedHandle(HANDLE);
@@ -241,24 +303,41 @@ mod platform {
         let context = CryptographicBuffer::CreateFromByteArray(&identity)?;
 
         let id = sync_root_id(&account_id)?;
-        if let Ok(existing) = StorageProviderSyncRootManager::GetSyncRootInformationForId(&id) {
-            if existing.Path()?.Path()? != root_path {
-                return Err("the account is registered at a different sync root path".into());
+        match StorageProviderSyncRootManager::GetSyncRootInformationForId(&id) {
+            Ok(existing) => {
+                if existing.ProviderId()? != PROVIDER_GUID {
+                    return Err(Box::new(UnsafeRegistrationConflict));
+                }
+                match existing.Path().and_then(|folder| folder.Path()) {
+                    Ok(existing_path) if registered_path_is_missing(&existing_path)? => {}
+                    Ok(existing_path) if registered_path_matches(&existing_path, &root)? => {
+                        if existing.DisplayNameResource()? == display_name
+                            && existing.IconResource()? == icon_resource
+                            && CryptographicBuffer::Compare(&existing.Context()?, &context)?
+                        {
+                            return Ok(());
+                        }
+                    }
+                    Ok(_) => return Err(Box::new(UnsafeRegistrationConflict)),
+                    Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
+                    Err(failure) => return Err(failure.into()),
+                }
+                unregister_owned_registration(&id)?;
             }
-            if existing.DisplayNameResource()? == display_name
-                && existing.IconResource()? == icon_resource
-                && CryptographicBuffer::Compare(&existing.Context()?, &context)?
-            {
-                return Ok(());
-            }
-            StorageProviderSyncRootManager::Unregister(&id)?;
+            Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
+            Err(failure) => return Err(failure.into()),
         }
         for existing in StorageProviderSyncRootManager::GetCurrentSyncRoots()? {
-            if existing.Id()? != id
-                && existing.ProviderId()? == PROVIDER_GUID
-                && existing.Path()?.Path()? == root_path
-            {
-                return Err(Box::new(OwnedPathConflict));
+            if existing.Id()? != id && existing.ProviderId()? == PROVIDER_GUID {
+                match existing.Path().and_then(|folder| folder.Path()) {
+                    Ok(existing_path) if registered_path_is_missing(&existing_path)? => {}
+                    Ok(existing_path) if registered_path_matches(&existing_path, &root)? => {
+                        return Err(Box::new(OwnedPathConflict));
+                    }
+                    Ok(_) => {}
+                    Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
+                    Err(failure) => return Err(failure.into()),
+                }
             }
         }
 
@@ -296,12 +375,24 @@ mod platform {
             return Err("invalid account identity".into());
         }
         let id = sync_root_id(&account_id)?;
-        let existing = StorageProviderSyncRootManager::GetSyncRootInformationForId(&id)?;
-        if existing.Path()?.Path()? != HSTRING::from(root.as_path()) {
-            return Err("the registered sync root path does not match".into());
+        let existing = match StorageProviderSyncRootManager::GetSyncRootInformationForId(&id) {
+            Ok(existing) => existing,
+            Err(failure) if is_windows_absence_hresult(failure.code().0) => {
+                return Err(Box::new(RegistrationNotFound));
+            }
+            Err(failure) => return Err(failure.into()),
+        };
+        if existing.ProviderId()? != PROVIDER_GUID {
+            return Err(Box::new(UnsafeRegistrationConflict));
         }
-        StorageProviderSyncRootManager::Unregister(&id)?;
-        Ok(())
+        match existing.Path().and_then(|folder| folder.Path()) {
+            Ok(registered_path) if registered_path_is_missing(&registered_path)? => {}
+            Ok(registered_path) if registered_path_matches(&registered_path, &root)? => {}
+            Ok(_) => return Err(Box::new(UnsafeRegistrationConflict)),
+            Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
+            Err(failure) => return Err(failure.into()),
+        }
+        unregister_owned_registration(&id).map_err(Into::into)
     }
 
     pub fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn std::error::Error>> {
@@ -368,6 +459,10 @@ fn main() {
         eprintln!("Windows shell registration failed.");
         std::process::exit(if failure.is::<OwnedPathConflict>() {
             3
+        } else if failure.is::<RegistrationNotFound>() {
+            4
+        } else if failure.is::<UnsafeRegistrationConflict>() {
+            5
         } else {
             1
         });
@@ -427,5 +522,35 @@ mod tests {
             Some("S-1-5-32-544")
         );
         assert_eq!(sid_string(&administrators_sid[..15]), None);
+    }
+
+    #[test]
+    fn classifies_only_missing_windows_objects_as_absent() {
+        assert!(is_windows_absence_hresult(0x8007_0002u32 as i32));
+        assert!(is_windows_absence_hresult(0x8007_0003u32 as i32));
+        assert!(is_windows_absence_hresult(0x8007_0490u32 as i32));
+        assert!(!is_windows_absence_hresult(0x8007_0005u32 as i32));
+        assert!(!is_windows_absence_hresult(0x8007_0057u32 as i32));
+    }
+
+    #[test]
+    fn canonical_paths_identify_the_same_existing_directory() {
+        let base = std::env::temp_dir().join(format!(
+            "nextcloud-native-path-equivalence-{}",
+            std::process::id()
+        ));
+        let child = base.join("child");
+        std::fs::create_dir_all(&child).expect("create path-equivalence fixture");
+
+        let equivalent = child.join(".");
+        assert!(
+            paths_refer_to_same_existing_entry(&child, &equivalent)
+                .expect("compare equivalent paths")
+        );
+        assert!(
+            !paths_refer_to_same_existing_entry(&base, &child).expect("compare distinct paths")
+        );
+
+        std::fs::remove_dir_all(&base).expect("remove path-equivalence fixture");
     }
 }

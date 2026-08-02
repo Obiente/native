@@ -92,15 +92,23 @@ internal class JnaWindowsCloudFilesApi(
 
     override fun unregisterSyncRoot(root: Path) {
         val accountId = windowsCloudShellAccountId(root)
-        if (accountId != null && shellRegistrar.available && shellRegistrar.unregister(root, accountId)) return
+        if (accountId != null && shellRegistrar.available) {
+            when (shellRegistrar.unregister(root, accountId)) {
+                WindowsShellUnregistrationResult.Unregistered -> return
+                WindowsShellUnregistrationResult.NotFound -> Unit
+                WindowsShellUnregistrationResult.Rejected -> {
+                    error("Windows refused to safely unregister the branded Cloud Files root.")
+                }
+            }
+        }
         val result = cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString()))
-        if (result in SYNC_ROOT_ALREADY_UNREGISTERED_RESULTS) return
+        if (isWindowsCloudFilesRootAbsentResult(result, rootMissing = Files.notExists(root))) return
         checkHResult(result, "unregister the Windows Cloud Files root")
     }
 
     private fun unregisterCloudFilesRoot(root: Path): Boolean {
         val result = cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString()))
-        return result >= 0 || result in SYNC_ROOT_ALREADY_UNREGISTERED_RESULTS
+        return result >= 0 || isWindowsCloudFilesRootAbsentResult(result, rootMissing = Files.notExists(root))
     }
 
     override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long {
@@ -150,7 +158,10 @@ internal class JnaWindowsCloudFilesApi(
     }
 
     override fun disconnect(connectionKey: Long) {
-        checkHResult(cldApi.CfDisconnectSyncRoot(connectionKey), "disconnect the Windows Cloud Files provider")
+        val result = cldApi.CfDisconnectSyncRoot(connectionKey)
+        if (result < 0 && !isWindowsCloudFilesConnectionAbsentResult(result)) {
+            throw WindowsCloudFilesOperationException("disconnect the Windows Cloud Files provider", result)
+        }
         callbacksByConnection.remove(connectionKey)
     }
 
@@ -502,7 +513,7 @@ internal class JnaWindowsCloudFilesApi(
     }
 
     private fun checkHResult(result: Int, operation: String) {
-        check(result >= 0) { "Could not $operation (HRESULT 0x${result.toUInt().toString(16)})." }
+        if (result < 0) throw WindowsCloudFilesOperationException(operation, result)
     }
 
     private data class CallbackLifetime(
@@ -567,11 +578,6 @@ internal class JnaWindowsCloudFilesApi(
 
         const val CF_OPERATION_TYPE_TRANSFER_DATA = 0
         const val CF_OPERATION_TYPE_TRANSFER_PLACEHOLDERS = 4
-        val SYNC_ROOT_ALREADY_UNREGISTERED_RESULTS = setOf(
-            0xC000CF13.toInt(), // STATUS_CLOUD_FILE_NOT_UNDER_SYNC_ROOT
-            0xD000CF13.toInt(), // HRESULT_FROM_NT(STATUS_CLOUD_FILE_NOT_UNDER_SYNC_ROOT)
-            0x80070186.toInt(), // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_NOT_UNDER_SYNC_ROOT)
-        )
         const val CF_OPERATION_TYPE_ACK_RENAME = 6
         const val CF_OPERATION_TYPE_ACK_DELETE = 7
         const val STATUS_SUCCESS = 0
@@ -618,6 +624,33 @@ internal class JnaWindowsCloudFilesApi(
         const val ACK_STATUS_OFFSET = PARAMETERS_UNION_OFFSET + 4L
     }
 }
+
+internal fun isWindowsCloudFilesRootAbsentResult(result: Int, rootMissing: Boolean): Boolean =
+    when (result) {
+        0xC000CF13.toInt(), // STATUS_CLOUD_FILE_NOT_UNDER_SYNC_ROOT
+        0xD000CF13.toInt(), // HRESULT_FROM_NT(STATUS_CLOUD_FILE_NOT_UNDER_SYNC_ROOT)
+        0x80070186.toInt(), // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_NOT_UNDER_SYNC_ROOT)
+        -> true
+        0x80070002.toInt(), // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+        0x80070003.toInt(), // HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND)
+        -> rootMissing
+        else -> false
+    }
+
+internal fun isWindowsCloudFilesRegistrationMissingResult(result: Int): Boolean =
+    result == 0xC000CF13.toInt() ||
+        result == 0xD000CF13.toInt() ||
+        result == 0x80070186.toInt() ||
+        result == 0x80070002.toInt() ||
+        result == 0x80070003.toInt()
+
+internal fun isWindowsCloudFilesConnectionAbsentResult(result: Int): Boolean =
+    result == 0x80070057.toInt() // HRESULT_FROM_WIN32(ERROR_INVALID_PARAMETER)
+
+internal class WindowsCloudFilesOperationException(
+    operation: String,
+    val hResult: Int,
+) : IllegalStateException("Could not $operation (HRESULT 0x${hResult.toUInt().toString(16)}).")
 
 internal interface CldApi : StdCallLibrary {
     fun CfRegisterSyncRoot(path: WString, registration: CfSyncRegistration, policies: CfSyncPolicies, flags: Int): Int

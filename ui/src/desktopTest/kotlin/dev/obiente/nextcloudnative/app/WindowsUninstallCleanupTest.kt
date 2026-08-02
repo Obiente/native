@@ -11,6 +11,25 @@ import kotlin.test.assertTrue
 
 class WindowsUninstallCleanupTest {
     @Test
+    fun cloudFilesCleanupTreatsOnlyMissingRootsAsAlreadyAbsent() {
+        assertTrue(isWindowsCloudFilesRootAbsentResult(0xC000CF13.toInt(), rootMissing = false))
+        assertTrue(isWindowsCloudFilesRootAbsentResult(0xD000CF13.toInt(), rootMissing = false))
+        assertTrue(isWindowsCloudFilesRootAbsentResult(0x80070186.toInt(), rootMissing = false))
+        assertTrue(isWindowsCloudFilesRootAbsentResult(0x80070002.toInt(), rootMissing = true))
+        assertTrue(isWindowsCloudFilesRootAbsentResult(0x80070003.toInt(), rootMissing = true))
+        assertFalse(isWindowsCloudFilesRootAbsentResult(0x80070003.toInt(), rootMissing = false))
+        assertFalse(isWindowsCloudFilesRootAbsentResult(0x80070005.toInt(), rootMissing = true))
+        assertFalse(isWindowsCloudFilesRootAbsentResult(0x8007017C.toInt(), rootMissing = true))
+    }
+
+    @Test
+    fun cloudFilesDisconnectTreatsOnlyAnAlreadyMissingConnectionAsAbsent() {
+        assertTrue(isWindowsCloudFilesConnectionAbsentResult(0x80070057.toInt()))
+        assertFalse(isWindowsCloudFilesConnectionAbsentResult(0x80070005.toInt()))
+        assertFalse(isWindowsCloudFilesConnectionAbsentResult(0x8007017C.toInt()))
+    }
+
+    @Test
     fun cloudFilesRootUsesTheCurrentProviderMetadataGeneration() {
         val home = Files.createTempDirectory("windows-root-generation-home").toFile()
         try {
@@ -208,12 +227,45 @@ class WindowsUninstallCleanupTest {
         }
     }
 
+    @Test
+    fun uninstallCleansTheCurrentRegistrationBeforeAStaleLegacyPreference() {
+        val preferences = Preferences.userRoot().node("windows-stale-legacy-pointer-test-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-stale-legacy-pointer-home").toFile()
+        val session = NextcloudSession("https://cloud.invalid", "alice", "unused")
+        val accountId = desktopFileCacheAccountId(session)
+        val currentRoot = desktopWindowsCloudFilesRoot(accountId, home).toPath()
+        val legacyRoot = home.resolve("Nextcloud Native").resolve(accountId).toPath()
+        val api = RecordingWindowsCloudFilesApi().apply {
+            prerequisiteRoot = currentRoot
+            dependentRoot = legacyRoot
+        }
+        try {
+            preferences.put("server", session.serverUrl)
+            preferences.put("login", session.loginName)
+            preferences.put("windows-cloud-files-root", legacyRoot.toString())
+
+            unregisterWindowsCloudFilesRootForUninstall(preferences, home) { api }
+
+            assertEquals(listOf(currentRoot, legacyRoot), api.unregisteredRoots)
+            assertEquals(null, preferences.get("windows-cloud-files-root", null))
+            assertTrue(api.closed)
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
     private class RecordingWindowsCloudFilesApi : WindowsCloudFilesApi {
         val unregisteredRoots = mutableListOf<Path>()
         val unregisteredRoot: Path? get() = unregisteredRoots.lastOrNull()
+        var prerequisiteRoot: Path? = null
+        var dependentRoot: Path? = null
         var closed = false
 
         override fun unregisterSyncRoot(root: Path) {
+            if (root == dependentRoot && prerequisiteRoot !in unregisteredRoots) {
+                error("The stable registration still points at another candidate root.")
+            }
             unregisteredRoots.add(root)
         }
 
