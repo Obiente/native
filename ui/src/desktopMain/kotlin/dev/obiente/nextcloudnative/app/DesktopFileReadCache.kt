@@ -97,6 +97,21 @@ internal class DesktopFileReadCache(
     }
 
     @Synchronized
+    fun storeListingUnlessNewer(
+        accountId: String,
+        path: String,
+        files: List<NextcloudFile>,
+        fetchedAtEpochMillis: Long,
+    ): Boolean {
+        require(fetchedAtEpochMillis >= 0L)
+        val normalized = path.cachePath()
+        val current = load(accountId).listings.firstOrNull { listing -> listing.path == normalized }
+        if (current != null && current.fetchedAtEpochMillis >= fetchedAtEpochMillis) return false
+        storeListing(accountId, normalized, files, fetchedAtEpochMillis)
+        return true
+    }
+
+    @Synchronized
     fun cachedContent(
         accountId: String,
         path: String,

@@ -308,6 +308,7 @@ internal class DesktopFileSyncRemoteTree(
                 input = response.body.byteStream(),
                 userId = userId,
                 maximumBytes = MAX_DIRECTORY_RESPONSE_BYTES,
+                maximumDocuments = MAX_CHILDREN + MAX_RECOVERY_ITEMS,
             )
         }
 
@@ -502,16 +503,21 @@ internal fun shouldSuppressDesktopOwnedBackup(
     return destination !in listedPaths
 }
 
-internal fun parseDesktopSyncDav(bytes: ByteArray, userId: String): List<DesktopRemoteSyncDocument> {
-    return parseDesktopSyncDav(ByteArrayInputStream(bytes), userId, bytes.size.toLong())
+internal fun parseDesktopSyncDav(
+    bytes: ByteArray,
+    userId: String,
+    maximumDocuments: Int = MAX_PARSED_DAV_DOCUMENTS,
+): List<DesktopRemoteSyncDocument> {
+    return parseDesktopSyncDav(ByteArrayInputStream(bytes), userId, bytes.size.toLong(), maximumDocuments)
 }
 
 private fun parseDesktopSyncDav(
     input: InputStream,
     userId: String,
     maximumBytes: Long,
+    maximumDocuments: Int,
 ): List<DesktopRemoteSyncDocument> {
-    require(maximumBytes > 0L)
+    require(maximumBytes > 0L && maximumDocuments > 0)
     val factory = XMLInputFactory.newFactory().apply {
         setProperty(XMLInputFactory.SUPPORT_DTD, false)
         setProperty("javax.xml.stream.isSupportingExternalEntities", false)
@@ -551,7 +557,12 @@ private fun parseDesktopSyncDav(
                         text.clear()
                     }
                     if (reader.namespaceURI == DAV_NAMESPACE && reader.localName == "response") {
-                        response?.toDocument(userId)?.let(documents::add)
+                        response?.toDocument(userId)?.let { document ->
+                            require(documents.size < maximumDocuments) {
+                                "A Nextcloud folder contains too many entries."
+                            }
+                            documents.add(document)
+                        }
                         response = null
                     }
                 }
@@ -663,4 +674,5 @@ private fun desktopFileSyncHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .build()
 
 private const val MAX_DAV_PROPERTY_CHARS = 16_384
+private const val MAX_PARSED_DAV_DOCUMENTS = 50_032
 private const val DAV_NAMESPACE = "DAV:"
