@@ -277,9 +277,11 @@ internal class DesktopFileReadCache(
             index.copy(
                 listings = index.listings.filterNot { listing ->
                     normalized.isEmpty() ||
+                        listing.path.isEmpty() ||
                         listing.path == normalized ||
                         listing.path.startsWith("$normalized/") ||
-                        listing.path == parent
+                        listing.path == parent ||
+                        normalized.startsWith("${listing.path}/")
                 },
                 content = index.content.filterNot { it in removed },
             ),

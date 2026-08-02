@@ -108,6 +108,17 @@ class DesktopFileSyncRemoteTreeTest {
     }
 
     @Test
+    fun `dav parser rejects non utf8 xml before decoded events`() {
+        val utf16 = (
+            "<?xml version=\"1.0\" encoding=\"UTF-16\"?>" +
+                "<d:multistatus xmlns:d=\"DAV:\"><d:response><d:href>Photos/a.jpg</d:href>" +
+                "</d:response></d:multistatus>"
+            ).toByteArray(Charsets.UTF_16)
+
+        assertFails { parseDesktopSyncDav(utf16, userId = "alice") }
+    }
+
+    @Test
     fun `only exact provider owned upload stages are suppressed`() {
         assertEquals(
             true,

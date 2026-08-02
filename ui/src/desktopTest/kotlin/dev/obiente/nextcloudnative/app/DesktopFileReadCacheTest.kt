@@ -125,6 +125,24 @@ class DesktopFileReadCacheTest {
     }
 
     @Test
+    fun `nested invalidation removes every persisted ancestor listing`() = withCache { _, cache ->
+        val accountId = desktopFileCacheAccountId(session())
+        cache.storeListing(accountId, "", listOf(directory("Photos"), directory("Archive")), 10)
+        cache.storeListing(accountId, "Photos", listOf(directory("Photos/Album")), 20)
+        cache.storeListing(accountId, "Photos/Album", listOf(directory("Photos/Album/Day")), 30)
+        cache.storeListing(accountId, "Photos/Album/Day", listOf(file("Photos/Album/Day/photo.raf", "e1")), 40)
+        cache.storeListing(accountId, "Archive", emptyList(), 50)
+
+        cache.invalidate(accountId, "Photos/Album/Day/photo.raf")
+
+        assertNull(cache.cachedListing(accountId, ""))
+        assertNull(cache.cachedListing(accountId, "Photos"))
+        assertNull(cache.cachedListing(accountId, "Photos/Album"))
+        assertNull(cache.cachedListing(accountId, "Photos/Album/Day"))
+        assertEquals(emptyList(), cache.cachedListing(accountId, "Archive"))
+    }
+
+    @Test
     fun `corrupt disposable index never exposes orphaned content`() = withCache { root, cache ->
         val accountId = desktopFileCacheAccountId(session())
         cache.storeContent(
