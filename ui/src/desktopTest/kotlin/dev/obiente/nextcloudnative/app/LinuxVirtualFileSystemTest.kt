@@ -9,6 +9,8 @@ import java.nio.file.Files
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -678,6 +680,67 @@ class LinuxVirtualFileSystemTest {
 
         assertEquals(1, invalidations.get())
         cached.close()
+    }
+
+    @Test
+    fun `same size truncate still invalidates the committed remote revision`() {
+        val delegate = MutableFixtureBackend().apply { addFile("Photos/draft.txt", "old".encodeToByteArray()) }
+        val invalidations = AtomicInteger(0)
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = Unit
+            override fun invalidate(path: String) {
+                invalidations.incrementAndGet()
+            }
+        }
+        val cached = CachingLinuxVirtualFileBackend(delegate, store)
+        val existing = requireNotNull(delegate.resolve("Photos/draft.txt"))
+        val handle = cached.openWrite(existing.path, existing, truncate = false)
+
+        handle.truncate(existing.size)
+        handle.flush()
+        handle.close()
+
+        assertEquals(1, invalidations.get())
+        cached.close()
+    }
+
+    @Test
+    fun `queued persistence snapshots remain within the metadata entry budget`() {
+        val delegate = MutableFixtureBackend().apply {
+            addFile("Photos/one.dat", byteArrayOf(1))
+            addFile("Archive/two.dat", byteArrayOf(2))
+        }
+        val executorStarted = CountDownLatch(1)
+        val releaseExecutor = CountDownLatch(1)
+        val executor = ThreadPoolExecutor(
+            1,
+            1,
+            0L,
+            TimeUnit.MILLISECONDS,
+            LinkedBlockingQueue(),
+        ).apply {
+            execute {
+                executorStarted.countDown()
+                releaseExecutor.await()
+            }
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = MemoryLinuxVirtualMetadataStore(),
+            freshForMillis = Long.MAX_VALUE,
+            maximumRetainedMetadataEntries = 1,
+            refreshExecutor = executor,
+        )
+        try {
+            assertTrue(executorStarted.await(2L, TimeUnit.SECONDS))
+            assertEquals(listOf("one.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
+            assertEquals(listOf("two.dat"), cached.list("Archive").map(LinuxVirtualFileNode::name))
+            assertEquals(1, executor.queue.size)
+        } finally {
+            releaseExecutor.countDown()
+            cached.close()
+        }
     }
 
     @Test

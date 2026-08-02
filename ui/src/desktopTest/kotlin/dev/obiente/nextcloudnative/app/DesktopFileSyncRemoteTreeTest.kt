@@ -78,6 +78,22 @@ class DesktopFileSyncRemoteTreeTest {
     }
 
     @Test
+    fun `dav parser rejects an oversized property without coalescing text`() {
+        val oversizedHref = "a".repeat(20_000)
+        val response = (
+            "<d:multistatus xmlns:d=\"DAV:\"><d:response><d:href>$oversizedHref</d:href>" +
+                "</d:response></d:multistatus>"
+            ).encodeToByteArray()
+
+        assertFails {
+            parseDesktopSyncDav(
+                response,
+                userId = "alice",
+            )
+        }
+    }
+
+    @Test
     fun `only exact provider owned upload stages are suppressed`() {
         assertEquals(
             true,

@@ -146,6 +146,9 @@ internal class CachingLinuxVirtualFileBackend(
     private val failedPersistedInvalidations = mutableSetOf<String>()
     private val revalidatedPersistedListings = linkedSetOf<String>()
     private val activeMetadataOperations = mutableSetOf<LinuxVirtualMetadataOperation>()
+    private val pendingPersistenceLock = Any()
+    private var pendingPersistenceEntries = 0L
+    private var pendingPersistenceDirectories = 0
     private val nextGeneration = AtomicLong(1L)
     @Volatile
     private var closed = false
@@ -230,9 +233,8 @@ internal class CachingLinuxVirtualFileBackend(
 
             @Synchronized
             override fun truncate(size: Long) {
-                val previousSize = handle.size
                 handle.truncate(size)
-                if (size != previousSize) dirty = true
+                dirty = true
             }
 
             @Synchronized
@@ -370,8 +372,9 @@ internal class CachingLinuxVirtualFileBackend(
         snapshot: LinuxVirtualDirectorySnapshot,
         operation: LinuxVirtualMetadataOperation,
     ): Boolean {
-        if (closed) return false
-        return runCatching {
+        val entryWeight = snapshot.nodes.size.coerceAtLeast(1).toLong()
+        if (closed || !reservePendingPersistence(entryWeight)) return false
+        val scheduled = runCatching {
             refreshExecutor.execute {
                 try {
                     val current = synchronized(metadataLock) {
@@ -398,11 +401,30 @@ internal class CachingLinuxVirtualFileBackend(
                         }
                     }
                 } finally {
+                    releasePendingPersistence(entryWeight)
                     endMetadataOperation(operation)
                 }
             }
-            true
-        }.getOrDefault(false)
+        }.isSuccess
+        if (!scheduled) releasePendingPersistence(entryWeight)
+        return scheduled
+    }
+
+    private fun reservePendingPersistence(entryWeight: Long): Boolean = synchronized(pendingPersistenceLock) {
+        if (
+            pendingPersistenceDirectories >= maximumRetainedDirectories ||
+            entryWeight > maximumRetainedMetadataEntries.toLong() - pendingPersistenceEntries
+        ) {
+            return@synchronized false
+        }
+        pendingPersistenceDirectories += 1
+        pendingPersistenceEntries += entryWeight
+        true
+    }
+
+    private fun releasePendingPersistence(entryWeight: Long) = synchronized(pendingPersistenceLock) {
+        pendingPersistenceDirectories = (pendingPersistenceDirectories - 1).coerceAtLeast(0)
+        pendingPersistenceEntries = (pendingPersistenceEntries - entryWeight).coerceAtLeast(0L)
     }
 
     private fun invalidate(path: String) {
