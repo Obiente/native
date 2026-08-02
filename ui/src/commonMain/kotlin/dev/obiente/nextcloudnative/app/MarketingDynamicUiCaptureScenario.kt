@@ -220,6 +220,58 @@ internal val marketingDynamicWorkItemRecords = listOf(
             "rrule" to "FREQ=MONTHLY",
         ),
     ),
+    NativeRecord(
+        id = "work-item-4",
+        values = mapOf(
+            "title" to "Book tool delivery",
+            "description" to "Coordinate the shared trailer and delivery window.",
+            "icon" to "truck",
+            "color" to "2563EB",
+            "status" to "planned",
+            "groupId" to "group-1",
+            "sendReminders" to "true",
+            "rrule" to "",
+        ),
+    ),
+    NativeRecord(
+        id = "work-item-5",
+        values = mapOf(
+            "title" to "Publish volunteer briefing",
+            "description" to "Share arrival details, safety notes, and contacts.",
+            "icon" to "notes",
+            "color" to "7C3AED",
+            "status" to "in-progress",
+            "groupId" to "group-2",
+            "sendReminders" to "false",
+            "rrule" to "",
+        ),
+    ),
+    NativeRecord(
+        id = "work-item-6",
+        values = mapOf(
+            "title" to "Confirm water access",
+            "description" to "Verify the outdoor tap and backup water containers.",
+            "icon" to "water",
+            "color" to "0284C7",
+            "status" to "ready",
+            "groupId" to "group-1",
+            "sendReminders" to "true",
+            "rrule" to "",
+        ),
+    ),
+    NativeRecord(
+        id = "work-item-7",
+        values = mapOf(
+            "title" to "Prepare day-of checklist",
+            "description" to "Collect the final setup and cleanup responsibilities.",
+            "icon" to "checklist",
+            "color" to "059669",
+            "status" to "planned",
+            "groupId" to "group-2",
+            "sendReminders" to "true",
+            "rrule" to "FREQ=WEEKLY",
+        ),
+    ),
 )
 
 internal val marketingDynamicRelatedGroupRecords = List(marketingDynamicUiFixture.relationOptionCount) { index ->
