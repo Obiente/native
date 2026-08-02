@@ -8,6 +8,7 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 import java.util.prefs.Preferences
 import kotlinx.coroutines.CancellationException
@@ -627,7 +628,9 @@ internal fun startWindowsInstallerAfterAppExit(
     packageFile: File,
     parentProcessId: Long = ProcessHandle.current().pid(),
     windowsDirectory: File? = System.getenv("SystemRoot")?.takeIf(String::isNotBlank)?.let(::File),
+    launcherFile: File? = packagedDesktopLauncherPath()?.let(::File),
     processStarter: (List<String>) -> Unit = { command -> ProcessBuilder(command).start() },
+    readinessWaiter: (File, String) -> Boolean = ::waitForWindowsInstallerHandoffReadiness,
 ) {
     check(parentProcessId > 0L) { "The current Windows process could not be identified." }
     check(packageFile.extension.equals("msi", ignoreCase = true)) { "The Windows update package is not an MSI." }
@@ -639,15 +642,34 @@ internal fun startWindowsInstallerAfterAppExit(
     check(Files.isRegularFile(powershell.toPath(), LinkOption.NOFOLLOW_LINKS)) {
         "The trusted Windows PowerShell executable could not be found."
     }
+    val launcher = requireNotNull(launcherFile) { "The installed Nextcloud Native launcher is unavailable." }
+    check(Files.isRegularFile(launcher.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        "The installed Nextcloud Native launcher could not be found."
+    }
     val script = writeWindowsInstallerHandoffScript(requireNotNull(packageFile.parentFile))
-    processStarter(
-        windowsInstallerHandoffCommand(
-            powershell = powershell,
-            script = script,
-            parentProcessId = parentProcessId,
-            packageFile = packageFile,
-        ),
-    )
+    val acknowledgement = Files.createTempFile(packageFile.parentFile.toPath(), "installer-ready-", ".ack").toFile()
+    Files.delete(acknowledgement.toPath())
+    val acknowledgementToken = ByteArray(32).also(SecureRandom()::nextBytes).lowercaseHex()
+    try {
+        processStarter(
+            windowsInstallerHandoffCommand(
+                powershell = powershell,
+                script = script,
+                parentProcessId = parentProcessId,
+                packageFile = packageFile,
+                launcherFile = launcher,
+                acknowledgementFile = acknowledgement,
+                acknowledgementToken = acknowledgementToken,
+            ),
+        )
+        check(readinessWaiter(acknowledgement, acknowledgementToken)) {
+            "The Windows installer handoff did not confirm that it was ready."
+        }
+    } catch (failure: Throwable) {
+        Files.deleteIfExists(acknowledgement.toPath())
+        Files.deleteIfExists(script.toPath())
+        throw failure
+    }
 }
 
 internal fun windowsInstallerHandoffCommand(
@@ -655,6 +677,9 @@ internal fun windowsInstallerHandoffCommand(
     script: File,
     parentProcessId: Long,
     packageFile: File,
+    launcherFile: File,
+    acknowledgementFile: File,
+    acknowledgementToken: String,
 ): List<String> = listOf(
     powershell.absolutePath,
     "-NoLogo",
@@ -670,7 +695,38 @@ internal fun windowsInstallerHandoffCommand(
     parentProcessId.toString(),
     "-InstallerPath",
     packageFile.absolutePath,
+    "-LauncherPath",
+    launcherFile.absolutePath,
+    "-AcknowledgementPath",
+    acknowledgementFile.absolutePath,
+    "-AcknowledgementToken",
+    acknowledgementToken,
 )
+
+private fun waitForWindowsInstallerHandoffReadiness(
+    acknowledgementFile: File,
+    expectedToken: String,
+): Boolean {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WINDOWS_INSTALLER_HANDOFF_READY_TIMEOUT_SECONDS)
+    while (System.nanoTime() < deadline) {
+        val acknowledged = runCatching {
+            Files.isRegularFile(acknowledgementFile.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                acknowledgementFile.length() <= WINDOWS_INSTALLER_ACKNOWLEDGEMENT_MAX_BYTES &&
+                MessageDigest.isEqual(
+                    acknowledgementFile.readBytes(),
+                    expectedToken.encodeToByteArray(),
+                )
+        }.getOrDefault(false)
+        if (acknowledged) return true
+        try {
+            Thread.sleep(WINDOWS_INSTALLER_HANDOFF_READY_POLL_MILLIS)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return false
+        }
+    }
+    return false
+}
 
 private fun writeWindowsInstallerHandoffScript(directory: File): File {
     check(directory.isDirectory) { "The Windows update cache is unavailable." }
@@ -749,20 +805,41 @@ private fun File.sha256(): String {
     }
 }
 
+private fun ByteArray.lowercaseHex(): String = joinToString("") { byte ->
+    (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+}
+
 internal class DesktopUpdateCancelledException : IOException("Update download cancelled.")
 
 private const val WINDOWS_INSTALLER_HANDOFF_SCRIPT_NAME = "install-after-app-exit.ps1"
+private const val WINDOWS_INSTALLER_HANDOFF_READY_TIMEOUT_SECONDS = 5L
+private const val WINDOWS_INSTALLER_HANDOFF_READY_POLL_MILLIS = 25L
+private const val WINDOWS_INSTALLER_ACKNOWLEDGEMENT_MAX_BYTES = 128L
 private val WINDOWS_INSTALLER_HANDOFF_SCRIPT = """
     param(
         [Parameter(Mandatory = ${'$'}true)][long]${'$'}ParentProcessId,
-        [Parameter(Mandatory = ${'$'}true)][string]${'$'}InstallerPath
+        [Parameter(Mandatory = ${'$'}true)][string]${'$'}InstallerPath,
+        [Parameter(Mandatory = ${'$'}true)][string]${'$'}LauncherPath,
+        [Parameter(Mandatory = ${'$'}true)][string]${'$'}AcknowledgementPath,
+        [Parameter(Mandatory = ${'$'}true)][string]${'$'}AcknowledgementToken
     )
 
     ${'$'}ErrorActionPreference = 'Stop'
     try {
+        if (-not (Test-Path -LiteralPath ${'$'}InstallerPath -PathType Leaf) -or
+            -not (Test-Path -LiteralPath ${'$'}LauncherPath -PathType Leaf)) {
+            throw 'The verified installer or application launcher is unavailable.'
+        }
+        Set-Content -LiteralPath ${'$'}AcknowledgementPath -Value ${'$'}AcknowledgementToken -NoNewline -Encoding ascii
         Wait-Process -Id ${'$'}ParentProcessId -ErrorAction SilentlyContinue
         Start-Process -FilePath ${'$'}InstallerPath
+    } catch {
+        if (-not (Get-Process -Id ${'$'}ParentProcessId -ErrorAction SilentlyContinue) -and
+            (Test-Path -LiteralPath ${'$'}LauncherPath -PathType Leaf)) {
+            Start-Process -FilePath ${'$'}LauncherPath -ArgumentList @('--update-handoff-failed') -ErrorAction SilentlyContinue
+        }
     } finally {
+        Remove-Item -LiteralPath ${'$'}AcknowledgementPath -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath ${'$'}PSCommandPath -Force -ErrorAction SilentlyContinue
     }
 """.trimIndent() + "\r\n"

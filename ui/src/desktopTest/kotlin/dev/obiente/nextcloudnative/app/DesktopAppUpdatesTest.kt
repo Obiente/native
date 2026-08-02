@@ -90,23 +90,63 @@ class DesktopAppUpdatesTest {
             parentFile.mkdirs()
             writeText("powershell")
         }
+        val launcher = directory.resolve("NextcloudNative.exe").apply { writeText("launcher") }
         var command = emptyList<String>()
         try {
             startWindowsInstallerAfterAppExit(
                 packageFile = packageFile,
                 parentProcessId = 42L,
                 windowsDirectory = windowsDirectory,
+                launcherFile = launcher,
                 processStarter = { command = it },
+                readinessWaiter = { acknowledgement, token ->
+                    assertEquals(acknowledgement.absolutePath, command[command.indexOf("-AcknowledgementPath") + 1])
+                    assertEquals(token, command[command.indexOf("-AcknowledgementToken") + 1])
+                    true
+                },
             )
 
             assertEquals(powershell.absolutePath, command.first())
             assertEquals("42", command[command.indexOf("-ParentProcessId") + 1])
             assertEquals(packageFile.absolutePath, command[command.indexOf("-InstallerPath") + 1])
+            assertEquals(launcher.absolutePath, command[command.indexOf("-LauncherPath") + 1])
             val script = File(command[command.indexOf("-File") + 1])
             assertTrue(script.isFile)
             assertTrue(script.readText().contains("Wait-Process -Id \$ParentProcessId"))
             assertTrue(script.readText().contains("Start-Process -FilePath \$InstallerPath"))
+            assertTrue(script.readText().contains("Set-Content -LiteralPath \$AcknowledgementPath"))
+            assertTrue(script.readText().contains("--update-handoff-failed"))
             assertFalse(script.readText().contains(packageFile.absolutePath))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun windowsInstallerHandoffKeepsTheAppOpenWithoutReadinessAcknowledgement() {
+        val directory = Files.createTempDirectory("desktop-update-handoff-failure").toFile()
+        val packageFile = directory.resolve("verified.msi").apply { writeText("verified") }
+        val windowsDirectory = directory.resolve("Windows")
+        windowsDirectory.resolve("System32/WindowsPowerShell/v1.0/powershell.exe").apply {
+            parentFile.mkdirs()
+            writeText("powershell")
+        }
+        val launcher = directory.resolve("NextcloudNative.exe").apply { writeText("launcher") }
+        var script: File? = null
+        try {
+            val failure = kotlin.test.assertFailsWith<IllegalStateException> {
+                startWindowsInstallerAfterAppExit(
+                    packageFile = packageFile,
+                    parentProcessId = 42L,
+                    windowsDirectory = windowsDirectory,
+                    launcherFile = launcher,
+                    processStarter = { command -> script = File(command[command.indexOf("-File") + 1]) },
+                    readinessWaiter = { _, _ -> false },
+                )
+            }
+
+            assertTrue(failure.message.orEmpty().contains("did not confirm"))
+            assertFalse(requireNotNull(script).exists())
         } finally {
             directory.deleteRecursively()
         }

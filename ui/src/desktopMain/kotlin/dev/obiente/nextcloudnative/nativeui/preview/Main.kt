@@ -22,6 +22,8 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.DesktopNextcloudServices
+import dev.obiente.nextcloudnative.app.DesktopSingleInstance
+import dev.obiente.nextcloudnative.app.DesktopSingleInstanceStart
 import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayPhase
 import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayPopup
 import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
@@ -42,6 +44,8 @@ import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import javax.imageio.ImageIO
+import javax.swing.JOptionPane
+import javax.swing.SwingUtilities
 import kotlinx.coroutines.launch
 
 fun main(arguments: Array<String>) {
@@ -50,6 +54,21 @@ fun main(arguments: Array<String>) {
         return
     }
     val backgroundLaunch = arguments.contains("--background")
+    val updateHandoffFailed = arguments.contains("--update-handoff-failed")
+    val singleInstance = when (val start = DesktopSingleInstance.acquire()) {
+        is DesktopSingleInstanceStart.Primary -> start.instance
+        DesktopSingleInstanceStart.Forwarded -> return
+        DesktopSingleInstanceStart.Failed -> {
+            JOptionPane.showMessageDialog(
+                null,
+                "Nextcloud Native could not activate its existing desktop process.",
+                "Nextcloud Native",
+                JOptionPane.ERROR_MESSAGE,
+            )
+            return
+        }
+    }
+    singleInstance.use {
     application {
     val themePreference = remember { mutableStateOf(ThemePreference.System) }
     val scope = rememberCoroutineScope()
@@ -73,12 +92,15 @@ fun main(arguments: Array<String>) {
     val traySnapshot = services.fileSyncTraySnapshot.collectAsState().value
     val systemTraySupported = remember { SystemTray.isSupported() }
     val trayAvailable = remember { mutableStateOf(false) }
+    val trayRegistrationResolved = remember { mutableStateOf(!systemTraySupported) }
     val windowVisible = remember { mutableStateOf(!backgroundLaunch || !systemTraySupported) }
     val trayPopupVisible = remember { mutableStateOf(false) }
     val mainWindow = remember { mutableStateOf<java.awt.Window?>(null) }
     val mainWindowState = rememberWindowState(width = 1_280.dp, height = 820.dp)
     val navigationSequence = remember { mutableStateOf(0L) }
     val navigationRequest = remember { mutableStateOf<NextcloudNativeNavigationRequest?>(null) }
+    val externalActivation = singleInstance.activations.collectAsState().value
+    val updateFailureShown = remember { mutableStateOf(false) }
     val appIcon = painterResource("nextcloud-native.png")
     val desktopTrayIcon = remember(systemTraySupported) {
         if (!systemTraySupported) {
@@ -100,8 +122,11 @@ fun main(arguments: Array<String>) {
         runCatching { services.restoreVirtualFileProviderIfEnabled() }
         services.startDesktopSyncLifecycle()
     }
-    LaunchedEffect(backgroundLaunch, systemTraySupported) {
-        if (backgroundLaunch && !systemTraySupported) mainWindowState.isMinimized = true
+    LaunchedEffect(backgroundLaunch, trayRegistrationResolved.value, trayAvailable.value) {
+        if (backgroundLaunch && trayRegistrationResolved.value && !trayAvailable.value) {
+            windowVisible.value = true
+            mainWindowState.isMinimized = true
+        }
     }
     LaunchedEffect(updaterExitRequested.value) {
         if (updaterExitRequested.value) exitApplication()
@@ -111,7 +136,10 @@ fun main(arguments: Array<String>) {
     }
 
     DisposableEffect(desktopTrayIcon) {
-        if (desktopTrayIcon == null) return@DisposableEffect onDispose {}
+        if (desktopTrayIcon == null) {
+            trayRegistrationResolved.value = true
+            return@DisposableEffect onDispose {}
+        }
         val clickListener = object : MouseAdapter() {
             override fun mouseReleased(event: MouseEvent) {
                 if (
@@ -129,6 +157,7 @@ fun main(arguments: Array<String>) {
             true
         }.getOrDefault(false)
         trayAvailable.value = installed
+        trayRegistrationResolved.value = true
         onDispose {
             trayAvailable.value = false
             desktopTrayIcon.removeMouseListener(clickListener)
@@ -147,12 +176,29 @@ fun main(arguments: Array<String>) {
         windowVisible.value = true
     }
 
+    LaunchedEffect(externalActivation.sequence) {
+        if (externalActivation.sequence > 0L) activateMainWindow(NextcloudNativeRoute.Home)
+    }
+
     LaunchedEffect(windowVisible.value, navigationRequest.value?.sequence, mainWindow.value) {
         if (!windowVisible.value) return@LaunchedEffect
         mainWindow.value?.let { window ->
             if (window is Frame) window.extendedState = Frame.NORMAL
             window.toFront()
             window.requestFocus()
+        }
+    }
+    LaunchedEffect(updateHandoffFailed, mainWindow.value) {
+        if (updateHandoffFailed && mainWindow.value != null && !updateFailureShown.value) {
+            updateFailureShown.value = true
+            SwingUtilities.invokeLater {
+                JOptionPane.showMessageDialog(
+                    mainWindow.value,
+                    "The Windows installer could not be opened. Nextcloud Native is still available.",
+                    "Update could not start",
+                    JOptionPane.ERROR_MESSAGE,
+                )
+            }
         }
     }
 
@@ -217,7 +263,7 @@ fun main(arguments: Array<String>) {
             if (trayAvailable.value) {
                 windowVisible.value = false
             } else {
-                mainWindowState.isMinimized = true
+                exitApplication()
             }
         },
         visible = windowVisible.value,
@@ -243,6 +289,7 @@ fun main(arguments: Array<String>) {
                 navigationRequest = navigationRequest.value,
             )
         }
+    }
     }
     }
 }
