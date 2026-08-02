@@ -722,9 +722,11 @@ fun NextcloudNativeApp(
     appUpdateReviewRequest: Long = 0L,
     platformCapabilityRefreshRequest: Long = 0L,
     navigationRequest: NextcloudNativeNavigationRequest? = null,
+    onNavigationRequestHandled: (Long) -> Unit = {},
 ) {
     var themePreference by remember { mutableStateOf(services.loadThemePreference()) }
     var handledAppUpdateReviewRequest by rememberSaveable { mutableStateOf(0L) }
+    var handledNavigationRequestSequence by remember { mutableStateOf(0L) }
     val darkTheme = isNextcloudDarkTheme(themePreference)
     val pendingAppUpdateReviewRequest = unhandledAppUpdateReviewRequest(
         requested = appUpdateReviewRequest,
@@ -781,6 +783,11 @@ fun NextcloudNativeApp(
                     appUpdateReviewRequest = pendingAppUpdateReviewRequest ?: 0L,
                     platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
                     navigationRequest = navigationRequest,
+                    handledNavigationRequestSequence = handledNavigationRequestSequence,
+                    onNavigationRequestHandled = { sequence ->
+                        handledNavigationRequestSequence = maxOf(handledNavigationRequestSequence, sequence)
+                        onNavigationRequestHandled(sequence)
+                    },
                     onAppUpdateReviewHandled = { request ->
                         handledAppUpdateReviewRequest = maxOf(handledAppUpdateReviewRequest, request)
                     },
@@ -1120,6 +1127,8 @@ private fun AuthenticatedApp(
     appUpdateReviewRequest: Long,
     platformCapabilityRefreshRequest: Long,
     navigationRequest: NextcloudNativeNavigationRequest?,
+    handledNavigationRequestSequence: Long,
+    onNavigationRequestHandled: (Long) -> Unit,
     onAppUpdateReviewHandled: (Long) -> Unit,
     themePreference: ThemePreference,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
@@ -1175,9 +1184,6 @@ private fun AuthenticatedApp(
     val appUpdateResult by remember(services) {
         services.observeAppUpdateCheckResult()
     }.collectAsState(null)
-    var handledNavigationRequestSequence by remember(session) {
-        mutableStateOf(0L)
-    }
     var pendingEditorNavigationRequest by remember(session) {
         mutableStateOf<NextcloudNativeNavigationRequest?>(null)
     }
@@ -1198,12 +1204,12 @@ private fun AuthenticatedApp(
                 screen = Screen.OfflineCenter
             }
         }
-        handledNavigationRequestSequence = maxOf(handledNavigationRequestSequence, request.sequence)
+        onNavigationRequestHandled(request.sequence)
         pendingEditorNavigationRequest = null
     }
 
     fun cancelNavigationRequest(request: NextcloudNativeNavigationRequest) {
-        handledNavigationRequestSequence = maxOf(handledNavigationRequestSequence, request.sequence)
+        onNavigationRequestHandled(request.sequence)
         if (pendingEditorNavigationRequest?.sequence == request.sequence) {
             pendingEditorNavigationRequest = null
         }
@@ -1221,7 +1227,11 @@ private fun AuthenticatedApp(
         val request = navigationRequest
             ?.takeIf { it.sequence > handledNavigationRequestSequence }
             ?: return@LaunchedEffect
-        if (screen is Screen.NoteEditor || screen is Screen.TextEditor) {
+        if (
+            screen is Screen.NoteEditor ||
+            screen is Screen.TextEditor ||
+            screen is Screen.MediaViewer
+        ) {
             pendingEditorNavigationRequest = request
         } else {
             applyNavigationRequest(request)
@@ -1725,6 +1735,9 @@ private fun AuthenticatedApp(
                         mediaViewerNavigationRepository.release(current.navigationKey)
                         screen = current.returnTo
                     },
+                    navigationRequest = pendingEditorNavigationRequest,
+                    onNavigationConfirmed = ::applyNavigationRequest,
+                    onNavigationCancelled = ::cancelNavigationRequest,
                     sourceMembers = snapshot.sourceMembers,
                 )
             }

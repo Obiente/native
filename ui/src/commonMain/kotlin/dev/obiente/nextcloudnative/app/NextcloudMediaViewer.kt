@@ -95,6 +95,9 @@ fun NextcloudMediaViewer(
     onSelect: (NextcloudFile) -> Unit,
     onSourceRemoved: (NextcloudFile) -> Unit,
     onClose: () -> Unit,
+    navigationRequest: NextcloudNativeNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudNativeNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudNativeNavigationRequest) -> Unit = {},
     sourceMembers: List<NextcloudFile> = media,
     initialZoom: Float = 1f,
     onStateObserved: (MediaViewerStateObservation) -> Unit = {},
@@ -232,6 +235,10 @@ fun NextcloudMediaViewer(
                 externalError = failure.message ?: "Could not prepare this media file."
             }
         }
+    }
+
+    LaunchedEffect(navigationRequest?.sequence, editing) {
+        navigationRequest?.takeIf { !editing }?.let(onNavigationConfirmed)
     }
 
     fun openInMediaApp() = handoffToExternalApp(ExternalFileHandoffAction.OpenWith)
@@ -559,6 +566,9 @@ fun NextcloudMediaViewer(
                 session = session,
                 userId = userId,
                 onCancel = { editing = false },
+                navigationRequest = navigationRequest,
+                onNavigationConfirmed = onNavigationConfirmed,
+                onNavigationCancelled = onNavigationCancelled,
                 modifier = Modifier.fillMaxSize(),
             )
         } else if (playbackSource != null && nativeVideoFailure == null) {

@@ -199,7 +199,7 @@ fun main(arguments: Array<String>) {
     LaunchedEffect(windowVisible.value, navigationRequest.value?.sequence, mainWindow.value) {
         if (!windowVisible.value) return@LaunchedEffect
         mainWindow.value?.let { window ->
-            if (window is Frame) window.extendedState = Frame.NORMAL
+            if (window is Frame) window.extendedState = restoredDesktopFrameState(window.extendedState)
             window.toFront()
             window.requestFocus()
         }
@@ -306,12 +306,25 @@ fun main(arguments: Array<String>) {
                 services = services,
                 presentation = NextcloudPresentation.Desktop,
                 navigationRequest = navigationRequest.value,
+                onNavigationRequestHandled = { sequence ->
+                    if (shouldClearDesktopNavigationRequest(navigationRequest.value, sequence)) {
+                        navigationRequest.value = null
+                    }
+                },
             )
         }
     }
     }
     }
 }
+
+internal fun restoredDesktopFrameState(currentState: Int): Int =
+    currentState and Frame.ICONIFIED.inv()
+
+internal fun shouldClearDesktopNavigationRequest(
+    currentRequest: NextcloudNativeNavigationRequest?,
+    handledSequence: Long,
+): Boolean = currentRequest?.sequence == handledSequence
 
 private fun FileSyncCenterActionResult.trayMessage(): String = when (this) {
     is FileSyncCenterActionResult.Completed -> message

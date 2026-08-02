@@ -63,6 +63,9 @@ fun NextcloudPhotoEditor(
     session: NextcloudSession,
     userId: String,
     onCancel: () -> Unit,
+    navigationRequest: NextcloudNativeNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudNativeNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudNativeNavigationRequest) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var editHistory by remember(file.path) { mutableStateOf(PhotoEditHistory()) }
@@ -170,6 +173,15 @@ fun NextcloudPhotoEditor(
             confirmDiscard = true
         } else if (!exportState.isSaving) {
             onCancel()
+        }
+    }
+    LaunchedEffect(navigationRequest?.sequence, exportState.isSaving) {
+        navigationRequest?.let { request ->
+            if (hasUnsavedChanges && !exportState.isSaving) {
+                confirmDiscard = true
+            } else if (!exportState.isSaving) {
+                onNavigationConfirmed(request)
+            }
         }
     }
     PlatformBackHandler(enabled = true, onBack = ::requestClose)
@@ -484,17 +496,25 @@ fun NextcloudPhotoEditor(
 
     if (confirmDiscard) {
         AlertDialog(
-            onDismissRequest = { confirmDiscard = false },
+            onDismissRequest = {
+                confirmDiscard = false
+                navigationRequest?.let(onNavigationCancelled)
+            },
             title = { Text("Discard photo edits?") },
             text = { Text("Your unsaved adjustments will be lost. The original photo is unchanged.") },
             dismissButton = {
-                TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") }
+                TextButton(
+                    onClick = {
+                        confirmDiscard = false
+                        navigationRequest?.let(onNavigationCancelled)
+                    },
+                ) { Text("Keep editing") }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         confirmDiscard = false
-                        onCancel()
+                        navigationRequest?.let(onNavigationConfirmed) ?: onCancel()
                     },
                 ) {
                     Text("Discard")
