@@ -25,7 +25,6 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.Base64
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -610,7 +609,8 @@ class DesktopNextcloudServices(
     private val virtualRangeCaches = mutableMapOf<String, DesktopVirtualRangeCache>()
     private val virtualFolderHydrationJobs = mutableMapOf<String, Job>()
     private val virtualFolderHydrationMutex = Mutex()
-    private val activeFileRangeSessions = ConcurrentHashMap.newKeySet<NextcloudFileRangeSession>()
+    private val activeFileRangeSessions = mutableSetOf<NextcloudFileRangeSession>()
+    private val fileRangeSessionLock = Any()
     @Volatile
     private var sessionClearing = false
     private val virtualFileProviderLock = Any()
@@ -656,9 +656,9 @@ class DesktopNextcloudServices(
         if (sessionClearing) return
         val jobKey = "$accountId\u0000$relativePath"
         synchronized(virtualFolderHydrationJobs) {
+            if (sessionClearing) return
             if (virtualFolderHydrationJobs[jobKey]?.isActive == true) return
-            val currentStatus = cache.loadFolderHydrationStatuses(accountId)
-                .firstOrNull { status -> status.relativePath == relativePath }
+            val currentStatus = cache.loadValidatedFolderHydrationStatus(accountId, relativePath)
             val now = System.currentTimeMillis().coerceAtLeast(0L)
             if (!shouldScheduleVirtualFolderHydration(currentStatus, now)) return
             if (currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline) {
@@ -791,6 +791,12 @@ class DesktopNextcloudServices(
                                     size,
                                 )
                                 if (revision == null || revision in completeRevisions) return@forEach
+                                cache.requireRevisionCapacity(
+                                    accountId,
+                                    fullPath,
+                                    size,
+                                    VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES,
+                                )
                                 val reserve = fileReadCache.loadPolicy().minimumFreeSpaceBytes
                                 val required = if (Long.MAX_VALUE - size < reserve) Long.MAX_VALUE else size + reserve
                                 check(cache.summary(accountId).availableFreeBytes >= required) {
@@ -874,28 +880,27 @@ class DesktopNextcloudServices(
                         )
                     }
                 } catch (cancellation: CancellationException) {
-                    if (
-                        cache.loadFolderRetention(accountId).rules.any { rule ->
-                            rule.relativePath == relativePath && rule.retention == VirtualFolderRetention.KeepOnDevice
-                        }
-                    ) {
-                        runCatching {
-                            cache.setFolderHydrationStatus(
-                                accountId,
-                                VirtualFolderHydrationStatus(
-                                    relativePath,
-                                    if (wasAvailableOffline) {
-                                        VirtualFolderHydrationPhase.AvailableOffline
-                                    } else {
-                                        VirtualFolderHydrationPhase.Queued
-                                    },
-                                    verifiedAtEpochMillis = currentStatus?.verifiedAtEpochMillis,
-                                ),
-                            )
-                        }
-                    }
+                    restoreVirtualFolderStatusAfterCancellation(
+                        cache,
+                        accountId,
+                        relativePath,
+                        wasAvailableOffline,
+                        currentStatus,
+                    )
                     throw cancellation
                 } catch (failure: Throwable) {
+                    if (!currentCoroutineContext().isActive) {
+                        restoreVirtualFolderStatusAfterCancellation(
+                            cache,
+                            accountId,
+                            relativePath,
+                            wasAvailableOffline,
+                            currentStatus,
+                        )
+                        throw CancellationException("Virtual folder hydration was canceled.").also { cancellation ->
+                            cancellation.initCause(failure)
+                        }
+                    }
                     val safeFailure = failure.message?.filterNot(Char::isISOControl)?.take(256)
                         ?.takeIf(String::isNotBlank) ?: "Offline download failed and can be retried."
                     val stillAvailableOffline = wasAvailableOffline && runCatching {
@@ -931,6 +936,34 @@ class DesktopNextcloudServices(
         }
     }
 
+    private fun restoreVirtualFolderStatusAfterCancellation(
+        cache: DesktopVirtualRangeCache,
+        accountId: String,
+        relativePath: String,
+        wasAvailableOffline: Boolean,
+        previousStatus: VirtualFolderHydrationStatus?,
+    ) {
+        runCatching {
+            if (
+                cache.loadFolderRetention(accountId).rules.none { rule ->
+                    rule.relativePath == relativePath && rule.retention == VirtualFolderRetention.KeepOnDevice
+                }
+            ) return@runCatching
+            cache.setFolderHydrationStatus(
+                accountId,
+                VirtualFolderHydrationStatus(
+                    relativePath,
+                    if (wasAvailableOffline) {
+                        VirtualFolderHydrationPhase.AvailableOffline
+                    } else {
+                        VirtualFolderHydrationPhase.Queued
+                    },
+                    verifiedAtEpochMillis = previousStatus?.verifiedAtEpochMillis,
+                ),
+            )
+        }
+    }
+
     private fun refreshRetainedFoldersAfterMutation(
         session: NextcloudSession,
         userId: String,
@@ -952,12 +985,13 @@ class DesktopNextcloudServices(
         jobs.forEach { job -> job.cancelAndJoin() }
     }
 
-    private suspend fun cancelAllVirtualFolderHydration(accountId: String) {
+    private fun cancelAllVirtualFolderHydration(accountId: String): List<Job> {
         val prefix = "$accountId\u0000"
         val jobs = synchronized(virtualFolderHydrationJobs) {
             virtualFolderHydrationJobs.filterKeys { key -> key.startsWith(prefix) }.values.toList()
         }
-        jobs.forEach { job -> job.cancelAndJoin() }
+        jobs.forEach(Job::cancel)
+        return jobs
     }
 
     private suspend fun reconcileConfiguredVirtualFolders() {
@@ -1502,8 +1536,12 @@ class DesktopNextcloudServices(
     }
 
     override fun close() {
-        activeFileRangeSessions.toList().forEach { source -> runCatching(source::close) }
+        val rangeSessions = synchronized(fileRangeSessionLock) {
+            sessionClearing = true
+            activeFileRangeSessions.toList()
+        }
         serviceScope.cancel()
+        rangeSessions.forEach { source -> runCatching(source::close) }
         synchronized(virtualFileProviderLock) {
             runCatching { linuxVirtualFileSystem?.unmount() }
             linuxVirtualFileSystem = null
@@ -2025,12 +2063,15 @@ class DesktopNextcloudServices(
         )
         preferences.put(KEY_SERVER, session.serverUrl)
         preferences.put(KEY_LOGIN, session.loginName)
-        sessionClearing = false
+        synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
     }
 
     override suspend fun clearSession() = withContext(Dispatchers.IO) {
-        sessionClearing = true
+        val rangeSessions = synchronized(fileRangeSessionLock) {
+            sessionClearing = true
+            activeFileRangeSessions.toList()
+        }
         var cleared = false
         try {
             val accountId = loadSession()?.let(::desktopFileCacheAccountId)
@@ -2039,9 +2080,11 @@ class DesktopNextcloudServices(
                 backgroundFileSyncJob = null
                 active
             }
-            activeFileRangeSessions.toList().forEach { source -> runCatching(source::close) }
-            syncJob?.cancelAndJoin()
-            accountId?.let { cancelAllVirtualFolderHydration(it) }
+            syncJob?.cancel()
+            val hydrationJobs = accountId?.let(::cancelAllVirtualFolderHydration).orEmpty()
+            rangeSessions.forEach { source -> runCatching(source::close) }
+            hydrationJobs.forEach { job -> job.join() }
+            syncJob?.join()
             synchronized(virtualFileProviderLock) {
                 runCatching { linuxVirtualFileSystem?.unmount() }
                 linuxVirtualFileSystem = null
@@ -2075,7 +2118,7 @@ class DesktopNextcloudServices(
             cleared = true
         } finally {
             if (!cleared) {
-                sessionClearing = false
+                synchronized(fileRangeSessionLock) { sessionClearing = false }
                 if (loadSession() != null) startDesktopSyncLifecycle()
             }
         }
@@ -2501,7 +2544,9 @@ class DesktopNextcloudServices(
         expectedEtag: String,
     ): NextcloudFileRangeSession {
         require(size > 0L)
-        check(!sessionClearing) { "The account session is closing." }
+        synchronized(fileRangeSessionLock) {
+            check(!sessionClearing) { "The account session is closing." }
+        }
         val safeEtag = requireSafeFileRangeEtag(expectedEtag)
         val closed = AtomicBoolean(false)
         val activeCall = AtomicReference<Call?>(null)
@@ -2555,12 +2600,16 @@ class DesktopNextcloudServices(
             closeBlock = {
                 if (closed.compareAndSet(false, true)) {
                     activeCall.get()?.cancel()
-                    activeFileRangeSessions.remove(rangeSession)
+                    synchronized(fileRangeSessionLock) {
+                        activeFileRangeSessions.remove(rangeSession)
+                    }
                 }
             },
         )
-        activeFileRangeSessions += rangeSession
-        if (sessionClearing) {
+        val registered = synchronized(fileRangeSessionLock) {
+            if (sessionClearing) false else activeFileRangeSessions.add(rangeSession)
+        }
+        if (!registered) {
             rangeSession.close()
             error("The account session is closing.")
         }

@@ -427,6 +427,26 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `retained revision capacity is rejected before staging starts`() {
+        val directory = Files.createTempDirectory("virtual-range-capacity-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(
+                root = directory,
+                maximumBlocks = 2,
+                policy = { nonEvictingTestPolicy() },
+            )
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/kept.raf", "e1", 1L, 0L, byteArrayOf(1))
+
+            assertFailsWith<IllegalArgumentException> {
+                cache.requireRevisionCapacity(ACCOUNT_ID, "Photos/next.raf", 3L, blockBytes = 2)
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `pinned bytes do not consume the automatic range cache budget`() {
         val directory = Files.createTempDirectory("virtual-range-pinned-budget-").toFile()
         try {
@@ -749,6 +769,77 @@ class DesktopVirtualRangeCacheTest {
             assertFalse(abandoned.exists())
             assertTrue(activeStage.exists())
             active.close()
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `startup recovery removes promoted blocks from an abandoned commit journal`() {
+        val directory = Files.createTempDirectory("virtual-range-promoted-recovery-").toFile()
+        try {
+            val accountDirectory = directory.resolve(ACCOUNT_ID)
+            Files.createDirectory(accountDirectory.toPath())
+            val stageId = "00000000-0000-0000-0000-000000000001"
+            val blockName = "a".repeat(64) + ".block"
+            val promoted = accountDirectory.resolve(blockName).apply { writeText("unpublished") }
+            val journal = accountDirectory.resolve("range-revision.$stageId.commit").apply {
+                writeText(blockName)
+            }
+            val lease = accountDirectory.resolve("range-revision.$stageId.lock").apply { writeText("") }
+
+            DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }.summary(ACCOUNT_ID)
+
+            assertFalse(promoted.exists())
+            assertFalse(journal.exists())
+            assertFalse(lease.exists())
+
+            val orphanId = "00000000-0000-0000-0000-000000000002"
+            val orphanName = "b".repeat(64) + ".block"
+            val orphan = accountDirectory.resolve(orphanName).apply { writeText("unpublished") }
+            val orphanJournal = accountDirectory.resolve("range-revision.$orphanId.commit").apply {
+                writeText(orphanName)
+            }
+            DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }.summary(ACCOUNT_ID)
+            assertFalse(orphan.exists())
+            assertFalse(orphanJournal.exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `unreadable range index queues previously available offline folders`() {
+        val directory = Files.createTempDirectory("virtual-range-index-revalidation-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L, 0L, "data".encodeToByteArray())
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos",
+                mapOf(
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos/photo.raf", "photo.raf", false, 4L, "e1")),
+                        42L,
+                    ),
+                ),
+            )
+            cache.setFolderHydrationStatus(
+                ACCOUNT_ID,
+                VirtualFolderHydrationStatus("Photos", VirtualFolderHydrationPhase.AvailableOffline),
+            )
+            directory.resolve(ACCOUNT_ID).resolve("range-index-v1.json").writeText("not-json")
+
+            assertEquals(
+                VirtualFolderHydrationPhase.Queued,
+                cache.loadValidatedFolderHydrationStatus(ACCOUNT_ID, "Photos")?.phase,
+            )
+            assertEquals(
+                VirtualFolderHydrationPhase.Queued,
+                DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+                    .loadFolderHydrationStatuses(ACCOUNT_ID).single().phase,
+            )
         } finally {
             directory.deleteRecursively()
         }
