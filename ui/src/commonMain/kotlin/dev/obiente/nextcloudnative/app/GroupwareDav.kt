@@ -892,11 +892,13 @@ fun createGroupwareCalendarEventContent(
     allDay: Boolean,
     location: String? = null,
     description: String? = null,
+    recurrenceRule: String? = null,
 ): String {
     require(uid.isNotBlank() && uid.none(Char::isISOControl)) { "The event id is invalid." }
     require(title.isNotBlank()) { "An event title is required." }
     require(start.isCalendarDateValue(allDay)) { "The event start is invalid." }
     require(end == null || end.isCalendarDateValue(allDay)) { "The event end is invalid." }
+    recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
     val dateParameter = if (allDay) ";VALUE=DATE" else ""
     return buildList {
         add("BEGIN:VCALENDAR")
@@ -909,6 +911,7 @@ fun createGroupwareCalendarEventContent(
         add("SUMMARY:${title.escapeCalendarText()}")
         location?.takeIf(String::isNotBlank)?.let { add("LOCATION:${it.escapeCalendarText()}") }
         description?.takeIf(String::isNotBlank)?.let { add("DESCRIPTION:${it.escapeCalendarText()}") }
+        recurrenceRule?.trim()?.takeIf(String::isNotBlank)?.let { add("RRULE:$it") }
         add("END:VEVENT")
         add("END:VCALENDAR")
     }.joinToString("\r\n", postfix = "\r\n")
@@ -922,13 +925,15 @@ fun updateGroupwareCalendarEventContent(
     allDay: Boolean,
     location: String?,
     description: String?,
+    recurrenceRule: String? = event.recurrenceRule,
 ): String {
+    recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
     val original = event.rawCalendar.unfoldCalendarLines().toMutableList()
     val eventStart = original.indexOfFirst { it.equals("BEGIN:VEVENT", ignoreCase = true) }
     val eventEnd = original.indexOfFirst { it.equals("END:VEVENT", ignoreCase = true) }
     if (eventStart < 0 || eventEnd <= eventStart) {
         return createGroupwareCalendarEventContent(
-            event.uid, title, start, end, allDay, location, description,
+            event.uid, title, start, end, allDay, location, description, recurrenceRule,
         )
     }
     val replacements = linkedMapOf(
@@ -937,6 +942,7 @@ fun updateGroupwareCalendarEventContent(
         "SUMMARY" to "SUMMARY:${title.escapeCalendarText()}",
         "LOCATION" to location?.takeIf(String::isNotBlank)?.let { "LOCATION:${it.escapeCalendarText()}" },
         "DESCRIPTION" to description?.takeIf(String::isNotBlank)?.let { "DESCRIPTION:${it.escapeCalendarText()}" },
+        "RRULE" to recurrenceRule?.trim()?.takeIf(String::isNotBlank)?.let { "RRULE:$it" },
     )
     replacements.forEach { (name, replacement) ->
         val index = (eventStart + 1 until eventEnd).firstOrNull { lineIndex ->
@@ -951,6 +957,16 @@ fun updateGroupwareCalendarEventContent(
         }
     }
     return original.joinToString("\r\n", postfix = "\r\n")
+}
+
+private fun requireValidCalendarRecurrenceRule(value: String) {
+    val normalized = value.trim()
+    require(
+        normalized.length in 1..MAX_CALENDAR_RECURRENCE_RULE_LENGTH &&
+            normalized.startsWith("FREQ=", ignoreCase = true) &&
+            normalized.none(Char::isISOControl) &&
+            ':' !in normalized,
+    ) { "The event recurrence rule is invalid." }
 }
 
 private data class CalendarProperty(val declaration: String, val value: String)
@@ -1191,6 +1207,7 @@ private const val MAX_DAV_SYNC_PAGES = 100
 private const val MAX_DAV_SYNC_TOKEN_LENGTH = 4_096
 private const val MAX_DAV_HREF_LENGTH = 4_096
 private const val MAX_DAV_ETAG_LENGTH = 1_024
+private const val MAX_CALENDAR_RECURRENCE_RULE_LENGTH = 1_024
 private const val MAX_DAV_OBJECT_BYTES = 1 * 1024 * 1024
 private const val DAV_DISCOVERY_RESPONSE_BYTES = 1L * 1024L * 1024L
 private const val DAV_COLLECTION_RESPONSE_BYTES = 4L * 1024L * 1024L

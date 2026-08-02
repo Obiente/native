@@ -100,19 +100,27 @@ internal fun NextcloudUnifiedSearchScreen(
             searching = false
             return@LaunchedEffect
         }
-        groups = emptyMap()
-        failures = emptyMap()
         searching = true
+        var refreshedGroups = emptyMap<String, UnifiedSearchGroup>()
+        var refreshedFailures = emptyMap<String, String>()
         client.searchAll(
             providers = activeProviders,
             request = UnifiedSearchRequest(term = submittedQuery, from = from),
             includeExternalProviders = includeExternal,
         ) { outcome ->
             when (outcome) {
-                is UnifiedSearchProviderOutcome.Results -> groups = groups + (outcome.provider.id to outcome.group)
-                is UnifiedSearchProviderOutcome.Failure -> failures = failures + (outcome.provider.id to outcome.message)
+                is UnifiedSearchProviderOutcome.Results -> {
+                    refreshedGroups = refreshedGroups + (outcome.provider.id to outcome.group)
+                    groups = refreshedGroups
+                    failures = refreshedFailures
+                }
+                is UnifiedSearchProviderOutcome.Failure -> {
+                    refreshedFailures = refreshedFailures + (outcome.provider.id to outcome.message)
+                }
             }
         }
+        groups = refreshedGroups
+        failures = refreshedFailures
         searching = false
     }
 

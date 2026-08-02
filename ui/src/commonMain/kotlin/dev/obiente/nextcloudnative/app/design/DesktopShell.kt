@@ -103,6 +103,7 @@ fun NextcloudDesktopShell(
     onSelected: (NextcloudDestination) -> Unit,
     identity: NextcloudDesktopIdentity?,
     onOpenApp: (String) -> Unit = {},
+    activeAppId: String? = null,
     workspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
@@ -158,6 +159,7 @@ fun NextcloudDesktopShell(
                         onSelected = onSelected,
                         identity = identity,
                         onOpenApp = onOpenApp,
+                        activeAppId = activeAppId,
                         modifier = Modifier.width(layout.navigationWidthDp.dp).fillMaxHeight(),
                     )
 
@@ -189,6 +191,7 @@ private fun NextcloudDesktopSidebar(
     onSelected: (NextcloudDestination) -> Unit,
     identity: NextcloudDesktopIdentity?,
     onOpenApp: (String) -> Unit,
+    activeAppId: String?,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -241,7 +244,7 @@ private fun NextcloudDesktopSidebar(
             DesktopNextcloudNavigationItems.forEach { item ->
                 NextcloudDesktopNavigationRow(
                     item = item,
-                    selected = selected == item.destination,
+                    selected = activeAppId == null && selected == item.destination,
                     onClick = { onSelected(item.destination) },
                 )
             }
@@ -254,7 +257,11 @@ private fun NextcloudDesktopSidebar(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 shortcuts.take(MAX_DESKTOP_SIDEBAR_SHORTCUTS).forEach { app ->
-                    NextcloudDesktopAppShortcutRow(app = app, onClick = { onOpenApp(app.id) })
+                    NextcloudDesktopAppShortcutRow(
+                        app = app,
+                        selected = app.id == activeAppId,
+                        onClick = { onOpenApp(app.id) },
+                    )
                 }
             }
 
@@ -267,7 +274,11 @@ private fun NextcloudDesktopSidebar(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    NextcloudDesktopAppShortcutRow(app = recent, onClick = { onOpenApp(recent.id) })
+                    NextcloudDesktopAppShortcutRow(
+                        app = recent,
+                        selected = recent.id == activeAppId,
+                        onClick = { onOpenApp(recent.id) },
+                    )
                 }
 
             Spacer(modifier = Modifier.weight(1f))
@@ -344,6 +355,7 @@ private fun NextcloudDesktopSidebar(
 @Composable
 private fun NextcloudDesktopAppShortcutRow(
     app: NextcloudDesktopSidebarApp,
+    selected: Boolean,
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(NextcloudRadii.Small)
@@ -351,7 +363,12 @@ private fun NextcloudDesktopAppShortcutRow(
         items = { listOf(NextcloudContextMenuItem("Open ${app.label}", onClick = onClick)) },
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp).clip(shape).clickable(onClick = onClick)
+            modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp).clip(shape)
+                .background(
+                    if (selected) MaterialTheme.colorScheme.primaryContainer
+                    else androidx.compose.ui.graphics.Color.Transparent,
+                )
+                .clickable(onClick = onClick)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -359,13 +376,17 @@ private fun NextcloudDesktopAppShortcutRow(
             Icon(
                 NextcloudIcons.app(app.id),
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(19.dp),
             )
             Text(
                 app.label,
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

@@ -4,4 +4,4 @@ pull: 273
 platforms: android, desktop
 user-facing: yes
 
-Apps, Settings, Home, and the desktop sidebar now use richer native workspaces with useful account, sync, recent-work, and installed-app context.
+Native workspaces now cover Home, Apps, Settings, Calendar, and desktop navigation. Calendar adds searchable Month, Week, and Agenda views with safe event and recurrence editing. App switching and refreshes retain content and state.

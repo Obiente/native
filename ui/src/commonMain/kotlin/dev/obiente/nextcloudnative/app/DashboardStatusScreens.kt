@@ -30,6 +30,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -1010,6 +1011,25 @@ private sealed interface UserStatusSurfaceState {
     data class Failed(val message: String) : UserStatusSurfaceState
 }
 
+private object UserStatusWorkspaceMemoryCache {
+    private val entries = linkedMapOf<String, UserStatusSurfaceState.Available>()
+
+    fun get(session: NextcloudSession): UserStatusSurfaceState.Available? {
+        val key = key(session)
+        return entries.remove(key)?.also { entries[key] = it }
+    }
+
+    fun store(session: NextcloudSession, value: UserStatusSurfaceState.Available) {
+        val key = key(session)
+        entries.remove(key)
+        entries[key] = value
+        while (entries.size > MAXIMUM_RETAINED_STATUS_ACCOUNTS) entries.remove(entries.keys.first())
+    }
+
+    private fun key(session: NextcloudSession): String =
+        "${session.serverUrl.trimEnd('/')}\n${session.loginName}"
+}
+
 private enum class StatusExpiryChoice(val label: String, val seconds: Long?) {
     Never("No expiry", null),
     OneHour("1 hour", 60L * 60L),
@@ -1023,7 +1043,13 @@ internal fun NativeUserStatusScreen(
     session: NextcloudSession,
     onBack: () -> Unit,
 ) {
-    var state by remember(session) { mutableStateOf<UserStatusSurfaceState>(UserStatusSurfaceState.Loading) }
+    var state by remember(session) {
+        mutableStateOf<UserStatusSurfaceState>(
+            UserStatusWorkspaceMemoryCache.get(session) ?: UserStatusSurfaceState.Loading,
+        )
+    }
+    var refreshing by remember(session) { mutableStateOf(false) }
+    var refreshError by remember(session) { mutableStateOf<String?>(null) }
     var refreshAttempt by remember(session) { mutableStateOf(0) }
     var customMessage by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
     var customIcon by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
@@ -1039,7 +1065,15 @@ internal fun NativeUserStatusScreen(
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(session, refreshAttempt) {
-        state = UserStatusSurfaceState.Loading
+        val cached = UserStatusWorkspaceMemoryCache.get(session)
+        if (cached != null) state = cached
+        val retained = cached ?: state as? UserStatusSurfaceState.Available
+        refreshError = null
+        if (retained == null) {
+            state = UserStatusSurfaceState.Loading
+        } else {
+            refreshing = true
+        }
         runCatching {
             val capabilities = parseUserStatusCapabilities(
                 services.executeNextcloudApi(session, userStatusCapabilitiesRequest()),
@@ -1064,6 +1098,7 @@ internal fun NativeUserStatusScreen(
             }
         }.onSuccess { loaded ->
             state = loaded
+            UserStatusWorkspaceMemoryCache.store(session, loaded)
             if (!draftInitialized) {
                 customMessage = loaded.status.message.orEmpty()
                 customIcon = loaded.status.icon.orEmpty().takeIf {
@@ -1072,10 +1107,14 @@ internal fun NativeUserStatusScreen(
                 draftInitialized = true
             }
         }.onFailure { failure ->
-            state = UserStatusSurfaceState.Failed(
-                failure.message ?: "Your status could not be loaded.",
-            )
+            val message = failure.message ?: "Your status could not be loaded."
+            if (retained == null) {
+                state = UserStatusSurfaceState.Failed(message)
+            } else {
+                refreshError = message
+            }
         }
+        refreshing = false
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -1085,6 +1124,27 @@ internal fun NativeUserStatusScreen(
             onBack = onBack,
             onRefresh = { refreshAttempt += 1 },
         )
+        if (refreshing) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        refreshError?.let { message ->
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(
+                    horizontal = NextcloudSpacing.Large,
+                    vertical = NextcloudSpacing.Small,
+                ),
+                color = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                shape = RoundedCornerShape(NextcloudRadii.Small),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = NextcloudSpacing.Medium),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(message, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { refreshAttempt += 1 }) { Text("Retry") }
+                }
+            }
+        }
         when (val current = state) {
             UserStatusSurfaceState.Loading -> DashboardLoading()
             is UserStatusSurfaceState.Failed -> DashboardFailure(
@@ -1322,6 +1382,8 @@ internal fun NativeUserStatusScreen(
         }
     }
 }
+
+private const val MAXIMUM_RETAINED_STATUS_ACCOUNTS = 4
 
 @Composable
 private fun CurrentUserStatusCard(status: NativeUserStatus) {

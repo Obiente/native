@@ -22,6 +22,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -36,6 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +59,22 @@ private sealed interface ContactsLoadState {
     data class Error(val message: String) : ContactsLoadState
 }
 
+private object ContactsWorkspaceMemoryCache {
+    private val entries = linkedMapOf<String, ContactsLoadState.Ready>()
+
+    fun get(session: NextcloudSession, userId: String): ContactsLoadState.Ready? {
+        val key = "${session.serverUrl.trimEnd('/')}\n${session.loginName}\n$userId"
+        return entries.remove(key)?.also { entries[key] = it }
+    }
+
+    fun store(session: NextcloudSession, userId: String, value: ContactsLoadState.Ready) {
+        val key = "${session.serverUrl.trimEnd('/')}\n${session.loginName}\n$userId"
+        entries.remove(key)
+        entries[key] = value
+        while (entries.size > MAXIMUM_RETAINED_CONTACT_ACCOUNTS) entries.remove(entries.keys.first())
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NativeGroupwareContactsScreen(
@@ -65,8 +83,14 @@ fun NativeGroupwareContactsScreen(
     userId: String,
     onBack: () -> Unit,
 ) {
-    var state by remember { mutableStateOf<ContactsLoadState>(ContactsLoadState.Loading) }
-    var query by remember { mutableStateOf("") }
+    var state by remember(session, userId) {
+        mutableStateOf<ContactsLoadState>(
+            ContactsWorkspaceMemoryCache.get(session, userId) ?: ContactsLoadState.Loading,
+        )
+    }
+    var refreshing by remember { mutableStateOf(false) }
+    var refreshError by remember { mutableStateOf<String?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
     var loadAttempt by remember { mutableStateOf(0) }
     var selected by remember { mutableStateOf<GroupwareContact?>(null) }
     var editing by remember { mutableStateOf(false) }
@@ -76,8 +100,16 @@ fun NativeGroupwareContactsScreen(
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(session, userId, loadAttempt) {
-        state = ContactsLoadState.Loading
-        state = runCatching {
+        val cached = ContactsWorkspaceMemoryCache.get(session, userId)
+        if (cached != null) state = cached
+        val retained = cached ?: state as? ContactsLoadState.Ready
+        refreshError = null
+        if (retained == null) {
+            state = ContactsLoadState.Loading
+        } else {
+            refreshing = true
+        }
+        runCatching {
             val principal = parseGroupwarePrincipalHref(
                 services.executeGroupwareDav(session, groupwareDavPrincipalDiscoveryRequest()),
             )
@@ -104,7 +136,18 @@ fun NativeGroupwareContactsScreen(
                 )
             }.sortedBy { it.displayName.lowercase() }
             ContactsLoadState.Ready(addressBooks, contacts)
-        }.getOrElse { ContactsLoadState.Error(it.message ?: "Could not load contacts.") }
+        }.onSuccess { loaded ->
+            state = loaded
+            ContactsWorkspaceMemoryCache.store(session, userId, loaded)
+        }.onFailure { failure ->
+            val message = failure.message ?: "Could not load contacts."
+            if (retained == null) {
+                state = ContactsLoadState.Error(message)
+            } else {
+                refreshError = message
+            }
+        }
+        refreshing = false
     }
 
     val ready = state as? ContactsLoadState.Ready
@@ -154,6 +197,26 @@ fun NativeGroupwareContactsScreen(
         },
     ) { insets ->
         Column(modifier = Modifier.fillMaxSize().padding(insets)) {
+            if (refreshing) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            refreshError?.let { message ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(
+                        horizontal = NextcloudSpacing.Large,
+                        vertical = NextcloudSpacing.Small,
+                    ),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = NextcloudSpacing.Medium),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(message, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
+                    }
+                }
+            }
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -293,6 +356,8 @@ fun NativeGroupwareContactsScreen(
         }
     }
 }
+
+private const val MAXIMUM_RETAINED_CONTACT_ACCOUNTS = 4
 
 @Composable
 private fun ContactList(contacts: List<GroupwareContact>, onSelect: (GroupwareContact) -> Unit) {

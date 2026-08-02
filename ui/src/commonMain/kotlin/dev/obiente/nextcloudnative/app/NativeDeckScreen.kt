@@ -16,6 +16,35 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
+private data class DeckWorkspaceMemorySnapshot(
+    val state: DeckWorkspaceState,
+    val loadedBoards: List<DeckBoard>,
+    val capabilities: DeckCapabilities?,
+    val activeRoute: DeckReadRoutePlan?,
+    val requestedBoard: DeckBoard?,
+    val requestedBoardId: Long?,
+    val requestedCardId: Long?,
+)
+
+private object DeckWorkspaceMemoryCache {
+    private val entries = linkedMapOf<String, DeckWorkspaceMemorySnapshot>()
+
+    fun get(session: NextcloudSession): DeckWorkspaceMemorySnapshot? {
+        val key = key(session)
+        return entries.remove(key)?.also { entries[key] = it }
+    }
+
+    fun store(session: NextcloudSession, value: DeckWorkspaceMemorySnapshot) {
+        val key = key(session)
+        entries.remove(key)
+        entries[key] = value
+        while (entries.size > MAXIMUM_RETAINED_DECK_ACCOUNTS) entries.remove(entries.keys.first())
+    }
+
+    private fun key(session: NextcloudSession): String =
+        "${session.serverUrl.trimEnd('/')}\n${session.loginName}"
+}
+
 /**
  * Production host for the native Deck workspace.
  *
@@ -31,16 +60,21 @@ fun NativeDeckScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    var state by remember(session) { mutableStateOf<DeckWorkspaceState>(DeckWorkspaceState.Loading) }
-    var loadedBoards by remember(session) { mutableStateOf<List<DeckBoard>>(emptyList()) }
-    var capabilities by remember(session) { mutableStateOf<DeckCapabilities?>(null) }
-    var activeRoute by remember(session) { mutableStateOf<DeckReadRoutePlan?>(null) }
-    var requestedBoard by remember(session) { mutableStateOf<DeckBoard?>(null) }
+    val retainedWorkspace = remember(session) { DeckWorkspaceMemoryCache.get(session) }
+    var state by remember(session) {
+        mutableStateOf<DeckWorkspaceState>(retainedWorkspace?.state ?: DeckWorkspaceState.Loading)
+    }
+    var loadedBoards by remember(session) {
+        mutableStateOf(retainedWorkspace?.loadedBoards.orEmpty())
+    }
+    var capabilities by remember(session) { mutableStateOf(retainedWorkspace?.capabilities) }
+    var activeRoute by remember(session) { mutableStateOf(retainedWorkspace?.activeRoute) }
+    var requestedBoard by remember(session) { mutableStateOf(retainedWorkspace?.requestedBoard) }
     var requestedBoardId by rememberSaveable(session.serverUrl, session.loginName) {
-        mutableStateOf<Long?>(null)
+        mutableStateOf(retainedWorkspace?.requestedBoardId)
     }
     var requestedCardId by rememberSaveable(session.serverUrl, session.loginName) {
-        mutableStateOf<Long?>(null)
+        mutableStateOf(retainedWorkspace?.requestedCardId)
     }
     var loadAttempt by remember(session) { mutableStateOf(0) }
     var interaction by remember(session) { mutableStateOf<DeckUiInteraction?>(null) }
@@ -68,6 +102,30 @@ fun NativeDeckScreen(
     val authoritativeActionLoadGate = remember(session) { DeckCardLoadGate() }
     val commentsLoadGate = remember(session) { DeckCardLoadGate() }
     val attachmentsLoadGate = remember(session) { DeckCardLoadGate() }
+
+    LaunchedEffect(
+        session,
+        state,
+        loadedBoards,
+        capabilities,
+        activeRoute,
+        requestedBoard,
+        requestedBoardId,
+        requestedCardId,
+    ) {
+        DeckWorkspaceMemoryCache.store(
+            session,
+            DeckWorkspaceMemorySnapshot(
+                state = state,
+                loadedBoards = loadedBoards,
+                capabilities = capabilities,
+                activeRoute = activeRoute,
+                requestedBoard = requestedBoard,
+                requestedBoardId = requestedBoardId,
+                requestedCardId = requestedCardId,
+            ),
+        )
+    }
 
     fun boardState(): DeckWorkspaceState.Board? = state as? DeckWorkspaceState.Board
 
@@ -1682,6 +1740,8 @@ fun NativeDeckScreen(
         )
     }
 }
+
+private const val MAXIMUM_RETAINED_DECK_ACCOUNTS = 4
 
 private data class LoadedDeckBoards(
     val route: DeckReadRoutePlan,

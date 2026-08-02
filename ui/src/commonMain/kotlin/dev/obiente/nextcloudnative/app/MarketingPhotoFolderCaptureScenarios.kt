@@ -8,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
+import dev.obiente.nextcloudnative.app.design.NextcloudDesktopWorkspaceKind
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 
@@ -69,6 +70,8 @@ internal fun MarketingPhotoFolderScenario(
             selected = NextcloudDestination.Apps,
             onSelected = {},
             identity = marketingDesktopIdentity(avatar = assets.avatar),
+            activeAppId = "photos",
+            workspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
             content = content,
         )
     } else {

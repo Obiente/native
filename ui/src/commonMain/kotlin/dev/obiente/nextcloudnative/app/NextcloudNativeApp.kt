@@ -86,6 +86,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -189,6 +190,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -292,6 +294,36 @@ private val screenSaver = Saver<Screen, String>(
     save = { screen -> navigationStateJson.encodeToString(screen) },
     restore = { encoded ->
         runCatching { navigationStateJson.decodeFromString<Screen>(encoded) }.getOrDefault(Screen.Root)
+    },
+)
+
+@Serializable
+private data class SavedAppWorkspaceNavigation(
+    val activeAppId: String? = null,
+    val lastScreenByApp: Map<String, Screen> = emptyMap(),
+)
+
+private val appWorkspaceNavigationSaver = Saver<AppWorkspaceNavigationMemory<Screen>, String>(
+    save = { memory ->
+        navigationStateJson.encodeToString(
+            SavedAppWorkspaceNavigation(
+                activeAppId = memory.activeAppId,
+                lastScreenByApp = memory.lastStateByApp,
+            ),
+        )
+    },
+    restore = { encoded ->
+        runCatching {
+            navigationStateJson.decodeFromString<SavedAppWorkspaceNavigation>(encoded)
+        }.map { saved ->
+            AppWorkspaceNavigationMemory(
+                activeAppId = saved.activeAppId,
+                lastStateByApp = saved.lastScreenByApp.entries
+                    .toList()
+                    .takeLast(MAX_REMEMBERED_APP_WORKSPACES)
+                    .associate { it.toPair() },
+            )
+        }.getOrDefault(AppWorkspaceNavigationMemory())
     },
 )
 
@@ -896,6 +928,11 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.AppsWorkspaceDesktopDark,
                     MarketingCaptureScenario.AppsWorkspaceDesktopLight,
                     -> MarketingAppsWorkspaceScenario(fixture, assets)
+                    MarketingCaptureScenario.CalendarWorkspaceDesktopDark,
+                    MarketingCaptureScenario.CalendarWorkspaceDesktopLight,
+                    MarketingCaptureScenario.CalendarWorkspaceMobileDark,
+                    MarketingCaptureScenario.CalendarWorkspaceMobileLight,
+                    -> MarketingCalendarWorkspaceScenario(scenario, assets)
                     MarketingCaptureScenario.MailWorkspaceDesktop,
                     MarketingCaptureScenario.MailWorkspaceMobile,
                     MarketingCaptureScenario.MailWorkspaceLoadingMobile,
@@ -1177,6 +1214,16 @@ private fun AuthenticatedApp(
     var screen by rememberSaveable(session.serverUrl, session.loginName, stateSaver = screenSaver) {
         mutableStateOf<Screen>(Screen.Root)
     }
+    var appWorkspaceNavigation by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        stateSaver = appWorkspaceNavigationSaver,
+    ) {
+        mutableStateOf(AppWorkspaceNavigationMemory())
+    }
+    val appWorkspaceSaveableStateHolder = key(session.serverUrl, session.loginName) {
+        rememberSaveableStateHolder()
+    }
     var destination by rememberSaveable(
         session.serverUrl,
         session.loginName,
@@ -1229,7 +1276,12 @@ private fun AuthenticatedApp(
         mutableStateOf<NextcloudNativeNavigationRequest?>(null)
     }
 
+    fun leaveAppWorkspace() {
+        appWorkspaceNavigation = appWorkspaceNavigation.retainCurrent(screen).leave()
+    }
+
     fun applyNavigationRequest(request: NextcloudNativeNavigationRequest) {
+        leaveAppWorkspace()
         when (request.route) {
             NextcloudNativeRoute.Home -> {
                 screen = Screen.Root
@@ -1263,6 +1315,7 @@ private fun AuthenticatedApp(
 
     LaunchedEffect(appUpdateReviewRequest) {
         if (appUpdateReviewRequest > 0) {
+            leaveAppWorkspace()
             screen = Screen.Root
             destination = NextcloudDestination.Settings
             onAppUpdateReviewHandled(appUpdateReviewRequest)
@@ -1285,7 +1338,6 @@ private fun AuthenticatedApp(
     }
 
     LaunchedEffect(session, discoveryAttempt) {
-        serverInfo = null
         discoveryError = null
         runCatching { services.loadServerInfo(session) }
             .onSuccess { serverInfo = it }
@@ -1299,11 +1351,19 @@ private fun AuthenticatedApp(
         }
     }
 
+    LaunchedEffect(screen, appWorkspaceNavigation.activeAppId) {
+        appWorkspaceNavigation = if (screen == Screen.Root) {
+            appWorkspaceNavigation.leave()
+        } else {
+            appWorkspaceNavigation.retainCurrent(screen)
+        }
+    }
+
     fun openApp(app: NextcloudAppEntry, from: NextcloudDestination) {
         returnDestination = from
         services.saveLastOpenedAppId(app.id)
         lastOpenedAppId = app.id
-        screen = when (app.id) {
+        val initialScreen = when (app.id) {
             "files" -> Screen.Files("")
             "photos", "memories" -> Screen.Media
             "spreed", "talk" -> Screen.Talk
@@ -1325,10 +1385,21 @@ private fun AuthenticatedApp(
                 lastKnownServerVersion = serverInfo?.version,
             )
         }
+        if (initialScreen == Screen.Root) {
+            leaveAppWorkspace()
+            screen = Screen.Root
+        } else {
+            val switched = appWorkspaceNavigation
+                .retainCurrent(screen)
+                .switchTo(app.id, initialScreen)
+            appWorkspaceNavigation = switched.memory
+            screen = switched.restoredState
+        }
     }
 
     fun openSearch() {
         returnDestination = destination
+        leaveAppWorkspace()
         screen = Screen.Search
     }
 
@@ -1373,9 +1444,13 @@ private fun AuthenticatedApp(
         when (val current = screen) {
             Screen.Root -> destination = NextcloudDestination.Home
             is Screen.Files -> {
-                screen = if (current.path.isBlank()) Screen.Root
-                else Screen.Files(current.path.substringBeforeLast('/', ""))
-                if (screen == Screen.Root) destination = returnDestination
+                if (current.path.isBlank()) {
+                    leaveAppWorkspace()
+                    screen = Screen.Root
+                    destination = returnDestination
+                } else {
+                    screen = Screen.Files(current.path.substringBeforeLast('/', ""))
+                }
             }
             Screen.Search,
             Screen.Media,
@@ -1388,6 +1463,7 @@ private fun AuthenticatedApp(
             Screen.Deck,
             is Screen.AppInfo,
             -> {
+                leaveAppWorkspace()
                 screen = Screen.Root
                 destination = returnDestination
             }
@@ -1871,6 +1947,7 @@ private fun AuthenticatedApp(
             AppUpdateAvailableBanner(
                 release = update.release,
                 onReview = {
+                    leaveAppWorkspace()
                     screen = Screen.Root
                     destination = NextcloudDestination.Settings
                 },
@@ -1887,19 +1964,37 @@ private fun AuthenticatedApp(
                         NextcloudDesktopWorkspaceKind.AppWorkspace
                     },
                     onSelected = {
+                        leaveAppWorkspace()
                         destination = it
                         screen = Screen.Root
                     },
                     identity = desktopIdentity,
+                    activeAppId = appWorkspaceNavigation.activeAppId,
                     onOpenApp = { appId ->
                         serverInfo?.apps?.firstOrNull { it.id == appId }?.let { app ->
                             openApp(app, destination)
                         }
                     },
-                    content = screenContent,
+                    content = {
+                        val appId = appWorkspaceNavigation.activeAppId
+                        if (appId != null && screen != Screen.Root) {
+                            appWorkspaceSaveableStateHolder.SaveableStateProvider("app:$appId") {
+                                screenContent()
+                            }
+                        } else {
+                            screenContent()
+                        }
+                    },
                 )
             } else {
-                screenContent()
+                val appId = appWorkspaceNavigation.activeAppId
+                if (appId != null && screen != Screen.Root) {
+                    appWorkspaceSaveableStateHolder.SaveableStateProvider("app:$appId") {
+                        screenContent()
+                    }
+                } else {
+                    screenContent()
+                }
             }
         }
     }
@@ -1943,6 +2038,7 @@ private fun RootShell(
     onSelected: (NextcloudDestination) -> Unit,
     identity: NextcloudDesktopIdentity?,
     onOpenApp: (String) -> Unit = {},
+    activeAppId: String? = null,
     content: @Composable () -> Unit,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -1952,6 +2048,7 @@ private fun RootShell(
                 onSelected = onSelected,
                 identity = identity,
                 onOpenApp = onOpenApp,
+                activeAppId = activeAppId,
                 workspaceKind = desktopWorkspaceKind,
                 content = content,
             )
@@ -2023,16 +2120,31 @@ private fun AdminAppsScreen(
     var catalogFilter by remember { mutableStateOf(NativeAppCatalogFilter.All) }
     var catalogResult by remember(session) { mutableStateOf<NativeAppCatalogResult?>(null) }
     var catalogAttempt by remember(session) { mutableStateOf(0) }
+    var catalogRefreshing by remember(session) { mutableStateOf(false) }
+    var catalogRefreshError by remember(session) { mutableStateOf<String?>(null) }
     var pendingLifecycleAction by remember {
         mutableStateOf<Pair<NativeManagedApp, NativeAppLifecycleAction>?>(null)
     }
     LaunchedEffect(session, catalogAttempt) {
-        catalogResult = null
-        catalogResult = runCatching {
+        val retained = catalogResult
+        catalogRefreshing = retained != null
+        catalogRefreshError = null
+        val loaded = runCatching {
             loadNativeAppCatalog { request -> services.executeNextcloudApi(session, request) }
         }.getOrElse {
             NativeAppCatalogResult.InvalidResponse("The administrator app catalog could not be loaded.")
         }
+        if (retained is NativeAppCatalogResult.Available && loaded !is NativeAppCatalogResult.Available) {
+            catalogRefreshError = when (loaded) {
+                NativeAppCatalogResult.Forbidden -> "This account no longer has permission to refresh server apps."
+                NativeAppCatalogResult.Unavailable -> "Administrator app management is currently unavailable."
+                is NativeAppCatalogResult.InvalidResponse -> loaded.reason
+                is NativeAppCatalogResult.Available -> error("Handled above")
+            }
+        } else {
+            catalogResult = loaded
+        }
+        catalogRefreshing = false
     }
 
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -2041,6 +2153,10 @@ private fun AdminAppsScreen(
             subtitle = "Administrator app management",
             onBack = onBack,
         )
+        if (catalogRefreshing) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        catalogRefreshError?.let { message ->
+            RetainedRefreshError(message = message, onRetry = { catalogAttempt += 1 })
+        }
         when (val result = catalogResult) {
             null -> LoadingMessage("Loading administrator app catalog...")
             is NativeAppCatalogResult.Available -> NativeAppCatalogSurface(
@@ -2350,6 +2466,9 @@ private fun DynamicDiscoveredAppScreen(
         mutableStateOf(restoreDynamicNavigationHistory(restoredNavigation.history))
     }
     var viewState by remember(descriptor) { mutableStateOf<NativeScreenState>(NativeScreenState.Loading) }
+    var renderedScreenCacheKey by remember(descriptor) { mutableStateOf<DynamicScreenCacheKey?>(null) }
+    var refreshingDynamicContent by remember(descriptor) { mutableStateOf(false) }
+    var dynamicRefreshError by remember(descriptor) { mutableStateOf<String?>(null) }
     var recordsByResourceId by remember(descriptor) {
         mutableStateOf<Map<String, List<NativeRecord>>>(emptyMap())
     }
@@ -2597,14 +2716,34 @@ private fun DynamicDiscoveredAppScreen(
             selectedRecordScope = selectedRecordCacheScope,
             cacheable = screenCacheAllowed,
         )
+        val retainedReady = (viewState as? NativeScreenState.Ready)
+            ?.takeIf { renderedScreenCacheKey == cacheKey }
+        refreshingDynamicContent = retainedReady != null
+        dynamicRefreshError = null
+        fun showLoading() {
+            if (retainedReady == null) viewState = NativeScreenState.Loading
+        }
+        fun showLoadError(
+            message: String,
+            retry: (() -> Unit)? = null,
+            retryLabel: String = "Try again",
+        ) {
+            if (retainedReady == null) {
+                viewState = NativeScreenState.Error(message, retry, retryLabel)
+            } else {
+                viewState = retainedReady
+                dynamicRefreshError = message
+            }
+        }
         paginationState = null
         loadingMore = false
         loadMoreError = null
+        try {
         if (view.component == NativeComponent.form) {
             val values = formRelationValues
             val pendingRelationRequests = formRelationCache.pendingRequests(formRelationRequests)
             if (pendingRelationRequests.isNotEmpty()) {
-                viewState = NativeScreenState.Loading
+                showLoading()
                 val relationOutcomes = coroutineScope {
                     pendingRelationRequests.map { request ->
                         async {
@@ -2654,7 +2793,7 @@ private fun DynamicDiscoveredAppScreen(
                 viewState = NativeScreenState.Ready(emptyList())
                 return@LaunchedEffect
             }
-            viewState = NativeScreenState.Loading
+            showLoading()
             runCatching {
                 val records = loadDynamicRecords(
                     services = services,
@@ -2669,7 +2808,7 @@ private fun DynamicDiscoveredAppScreen(
                 records
             }.onSuccess { records ->
                 if (records.isEmpty()) {
-                    viewState = NativeScreenState.Error(
+                    showLoadError(
                         message = "The server returned no current settings to edit.",
                         retry = { loadAttempt += 1 },
                     )
@@ -2685,7 +2824,7 @@ private fun DynamicDiscoveredAppScreen(
                 }
             }.onFailure { failure ->
                 if (failure is CancellationException) throw failure
-                viewState = NativeScreenState.Error(
+                showLoadError(
                     message = failure.message ?: "Could not load the current settings.",
                     retry = { loadAttempt += 1 },
                 )
@@ -2721,7 +2860,7 @@ private fun DynamicDiscoveredAppScreen(
         }
         val composite = view.compositeDataGrid
         if (composite != null) {
-            if (staleSnapshot == null) viewState = NativeScreenState.Loading
+            if (staleSnapshot == null) showLoading()
             val values = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
             runCatching {
                 val loaded = coroutineScope {
@@ -2756,11 +2895,14 @@ private fun DynamicDiscoveredAppScreen(
                 )
             }.onFailure { failure ->
                 if (failure is CancellationException) throw failure
-                viewState = staleSnapshot?.let { NativeScreenState.Ready(it.records) }
-                    ?: NativeScreenState.Error(
+                if (staleSnapshot != null) {
+                    viewState = NativeScreenState.Ready(staleSnapshot.records)
+                } else {
+                    showLoadError(
                         message = failure.message ?: "Could not load ${view.title}.",
                         retry = { loadAttempt += 1 },
                     )
+                }
             }
             return@LaunchedEffect
         }
@@ -2775,7 +2917,7 @@ private fun DynamicDiscoveredAppScreen(
             )
             return@LaunchedEffect
         }
-        if (staleSnapshot == null) viewState = NativeScreenState.Loading
+        if (staleSnapshot == null) showLoading()
         val values = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
         runCatching {
             val records = loadDynamicRecords(
@@ -2825,7 +2967,7 @@ private fun DynamicDiscoveredAppScreen(
             }
             val recoveryRequest = failure.takeIf(Throwable::isUnsynchronizedDynamicCollectionFailure)
                 ?.let { buildDynamicRefreshRecoveryRequest(descriptor, values) }
-            viewState = NativeScreenState.Error(
+            showLoadError(
                 message = failure.message ?: "Could not load ${view.title}.",
                 retry = recoveryRequest?.let { request ->
                     {
@@ -2852,6 +2994,12 @@ private fun DynamicDiscoveredAppScreen(
                 } ?: { loadAttempt += 1 },
                 retryLabel = if (recoveryRequest == null) "Try again" else "Sync and retry",
             )
+        }
+        } finally {
+            if (currentCoroutineContext().isActive) {
+                if (viewState is NativeScreenState.Ready) renderedScreenCacheKey = cacheKey
+                refreshingDynamicContent = false
+            }
         }
     }
 
@@ -4074,6 +4222,34 @@ private fun DynamicDiscoveredAppScreen(
                         content = dynamicScreenContent,
                     )
                 }
+                if (refreshingDynamicContent) {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
+                    )
+                }
+                dynamicRefreshError?.let { message ->
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        shape = RoundedCornerShape(NextcloudRadii.Small),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = NextcloudSpacing.Medium),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                message,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
+                        }
+                    }
+                }
             }
             if (audioSourceCapability != null && audioQueue.currentTrack != null) {
                 NativeAudioMiniPlayer(
@@ -5286,6 +5462,25 @@ internal fun shouldShowDynamicRecordFallbackDetail(
     viewComponent != NativeComponent.form &&
     selectedRecordResourceId?.sameDynamicResourceAs(viewResourceId) == true
 
+private object ActivityWorkspaceMemoryCache {
+    private val entries = linkedMapOf<String, ActivityTimelineState>()
+
+    fun get(session: NextcloudSession): ActivityTimelineState? {
+        val key = key(session)
+        return entries.remove(key)?.also { entries[key] = it }
+    }
+
+    fun store(session: NextcloudSession, value: ActivityTimelineState) {
+        val key = key(session)
+        entries.remove(key)
+        entries[key] = value
+        while (entries.size > MAXIMUM_RETAINED_ACTIVITY_ACCOUNTS) entries.remove(entries.keys.first())
+    }
+
+    private fun key(session: NextcloudSession): String =
+        "${session.serverUrl.trimEnd('/')}\n${session.loginName}"
+}
+
 @Composable
 private fun ActivityScreen(
     services: NextcloudPlatformServices,
@@ -5295,7 +5490,9 @@ private fun ActivityScreen(
     onApps: () -> Unit,
     onOpenApp: (NextcloudAppEntry) -> Unit,
 ) {
-    var timeline by remember(session, activityInstalled) { mutableStateOf(ActivityTimelineState()) }
+    var timeline by remember(session, activityInstalled) {
+        mutableStateOf(ActivityWorkspaceMemoryCache.get(session) ?: ActivityTimelineState())
+    }
     var loadAttempt by remember(session, activityInstalled) { mutableStateOf(0) }
     var olderPageAttempt by remember(session, activityInstalled) { mutableStateOf(0) }
     var query by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
@@ -5340,7 +5537,10 @@ private fun ActivityScreen(
         runCatching {
             loadNextcloudActivityPage { request -> services.executeNextcloudApi(session, request) }
         }
-            .onSuccess { page -> timeline = timeline.applyActivityRefresh(page) }
+            .onSuccess { page ->
+                timeline = timeline.applyActivityRefresh(page)
+                ActivityWorkspaceMemoryCache.store(session, timeline)
+            }
             .onFailure { failure ->
                 timeline = timeline.failActivityLoad(failure.message ?: "Could not load your activity.")
             }
@@ -5355,7 +5555,10 @@ private fun ActivityScreen(
                 services.executeNextcloudApi(session, request)
             }
         }
-            .onSuccess { page -> timeline = timeline.applyNextActivityPage(page) }
+            .onSuccess { page ->
+                timeline = timeline.applyNextActivityPage(page)
+                ActivityWorkspaceMemoryCache.store(session, timeline)
+            }
             .onFailure { failure ->
                 timeline = timeline.failActivityLoad(failure.message ?: "Could not load more activity.")
             }
@@ -8800,7 +9003,7 @@ private fun PersonMediaScreen(
             mediaCursor = page.nextCursor
         }.onFailure { failure ->
             val message = failure.message ?: "Could not load photos for this person."
-            if (reset || mediaItems.isNullOrEmpty()) error = message else mediaLoadMoreError = message
+            if (mediaItems.isNullOrEmpty()) error = message else mediaLoadMoreError = message
         }
         mediaLoadingMore = false
     }
@@ -8842,7 +9045,7 @@ private fun PersonMediaScreen(
             recognizedFaceCursor = page.nextCursor
         }.onFailure { failure ->
             val message = failure.message ?: "Could not load exact face assignments."
-            if (reset || recognizedFaces.isNullOrEmpty()) {
+            if (recognizedFaces.isNullOrEmpty()) {
                 recognizedFacesError = message
             } else {
                 recognizedFacesLoadMoreError = message
@@ -8925,10 +9128,11 @@ private fun PersonMediaScreen(
         }
     }
     LaunchedEffect(person.id, person.backend, loadAttempt) {
-        mediaItems = null
-        resolvedMediaFiles = emptyMap()
-        mediaDayIndex = null
-        mediaCursor = null
+        if (mediaItems == null) {
+            resolvedMediaFiles = emptyMap()
+            mediaDayIndex = null
+            mediaCursor = null
+        }
         mediaLoadMoreError = null
         error = null
         loadPersonMediaPage(reset = true)
@@ -8957,9 +9161,10 @@ private fun PersonMediaScreen(
     }
     LaunchedEffect(photoSelectionMode, person.id, recognizedFacesLoadAttempt) {
         if (photoSelectionMode != PersonPhotoSelectionMode.RemoveFace) return@LaunchedEffect
-        recognizedFaces = null
-        recognizedFaceDayIndex = null
-        recognizedFaceCursor = null
+        if (recognizedFaces == null) {
+            recognizedFaceDayIndex = null
+            recognizedFaceCursor = null
+        }
         recognizedFacesLoadMoreError = null
         recognizedFacesError = null
         loadRecognizedFacePage(reset = true)
@@ -10144,6 +10349,41 @@ private enum class MarkdownFileViewMode {
     Edit,
 }
 
+private object TalkWorkspaceMemoryCache {
+    private val rooms = linkedMapOf<String, List<TalkRoom>>()
+    private val messages = linkedMapOf<String, List<TalkMessage>>()
+
+    fun rooms(session: NextcloudSession): List<TalkRoom>? = touch(rooms, accountKey(session))
+
+    fun storeRooms(session: NextcloudSession, value: List<TalkRoom>) {
+        store(rooms, accountKey(session), value, MAXIMUM_RETAINED_TALK_ACCOUNTS)
+    }
+
+    fun messages(session: NextcloudSession, roomToken: String): List<TalkMessage>? =
+        touch(messages, "${accountKey(session)}\n$roomToken")
+
+    fun storeMessages(session: NextcloudSession, roomToken: String, value: List<TalkMessage>) {
+        store(
+            messages,
+            "${accountKey(session)}\n$roomToken",
+            value,
+            MAXIMUM_RETAINED_TALK_ROOMS,
+        )
+    }
+
+    private fun accountKey(session: NextcloudSession): String =
+        "${session.serverUrl.trimEnd('/')}\n${session.loginName}"
+
+    private fun <T> touch(entries: LinkedHashMap<String, T>, key: String): T? =
+        entries.remove(key)?.also { entries[key] = it }
+
+    private fun <T> store(entries: LinkedHashMap<String, T>, key: String, value: T, maximum: Int) {
+        entries.remove(key)
+        entries[key] = value
+        while (entries.size > maximum) entries.remove(entries.keys.first())
+    }
+}
+
 @Composable
 private fun TalkScreen(
     services: NextcloudPlatformServices,
@@ -10151,20 +10391,29 @@ private fun TalkScreen(
     onBack: () -> Unit,
     onOpenRoom: (TalkRoom) -> Unit,
 ) {
-    var rooms by remember { mutableStateOf<List<TalkRoom>?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var loadAttempt by remember { mutableStateOf(0) }
+    var rooms by remember(session) { mutableStateOf(TalkWorkspaceMemoryCache.rooms(session)) }
+    var error by remember(session) { mutableStateOf<String?>(null) }
+    var refreshing by remember(session) { mutableStateOf(false) }
+    var loadAttempt by remember(session) { mutableStateOf(0) }
     LaunchedEffect(loadAttempt) {
-        rooms = null
+        refreshing = rooms != null
         error = null
         runCatching { services.listTalkRooms(session) }
-            .onSuccess { rooms = it }
+            .onSuccess {
+                rooms = it
+                TalkWorkspaceMemoryCache.storeRooms(session, it)
+            }
             .onFailure { error = it.message ?: "Could not load Talk conversations." }
+        refreshing = false
     }
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         ScreenHeader("Talk", "Conversations", onBack)
+        if (refreshing) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        if (error != null && rooms != null) {
+            RetainedRefreshError(message = requireNotNull(error), onRetry = { loadAttempt += 1 })
+        }
         when {
-            error != null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
+            error != null && rooms == null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
             rooms == null -> LoadingMessage("Loading conversations...")
             rooms?.isEmpty() == true -> EmptyMessage("No Talk conversations yet.")
             else -> LazyColumn(contentPadding = PaddingValues(bottom = NextcloudSpacing.XXLarge)) {
@@ -10226,13 +10475,16 @@ private fun ChatScreen(
     onBack: () -> Unit,
     onOpenAttachment: (NextcloudFile) -> Unit,
 ) {
-    var messages by remember(room.token) { mutableStateOf<List<TalkMessage>?>(null) }
+    var messages by remember(session, room.token) {
+        mutableStateOf(TalkWorkspaceMemoryCache.messages(session, room.token))
+    }
     var olderCursor by remember(room.token) { mutableStateOf<Long?>(null) }
     var hasMoreHistory by remember(room.token) { mutableStateOf(false) }
     var loadingEarlier by remember(room.token) { mutableStateOf(false) }
     var historyError by remember(room.token) { mutableStateOf<String?>(null) }
-    var draft by remember(room.token) { mutableStateOf("") }
+    var draft by rememberSaveable(session.serverUrl, session.loginName, room.token) { mutableStateOf("") }
     var error by remember(room.token) { mutableStateOf<String?>(null) }
+    var refreshing by remember(room.token) { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     var loadAttempt by remember(room.token) { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
@@ -10242,13 +10494,15 @@ private fun ChatScreen(
     suspend fun refresh() {
         val page = services.listTalkMessagePage(session, room.token)
         messages = page.messages
+        TalkWorkspaceMemoryCache.storeMessages(session, room.token, page.messages)
         olderCursor = page.olderCursor
         hasMoreHistory = page.hasMoreHistory
     }
     LaunchedEffect(room.token, loadAttempt) {
-        messages = null
+        refreshing = messages != null
         error = null
         runCatching { refresh() }.onFailure { error = it.message ?: "Could not load messages." }
+        refreshing = false
     }
     LaunchedEffect(orderedMessages?.lastOrNull()?.id) {
         val lastIndex = orderedMessages?.lastIndex ?: return@LaunchedEffect
@@ -10259,7 +10513,7 @@ private fun ChatScreen(
         ScreenHeader(room.displayName, "Talk", onBack)
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when {
-                error != null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
+                error != null && messages == null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
                 messages == null -> LoadingMessage("Loading messages...")
                 messages?.isEmpty() == true -> EmptyMessage("No messages in this conversation yet.")
                 else -> LazyColumn(
@@ -10300,6 +10554,11 @@ private fun ChatScreen(
                                                         messages.orEmpty(),
                                                         page.messages,
                                                     )
+                                                    TalkWorkspaceMemoryCache.storeMessages(
+                                                        session,
+                                                        room.token,
+                                                        messages.orEmpty(),
+                                                    )
                                                     olderCursor = page.olderCursor
                                                     hasMoreHistory = page.hasMoreHistory
                                                 }.onFailure { failure ->
@@ -10335,6 +10594,18 @@ private fun ChatScreen(
                         )
                     }
                 }
+            }
+            if (refreshing) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
+                )
+            }
+            if (error != null && messages != null) {
+                RetainedRefreshError(
+                    message = requireNotNull(error),
+                    onRetry = { loadAttempt += 1 },
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
             }
         }
         Row(
@@ -11802,6 +12073,32 @@ private fun ErrorMessage(message: String, onRetry: (() -> Unit)? = null) {
     }
 }
 
+@Composable
+private fun RetainedRefreshError(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.padding(
+            horizontal = NextcloudSpacing.Large,
+            vertical = NextcloudSpacing.Small,
+        ),
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = RoundedCornerShape(NextcloudRadii.Small),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(message, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = onRetry) { Text("Retry") }
+        }
+    }
+}
+
 private fun fileIcon(file: NextcloudFile): ImageVector = when {
     file.mimeType?.startsWith("image/") == true -> NextcloudIcons.Image
     file.mimeType?.startsWith("video/") == true -> NextcloudIcons.Video
@@ -11844,3 +12141,6 @@ private fun formatBytes(bytes: Long?): String = when {
 }
 
 private const val MAX_DYNAMIC_BATCH_RELATION_ERROR_LENGTH = 1_024
+private const val MAXIMUM_RETAINED_ACTIVITY_ACCOUNTS = 4
+private const val MAXIMUM_RETAINED_TALK_ACCOUNTS = 4
+private const val MAXIMUM_RETAINED_TALK_ROOMS = 16
