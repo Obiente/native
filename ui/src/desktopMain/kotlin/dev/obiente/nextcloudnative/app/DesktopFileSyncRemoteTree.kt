@@ -507,11 +507,11 @@ internal fun desktopOwnedBackupRecoveryPlan(
 ): List<Pair<String, String>> {
     require(maximumRecoveryItems >= 0)
     val listedPaths = relativePaths.toHashSet()
-    val backups = relativePaths.mapNotNull { source ->
+    val recoveries = relativePaths.mapNotNull { source ->
         desktopOwnedBackupDestination(source)?.let { destination -> source to destination }
-    }
-    require(backups.size <= maximumRecoveryItems) { "A Nextcloud folder contains too many recovery items." }
-    return backups.filterNot { (_, destination) -> destination in listedPaths }
+    }.filterNot { (_, destination) -> destination in listedPaths }
+    require(recoveries.size <= maximumRecoveryItems) { "A Nextcloud folder contains too many recovery items." }
+    return recoveries
 }
 
 internal fun parseDesktopSyncDav(
@@ -536,7 +536,7 @@ private fun parseDesktopSyncDav(
         setProperty(XMLInputFactory.IS_COALESCING, false)
     }
     val reader = factory.createXMLStreamReader(
-        RejectingXmlCdataInputStream(BoundedInputStream(input, maximumBytes)),
+        GuardedXmlInputStream(BoundedInputStream(input, maximumBytes)),
         StandardCharsets.UTF_8.name(),
     )
     val documents = ArrayList<DesktopRemoteSyncDocument>()
@@ -659,8 +659,12 @@ private class BoundedInputStream(
     }
 }
 
-private class RejectingXmlCdataInputStream(input: InputStream) : FilterInputStream(input) {
-    private var matchedPrefixBytes = 0
+private class GuardedXmlInputStream(input: InputStream) : FilterInputStream(input) {
+    private var insideMarkup = false
+    private var markupBytes = 0
+    private var quote: Byte? = null
+    private var previous: Byte? = null
+    private var markupCount = 0
 
     override fun read(): Int = super.read().also { value ->
         if (value >= 0) inspect(value.toByte())
@@ -686,16 +690,32 @@ private class RejectingXmlCdataInputStream(input: InputStream) : FilterInputStre
     }
 
     private fun inspect(value: Byte) {
-        if (value == CDATA_PREFIX[matchedPrefixBytes]) {
-            matchedPrefixBytes += 1
-            require(matchedPrefixBytes < CDATA_PREFIX.size) { "DAV CDATA properties are not supported." }
-        } else {
-            matchedPrefixBytes = if (value == CDATA_PREFIX[0]) 1 else 0
+        if (!insideMarkup) {
+            if (value == '<'.code.toByte()) {
+                insideMarkup = true
+                markupBytes = 1
+                markupCount += 1
+            }
+            previous = value
+            return
         }
-    }
-
-    private companion object {
-        val CDATA_PREFIX = "<![CDATA[".encodeToByteArray()
+        markupBytes += 1
+        require(markupBytes <= MAX_XML_MARKUP_BYTES) { "A DAV XML token is too large." }
+        if (previous == '<'.code.toByte()) {
+            require(value != '!'.code.toByte()) { "DAV XML declarations are not supported." }
+            require(value != '?'.code.toByte() || markupCount == 1) {
+                "DAV XML processing instructions are not supported."
+            }
+        }
+        if (quote == null && (value == '\''.code.toByte() || value == '"'.code.toByte())) {
+            quote = value
+        } else if (quote == value) {
+            quote = null
+        } else if (quote == null && value == '>'.code.toByte()) {
+            insideMarkup = false
+            markupBytes = 0
+        }
+        previous = value
     }
 }
 
@@ -731,5 +751,6 @@ private fun desktopFileSyncHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .build()
 
 private const val MAX_DAV_PROPERTY_CHARS = 16_384
+private const val MAX_XML_MARKUP_BYTES = 16_384
 private const val MAX_PARSED_DAV_DOCUMENTS = 50_032
 private const val DAV_NAMESPACE = "DAV:"

@@ -119,6 +119,20 @@ class DesktopFileSyncRemoteTreeTest {
     }
 
     @Test
+    fun `dav parser bounds markup and rejects unsupported token forms before stax`() {
+        val oversizedAttribute = (
+            "<d:multistatus xmlns:d=\"DAV:\" data-value=\"" + "a".repeat(20_000) +
+                "\"></d:multistatus>"
+            ).encodeToByteArray()
+        val comment = "<d:multistatus xmlns:d=\"DAV:\"><!-- comment --></d:multistatus>".encodeToByteArray()
+        val instruction = "<d:multistatus xmlns:d=\"DAV:\"><?unsafe value?></d:multistatus>".encodeToByteArray()
+
+        listOf(oversizedAttribute, comment, instruction).forEach { response ->
+            assertFails { parseDesktopSyncDav(response, userId = "alice") }
+        }
+    }
+
+    @Test
     fun `only exact provider owned upload stages are suppressed`() {
         assertEquals(
             true,
@@ -155,6 +169,13 @@ class DesktopFileSyncRemoteTreeTest {
         assertEquals(
             emptyList(),
             desktopOwnedBackupRecoveryPlan(listOf(first, "Photos/one.jpg"), maximumRecoveryItems = 1),
+        )
+        assertEquals(
+            emptyList(),
+            desktopOwnedBackupRecoveryPlan(
+                listOf(first, second, "Photos/one.jpg", "Photos/two.jpg"),
+                maximumRecoveryItems = 0,
+            ),
         )
     }
 
