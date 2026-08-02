@@ -149,6 +149,9 @@ internal fun migrateWindowsSyncRootRegistration(
 
 internal fun windowsCloudShellAccountId(root: Path): String? {
     val name = root.fileName?.toString() ?: return null
+    // The unsuffixed generation predates shell branding. Looking it up by account ID can resolve
+    // the active -v2 registration and must never be used to unregister that different root.
+    if (!name.endsWith(WINDOWS_CLOUD_ROOT_GENERATION_SUFFIX)) return null
     val accountId = name.removeSuffix(WINDOWS_CLOUD_ROOT_GENERATION_SUFFIX)
     return accountId.takeIf(::isWindowsShellAccountId)
 }

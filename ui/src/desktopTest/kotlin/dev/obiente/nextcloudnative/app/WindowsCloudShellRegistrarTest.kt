@@ -232,10 +232,10 @@ class WindowsCloudShellRegistrarTest {
     }
 
     @Test
-    fun recognizesCurrentAndLegacyAccountRootNames() {
+    fun recognizesOnlyTheBrandedAccountRootGeneration() {
         val accountId = "01".repeat(32)
         assertEquals(accountId, windowsCloudShellAccountId(File("C:/root/$accountId-v2").toPath()))
-        assertEquals(accountId, windowsCloudShellAccountId(File("C:/root/$accountId").toPath()))
+        assertEquals(null, windowsCloudShellAccountId(File("C:/root/$accountId").toPath()))
         assertEquals(null, windowsCloudShellAccountId(File("C:/root/not-an-account").toPath()))
     }
 
