@@ -1,7 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
+import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.StandardOpenOption
 import java.util.UUID
 import java.util.prefs.Preferences
 import kotlinx.coroutines.runBlocking
@@ -91,6 +93,7 @@ class DesktopAppUpdatesTest {
             writeText("powershell")
         }
         val launcher = directory.resolve("NextcloudNative.exe").apply { writeText("launcher") }
+        val updateGate = directory.resolve("windows-update-in-progress.lock")
         var command = emptyList<String>()
         var cancelled = false
         try {
@@ -99,6 +102,7 @@ class DesktopAppUpdatesTest {
                 parentProcessId = 42L,
                 windowsDirectory = windowsDirectory,
                 launcherFile = launcher,
+                updateGateFile = updateGate,
                 processStarter = {
                     command = it
                     WindowsInstallerHandoffProcess {
@@ -117,6 +121,7 @@ class DesktopAppUpdatesTest {
             assertEquals("42", command[command.indexOf("-ParentProcessId") + 1])
             assertEquals(packageFile.absolutePath, command[command.indexOf("-InstallerPath") + 1])
             assertEquals(launcher.absolutePath, command[command.indexOf("-LauncherPath") + 1])
+            assertEquals(updateGate.absolutePath, command[command.indexOf("-UpdateGatePath") + 1])
             assertTrue(command[command.indexOf("-CancellationPath") + 1].endsWith(".ack"))
             assertEquals(64, command[command.indexOf("-CancellationToken") + 1].length)
             val script = File(command[command.indexOf("-File") + 1])
@@ -124,10 +129,17 @@ class DesktopAppUpdatesTest {
             assertTrue(script.readText().contains("Wait-Process -Id \$ParentProcessId"))
             assertTrue(script.readText().contains("Join-Path \$env:SystemRoot 'System32\\msiexec.exe'"))
             assertTrue(script.readText().contains("'NEXTCLOUD_NATIVE_UPDATER_HANDOFF=1'"))
-            assertTrue(script.readText().contains("Start-Process -FilePath \$LauncherPath -ErrorAction Stop"))
+            assertTrue(
+                script.readText().contains(
+                    "Start-Process -FilePath \$LauncherPath -ErrorAction Stop",
+                ),
+            )
             assertTrue(script.readText().contains("\$successfulExitCodes = @(0, 1641, 3010)"))
             assertTrue(script.readText().contains("\$installerProcess.ExitCode -notin \$successfulExitCodes"))
             assertTrue(script.readText().contains("Set-Content -LiteralPath \$AcknowledgementPath"))
+            assertTrue(script.readText().contains("[System.IO.FileShare]::None"))
+            assertTrue(script.readText().indexOf("\$updateGateStream.Dispose()") <
+                script.readText().lastIndexOf("Start-Process -FilePath \$LauncherPath"))
             assertTrue(script.readText().contains("Test-HandoffCancellation"))
             assertTrue(script.readText().contains("cancelled before installer launch"))
             assertTrue(script.readText().contains("--update-handoff-failed"))
@@ -158,6 +170,7 @@ class DesktopAppUpdatesTest {
                     parentProcessId = 42L,
                     windowsDirectory = windowsDirectory,
                     launcherFile = launcher,
+                    updateGateFile = directory.resolve("windows-update-in-progress.lock"),
                     processStarter = { command ->
                         script = File(command[command.indexOf("-File") + 1])
                         WindowsInstallerHandoffProcess {
@@ -176,6 +189,24 @@ class DesktopAppUpdatesTest {
             assertTrue(processCancelled)
             assertTrue(cancellationObserved)
             assertFalse(requireNotNull(script).exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun windowsUpdateGateBlocksLaunchesOnlyWhileOwnershipIsHeld() {
+        val directory = Files.createTempDirectory("desktop-update-gate").toFile()
+        val gate = directory.resolve("windows-update-in-progress.lock").apply { writeText("active") }
+        try {
+            FileChannel.open(gate.toPath(), StandardOpenOption.WRITE).use { channel ->
+                channel.lock().use {
+                    assertTrue(desktopUpdateHandoffActive(gate, windows = true))
+                }
+            }
+
+            assertFalse(desktopUpdateHandoffActive(gate, windows = true))
+            assertFalse(gate.exists())
         } finally {
             directory.deleteRecursively()
         }

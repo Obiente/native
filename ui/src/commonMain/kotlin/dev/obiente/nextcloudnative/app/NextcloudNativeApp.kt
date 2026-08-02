@@ -1223,7 +1223,7 @@ private fun AuthenticatedApp(
         }
     }
 
-    LaunchedEffect(navigationRequest?.sequence) {
+    LaunchedEffect(navigationRequest?.sequence, screen) {
         val request = navigationRequest
             ?.takeIf { it.sequence > handledNavigationRequestSequence }
             ?: return@LaunchedEffect
@@ -9439,11 +9439,14 @@ private fun TextEditorScreen(
     }
 
     fun requestBack() {
+        if (saving) return
         if (dirty) confirmDiscard = true else onBack()
     }
-    LaunchedEffect(navigationRequest?.sequence) {
+    LaunchedEffect(navigationRequest?.sequence, saving) {
         navigationRequest?.let { request ->
-            if (dirty) confirmDiscard = true else onNavigationConfirmed(request)
+            if (!saving) {
+                if (dirty) confirmDiscard = true else onNavigationConfirmed(request)
+            }
         }
     }
     PlatformBackHandler(enabled = true, onBack = ::requestBack)

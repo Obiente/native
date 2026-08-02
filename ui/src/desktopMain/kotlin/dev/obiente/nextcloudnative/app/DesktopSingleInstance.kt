@@ -17,9 +17,9 @@ import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicLong
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
 
 internal enum class DesktopActivationKind(val wireValue: String) {
     ShowWindow("show"),
@@ -50,10 +50,8 @@ internal class DesktopSingleInstance private constructor(
     private val endpointToken: String,
 ) : AutoCloseable {
     private val activationSequence = AtomicLong(0L)
-    private val mutableActivations = MutableStateFlow(
-        DesktopActivationRequest(0L, DesktopActivationKind.ShowWindow),
-    )
-    val activations: StateFlow<DesktopActivationRequest> = mutableActivations.asStateFlow()
+    private val activationQueue = Channel<DesktopActivationRequest>(Channel.UNLIMITED)
+    val activations: Flow<DesktopActivationRequest> = activationQueue.receiveAsFlow()
     private val serverThread = Thread(::serveActivations, "nextcloud-native-instance-activation").apply {
         isDaemon = true
         start()
@@ -69,16 +67,16 @@ internal class DesktopSingleInstance private constructor(
                     val activationKind = connection.getInputStream()
                         .readBoundedLine(MAX_ACTIVATION_KIND_BYTES)
                         ?.let(DesktopActivationKind::fromWireValue)
-                    val accepted = suppliedToken != null && activationKind != null && MessageDigest.isEqual(
+                    val authenticated = suppliedToken != null && activationKind != null && MessageDigest.isEqual(
                         suppliedToken.encodeToByteArray(),
                         endpointToken.encodeToByteArray(),
                     )
-                    if (accepted) {
-                        mutableActivations.value = DesktopActivationRequest(
+                    val accepted = authenticated && activationQueue.trySend(
+                        DesktopActivationRequest(
                             activationSequence.incrementAndGet(),
                             requireNotNull(activationKind),
-                        )
-                    }
+                        ),
+                    ).isSuccess
                     connection.getOutputStream().write(if (accepted) ACTIVATION_ACCEPTED else ACTIVATION_REJECTED)
                     connection.getOutputStream().flush()
                 }
@@ -88,6 +86,7 @@ internal class DesktopSingleInstance private constructor(
 
     override fun close() {
         runCatching { server.close() }
+        activationQueue.close()
         serverThread.interrupt()
         runCatching {
             if (endpointFile.isFile && endpointFile.length() <= MAX_ENDPOINT_BYTES) {
@@ -243,7 +242,7 @@ internal class DesktopSingleInstance private constructor(
     }
 }
 
-private fun defaultDesktopRuntimeDirectory(): File {
+internal fun defaultDesktopRuntimeDirectory(): File {
     val osName = System.getProperty("os.name", "")
     if (osName.startsWith("Windows", ignoreCase = true)) {
         val localAppData = System.getenv("LOCALAPPDATA")?.takeIf(String::isNotBlank)?.let(::File)

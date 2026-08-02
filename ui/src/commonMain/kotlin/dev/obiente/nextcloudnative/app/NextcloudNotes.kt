@@ -722,11 +722,14 @@ internal fun NextcloudNoteEditor(
             .sortedBy(String::lowercase)
     }
     fun requestBack() {
+        if (saving) return
         if (dirty) showDiscardConfirmation = true else onBack()
     }
-    LaunchedEffect(navigationRequest?.sequence) {
+    LaunchedEffect(navigationRequest?.sequence, saving) {
         navigationRequest?.let { request ->
-            if (dirty) showDiscardConfirmation = true else onNavigationConfirmed(request)
+            if (!saving) {
+                if (dirty) showDiscardConfirmation = true else onNavigationConfirmed(request)
+            }
         }
     }
     fun saveNote() {

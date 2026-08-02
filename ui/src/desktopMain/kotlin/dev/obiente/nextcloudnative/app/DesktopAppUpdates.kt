@@ -3,6 +3,8 @@ package dev.obiente.nextcloudnative.app
 import java.awt.Desktop
 import java.io.File
 import java.io.IOException
+import java.nio.channels.FileChannel
+import java.nio.channels.OverlappingFileLockException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -630,6 +632,7 @@ internal fun startWindowsInstallerAfterAppExit(
     parentProcessId: Long = ProcessHandle.current().pid(),
     windowsDirectory: File? = System.getenv("SystemRoot")?.takeIf(String::isNotBlank)?.let(::File),
     launcherFile: File? = packagedDesktopLauncherPath()?.let(::File),
+    updateGateFile: File = desktopUpdateHandoffGateFile(),
     processStarter: (List<String>) -> WindowsInstallerHandoffProcess = ::startWindowsInstallerHandoffProcess,
     readinessWaiter: (File, String) -> Boolean = ::waitForWindowsInstallerHandoffReadiness,
 ) {
@@ -647,6 +650,11 @@ internal fun startWindowsInstallerAfterAppExit(
     check(Files.isRegularFile(launcher.toPath(), LinkOption.NOFOLLOW_LINKS)) {
         "The installed Nextcloud Native launcher could not be found."
     }
+    val updateGate = updateGateFile.toPath().toAbsolutePath().normalize()
+    val updateGateDirectory = requireNotNull(updateGate.parent)
+    Files.createDirectories(updateGateDirectory)
+    check(!Files.isSymbolicLink(updateGateDirectory)) { "The desktop update runtime folder cannot be a symlink." }
+    check(!Files.isSymbolicLink(updateGate)) { "The desktop update handoff gate cannot be a symlink." }
     val script = writeWindowsInstallerHandoffScript(requireNotNull(packageFile.parentFile))
     val acknowledgement = Files.createTempFile(packageFile.parentFile.toPath(), "installer-ready-", ".ack").toFile()
     Files.delete(acknowledgement.toPath())
@@ -663,6 +671,7 @@ internal fun startWindowsInstallerAfterAppExit(
                 parentProcessId = parentProcessId,
                 packageFile = packageFile,
                 launcherFile = launcher,
+                updateGateFile = updateGate.toFile(),
                 acknowledgementFile = acknowledgement,
                 acknowledgementToken = acknowledgementToken,
                 cancellationFile = cancellation,
@@ -733,6 +742,7 @@ internal fun windowsInstallerHandoffCommand(
     parentProcessId: Long,
     packageFile: File,
     launcherFile: File,
+    updateGateFile: File,
     acknowledgementFile: File,
     acknowledgementToken: String,
     cancellationFile: File,
@@ -754,6 +764,8 @@ internal fun windowsInstallerHandoffCommand(
     packageFile.absolutePath,
     "-LauncherPath",
     launcherFile.absolutePath,
+    "-UpdateGatePath",
+    updateGateFile.absolutePath,
     "-AcknowledgementPath",
     acknowledgementFile.absolutePath,
     "-AcknowledgementToken",
@@ -763,6 +775,35 @@ internal fun windowsInstallerHandoffCommand(
     "-CancellationToken",
     cancellationToken,
 )
+
+internal fun desktopUpdateHandoffGateFile(
+    runtimeDirectory: File = defaultDesktopRuntimeDirectory(),
+): File = runtimeDirectory.resolve(WINDOWS_INSTALLER_HANDOFF_GATE_NAME)
+
+internal fun desktopUpdateHandoffActive(
+    gateFile: File = desktopUpdateHandoffGateFile(),
+    windows: Boolean = System.getProperty("os.name", "").startsWith("Windows", ignoreCase = true),
+): Boolean {
+    if (!windows) return false
+    val path = gateFile.toPath().toAbsolutePath().normalize()
+    if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return false
+    if (Files.isSymbolicLink(path) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) return true
+    return try {
+        FileChannel.open(path, StandardOpenOption.WRITE).use { channel ->
+            val lock = try {
+                channel.tryLock()
+            } catch (_: OverlappingFileLockException) {
+                null
+            }
+            if (lock == null) return true
+            lock.release()
+        }
+        Files.deleteIfExists(path)
+        false
+    } catch (_: IOException) {
+        true
+    }
+}
 
 private fun waitForWindowsInstallerHandoffReadiness(
     acknowledgementFile: File,
@@ -873,6 +914,7 @@ private fun ByteArray.lowercaseHex(): String = joinToString("") { byte ->
 internal class DesktopUpdateCancelledException : IOException("Update download cancelled.")
 
 private const val WINDOWS_INSTALLER_HANDOFF_SCRIPT_NAME = "install-after-app-exit.ps1"
+private const val WINDOWS_INSTALLER_HANDOFF_GATE_NAME = "windows-update-in-progress.lock"
 private const val WINDOWS_INSTALLER_HANDOFF_READY_TIMEOUT_SECONDS = 5L
 private const val WINDOWS_INSTALLER_HANDOFF_READY_POLL_MILLIS = 25L
 private const val WINDOWS_INSTALLER_HANDOFF_CANCEL_GRACE_SECONDS = 2L
@@ -882,6 +924,7 @@ private val WINDOWS_INSTALLER_HANDOFF_SCRIPT = """
         [Parameter(Mandatory = ${'$'}true)][long]${'$'}ParentProcessId,
         [Parameter(Mandatory = ${'$'}true)][string]${'$'}InstallerPath,
         [Parameter(Mandatory = ${'$'}true)][string]${'$'}LauncherPath,
+        [Parameter(Mandatory = ${'$'}true)][string]${'$'}UpdateGatePath,
         [Parameter(Mandatory = ${'$'}true)][string]${'$'}AcknowledgementPath,
         [Parameter(Mandatory = ${'$'}true)][string]${'$'}AcknowledgementToken,
         [Parameter(Mandatory = ${'$'}true)][string]${'$'}CancellationPath,
@@ -889,6 +932,9 @@ private val WINDOWS_INSTALLER_HANDOFF_SCRIPT = """
     )
 
     ${'$'}ErrorActionPreference = 'Stop'
+    ${'$'}updateGateStream = ${'$'}null
+    ${'$'}relaunchApplication = ${'$'}false
+    ${'$'}relaunchWithFailure = ${'$'}false
     function Test-HandoffCancellation {
         if (-not (Test-Path -LiteralPath ${'$'}CancellationPath -PathType Leaf)) {
             return ${'$'}false
@@ -906,6 +952,16 @@ private val WINDOWS_INSTALLER_HANDOFF_SCRIPT = """
             -not (Test-Path -LiteralPath ${'$'}LauncherPath -PathType Leaf)) {
             throw 'The verified installer or application launcher is unavailable.'
         }
+        ${'$'}updateGateStream = [System.IO.File]::Open(
+            ${'$'}UpdateGatePath,
+            [System.IO.FileMode]::OpenOrCreate,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::None
+        )
+        ${'$'}updateGateStream.SetLength(0)
+        ${'$'}gateBytes = [System.Text.Encoding]::ASCII.GetBytes([string]${'$'}PID)
+        ${'$'}updateGateStream.Write(${'$'}gateBytes, 0, ${'$'}gateBytes.Length)
+        ${'$'}updateGateStream.Flush(${'$'}true)
         Set-Content -LiteralPath ${'$'}AcknowledgementPath -Value ${'$'}AcknowledgementToken -NoNewline -Encoding ascii
         if (Test-HandoffCancellation) {
             throw 'The Windows installer handoff was cancelled before application exit.'
@@ -926,16 +982,38 @@ private val WINDOWS_INSTALLER_HANDOFF_SCRIPT = """
         if (${'$'}installerProcess.ExitCode -notin ${'$'}successfulExitCodes) {
             throw "The Windows installer exited with code ${'$'}(${'$'}installerProcess.ExitCode)."
         }
-        Start-Process -FilePath ${'$'}LauncherPath -ErrorAction Stop
+        ${'$'}relaunchApplication = ${'$'}true
     } catch {
         if (-not (Get-Process -Id ${'$'}ParentProcessId -ErrorAction SilentlyContinue) -and
             (Test-Path -LiteralPath ${'$'}LauncherPath -PathType Leaf)) {
-            Start-Process -FilePath ${'$'}LauncherPath -ArgumentList @('--update-handoff-failed') -ErrorAction SilentlyContinue
+            ${'$'}relaunchApplication = ${'$'}true
+            ${'$'}relaunchWithFailure = ${'$'}true
         }
     } finally {
         Remove-Item -LiteralPath ${'$'}AcknowledgementPath -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath ${'$'}CancellationPath -Force -ErrorAction SilentlyContinue
+        if (${'$'}null -ne ${'$'}updateGateStream) {
+            ${'$'}updateGateStream.Dispose()
+        }
+        Remove-Item -LiteralPath ${'$'}UpdateGatePath -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath ${'$'}PSCommandPath -Force -ErrorAction SilentlyContinue
+    }
+    if (${'$'}relaunchApplication -and (Test-Path -LiteralPath ${'$'}LauncherPath -PathType Leaf)) {
+        try {
+            if (${'$'}relaunchWithFailure) {
+                Start-Process -FilePath ${'$'}LauncherPath `
+                    -ArgumentList @('--update-handoff-failed') `
+                    -ErrorAction Stop
+            } else {
+                Start-Process -FilePath ${'$'}LauncherPath -ErrorAction Stop
+            }
+        } catch {
+            if (-not ${'$'}relaunchWithFailure) {
+                Start-Process -FilePath ${'$'}LauncherPath `
+                    -ArgumentList @('--update-handoff-failed') `
+                    -ErrorAction SilentlyContinue
+            }
+        }
     }
 """.trimIndent() + "\r\n"
 

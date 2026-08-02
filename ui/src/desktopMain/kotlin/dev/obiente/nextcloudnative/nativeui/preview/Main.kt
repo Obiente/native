@@ -33,6 +33,7 @@ import dev.obiente.nextcloudnative.app.NextcloudNativeNavigationRequest
 import dev.obiente.nextcloudnative.app.NextcloudNativeRoute
 import dev.obiente.nextcloudnative.app.ThemePreference
 import dev.obiente.nextcloudnative.app.applyDesktopNativeWindowFrame
+import dev.obiente.nextcloudnative.app.desktopUpdateHandoffActive
 import dev.obiente.nextcloudnative.app.tooltip
 import dev.obiente.nextcloudnative.app.unregisterWindowsCloudFilesRootForUninstall
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
@@ -47,11 +48,21 @@ import java.awt.event.WindowEvent
 import javax.imageio.ImageIO
 import javax.swing.JOptionPane
 import javax.swing.SwingUtilities
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 fun main(arguments: Array<String>) {
     if (arguments.contentEquals(arrayOf("--unregister-windows-sync-root"))) {
         unregisterWindowsCloudFilesRootForUninstall()
+        return
+    }
+    if (desktopUpdateHandoffActive()) {
+        JOptionPane.showMessageDialog(
+            null,
+            "Nextcloud Native is updating and will reopen when installation finishes.",
+            "Nextcloud Native update in progress",
+            JOptionPane.INFORMATION_MESSAGE,
+        )
         return
     }
     val backgroundLaunch = arguments.contains("--background")
@@ -105,7 +116,6 @@ fun main(arguments: Array<String>) {
     val mainWindowState = rememberWindowState(width = 1_280.dp, height = 820.dp)
     val navigationSequence = remember { mutableStateOf(0L) }
     val navigationRequest = remember { mutableStateOf<NextcloudNativeNavigationRequest?>(null) }
-    val externalActivation = singleInstance.activations.collectAsState().value
     val updateFailureSequence = remember { mutableStateOf(if (updateHandoffFailed) 1L else 0L) }
     val shownUpdateFailureSequence = remember { mutableStateOf(0L) }
     val appIcon = painterResource("nextcloud-native.png")
@@ -187,8 +197,8 @@ fun main(arguments: Array<String>) {
         showMainWindow()
     }
 
-    LaunchedEffect(externalActivation.sequence) {
-        if (externalActivation.sequence > 0L) {
+    LaunchedEffect(singleInstance) {
+        singleInstance.activations.collect { externalActivation ->
             showMainWindow()
             if (externalActivation.kind == DesktopActivationKind.UpdateHandoffFailed) {
                 updateFailureSequence.value += 1L
