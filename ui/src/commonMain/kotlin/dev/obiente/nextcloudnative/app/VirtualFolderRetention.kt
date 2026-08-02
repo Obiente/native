@@ -9,6 +9,27 @@ enum class VirtualFolderRetention {
     KeepOnDevice,
 }
 
+@Serializable
+enum class VirtualFolderHydrationPhase {
+    Queued,
+    Downloading,
+    AvailableOffline,
+    Failed,
+}
+
+data class VirtualFolderHydrationStatus(
+    val relativePath: String,
+    val phase: VirtualFolderHydrationPhase,
+    val detail: String? = null,
+) {
+    init {
+        require(relativePath.isNotEmpty())
+        FileOfflineKey("account", relativePath)
+        require(detail == null || detail.isNotBlank() && detail.length <= MAX_VIRTUAL_FOLDER_HYDRATION_DETAIL_LENGTH)
+        require(phase == VirtualFolderHydrationPhase.Failed || detail == null)
+    }
+}
+
 data class VirtualFolderRetentionRule(
     val relativePath: String,
     val retention: VirtualFolderRetention,
@@ -151,3 +172,4 @@ fun planVirtualFolderRetention(
 }
 
 private const val MAX_VIRTUAL_FOLDER_RETENTION_RULES = 1_024
+private const val MAX_VIRTUAL_FOLDER_HYDRATION_DETAIL_LENGTH = 256

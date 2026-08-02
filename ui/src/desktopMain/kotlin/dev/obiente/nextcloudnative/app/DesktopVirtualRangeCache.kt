@@ -22,6 +22,7 @@ internal data class DesktopVirtualRangeCacheSummary(
 internal class DesktopVirtualRangeCache(
     private val root: File,
     private val maximumIndexBytes: Long = MAX_INDEX_BYTES,
+    private val maximumBlocks: Int = MAX_BLOCKS,
     private val createParentDirectories: Boolean = true,
     private val policy: () -> VirtualFileCachePolicy,
 ) {
@@ -29,6 +30,7 @@ internal class DesktopVirtualRangeCache(
 
     init {
         require(maximumIndexBytes in 1L..MAX_INDEX_BYTES)
+        require(maximumBlocks in 1..MAX_BLOCKS)
         val cacheRoot = root.toPath().toAbsolutePath().normalize()
         val parent = requireNotNull(cacheRoot.parent)
         if (createParentDirectories) {
@@ -130,20 +132,19 @@ internal class DesktopVirtualRangeCache(
             block.path == normalized &&
                 (block.remoteRevision != remoteRevision || block.fileSize != fileSize || block.offset == offset)
         }
-        val next = current.copy(
-            blocks = current.blocks.filterNot { it in obsolete } + CachedRangeBlock(
-                path = normalized,
-                remoteRevision = remoteRevision,
-                fileSize = fileSize,
-                offset = offset,
-                length = bytes.size,
-                blobName = blobName,
-                sha256 = sha256Hex(bytes),
-                cachedAtEpochMillis = nowEpochMillis,
-                lastAccessedAtEpochMillis = nowEpochMillis,
-            ),
+        val newRecord = CachedRangeBlock(
+            path = normalized,
+            remoteRevision = remoteRevision,
+            fileSize = fileSize,
+            offset = offset,
+            length = bytes.size,
+            blobName = blobName,
+            sha256 = sha256Hex(bytes),
+            cachedAtEpochMillis = nowEpochMillis,
+            lastAccessedAtEpochMillis = nowEpochMillis,
         )
-        requireIndexFits(next)
+        val next = current.copy(blocks = current.blocks.filterNot { it in obsolete } + newRecord)
+        requireIndexFits(accountId, next, newRecord)
         val alreadyReferenced = current.blocks.any { block -> block.blobName == blobName }
         try {
             publishBytes(directory, blobName, bytes)
@@ -168,7 +169,11 @@ internal class DesktopVirtualRangeCache(
 
     @Synchronized
     fun loadFolderRetention(accountId: String): VirtualFolderRetentionState =
-        load(accountId).folderRules.toDomain()
+        loadRetention(accountId).rules.toDomain()
+
+    @Synchronized
+    fun loadFolderHydrationStatuses(accountId: String): List<VirtualFolderHydrationStatus> =
+        loadRetention(accountId).hydration.map(CachedVirtualFolderHydration::toDomain)
 
     @Synchronized
     fun cachedBytesForRevision(accountId: String, path: String, remoteRevision: String, fileSize: Long): Long {
@@ -182,9 +187,36 @@ internal class DesktopVirtualRangeCache(
 
     @Synchronized
     fun setFolderRetention(accountId: String, path: String, retention: VirtualFolderRetention) {
-        val current = load(accountId)
-        val next = current.folderRules.toDomain().withRetention(path, retention)
-        save(current = current, accountId = accountId, folderRetention = next)
+        val current = loadRetention(accountId)
+        val next = current.rules.toDomain().withRetention(path, retention)
+        FileOfflineKey(accountId, path)
+        val retainedStatusPaths = next.rules.asSequence()
+            .filter { rule -> rule.retention == VirtualFolderRetention.KeepOnDevice }
+            .mapTo(hashSetOf(), VirtualFolderRetentionRule::relativePath)
+        saveRetention(
+            accountId,
+            current.copy(
+                rules = next.rules.map { rule -> CachedVirtualFolderRule(rule.relativePath, rule.retention) },
+                hydration = current.hydration.filter { status -> status.relativePath in retainedStatusPaths },
+            ),
+        )
+    }
+
+    @Synchronized
+    fun setFolderHydrationStatus(accountId: String, status: VirtualFolderHydrationStatus) {
+        val current = loadRetention(accountId)
+        require(
+            current.rules.toDomain().rules.any { rule ->
+                rule.relativePath == status.relativePath && rule.retention == VirtualFolderRetention.KeepOnDevice
+            },
+        ) { "Hydration status requires an explicit keep-on-device rule." }
+        saveRetention(
+            accountId,
+            current.copy(
+                hydration = current.hydration.filterNot { it.relativePath == status.relativePath } +
+                    CachedVirtualFolderHydration.fromDomain(status),
+            ),
+        )
     }
 
     /** Releases only inactive, automatic blocks in the selected subtree. */
@@ -192,7 +224,7 @@ internal class DesktopVirtualRangeCache(
     fun dehydrateFolder(accountId: String, path: String, protectedPaths: Set<String>): Long {
         val normalized = FileOfflineKey(accountId, path).relativePath
         val current = load(accountId)
-        val retention = current.folderRules.toDomain()
+        val retention = loadFolderRetention(accountId)
         val removablePaths = current.blocks.asSequence()
             .map(CachedRangeBlock::path)
             .distinct()
@@ -214,13 +246,13 @@ internal class DesktopVirtualRangeCache(
     fun summary(accountId: String): DesktopVirtualRangeCacheSummary {
         val entries = load(accountId).toDomain(accountId)
         val plan = planVirtualFileEviction(
-            entries = entries,
+            entries = entries.filter { entry -> entry.retention == VirtualFileRetention.Automatic },
             policy = policy(),
             availableFreeBytes = root.usableSpace.coerceAtLeast(0L),
             nowEpochMillis = System.currentTimeMillis(),
         )
         return DesktopVirtualRangeCacheSummary(
-            cachedBytes = plan.cachedBytes,
+            cachedBytes = entries.sumOf(VirtualFileCacheEntry::sizeBytes),
             reclaimableBytes = plan.reclaimableBytes,
             pinnedBytes = entries
                 .filter { entry -> entry.retention == VirtualFileRetention.Pinned }
@@ -237,8 +269,11 @@ internal class DesktopVirtualRangeCache(
 
     private fun applyEviction(accountId: String, requestedBytes: Long, nowEpochMillis: Long): VirtualFileEvictionPlan {
         val current = load(accountId)
+        val automaticEntries = current.toDomain(accountId).filter { entry ->
+            entry.retention == VirtualFileRetention.Automatic
+        }
         val plan = planVirtualFileEviction(
-            entries = current.toDomain(accountId),
+            entries = automaticEntries,
             policy = policy(),
             availableFreeBytes = root.usableSpace.coerceAtLeast(0L),
             nowEpochMillis = nowEpochMillis,
@@ -257,8 +292,9 @@ internal class DesktopVirtualRangeCache(
         return plan
     }
 
-    private fun RangeCacheIndex.toDomain(accountId: String): List<VirtualFileCacheEntry> =
-        blocks.groupBy(CachedRangeBlock::path).map { (path, fileBlocks) ->
+    private fun RangeCacheIndex.toDomain(accountId: String): List<VirtualFileCacheEntry> {
+        val retention = loadFolderRetention(accountId)
+        return blocks.groupBy(CachedRangeBlock::path).map { (path, fileBlocks) ->
             VirtualFileCacheEntry(
                 key = FileOfflineKey(accountId, path),
                 remoteRevision = fileBlocks.first().remoteRevision,
@@ -267,11 +303,12 @@ internal class DesktopVirtualRangeCache(
                 cachedAtEpochMillis = fileBlocks.minOf(CachedRangeBlock::cachedAtEpochMillis),
                 lastAccessedAtEpochMillis = fileBlocks.maxOf(CachedRangeBlock::lastAccessedAtEpochMillis),
                 retention = if (
-                    folderRules.toDomain().retentionFor(path) == VirtualFolderRetention.KeepOnDevice
+                    retention.retentionFor(path) == VirtualFolderRetention.KeepOnDevice
                 ) VirtualFileRetention.Pinned else VirtualFileRetention.Automatic,
                 activeLeaseCount = activePaths.getOrDefault(FileOfflineKey(accountId, path), 0),
             )
         }
+    }
 
     private fun List<CachedRangeBlock>.localRevision(): String = "sha256:" + sha256Hex(
         sortedBy(CachedRangeBlock::offset).joinToString("|") { block ->
@@ -287,11 +324,28 @@ internal class DesktopVirtualRangeCache(
         }.getOrElse { RangeCacheIndex() }
     }
 
+    private fun loadRetention(accountId: String): VirtualFolderRetentionIndex {
+        val directory = accountDirectory(accountId)
+        val file = File(directory, RETENTION_INDEX_FILE)
+        if (file.isFile && file.length() in 1L..MAX_RETENTION_INDEX_BYTES) {
+            runCatching {
+                return rangeCacheJson.decodeFromString<VirtualFolderRetentionIndex>(file.readText()).also { index ->
+                    index.requireValid()
+                }
+            }
+        }
+        val legacy = load(accountId).folderRules
+        if (legacy.isEmpty()) return VirtualFolderRetentionIndex()
+        return VirtualFolderRetentionIndex(rules = legacy).also { migrated ->
+            runCatching { saveRetention(accountId, migrated) }
+        }
+    }
+
     private fun save(accountId: String, index: RangeCacheIndex) {
         val directory = accountDirectory(accountId).apply {
             check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
         }
-        val bounded = boundedIndex(index)
+        val bounded = boundedIndex(accountId, index)
         val encoded = encodedIndex(bounded)
         publishBytes(directory, INDEX_FILE, encoded)
         val referenced = bounded.blocks.mapTo(hashSetOf(), CachedRangeBlock::blobName)
@@ -300,26 +354,41 @@ internal class DesktopVirtualRangeCache(
             .forEach(File::delete)
     }
 
-    private fun save(
-        current: RangeCacheIndex,
-        accountId: String,
-        folderRetention: VirtualFolderRetentionState,
-    ) = save(
-        accountId,
-        current.copy(
-            folderRules = folderRetention.rules.map { rule ->
-                CachedVirtualFolderRule(rule.relativePath, rule.retention)
-            },
-        ),
-    )
-
-    private fun requireIndexFits(index: RangeCacheIndex) {
-        encodedIndex(boundedIndex(index))
+    private fun saveRetention(accountId: String, index: VirtualFolderRetentionIndex) {
+        index.requireValid()
+        val encoded = rangeCacheJson.encodeToString(index).encodeToByteArray()
+        require(encoded.size.toLong() <= MAX_RETENTION_INDEX_BYTES) {
+            "The desktop virtual folder retention index is too large."
+        }
+        val directory = accountDirectory(accountId).apply {
+            check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
+        }
+        publishBytes(directory, RETENTION_INDEX_FILE, encoded)
     }
 
-    private fun boundedIndex(index: RangeCacheIndex): RangeCacheIndex = index.copy(
-        blocks = index.blocks.sortedByDescending(CachedRangeBlock::lastAccessedAtEpochMillis).take(MAX_BLOCKS),
-    ).also { bounded -> bounded.requireValid() }
+    private fun requireIndexFits(accountId: String, index: RangeCacheIndex, required: CachedRangeBlock) {
+        val bounded = boundedIndex(accountId, index)
+        require(required in bounded.blocks) {
+            "The retained folder is larger than the supported virtual-file cache index."
+        }
+        encodedIndex(bounded)
+    }
+
+    private fun boundedIndex(accountId: String, index: RangeCacheIndex): RangeCacheIndex {
+        val retention = loadFolderRetention(accountId)
+        val (pinned, automatic) = index.blocks.partition { block ->
+            retention.retentionFor(block.path) == VirtualFolderRetention.KeepOnDevice
+        }
+        require(pinned.size <= maximumBlocks) {
+            "The retained folders exceed the supported virtual-file cache index."
+        }
+        return index.copy(
+            blocks = pinned + automatic
+                .sortedByDescending(CachedRangeBlock::lastAccessedAtEpochMillis)
+                .take(maximumBlocks - pinned.size),
+            folderRules = emptyList(),
+        ).also { bounded -> bounded.requireValid() }
+    }
 
     private fun encodedIndex(index: RangeCacheIndex): ByteArray =
         rangeCacheJson.encodeToString(index).encodeToByteArray().also { encoded ->
@@ -359,15 +428,31 @@ internal class DesktopVirtualRangeCache(
     }
 
     private fun RangeCacheIndex.requireValid() {
-        require(version == 1 && blocks.size <= MAX_BLOCKS)
+        require(version == 1 && blocks.size <= maximumBlocks)
         require(blocks.map { "${it.path}\u0000${it.offset}" }.distinct().size == blocks.size)
         blocks.forEach(CachedRangeBlock::requireValid)
         folderRules.toDomain()
     }
 
+    private fun VirtualFolderRetentionIndex.requireValid() {
+        require(version == 1)
+        val retention = rules.toDomain()
+        require(hydration.map(CachedVirtualFolderHydration::relativePath).distinct().size == hydration.size)
+        hydration.forEach { cached ->
+            val status = cached.toDomain()
+            require(
+                retention.rules.any { rule ->
+                    rule.relativePath == status.relativePath && rule.retention == VirtualFolderRetention.KeepOnDevice
+                },
+            )
+        }
+    }
+
     private companion object {
         const val INDEX_FILE = "range-index-v1.json"
+        const val RETENTION_INDEX_FILE = "folder-retention-v1.json"
         const val MAX_INDEX_BYTES = 16L * 1024L * 1024L
+        const val MAX_RETENTION_INDEX_BYTES = 1024L * 1024L
         const val MAX_BLOCKS = 20_000
         const val MAX_BLOCK_BYTES = 4 * 1024 * 1024
     }
@@ -396,6 +481,30 @@ private data class CachedVirtualFolderRule(
     val relativePath: String,
     val retention: VirtualFolderRetention,
 )
+
+@Serializable
+private data class VirtualFolderRetentionIndex(
+    val version: Int = 1,
+    val rules: List<CachedVirtualFolderRule> = emptyList(),
+    val hydration: List<CachedVirtualFolderHydration> = emptyList(),
+)
+
+@Serializable
+private data class CachedVirtualFolderHydration(
+    val relativePath: String,
+    val phase: VirtualFolderHydrationPhase,
+    val detail: String? = null,
+) {
+    fun toDomain(): VirtualFolderHydrationStatus = VirtualFolderHydrationStatus(relativePath, phase, detail)
+
+    companion object {
+        fun fromDomain(status: VirtualFolderHydrationStatus) = CachedVirtualFolderHydration(
+            status.relativePath,
+            status.phase,
+            status.detail,
+        )
+    }
+}
 
 private fun List<CachedVirtualFolderRule>.toDomain(): VirtualFolderRetentionState =
     VirtualFolderRetentionState(map { rule -> VirtualFolderRetentionRule(rule.relativePath, rule.retention) })

@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class DesktopVirtualRangeCacheTest {
     @Test
@@ -93,6 +94,95 @@ class DesktopVirtualRangeCacheTest {
             cache.release(ACCOUNT_ID, "Photos/Album/open.raf")
             assertEquals(4L, cache.dehydrateFolder(ACCOUNT_ID, "Photos/Album", setOf("Photos/Album/dirty.raf")))
             assertEquals(5L, cache.summary(ACCOUNT_ID).cachedBytes)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `retention intent and hydration failure survive a corrupt disposable range index`() {
+        val directory = Files.createTempDirectory("virtual-range-retention-index-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Album", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderHydrationStatus(
+                ACCOUNT_ID,
+                VirtualFolderHydrationStatus(
+                    "Photos/Album",
+                    VirtualFolderHydrationPhase.Failed,
+                    "The storage drive became unavailable.",
+                ),
+            )
+            cache.storeBlock(ACCOUNT_ID, "Photos/Album/photo.raf", "e1", 4L, 0L, "data".encodeToByteArray())
+            directory.resolve(ACCOUNT_ID).resolve("range-index-v1.json").writeText("not-json")
+
+            val restarted = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            assertEquals(
+                VirtualFolderRetention.KeepOnDevice,
+                restarted.loadFolderRetention(ACCOUNT_ID).retentionFor("Photos/Album/photo.raf"),
+            )
+            assertEquals(
+                VirtualFolderHydrationPhase.Failed,
+                restarted.loadFolderHydrationStatuses(ACCOUNT_ID).single().phase,
+            )
+            assertEquals(0L, restarted.summary(ACCOUNT_ID).cachedBytes)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `pinned blocks are rejected instead of truncated at the index bound`() {
+        val directory = Files.createTempDirectory("virtual-range-pinned-bound-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(
+                root = directory,
+                maximumBlocks = 2,
+                policy = { nonEvictingTestPolicy() },
+            )
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Album", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/Album/large.raf", "e1", 3L, 0L, byteArrayOf(1))
+            cache.storeBlock(ACCOUNT_ID, "Photos/Album/large.raf", "e1", 3L, 1L, byteArrayOf(2))
+
+            assertFailsWith<IllegalArgumentException> {
+                cache.storeBlock(ACCOUNT_ID, "Photos/Album/large.raf", "e1", 3L, 2L, byteArrayOf(3))
+            }
+            assertContentEquals(
+                byteArrayOf(1),
+                cache.readBlock(ACCOUNT_ID, "Photos/Album/large.raf", "e1", 3L, 0L, 1),
+            )
+            assertContentEquals(
+                byteArrayOf(2),
+                cache.readBlock(ACCOUNT_ID, "Photos/Album/large.raf", "e1", 3L, 1L, 1),
+            )
+            assertEquals(2L, cache.summary(ACCOUNT_ID).pinnedBytes)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `pinned bytes do not consume the automatic range cache budget`() {
+        val directory = Files.createTempDirectory("virtual-range-pinned-budget-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) {
+                VirtualFileCachePolicy(maximumCacheBytes = 4L, minimumFreeSpaceBytes = 0L, unusedFileAgeMillis = null)
+            }
+            cache.storeBlock(ACCOUNT_ID, "Photos/automatic.raf", "e1", 4L, 0L, "auto".encodeToByteArray())
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Album", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/Album/pinned.raf", "e2", 4L, 0L, "keep".encodeToByteArray())
+
+            assertContentEquals(
+                "auto".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/automatic.raf", "e1", 4L, 0L, 4),
+            )
+            assertContentEquals(
+                "keep".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/Album/pinned.raf", "e2", 4L, 0L, 4),
+            )
+            assertEquals(8L, cache.summary(ACCOUNT_ID).cachedBytes)
+            assertEquals(4L, cache.summary(ACCOUNT_ID).pinnedBytes)
+            assertTrue(cache.summary(ACCOUNT_ID).reclaimableBytes >= 4L)
         } finally {
             directory.deleteRecursively()
         }

@@ -37,4 +37,26 @@ class DesktopVirtualFileProviderLocationTest {
             temporary.deleteRecursively()
         }
     }
+
+    @Test
+    fun activationValidationDoesNotRecreateAMissingConfiguredParent() {
+        val temporary = Files.createTempDirectory("virtual-provider-activation-").toFile()
+        val missingParent = temporary.resolve("detached-drive")
+        try {
+            assertFailsWith<IllegalArgumentException> {
+                validateDesktopVirtualFileProviderLocation(
+                    VirtualFileProviderLocation(missingParent.absolutePath, "Nextcloud Native"),
+                )
+            }
+            assertEquals(false, missingParent.exists())
+        } finally {
+            temporary.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun internalCacheDirectoryCannotBeUsedAsTheVisibleFolder() {
+        assertEquals(false, ".nextcloud-native-cache".isValidVirtualFileProviderFolderName())
+        assertEquals(false, ".NEXTCLOUD-NATIVE-CACHE".isValidVirtualFileProviderFolderName())
+    }
 }

@@ -385,6 +385,7 @@ internal class DesktopNextcloudVirtualFileBackend(
     private val rangeCache: DesktopVirtualRangeCache,
     private val writebacks: DesktopLinuxVirtualFileWritebackStore,
     private val tree: DesktopFileSyncRemoteTree = DesktopFileSyncRemoteTree(session, userId, ""),
+    private val requireDurableCacheWrites: Boolean = false,
 ) : LinuxVirtualFileBackend {
     private val accountId = desktopFileCacheAccountId(session)
 
@@ -431,7 +432,7 @@ internal class DesktopNextcloudVirtualFileBackend(
                             length = blockLength,
                         )
                     }.getOrNull() ?: runBlocking(Dispatchers.IO) { source.read(blockOffset, blockLength) }.also { fetched ->
-                        runCatching {
+                        val stored = runCatching {
                             rangeCache.storeBlock(
                                 accountId = accountId,
                                 path = currentPath,
@@ -441,6 +442,7 @@ internal class DesktopNextcloudVirtualFileBackend(
                                 bytes = fetched,
                             )
                         }
+                        if (requireDurableCacheWrites) stored.getOrThrow()
                     }
                     val copyStart = maxOf(offset, blockOffset)
                     val copyEnd = minOf(offset + length, blockOffset + blockLength)

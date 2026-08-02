@@ -1474,6 +1474,7 @@ internal fun MarketingVirtualFileStorageDesktopScenario() {
                     onChangeLocation = {},
                     onChoosePinnedFolder = {},
                     onReleaseFolder = {},
+                    onRetryFolder = {},
                 )
             }
         }

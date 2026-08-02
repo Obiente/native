@@ -468,6 +468,9 @@ internal fun FileOfflineCenterScreen(
                         onReleaseFolder = { path ->
                             setVirtualFolderRetention(path, VirtualFolderRetention.Automatic)
                         },
+                        onRetryFolder = { path ->
+                            setVirtualFolderRetention(path, VirtualFolderRetention.KeepOnDevice)
+                        },
                     )
                 }
             }
@@ -1294,6 +1297,7 @@ internal fun VirtualFileStorageCard(
     onChangeLocation: () -> Unit,
     onChoosePinnedFolder: () -> Unit,
     onReleaseFolder: (String) -> Unit,
+    onRetryFolder: (String) -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1466,20 +1470,50 @@ internal fun VirtualFileStorageCard(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         } else {
+                            val hydrationByPath = snapshot.folderHydrationStatuses.associateBy(
+                                VirtualFolderHydrationStatus::relativePath,
+                            )
                             pinnedFolders.forEach { rule ->
+                                val status = hydrationByPath[rule.relativePath]
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Text(
-                                        rule.relativePath,
-                                        modifier = Modifier.weight(1f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    TextButton(enabled = !busy, onClick = { onReleaseFolder(rule.relativePath) }) {
-                                        Text("Make online-only")
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            rule.relativePath,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            when (status?.phase) {
+                                                VirtualFolderHydrationPhase.Queued -> "Waiting to download"
+                                                VirtualFolderHydrationPhase.Downloading -> "Downloading for offline use"
+                                                VirtualFolderHydrationPhase.AvailableOffline -> "Available offline"
+                                                VirtualFolderHydrationPhase.Failed ->
+                                                    status.detail ?: "Download needs attention"
+                                                null -> "Waiting to check offline content"
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (status?.phase == VirtualFolderHydrationPhase.Failed) {
+                                                MaterialTheme.colorScheme.error
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            },
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        if (status?.phase == VirtualFolderHydrationPhase.Failed) {
+                                            TextButton(enabled = !busy, onClick = { onRetryFolder(rule.relativePath) }) {
+                                                Text("Retry")
+                                            }
+                                        }
+                                        TextButton(enabled = !busy, onClick = { onReleaseFolder(rule.relativePath) }) {
+                                            Text("Make online-only")
+                                        }
                                     }
                                 }
                             }
