@@ -378,6 +378,30 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `slow directory materialization does not block an unrelated open`() {
+        val fixture = MutableFixtureBackend().apply { createDirectory("Slow") }
+        val backend = BlockingListBackend(fixture, "Slow")
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        val runtime = Runtime.getSystemRuntime()
+        val slow = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val fast = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val workers = Executors.newFixedThreadPool(2)
+        try {
+            val slowOpen = workers.submit<Int> { fileSystem.opendir("/Slow", slow) }
+            assertTrue(backend.started.await(2L, TimeUnit.SECONDS))
+
+            assertEquals(0, workers.submit<Int> { fileSystem.opendir("/Photos", fast) }.get(1L, TimeUnit.SECONDS))
+            assertEquals(0, fileSystem.releasedir("/Photos", fast))
+            backend.release.countDown()
+            assertEquals(0, slowOpen.get(2L, TimeUnit.SECONDS))
+            assertEquals(0, fileSystem.releasedir("/Slow", slow))
+        } finally {
+            backend.release.countDown()
+            workers.shutdownNow()
+        }
+    }
+
+    @Test
     fun `listing persistence keeps causal order from before the network request`() {
         val root = Files.createTempDirectory("linux-virtual-causal-listing-")
         val preferences = Preferences.userRoot().node(
@@ -400,9 +424,10 @@ class LinuxVirtualFileSystemTest {
             }
             val persisted = DesktopLinuxVirtualMetadataStore(cache, accountId)
             val store = object : LinuxVirtualMetadataStore by persisted {
-                override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
-                    persisted.store(path, snapshot)
+                override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean {
+                    val stored = persisted.store(path, snapshot)
                     persistenceAttempted.countDown()
+                    return stored
                 }
             }
             val clock = AtomicLong(100L)
@@ -430,6 +455,48 @@ class LinuxVirtualFileSystemTest {
         } finally {
             runCatching { preferences.removeNode() }
             root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a skipped persisted refresh keeps its invalidation tombstone`() {
+        val delegate = MutableFixtureBackend()
+        val stale = LinuxVirtualDirectorySnapshot(
+            nodes = listOf(LinuxVirtualFileNode("Photos", "Photos", true, 0L, "stale-photos")),
+            fetchedAtEpochMillis = 100L,
+        )
+        val persistenceAttempted = CountDownLatch(1)
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = stale.takeIf { path.isEmpty() }
+
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean {
+                if (path.isEmpty()) persistenceAttempted.countDown()
+                return false
+            }
+
+            override fun invalidate(path: String): Unit = error("Simulated persisted invalidation failure")
+            override fun retainedPaths(): Set<String> = setOf("")
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = store,
+            nowEpochMillis = { 100L },
+            freshForMillis = Long.MAX_VALUE,
+            maximumRetainedDirectories = 1,
+        )
+        try {
+            assertEquals(listOf("Photos"), cached.list("").map(LinuxVirtualFileNode::name))
+            cached.createDirectory("Albums")
+            assertEquals(setOf("Photos", "Albums"), cached.list("").mapTo(mutableSetOf(), LinuxVirtualFileNode::name))
+            assertTrue(persistenceAttempted.await(2L, TimeUnit.SECONDS))
+            assertEquals(0, cached.revalidatedPersistedListingCount())
+            assertEquals(1, cached.failedPersistedInvalidationCount())
+
+            cached.list("Photos")
+            assertEquals(setOf("Photos", "Albums"), cached.list("").mapTo(mutableSetOf(), LinuxVirtualFileNode::name))
+            assertEquals(2, delegate.listCallCount(""))
+        } finally {
+            cached.close()
         }
     }
 
@@ -612,9 +679,10 @@ class LinuxVirtualFileSystemTest {
         val releasePersistence = CountDownLatch(1)
         val store = object : LinuxVirtualMetadataStore {
             override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
-            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean {
                 persistenceStarted.countDown()
                 check(releasePersistence.await(2L, TimeUnit.SECONDS))
+                return true
             }
             override fun invalidate(path: String) = Unit
         }
@@ -656,7 +724,7 @@ class LinuxVirtualFileSystemTest {
                 check(releaseLoad.await(2L, TimeUnit.SECONDS))
                 return stale
             }
-            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = Unit
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = true
             override fun invalidate(path: String) = Unit
         }
         val cached = CachingLinuxVirtualFileBackend(
@@ -726,7 +794,7 @@ class LinuxVirtualFileSystemTest {
         }
         val store = object : LinuxVirtualMetadataStore {
             override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
-            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = Unit
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = true
             override fun invalidate(path: String) = Unit
         }
         val cached = CachingLinuxVirtualFileBackend(
@@ -755,7 +823,7 @@ class LinuxVirtualFileSystemTest {
             override fun load(path: String): LinuxVirtualDirectorySnapshot? =
                 stale.takeIf { path.isEmpty() }.also { loads.incrementAndGet() }
 
-            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = Unit
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = true
             override fun invalidate(path: String): Unit = error("Simulated cache publication failure")
         }
         val cached = CachingLinuxVirtualFileBackend(
@@ -777,7 +845,7 @@ class LinuxVirtualFileSystemTest {
         val invalidations = AtomicInteger(0)
         val store = object : LinuxVirtualMetadataStore {
             override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
-            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = Unit
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = true
             override fun invalidate(path: String) {
                 invalidations.incrementAndGet()
             }
@@ -801,7 +869,7 @@ class LinuxVirtualFileSystemTest {
         val invalidations = AtomicInteger(0)
         val store = object : LinuxVirtualMetadataStore {
             override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
-            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = Unit
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = true
             override fun invalidate(path: String) {
                 invalidations.incrementAndGet()
             }
@@ -1026,6 +1094,49 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `directory release and rename cannot leak a readdressed handle`() {
+        val fixture = MutableFixtureBackend()
+        val moveCommitted = CountDownLatch(1)
+        val backend = object : LinuxVirtualFileBackend by fixture {
+            override fun move(node: LinuxVirtualFileNode, destinationPath: String) {
+                fixture.move(node, destinationPath)
+                moveCommitted.countDown()
+            }
+        }
+        val releaseLoaded = CountDownLatch(1)
+        val allowRemoval = CountDownLatch(1)
+        val fileSystem = LinuxNextcloudVirtualFileSystem(
+            backend = backend,
+            maximumOpenDirectoryEntries = 2,
+            beforeDirectoryHandleRemoval = {
+                releaseLoaded.countDown()
+                check(allowRemoval.await(2L, TimeUnit.SECONDS))
+            },
+        )
+        val runtime = Runtime.getSystemRuntime()
+        val opened = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val reopened = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val workers = Executors.newFixedThreadPool(2)
+        try {
+            assertEquals(0, fileSystem.opendir("/Photos", opened))
+            val release = workers.submit<Int> { fileSystem.releasedir("/Photos", opened) }
+            assertTrue(releaseLoaded.await(2L, TimeUnit.SECONDS))
+            val rename = workers.submit<Int> { fileSystem.rename("/Photos", "/Albums") }
+            assertTrue(moveCommitted.await(2L, TimeUnit.SECONDS))
+            assertFalse(rename.isDone)
+
+            allowRemoval.countDown()
+            assertEquals(0, release.get(2L, TimeUnit.SECONDS))
+            assertEquals(0, rename.get(2L, TimeUnit.SECONDS))
+            assertEquals(0, fileSystem.opendir("/Albums", reopened))
+            assertEquals(0, fileSystem.releasedir("/Albums", reopened))
+        } finally {
+            allowRemoval.countDown()
+            workers.shutdownNow()
+        }
+    }
+
+    @Test
     fun `release reports a close time writeback failure`() {
         val backend = MutableFixtureBackend(failClose = true)
         val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
@@ -1235,8 +1346,9 @@ class LinuxVirtualFileSystemTest {
         override fun load(path: String): LinuxVirtualDirectorySnapshot? = snapshots[path]
 
         @Synchronized
-        override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
+        override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean {
             snapshots[path] = snapshot
+            return true
         }
 
         @Synchronized
