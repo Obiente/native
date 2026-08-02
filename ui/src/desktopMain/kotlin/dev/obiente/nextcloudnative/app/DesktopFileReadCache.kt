@@ -35,9 +35,9 @@ internal class DesktopFileReadCache(
     private val root: File,
     private val maximumContentBytes: Long = DEFAULT_MAXIMUM_CONTENT_BYTES,
     private val maximumEntryBytes: Long = DEFAULT_MAXIMUM_ENTRY_BYTES,
+    private val preferences: Preferences = Preferences.userRoot()
+        .node("dev/obiente/nextcloudnative/virtual-file-cache"),
 ) {
-    private val preferences = Preferences.userRoot()
-        .node("dev/obiente/nextcloudnative/virtual-file-cache")
     init {
         require(maximumContentBytes > 0L)
         require(maximumEntryBytes in 1L..maximumContentBytes)

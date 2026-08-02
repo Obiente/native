@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Files
+import java.util.prefs.Preferences
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -24,7 +25,7 @@ class DesktopFileReadCacheTest {
             ),
         )
 
-        val restored = DesktopFileReadCache(root)
+        val restored = DesktopFileReadCache(root, preferences = testPreferences(root))
 
         assertEquals(listOf(file), restored.cachedListing(accountId, "Notes"))
         assertContentEquals(
@@ -135,7 +136,7 @@ class DesktopFileReadCacheTest {
         val index = root.resolve(accountId).resolve("index-v1.json")
         index.writeText("{not-json")
 
-        val restored = DesktopFileReadCache(root)
+        val restored = DesktopFileReadCache(root, preferences = testPreferences(root))
 
         assertNull(restored.cachedContent(accountId, "safe.txt", 10))
     }
@@ -176,10 +177,20 @@ class DesktopFileReadCacheTest {
         block: (java.io.File, DesktopFileReadCache) -> Unit,
     ) {
         val root = Files.createTempDirectory("ncn-files-cache-").toFile()
+        val preferences = testPreferences(root)
         try {
-            block(root, DesktopFileReadCache(root, maximumContentBytes, maximumEntryBytes))
+            preferences.clear()
+            preferences.putBoolean("automatic-cleanup", false)
+            block(
+                root,
+                DesktopFileReadCache(root, maximumContentBytes, maximumEntryBytes, preferences),
+            )
         } finally {
+            preferences.removeNode()
             root.deleteRecursively()
         }
     }
+
+    private fun testPreferences(root: java.io.File): Preferences = Preferences.userRoot()
+        .node("dev/obiente/nextcloudnative/tests/file-cache/${root.name}")
 }
