@@ -362,9 +362,10 @@ internal class CachingLinuxVirtualFileBackend(
         var persistenceScheduled = false
         try {
             check(!closed) { "The Linux metadata cache is closed." }
+            val requestStartedAtEpochMillis = nowEpochMillis().coerceAtLeast(0L)
             val snapshot = LinuxVirtualDirectorySnapshot(
                 nodes = delegate.list(path),
-                fetchedAtEpochMillis = nowEpochMillis().coerceAtLeast(0L),
+                fetchedAtEpochMillis = requestStartedAtEpochMillis,
                 generation = nextGeneration.getAndIncrement(),
             )
             val published = synchronized(metadataLock) {
@@ -808,14 +809,22 @@ internal class DesktopNextcloudVirtualFileBackend(
  */
 internal class LinuxNextcloudVirtualFileSystem(
     private val backend: LinuxVirtualFileBackend,
+    private val maximumOpenDirectoryEntries: Int = DEFAULT_MAX_OPEN_DIRECTORY_ENTRIES,
 ) : FuseStubFS() {
     private val nextHandle = AtomicLong(1L)
     private val readHandles = ConcurrentHashMap<Long, LinuxVirtualFileReadHandle>()
     private val readHandlePaths = ConcurrentHashMap<Long, String>()
     private val writeHandles = ConcurrentHashMap<Long, LinuxOpenWriteReference>()
     private val directoryHandles = ConcurrentHashMap<Long, LinuxOpenDirectorySnapshot>()
+    private val directoryHandleLock = Any()
+    private val directorySnapshotCreationLock = Any()
+    private var openDirectoryEntries = 0L
     private val pendingCreatedFiles = ConcurrentHashMap<String, LinuxSharedWriteHandle>()
     private val namespaceLock = Any()
+
+    init {
+        require(maximumOpenDirectoryEntries > 0)
+    }
 
     override fun getattr(path: String, stat: FileStat): Int = fuseResult {
         val normalized = path.linuxVirtualPath()
@@ -828,9 +837,7 @@ internal class LinuxNextcloudVirtualFileSystem(
     }
 
     override fun opendir(path: String, fileInfo: FuseFileInfo): Int = fuseResult {
-        val snapshot = openDirectorySnapshot(path)
-        val id = nextHandle.getAndIncrement()
-        directoryHandles[id] = snapshot
+        val id = openAndRegisterDirectorySnapshot(path)
         fileInfo.fh.set(id)
         0
     }
@@ -846,10 +853,9 @@ internal class LinuxNextcloudVirtualFileSystem(
         val handleId = fileInfo.fh.get()
         val existingHandle = directoryHandles[handleId]?.takeIf { it.path == normalized }
         if (handleId != 0L && existingHandle == null) return -ErrorCodes.EBADF()
-        val snapshot = existingHandle ?: openDirectorySnapshot(path).also { opened ->
-            val id = nextHandle.getAndIncrement()
-            directoryHandles[id] = opened
+        val snapshot = existingHandle ?: openAndRegisterDirectorySnapshot(path).let { id ->
             fileInfo.fh.set(id)
+            checkNotNull(directoryHandles[id])
         }
         val entries = snapshot.entries
         if (offset < 0L || offset > entries.size.toLong()) return -ErrorCodes.EINVAL()
@@ -863,9 +869,13 @@ internal class LinuxNextcloudVirtualFileSystem(
 
     override fun releasedir(path: String, fileInfo: FuseFileInfo): Int = fuseResult {
         val id = fileInfo.fh.get()
-        val handle = directoryHandles[id] ?: return -ErrorCodes.EBADF()
-        if (handle.path != path.linuxVirtualPath()) return -ErrorCodes.EBADF()
-        if (!directoryHandles.remove(id, handle)) return -ErrorCodes.EBADF()
+        val normalized = path.linuxVirtualPath()
+        val removed = synchronized(directoryHandleLock) {
+            val handle = directoryHandles[id] ?: return@synchronized null
+            if (handle.path != normalized || !directoryHandles.remove(id, handle)) return@synchronized null
+            openDirectoryEntries = (openDirectoryEntries - handle.entries.size).coerceAtLeast(0L)
+            handle
+        } ?: return -ErrorCodes.EBADF()
         fileInfo.fh.set(0L)
         0
     }
@@ -1070,7 +1080,10 @@ internal class LinuxNextcloudVirtualFileSystem(
         readHandles.clear()
         readHandlePaths.clear()
         writeHandles.clear()
-        directoryHandles.clear()
+        synchronized(directoryHandleLock) {
+            directoryHandles.clear()
+            openDirectoryEntries = 0L
+        }
         pendingCreatedFiles.clear()
         backend.close()
     }
@@ -1100,6 +1113,23 @@ internal class LinuxNextcloudVirtualFileSystem(
         }
         return LinuxOpenDirectorySnapshot(normalized, entries)
     }
+
+    private fun openAndRegisterDirectorySnapshot(path: String): Long =
+        synchronized(directorySnapshotCreationLock) {
+            registerDirectorySnapshot(openDirectorySnapshot(path))
+        }
+
+    private fun registerDirectorySnapshot(snapshot: LinuxOpenDirectorySnapshot): Long =
+        synchronized(directoryHandleLock) {
+            val entryCount = snapshot.entries.size.toLong()
+            if (entryCount > maximumOpenDirectoryEntries.toLong() - openDirectoryEntries) {
+                throw LinuxVirtualFileSystemException(ErrorCodes.ENOMEM())
+            }
+            val id = nextHandle.getAndIncrement()
+            directoryHandles[id] = snapshot
+            openDirectoryEntries += entryCount
+            id
+        }
 
     private fun fillStat(node: LinuxVirtualFileNode, stat: FileStat) {
         stat.st_mode.set(
@@ -1223,6 +1253,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         const val OPEN_ACCESS_MASK = 0x3
         const val OPEN_READ_ONLY = 0x0
         const val OPEN_TRUNCATE = 0x200
+        const val DEFAULT_MAX_OPEN_DIRECTORY_ENTRIES = 100_000
     }
 }
 

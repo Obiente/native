@@ -359,6 +359,80 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `open directory handles share one bounded entry budget`() {
+        val backend = MutableFixtureBackend().apply {
+            addFile("Photos/a.dat", byteArrayOf(1))
+            addFile("Photos/b.dat", byteArrayOf(2))
+        }
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend, maximumOpenDirectoryEntries = 4)
+        val runtime = Runtime.getSystemRuntime()
+        val first = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val second = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+
+        assertEquals(0, fileSystem.opendir("/Photos", first))
+        assertEquals(-ErrorCodes.ENOMEM(), fileSystem.opendir("/Photos", second))
+        assertEquals(0, fileSystem.releasedir("/Photos", first))
+        assertEquals(0, fileSystem.opendir("/Photos", second))
+        assertEquals(0, fileSystem.releasedir("/Photos", second))
+    }
+
+    @Test
+    fun `listing persistence keeps causal order from before the network request`() {
+        val root = Files.createTempDirectory("linux-virtual-causal-listing-")
+        val preferences = Preferences.userRoot().node(
+            "dev/obiente/nextcloudnative/tests/linux-virtual-causal-listing/${UUID.randomUUID()}",
+        )
+        val listingStarted = CountDownLatch(1)
+        val releaseListing = CountDownLatch(1)
+        val persistenceAttempted = CountDownLatch(1)
+        try {
+            val cache = DesktopFileReadCache(root.toFile(), preferences = preferences)
+            val accountId = "0".repeat(64)
+            val fixture = MutableFixtureBackend().apply { addFile("Photos/old.dat", byteArrayOf(1)) }
+            val delegate = object : LinuxVirtualFileBackend by fixture {
+                override fun list(path: String): List<LinuxVirtualFileNode> {
+                    val snapshot = fixture.list(path)
+                    listingStarted.countDown()
+                    check(releaseListing.await(2L, TimeUnit.SECONDS))
+                    return snapshot
+                }
+            }
+            val persisted = DesktopLinuxVirtualMetadataStore(cache, accountId)
+            val store = object : LinuxVirtualMetadataStore by persisted {
+                override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
+                    persisted.store(path, snapshot)
+                    persistenceAttempted.countDown()
+                }
+            }
+            val clock = AtomicLong(100L)
+            val cached = CachingLinuxVirtualFileBackend(delegate, store, nowEpochMillis = clock::get)
+            val worker = Executors.newSingleThreadExecutor()
+            try {
+                val request = worker.submit<List<LinuxVirtualFileNode>> { cached.list("Photos") }
+                assertTrue(listingStarted.await(2L, TimeUnit.SECONDS))
+                cache.storeListing(
+                    accountId,
+                    "Photos",
+                    listOf(cachedNextcloudFile("Photos/current.dat", "current-etag")),
+                    nowEpochMillis = 200L,
+                )
+                clock.set(300L)
+                releaseListing.countDown()
+                assertEquals(listOf("old.dat"), request.get(2L, TimeUnit.SECONDS).map(LinuxVirtualFileNode::name))
+                assertTrue(persistenceAttempted.await(2L, TimeUnit.SECONDS))
+                assertEquals("Photos/current.dat", cache.cachedListing(accountId, "Photos")?.single()?.path)
+            } finally {
+                releaseListing.countDown()
+                worker.shutdownNow()
+                cached.close()
+            }
+        } finally {
+            runCatching { preferences.removeNode() }
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `directory snapshot indexes large child sets by canonical path`() {
         val nodes = List(50_000) { index ->
             val name = "item-${index.toString().padStart(5, '0')}.dat"
@@ -1067,6 +1141,18 @@ class LinuxVirtualFileSystemTest {
             )
         }
     }
+
+    private fun cachedNextcloudFile(path: String, etag: String) = NextcloudFile(
+        path = path,
+        name = path.substringAfterLast('/'),
+        isDirectory = false,
+        mimeType = "application/octet-stream",
+        size = 1L,
+        lastModified = null,
+        fileId = null,
+        hasPreview = false,
+        etag = etag,
+    )
 
     private class MemoryLinuxVirtualMetadataStore : LinuxVirtualMetadataStore {
         private val snapshots = mutableMapOf<String, LinuxVirtualDirectorySnapshot>()
