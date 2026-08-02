@@ -15,12 +15,15 @@ import com.sun.jna.win32.StdCallLibrary
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 
 /** 64-bit Windows CldApi.dll binding kept behind [WindowsCloudFilesApi] for deterministic tests. */
 internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
     private val cldApi: CldApi
     private val kernelFiles: KernelFileApi
     private val callbacksByConnection = ConcurrentHashMap<Long, CallbackLifetime>()
+    private val callbackCounts = ConcurrentHashMap<Int, Int>()
+    private val callbackFailures = ConcurrentLinkedQueue<String>()
 
     init {
         require(isWindowsDesktop()) { "CldApi.dll is only available on Windows." }
@@ -85,9 +88,12 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         )
         val nativeCallbacks = types.filter { it != CF_CALLBACK_TYPE_NONE }.associateWith { callbackType ->
             CldCallback { infoPointer, parametersPointer ->
+                callbackCounts.merge(callbackType, 1, Int::plus)
                 currentCallbackType.set(callbackType)
                 try {
-                    runCatching { dispatchCallback(callbacks, infoPointer, parametersPointer) }
+                    dispatchCallback(callbacks, infoPointer, parametersPointer)
+                } catch (failure: Throwable) {
+                    recordCallbackFailure("callback $callbackType: ${failure.message ?: failure.javaClass.simpleName}")
                 } finally {
                     currentCallbackType.remove()
                 }
@@ -136,6 +142,9 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         )
         check(processed.value == placeholders.size) { "Windows created only some requested placeholders." }
         native.requireSuccessful()
+        placeholders.filter { it.directory }.forEach { placeholder ->
+            updatePlaceholder(baseDirectory.resolve(placeholder.name), placeholder)
+        }
     }
 
     override fun transferData(info: WindowsCloudCallbackInfo, offset: Long, bytes: ByteArray) {
@@ -156,6 +165,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         length: Long,
         message: String,
     ) {
+        recordCallbackFailure("data ${info.normalizedPath} offset=$offset length=$length: $message")
         execute(info, CF_OPERATION_TYPE_TRANSFER_DATA, TRANSFER_PARAMETERS_SIZE) { parameters ->
             parameters.setInt(TRANSFER_FLAGS_OFFSET, 0)
             parameters.setInt(TRANSFER_STATUS_OFFSET, STATUS_CLOUD_FILE_UNSUCCESSFUL)
@@ -171,11 +181,16 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
     ) {
         val native = NativePlaceholderArray(placeholders)
         execute(info, CF_OPERATION_TYPE_TRANSFER_PLACEHOLDERS, PLACEHOLDER_PARAMETERS_SIZE) { parameters ->
-            parameters.setInt(PLACEHOLDERS_FLAGS_OFFSET, 0)
+            parameters.setInt(
+                PLACEHOLDERS_FLAGS_OFFSET,
+                CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_STOP_ON_ERROR or
+                    CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_DISABLE_ON_DEMAND_POPULATION,
+            )
             parameters.setInt(PLACEHOLDERS_STATUS_OFFSET, STATUS_SUCCESS)
             parameters.setLong(PLACEHOLDERS_TOTAL_OFFSET, placeholders.size.toLong())
             parameters.setPointer(PLACEHOLDERS_ARRAY_OFFSET, native.firstPointer)
             parameters.setInt(PLACEHOLDERS_COUNT_OFFSET, placeholders.size)
+            // EntriesProcessed is an output field populated by CfExecute.
             parameters.setInt(PLACEHOLDERS_PROCESSED_OFFSET, 0)
         }
     }
@@ -266,13 +281,14 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
     ) {
         require(!invalidateContent || !preserveSyncState)
         withFileHandle(path, write = true, exclusive = invalidateContent) { handle ->
-            val metadata = placeholder.metadata()
+            val metadata = placeholder.windowsMetadata(fallbackEpochMillis = null)
             val identity = placeholder.identity.nativeMemory()
             val flags = if (preserveSyncState) {
                 0
             } else {
                 CF_UPDATE_FLAG_MARK_IN_SYNC or CF_UPDATE_FLAG_VERIFY_IN_SYNC or
-                    if (invalidateContent) CF_UPDATE_FLAG_DEHYDRATE else 0
+                    (if (invalidateContent) CF_UPDATE_FLAG_DEHYDRATE else 0) or
+                    (if (placeholder.directory) CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION else 0)
             }
             checkHResult(
                 cldApi.CfUpdatePlaceholder(
@@ -335,6 +351,15 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         callbacksByConnection.keys.toList().forEach { key -> runCatching { disconnect(key) } }
     }
 
+    internal fun diagnostics(): String = buildString {
+        append("callback counts=")
+        append(callbackCounts.toSortedMap())
+        if (callbackFailures.isNotEmpty()) {
+            append(", failures=")
+            append(callbackFailures.toList())
+        }
+    }
+
     private fun dispatchCallback(callbacks: WindowsCloudFilesCallbacks, infoPointer: Pointer, parameters: Pointer) {
         val nativeInfo = CfCallbackInfo(infoPointer).apply { read() }
         val identity = nativeInfo.fileIdentity?.takeIf { nativeInfo.fileIdentityLength > 0 }
@@ -343,7 +368,10 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
             connectionKey = nativeInfo.connectionKey,
             transferKey = nativeInfo.transferKey,
             requestKey = nativeInfo.requestKey,
-            normalizedPath = nativeInfo.normalizedPath?.toString().orEmpty(),
+            normalizedPath = windowsCloudAbsoluteCallbackPath(
+                volumeDosName = nativeInfo.volumeDosName?.toString().orEmpty(),
+                normalizedPath = nativeInfo.normalizedPath?.toString().orEmpty(),
+            ),
             fileIdentity = identity,
             fileSize = nativeInfo.fileSize,
             priorityHint = nativeInfo.priorityHint.toInt() and 0xff,
@@ -397,7 +425,16 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
             setInt(0L, parameterSize)
             fill(this)
         }
-        checkHResult(cldApi.CfExecute(operation, parameters), "complete a Windows Cloud Files callback")
+        try {
+            checkHResult(cldApi.CfExecute(operation, parameters), "complete a Windows Cloud Files callback")
+        } catch (failure: Throwable) {
+            recordCallbackFailure("operation $operationType: ${failure.message ?: failure.javaClass.simpleName}")
+            throw failure
+        }
+    }
+
+    private fun recordCallbackFailure(message: String) {
+        if (callbackFailures.size < MAX_RECORDED_CALLBACK_FAILURES) callbackFailures.add(message)
     }
 
     private inline fun <T> withFileHandle(
@@ -456,7 +493,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
                 .also { array ->
                     placeholders.forEachIndexed { index, placeholder ->
                         array[index].relativeFileName = names[index]
-                        array[index].metadata = placeholder.metadata()
+                        array[index].metadata = placeholder.windowsMetadata()
                         array[index].fileIdentity = identities[index]
                         array[index].fileIdentityLength = placeholder.identity.size
                         array[index].flags = CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC
@@ -488,7 +525,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         const val CF_PLACEHOLDER_MANAGEMENT_POLICY_DEFAULT = 0
         const val CF_REGISTER_FLAG_UPDATE = 0x1
         const val CF_REGISTER_FLAG_MARK_IN_SYNC_ON_ROOT = 0x4
-        const val CF_CONNECT_FLAG_REQUIRE_FULL_FILE_PATH = 0x2
+        const val CF_CONNECT_FLAG_REQUIRE_FULL_FILE_PATH = 0x4
 
         const val CF_CALLBACK_TYPE_FETCH_DATA = 0
         const val CF_CALLBACK_TYPE_CANCEL_FETCH_DATA = 2
@@ -515,9 +552,12 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         const val CF_PLACEHOLDER_STATE_PLACEHOLDER = 0x1
         const val CF_PLACEHOLDER_STATE_IN_SYNC = 0x8
         const val CF_CREATE_FLAG_STOP_ON_ERROR = 0x1
+        const val CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_STOP_ON_ERROR = 0x1
+        const val CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_DISABLE_ON_DEMAND_POPULATION = 0x2
         const val CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC = 0x2
         const val CF_UPDATE_FLAG_MARK_IN_SYNC = 0x2
         const val CF_UPDATE_FLAG_DEHYDRATE = 0x4
+        const val CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION = 0x8
         const val CF_UPDATE_FLAG_VERIFY_IN_SYNC = 0x1
         const val CF_CONVERT_FLAG_MARK_IN_SYNC = 0x1
         const val CF_PLACEHOLDER_INFO_STANDARD = 1
@@ -527,6 +567,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         const val CF_STANDARD_INFO_BUFFER_BYTES = CF_STANDARD_INFO_IDENTITY_OFFSET + MAX_PLACEHOLDER_IDENTITY_BYTES
         const val CF_IN_SYNC_STATE_IN_SYNC = 1
         const val FILE_ATTRIBUTE_PINNED = 0x0008_0000
+        const val MAX_RECORDED_CALLBACK_FAILURES = 16
 
         const val PARAMETERS_UNION_OFFSET = 8L
         const val OPERATION_INFO_SIZE = 48
@@ -683,11 +724,23 @@ internal class CfCallbackInfo(pointer: Pointer) : Structure(pointer) {
     @JvmField var requestKey: Long = 0L
 }
 
-private fun WindowsCloudPlaceholder.metadata(): CfFsMetadata = CfFsMetadata().apply {
+internal fun WindowsCloudPlaceholder.windowsMetadata(
+    fallbackEpochMillis: Long? = System.currentTimeMillis(),
+): CfFsMetadata = CfFsMetadata().apply {
+    val timestamp = (lastModifiedEpochMillis ?: fallbackEpochMillis)?.let(::windowsFileTime) ?: 0L
+    creationTime = timestamp
+    lastAccessTime = timestamp
+    lastWriteTime = timestamp
+    changeTime = timestamp
     fileAttributes = if (directory) WinNT.FILE_ATTRIBUTE_DIRECTORY else WinNT.FILE_ATTRIBUTE_ARCHIVE
     fileSize = size
     write()
 }
+
+internal fun windowsFileTime(epochMillis: Long): Long = Math.multiplyExact(
+    Math.addExact(epochMillis, WINDOWS_EPOCH_OFFSET_MILLIS),
+    WINDOWS_FILE_TIME_TICKS_PER_MILLISECOND,
+)
 
 private fun ByteArray.nativeMemory(): Memory = Memory(size.toLong()).also { memory ->
     memory.write(0L, this, 0, size)
@@ -699,6 +752,18 @@ private fun String.wideMemory(): Memory = Memory(((length + 1) * Native.WCHAR_SI
 
 internal fun isWindowsDesktop(): Boolean =
     System.getProperty("os.name").orEmpty().lowercase().contains("windows")
+
+internal fun windowsCloudAbsoluteCallbackPath(volumeDosName: String, normalizedPath: String): String {
+    require(normalizedPath.isNotBlank()) { "The Cloud Files callback has no normalized path." }
+    if (WINDOWS_ABSOLUTE_PATH.matchesAt(normalizedPath, 0)) return normalizedPath
+    require(WINDOWS_VOLUME_DOS_NAME.matches(volumeDosName)) {
+        "The Cloud Files callback has no valid DOS volume name."
+    }
+    require(normalizedPath.first() == '\\' || normalizedPath.first() == '/') {
+        "The Cloud Files callback path is not rooted on its volume."
+    }
+    return "$volumeDosName$normalizedPath"
+}
 
 internal data class WindowsCloudNativeLayoutSizes(
     val registration: Int,
@@ -715,3 +780,8 @@ internal fun windowsCloudNativeLayoutSizes(): WindowsCloudNativeLayoutSizes = Wi
     placeholder = CfPlaceholderCreateInfo().size(),
     callbackInfo = CfCallbackInfo(Memory(160L)).size(),
 )
+
+private const val WINDOWS_EPOCH_OFFSET_MILLIS = 11_644_473_600_000L
+private const val WINDOWS_FILE_TIME_TICKS_PER_MILLISECOND = 10_000L
+private val WINDOWS_ABSOLUTE_PATH = Regex("^[A-Za-z]:[\\\\/]")
+private val WINDOWS_VOLUME_DOS_NAME = Regex("^[A-Za-z]:$")

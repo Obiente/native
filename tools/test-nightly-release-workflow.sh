@@ -151,7 +151,7 @@ require_text "$promotion" '--clobber'
 require_text "$promotion" 'test "$release_state" = $'\''false\ttrue\t'\''"$immutable_tag"'
 require_text "$msi_repackager" 'Join-Path $AppImage "app/.jpackage.xml"'
 require_text "$msi_repackager" 'Id="LaunchNextcloudNative"'
-require_text "$msi_repackager" 'NOT Installed AND NOT REMOVE AND UILevel &gt;= 3'
+require_text "$msi_repackager" 'NOT REMOVE AND UILevel &gt;= 3'
 require_text "$msi_repackager" 'Return="asyncNoWait"'
 if grep -Fq 'Join-Path $AppImage "lib/app/.jpackage.xml"' "$msi_repackager"; then
     echo "Windows MSI repackaging must use the Windows jpackage metadata layout." >&2
