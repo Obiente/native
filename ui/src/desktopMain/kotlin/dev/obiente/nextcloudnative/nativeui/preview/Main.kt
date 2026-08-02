@@ -26,12 +26,15 @@ import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayPhase
 import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayPopup
 import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
 import dev.obiente.nextcloudnative.app.NextcloudNativeApp
+import dev.obiente.nextcloudnative.app.NextcloudNativeNavigationRequest
+import dev.obiente.nextcloudnative.app.NextcloudNativeRoute
 import dev.obiente.nextcloudnative.app.ThemePreference
 import dev.obiente.nextcloudnative.app.applyDesktopNativeWindowFrame
 import dev.obiente.nextcloudnative.app.tooltip
 import dev.obiente.nextcloudnative.app.unregisterWindowsCloudFilesRootForUninstall
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
+import java.awt.Frame
 import java.awt.SystemTray
 import java.awt.TrayIcon
 import java.awt.event.MouseAdapter
@@ -46,12 +49,20 @@ fun main(arguments: Array<String>) {
         unregisterWindowsCloudFilesRootForUninstall()
         return
     }
+    val backgroundLaunch = arguments.contains("--background")
     application {
     val themePreference = remember { mutableStateOf(ThemePreference.System) }
+    val scope = rememberCoroutineScope()
+    val updaterExitRequested = remember { mutableStateOf(false) }
     val services = remember {
-        DesktopNextcloudServices { preference ->
-            themePreference.value = preference
-        }.also { themePreference.value = it.loadThemePreference() }
+        DesktopNextcloudServices(
+            onThemePreferenceChanged = { preference -> themePreference.value = preference },
+            onDesktopUpdateInstallerOpened = { platform ->
+                if (platform == "windows") {
+                    scope.launch { updaterExitRequested.value = true }
+                }
+            },
+        ).also { themePreference.value = it.loadThemePreference() }
     }
     val darkTheme = when (themePreference.value) {
         ThemePreference.System -> isSystemInDarkTheme()
@@ -59,12 +70,15 @@ fun main(arguments: Array<String>) {
         ThemePreference.Dark -> true
     }
     val background = if (darkTheme) DarkWindowBackground else LightWindowBackground
-    val scope = rememberCoroutineScope()
     val traySnapshot = services.fileSyncTraySnapshot.collectAsState().value
     val systemTraySupported = remember { SystemTray.isSupported() }
     val trayAvailable = remember { mutableStateOf(false) }
-    val windowVisible = remember { mutableStateOf(true) }
+    val windowVisible = remember { mutableStateOf(!backgroundLaunch || !systemTraySupported) }
     val trayPopupVisible = remember { mutableStateOf(false) }
+    val mainWindow = remember { mutableStateOf<java.awt.Window?>(null) }
+    val mainWindowState = rememberWindowState(width = 1_280.dp, height = 820.dp)
+    val navigationSequence = remember { mutableStateOf(0L) }
+    val navigationRequest = remember { mutableStateOf<NextcloudNativeNavigationRequest?>(null) }
     val appIcon = painterResource("nextcloud-native.png")
     val desktopTrayIcon = remember(systemTraySupported) {
         if (!systemTraySupported) {
@@ -85,6 +99,12 @@ fun main(arguments: Array<String>) {
         runCatching { services.refreshFileSyncTraySnapshot() }
         runCatching { services.restoreVirtualFileProviderIfEnabled() }
         services.startDesktopSyncLifecycle()
+    }
+    LaunchedEffect(backgroundLaunch, systemTraySupported) {
+        if (backgroundLaunch && !systemTraySupported) mainWindowState.isMinimized = true
+    }
+    LaunchedEffect(updaterExitRequested.value) {
+        if (updaterExitRequested.value) exitApplication()
     }
     DisposableEffect(services) {
         onDispose(services::close)
@@ -119,6 +139,23 @@ fun main(arguments: Array<String>) {
         desktopTrayIcon?.toolTip = traySnapshot.tooltip()
     }
 
+    fun activateMainWindow(route: NextcloudNativeRoute) {
+        navigationSequence.value += 1L
+        navigationRequest.value = NextcloudNativeNavigationRequest(navigationSequence.value, route)
+        trayPopupVisible.value = false
+        mainWindowState.isMinimized = false
+        windowVisible.value = true
+    }
+
+    LaunchedEffect(windowVisible.value, navigationRequest.value?.sequence, mainWindow.value) {
+        if (!windowVisible.value) return@LaunchedEffect
+        mainWindow.value?.let { window ->
+            if (window is Frame) window.extendedState = Frame.NORMAL
+            window.toFront()
+            window.requestFocus()
+        }
+    }
+
     if (trayAvailable.value && trayPopupVisible.value) {
         Window(
             onCloseRequest = { trayPopupVisible.value = false },
@@ -147,10 +184,9 @@ fun main(arguments: Array<String>) {
             NextcloudNativeTheme(darkTheme = darkTheme) {
                 DesktopFileSyncTrayPopup(
                     snapshot = traySnapshot,
-                    onOpenApp = {
-                        trayPopupVisible.value = false
-                        windowVisible.value = true
-                    },
+                    onOpenApp = { activateMainWindow(NextcloudNativeRoute.Home) },
+                    onOpenSettings = { activateMainWindow(NextcloudNativeRoute.Settings) },
+                    onOpenSyncCenter = { activateMainWindow(NextcloudNativeRoute.SyncCenter) },
                     onSyncNow = {
                         scope.launch {
                             val result = services.syncAllFileSyncPairsFromTray()
@@ -178,13 +214,23 @@ fun main(arguments: Array<String>) {
 
     Window(
         onCloseRequest = {
-            if (trayAvailable.value) windowVisible.value = false else exitApplication()
+            if (trayAvailable.value) {
+                windowVisible.value = false
+            } else {
+                mainWindowState.isMinimized = true
+            }
         },
         visible = windowVisible.value,
         title = "Nextcloud Native",
         icon = appIcon,
-        state = rememberWindowState(width = 1_280.dp, height = 820.dp),
+        state = mainWindowState,
     ) {
+        DisposableEffect(window) {
+            mainWindow.value = window
+            onDispose {
+                if (mainWindow.value === window) mainWindow.value = null
+            }
+        }
         SideEffect {
             applyDesktopNativeWindowFrame(window, darkTheme)
             window.background = java.awt.Color(background.toArgb(), true)
@@ -194,6 +240,7 @@ fun main(arguments: Array<String>) {
             NextcloudNativeApp(
                 services = services,
                 presentation = NextcloudPresentation.Desktop,
+                navigationRequest = navigationRequest.value,
             )
         }
     }

@@ -117,6 +117,7 @@ internal class DesktopAppUpdater(
     private val client: OkHttpClient = buildDesktopUpdateHttpClient(),
     private val prepareInstaller: (File, DesktopDirectRelease) -> Unit = ::prepareDesktopPackageInstaller,
     private val openInstaller: (File) -> Unit = ::openDesktopPackageInstaller,
+    private val onInstallerOpened: (DesktopUpdateTarget) -> Unit = {},
 ) {
     private val mutableCheckResult = MutableStateFlow<AppUpdateCheckResult?>(null)
     private val mutableInstallState = MutableStateFlow<AppUpdateInstallState>(AppUpdateInstallState.Idle)
@@ -294,6 +295,7 @@ internal class DesktopAppUpdater(
                 desktopRelease.versionName,
                 desktopRelease.versionCode,
             )
+            onInstallerOpened(selectedTarget)
             return AppUpdateInstallResult.ConfirmationOpened
         } catch (_: DesktopUpdateCancelledException) {
             File(updateDirectory, "${desktopRelease.asset.url.substringAfterLast('/')}.part").delete()

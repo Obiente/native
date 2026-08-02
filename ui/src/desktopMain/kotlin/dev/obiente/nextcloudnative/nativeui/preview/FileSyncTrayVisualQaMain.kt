@@ -84,6 +84,8 @@ fun main() = application {
             DesktopFileSyncTrayPopup(
                 snapshot = snapshot,
                 onOpenApp = {},
+                onOpenSettings = {},
+                onOpenSyncCenter = {},
                 onSyncNow = {},
                 onTogglePaused = {},
                 onQuit = {},

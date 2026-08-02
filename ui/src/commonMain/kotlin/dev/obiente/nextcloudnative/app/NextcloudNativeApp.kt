@@ -700,12 +700,28 @@ private val nativeAppIds = setOf(
     "user_status",
 )
 
+enum class NextcloudNativeRoute {
+    Home,
+    Settings,
+    SyncCenter,
+}
+
+data class NextcloudNativeNavigationRequest(
+    val sequence: Long,
+    val route: NextcloudNativeRoute,
+) {
+    init {
+        require(sequence > 0L)
+    }
+}
+
 @Composable
 fun NextcloudNativeApp(
     services: NextcloudPlatformServices,
     presentation: NextcloudPresentation = NextcloudPresentation.Adaptive,
     appUpdateReviewRequest: Long = 0L,
     platformCapabilityRefreshRequest: Long = 0L,
+    navigationRequest: NextcloudNativeNavigationRequest? = null,
 ) {
     var themePreference by remember { mutableStateOf(services.loadThemePreference()) }
     var handledAppUpdateReviewRequest by rememberSaveable { mutableStateOf(0L) }
@@ -764,6 +780,7 @@ fun NextcloudNativeApp(
                     presentation = presentation,
                     appUpdateReviewRequest = pendingAppUpdateReviewRequest ?: 0L,
                     platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
+                    navigationRequest = navigationRequest,
                     onAppUpdateReviewHandled = { request ->
                         handledAppUpdateReviewRequest = maxOf(handledAppUpdateReviewRequest, request)
                     },
@@ -1102,6 +1119,7 @@ private fun AuthenticatedApp(
     presentation: NextcloudPresentation,
     appUpdateReviewRequest: Long,
     platformCapabilityRefreshRequest: Long,
+    navigationRequest: NextcloudNativeNavigationRequest?,
     onAppUpdateReviewHandled: (Long) -> Unit,
     themePreference: ThemePreference,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
@@ -1163,6 +1181,25 @@ private fun AuthenticatedApp(
             screen = Screen.Root
             destination = NextcloudDestination.Settings
             onAppUpdateReviewHandled(appUpdateReviewRequest)
+        }
+    }
+
+    LaunchedEffect(navigationRequest?.sequence) {
+        when (navigationRequest?.route) {
+            NextcloudNativeRoute.Home -> {
+                screen = Screen.Root
+                destination = NextcloudDestination.Home
+            }
+            NextcloudNativeRoute.Settings -> {
+                screen = Screen.Root
+                destination = NextcloudDestination.Settings
+            }
+            NextcloudNativeRoute.SyncCenter -> {
+                returnDestination = NextcloudDestination.Settings
+                destination = NextcloudDestination.Settings
+                screen = Screen.OfflineCenter
+            }
+            null -> Unit
         }
     }
 
@@ -10456,8 +10493,8 @@ private fun SettingsScreen(
                         enabled = startOnLogin,
                         message = startOnLoginMessage,
                         onEnabledChanged = { enabled ->
-                            startOnLogin = enabled
                             startOnLoginMessage = services.saveStartOnLoginPreference(enabled)
+                            startOnLogin = services.loadStartOnLoginPreference()
                         },
                     )
                 }

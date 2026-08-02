@@ -110,11 +110,21 @@ $actionDefinition = @'
       Directory="INSTALLDIR"
       ExeCommand="&quot;[INSTALLDIR]NextcloudNative.exe&quot; --unregister-windows-sync-root"
       Return="check" />
+    <CustomAction
+      Id="LaunchNextcloudNative"
+      Directory="INSTALLDIR"
+      ExeCommand="&quot;[INSTALLDIR]NextcloudNative.exe&quot;"
+      Execute="immediate"
+      Impersonate="yes"
+      Return="asyncNoWait" />
 
 '@
 $actionSequence = @'
       <Custom Action="UnregisterNextcloudNativeSyncRoot" Before="RemoveFiles">
         REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE
+      </Custom>
+      <Custom Action="LaunchNextcloudNative" After="InstallFinalize">
+        NOT Installed AND NOT REMOVE AND UILevel &gt;= 3
       </Custom>
 '@
 if (-not $mainWix.Contains("    <InstallExecuteSequence>")) {

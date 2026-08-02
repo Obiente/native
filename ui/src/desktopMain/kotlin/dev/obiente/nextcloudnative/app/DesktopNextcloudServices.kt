@@ -451,10 +451,14 @@ internal fun combinedAutomaticCacheExcess(
 
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
+    private val onDesktopUpdateInstallerOpened: (String) -> Unit = {},
 ) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
     private val secretStore = defaultDesktopSecretStore()
-    private val appUpdater = DesktopAppUpdater(preferences.node("app-updates-v1"))
+    private val appUpdater = DesktopAppUpdater(
+        preferences = preferences.node("app-updates-v1"),
+        onInstallerOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
+    )
     private val httpClient = OkHttpClient()
     private val noRedirectHttpClient = httpClient.newBuilder()
         .followRedirects(false)
@@ -921,9 +925,13 @@ class DesktopNextcloudServices(
     override fun loadStartOnLoginPreference(): Boolean = preferences.getBoolean(KEY_START_ON_LOGIN, true)
 
     override fun saveStartOnLoginPreference(enabled: Boolean): String? {
-        val result = startOnLoginController.configure(enabled)
-        if (result.configured) preferences.putBoolean(KEY_START_ON_LOGIN, enabled)
-        return result.message.takeUnless { result.configured }
+        return runCatching {
+            val result = startOnLoginController.configure(enabled)
+            if (result.configured) preferences.putBoolean(KEY_START_ON_LOGIN, enabled)
+            result.message.takeUnless { result.configured }
+        }.getOrElse { failure ->
+            failure.message ?: "Start on login could not be updated."
+        }
     }
 
     fun setFileSyncPaused(paused: Boolean) {
