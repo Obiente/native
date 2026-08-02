@@ -21,7 +21,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-internal data class DesktopActivationRequest(val sequence: Long)
+internal enum class DesktopActivationKind(val wireValue: String) {
+    ShowWindow("show"),
+    UpdateHandoffFailed("update-handoff-failed"),
+    ;
+
+    companion object {
+        fun fromWireValue(value: String): DesktopActivationKind? = entries.firstOrNull { it.wireValue == value }
+    }
+}
+
+internal data class DesktopActivationRequest(
+    val sequence: Long,
+    val kind: DesktopActivationKind,
+)
 
 internal sealed interface DesktopSingleInstanceStart {
     data class Primary(val instance: DesktopSingleInstance) : DesktopSingleInstanceStart
@@ -37,7 +50,9 @@ internal class DesktopSingleInstance private constructor(
     private val endpointToken: String,
 ) : AutoCloseable {
     private val activationSequence = AtomicLong(0L)
-    private val mutableActivations = MutableStateFlow(DesktopActivationRequest(0L))
+    private val mutableActivations = MutableStateFlow(
+        DesktopActivationRequest(0L, DesktopActivationKind.ShowWindow),
+    )
     val activations: StateFlow<DesktopActivationRequest> = mutableActivations.asStateFlow()
     private val serverThread = Thread(::serveActivations, "nextcloud-native-instance-activation").apply {
         isDaemon = true
@@ -51,12 +66,18 @@ internal class DesktopSingleInstance private constructor(
                 socket.use { connection ->
                     connection.soTimeout = ACTIVATION_TIMEOUT_MILLIS
                     val suppliedToken = connection.getInputStream().readBoundedLine(MAX_ENDPOINT_BYTES)
-                    val accepted = suppliedToken != null && MessageDigest.isEqual(
+                    val activationKind = connection.getInputStream()
+                        .readBoundedLine(MAX_ACTIVATION_KIND_BYTES)
+                        ?.let(DesktopActivationKind::fromWireValue)
+                    val accepted = suppliedToken != null && activationKind != null && MessageDigest.isEqual(
                         suppliedToken.encodeToByteArray(),
                         endpointToken.encodeToByteArray(),
                     )
                     if (accepted) {
-                        mutableActivations.value = DesktopActivationRequest(activationSequence.incrementAndGet())
+                        mutableActivations.value = DesktopActivationRequest(
+                            activationSequence.incrementAndGet(),
+                            requireNotNull(activationKind),
+                        )
                     }
                     connection.getOutputStream().write(if (accepted) ACTIVATION_ACCEPTED else ACTIVATION_REJECTED)
                     connection.getOutputStream().flush()
@@ -83,6 +104,7 @@ internal class DesktopSingleInstance private constructor(
             runtimeDirectory: File = defaultDesktopRuntimeDirectory(),
             forwardAttempts: Int = DEFAULT_FORWARD_ATTEMPTS,
             forwardDelayMillis: Long = DEFAULT_FORWARD_DELAY_MILLIS,
+            activationKind: DesktopActivationKind = DesktopActivationKind.ShowWindow,
         ): DesktopSingleInstanceStart {
             require(forwardAttempts > 0 && forwardDelayMillis >= 0L)
             val directory = runtimeDirectory.toPath().toAbsolutePath().normalize()
@@ -104,7 +126,12 @@ internal class DesktopSingleInstance private constructor(
                 if (lock == null) {
                     lockChannel.close()
                     return@runCatching if (
-                        forwardActivation(directory.resolve(INSTANCE_ENDPOINT_NAME).toFile(), forwardAttempts, forwardDelayMillis)
+                        forwardActivation(
+                            directory.resolve(INSTANCE_ENDPOINT_NAME).toFile(),
+                            activationKind,
+                            forwardAttempts,
+                            forwardDelayMillis,
+                        )
                     ) {
                         DesktopSingleInstanceStart.Forwarded
                     } else {
@@ -163,9 +190,14 @@ internal class DesktopSingleInstance private constructor(
             }
         }
 
-        private fun forwardActivation(endpoint: File, attempts: Int, delayMillis: Long): Boolean {
+        private fun forwardActivation(
+            endpoint: File,
+            activationKind: DesktopActivationKind,
+            attempts: Int,
+            delayMillis: Long,
+        ): Boolean {
             repeat(attempts) { attempt ->
-                if (readEndpoint(endpoint)?.let(::sendActivation) == true) return true
+                if (readEndpoint(endpoint)?.let { sendActivation(it, activationKind) } == true) return true
                 if (attempt + 1 < attempts && delayMillis > 0L) Thread.sleep(delayMillis)
             }
             return false
@@ -182,10 +214,15 @@ internal class DesktopSingleInstance private constructor(
             port to token
         }.getOrNull()
 
-        private fun sendActivation(endpoint: Pair<Int, String>): Boolean = runCatching {
+        private fun sendActivation(
+            endpoint: Pair<Int, String>,
+            activationKind: DesktopActivationKind,
+        ): Boolean = runCatching {
             Socket(InetAddress.getLoopbackAddress(), endpoint.first).use { socket ->
                 socket.soTimeout = ACTIVATION_TIMEOUT_MILLIS
-                socket.getOutputStream().write((endpoint.second + "\n").encodeToByteArray())
+                socket.getOutputStream().write(
+                    (endpoint.second + "\n" + activationKind.wireValue + "\n").encodeToByteArray(),
+                )
                 socket.getOutputStream().flush()
                 socket.getInputStream().read() == ACTIVATION_ACCEPTED
             }
@@ -232,6 +269,7 @@ private const val DEFAULT_FORWARD_ATTEMPTS = 40
 private const val DEFAULT_FORWARD_DELAY_MILLIS = 50L
 private const val ACTIVATION_TIMEOUT_MILLIS = 1_000
 private const val MAX_ENDPOINT_BYTES = 256
+private const val MAX_ACTIVATION_KIND_BYTES = 64
 private const val ACTIVATION_ACCEPTED = 1
 private const val ACTIVATION_REJECTED = 0
 private const val HEX_DIGITS = "0123456789abcdef"

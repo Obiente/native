@@ -22,6 +22,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.DesktopNextcloudServices
+import dev.obiente.nextcloudnative.app.DesktopActivationKind
 import dev.obiente.nextcloudnative.app.DesktopSingleInstance
 import dev.obiente.nextcloudnative.app.DesktopSingleInstanceStart
 import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayPhase
@@ -55,7 +56,12 @@ fun main(arguments: Array<String>) {
     }
     val backgroundLaunch = arguments.contains("--background")
     val updateHandoffFailed = arguments.contains("--update-handoff-failed")
-    val singleInstance = when (val start = DesktopSingleInstance.acquire()) {
+    val activationKind = if (updateHandoffFailed) {
+        DesktopActivationKind.UpdateHandoffFailed
+    } else {
+        DesktopActivationKind.ShowWindow
+    }
+    val singleInstance = when (val start = DesktopSingleInstance.acquire(activationKind = activationKind)) {
         is DesktopSingleInstanceStart.Primary -> start.instance
         DesktopSingleInstanceStart.Forwarded -> return
         DesktopSingleInstanceStart.Failed -> {
@@ -100,7 +106,8 @@ fun main(arguments: Array<String>) {
     val navigationSequence = remember { mutableStateOf(0L) }
     val navigationRequest = remember { mutableStateOf<NextcloudNativeNavigationRequest?>(null) }
     val externalActivation = singleInstance.activations.collectAsState().value
-    val updateFailureShown = remember { mutableStateOf(false) }
+    val updateFailureSequence = remember { mutableStateOf(if (updateHandoffFailed) 1L else 0L) }
+    val shownUpdateFailureSequence = remember { mutableStateOf(0L) }
     val appIcon = painterResource("nextcloud-native.png")
     val desktopTrayIcon = remember(systemTraySupported) {
         if (!systemTraySupported) {
@@ -181,7 +188,12 @@ fun main(arguments: Array<String>) {
     }
 
     LaunchedEffect(externalActivation.sequence) {
-        if (externalActivation.sequence > 0L) showMainWindow()
+        if (externalActivation.sequence > 0L) {
+            showMainWindow()
+            if (externalActivation.kind == DesktopActivationKind.UpdateHandoffFailed) {
+                updateFailureSequence.value += 1L
+            }
+        }
     }
 
     LaunchedEffect(windowVisible.value, navigationRequest.value?.sequence, mainWindow.value) {
@@ -192,9 +204,12 @@ fun main(arguments: Array<String>) {
             window.requestFocus()
         }
     }
-    LaunchedEffect(updateHandoffFailed, mainWindow.value) {
-        if (updateHandoffFailed && mainWindow.value != null && !updateFailureShown.value) {
-            updateFailureShown.value = true
+    LaunchedEffect(updateFailureSequence.value, mainWindow.value) {
+        if (
+            updateFailureSequence.value > shownUpdateFailureSequence.value &&
+            mainWindow.value != null
+        ) {
+            shownUpdateFailureSequence.value = updateFailureSequence.value
             SwingUtilities.invokeLater {
                 JOptionPane.showMessageDialog(
                     mainWindow.value,
@@ -234,7 +249,7 @@ fun main(arguments: Array<String>) {
             NextcloudNativeTheme(darkTheme = darkTheme) {
                 DesktopFileSyncTrayPopup(
                     snapshot = traySnapshot,
-                    onOpenApp = { activateMainWindow(NextcloudNativeRoute.Home) },
+                    onOpenApp = ::showMainWindow,
                     onOpenSettings = { activateMainWindow(NextcloudNativeRoute.Settings) },
                     onOpenSyncCenter = { activateMainWindow(NextcloudNativeRoute.SyncCenter) },
                     onSyncNow = {
