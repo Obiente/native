@@ -78,7 +78,7 @@ internal data class LinuxVirtualDirectorySnapshot(
 
 internal interface LinuxVirtualMetadataStore {
     fun load(path: String): LinuxVirtualDirectorySnapshot?
-    fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot)
+    fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean
     fun invalidate(path: String)
     fun retainedPaths(): Set<String>? = null
 }
@@ -92,14 +92,13 @@ internal class DesktopLinuxVirtualMetadataStore(
         return LinuxVirtualDirectorySnapshot(listing.nodes, listing.fetchedAtEpochMillis)
     }
 
-    override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
+    override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean =
         cache.storeVirtualListingUnlessNewer(
             accountId = accountId,
             path = path,
             nodes = snapshot.nodes,
             fetchedAtEpochMillis = snapshot.fetchedAtEpochMillis,
         )
-    }
 
     override fun invalidate(path: String) = cache.invalidate(accountId, path)
 
@@ -434,7 +433,9 @@ internal class CachingLinuxVirtualFileBackend(
                                 !operation.invalidated &&
                                 snapshots[path]?.generation == snapshot.generation
                         }
-                        if (stillCurrent && runCatching { store.store(path, snapshot) }.isSuccess) {
+                        val persisted = stillCurrent &&
+                            runCatching { store.store(path, snapshot) }.getOrDefault(false)
+                        if (persisted) {
                             synchronized(metadataLock) {
                                 if (
                                     !closed &&
@@ -863,6 +864,7 @@ internal class DesktopNextcloudVirtualFileBackend(
 internal class LinuxNextcloudVirtualFileSystem(
     private val backend: LinuxVirtualFileBackend,
     private val maximumOpenDirectoryEntries: Int = DEFAULT_MAX_OPEN_DIRECTORY_ENTRIES,
+    private val beforeDirectoryHandleRemoval: () -> Unit = {},
 ) : FuseStubFS() {
     private val nextHandle = AtomicLong(1L)
     private val readHandles = ConcurrentHashMap<Long, LinuxVirtualFileReadHandle>()
@@ -870,7 +872,7 @@ internal class LinuxNextcloudVirtualFileSystem(
     private val writeHandles = ConcurrentHashMap<Long, LinuxOpenWriteReference>()
     private val directoryHandles = ConcurrentHashMap<Long, LinuxOpenDirectorySnapshot>()
     private val directoryHandleLock = Any()
-    private val directorySnapshotCreationLock = Any()
+    private val directorySnapshotCreationPermits = Semaphore(MAX_CONCURRENT_DIRECTORY_SNAPSHOT_CREATIONS, true)
     private var openDirectoryEntries = 0L
     private val pendingCreatedFiles = ConcurrentHashMap<String, LinuxSharedWriteHandle>()
     private val namespaceLock = Any()
@@ -925,6 +927,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         val normalized = path.linuxVirtualPath()
         val removed = synchronized(directoryHandleLock) {
             val handle = directoryHandles[id] ?: return@synchronized null
+            beforeDirectoryHandleRemoval()
             if (handle.path != normalized || !directoryHandles.remove(id, handle)) return@synchronized null
             openDirectoryEntries = (openDirectoryEntries - handle.entries.size).coerceAtLeast(0L)
             handle
@@ -1167,10 +1170,19 @@ internal class LinuxNextcloudVirtualFileSystem(
         return LinuxOpenDirectorySnapshot(normalized, entries)
     }
 
-    private fun openAndRegisterDirectorySnapshot(path: String): Long =
-        synchronized(directorySnapshotCreationLock) {
-            registerDirectorySnapshot(openDirectorySnapshot(path))
+    private fun openAndRegisterDirectorySnapshot(path: String): Long {
+        var acquired = false
+        try {
+            directorySnapshotCreationPermits.acquire()
+            acquired = true
+            return registerDirectorySnapshot(openDirectorySnapshot(path))
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw LinuxVirtualFileSystemException(ErrorCodes.EINTR())
+        } finally {
+            if (acquired) directorySnapshotCreationPermits.release()
         }
+    }
 
     private fun registerDirectorySnapshot(snapshot: LinuxOpenDirectorySnapshot): Long =
         synchronized(directoryHandleLock) {
@@ -1240,9 +1252,11 @@ internal class LinuxNextcloudVirtualFileSystem(
     }
 
     private fun readdressDirectoryHandles(sourcePath: String, destinationPath: String) {
-        directoryHandles.entries.toList().forEach { (id, snapshot) ->
-            val movedPath = snapshot.path.readdressWithin(sourcePath, destinationPath) ?: return@forEach
-            directoryHandles.replace(id, snapshot, snapshot.copy(path = movedPath))
+        synchronized(directoryHandleLock) {
+            directoryHandles.entries.toList().forEach { (id, snapshot) ->
+                val movedPath = snapshot.path.readdressWithin(sourcePath, destinationPath) ?: return@forEach
+                directoryHandles.replace(id, snapshot, snapshot.copy(path = movedPath))
+            }
         }
     }
 
@@ -1307,6 +1321,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         const val OPEN_READ_ONLY = 0x0
         const val OPEN_TRUNCATE = 0x200
         const val DEFAULT_MAX_OPEN_DIRECTORY_ENTRIES = 100_000
+        const val MAX_CONCURRENT_DIRECTORY_SNAPSHOT_CREATIONS = 4
     }
 }
 
