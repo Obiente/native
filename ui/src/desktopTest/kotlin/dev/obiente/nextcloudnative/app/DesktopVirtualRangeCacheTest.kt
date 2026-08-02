@@ -189,6 +189,109 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `incomplete staged revision preserves the previous complete revision`() {
+        val directory = Files.createTempDirectory("virtual-range-generation-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Album", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/Album/photo.raf", "etag-1", 8L, 0L, "old-data".encodeToByteArray())
+
+            assertFailsWith<IllegalStateException> {
+                cache.storeBlock(
+                    ACCOUNT_ID,
+                    "Photos/Album/photo.raf",
+                    "etag-2",
+                    8L,
+                    0L,
+                    "new-".encodeToByteArray(),
+                )
+            }
+
+            cache.beginRevisionStaging(ACCOUNT_ID, "Photos/Album/photo.raf", "etag-2", 8L).use { staging ->
+                staging.store(0L, "new-".encodeToByteArray())
+                assertEquals(false, staging.commitIfComplete())
+            }
+
+            assertContentEquals(
+                "old-data".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/Album/photo.raf", "etag-1", 8L, 0L, 8),
+            )
+            assertEquals(null, cache.readBlock(ACCOUNT_ID, "Photos/Album/photo.raf", "etag-2", 8L, 0L, 4))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `complete staged revision atomically replaces the previous revision`() {
+        val directory = Files.createTempDirectory("virtual-range-generation-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Album", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/Album/photo.raf", "etag-1", 8L, 0L, "old-data".encodeToByteArray())
+
+            cache.beginRevisionStaging(ACCOUNT_ID, "Photos/Album/photo.raf", "etag-2", 8L).use { staging ->
+                staging.store(0L, "new-".encodeToByteArray())
+                staging.store(4L, "data".encodeToByteArray())
+                assertTrue(staging.commitIfComplete())
+            }
+
+            assertEquals(null, cache.readBlock(ACCOUNT_ID, "Photos/Album/photo.raf", "etag-1", 8L, 0L, 8))
+            assertContentEquals(
+                "new-".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/Album/photo.raf", "etag-2", 8L, 0L, 4),
+            )
+            assertContentEquals(
+                "data".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/Album/photo.raf", "etag-2", 8L, 4L, 4),
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `authoritative directory reconciliation removes stale ranges but protects writebacks`() {
+        val directory = Files.createTempDirectory("virtual-range-reconcile-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.storeBlock(ACCOUNT_ID, "Photos/live.raf", "e1", 4L, 0L, "live".encodeToByteArray())
+            cache.storeBlock(ACCOUNT_ID, "Photos/Gone/old.raf", "e2", 3L, 0L, "old".encodeToByteArray())
+            cache.storeBlock(ACCOUNT_ID, "Photos/dirty.raf", "e3", 5L, 0L, "dirty".encodeToByteArray())
+
+            assertEquals(
+                setOf("Photos/live.raf", "Photos/Gone", "Photos/dirty.raf"),
+                cache.cachedDirectChildren(ACCOUNT_ID, "Photos"),
+            )
+            reconcileVirtualRangeChildren(
+                cache = cache,
+                accountId = ACCOUNT_ID,
+                parent = "Photos",
+                documents = listOf(
+                    DesktopRemoteSyncDocument(
+                        RemoteSyncEntry("Photos/live.raf", SyncEntryKind.File, "e1", 4L),
+                        isDirectory = false,
+                    ),
+                ),
+                protectedPaths = setOf("Photos/dirty.raf"),
+            )
+
+            assertContentEquals(
+                "live".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/live.raf", "e1", 4L, 0L, 4),
+            )
+            assertEquals(null, cache.readBlock(ACCOUNT_ID, "Photos/Gone/old.raf", "e2", 3L, 0L, 3))
+            assertContentEquals(
+                "dirty".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/dirty.raf", "e3", 5L, 0L, 5),
+            )
+            assertEquals(listOf("", "Photos", "Photos/2026"), retainedFolderAncestorListings("Photos/2026/August"))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `oversized range index rejects a block without leaving an orphan blob`() {
         val directory = Files.createTempDirectory("virtual-range-cache-index-").toFile()
         try {

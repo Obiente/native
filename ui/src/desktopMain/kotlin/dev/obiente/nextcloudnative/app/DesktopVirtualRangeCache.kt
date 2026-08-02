@@ -132,6 +132,12 @@ internal class DesktopVirtualRangeCache(
             block.path == normalized &&
                 (block.remoteRevision != remoteRevision || block.fileSize != fileSize || block.offset == offset)
         }
+        check(
+            loadFolderRetention(accountId).retentionFor(normalized) != VirtualFolderRetention.KeepOnDevice ||
+                obsolete.none { block ->
+                    block.remoteRevision != remoteRevision || block.fileSize != fileSize
+                },
+        ) { "A retained file revision must be replaced as one complete staged generation." }
         val newRecord = CachedRangeBlock(
             path = normalized,
             remoteRevision = remoteRevision,
@@ -183,6 +189,36 @@ internal class DesktopVirtualRangeCache(
                 block.path == normalized && block.remoteRevision == remoteRevision && block.fileSize == fileSize
             }
             .sumOf { block -> block.length.toLong() }
+    }
+
+    @Synchronized
+    fun cachedDirectChildren(accountId: String, directoryPath: String): Set<String> {
+        val normalizedParent = directoryPath.trim('/')
+        return load(accountId).blocks.mapNotNullTo(linkedSetOf()) { block ->
+            val remainder = if (normalizedParent.isEmpty()) {
+                block.path
+            } else {
+                block.path.removePrefix("$normalizedParent/").takeIf { it != block.path }
+            } ?: return@mapNotNullTo null
+            val childName = remainder.substringBefore('/')
+            if (childName.isEmpty()) return@mapNotNullTo null
+            if (normalizedParent.isEmpty()) childName else "$normalizedParent/$childName"
+        }
+    }
+
+    @Synchronized
+    fun beginRevisionStaging(
+        accountId: String,
+        path: String,
+        remoteRevision: String,
+        fileSize: Long,
+    ): RevisionStaging {
+        require(remoteRevision.isNotBlank() && fileSize > 0L)
+        val normalized = FileOfflineKey(accountId, path).relativePath
+        val directory = accountDirectory(accountId).apply {
+            check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
+        }
+        return RevisionStaging(accountId, normalized, remoteRevision, fileSize, directory)
     }
 
     @Synchronized
@@ -400,6 +436,119 @@ internal class DesktopVirtualRangeCache(
         save(accountId, index.copy(blocks = index.blocks.filterNot { it == record }))
     }
 
+    internal inner class RevisionStaging internal constructor(
+        private val accountId: String,
+        private val path: String,
+        private val remoteRevision: String,
+        private val fileSize: Long,
+        private val directory: File,
+    ) : AutoCloseable {
+        private val staged = linkedMapOf<Long, StagedRangeBlock>()
+        private var closed = false
+
+        @Synchronized
+        fun store(offset: Long, bytes: ByteArray, nowEpochMillis: Long = System.currentTimeMillis()) {
+            check(!closed)
+            require(offset >= 0L && bytes.isNotEmpty() && bytes.size <= MAX_BLOCK_BYTES)
+            require(offset + bytes.size <= fileSize)
+            val identity = "$path\u0000$remoteRevision\u0000$fileSize\u0000$offset\u0000${bytes.size}"
+            val record = CachedRangeBlock(
+                path = path,
+                remoteRevision = remoteRevision,
+                fileSize = fileSize,
+                offset = offset,
+                length = bytes.size,
+                blobName = "${sha256Hex(identity)}.block",
+                sha256 = sha256Hex(bytes),
+                cachedAtEpochMillis = nowEpochMillis,
+                lastAccessedAtEpochMillis = nowEpochMillis,
+            )
+            val temporary = File.createTempFile("range-revision.", ".stage", directory)
+            try {
+                FileOutputStream(temporary).use { output ->
+                    output.write(bytes)
+                    output.fd.sync()
+                }
+            } catch (failure: Throwable) {
+                temporary.delete()
+                throw failure
+            }
+            staged.put(offset, StagedRangeBlock(record, temporary))?.temporary?.delete()
+        }
+
+        @Synchronized
+        fun commitIfComplete(): Boolean {
+            check(!closed)
+            val ordered = staged.values.sortedBy { stagedBlock -> stagedBlock.record.offset }
+            var expectedOffset = 0L
+            ordered.forEach { stagedBlock ->
+                if (stagedBlock.record.offset != expectedOffset) return false
+                expectedOffset += stagedBlock.record.length
+            }
+            if (expectedOffset != fileSize) return false
+            this@DesktopVirtualRangeCache.commitStagedRevision(
+                accountId,
+                path,
+                ordered,
+            )
+            closed = true
+            staged.clear()
+            return true
+        }
+
+        @Synchronized
+        override fun close() {
+            if (closed) return
+            closed = true
+            staged.values.forEach { stagedBlock -> stagedBlock.temporary.delete() }
+            staged.clear()
+        }
+    }
+
+    @Synchronized
+    private fun commitStagedRevision(
+        accountId: String,
+        path: String,
+        staged: List<StagedRangeBlock>,
+    ) {
+        val current = load(accountId)
+        val records = staged.map(StagedRangeBlock::record)
+        val next = current.copy(blocks = current.blocks.filterNot { block -> block.path == path } + records)
+        val bounded = boundedIndex(accountId, next)
+        require(records.all { record -> record in bounded.blocks }) {
+            "The retained folder is larger than the supported virtual-file cache index."
+        }
+        encodedIndex(bounded)
+        val currentBlobs = current.blocks.mapTo(hashSetOf(), CachedRangeBlock::blobName)
+        val moved = mutableListOf<File>()
+        try {
+            staged.forEach { stagedBlock ->
+                val destination = File(accountDirectory(accountId), stagedBlock.record.blobName)
+                try {
+                    Files.move(
+                        stagedBlock.temporary.toPath(),
+                        destination.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING,
+                    )
+                } catch (_: AtomicMoveNotSupportedException) {
+                    Files.move(
+                        stagedBlock.temporary.toPath(),
+                        destination.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING,
+                    )
+                }
+                moved += destination
+            }
+            save(accountId, next)
+        } catch (failure: Throwable) {
+            moved.filterNot { file -> file.name in currentBlobs }.forEach(File::delete)
+            throw failure
+        } finally {
+            staged.forEach { stagedBlock -> stagedBlock.temporary.delete() }
+        }
+    }
+
     private fun accountDirectory(accountId: String): File {
         require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
         return File(root, accountId)
@@ -531,6 +680,11 @@ private data class CachedRangeBlock(
         require(cachedAtEpochMillis >= 0L && lastAccessedAtEpochMillis >= cachedAtEpochMillis)
     }
 }
+
+private data class StagedRangeBlock(
+    val record: CachedRangeBlock,
+    val temporary: File,
+)
 
 private fun sha256Hex(value: String): String = sha256Hex(value.encodeToByteArray())
 

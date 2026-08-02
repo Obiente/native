@@ -671,12 +671,34 @@ class DesktopNextcloudServices(
                             VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Downloading),
                         )
                         val tree = DesktopFileSyncRemoteTree(session, userId, "")
+                        val writebacks = defaultDesktopLinuxWritebackStore(session)
+                        val metadataStore = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId)
+                        fun authoritativeListing(parent: String): List<DesktopRemoteSyncDocument> {
+                            val documents = tree.list(parent)
+                            reconcileVirtualRangeChildren(
+                                cache = cache,
+                                accountId = accountId,
+                                parent = parent,
+                                documents = documents,
+                                protectedPaths = writebacks.pendingWritebacks()
+                                    .mapTo(hashSetOf(), DesktopLinuxPendingWriteback::path),
+                            )
+                            metadataStore.store(
+                                parent,
+                                LinuxVirtualDirectorySnapshot(
+                                    nodes = documents.map(DesktopRemoteSyncDocument::toLinuxVirtualFileNode),
+                                    fetchedAtEpochMillis = System.currentTimeMillis(),
+                                ),
+                            )
+                            return documents
+                        }
+                        retainedFolderAncestorListings(relativePath).forEach(::authoritativeListing)
                         val backend = DesktopNextcloudVirtualFileBackend(
                             session = session,
                             userId = userId,
                             services = this@DesktopNextcloudServices,
                             rangeCache = cache,
-                            writebacks = defaultDesktopLinuxWritebackStore(session),
+                            writebacks = writebacks,
                             tree = tree,
                             requireDurableCacheWrites = true,
                         )
@@ -688,7 +710,7 @@ class DesktopNextcloudServices(
                                 cache.loadFolderRetention(accountId).retentionFor(parent) !=
                                 VirtualFolderRetention.KeepOnDevice
                             ) continue
-                            tree.list(parent).forEach { document ->
+                            authoritativeListing(parent).forEach { document ->
                                 discoveredEntries += 1
                                 check(discoveredEntries <= MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES) {
                                     "The selected virtual folder contains too many entries for one reconciliation pass."
@@ -3503,6 +3525,35 @@ class DesktopNextcloudServices(
             <d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>
         """.trimIndent()
     }
+}
+
+internal fun retainedFolderAncestorListings(relativePath: String): List<String> {
+    val segments = relativePath.trim('/').split('/').filter(String::isNotBlank)
+    require(segments.isNotEmpty()) { "A retained folder path is required." }
+    return buildList {
+        add("")
+        var current = ""
+        segments.dropLast(1).forEach { segment ->
+            current = if (current.isEmpty()) segment else "$current/$segment"
+            add(current)
+        }
+    }
+}
+
+internal fun reconcileVirtualRangeChildren(
+    cache: DesktopVirtualRangeCache,
+    accountId: String,
+    parent: String,
+    documents: List<DesktopRemoteSyncDocument>,
+    protectedPaths: Set<String>,
+) {
+    val liveChildren = documents.mapTo(hashSetOf()) { document -> document.entry.relativePath }
+    cache.cachedDirectChildren(accountId, parent)
+        .filterNot(liveChildren::contains)
+        .filterNot { missing ->
+            protectedPaths.any { protected -> protected == missing || protected.startsWith("$missing/") }
+        }
+        .forEach { missing -> cache.invalidate(accountId, missing) }
 }
 
 internal fun parseDesktopFileVersionDavRecords(xml: ByteArray): List<FileVersionDavRecord> {

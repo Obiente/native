@@ -24,6 +24,14 @@ internal data class LinuxVirtualFileNode(
     val remoteRevision: String,
 )
 
+internal fun DesktopRemoteSyncDocument.toLinuxVirtualFileNode(): LinuxVirtualFileNode = LinuxVirtualFileNode(
+    path = entry.relativePath,
+    name = entry.relativePath.substringAfterLast('/'),
+    directory = isDirectory,
+    size = entry.size ?: 0L,
+    remoteRevision = entry.etag,
+)
+
 internal interface LinuxVirtualFileReadHandle : AutoCloseable {
     val size: Long
     fun read(offset: Long, length: Int): ByteArray
@@ -392,11 +400,11 @@ internal class DesktopNextcloudVirtualFileBackend(
     override fun resolve(path: String): LinuxVirtualFileNode? {
         val normalized = path.linuxVirtualPath()
         if (normalized.isEmpty()) return ROOT_NODE
-        return tree.resolve(normalized)?.toLinuxNode()
+        return tree.resolve(normalized)?.toLinuxVirtualFileNode()
     }
 
     override fun list(path: String): List<LinuxVirtualFileNode> =
-        tree.list(path.linuxVirtualPath()).map { document -> document.toLinuxNode() }
+        tree.list(path.linuxVirtualPath()).map { document -> document.toLinuxVirtualFileNode() }
 
     override fun open(node: LinuxVirtualFileNode): LinuxVirtualFileReadHandle {
         require(!node.directory)
@@ -404,6 +412,11 @@ internal class DesktopNextcloudVirtualFileBackend(
         return object : LinuxVirtualFileReadHandle {
             private var currentPath = node.path
             private var source = openRangeSource(currentPath)
+            private val stagedRevision = if (requireDurableCacheWrites) {
+                rangeCache.beginRevisionStaging(accountId, currentPath, node.remoteRevision, node.size)
+            } else {
+                null
+            }
             private var closed = false
 
             init {
@@ -432,7 +445,7 @@ internal class DesktopNextcloudVirtualFileBackend(
                             length = blockLength,
                         )
                     }.getOrNull() ?: runBlocking(Dispatchers.IO) { source.read(blockOffset, blockLength) }.also { fetched ->
-                        val stored = runCatching {
+                        if (!requireDurableCacheWrites) runCatching {
                             rangeCache.storeBlock(
                                 accountId = accountId,
                                 path = currentPath,
@@ -442,8 +455,8 @@ internal class DesktopNextcloudVirtualFileBackend(
                                 bytes = fetched,
                             )
                         }
-                        if (requireDurableCacheWrites) stored.getOrThrow()
                     }
+                    stagedRevision?.store(blockOffset, bytes)
                     val copyStart = maxOf(offset, blockOffset)
                     val copyEnd = minOf(offset + length, blockOffset + blockLength)
                     bytes.copyInto(
@@ -459,6 +472,7 @@ internal class DesktopNextcloudVirtualFileBackend(
             @Synchronized
             override fun readdress(path: String) {
                 check(!closed)
+                check(stagedRevision == null) { "A retained-file download cannot change paths while it is running." }
                 val normalized = path.linuxVirtualPath()
                 if (normalized == currentPath) return
                 val replacement = openRangeSource(normalized)
@@ -475,8 +489,20 @@ internal class DesktopNextcloudVirtualFileBackend(
             override fun close() {
                 if (closed) return
                 closed = true
-                source.close()
+                var failure: Throwable? = null
+                runCatching(source::close).onFailure { failure = it }
+                val staging = stagedRevision
+                if (failure == null && staging != null) {
+                    runCatching {
+                        check(staging.commitIfComplete()) {
+                            "The retained file download did not persist a complete remote revision."
+                        }
+                    }.onFailure { failure = it }
+                }
+                runCatching { stagedRevision?.close() }
+                    .onFailure { closeFailure -> if (failure == null) failure = closeFailure }
                 rangeCache.release(accountId, currentPath)
+                failure?.let { throw it }
             }
 
             private fun openRangeSource(path: String) = services.openFileRangeSession(
@@ -529,14 +555,6 @@ internal class DesktopNextcloudVirtualFileBackend(
         rangeCache.invalidate(accountId, node.path)
         rangeCache.invalidate(accountId, normalized)
     }
-
-    private fun DesktopRemoteSyncDocument.toLinuxNode(): LinuxVirtualFileNode = LinuxVirtualFileNode(
-        path = entry.relativePath,
-        name = entry.relativePath.substringAfterLast('/'),
-        directory = isDirectory,
-        size = entry.size ?: 0L,
-        remoteRevision = entry.etag,
-    )
 
     private companion object {
         const val RANGE_BLOCK_BYTES = 1024L * 1024L
