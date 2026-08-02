@@ -1112,8 +1112,11 @@ private class AtomicLongState {
 }
 
 internal fun requireWindowsCloudCallbackPath(root: Path, normalizedPath: String, identityPath: String) {
-    val absoluteRoot = root.toAbsolutePath().normalize()
-    val callbackTarget = Path.of(normalizedPath).toAbsolutePath().normalize()
+    // Windows can report the same directory through a long path in CFAPI while java.io.tmpdir or a
+    // configured root still contains an 8.3 component such as RUNNER~1. Compare real filesystem
+    // paths so the containment check does not reject that legitimate alias.
+    val absoluteRoot = root.windowsCloudRealPath()
+    val callbackTarget = Path.of(normalizedPath).windowsCloudRealPath()
     require(callbackTarget.startsWith(absoluteRoot)) { "The Cloud Files callback escaped its sync root." }
     val relative = if (callbackTarget == absoluteRoot) {
         ""
@@ -1121,6 +1124,16 @@ internal fun requireWindowsCloudCallbackPath(root: Path, normalizedPath: String,
         absoluteRoot.relativize(callbackTarget).joinToString("/") { it.toString() }.windowsCloudPath()
     }
     require(relative == identityPath) { "The Cloud Files callback path does not match its identity." }
+}
+
+private fun Path.windowsCloudRealPath(): Path {
+    val absolute = toAbsolutePath().normalize()
+    var existing = absolute
+    while (!Files.exists(existing, LinkOption.NOFOLLOW_LINKS)) {
+        existing = requireNotNull(existing.parent) { "The Cloud Files callback path has no existing ancestor." }
+    }
+    val realAncestor = existing.toRealPath(LinkOption.NOFOLLOW_LINKS)
+    return if (existing == absolute) realAncestor else realAncestor.resolve(existing.relativize(absolute)).normalize()
 }
 
 private fun windowsWildcardMatches(pattern: String, name: String): Boolean {
