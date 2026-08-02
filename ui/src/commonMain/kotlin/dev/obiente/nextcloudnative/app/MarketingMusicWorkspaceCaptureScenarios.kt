@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
@@ -116,11 +115,7 @@ internal fun MarketingMusicWorkspaceScenario(
         NextcloudDesktopShell(
             selected = NextcloudDestination.Apps,
             onSelected = {},
-            identity = NextcloudDesktopIdentity(
-                displayName = "Obiente",
-                cloudName = "Nextcloud",
-                avatar = assets.avatar,
-            ),
+            identity = marketingDesktopIdentity(avatar = assets.avatar),
             content = content,
         )
     } else {

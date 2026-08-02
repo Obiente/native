@@ -16,10 +16,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -48,11 +50,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+private const val MAX_DESKTOP_SIDEBAR_SHORTCUTS = 4
+
 @Immutable
 data class NextcloudDesktopIdentity(
     val displayName: String,
     val cloudName: String,
     val avatar: ImageBitmap? = null,
+    val connectionLabel: String = "Connected",
+    val serverVersion: String? = null,
+    val shortcuts: List<NextcloudDesktopSidebarApp> = emptyList(),
+    val recentApp: NextcloudDesktopSidebarApp? = null,
+    val syncSummary: String? = null,
+    val storageLabel: String? = null,
+    val storageProgress: Float? = null,
+)
+
+@Immutable
+data class NextcloudDesktopSidebarApp(
+    val id: String,
+    val label: String,
+    val badge: String? = null,
 )
 
 internal fun accountAvatarContentDescription(displayName: String?): String {
@@ -84,6 +102,7 @@ fun NextcloudDesktopShell(
     selected: NextcloudDestination,
     onSelected: (NextcloudDestination) -> Unit,
     identity: NextcloudDesktopIdentity?,
+    onOpenApp: (String) -> Unit = {},
     workspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
@@ -138,6 +157,7 @@ fun NextcloudDesktopShell(
                         selected = selected,
                         onSelected = onSelected,
                         identity = identity,
+                        onOpenApp = onOpenApp,
                         modifier = Modifier.width(layout.navigationWidthDp.dp).fillMaxHeight(),
                     )
 
@@ -168,6 +188,7 @@ private fun NextcloudDesktopSidebar(
     selected: NextcloudDestination,
     onSelected: (NextcloudDestination) -> Unit,
     identity: NextcloudDesktopIdentity?,
+    onOpenApp: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -225,8 +246,37 @@ private fun NextcloudDesktopSidebar(
                 )
             }
 
+            identity?.shortcuts?.takeIf(List<NextcloudDesktopSidebarApp>::isNotEmpty)?.let { shortcuts ->
+                Text(
+                    text = "PINNED",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                shortcuts.take(MAX_DESKTOP_SIDEBAR_SHORTCUTS).forEach { app ->
+                    NextcloudDesktopAppShortcutRow(app = app, onClick = { onOpenApp(app.id) })
+                }
+            }
+
+            identity?.recentApp
+                ?.takeIf { recent -> identity.shortcuts.none { it.id == recent.id } }
+                ?.let { recent ->
+                    Text(
+                        text = "RECENT",
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    NextcloudDesktopAppShortcutRow(app = recent, onClick = { onOpenApp(recent.id) })
+                }
+
             Spacer(modifier = Modifier.weight(1f))
             identity?.let { account ->
+                if (account.syncSummary != null || account.storageLabel != null) {
+                    NextcloudDesktopCloudStatus(account = account, onOpenSync = {
+                        onSelected(NextcloudDestination.FolderSync)
+                    })
+                }
                 HorizontalDivider(
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
                     color = MaterialTheme.colorScheme.outlineVariant,
@@ -286,6 +336,94 @@ private fun NextcloudDesktopSidebar(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NextcloudDesktopAppShortcutRow(
+    app: NextcloudDesktopSidebarApp,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(NextcloudRadii.Small)
+    NextcloudContextMenuArea(
+        items = { listOf(NextcloudContextMenuItem("Open ${app.label}", onClick = onClick)) },
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp).clip(shape).clickable(onClick = onClick)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                NextcloudIcons.app(app.id),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(19.dp),
+            )
+            Text(
+                app.label,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            app.badge?.let { badge ->
+                Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = CircleShape) {
+                    Text(
+                        badge,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NextcloudDesktopCloudStatus(
+    account: NextcloudDesktopIdentity,
+    onOpenSync: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onOpenSync,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(NextcloudRadii.Small),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier.size(8.dp).clip(CircleShape)
+                        .background(NextcloudTheme.colors.success),
+                )
+                Text(
+                    account.syncSummary ?: "Cloud connected",
+                    modifier = Modifier.padding(start = 8.dp).weight(1f),
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Icon(NextcloudIcons.ChevronRight, contentDescription = null, modifier = Modifier.size(16.dp))
+            }
+            account.storageLabel?.let { label ->
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            account.storageProgress?.takeIf { it.isFinite() }?.let { progress ->
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                )
             }
         }
     }

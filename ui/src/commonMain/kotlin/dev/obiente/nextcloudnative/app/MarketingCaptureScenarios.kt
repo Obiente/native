@@ -26,7 +26,6 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
-import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
@@ -280,6 +279,35 @@ enum class MarketingCaptureScenario(
         "Homepage",
         "Installed app workspace",
         "Verified native data",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+        darkTheme = false,
+    ),
+    AppsWorkspaceDesktopDark(
+        "apps-workspace-desktop-dark",
+        "apps-workspace-desktop-dark.png",
+        NextcloudPresentation.Desktop,
+        "Apps",
+        "Installed app command center",
+        "Active account with pinned and recent workspaces",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+    ),
+    AppsWorkspaceDesktopLight(
+        "apps-workspace-desktop-light",
+        "apps-workspace-desktop-light.png",
+        NextcloudPresentation.Desktop,
+        "Apps",
+        "Installed app command center",
+        "Active account with pinned and recent workspaces",
         MarketingCapturePurpose.Showcase,
         "desktop",
         "wide",
@@ -1176,7 +1204,7 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
     NextcloudDesktopShell(
         selected = NextcloudDestination.FolderSync,
         onSelected = {},
-        identity = NextcloudDesktopIdentity("Mara", "cloud.example.com"),
+        identity = marketingDesktopIdentity(),
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -1318,7 +1346,7 @@ internal fun MarketingActivityWorkspaceDesktopScenario() {
     NextcloudDesktopShell(
         selected = NextcloudDestination.Activity,
         onSelected = {},
-        identity = NextcloudDesktopIdentity("Mara", "cloud.example.com"),
+        identity = marketingDesktopIdentity(),
     ) {
         ActivityDesktopWorkspace(
             timeline = timeline,
@@ -2137,6 +2165,10 @@ internal val marketingDashboardSnapshot = NativeDashboardSnapshot(
         marketingDashboardWidget("calendar", "Upcoming events", 20),
         marketingDashboardWidget("recommendations", "Recent files", 30),
         marketingDashboardWidget("photos", "Photo backup", 40),
+        marketingDashboardWidget("favorites", "Favorite files", 50),
+        marketingDashboardWidget("storage", "Storage", 60),
+        marketingDashboardWidget("talk", "Unread conversations", 70),
+        marketingDashboardWidget("mail", "Important mail", 80),
     ),
     itemsByWidget = mapOf(
         "activity" to listOf(
@@ -2152,6 +2184,8 @@ internal val marketingDashboardSnapshot = NativeDashboardSnapshot(
                 subtitle = "Today",
                 sinceId = "activity-1",
             ),
+            marketingDashboardItem("activity", "Kai commented on Q3 roadmap.xlsx", "18 minutes ago", "activity-0b"),
+            marketingDashboardItem("activity", "Camera backup uploaded 27 new photos", "42 minutes ago", "activity-0a"),
         ),
         "calendar" to listOf(
             marketingDashboardItem(
@@ -2166,6 +2200,8 @@ internal val marketingDashboardSnapshot = NativeDashboardSnapshot(
                 subtitle = "Tomorrow at 10:30",
                 sinceId = "calendar-1",
             ),
+            marketingDashboardItem("calendar", "Design review", "Tomorrow at 14:30 · Product room", "calendar-0b"),
+            marketingDashboardItem("calendar", "Release retrospective", "Friday at 09:30", "calendar-0a"),
         ),
         "recommendations" to listOf(
             marketingDashboardItem(
@@ -2180,6 +2216,8 @@ internal val marketingDashboardSnapshot = NativeDashboardSnapshot(
                 subtitle = "Notes",
                 sinceId = "files-1",
             ),
+            marketingDashboardItem("recommendations", "Q3 roadmap.xlsx", "Projects · edited 18 min ago", "files-0b"),
+            marketingDashboardItem("recommendations", "Brand presentation.pptx", "Design system", "files-0a"),
         ),
         "photos" to listOf(
             marketingDashboardItem(
@@ -2188,6 +2226,29 @@ internal val marketingDashboardSnapshot = NativeDashboardSnapshot(
                 subtitle = "128 photos and 14 videos",
                 sinceId = "photos-1",
             ),
+            marketingDashboardItem("photos", "Weekend in Texel", "38 new photos · Yesterday", "photos-0b"),
+            marketingDashboardItem("photos", "7 people recognized", "Review suggested matches", "photos-0a"),
+        ),
+        "favorites" to listOf(
+            marketingDashboardItem("favorites", "Q3 roadmap.xlsx", "Projects/Planning", "favorites-3"),
+            marketingDashboardItem("favorites", "Product direction.md", "Projects/Native", "favorites-2"),
+            marketingDashboardItem("favorites", "Brand presentation.pptx", "Design system", "favorites-1"),
+        ),
+        "storage" to listOf(
+            marketingDashboardItem("storage", "34.2 GB of 100 GB used", "65.8 GB available", "storage-2"),
+            marketingDashboardItem("storage", "8.6 GB available offline", "4 folder sync pairs", "storage-1"),
+        ),
+        "talk" to listOf(
+            marketingDashboardItem("talk", "Nextcloud Native", "Mara: The updated brief is ready · 3 unread", "talk-4"),
+            marketingDashboardItem("talk", "Design system", "Kai: I reviewed the new tokens · 1 unread", "talk-3"),
+            marketingDashboardItem("talk", "Community", "Elena: See you at the call · 1 unread", "talk-2"),
+            marketingDashboardItem("talk", "Release crew", "You: Desktop artifacts are ready", "talk-1"),
+        ),
+        "mail" to listOf(
+            marketingDashboardItem("mail", "Release candidate is ready", "Ada Lovelace · 8 minutes ago", "mail-4"),
+            marketingDashboardItem("mail", "Design review notes", "Kai Lind · 31 minutes ago", "mail-3"),
+            marketingDashboardItem("mail", "Your weekly cloud summary", "Nextcloud · Today", "mail-2"),
+            marketingDashboardItem("mail", "Community call agenda", "Elena Schneider · Yesterday", "mail-1"),
         ),
     ),
 )

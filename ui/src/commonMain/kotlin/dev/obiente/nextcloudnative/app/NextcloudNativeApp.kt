@@ -114,6 +114,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import dev.obiente.nextcloudnative.app.design.NextcloudNavigationRail
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
+import dev.obiente.nextcloudnative.app.design.NextcloudDesktopSidebarApp
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopMasterDetail
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopWorkspaceKind
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
@@ -862,11 +863,7 @@ fun NextcloudNativeMarketingCapture(
                             selected = NextcloudDestination.Home,
                             desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
                             onSelected = {},
-                            identity = NextcloudDesktopIdentity(
-                                displayName = fixture.displayName,
-                                cloudName = fixture.cloudName,
-                                avatar = assets.avatar,
-                            ),
+                            identity = marketingDesktopIdentity(fixture, assets.avatar),
                         ) {
                             MarketingHomeDashboardScenario(scenario, fixture)
                         }
@@ -896,6 +893,9 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.AdaptiveAppCollectionMobile,
                     MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
                     -> MarketingAdaptiveAppScenario(scenario)
+                    MarketingCaptureScenario.AppsWorkspaceDesktopDark,
+                    MarketingCaptureScenario.AppsWorkspaceDesktopLight,
+                    -> MarketingAppsWorkspaceScenario(fixture, assets)
                     MarketingCaptureScenario.MailWorkspaceDesktop,
                     MarketingCaptureScenario.MailWorkspaceMobile,
                     MarketingCaptureScenario.MailWorkspaceLoadingMobile,
@@ -959,6 +959,30 @@ fun NextcloudNativeMarketingCapture(
 }
 
 @Composable
+private fun MarketingAppsWorkspaceScenario(
+    fixture: MarketingDemoFixture,
+    assets: MarketingCaptureAssets,
+) {
+    RootShell(
+        presentation = NextcloudPresentation.Desktop,
+        selected = NextcloudDestination.Apps,
+        onSelected = {},
+        identity = marketingDesktopIdentity(fixture, assets.avatar),
+        onOpenApp = {},
+    ) {
+        NativeAppsWorkspace(
+            serverInfo = fixture.serverInfo(),
+            error = null,
+            lastOpenedAppId = "deck",
+            onRetry = {},
+            onSettings = {},
+            onSearch = {},
+            onOpenApp = {},
+        )
+    }
+}
+
+@Composable
 private fun MarketingDesktopConversationsScenario(
     fixture: MarketingDemoFixture,
     assets: MarketingCaptureAssets,
@@ -967,11 +991,7 @@ private fun MarketingDesktopConversationsScenario(
         presentation = NextcloudPresentation.Desktop,
         selected = NextcloudDestination.Apps,
         onSelected = {},
-        identity = NextcloudDesktopIdentity(
-            displayName = fixture.displayName,
-            cloudName = fixture.cloudName,
-            avatar = assets.avatar,
-        ),
+        identity = marketingDesktopIdentity(fixture, assets.avatar),
     ) {
         NextcloudDesktopMasterDetail(
             masterWidthDp = 340,
@@ -1006,67 +1026,56 @@ private fun MarketingDesktopStartupSettingsScenario(
         presentation = NextcloudPresentation.Desktop,
         selected = NextcloudDestination.Settings,
         onSelected = {},
-        identity = NextcloudDesktopIdentity(
-            displayName = fixture.displayName,
-            cloudName = fixture.cloudName,
-            avatar = assets.avatar,
-        ),
+        identity = marketingDesktopIdentity(fixture, assets.avatar),
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            ProductHeader(title = "Settings", showSettings = false)
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(NextcloudSpacing.XLarge),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XLarge),
-            ) {
-                item {
-                    SectionTitle("Appearance")
-                    Row(
-                        modifier = Modifier.padding(top = NextcloudSpacing.Medium),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    ) {
-                        ThemePreference.entries.forEach { preference ->
-                            FilterChip(
-                                selected = preference == ThemePreference.System,
-                                onClick = {},
-                                label = { Text(preference.name) },
-                            )
-                        }
-                    }
-                }
-                item {
-                    SectionTitle("Desktop")
-                    DesktopStartOnLoginSettingsCard(
-                        enabled = true,
-                        message = null,
-                        onEnabledChanged = {},
+        DesktopSettingsWorkspace(
+            summary = SettingsWorkspaceSummary(
+                displayName = fixture.displayName,
+                cloudName = fixture.cloudName,
+                serverUrl = "https://${fixture.cloudName}",
+                serverVersion = "31.0.8",
+                installedApps = fixture.apps.count { it.id != "dashboard" },
+                syncLabel = "4 active syncs",
+                storageLabel = "34.2 GB of 100 GB used",
+            ),
+            initialSection = SettingsWorkspaceSection.SyncAndStorage,
+        ) { section ->
+            when (section) {
+                SettingsWorkspaceSection.SyncAndStorage -> {
+                    SettingsActionCard(
+                        title = "Folder sync workspace",
+                        description = "4 active pairs · 341 downloads · 87 uploads · 1.2 GB queued",
+                        icon = NextcloudIcons.Cloud,
+                        onClick = {},
+                        trailing = "Healthy",
+                    )
+                    SettingsActionCard(
+                        title = "Virtual files",
+                        description = "123.4 GB represented locally · 8.6 GB hydrated",
+                        icon = NextcloudIcons.FolderOpen,
+                        onClick = {},
+                        trailing = "On",
+                    )
+                    SettingsActionCard(
+                        title = "Media transfers",
+                        description = "2 active · 5 queued · 1 retry available",
+                        icon = NextcloudIcons.Refresh,
+                        onClick = {},
+                    )
+                    SettingsActionCard(
+                        title = "Storage policy",
+                        description = "Keep pinned files and recently opened work available offline",
+                        icon = NextcloudIcons.Favorite,
+                        onClick = {},
+                        trailing = "Balanced",
                     )
                 }
-                item {
-                    SectionTitle("Files")
-                    Surface(
-                        modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                        color = NextcloudTheme.colors.appTile,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                        ) {
-                            Icon(NextcloudIcons.Cloud, contentDescription = null)
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Sync and offline", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    "Folder sync, virtual files, conflicts, and storage",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Icon(NextcloudIcons.ChevronRight, contentDescription = null)
-                        }
-                    }
-                }
+                else -> SettingsActionCard(
+                    title = section.title,
+                    description = section.description,
+                    icon = section.icon,
+                    onClick = {},
+                )
             }
         }
     }
@@ -1179,6 +1188,7 @@ private fun AuthenticatedApp(
         stateSaver = enumSaver<NextcloudDestination>(),
     ) { mutableStateOf(NextcloudDestination.Home) }
     var serverInfo by remember(session) { mutableStateOf<NextcloudServerInfo?>(null) }
+    var lastOpenedAppId by remember(session) { mutableStateOf(services.loadLastOpenedAppId()) }
     var memoriesLivePhotoCapability by remember(session) {
         mutableStateOf<MemoriesLivePhotoCapability>(MemoriesLivePhotoCapability.NotAdvertised)
     }
@@ -1292,6 +1302,7 @@ private fun AuthenticatedApp(
     fun openApp(app: NextcloudAppEntry, from: NextcloudDestination) {
         returnDestination = from
         services.saveLastOpenedAppId(app.id)
+        lastOpenedAppId = app.id
         screen = when (app.id) {
             "files" -> Screen.Files("")
             "photos", "memories" -> Screen.Media
@@ -1420,9 +1431,29 @@ private fun AuthenticatedApp(
     )
 
     val desktopIdentity = serverInfo?.let { info ->
+        val shortcutAppIds = listOf(
+            listOf("files"),
+            listOf("photos", "memories"),
+            listOf("talk", "spreed"),
+            listOf("calendar"),
+        )
         NextcloudDesktopIdentity(
             displayName = info.displayName,
             cloudName = info.themeName ?: "Nextcloud",
+            connectionLabel = "Connected",
+            serverVersion = info.version,
+            shortcuts = shortcutAppIds.mapNotNull { candidateIds ->
+                info.apps.firstOrNull { app -> app.id in candidateIds }?.let { app ->
+                    NextcloudDesktopSidebarApp(id = app.id, label = app.name)
+                }
+            },
+            recentApp = info.apps.firstOrNull { app -> app.id == lastOpenedAppId }
+                ?.let { app -> NextcloudDesktopSidebarApp(app.id, app.name) },
+            syncSummary = if (services.supportsRecursiveFileOfflineStorage) {
+                "Folder sync workspace"
+            } else {
+                null
+            },
         )
     }
     val screenContent: @Composable () -> Unit = {
@@ -1452,6 +1483,7 @@ private fun AuthenticatedApp(
                 RootDestinationContent.Apps -> AppsScreen(
                     serverInfo = serverInfo,
                     error = discoveryError,
+                    lastOpenedAppId = lastOpenedAppId,
                     onRetry = { discoveryAttempt += 1 },
                     onSettings = { destination = NextcloudDestination.Settings },
                     onSearch = ::openSearch,
@@ -1859,6 +1891,11 @@ private fun AuthenticatedApp(
                         screen = Screen.Root
                     },
                     identity = desktopIdentity,
+                    onOpenApp = { appId ->
+                        serverInfo?.apps?.firstOrNull { it.id == appId }?.let { app ->
+                            openApp(app, destination)
+                        }
+                    },
                     content = screenContent,
                 )
             } else {
@@ -1905,6 +1942,7 @@ private fun RootShell(
     desktopWorkspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
     onSelected: (NextcloudDestination) -> Unit,
     identity: NextcloudDesktopIdentity?,
+    onOpenApp: (String) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -1913,6 +1951,7 @@ private fun RootShell(
                 selected = selected,
                 onSelected = onSelected,
                 identity = identity,
+                onOpenApp = onOpenApp,
                 workspaceKind = desktopWorkspaceKind,
                 content = content,
             )
@@ -1955,63 +1994,21 @@ private fun RootShell(
 private fun AppsScreen(
     serverInfo: NextcloudServerInfo?,
     error: String?,
+    lastOpenedAppId: String?,
     onRetry: () -> Unit,
     onSettings: () -> Unit,
     onSearch: () -> Unit,
     onOpenApp: (NextcloudAppEntry) -> Unit,
 ) {
-    var search by remember { mutableStateOf("") }
-    Column(modifier = Modifier.fillMaxSize()) {
-        ProductHeader(title = "Apps", onSettings = onSettings, onSearch = onSearch)
-        when {
-            error != null -> ErrorMessage(error, onRetry)
-            serverInfo == null -> LoadingMessage("Loading installed apps...")
-            else -> {
-                val apps = serverInfo.apps.filter { app ->
-                    app.id != "dashboard" &&
-                        (search.isBlank() || app.name.contains(search, ignoreCase = true))
-                }
-                OutlinedTextField(
-                    value = search,
-                    onValueChange = { search = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = NextcloudSpacing.XLarge, vertical = 14.dp)
-                        .semantics { contentDescription = "Search apps" },
-                    leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
-                    placeholder = { Text("Find an app") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                )
-                if (apps.isEmpty()) {
-                    EmptyMessage("No installed app matches \"$search\".")
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(150.dp),
-                        contentPadding = PaddingValues(
-                            start = NextcloudSpacing.XLarge,
-                            top = NextcloudSpacing.Small,
-                            end = NextcloudSpacing.XLarge,
-                            bottom = NextcloudSpacing.XXLarge,
-                        ),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        items(apps, key = NextcloudAppEntry::id) { app ->
-                            NextcloudAppTile(
-                                title = app.name,
-                                icon = NextcloudIcons.app(app.id),
-                                supportingText = if (app.id in nativeAppIds) nativeSubtitle(app.id) else nativeFamily(app.id),
-                                onClick = { onOpenApp(app) },
-                                modifier = Modifier.fillMaxWidth().height(140.dp),
-                                accessibilityId = app.id,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
+    NativeAppsWorkspace(
+        serverInfo = serverInfo,
+        error = error,
+        lastOpenedAppId = lastOpenedAppId,
+        onRetry = onRetry,
+        onSettings = onSettings,
+        onSearch = onSearch,
+        onOpenApp = onOpenApp,
+    )
 }
 
 @Composable
@@ -11065,6 +11062,222 @@ private fun SettingsScreen(
     var startOnLoginMessage by remember(services) { mutableStateOf<String?>(null) }
     val platformCapabilities = remember(services, capabilityRefresh, platformCapabilityRefreshRequest) {
         services.platformCapabilities()
+    }
+    if (LocalNextcloudWorkspaceCapabilities.current.isDesktop) {
+        DesktopSettingsWorkspace(
+            summary = SettingsWorkspaceSummary(
+                displayName = serverInfo?.displayName ?: session.loginName,
+                cloudName = serverInfo?.themeName ?: "Nextcloud",
+                serverUrl = session.serverUrl,
+                serverVersion = serverInfo?.version,
+                installedApps = serverInfo?.apps?.count { it.id != "dashboard" } ?: 0,
+                syncLabel = if (services.supportsRecursiveFileOfflineStorage) {
+                    "Folder sync available"
+                } else {
+                    "Offline files available"
+                },
+            ),
+        ) { section ->
+            when (section) {
+                SettingsWorkspaceSection.Account -> {
+                    SettingsActionCard(
+                        title = serverInfo?.displayName ?: session.loginName,
+                        description = "${session.serverUrl} · ${serverInfo?.version?.let { "Nextcloud $it" } ?: "Connected"}",
+                        icon = NextcloudIcons.Profile,
+                        onClick = {},
+                        trailing = "Primary account",
+                    )
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(NextcloudRadii.Card),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text("Security", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "This device uses an app password. Signing out revokes its access without changing other sessions.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            OutlinedButton(
+                                enabled = !loggingOut,
+                                onClick = {
+                                    loggingOut = true
+                                    scope.launch {
+                                        runCatching { services.revokeSession(session) }
+                                        onLoggedOut()
+                                    }
+                                },
+                            ) {
+                                Icon(NextcloudIcons.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.size(8.dp))
+                                Text(if (loggingOut) "Signing out..." else "Sign out and revoke access")
+                            }
+                        }
+                    }
+                }
+
+                SettingsWorkspaceSection.Appearance -> {
+                    Text("Color theme", style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                        ThemePreference.entries.forEach { preference ->
+                            FilterChip(
+                                selected = themePreference == preference,
+                                onClick = { onThemePreferenceChanged(preference) },
+                                label = { Text(preference.name) },
+                                leadingIcon = {
+                                    Icon(
+                                        when (preference) {
+                                            ThemePreference.System -> NextcloudIcons.SystemMode
+                                            ThemePreference.Light -> NextcloudIcons.LightMode
+                                            ThemePreference.Dark -> NextcloudIcons.DarkMode
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                            )
+                        }
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(NextcloudRadii.Card),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text("Designed for this screen", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "Desktop workspaces use persistent navigation, dense controls, and detail panes. Compact windows adapt automatically.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+
+                SettingsWorkspaceSection.SyncAndStorage -> {
+                    SettingsActionCard(
+                        title = "Folder sync workspace",
+                        description = if (services.supportsRecursiveFileOfflineStorage) {
+                            "Manage sync pairs, rules, conflicts, virtual files, and storage"
+                        } else {
+                            "Manage pinned files, downloads, conflicts, and device storage"
+                        },
+                        icon = NextcloudIcons.Cloud,
+                        onClick = onOfflineCenter,
+                        trailing = if (services.supportsRecursiveFileOfflineStorage) "Ready" else null,
+                    )
+                    if (services.supportsMediaTransferCenter) {
+                        SettingsActionCard(
+                            title = "Media transfers",
+                            description = "Review pending, active, failed, and completed uploads",
+                            icon = NextcloudIcons.Refresh,
+                            onClick = onTransfers,
+                        )
+                    }
+                    SettingsActionCard(
+                        title = "Offline availability",
+                        description = "Choose what stays available when this device is offline",
+                        icon = NextcloudIcons.FolderOpen,
+                        onClick = onOfflineCenter,
+                    )
+                }
+
+                SettingsWorkspaceSection.NotificationsAndDevice -> {
+                    if (platformCapabilities.isEmpty()) {
+                        Text("No device permissions are required on this platform.")
+                    } else {
+                        platformCapabilities.forEach { status ->
+                            SettingsActionCard(
+                                title = status.label,
+                                description = status.description,
+                                icon = NextcloudIcons.Settings,
+                                trailing = when (status.state) {
+                                    PlatformCapabilityState.Granted -> "Enabled"
+                                    PlatformCapabilityState.AvailableWithoutPermission -> "Available"
+                                    PlatformCapabilityState.NeedsPermission -> "Enable"
+                                    PlatformCapabilityState.Blocked -> "Open settings"
+                                    PlatformCapabilityState.Unsupported -> "Unavailable"
+                                },
+                                onClick = {
+                                    if (status.state == PlatformCapabilityState.NeedsPermission ||
+                                        status.state == PlatformCapabilityState.Blocked
+                                    ) {
+                                        services.requestPlatformCapability(status.capability)
+                                        capabilityRefresh += 1
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+
+                SettingsWorkspaceSection.DesktopApp -> {
+                    if (services.supportsStartOnLogin) {
+                        DesktopStartOnLoginSettingsCard(
+                            enabled = startOnLogin,
+                            message = startOnLoginMessage,
+                            onEnabledChanged = { enabled ->
+                                startOnLoginMessage = services.saveStartOnLoginPreference(enabled)
+                                startOnLogin = services.loadStartOnLoginPreference()
+                            },
+                        )
+                    }
+                    SettingsActionCard(
+                        title = "Project news",
+                        description = "Read release notes and development updates in a cached native view",
+                        icon = NextcloudIcons.Activity,
+                        onClick = onProjectNews,
+                    )
+                }
+
+                SettingsWorkspaceSection.Updates -> AppUpdateSettingsCard(
+                    services = services,
+                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
+                )
+
+                SettingsWorkspaceSection.Administration -> {
+                    SettingsActionCard(
+                        title = "Server apps",
+                        description = "Install, update, enable, or disable apps as an administrator",
+                        icon = NextcloudIcons.Apps,
+                        onClick = onAdminApps,
+                        trailing = serverInfo?.apps?.size?.let { "$it active" },
+                    )
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(NextcloudRadii.Card),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("Installed workspaces", style = MaterialTheme.typography.titleSmall)
+                            serverInfo?.apps.orEmpty().filterNot { it.id == "dashboard" }.take(8).forEach { app ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    Icon(NextcloudIcons.app(app.id), contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Text(app.name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        if (app.id in nativeAppIds) "Native" else "Adaptive",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return
     }
     Column(modifier = Modifier.fillMaxSize()) {
         ProductHeader(title = "Settings", showSettings = false)
