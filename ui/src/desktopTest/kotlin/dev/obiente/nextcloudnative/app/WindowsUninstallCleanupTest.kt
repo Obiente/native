@@ -227,12 +227,45 @@ class WindowsUninstallCleanupTest {
         }
     }
 
+    @Test
+    fun uninstallCleansTheCurrentRegistrationBeforeAStaleLegacyPreference() {
+        val preferences = Preferences.userRoot().node("windows-stale-legacy-pointer-test-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-stale-legacy-pointer-home").toFile()
+        val session = NextcloudSession("https://cloud.invalid", "alice", "unused")
+        val accountId = desktopFileCacheAccountId(session)
+        val currentRoot = desktopWindowsCloudFilesRoot(accountId, home).toPath()
+        val legacyRoot = home.resolve("Nextcloud Native").resolve(accountId).toPath()
+        val api = RecordingWindowsCloudFilesApi().apply {
+            prerequisiteRoot = currentRoot
+            dependentRoot = legacyRoot
+        }
+        try {
+            preferences.put("server", session.serverUrl)
+            preferences.put("login", session.loginName)
+            preferences.put("windows-cloud-files-root", legacyRoot.toString())
+
+            unregisterWindowsCloudFilesRootForUninstall(preferences, home) { api }
+
+            assertEquals(listOf(currentRoot, legacyRoot), api.unregisteredRoots)
+            assertEquals(null, preferences.get("windows-cloud-files-root", null))
+            assertTrue(api.closed)
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
     private class RecordingWindowsCloudFilesApi : WindowsCloudFilesApi {
         val unregisteredRoots = mutableListOf<Path>()
         val unregisteredRoot: Path? get() = unregisteredRoots.lastOrNull()
+        var prerequisiteRoot: Path? = null
+        var dependentRoot: Path? = null
         var closed = false
 
         override fun unregisterSyncRoot(root: Path) {
+            if (root == dependentRoot && prerequisiteRoot !in unregisteredRoots) {
+                error("The stable registration still points at another candidate root.")
+            }
             unregisteredRoots.add(root)
         }
 

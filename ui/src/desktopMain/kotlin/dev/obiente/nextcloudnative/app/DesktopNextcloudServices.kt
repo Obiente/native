@@ -226,11 +226,13 @@ internal fun unregisterWindowsCloudFilesRootForUninstall(
     val api = apiFactory()
     var firstFailure: Throwable? = null
     try {
-        rootsByPreference.forEach { (root, preferenceKeys) ->
-            runCatching { api.unregisterSyncRoot(root) }
-                .onSuccess { preferenceKeys.forEach(preferences::remove) }
-                .onFailure { failure -> if (firstFailure == null) firstFailure = failure }
-        }
+        rootsByPreference.entries
+            .sortedByDescending { (root) -> root.fileName.toString().endsWith(WINDOWS_CLOUD_FILES_ROOT_SUFFIX) }
+            .forEach { (root, preferenceKeys) ->
+                runCatching { api.unregisterSyncRoot(root) }
+                    .onSuccess { preferenceKeys.forEach(preferences::remove) }
+                    .onFailure { failure -> if (firstFailure == null) firstFailure = failure }
+            }
     } finally {
         api.close()
     }
