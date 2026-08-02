@@ -4,13 +4,16 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.FilterInputStream
+import java.io.InputStream
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.UUID
-import javax.xml.parsers.DocumentBuilderFactory
+import javax.xml.stream.XMLInputFactory
+import javax.xml.stream.XMLStreamConstants
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -285,21 +288,28 @@ internal class DesktopFileSyncRemoteTree(
     }
 
     private fun rawListDirectory(path: String): List<DesktopRemoteSyncDocument> {
-        val response = execute(
+        val documents = executeDirectoryListing(
             requestBuilder(fileUrl(path))
                 .header("Accept", "application/xml")
                 .header("Depth", "1")
                 .method("PROPFIND", DIRECTORY_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
                 .build(),
-            "list folder",
-            expectedStatus = 207,
-            maximumResponseBytes = MAX_DIRECTORY_RESPONSE_BYTES,
         )
         val parent = path.trim('/')
-        return parseDesktopSyncDav(response, userId)
+        return documents
             .filter { it.entry.relativePath.substringBeforeLast('/', "") == parent }
             .also { require(it.size <= MAX_CHILDREN + MAX_RECOVERY_ITEMS) { "A Nextcloud folder contains too many entries." } }
     }
+
+    private fun executeDirectoryListing(request: Request): List<DesktopRemoteSyncDocument> =
+        client.newCall(request).execute().use { response ->
+            require(response.code == 207) { response.failure("list folder") }
+            parseDesktopSyncDav(
+                input = response.body.byteStream(),
+                userId = userId,
+                maximumBytes = MAX_DIRECTORY_RESPONSE_BYTES,
+            )
+        }
 
     private fun DesktopRemoteSyncDocument.withPath(path: String): DesktopRemoteSyncDocument =
         copy(entry = entry.copy(relativePath = path))
@@ -446,10 +456,10 @@ internal class DesktopFileSyncRemoteTree(
 
     private companion object {
         const val MAX_ENTRIES = 20_000
-        const val MAX_CHILDREN = 5_000
+        const val MAX_CHILDREN = 50_000
         const val MAX_RECOVERY_ITEMS = 32
         const val MAX_DEPTH = 64
-        const val MAX_DIRECTORY_RESPONSE_BYTES = 16L * 1024L * 1024L
+        const val MAX_DIRECTORY_RESPONSE_BYTES = 128L * 1024L * 1024L
         const val MAX_ERROR_RESPONSE_BYTES = 64L * 1024L
         const val USER_AGENT = "Nextcloud-Native/0.1.0 (Desktop file sync)"
         val XML_CONTENT_TYPE = "application/xml; charset=utf-8".toMediaType()
@@ -493,38 +503,131 @@ internal fun shouldSuppressDesktopOwnedBackup(
 }
 
 internal fun parseDesktopSyncDav(bytes: ByteArray, userId: String): List<DesktopRemoteSyncDocument> {
-    val factory = DocumentBuilderFactory.newInstance().apply {
-        isNamespaceAware = true
-        setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-        setFeature("http://xml.org/sax/features/external-general-entities", false)
-        setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+    return parseDesktopSyncDav(ByteArrayInputStream(bytes), userId, bytes.size.toLong())
+}
+
+private fun parseDesktopSyncDav(
+    input: InputStream,
+    userId: String,
+    maximumBytes: Long,
+): List<DesktopRemoteSyncDocument> {
+    require(maximumBytes > 0L)
+    val factory = XMLInputFactory.newFactory().apply {
+        setProperty(XMLInputFactory.SUPPORT_DTD, false)
+        setProperty("javax.xml.stream.isSupportingExternalEntities", false)
+        setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, true)
+        setProperty(XMLInputFactory.IS_COALESCING, true)
     }
-    val responses = factory.newDocumentBuilder().parse(ByteArrayInputStream(bytes))
-        .getElementsByTagNameNS(DAV_NAMESPACE, "response")
-    return buildList {
-        for (index in 0 until responses.length) {
-            val response = responses.item(index) as? org.w3c.dom.Element ?: continue
-            val href = response.syncText("href") ?: continue
-            val decoded = URLDecoder.decode(href.replace("+", "%2B"), StandardCharsets.UTF_8)
-            val path = decoded.substringAfter("/files/$userId/", "").trim('/')
-            if (path.isBlank()) continue
-            val etag = response.syncText("getetag") ?: error("A server item has no usable revision.")
-            val isDirectory = response.getElementsByTagNameNS(DAV_NAMESPACE, "collection").length > 0
-            add(
-                DesktopRemoteSyncDocument(
-                    RemoteSyncEntry(
-                        relativePath = path,
-                        kind = if (isDirectory) SyncEntryKind.Directory else SyncEntryKind.File,
-                        etag = etag,
-                        size = response.syncText("getcontentlength")?.toLongOrNull()
-                            ?.takeIf { !isDirectory },
-                    ),
-                    isDirectory,
-                    lastModifiedEpochMillis = response.syncText("getlastmodified")
-                        ?.let(::parseDesktopSyncDavTimestamp),
-                ),
-            )
+    val reader = factory.createXMLStreamReader(BoundedInputStream(input, maximumBytes))
+    val documents = ArrayList<DesktopRemoteSyncDocument>()
+    var response: DesktopDavResponseBuilder? = null
+    var textField: String? = null
+    val text = StringBuilder()
+    try {
+        while (reader.hasNext()) {
+            when (reader.next()) {
+                XMLStreamConstants.START_ELEMENT -> {
+                    if (reader.namespaceURI == DAV_NAMESPACE) {
+                        when (reader.localName) {
+                            "response" -> response = DesktopDavResponseBuilder()
+                            "href", "getetag", "getcontentlength", "getlastmodified" -> if (response != null) {
+                                textField = reader.localName
+                                text.clear()
+                            }
+                            "collection" -> response?.isDirectory = true
+                        }
+                    }
+                }
+                XMLStreamConstants.CHARACTERS,
+                XMLStreamConstants.CDATA,
+                -> if (textField != null) {
+                    text.append(reader.text)
+                    require(text.length <= MAX_DAV_PROPERTY_CHARS) { "A DAV property is too large." }
+                }
+                XMLStreamConstants.END_ELEMENT -> {
+                    if (reader.namespaceURI == DAV_NAMESPACE && reader.localName == textField) {
+                        response?.set(reader.localName, text.toString())
+                        textField = null
+                        text.clear()
+                    }
+                    if (reader.namespaceURI == DAV_NAMESPACE && reader.localName == "response") {
+                        response?.toDocument(userId)?.let(documents::add)
+                        response = null
+                    }
+                }
+            }
         }
+    } finally {
+        reader.close()
+    }
+    return documents
+}
+
+private class DesktopDavResponseBuilder {
+    private var href: String? = null
+    private var etag: String? = null
+    private var contentLength: String? = null
+    private var lastModified: String? = null
+    var isDirectory: Boolean = false
+
+    fun set(name: String, value: String) {
+        when (name) {
+            "href" -> href = value
+            "getetag" -> etag = value
+            "getcontentlength" -> contentLength = value
+            "getlastmodified" -> lastModified = value
+        }
+    }
+
+    fun toDocument(userId: String): DesktopRemoteSyncDocument? {
+        val encodedHref = href ?: return null
+        val decoded = URLDecoder.decode(encodedHref.replace("+", "%2B"), StandardCharsets.UTF_8)
+        val path = decoded.substringAfter("/files/$userId/", "").trim('/')
+        if (path.isBlank()) return null
+        val revision = etag?.takeIf(String::isNotBlank) ?: error("A server item has no usable revision.")
+        return DesktopRemoteSyncDocument(
+            RemoteSyncEntry(
+                relativePath = path,
+                kind = if (isDirectory) SyncEntryKind.Directory else SyncEntryKind.File,
+                etag = revision,
+                size = contentLength?.toLongOrNull()?.takeIf { !isDirectory },
+            ),
+            isDirectory,
+            lastModifiedEpochMillis = lastModified?.let(::parseDesktopSyncDavTimestamp),
+        )
+    }
+}
+
+private class BoundedInputStream(
+    input: InputStream,
+    private val maximumBytes: Long,
+) : FilterInputStream(input) {
+    private var consumed = 0L
+
+    override fun read(): Int = super.read().also { value ->
+        if (value >= 0) count(1L)
+    }
+
+    override fun read(destination: ByteArray, offset: Int, length: Int): Int =
+        super.read(destination, offset, length).also { read ->
+            if (read > 0) count(read.toLong())
+        }
+
+    override fun skip(requested: Long): Long {
+        if (requested <= 0L) return 0L
+        val buffer = ByteArray(minOf(requested, 64L * 1024L).toInt())
+        var skipped = 0L
+        while (skipped < requested) {
+            val read = read(buffer, 0, minOf(buffer.size.toLong(), requested - skipped).toInt())
+            if (read < 0) break
+            skipped += read
+        }
+        return skipped
+    }
+
+    private fun count(bytes: Long) {
+        consumed += bytes
+        require(consumed <= maximumBytes) { "The server response exceeds its safe size limit." }
     }
 }
 
@@ -532,9 +635,6 @@ internal fun parseDesktopSyncDavTimestamp(value: String): Long? = runCatching {
     ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
         .takeIf { it >= 0L }
 }.getOrNull()
-
-private fun org.w3c.dom.Element.syncText(localName: String): String? =
-    getElementsByTagNameNS(DAV_NAMESPACE, localName).item(0)?.textContent?.takeIf(String::isNotBlank)
 
 private fun java.io.InputStream.readBounded(maximumBytes: Long): ByteArray {
     val output = ByteArrayOutputStream()
@@ -562,4 +662,5 @@ private fun desktopFileSyncHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .followSslRedirects(false)
     .build()
 
+private const val MAX_DAV_PROPERTY_CHARS = 16_384
 private const val DAV_NAMESPACE = "DAV:"

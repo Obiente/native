@@ -854,12 +854,15 @@ class DesktopNextcloudServices(
                 onCommitted = { path -> virtualRangeCache.invalidate(accountId, path) },
             )
             val fileSystem = LinuxNextcloudVirtualFileSystem(
-                DesktopNextcloudVirtualFileBackend(
-                    session = session,
-                    userId = userId,
-                    services = this@DesktopNextcloudServices,
-                    rangeCache = virtualRangeCache,
-                    writebacks = writebackStore,
+                CachingLinuxVirtualFileBackend(
+                    delegate = DesktopNextcloudVirtualFileBackend(
+                        session = session,
+                        userId = userId,
+                        services = this@DesktopNextcloudServices,
+                        rangeCache = virtualRangeCache,
+                        writebacks = writebackStore,
+                    ),
+                    store = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId),
                 ),
             )
             try {

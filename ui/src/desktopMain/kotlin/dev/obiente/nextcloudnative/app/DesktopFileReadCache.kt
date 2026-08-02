@@ -16,6 +16,11 @@ internal data class DesktopCachedFileContent(
     val etag: String,
 )
 
+internal data class DesktopCachedFileListing(
+    val files: List<NextcloudFile>,
+    val fetchedAtEpochMillis: Long,
+)
+
 internal data class DesktopVirtualFileCacheSummary(
     val policy: VirtualFileCachePolicy,
     val cachedBytes: Long,
@@ -35,18 +40,25 @@ internal class DesktopFileReadCache(
     private val root: File,
     private val maximumContentBytes: Long = DEFAULT_MAXIMUM_CONTENT_BYTES,
     private val maximumEntryBytes: Long = DEFAULT_MAXIMUM_ENTRY_BYTES,
+    private val preferences: Preferences = Preferences.userRoot()
+        .node("dev/obiente/nextcloudnative/virtual-file-cache"),
 ) {
-    private val preferences = Preferences.userRoot()
-        .node("dev/obiente/nextcloudnative/virtual-file-cache")
+    private val loadedIndexes = mutableMapOf<String, CacheIndexV1>()
     init {
         require(maximumContentBytes > 0L)
         require(maximumEntryBytes in 1L..maximumContentBytes)
     }
 
     @Synchronized
-    fun cachedListing(accountId: String, path: String): List<NextcloudFile>? {
+    fun cachedListing(accountId: String, path: String): List<NextcloudFile>? =
+        cachedListingSnapshot(accountId, path)?.files
+
+    @Synchronized
+    fun cachedListingSnapshot(accountId: String, path: String): DesktopCachedFileListing? {
         val normalized = path.cachePath()
-        return load(accountId).listings.firstOrNull { it.path == normalized }?.files
+        return load(accountId).listings.firstOrNull { it.path == normalized }?.let { listing ->
+            DesktopCachedFileListing(listing.files, listing.fetchedAtEpochMillis)
+        }
     }
 
     @Synchronized
@@ -246,11 +258,16 @@ internal class DesktopFileReadCache(
     }
 
     private fun CacheIndexV1.bounded(): CacheIndexV1 {
-        val boundedListings = listings
-            .sortedByDescending(CachedListingV1::fetchedAtEpochMillis)
-            .take(MAX_LISTINGS)
-        require(boundedListings.sumOf { it.files.size } <= MAX_TOTAL_METADATA_ENTRIES) {
-            "The Files metadata cache exceeds its entry limit."
+        var retainedMetadataEntries = 0
+        val boundedListings = buildList {
+            listings.sortedByDescending(CachedListingV1::fetchedAtEpochMillis)
+                .take(MAX_LISTINGS)
+                .forEach { listing ->
+                    if (retainedMetadataEntries + listing.files.size <= MAX_TOTAL_METADATA_ENTRIES) {
+                        add(listing)
+                        retainedMetadataEntries += listing.files.size
+                    }
+                }
         }
         val policyBudget = if (loadPolicy().automaticCleanup) {
             loadPolicy().maximumCacheBytes ?: maximumContentBytes
@@ -274,13 +291,19 @@ internal class DesktopFileReadCache(
     }
 
     private fun load(accountId: String): CacheIndexV1 {
+        loadedIndexes[accountId]?.let { return it }
         val directory = accountDirectory(accountId)
         val indexFile = File(directory, INDEX_FILE_NAME)
-        if (!indexFile.isFile || indexFile.length() !in 1..MAX_INDEX_BYTES) return CacheIndexV1()
-        return runCatching {
-            val decoded = cacheJson.decodeFromString<CacheIndexV1>(indexFile.readText(Charsets.UTF_8))
-            decoded.requireValid().bounded()
-        }.getOrElse { CacheIndexV1() }
+        val loaded = if (!indexFile.isFile || indexFile.length() !in 1..MAX_INDEX_BYTES) {
+            CacheIndexV1()
+        } else {
+            runCatching {
+                val decoded = cacheJson.decodeFromString<CacheIndexV1>(indexFile.readText(Charsets.UTF_8))
+                decoded.requireValid().bounded()
+            }.getOrElse { CacheIndexV1() }
+        }
+        loadedIndexes[accountId] = loaded
+        return loaded
     }
 
     private fun save(accountId: String, index: CacheIndexV1) {
@@ -291,6 +314,7 @@ internal class DesktopFileReadCache(
         val encoded = cacheJson.encodeToString(bounded).encodeToByteArray()
         require(encoded.size.toLong() <= MAX_INDEX_BYTES) { "The Files cache index is too large." }
         publishBytes(directory, INDEX_FILE_NAME, encoded)
+        loadedIndexes[accountId] = bounded
         val referenced = bounded.content.mapTo(hashSetOf(), CachedContentV1::blobName)
         directory.listFiles().orEmpty()
             .filter { file -> file.isFile && file.extension == "blob" && file.name !in referenced }
@@ -400,10 +424,10 @@ internal class DesktopFileReadCache(
     private companion object {
         const val FORMAT_VERSION = 1
         const val INDEX_FILE_NAME = "index-v1.json"
-        const val MAX_INDEX_BYTES = 8L * 1024L * 1024L
+        const val MAX_INDEX_BYTES = 64L * 1024L * 1024L
         const val MAX_LISTINGS = 256
-        const val MAX_FILES_PER_LISTING = 5_000
-        const val MAX_TOTAL_METADATA_ENTRIES = 20_000
+        const val MAX_FILES_PER_LISTING = 50_000
+        const val MAX_TOTAL_METADATA_ENTRIES = 250_000
         const val MAX_CONTENT_ENTRIES = 256
         const val MAX_FILE_NAME_LENGTH = 1_024
         const val MAX_ETAG_LENGTH = 4_096

@@ -1,7 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import jnr.ffi.Pointer
 import jnr.ffi.Platform
@@ -35,7 +38,7 @@ internal interface LinuxVirtualFileWriteHandle : AutoCloseable {
     fun flush()
 }
 
-internal interface LinuxVirtualFileBackend {
+internal interface LinuxVirtualFileBackend : AutoCloseable {
     fun resolve(path: String): LinuxVirtualFileNode?
     fun list(path: String): List<LinuxVirtualFileNode>
     fun open(node: LinuxVirtualFileNode): LinuxVirtualFileReadHandle
@@ -48,7 +51,248 @@ internal interface LinuxVirtualFileBackend {
         destination: LinuxVirtualFileNode,
         destinationPath: String,
     )
+
+    override fun close() = Unit
 }
+
+internal data class LinuxVirtualDirectorySnapshot(
+    val nodes: List<LinuxVirtualFileNode>,
+    val fetchedAtEpochMillis: Long,
+    val generation: Long = 0L,
+)
+
+internal interface LinuxVirtualMetadataStore {
+    fun load(path: String): LinuxVirtualDirectorySnapshot?
+    fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot)
+    fun invalidate(path: String)
+}
+
+internal class DesktopLinuxVirtualMetadataStore(
+    private val cache: DesktopFileReadCache,
+    private val accountId: String,
+) : LinuxVirtualMetadataStore {
+    override fun load(path: String): LinuxVirtualDirectorySnapshot? {
+        val listing = cache.cachedListingSnapshot(accountId, path) ?: return null
+        val nodes = listing.files.mapNotNull { file ->
+            val revision = file.etag?.takeIf(String::isNotBlank) ?: return null
+            LinuxVirtualFileNode(
+                path = file.path,
+                name = file.name,
+                directory = file.isDirectory,
+                size = file.size ?: 0L,
+                remoteRevision = revision,
+            )
+        }
+        return LinuxVirtualDirectorySnapshot(nodes, listing.fetchedAtEpochMillis)
+    }
+
+    override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
+        val previous = cache.cachedListing(accountId, path).orEmpty().associateBy(NextcloudFile::path)
+        val files = snapshot.nodes.map { node ->
+            previous[node.path]?.copy(
+                name = node.name,
+                isDirectory = node.directory,
+                size = node.size.takeUnless { node.directory },
+                etag = node.remoteRevision,
+            ) ?: NextcloudFile(
+                path = node.path,
+                name = node.name,
+                isDirectory = node.directory,
+                mimeType = null,
+                size = node.size.takeUnless { node.directory },
+                lastModified = null,
+                fileId = null,
+                hasPreview = false,
+                etag = node.remoteRevision,
+            )
+        }
+        cache.storeListing(accountId, path, files, snapshot.fetchedAtEpochMillis)
+    }
+
+    override fun invalidate(path: String) = cache.invalidate(accountId, path)
+}
+
+/**
+ * Coalesces directory reads and serves a persisted snapshot before refreshing stale metadata.
+ *
+ * File managers typically follow one readdir with a getattr for every visible child. Resolving a
+ * child from its cached parent snapshot prevents that access pattern from becoming one WebDAV
+ * PROPFIND per entry. A stale snapshot remains useful while one daemon refresh updates it.
+ */
+internal class CachingLinuxVirtualFileBackend(
+    private val delegate: LinuxVirtualFileBackend,
+    private val store: LinuxVirtualMetadataStore,
+    private val nowEpochMillis: () -> Long = System::currentTimeMillis,
+    private val freshForMillis: Long = DEFAULT_FRESH_MILLIS,
+    private val refreshExecutor: ExecutorService = defaultLinuxMetadataRefreshExecutor(),
+) : LinuxVirtualFileBackend {
+    private val snapshots = ConcurrentHashMap<String, LinuxVirtualDirectorySnapshot>()
+    private val refreshes = ConcurrentHashMap<String, CompletableFuture<LinuxVirtualDirectorySnapshot>>()
+    private val nextGeneration = AtomicLong(1L)
+    @Volatile
+    private var closed = false
+
+    init {
+        require(freshForMillis >= 0L)
+    }
+
+    override fun resolve(path: String): LinuxVirtualFileNode? {
+        val normalized = path.linuxVirtualPath()
+        if (normalized.isEmpty()) return ROOT_NODE
+        val parent = normalized.substringBeforeLast('/', "")
+        return list(parent).firstOrNull { node -> node.path == normalized }
+    }
+
+    override fun list(path: String): List<LinuxVirtualFileNode> {
+        val normalized = path.linuxVirtualPath()
+        val cached = snapshots[normalized] ?: store.load(normalized)?.also { restored ->
+            snapshots.putIfAbsent(normalized, restored)
+        }
+        if (cached != null) {
+            if (!cached.isFresh(nowEpochMillis(), freshForMillis)) refreshAsync(normalized)
+            return cached.nodes
+        }
+        return refreshBlocking(normalized).nodes
+    }
+
+    override fun open(node: LinuxVirtualFileNode): LinuxVirtualFileReadHandle = delegate.open(node)
+
+    override fun openWrite(
+        path: String,
+        existing: LinuxVirtualFileNode?,
+        truncate: Boolean,
+    ): LinuxVirtualFileWriteHandle {
+        val normalized = path.linuxVirtualPath()
+        val handle = delegate.openWrite(normalized, existing, truncate)
+        return object : LinuxVirtualFileWriteHandle {
+            override val size: Long get() = handle.size
+            override fun read(offset: Long, length: Int): ByteArray = handle.read(offset, length)
+            override fun write(offset: Long, bytes: ByteArray): Int = handle.write(offset, bytes)
+            override fun truncate(size: Long) = handle.truncate(size)
+            override fun flush() {
+                handle.flush()
+                invalidate(normalized)
+            }
+
+            override fun close() {
+                handle.close()
+                invalidate(normalized)
+            }
+        }
+    }
+
+    override fun createDirectory(path: String) {
+        val normalized = path.linuxVirtualPath()
+        delegate.createDirectory(normalized)
+        invalidate(normalized)
+    }
+
+    override fun delete(node: LinuxVirtualFileNode) {
+        delegate.delete(node)
+        invalidate(node.path)
+    }
+
+    override fun move(node: LinuxVirtualFileNode, destinationPath: String) {
+        val destination = destinationPath.linuxVirtualPath()
+        delegate.move(node, destination)
+        invalidate(node.path)
+        invalidate(destination)
+    }
+
+    override fun moveReplacing(
+        node: LinuxVirtualFileNode,
+        destination: LinuxVirtualFileNode,
+        destinationPath: String,
+    ) {
+        val normalized = destinationPath.linuxVirtualPath()
+        delegate.moveReplacing(node, destination, normalized)
+        invalidate(node.path)
+        invalidate(normalized)
+    }
+
+    @Synchronized
+    override fun close() {
+        if (closed) return
+        closed = true
+        refreshExecutor.shutdownNow()
+        delegate.close()
+    }
+
+    private fun refreshBlocking(path: String): LinuxVirtualDirectorySnapshot {
+        val candidate = CompletableFuture<LinuxVirtualDirectorySnapshot>()
+        val existing = refreshes.putIfAbsent(path, candidate)
+        if (existing != null) return existing.get()
+        refresh(path, candidate)
+        return candidate.get()
+    }
+
+    private fun refreshAsync(path: String) {
+        if (closed) return
+        val candidate = CompletableFuture<LinuxVirtualDirectorySnapshot>()
+        if (refreshes.putIfAbsent(path, candidate) != null) return
+        runCatching { refreshExecutor.execute { refresh(path, candidate) } }
+            .onFailure { failure ->
+                candidate.completeExceptionally(failure)
+                refreshes.remove(path, candidate)
+            }
+    }
+
+    private fun refresh(path: String, future: CompletableFuture<LinuxVirtualDirectorySnapshot>) {
+        try {
+            check(!closed) { "The Linux metadata cache is closed." }
+            val snapshot = LinuxVirtualDirectorySnapshot(
+                nodes = delegate.list(path),
+                fetchedAtEpochMillis = nowEpochMillis().coerceAtLeast(0L),
+                generation = nextGeneration.getAndIncrement(),
+            )
+            snapshots[path] = snapshot
+            future.complete(snapshot)
+            persistAsync(path, snapshot)
+        } catch (failure: Throwable) {
+            future.completeExceptionally(failure)
+        } finally {
+            refreshes.remove(path, future)
+        }
+    }
+
+    private fun persistAsync(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
+        if (closed) return
+        runCatching {
+            refreshExecutor.execute {
+                if (!closed && snapshots[path]?.generation == snapshot.generation) {
+                    runCatching { store.store(path, snapshot) }
+                }
+            }
+        }
+    }
+
+    private fun invalidate(path: String) {
+        val normalized = path.linuxVirtualPath()
+        val parent = normalized.substringBeforeLast('/', "")
+        snapshots.keys.removeIf { cachedPath ->
+            normalized.isEmpty() ||
+                cachedPath == normalized ||
+                cachedPath.startsWith("$normalized/") ||
+                cachedPath == parent
+        }
+        store.invalidate(normalized)
+    }
+
+    private fun LinuxVirtualDirectorySnapshot.isFresh(now: Long, duration: Long): Boolean {
+        val age = now - fetchedAtEpochMillis
+        return age >= 0L && age <= duration
+    }
+
+    private companion object {
+        const val DEFAULT_FRESH_MILLIS = 5_000L
+        val ROOT_NODE = LinuxVirtualFileNode("", "Nextcloud", true, 0L, "root")
+    }
+}
+
+private fun defaultLinuxMetadataRefreshExecutor(): ExecutorService =
+    Executors.newSingleThreadExecutor { task ->
+        Thread(task, "nextcloud-linux-metadata-refresh").apply { isDaemon = true }
+    }
 
 /** Generation-pinned WebDAV backend shared by the Linux FUSE adapter and its unit tests. */
 internal class DesktopNextcloudVirtualFileBackend(
@@ -229,6 +473,7 @@ internal class LinuxNextcloudVirtualFileSystem(
     private val readHandles = ConcurrentHashMap<Long, LinuxVirtualFileReadHandle>()
     private val readHandlePaths = ConcurrentHashMap<Long, String>()
     private val writeHandles = ConcurrentHashMap<Long, LinuxOpenWriteReference>()
+    private val directoryHandles = ConcurrentHashMap<Long, LinuxOpenDirectorySnapshot>()
     private val pendingCreatedFiles = ConcurrentHashMap<String, LinuxSharedWriteHandle>()
     private val namespaceLock = Any()
 
@@ -238,14 +483,15 @@ internal class LinuxNextcloudVirtualFileSystem(
         val node = visibleNode(normalized)
             ?: pending?.let { LinuxVirtualFileNode(normalized, normalized.substringAfterLast('/'), false, it.size, "pending") }
             ?: return -ErrorCodes.ENOENT()
-        stat.st_mode.set(
-            if (node.directory) FileStat.S_IFDIR or DIRECTORY_PERMISSIONS
-            else FileStat.S_IFREG or FILE_PERMISSIONS,
-        )
-        stat.st_nlink.set(if (node.directory) 2 else 1)
-        stat.st_size.set(node.size)
-        stat.st_uid.set(context.uid.get())
-        stat.st_gid.set(context.gid.get())
+        fillStat(node, stat)
+        0
+    }
+
+    override fun opendir(path: String, fileInfo: FuseFileInfo): Int = fuseResult {
+        val snapshot = openDirectorySnapshot(path)
+        val id = nextHandle.getAndIncrement()
+        directoryHandles[id] = snapshot
+        fileInfo.fh.set(id)
         0
     }
 
@@ -257,22 +503,30 @@ internal class LinuxNextcloudVirtualFileSystem(
         fileInfo: FuseFileInfo,
     ): Int = fuseResult {
         val normalized = path.linuxVirtualPath()
-        val directory = visibleNode(normalized) ?: return -ErrorCodes.ENOENT()
-        if (!directory.directory) return -ErrorCodes.ENOTDIR()
-        val visibleNames = LinkedHashSet<String>()
-        backend.list(normalized)
-            .forEach { node -> visibleNames += node.name }
-        pendingCreatedFiles.keys
-            .asSequence()
-            .filter { pending -> pending.substringBeforeLast('/', "") == normalized }
-            .map { pending -> pending.substringAfterLast('/') }
-            .filter(visibleNames::add)
-            .toList()
-        val entries = listOf(".", "..") + visibleNames.sorted()
+        val handleId = fileInfo.fh.get()
+        val existingHandle = directoryHandles[handleId]?.takeIf { it.path == normalized }
+        if (handleId != 0L && existingHandle == null) return -ErrorCodes.EBADF()
+        val snapshot = existingHandle ?: openDirectorySnapshot(path).also { opened ->
+            val id = nextHandle.getAndIncrement()
+            directoryHandles[id] = opened
+            fileInfo.fh.set(id)
+        }
+        val entries = snapshot.entries
         if (offset < 0L || offset > entries.size.toLong()) return -ErrorCodes.EINVAL()
         for (index in offset.toInt() until entries.size) {
-            if (filler.apply(buffer, entries[index], null, index.toLong() + 1L) != 0) break
+            val entry = entries[index]
+            val stat = entry.node?.let { node -> FileStat(jnr.ffi.Runtime.getSystemRuntime()).also { fillStat(node, it) } }
+            if (filler.apply(buffer, entry.name, stat, index.toLong() + 1L) != 0) break
         }
+        0
+    }
+
+    override fun releasedir(path: String, fileInfo: FuseFileInfo): Int = fuseResult {
+        val id = fileInfo.fh.get()
+        val handle = directoryHandles[id] ?: return -ErrorCodes.EBADF()
+        if (handle.path != path.linuxVirtualPath()) return -ErrorCodes.EBADF()
+        if (!directoryHandles.remove(id, handle)) return -ErrorCodes.EBADF()
+        fileInfo.fh.set(0L)
         0
     }
 
@@ -451,7 +705,19 @@ internal class LinuxNextcloudVirtualFileSystem(
         require(mountPoint.toFile().let { it.isDirectory && it.canWrite() }) {
             "The Linux virtual filesystem mount point must be a writable directory."
         }
-        mount(mountPoint, blocking, debug, arrayOf("-o", "fsname=nextcloud-native", "-o", "default_permissions"))
+        mount(
+            mountPoint,
+            blocking,
+            debug,
+            arrayOf(
+                "-o", "fsname=nextcloud-native",
+                "-o", "default_permissions",
+                "-o", "attr_timeout=5",
+                "-o", "entry_timeout=5",
+                "-o", "negative_timeout=1",
+                "-o", "big_writes",
+            ),
+        )
     }
 
     fun unmount() {
@@ -462,8 +728,50 @@ internal class LinuxNextcloudVirtualFileSystem(
         readHandles.clear()
         readHandlePaths.clear()
         writeHandles.clear()
+        directoryHandles.clear()
         pendingCreatedFiles.clear()
-        umount()
+        try {
+            umount()
+        } finally {
+            backend.close()
+        }
+    }
+
+    private fun openDirectorySnapshot(path: String): LinuxOpenDirectorySnapshot {
+        val normalized = path.linuxVirtualPath()
+        val directory = visibleNode(normalized) ?: throw LinuxVirtualFileSystemException(ErrorCodes.ENOENT())
+        if (!directory.directory) throw LinuxVirtualFileSystemException(ErrorCodes.ENOTDIR())
+        val byName = linkedMapOf<String, LinuxVirtualFileNode>()
+        backend.list(normalized).forEach { node -> byName[node.name] = node }
+        pendingCreatedFiles.entries
+            .asSequence()
+            .filter { (pending, _) -> pending.substringBeforeLast('/', "") == normalized }
+            .forEach { (pending, shared) ->
+                val name = pending.substringAfterLast('/')
+                byName.putIfAbsent(
+                    name,
+                    LinuxVirtualFileNode(pending, name, false, shared.delegate.size, "pending"),
+                )
+            }
+        val entries = buildList {
+            add(LinuxOpenDirectoryEntry(".", directory))
+            add(LinuxOpenDirectoryEntry("..", null))
+            byName.values.sortedBy(LinuxVirtualFileNode::name).forEach { node ->
+                add(LinuxOpenDirectoryEntry(node.name, node))
+            }
+        }
+        return LinuxOpenDirectorySnapshot(normalized, entries)
+    }
+
+    private fun fillStat(node: LinuxVirtualFileNode, stat: FileStat) {
+        stat.st_mode.set(
+            if (node.directory) FileStat.S_IFDIR or DIRECTORY_PERMISSIONS
+            else FileStat.S_IFREG or FILE_PERMISSIONS,
+        )
+        stat.st_nlink.set(if (node.directory) 2 else 1)
+        stat.st_size.set(node.size)
+        stat.st_uid.set(context.uid.get())
+        stat.st_gid.set(context.gid.get())
     }
 
     private fun registerWriteHandle(shared: LinuxSharedWriteHandle, writable: Boolean): Long {
@@ -549,6 +857,8 @@ internal class LinuxNextcloudVirtualFileSystem(
 
     private inline fun fuseResult(operation: () -> Int): Int = try {
         operation()
+    } catch (failure: LinuxVirtualFileSystemException) {
+        -failure.errorCode
     } catch (_: IllegalArgumentException) {
         -ErrorCodes.EINVAL()
     } catch (_: Throwable) {
@@ -564,6 +874,18 @@ internal class LinuxNextcloudVirtualFileSystem(
         const val OPEN_TRUNCATE = 0x200
     }
 }
+
+private data class LinuxOpenDirectorySnapshot(
+    val path: String,
+    val entries: List<LinuxOpenDirectoryEntry>,
+)
+
+private data class LinuxOpenDirectoryEntry(
+    val name: String,
+    val node: LinuxVirtualFileNode?,
+)
+
+private class LinuxVirtualFileSystemException(val errorCode: Int) : RuntimeException()
 
 private class LinuxSharedWriteHandle(
     val delegate: LinuxVirtualFileWriteHandle,

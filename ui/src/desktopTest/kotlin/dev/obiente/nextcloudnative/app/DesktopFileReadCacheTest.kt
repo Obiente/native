@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Files
+import java.util.prefs.Preferences
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -24,7 +25,7 @@ class DesktopFileReadCacheTest {
             ),
         )
 
-        val restored = DesktopFileReadCache(root)
+        val restored = DesktopFileReadCache(root, preferences = testPreferences(root))
 
         assertEquals(listOf(file), restored.cachedListing(accountId, "Notes"))
         assertContentEquals(
@@ -135,9 +136,24 @@ class DesktopFileReadCacheTest {
         val index = root.resolve(accountId).resolve("index-v1.json")
         index.writeText("{not-json")
 
-        val restored = DesktopFileReadCache(root)
+        val restored = DesktopFileReadCache(root, preferences = testPreferences(root))
 
         assertNull(restored.cachedContent(accountId, "safe.txt", 10))
+    }
+
+    @Test
+    fun `large folder metadata and refresh timestamp survive restart`() = withCache { root, cache ->
+        val accountId = desktopFileCacheAccountId(session())
+        val files = List(6_001) { index ->
+            file("Library/photo-${index.toString().padStart(5, '0')}.jpg", "\"etag-$index\"")
+        }
+
+        cache.storeListing(accountId, "Library", files, nowEpochMillis = 123_456)
+        val restored = DesktopFileReadCache(root, preferences = testPreferences(root))
+        val listing = restored.cachedListingSnapshot(accountId, "Library")
+
+        assertEquals(6_001, listing?.files?.size)
+        assertEquals(123_456, listing?.fetchedAtEpochMillis)
     }
 
     private fun session(password: String = "secret") = NextcloudSession(
@@ -176,10 +192,20 @@ class DesktopFileReadCacheTest {
         block: (java.io.File, DesktopFileReadCache) -> Unit,
     ) {
         val root = Files.createTempDirectory("ncn-files-cache-").toFile()
+        val preferences = testPreferences(root)
         try {
-            block(root, DesktopFileReadCache(root, maximumContentBytes, maximumEntryBytes))
+            preferences.clear()
+            preferences.putBoolean("automatic-cleanup", false)
+            block(
+                root,
+                DesktopFileReadCache(root, maximumContentBytes, maximumEntryBytes, preferences),
+            )
         } finally {
+            preferences.removeNode()
             root.deleteRecursively()
         }
     }
+
+    private fun testPreferences(root: java.io.File): Preferences = Preferences.userRoot()
+        .node("dev/obiente/nextcloudnative/tests/file-cache/${root.name}")
 }

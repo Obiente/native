@@ -29,10 +29,10 @@ class DesktopVirtualRangeCacheTest {
     fun `exact revision blocks survive cache restart`() {
         val directory = Files.createTempDirectory("virtual-range-cache-").toFile()
         try {
-            val cache = DesktopVirtualRangeCache(directory) { VirtualFileCachePolicy() }
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
             cache.storeBlock(ACCOUNT_ID, "Photos/example.raf", "etag-1", 8L, 0L, "abcd".encodeToByteArray())
 
-            val restarted = DesktopVirtualRangeCache(directory) { VirtualFileCachePolicy() }
+            val restarted = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
             assertContentEquals(
                 "abcd".encodeToByteArray(),
                 restarted.readBlock(ACCOUNT_ID, "Photos/example.raf", "etag-1", 8L, 0L, 4),
@@ -71,7 +71,7 @@ class DesktopVirtualRangeCacheTest {
         try {
             val cache = DesktopVirtualRangeCache(
                 root = directory,
-                policy = { VirtualFileCachePolicy() },
+                policy = { nonEvictingTestPolicy() },
                 maximumIndexBytes = 1_024L,
             )
             cache.storeBlock(ACCOUNT_ID, "Photos/kept.raf", "etag-1", 4L, 0L, "kept".encodeToByteArray())
@@ -102,5 +102,11 @@ class DesktopVirtualRangeCacheTest {
 
     private companion object {
         const val ACCOUNT_ID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+        fun nonEvictingTestPolicy() = VirtualFileCachePolicy(
+            automaticCleanup = false,
+            minimumFreeSpaceBytes = 0L,
+            unusedFileAgeMillis = null,
+        )
     }
 }

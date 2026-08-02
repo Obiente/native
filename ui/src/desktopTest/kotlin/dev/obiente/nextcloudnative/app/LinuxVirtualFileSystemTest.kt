@@ -5,9 +5,11 @@ import jnr.ffi.Pointer
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import java.nio.ByteBuffer
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import ru.serce.jnrfuse.ErrorCodes
 import ru.serce.jnrfuse.struct.FileStat
@@ -280,6 +282,121 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `large readdir keeps one stable snapshot across all continuation buffers`() {
+        val backend = MutableFixtureBackend()
+        repeat(12_000) { index ->
+            backend.addFile("Photos/item-${index.toString().padStart(5, '0')}.dat", byteArrayOf(1))
+        }
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+        val runtime = Runtime.getSystemRuntime()
+        val buffer = runtime.memoryManager.allocateDirect(8)
+        val fileInfo = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val names = mutableListOf<String>()
+        var offset = 0L
+
+        while (names.size < 12_002) {
+            val page = mutableListOf<Pair<String, Long>>()
+            val filler = ru.serce.jnrfuse.FuseFillDir { _: Pointer, name: ByteBuffer, stat, nextOffset: Long ->
+                if (page.size == 257) return@FuseFillDir 1
+                page += name.fuseName() to nextOffset
+                if (page.last().first !in setOf(".", "..")) assertNotNull(stat)
+                0
+            }
+            assertEquals(0, fileSystem.readdir("/Photos", buffer, filler, offset, fileInfo))
+            assertTrue(page.isNotEmpty())
+            names += page.map { it.first }
+            offset = page.last().second
+        }
+
+        assertEquals(12_002, names.distinct().size)
+        assertEquals(1, backend.listCallCount("Photos"))
+        assertEquals(0, fileSystem.releasedir("/Photos", fileInfo))
+    }
+
+    @Test
+    fun `cached parent snapshot prevents one remote listing per child getattr`() {
+        val delegate = MutableFixtureBackend()
+        repeat(10_000) { index ->
+            delegate.addFile("Photos/item-${index.toString().padStart(5, '0')}.dat", byteArrayOf(1))
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = MemoryLinuxVirtualMetadataStore(),
+            freshForMillis = Long.MAX_VALUE,
+        )
+        val fileSystem = LinuxNextcloudVirtualFileSystem(cached)
+        val runtime = Runtime.getSystemRuntime()
+        val buffer = runtime.memoryManager.allocateDirect(8)
+        val fileInfo = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
+        val names = mutableListOf<String>()
+        val filler = ru.serce.jnrfuse.FuseFillDir { _: Pointer, name: ByteBuffer, _, _ ->
+            name.fuseName().takeUnless { it == "." || it == ".." }?.let(names::add)
+            0
+        }
+
+        assertEquals(0, fileSystem.opendir("/Photos", fileInfo))
+        assertEquals(0, fileSystem.readdir("/Photos", buffer, filler, 0L, fileInfo))
+        assertEquals(10_000, names.size)
+        names.forEach { name ->
+            assertEquals(0, fileSystem.getattr("/Photos/$name", FileStat(runtime)))
+        }
+
+        assertEquals(1, delegate.listCallCount(""))
+        assertEquals(1, delegate.listCallCount("Photos"))
+        assertEquals(0, fileSystem.releasedir("/Photos", fileInfo))
+        cached.close()
+    }
+
+    @Test
+    fun `stale persisted listing is returned while one background refresh replaces it`() {
+        val delegate = MutableFixtureBackend().apply {
+            addFile("Photos/new-a.dat", byteArrayOf(1))
+            addFile("Photos/new-b.dat", byteArrayOf(2))
+        }
+        val store = MemoryLinuxVirtualMetadataStore().apply {
+            seed(
+                "Photos",
+                LinuxVirtualDirectorySnapshot(
+                    listOf(LinuxVirtualFileNode("Photos/cached.dat", "cached.dat", false, 1L, "cached-etag")),
+                    fetchedAtEpochMillis = 1L,
+                ),
+            )
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = store,
+            nowEpochMillis = { 10_000L },
+            freshForMillis = 1_000L,
+        )
+
+        assertEquals(listOf("cached.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
+        assertTrue(
+            waitUntil {
+                cached.list("Photos").map(LinuxVirtualFileNode::name) == listOf("new-a.dat", "new-b.dat")
+            },
+        )
+        assertEquals(listOf("new-a.dat", "new-b.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
+        assertEquals(1, delegate.listCallCount("Photos"))
+        cached.close()
+    }
+
+    @Test
+    fun `successful namespace mutation invalidates the affected parent listing`() {
+        val delegate = MutableFixtureBackend()
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = MemoryLinuxVirtualMetadataStore(),
+            freshForMillis = Long.MAX_VALUE,
+        )
+
+        assertEquals(listOf("Photos"), cached.list("").map(LinuxVirtualFileNode::name))
+        cached.createDirectory("Albums")
+        assertEquals(listOf("Photos", "Albums"), cached.list("").map(LinuxVirtualFileNode::name))
+        assertEquals(2, delegate.listCallCount(""))
+        cached.close()
+    }
+
+    @Test
     fun `release reports a close time writeback failure`() {
         val backend = MutableFixtureBackend(failClose = true)
         val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
@@ -356,11 +473,13 @@ class LinuxVirtualFileSystemTest {
             "Photos" to LinuxVirtualFileNode("Photos", "Photos", true, 0L, "photos-etag"),
         )
         private val contents = linkedMapOf<String, ByteArray>()
+        private val listCalls = mutableMapOf<String, Int>()
 
         override fun resolve(path: String): LinuxVirtualFileNode? = nodes[path.trim('/')]
 
         override fun list(path: String): List<LinuxVirtualFileNode> {
             val parent = path.trim('/')
+            listCalls[parent] = listCalls.getOrDefault(parent, 0) + 1
             return nodes.values.filter { node ->
                 node.path.isNotEmpty() && node.path.substringBeforeLast('/', "") == parent
             }
@@ -454,6 +573,8 @@ class LinuxVirtualFileSystemTest {
 
         fun fileBytes(path: String): ByteArray = requireNotNull(contents[path])
 
+        fun listCallCount(path: String): Int = listCalls.getOrDefault(path.trim('/'), 0)
+
         fun addFile(path: String, bytes: ByteArray) {
             contents[path] = bytes.copyOf()
             nodes[path] = LinuxVirtualFileNode(
@@ -464,6 +585,39 @@ class LinuxVirtualFileSystemTest {
                 remoteRevision = "etag-${bytes.size}",
             )
         }
+    }
+
+    private class MemoryLinuxVirtualMetadataStore : LinuxVirtualMetadataStore {
+        private val snapshots = mutableMapOf<String, LinuxVirtualDirectorySnapshot>()
+
+        override fun load(path: String): LinuxVirtualDirectorySnapshot? = snapshots[path]
+
+        override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
+            snapshots[path] = snapshot
+        }
+
+        override fun invalidate(path: String) {
+            val normalized = path.trim('/')
+            val parent = normalized.substringBeforeLast('/', "")
+            snapshots.keys.removeIf { cachedPath ->
+                normalized.isEmpty() ||
+                    cachedPath == normalized ||
+                    cachedPath.startsWith("$normalized/") ||
+                    cachedPath == parent
+            }
+        }
+
+        fun seed(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
+            snapshots[path] = snapshot
+        }
+    }
+
+    private fun waitUntil(condition: () -> Boolean): Boolean {
+        repeat(200) {
+            if (condition()) return true
+            TimeUnit.MILLISECONDS.sleep(10L)
+        }
+        return condition()
     }
 }
 
