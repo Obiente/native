@@ -167,6 +167,7 @@ internal class CachingLinuxVirtualFileBackend(
     private val metadataLock = Any()
     private val persistedStoreLock = Any()
     private val pendingPersistedInvalidations = mutableMapOf<String, Int>()
+    private val failedPersistedInvalidations = mutableSetOf<String>()
     private val activeMetadataOperations = mutableSetOf<LinuxVirtualMetadataOperation>()
     private val nextGeneration = AtomicLong(1L)
     @Volatile
@@ -201,7 +202,8 @@ internal class CachingLinuxVirtualFileBackend(
         val persisted = try {
             synchronized(persistedStoreLock) {
                 val invalidationPending = synchronized(metadataLock) {
-                    pendingPersistedInvalidations.keys.any { mutation -> mutation.invalidatesListing(normalized) }
+                    pendingPersistedInvalidations.keys.any { mutation -> mutation.invalidatesListing(normalized) } ||
+                        failedPersistedInvalidations.any { mutation -> mutation.invalidatesListing(normalized) }
                 }
                 if (invalidationPending) null else store.load(normalized)
             }
@@ -239,18 +241,38 @@ internal class CachingLinuxVirtualFileBackend(
         val normalized = path.linuxVirtualPath()
         val handle = delegate.openWrite(normalized, existing, truncate)
         return object : LinuxVirtualFileWriteHandle {
+            private var dirty = truncate
+
             override val size: Long get() = handle.size
             override fun read(offset: Long, length: Int): ByteArray = handle.read(offset, length)
-            override fun write(offset: Long, bytes: ByteArray): Int = handle.write(offset, bytes)
-            override fun truncate(size: Long) = handle.truncate(size)
-            override fun flush() {
-                handle.flush()
-                invalidate(normalized)
+            @Synchronized
+            override fun write(offset: Long, bytes: ByteArray): Int = handle.write(offset, bytes).also { written ->
+                if (written > 0) dirty = true
             }
 
+            @Synchronized
+            override fun truncate(size: Long) {
+                val previousSize = handle.size
+                handle.truncate(size)
+                if (size != previousSize) dirty = true
+            }
+
+            @Synchronized
+            override fun flush() {
+                handle.flush()
+                if (dirty) {
+                    invalidate(normalized)
+                    dirty = false
+                }
+            }
+
+            @Synchronized
             override fun close() {
                 handle.close()
-                invalidate(normalized)
+                if (dirty) {
+                    invalidate(normalized)
+                    dirty = false
+                }
             }
         }
     }
@@ -292,6 +314,7 @@ internal class CachingLinuxVirtualFileBackend(
         synchronized(metadataLock) {
             activeMetadataOperations.clear()
             pendingPersistedInvalidations.clear()
+            failedPersistedInvalidations.clear()
         }
         delegate.close()
     }
@@ -417,14 +440,40 @@ internal class CachingLinuxVirtualFileBackend(
                 pendingPersistedInvalidations.getOrDefault(normalized, 0) + 1
         }
         afterPersistedInvalidationMarked()
+        var persistedInvalidated = false
         try {
-            synchronized(persistedStoreLock) { runCatching { store.invalidate(normalized) } }
+            synchronized(persistedStoreLock) {
+                persistedInvalidated = runCatching { store.invalidate(normalized) }.isSuccess
+            }
         } finally {
             synchronized(metadataLock) {
+                if (persistedInvalidated) {
+                    failedPersistedInvalidations.removeIf { failed ->
+                        normalized.isEmpty() || failed == normalized || failed.startsWith("$normalized/")
+                    }
+                } else {
+                    rememberFailedPersistedInvalidation(normalized)
+                }
                 val remaining = pendingPersistedInvalidations.getOrDefault(normalized, 1) - 1
                 if (remaining <= 0) pendingPersistedInvalidations.remove(normalized)
                 else pendingPersistedInvalidations[normalized] = remaining
             }
+        }
+    }
+
+    private fun rememberFailedPersistedInvalidation(path: String) {
+        check(Thread.holdsLock(metadataLock))
+        if (failedPersistedInvalidations.any { failed ->
+                failed.isEmpty() || failed == path || path.startsWith("$failed/")
+            }
+        ) {
+            return
+        }
+        failedPersistedInvalidations.removeIf { failed -> path.isEmpty() || failed.startsWith("$path/") }
+        failedPersistedInvalidations += path
+        if (failedPersistedInvalidations.size > MAX_FAILED_PERSISTED_INVALIDATIONS) {
+            failedPersistedInvalidations.clear()
+            failedPersistedInvalidations += ""
         }
     }
 
@@ -483,6 +532,7 @@ internal class CachingLinuxVirtualFileBackend(
         const val DEFAULT_REFRESH_RETRY_MAX_MILLIS = 60_000L
         const val DEFAULT_MAX_RETAINED_METADATA_ENTRIES = 100_000
         const val DEFAULT_MAX_RETAINED_DIRECTORIES = 512
+        const val MAX_FAILED_PERSISTED_INVALIDATIONS = 1_024
         const val MAX_BACKOFF_EXPONENT = 30
         val ROOT_NODE = LinuxVirtualFileNode("", "Nextcloud", true, 0L, "root")
     }
@@ -951,6 +1001,7 @@ internal class LinuxNextcloudVirtualFileSystem(
     }
 
     fun unmount() {
+        umount()
         readHandles.values.forEach { runCatching(it::close) }
         writeHandles.values.map(LinuxOpenWriteReference::shared).distinct().forEach { shared ->
             runCatching(shared.delegate::close)
@@ -960,7 +1011,6 @@ internal class LinuxNextcloudVirtualFileSystem(
         writeHandles.clear()
         directoryHandles.clear()
         pendingCreatedFiles.clear()
-        umount()
         backend.close()
     }
 
