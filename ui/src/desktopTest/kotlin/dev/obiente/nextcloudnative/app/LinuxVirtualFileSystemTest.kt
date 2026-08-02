@@ -765,6 +765,7 @@ class LinuxVirtualFileSystemTest {
         )
 
         assertEquals(listOf("Photos"), cached.list("").map(LinuxVirtualFileNode::name))
+        assertTrue(waitUntil { persisted.snapshot("")?.nodes?.singleOrNull()?.name == "Photos" })
         cached.createDirectory("Albums")
         assertEquals(setOf("Photos", "Albums"), cached.list("").mapTo(hashSetOf(), LinuxVirtualFileNode::name))
         assertTrue(waitUntil { persisted.snapshot("")?.nodes?.any { it.name == "Albums" } == true })
