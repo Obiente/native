@@ -25,6 +25,7 @@ jobs:
 
       - name: Detect build scopes
         id: changes
+        continue-on-error: true
         uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         with:
           filters: |
@@ -91,6 +92,7 @@ jobs:
       - name: Install Linux repository tooling
         if: >-
           github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
           steps.changes.outputs.linux_repositories == 'true'
         run: |
           sudo apt-get update
@@ -99,6 +101,7 @@ jobs:
       - name: Test signed Linux package repositories
         if: >-
           github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
           steps.changes.outputs.linux_repositories == 'true'
         run: bash tools/test-linux-package-repositories.sh
 
@@ -132,6 +135,7 @@ jobs:
       - name: Set up JDK 21
         if: >-
           github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
           steps.changes.outputs.contract == 'true' ||
           steps.changes.outputs.desktop == 'true' ||
           steps.changes.outputs.android == 'true'
@@ -143,6 +147,7 @@ jobs:
       - name: Set up Gradle build cache
         if: >-
           github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
           steps.changes.outputs.contract == 'true' ||
           steps.changes.outputs.desktop == 'true' ||
           steps.changes.outputs.android == 'true'
@@ -153,13 +158,17 @@ jobs:
       - name: Install Linux virtual filesystem runtime
         if: >-
           github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
           steps.changes.outputs.desktop == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --yes libfuse2t64
 
       - name: Cache Cargo dependencies and build output
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.rust == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.rust == 'true'
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
@@ -171,27 +180,37 @@ jobs:
             ${{ runner.os }}-cargo-v1-
 
       - name: Set up Android SDK
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.android == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.android == 'true'
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
 
       - name: Install Android platform
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.android == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.android == 'true'
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
 
       - name: Test semantic compiler
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.rust == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.rust == 'true'
         run: cargo test --locked
 
       - name: Test and build selected Gradle scopes
         if: >-
           github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
           steps.changes.outputs.contract == 'true' ||
           steps.changes.outputs.desktop == 'true' ||
           steps.changes.outputs.android == 'true'
         env:
-          RUN_CONTRACT: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.contract == 'true' }}
-          RUN_DESKTOP: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.desktop == 'true' }}
-          RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.android == 'true' }}
+          RUN_CONTRACT: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outcome != 'success' || steps.changes.outputs.contract == 'true' }}
+          RUN_DESKTOP: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outcome != 'success' || steps.changes.outputs.desktop == 'true' }}
+          RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outcome != 'success' || steps.changes.outputs.android == 'true' }}
         run: |
           set -euo pipefail
           gradle_tasks=()
@@ -212,7 +231,10 @@ jobs:
           ./gradlew --no-daemon "${gradle_tasks[@]}"
 
       - name: Upload Linux desktop app
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.desktop == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.desktop == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nextcloud-native-linux
@@ -221,7 +243,10 @@ jobs:
           retention-days: 7
 
       - name: Upload Android debug APK
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.android == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.android == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nextcloud-native-android-debug
@@ -232,6 +257,7 @@ jobs:
       - name: Report skipped app build
         if: >-
           github.event_name != 'workflow_dispatch' &&
+          steps.changes.outcome == 'success' &&
           steps.changes.outputs.rust != 'true' &&
           steps.changes.outputs.contract != 'true' &&
           steps.changes.outputs.desktop != 'true' &&
@@ -248,6 +274,7 @@ jobs:
 
       - name: Detect Windows desktop changes
         id: changes
+        continue-on-error: true
         uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         with:
           filters: |
@@ -274,32 +301,47 @@ jobs:
               - "gradlew.bat"
 
       - name: Set up Rust
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.windows == 'true'
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: x86_64-pc-windows-msvc
 
       - name: Set up JDK 21
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.windows == 'true'
         uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Set up Gradle build cache
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.windows == 'true'
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
         with:
           cache-read-only: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
 
       - name: Test Windows desktop and build MSI
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.windows == 'true'
         shell: pwsh
         run: |
           .\gradlew.bat --no-daemon :ui:desktopTest :ui:packageMsi
 
       - name: Verify Windows MSI metadata
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.windows == 'true'
         shell: pwsh
         run: |
           tools/verify-windows-package.ps1 `
@@ -307,7 +349,10 @@ jobs:
             -ExpectedVersion "0.1.0"
 
       - name: Exercise WinGet manifest generation
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.windows == 'true'
         shell: pwsh
         run: |
           tools/create-winget-manifests.ps1 `
@@ -323,7 +368,10 @@ jobs:
           }
 
       - name: Upload Windows MSI
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.windows == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.windows == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nextcloud-native-windows
@@ -334,6 +382,9 @@ jobs:
           retention-days: 7
 
       - name: Report skipped Windows build
-        if: github.event_name != 'workflow_dispatch' && steps.changes.outputs.windows != 'true'
+        if: >-
+          github.event_name != 'workflow_dispatch' &&
+          steps.changes.outcome == 'success' &&
+          steps.changes.outputs.windows != 'true'
         shell: pwsh
         run: '"No Windows desktop or build-system changes; native Windows validation was skipped." >> $env:GITHUB_STEP_SUMMARY'
