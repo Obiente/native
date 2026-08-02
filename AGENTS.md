@@ -356,13 +356,23 @@ final-device QA, not the only way to test.
 - Amending, rebasing, force-pushing, deleting branches/tags/releases, or
   rewriting shared history requires explicit authority for that exact action.
 - Use Conventional Commit subjects.
+- Authorship and DCO are submission metadata, not code-review findings. Automated
+  reviewers must not post review comments about an author, committer, or missing
+  sign-off. Repository checks and maintainers own those submission gates.
+- Never infer Git identity from an agent sandbox, a local worktree, synthetic
+  patch commits, or rewritten review fixtures. If an operational workflow must
+  inspect PR commit identity, it must use the exact remote PR commits returned by
+  GitHub's API. If that evidence is unavailable or inconsistent, leave the
+  metadata decision to a maintainer rather than reporting a finding.
 - The human contributor remains the author and is responsible for the complete
   change. Automated tools must not become author or committer and must not add
   bot/assistant `Co-authored-by` trailers.
-- Every submitted commit needs the human contributor's DCO `Signed-off-by`
-  trailer. An agent may add it only after that human explicitly confirms they
-  reviewed the commit and authorize the sign-off. Cryptographic commit signing
-  remains a separate repository requirement.
+- Every submitted commit must carry the human contributor's `Signed-off-by`
+  trailer. Only that human may add or authorize the trailer after reviewing the
+  commit; an agent must never add, manufacture, or repair it. Automated reviewers
+  must leave DCO enforcement to protected repository checks and maintainers and
+  must not report missing sign-off as a code-review finding. Cryptographic commit
+  signing remains a separate repository requirement.
 - Optional AI disclosure is appreciated in the PR description or an
   `Assisted-by: Tool[:model]` trailer, but it is not mandatory. Never disclose
   private prompts or account data.
