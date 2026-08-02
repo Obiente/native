@@ -173,17 +173,19 @@ internal class DesktopVirtualRangeCache(
 
     @Synchronized
     fun invalidate(accountId: String, path: String) {
-        invalidateRangeBlocks(accountId, path, invalidateRetainedMetadata = true)
+        val normalized = FileOfflineKey(accountId, path).relativePath
+        runCatching { invalidateRetainedListings(accountId, normalized) }
+        runCatching { invalidateRangeBlocks(accountId, normalized) }
     }
 
     @Synchronized
     fun invalidateDisposableRanges(accountId: String, path: String) {
-        invalidateRangeBlocks(accountId, path, invalidateRetainedMetadata = false)
+        val normalized = FileOfflineKey(accountId, path).relativePath
+        runCatching { invalidateRangeBlocks(accountId, normalized) }
     }
 
-    private fun invalidateRangeBlocks(accountId: String, path: String, invalidateRetainedMetadata: Boolean) {
+    private fun invalidateRangeBlocks(accountId: String, path: String) {
         val normalized = FileOfflineKey(accountId, path).relativePath
-        if (invalidateRetainedMetadata) invalidateRetainedListings(accountId, normalized)
         val current = load(accountId)
         val candidates = current.blocks.filter { block ->
             block.path == normalized || block.path.startsWith("$normalized/")
@@ -872,7 +874,7 @@ internal class DesktopVirtualRangeCache(
         const val MAX_RETAINED_LISTINGS = 20_000
         const val MAX_BLOCKS = 20_000
         const val MAX_BLOCK_BYTES = 4 * 1024 * 1024
-        const val MAX_STALE_REVISION_STAGES_PER_RECOVERY = 1_024
+        const val MAX_STALE_REVISION_STAGES_PER_RECOVERY = 20_000
         val REVISION_STAGE_FILE = Regex(
             "range-revision\\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\..+\\.stage",
         )
