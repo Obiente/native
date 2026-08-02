@@ -87,7 +87,14 @@ internal class DesktopLinuxVirtualFileWritebackStore(
             try {
                 saveManifest(
                     manifestFile,
-                    WritebackManifest(path, expectedRevision, stagedAt, dirty, stage.name),
+                    WritebackManifest(
+                        path = path,
+                        expectedRemoteRevision = expectedRevision,
+                        stagedAtEpochMillis = stagedAt,
+                        dirty = dirty,
+                        stageName = stage.name,
+                        committed = false,
+                    ),
                 )
                 if (truncate) {
                     afterDirtyIntentPersisted()
@@ -153,7 +160,14 @@ internal class DesktopLinuxVirtualFileWritebackStore(
                     if (dirty) return
                     saveManifest(
                         manifestFile,
-                        WritebackManifest(path, expectedRevision, stagedAt, true, stage.name),
+                        WritebackManifest(
+                            path = path,
+                            expectedRemoteRevision = expectedRevision,
+                            stagedAtEpochMillis = stagedAt,
+                            dirty = true,
+                            stageName = stage.name,
+                            committed = false,
+                        ),
                     )
                     dirty = true
                     afterDirtyIntentPersisted()
@@ -169,7 +183,14 @@ internal class DesktopLinuxVirtualFileWritebackStore(
                     dirty = false
                     saveManifest(
                         manifestFile,
-                        WritebackManifest(path, expectedRevision, stagedAt, false, stage.name),
+                        WritebackManifest(
+                            path = path,
+                            expectedRemoteRevision = expectedRevision,
+                            stagedAtEpochMillis = stagedAt,
+                            dirty = false,
+                            stageName = stage.name,
+                            committed = true,
+                        ),
                     )
                     onCommitted(path)
                 }
@@ -235,7 +256,9 @@ internal class DesktopLinuxVirtualFileWritebackStore(
             val stage = File(root, manifest.stageName)
             if (!stage.isFile) return@forEach
             if (!manifest.dirty) {
-                onCommitted(manifest.path)
+                // Missing values are legacy clean manifests, whose pre- and post-upload states
+                // were indistinguishable. Preserve their conservative invalidation behavior.
+                if (manifest.committed != false) onCommitted(manifest.path)
                 manifestFile.delete()
                 stage.delete()
                 recovered += 1
@@ -358,6 +381,7 @@ private data class WritebackManifest(
     val stagedAtEpochMillis: Long,
     val dirty: Boolean,
     val stageName: String,
+    val committed: Boolean? = null,
 ) {
     fun requireValid() {
         FileOfflineKey("account", path)
