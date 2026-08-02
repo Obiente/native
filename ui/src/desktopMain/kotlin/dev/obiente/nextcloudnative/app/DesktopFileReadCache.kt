@@ -56,6 +56,10 @@ internal class DesktopFileReadCache(
         cachedListingSnapshot(accountId, path)?.files
 
     @Synchronized
+    fun cachedListingPaths(accountId: String): Set<String> =
+        load(accountId).listings.mapTo(linkedSetOf()) { listing -> listing.path }
+
+    @Synchronized
     fun cachedListingSnapshot(accountId: String, path: String): DesktopCachedFileListing? {
         val normalized = path.cachePath()
         return load(accountId).listings.firstOrNull { it.path == normalized }?.let { listing ->

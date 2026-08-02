@@ -71,6 +71,7 @@ internal interface LinuxVirtualMetadataStore {
     fun load(path: String): LinuxVirtualDirectorySnapshot?
     fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot)
     fun invalidate(path: String)
+    fun retainedPaths(): Set<String>? = null
 }
 
 internal class DesktopLinuxVirtualMetadataStore(
@@ -116,6 +117,8 @@ internal class DesktopLinuxVirtualMetadataStore(
     }
 
     override fun invalidate(path: String) = cache.invalidate(accountId, path)
+
+    override fun retainedPaths(): Set<String> = cache.cachedListingPaths(accountId)
 }
 
 /**
@@ -172,6 +175,12 @@ internal class CachingLinuxVirtualFileBackend(
 
     internal fun hasRecordedRefreshFailure(path: String): Boolean =
         synchronized(metadataLock) { refreshFailures.containsKey(path.linuxVirtualPath()) }
+
+    internal fun revalidatedPersistedListingCount(): Int =
+        synchronized(metadataLock) { revalidatedPersistedListings.size }
+
+    internal fun failedPersistedInvalidationCount(): Int =
+        synchronized(metadataLock) { failedPersistedInvalidations.size }
 
     private fun snapshot(normalized: String): LinuxVirtualDirectorySnapshot {
         synchronized(metadataLock) { snapshots[normalized] }?.let { cached ->
@@ -467,6 +476,7 @@ internal class CachingLinuxVirtualFileBackend(
                     failedPersistedInvalidations.removeIf { failed ->
                         normalized.isEmpty() || failed == normalized || failed.startsWith("$normalized/")
                     }
+                    pruneUnpairedRevalidatedListings()
                 } else {
                     rememberFailedPersistedInvalidation(normalized)
                 }
@@ -495,11 +505,32 @@ internal class CachingLinuxVirtualFileBackend(
 
     private fun rememberRevalidatedPersistedListing(path: String) {
         check(Thread.holdsLock(metadataLock))
+        if (failedPersistedInvalidations.none { failed -> failed.invalidatesListing(path) }) {
+            revalidatedPersistedListings.remove(path)
+            return
+        }
         revalidatedPersistedListings.remove(path)
         revalidatedPersistedListings += path
-        while (revalidatedPersistedListings.size > MAX_REVALIDATED_PERSISTED_LISTINGS) {
-            revalidatedPersistedListings.remove(revalidatedPersistedListings.first())
+        reconcileRevalidatedListingsWithStore()
+    }
+
+    private fun pruneUnpairedRevalidatedListings() {
+        check(Thread.holdsLock(metadataLock))
+        revalidatedPersistedListings.removeIf { listing ->
+            failedPersistedInvalidations.none { failed -> failed.invalidatesListing(listing) }
         }
+    }
+
+    private fun reconcileRevalidatedListingsWithStore() {
+        check(Thread.holdsLock(metadataLock))
+        val retainedPaths = store.retainedPaths() ?: return
+        revalidatedPersistedListings.retainAll(retainedPaths)
+        failedPersistedInvalidations.removeIf { failed ->
+            retainedPaths.none { listing ->
+                failed.invalidatesListing(listing) && listing !in revalidatedPersistedListings
+            }
+        }
+        pruneUnpairedRevalidatedListings()
     }
 
     private fun retainSnapshot(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
@@ -562,7 +593,6 @@ internal class CachingLinuxVirtualFileBackend(
         const val DEFAULT_MAX_RETAINED_METADATA_ENTRIES = 100_000
         const val DEFAULT_MAX_RETAINED_DIRECTORIES = 512
         const val MAX_FAILED_PERSISTED_INVALIDATIONS = 1_024
-        const val MAX_REVALIDATED_PERSISTED_LISTINGS = 1_024
         const val MAX_BACKOFF_EXPONENT = 30
         val ROOT_NODE = LinuxVirtualFileNode("", "Nextcloud", true, 0L, "root")
     }

@@ -857,7 +857,7 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
-    fun `authoritative persistence re-enables a listing after failed invalidation`() {
+    fun `authoritative persistence clears a covered failed invalidation`() {
         val fixture = MutableFixtureBackend()
         val failRootListing = AtomicBoolean(false)
         val delegate = object : LinuxVirtualFileBackend by fixture {
@@ -880,9 +880,14 @@ class LinuxVirtualFileSystemTest {
         assertEquals(listOf("Photos"), cached.list("").map(LinuxVirtualFileNode::name))
         assertTrue(waitUntil { persisted.snapshot("")?.nodes?.singleOrNull()?.name == "Photos" })
         cached.createDirectory("Albums")
+        assertEquals(1, cached.failedPersistedInvalidationCount())
         assertEquals(setOf("Photos", "Albums"), cached.list("").mapTo(hashSetOf(), LinuxVirtualFileNode::name))
         assertTrue(waitUntil { persisted.snapshot("")?.nodes?.any { it.name == "Albums" } == true })
+        assertTrue(waitUntil { cached.failedPersistedInvalidationCount() == 0 })
+        assertEquals(0, cached.revalidatedPersistedListingCount())
         cached.list("Photos")
+        assertTrue(waitUntil { persisted.snapshot("Photos") != null })
+        assertEquals(0, cached.revalidatedPersistedListingCount())
         failRootListing.set(true)
 
         assertEquals(setOf("Photos", "Albums"), cached.list("").mapTo(hashSetOf(), LinuxVirtualFileNode::name))
@@ -1196,12 +1201,15 @@ class LinuxVirtualFileSystemTest {
     private class MemoryLinuxVirtualMetadataStore : LinuxVirtualMetadataStore {
         private val snapshots = mutableMapOf<String, LinuxVirtualDirectorySnapshot>()
 
+        @Synchronized
         override fun load(path: String): LinuxVirtualDirectorySnapshot? = snapshots[path]
 
+        @Synchronized
         override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
             snapshots[path] = snapshot
         }
 
+        @Synchronized
         override fun invalidate(path: String) {
             val normalized = path.trim('/')
             val parent = normalized.substringBeforeLast('/', "")
@@ -1213,10 +1221,15 @@ class LinuxVirtualFileSystemTest {
             }
         }
 
+        @Synchronized
+        override fun retainedPaths(): Set<String> = snapshots.keys.toSet()
+
+        @Synchronized
         fun seed(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
             snapshots[path] = snapshot
         }
 
+        @Synchronized
         fun snapshot(path: String): LinuxVirtualDirectorySnapshot? = snapshots[path]
     }
 
