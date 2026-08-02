@@ -2165,6 +2165,7 @@ class DesktopNextcloudServices(
         path: String,
     ): NextcloudFileListing = withContext(Dispatchers.IO) {
         val accountId = desktopFileCacheAccountId(session)
+        val requestStartedAtEpochMillis = System.currentTimeMillis().coerceAtLeast(0L)
         try {
             val response = request(
                 "PROPFIND", buildNextcloudFileUrl(session.serverUrl, userId, path), session, DAV_PROPERTIES,
@@ -2173,7 +2174,14 @@ class DesktopNextcloudServices(
             if (response.status == 207) {
                 val files = parseDavFiles(response.body, userId).drop(1)
                     .sortedWith(compareByDescending<NextcloudFile> { it.isDirectory }.thenBy { it.name.lowercase() })
-                runCatching { fileReadCache.storeListing(accountId, path, files) }
+                runCatching {
+                    fileReadCache.storeListingUnlessNewer(
+                        accountId = accountId,
+                        path = path,
+                        files = files,
+                        fetchedAtEpochMillis = requestStartedAtEpochMillis,
+                    )
+                }
                 NextcloudFileListing(files, NextcloudFileListingSource.Network)
             } else {
                 if (response.status >= 500) {

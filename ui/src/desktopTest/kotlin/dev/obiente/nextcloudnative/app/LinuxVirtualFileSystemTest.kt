@@ -895,7 +895,7 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
-    fun `persisted metadata is reused only for the same remote revision`() {
+    fun `virtual metadata persistence never degrades the authoritative Files listing`() {
         val root = Files.createTempDirectory("linux-virtual-metadata-")
         val preferences = Preferences.userRoot().node(
             "dev/obiente/nextcloudnative/tests/linux-virtual-metadata/${UUID.randomUUID()}",
@@ -927,9 +927,8 @@ class LinuxVirtualFileSystemTest {
                 ),
             )
             val unchanged = cache.cachedListing(accountId, "Photos").orEmpty().single()
-            assertEquals("image/x-raw", unchanged.mimeType)
-            assertEquals("RGDNVW", unchanged.permissions)
-            assertEquals(listOf("SHA256:abc"), unchanged.checksums)
+            assertEquals(previous, unchanged)
+            assertEquals("revision-1", store.load("Photos")?.nodes?.single()?.remoteRevision)
 
             store.store(
                 "Photos",
@@ -939,14 +938,10 @@ class LinuxVirtualFileSystemTest {
                 ),
             )
             val replaced = cache.cachedListing(accountId, "Photos").orEmpty().single()
-            assertEquals("revision-2", replaced.etag)
-            assertEquals(8L, replaced.size)
-            assertNull(replaced.mimeType)
-            assertNull(replaced.lastModified)
-            assertNull(replaced.fileId)
-            assertTrue(!replaced.hasPreview)
-            assertNull(replaced.permissions)
-            assertTrue(replaced.checksums.isEmpty())
+            assertEquals(previous, replaced)
+            val virtualReplacement = requireNotNull(store.load("Photos")).nodes.single()
+            assertEquals("revision-2", virtualReplacement.remoteRevision)
+            assertEquals(8L, virtualReplacement.size)
 
             val authoritative = previous.copy(name = "authoritative.raf", etag = "revision-3")
             cache.storeListing(accountId, "Photos", listOf(authoritative), nowEpochMillis = 10L)
@@ -958,9 +953,44 @@ class LinuxVirtualFileSystemTest {
                 ),
             )
             assertEquals(authoritative, cache.cachedListing(accountId, "Photos").orEmpty().single())
+            assertEquals("revision-older", store.load("Photos")?.nodes?.single()?.remoteRevision)
         } finally {
             runCatching { preferences.removeNode() }
             root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `concurrent blocking metadata misses stay within a fixed network bound`() {
+        val active = AtomicInteger(0)
+        val maximumActive = AtomicInteger(0)
+        val started = CountDownLatch(2)
+        val release = CountDownLatch(1)
+        val delegate = object : LinuxVirtualFileBackend by MutableFixtureBackend() {
+            override fun list(path: String): List<LinuxVirtualFileNode> {
+                val current = active.incrementAndGet()
+                maximumActive.updateAndGet { previous -> maxOf(previous, current) }
+                started.countDown()
+                try {
+                    check(release.await(2L, TimeUnit.SECONDS))
+                    return emptyList()
+                } finally {
+                    active.decrementAndGet()
+                }
+            }
+        }
+        val cached = CachingLinuxVirtualFileBackend(delegate, MemoryLinuxVirtualMetadataStore())
+        val workers = Executors.newFixedThreadPool(8)
+        try {
+            val reads = List(8) { index -> workers.submit<List<LinuxVirtualFileNode>> { cached.list("Folder-$index") } }
+            assertTrue(started.await(2L, TimeUnit.SECONDS))
+            assertEquals(2, maximumActive.get())
+            release.countDown()
+            reads.forEach { read -> assertTrue(read.get(2L, TimeUnit.SECONDS).isEmpty()) }
+        } finally {
+            release.countDown()
+            workers.shutdownNow()
+            cached.close()
         }
     }
 

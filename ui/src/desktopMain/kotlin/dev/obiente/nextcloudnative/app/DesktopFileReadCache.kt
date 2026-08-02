@@ -21,6 +21,11 @@ internal data class DesktopCachedFileListing(
     val fetchedAtEpochMillis: Long,
 )
 
+internal data class DesktopCachedVirtualListing(
+    val nodes: List<LinuxVirtualFileNode>,
+    val fetchedAtEpochMillis: Long,
+)
+
 internal data class DesktopVirtualFileCacheSummary(
     val policy: VirtualFileCachePolicy,
     val cachedBytes: Long,
@@ -64,6 +69,21 @@ internal class DesktopFileReadCache(
         val normalized = path.cachePath()
         return load(accountId).listings.firstOrNull { it.path == normalized }?.let { listing ->
             DesktopCachedFileListing(listing.files, listing.fetchedAtEpochMillis)
+        }
+    }
+
+    @Synchronized
+    fun cachedVirtualListingPaths(accountId: String): Set<String> =
+        load(accountId).virtualListings.mapTo(linkedSetOf()) { listing -> listing.path }
+
+    @Synchronized
+    fun cachedVirtualListingSnapshot(accountId: String, path: String): DesktopCachedVirtualListing? {
+        val normalized = path.cachePath()
+        return load(accountId).virtualListings.firstOrNull { it.path == normalized }?.let { listing ->
+            DesktopCachedVirtualListing(
+                nodes = listing.nodes.map(CachedVirtualFileNodeV1::toDomain),
+                fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
+            )
         }
     }
 
@@ -122,6 +142,42 @@ internal class DesktopFileReadCache(
             return false
         }
         storeListing(accountId, normalized, files, fetchedAtEpochMillis)
+        return true
+    }
+
+    @Synchronized
+    fun storeVirtualListingUnlessNewer(
+        accountId: String,
+        path: String,
+        nodes: List<LinuxVirtualFileNode>,
+        fetchedAtEpochMillis: Long,
+        nowEpochMillis: Long = System.currentTimeMillis(),
+    ): Boolean {
+        require(fetchedAtEpochMillis >= 0L)
+        require(nowEpochMillis >= 0L)
+        require(nodes.size <= MAX_FILES_PER_LISTING) { "The folder contains too many cacheable entries." }
+        val normalized = path.cachePath()
+        nodes.forEach(::requireValidVirtualNode)
+        val index = load(accountId)
+        val current = index.virtualListings.firstOrNull { listing -> listing.path == normalized }
+        if (
+            current != null &&
+            current.fetchedAtEpochMillis <= nowEpochMillis &&
+            current.fetchedAtEpochMillis >= fetchedAtEpochMillis
+        ) {
+            return false
+        }
+        save(
+            accountId,
+            index.copy(
+                virtualListings = index.virtualListings.filterNot { it.path == normalized } +
+                    CachedVirtualListingV1(
+                        path = normalized,
+                        fetchedAtEpochMillis = fetchedAtEpochMillis,
+                        nodes = nodes.map(CachedVirtualFileNodeV1::fromDomain),
+                    ),
+            ),
+        )
         return true
     }
 
@@ -283,6 +339,14 @@ internal class DesktopFileReadCache(
                         listing.path == parent ||
                         normalized.startsWith("${listing.path}/")
                 },
+                virtualListings = index.virtualListings.filterNot { listing ->
+                    normalized.isEmpty() ||
+                        listing.path.isEmpty() ||
+                        listing.path == normalized ||
+                        listing.path.startsWith("$normalized/") ||
+                        listing.path == parent ||
+                        normalized.startsWith("${listing.path}/")
+                },
                 content = index.content.filterNot { it in removed },
             ),
         )
@@ -297,6 +361,16 @@ internal class DesktopFileReadCache(
                     if (retainedMetadataEntries + listing.files.size <= MAX_TOTAL_METADATA_ENTRIES) {
                         add(listing)
                         retainedMetadataEntries += listing.files.size
+                    }
+                }
+        }
+        val boundedVirtualListings = buildList {
+            virtualListings.sortedByDescending(CachedVirtualListingV1::fetchedAtEpochMillis)
+                .take(MAX_LISTINGS)
+                .forEach { listing ->
+                    if (retainedMetadataEntries + listing.nodes.size <= MAX_TOTAL_METADATA_ENTRIES) {
+                        add(listing)
+                        retainedMetadataEntries += listing.nodes.size
                     }
                 }
         }
@@ -318,7 +392,11 @@ internal class DesktopFileReadCache(
                 }
             }
             .take(MAX_CONTENT_ENTRIES)
-        return copy(listings = boundedListings, content = retainedContent)
+        return copy(
+            listings = boundedListings,
+            virtualListings = boundedVirtualListings,
+            content = retainedContent,
+        )
     }
 
     private fun load(accountId: String): CacheIndexV1 {
@@ -411,8 +489,10 @@ internal class DesktopFileReadCache(
     private fun CacheIndexV1.requireValid(): CacheIndexV1 = also { index ->
         require(index.version == FORMAT_VERSION)
         require(index.listings.size <= MAX_LISTINGS)
+        require(index.virtualListings.size <= MAX_LISTINGS)
         require(index.content.size <= MAX_CONTENT_ENTRIES)
         require(index.listings.map(CachedListingV1::path).distinct().size == index.listings.size)
+        require(index.virtualListings.map(CachedVirtualListingV1::path).distinct().size == index.virtualListings.size)
         require(index.content.map(CachedContentV1::path).distinct().size == index.content.size)
         index.listings.forEach { listing ->
             require(listing.path.cachePath() == listing.path)
@@ -423,6 +503,12 @@ internal class DesktopFileReadCache(
                 require(file.name.length <= MAX_FILE_NAME_LENGTH && file.name.none(Char::isISOControl))
                 require(file.etag == null || file.etag.length <= MAX_ETAG_LENGTH && file.etag.none(Char::isISOControl))
             }
+        }
+        index.virtualListings.forEach { listing ->
+            require(listing.path.cachePath() == listing.path)
+            require(listing.fetchedAtEpochMillis >= 0L)
+            require(listing.nodes.size <= MAX_FILES_PER_LISTING)
+            listing.nodes.forEach { node -> requireValidVirtualNode(node.toDomain()) }
         }
         index.content.forEach { content ->
             require(content.path.cachePath() == content.path)
@@ -437,6 +523,14 @@ internal class DesktopFileReadCache(
             require(content.storedAtEpochMillis >= 0L)
             require(content.lastAccessedAtEpochMillis >= content.storedAtEpochMillis)
         }
+    }
+
+    private fun requireValidVirtualNode(node: LinuxVirtualFileNode) {
+        require(node.path.cachePath() == node.path)
+        require(node.name.length <= MAX_FILE_NAME_LENGTH && node.name.none(Char::isISOControl))
+        require(node.remoteRevision.isNotBlank() && node.remoteRevision.length <= MAX_ETAG_LENGTH)
+        require(node.remoteRevision.none(Char::isISOControl))
+        require(node.size >= 0L)
     }
 
     private fun publishBytes(directory: File, name: String, bytes: ByteArray) {
@@ -525,6 +619,7 @@ private fun String.isSha256Hex(): Boolean =
 private data class CacheIndexV1(
     val version: Int = 1,
     val listings: List<CachedListingV1> = emptyList(),
+    val virtualListings: List<CachedVirtualListingV1> = emptyList(),
     val content: List<CachedContentV1> = emptyList(),
 )
 
@@ -534,6 +629,34 @@ private data class CachedListingV1(
     val fetchedAtEpochMillis: Long,
     val files: List<NextcloudFile>,
 )
+
+@Serializable
+private data class CachedVirtualListingV1(
+    val path: String,
+    val fetchedAtEpochMillis: Long,
+    val nodes: List<CachedVirtualFileNodeV1>,
+)
+
+@Serializable
+private data class CachedVirtualFileNodeV1(
+    val path: String,
+    val name: String,
+    val directory: Boolean,
+    val size: Long,
+    val remoteRevision: String,
+) {
+    fun toDomain(): LinuxVirtualFileNode = LinuxVirtualFileNode(path, name, directory, size, remoteRevision)
+
+    companion object {
+        fun fromDomain(node: LinuxVirtualFileNode): CachedVirtualFileNodeV1 = CachedVirtualFileNodeV1(
+            path = node.path,
+            name = node.name,
+            directory = node.directory,
+            size = node.size,
+            remoteRevision = node.remoteRevision,
+        )
+    }
+}
 
 @Serializable
 private data class CachedContentV1(
