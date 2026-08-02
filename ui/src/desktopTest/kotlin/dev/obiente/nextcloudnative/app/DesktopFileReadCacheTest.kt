@@ -157,6 +157,25 @@ class DesktopFileReadCacheTest {
     }
 
     @Test
+    fun `authoritative listing replaces a future timestamp after clock rollback`() = withCache { _, cache ->
+        val accountId = desktopFileCacheAccountId(session())
+        cache.storeListing(accountId, "Photos", listOf(file("Photos/old.jpg", "old")), 10_000L)
+
+        assertTrue(
+            cache.storeListingUnlessNewer(
+                accountId = accountId,
+                path = "Photos",
+                files = listOf(file("Photos/current.jpg", "current")),
+                fetchedAtEpochMillis = 5_000L,
+                nowEpochMillis = 5_000L,
+            ),
+        )
+
+        assertEquals("Photos/current.jpg", cache.cachedListing(accountId, "Photos")?.single()?.path)
+        assertEquals(5_000L, cache.cachedListingSnapshot(accountId, "Photos")?.fetchedAtEpochMillis)
+    }
+
+    @Test
     fun `decoded account indexes are retained within an LRU bound`() {
         val root = Files.createTempDirectory("ncn-files-cache-accounts-").toFile()
         val preferences = testPreferences(root)

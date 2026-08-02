@@ -144,6 +144,7 @@ internal class CachingLinuxVirtualFileBackend(
     private val persistedStoreLock = Any()
     private val pendingPersistedInvalidations = mutableMapOf<String, Int>()
     private val failedPersistedInvalidations = mutableSetOf<String>()
+    private val revalidatedPersistedListings = linkedSetOf<String>()
     private val activeMetadataOperations = mutableSetOf<LinuxVirtualMetadataOperation>()
     private val nextGeneration = AtomicLong(1L)
     @Volatile
@@ -179,6 +180,7 @@ internal class CachingLinuxVirtualFileBackend(
             synchronized(persistedStoreLock) {
                 val invalidationPending = synchronized(metadataLock) {
                     pendingPersistedInvalidations.keys.any { mutation -> mutation.invalidatesListing(normalized) } ||
+                        normalized !in revalidatedPersistedListings &&
                         failedPersistedInvalidations.any { mutation -> mutation.invalidatesListing(normalized) }
                 }
                 if (invalidationPending) null else store.load(normalized)
@@ -291,6 +293,7 @@ internal class CachingLinuxVirtualFileBackend(
             activeMetadataOperations.clear()
             pendingPersistedInvalidations.clear()
             failedPersistedInvalidations.clear()
+            revalidatedPersistedListings.clear()
         }
         delegate.close()
     }
@@ -382,7 +385,17 @@ internal class CachingLinuxVirtualFileBackend(
                                 !operation.invalidated &&
                                 snapshots[path]?.generation == snapshot.generation
                         }
-                        if (stillCurrent) runCatching { store.store(path, snapshot) }
+                        if (stillCurrent && runCatching { store.store(path, snapshot) }.isSuccess) {
+                            synchronized(metadataLock) {
+                                if (
+                                    !closed &&
+                                    !operation.invalidated &&
+                                    snapshots[path]?.generation == snapshot.generation
+                                ) {
+                                    rememberRevalidatedPersistedListing(path)
+                                }
+                            }
+                        }
                     }
                 } finally {
                     endMetadataOperation(operation)
@@ -412,6 +425,7 @@ internal class CachingLinuxVirtualFileBackend(
             activeMetadataOperations
                 .filter { operation -> normalized.invalidatesListing(operation.path) }
                 .forEach { operation -> operation.invalidated = true }
+            revalidatedPersistedListings.removeIf { listing -> normalized.invalidatesListing(listing) }
             pendingPersistedInvalidations[normalized] =
                 pendingPersistedInvalidations.getOrDefault(normalized, 0) + 1
         }
@@ -450,6 +464,15 @@ internal class CachingLinuxVirtualFileBackend(
         if (failedPersistedInvalidations.size > MAX_FAILED_PERSISTED_INVALIDATIONS) {
             failedPersistedInvalidations.clear()
             failedPersistedInvalidations += ""
+        }
+    }
+
+    private fun rememberRevalidatedPersistedListing(path: String) {
+        check(Thread.holdsLock(metadataLock))
+        revalidatedPersistedListings.remove(path)
+        revalidatedPersistedListings += path
+        while (revalidatedPersistedListings.size > MAX_REVALIDATED_PERSISTED_LISTINGS) {
+            revalidatedPersistedListings.remove(revalidatedPersistedListings.first())
         }
     }
 
@@ -509,6 +532,7 @@ internal class CachingLinuxVirtualFileBackend(
         const val DEFAULT_MAX_RETAINED_METADATA_ENTRIES = 100_000
         const val DEFAULT_MAX_RETAINED_DIRECTORIES = 512
         const val MAX_FAILED_PERSISTED_INVALIDATIONS = 1_024
+        const val MAX_REVALIDATED_PERSISTED_LISTINGS = 1_024
         const val MAX_BACKOFF_EXPONENT = 30
         val ROOT_NODE = LinuxVirtualFileNode("", "Nextcloud", true, 0L, "root")
     }
