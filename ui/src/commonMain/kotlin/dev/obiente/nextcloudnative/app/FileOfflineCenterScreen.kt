@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -117,6 +118,7 @@ internal fun FileOfflineCenterScreen(
     var virtualStorageSettingsVisible by remember(session, userId) { mutableStateOf(false) }
     var virtualLocationVisible by remember(session, userId) { mutableStateOf(false) }
     var virtualFolderPickerVisible by remember(session, userId) { mutableStateOf(false) }
+    var releaseVirtualFolderPath by remember(session, userId) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     fun runItemAction(item: FileOfflineCenterItem, remove: Boolean) {
@@ -493,7 +495,7 @@ internal fun FileOfflineCenterScreen(
                         onChangeLocation = { virtualLocationVisible = true },
                         onChoosePinnedFolder = { virtualFolderPickerVisible = true },
                         onReleaseFolder = { path ->
-                            setVirtualFolderRetention(path, VirtualFolderRetention.Automatic)
+                            releaseVirtualFolderPath = path
                         },
                         onRetryFolder = { path ->
                             retryVirtualFolderHydration(path)
@@ -592,6 +594,42 @@ internal fun FileOfflineCenterScreen(
             },
             dismissButton = {
                 TextButton(enabled = actionKey == null, onClick = { removeTarget = null }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
+    releaseVirtualFolderPath?.let { path ->
+        AlertDialog(
+            onDismissRequest = { if (!virtualStorageBusy) releaseVirtualFolderPath = null },
+            title = { Text("Make this folder online-only?") },
+            text = {
+                Text(
+                    "The downloaded copy of $path and its contents will be removed from this device. " +
+                        "Everything stays visible in Nextcloud and downloads again when opened.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    enabled = !virtualStorageBusy,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                    onClick = {
+                        releaseVirtualFolderPath = null
+                        setVirtualFolderRetention(path, VirtualFolderRetention.Automatic)
+                    },
+                ) {
+                    Text("Remove local folder copy")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !virtualStorageBusy,
+                    onClick = { releaseVirtualFolderPath = null },
+                ) {
                     Text("Cancel")
                 }
             },

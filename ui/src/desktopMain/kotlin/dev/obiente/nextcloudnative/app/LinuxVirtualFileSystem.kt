@@ -587,16 +587,27 @@ internal class DesktopNextcloudVirtualFileBackend(
         require(node.size > 0L)
         return object : LinuxVirtualFileReadHandle {
             private var currentPath = node.path
-            private var source = openRangeSource(currentPath)
             private val stagedRevision = if (requireDurableCacheWrites) {
                 rangeCache.beginRevisionStaging(accountId, currentPath, node.remoteRevision, node.size)
             } else {
                 null
             }
+            private var source = try {
+                openRangeSource(currentPath)
+            } catch (failure: Throwable) {
+                runCatching { stagedRevision?.close() }
+                throw failure
+            }
             private var closed = false
 
             init {
-                rangeCache.acquire(accountId, currentPath)
+                try {
+                    rangeCache.acquire(accountId, currentPath)
+                } catch (failure: Throwable) {
+                    runCatching(source::close)
+                    runCatching { stagedRevision?.close() }
+                    throw failure
+                }
             }
 
             override val size: Long = node.size

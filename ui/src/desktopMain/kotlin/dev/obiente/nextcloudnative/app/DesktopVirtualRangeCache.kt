@@ -131,9 +131,7 @@ internal class DesktopVirtualRangeCache(
         require(offset + bytes.size <= fileSize)
         require(bytes.size <= MAX_BLOCK_BYTES)
         val normalized = FileOfflineKey(accountId, path).relativePath
-        val directory = accountDirectory(accountId).apply {
-            check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
-        }
+        val directory = writableAccountDirectory(accountId)
         val identity = "$normalized\u0000$remoteRevision\u0000$fileSize\u0000$offset\u0000${bytes.size}"
         val blobName = "${sha256Hex(identity)}.block"
         val current = load(accountId)
@@ -277,9 +275,7 @@ internal class DesktopVirtualRangeCache(
     ): RevisionStaging {
         require(remoteRevision.isNotBlank() && fileSize > 0L)
         val normalized = FileOfflineKey(accountId, path).relativePath
-        val directory = accountDirectory(accountId).apply {
-            check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
-        }
+        val directory = writableAccountDirectory(accountId)
         return RevisionStaging(accountId, normalized, remoteRevision, fileSize, directory)
     }
 
@@ -376,9 +372,7 @@ internal class DesktopVirtualRangeCache(
         val normalizedRoot = FileOfflineKey(accountId, retainedRoot).relativePath
         require(snapshots.isNotEmpty() && normalizedRoot in snapshots)
         require(snapshots.size <= MAX_RETAINED_LISTINGS)
-        val directory = accountDirectory(accountId).apply {
-            check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
-        }
+        val directory = writableAccountDirectory(accountId)
         val published = snapshots.map { (path, snapshot) ->
             val normalized = path.trim('/')
             RetainedDirectoryListing.fromSnapshot(normalized, snapshot).let { listing ->
@@ -422,11 +416,15 @@ internal class DesktopVirtualRangeCache(
         val normalized = FileOfflineKey(accountId, path).relativePath
         val parent = normalized.substringBeforeLast('/', "")
         val current = loadRetainedMetadataIndex(accountId)
+        val parentStillRequired = loadFolderRetention(accountId).rules.any { rule ->
+            rule.retention == VirtualFolderRetention.KeepOnDevice &&
+                (parent.isEmpty() || rule.relativePath == parent || rule.relativePath.startsWith("$parent/"))
+        }
         val next = current.copy(
             listings = current.listings.filterNot { reference ->
                 reference.path == normalized ||
                     reference.path.startsWith("$normalized/") ||
-                    reference.path == parent
+                    reference.path == parent && !parentStillRequired
             },
         )
         if (next != current) saveRetainedMetadataIndex(accountId, next)
@@ -571,9 +569,7 @@ internal class DesktopVirtualRangeCache(
         require(encoded.size.toLong() <= MAX_RETAINED_METADATA_INDEX_BYTES) {
             "The retained virtual-folder metadata index is too large."
         }
-        val directory = accountDirectory(accountId).apply {
-            check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
-        }
+        val directory = writableAccountDirectory(accountId)
         publishBytes(directory, RETAINED_METADATA_INDEX_FILE, encoded)
         val referenced = index.listings.mapTo(hashSetOf(), RetainedListingReference::blobName)
         directory.listFiles().orEmpty().asSequence()
@@ -583,9 +579,7 @@ internal class DesktopVirtualRangeCache(
     }
 
     private fun save(accountId: String, index: RangeCacheIndex) {
-        val directory = accountDirectory(accountId).apply {
-            check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
-        }
+        val directory = writableAccountDirectory(accountId)
         val bounded = boundedIndex(accountId, index)
         val encoded = encodedIndex(bounded)
         publishBytes(directory, INDEX_FILE, encoded)
@@ -601,9 +595,7 @@ internal class DesktopVirtualRangeCache(
         require(encoded.size.toLong() <= MAX_RETENTION_INDEX_BYTES) {
             "The desktop virtual folder retention index is too large."
         }
-        val directory = accountDirectory(accountId).apply {
-            check(isDirectory || mkdirs()) { "Could not create the desktop virtual range cache." }
-        }
+        val directory = writableAccountDirectory(accountId)
         publishBytes(directory, RETENTION_INDEX_FILE, encoded)
     }
 
@@ -780,10 +772,30 @@ internal class DesktopVirtualRangeCache(
     private fun accountDirectory(accountId: String): File {
         require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
         return File(root, accountId).also { directory ->
+            require(!Files.isSymbolicLink(directory.toPath())) {
+                "The desktop virtual range cache account directory cannot be a symbolic link."
+            }
             if (directory.isDirectory && recoveredAccounts.add(accountId)) {
                 recoverStaleRevisionStages(directory)
             }
         }
+    }
+
+    private fun writableAccountDirectory(accountId: String): File {
+        requireAvailable()
+        val directory = accountDirectory(accountId)
+        if (Files.notExists(directory.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                Files.createDirectory(directory.toPath())
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                // Another app process may have created this account directory concurrently.
+            }
+        }
+        check(
+            Files.isDirectory(directory.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(directory.toPath()),
+        ) { "Could not create the desktop virtual range cache." }
+        return directory
     }
 
     private fun recoverStaleRevisionStages(directory: File) {

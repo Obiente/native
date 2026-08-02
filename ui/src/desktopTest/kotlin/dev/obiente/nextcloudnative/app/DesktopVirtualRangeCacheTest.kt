@@ -364,6 +364,65 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `releasing one retained sibling preserves their shared ancestor listing`() {
+        val directory = Files.createTempDirectory("virtual-range-retained-siblings-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/A", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/B", VirtualFolderRetention.KeepOnDevice)
+            val photos = LinuxVirtualDirectorySnapshot(
+                listOf(
+                    LinuxVirtualFileNode("Photos/A", "A", true, 0L, "a"),
+                    LinuxVirtualFileNode("Photos/B", "B", true, 0L, "b"),
+                ),
+                42L,
+            )
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos/A",
+                mapOf("Photos" to photos, "Photos/A" to LinuxVirtualDirectorySnapshot(emptyList(), 42L)),
+            )
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos/B",
+                mapOf("Photos" to photos, "Photos/B" to LinuxVirtualDirectorySnapshot(emptyList(), 42L)),
+            )
+
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/A", VirtualFolderRetention.Automatic)
+            cache.dehydrateFolder(ACCOUNT_ID, "Photos/A", emptySet())
+
+            assertEquals(setOf("A", "B"), cache.loadRetainedListing(ACCOUNT_ID, "Photos")
+                ?.nodes?.mapTo(hashSetOf(), LinuxVirtualFileNode::name))
+            assertEquals(emptyList(), cache.loadRetainedListing(ACCOUNT_ID, "Photos/B")?.nodes)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `missing selected drive is not recreated while starting revision staging`() {
+        val directory = Files.createTempDirectory("virtual-range-drive-").toFile()
+        val selectedDrive = directory.resolve("selected-drive").apply { mkdir() }
+        val cacheRoot = selectedDrive.resolve("cache")
+        try {
+            val cache = DesktopVirtualRangeCache(
+                root = cacheRoot,
+                createParentDirectories = false,
+                policy = { nonEvictingTestPolicy() },
+            )
+            cacheRoot.deleteRecursively()
+            selectedDrive.delete()
+
+            assertFailsWith<IllegalArgumentException> {
+                cache.beginRevisionStaging(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L)
+            }
+            assertFalse(selectedDrive.exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `startup recovery removes abandoned stages but preserves an active staging lease`() {
         val directory = Files.createTempDirectory("virtual-range-stage-recovery-").toFile()
         try {
