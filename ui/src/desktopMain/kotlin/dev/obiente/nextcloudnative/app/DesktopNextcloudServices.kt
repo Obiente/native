@@ -1208,7 +1208,10 @@ class DesktopNextcloudServices(
             val writebackStore = defaultDesktopLinuxWritebackStore(session)
             writebackStore.recoverPending(
                 tree = DesktopFileSyncRemoteTree(session, userId, ""),
-                onCommitted = { path -> virtualRangeCache(accountId).invalidate(accountId, path) },
+                onCommitted = { path ->
+                    runCatching { virtualRangeCache(accountId).invalidate(accountId, path) }
+                    runCatching { fileReadCache.invalidate(accountId, path) }
+                },
             )
             val fileSystem = LinuxNextcloudVirtualFileSystem(
                 CachingLinuxVirtualFileBackend(

@@ -156,6 +156,30 @@ class DesktopFileReadCacheTest {
         assertEquals(123_456, listing?.fetchedAtEpochMillis)
     }
 
+    @Test
+    fun `decoded account indexes are retained within an LRU bound`() {
+        val root = Files.createTempDirectory("ncn-files-cache-accounts-").toFile()
+        val preferences = testPreferences(root)
+        try {
+            val cache = DesktopFileReadCache(
+                root = root,
+                preferences = preferences,
+                maximumLoadedAccountIndexes = 1,
+            )
+            val firstAccount = "1".repeat(64)
+            val secondAccount = "2".repeat(64)
+            cache.storeListing(firstAccount, "Notes", listOf(file("Notes/first.txt", "e1")), 1L)
+            cache.storeListing(secondAccount, "Notes", listOf(file("Notes/second.txt", "e2")), 2L)
+
+            assertTrue(root.resolve(firstAccount).resolve("index-v1.json").delete())
+            assertNull(cache.cachedListing(firstAccount, "Notes"))
+            assertEquals("Notes/second.txt", cache.cachedListing(secondAccount, "Notes")?.single()?.path)
+        } finally {
+            runCatching { preferences.removeNode() }
+            root.deleteRecursively()
+        }
+    }
+
     private fun session(password: String = "secret") = NextcloudSession(
         serverUrl = "https://cloud.example.test",
         loginName = "alice",

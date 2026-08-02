@@ -159,12 +159,15 @@ internal class CachingLinuxVirtualFileBackend(
     private val maximumRetainedMetadataEntries: Int = DEFAULT_MAX_RETAINED_METADATA_ENTRIES,
     private val maximumRetainedDirectories: Int = DEFAULT_MAX_RETAINED_DIRECTORIES,
     private val refreshExecutor: ExecutorService = defaultLinuxMetadataRefreshExecutor(),
+    private val afterPersistedInvalidationMarked: () -> Unit = {},
 ) : LinuxVirtualFileBackend {
     private val snapshots = LinkedHashMap<String, LinuxVirtualDirectorySnapshot>(16, 0.75f, true)
     private val refreshes = ConcurrentHashMap<String, CompletableFuture<LinuxVirtualDirectorySnapshot?>>()
     private val refreshFailures = ConcurrentHashMap<String, LinuxVirtualRefreshFailure>()
-    private val invalidationGenerations = mutableMapOf<String, Long>()
     private val metadataLock = Any()
+    private val persistedStoreLock = Any()
+    private val pendingPersistedInvalidations = mutableMapOf<String, Int>()
+    private val activeMetadataOperations = mutableSetOf<LinuxVirtualMetadataOperation>()
     private val nextGeneration = AtomicLong(1L)
     @Volatile
     private var closed = false
@@ -187,10 +190,34 @@ internal class CachingLinuxVirtualFileBackend(
     override fun list(path: String): List<LinuxVirtualFileNode> = snapshot(path.linuxVirtualPath()).nodes
 
     private fun snapshot(normalized: String): LinuxVirtualDirectorySnapshot {
-        val cached = synchronized(metadataLock) {
-            snapshots[normalized] ?: store.load(normalized)?.also { restored ->
-                retainSnapshot(normalized, restored)
+        synchronized(metadataLock) { snapshots[normalized] }?.let { cached ->
+            if (!cached.isFresh(nowEpochMillis(), freshForMillis)) refreshAsync(normalized)
+            return cached
+        }
+        val operation = beginMetadataOperation(normalized)
+        val persisted = try {
+            synchronized(persistedStoreLock) {
+                val invalidationPending = synchronized(metadataLock) {
+                    pendingPersistedInvalidations.keys.any { mutation -> mutation.invalidatesListing(normalized) }
+                }
+                if (invalidationPending) null else store.load(normalized)
             }
+        } catch (failure: Throwable) {
+            endMetadataOperation(operation)
+            throw failure
+        }
+        val cached = try {
+            persisted?.let { restored ->
+                synchronized(metadataLock) {
+                    if (!operation.invalidated) {
+                        snapshots[normalized] ?: restored.also { retainSnapshot(normalized, it) }
+                    } else {
+                        null
+                    }
+                }
+            }
+        } finally {
+            endMetadataOperation(operation)
         }
         if (cached != null) {
             if (!cached.isFresh(nowEpochMillis(), freshForMillis)) refreshAsync(normalized)
@@ -259,6 +286,10 @@ internal class CachingLinuxVirtualFileBackend(
         if (closed) return
         closed = true
         refreshExecutor.shutdownNow()
+        synchronized(metadataLock) {
+            activeMetadataOperations.clear()
+            pendingPersistedInvalidations.clear()
+        }
         delegate.close()
     }
 
@@ -278,7 +309,13 @@ internal class CachingLinuxVirtualFileBackend(
     private fun refreshAsync(path: String) {
         if (closed) return
         val now = nowEpochMillis().coerceAtLeast(0L)
-        if (refreshFailures[path]?.retryAtEpochMillis?.let { retryAt -> now < retryAt } == true) return
+        refreshFailures[path]?.let { failure ->
+            if (now < failure.recordedAtEpochMillis) {
+                refreshFailures.remove(path, failure)
+            } else if (now < failure.retryAtEpochMillis) {
+                return
+            }
+        }
         val candidate = CompletableFuture<LinuxVirtualDirectorySnapshot?>()
         if (refreshes.putIfAbsent(path, candidate) != null) return
         runCatching { refreshExecutor.execute { refresh(path, candidate) } }
@@ -290,18 +327,17 @@ internal class CachingLinuxVirtualFileBackend(
     }
 
     private fun refresh(path: String, future: CompletableFuture<LinuxVirtualDirectorySnapshot?>) {
+        val operation = beginMetadataOperation(path)
+        var persistenceScheduled = false
         try {
             check(!closed) { "The Linux metadata cache is closed." }
-            val invalidationGeneration = synchronized(metadataLock) {
-                invalidationGenerations.getOrDefault(path, 0L)
-            }
             val snapshot = LinuxVirtualDirectorySnapshot(
                 nodes = delegate.list(path),
                 fetchedAtEpochMillis = nowEpochMillis().coerceAtLeast(0L),
                 generation = nextGeneration.getAndIncrement(),
             )
             val published = synchronized(metadataLock) {
-                if (!closed && invalidationGenerations.getOrDefault(path, 0L) == invalidationGeneration) {
+                if (!closed && !operation.invalidated) {
                     retainSnapshot(path, snapshot)
                     true
                 } else {
@@ -311,7 +347,7 @@ internal class CachingLinuxVirtualFileBackend(
             if (published) {
                 refreshFailures.remove(path)
                 future.complete(snapshot)
-                persistAsync(path, snapshot)
+                persistenceScheduled = persistAsync(path, snapshot, operation)
             } else {
                 future.complete(null)
             }
@@ -319,21 +355,39 @@ internal class CachingLinuxVirtualFileBackend(
             if (!closed) recordRefreshFailure(path)
             future.completeExceptionally(failure)
         } finally {
+            if (!persistenceScheduled) endMetadataOperation(operation)
             refreshes.remove(path, future)
         }
     }
 
-    private fun persistAsync(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
-        if (closed) return
-        runCatching {
+    private fun persistAsync(
+        path: String,
+        snapshot: LinuxVirtualDirectorySnapshot,
+        operation: LinuxVirtualMetadataOperation,
+    ): Boolean {
+        if (closed) return false
+        return runCatching {
             refreshExecutor.execute {
-                synchronized(metadataLock) {
-                    if (!closed && snapshots[path]?.generation == snapshot.generation) {
-                        runCatching { store.store(path, snapshot) }
+                try {
+                    val current = synchronized(metadataLock) {
+                        !closed &&
+                            !operation.invalidated &&
+                            snapshots[path]?.generation == snapshot.generation
                     }
+                    if (current) synchronized(persistedStoreLock) {
+                        val stillCurrent = synchronized(metadataLock) {
+                            !closed &&
+                                !operation.invalidated &&
+                                snapshots[path]?.generation == snapshot.generation
+                        }
+                        if (stillCurrent) runCatching { store.store(path, snapshot) }
+                    }
+                } finally {
+                    endMetadataOperation(operation)
                 }
             }
-        }
+            true
+        }.getOrDefault(false)
     }
 
     private fun invalidate(path: String) {
@@ -346,21 +400,29 @@ internal class CachingLinuxVirtualFileBackend(
                 addAll(snapshots.keys)
                 addAll(refreshes.keys)
                 addAll(refreshFailures.keys)
-                addAll(invalidationGenerations.keys)
             }
-            knownPaths.filterTo(mutableSetOf(), { cachedPath ->
-                normalized.isEmpty() ||
-                    cachedPath == normalized ||
-                    cachedPath.startsWith("$normalized/") ||
-                    cachedPath == parent
-            }).forEach { cachedPath ->
-                invalidationGenerations[cachedPath] =
-                    invalidationGenerations.getOrDefault(cachedPath, 0L) + 1L
+            knownPaths.filterTo(mutableSetOf()) { cachedPath ->
+                normalized.invalidatesListing(cachedPath)
+            }.forEach { cachedPath ->
                 snapshots.remove(cachedPath)
                 refreshFailures.remove(cachedPath)
             }
+            activeMetadataOperations
+                .filter { operation -> normalized.invalidatesListing(operation.path) }
+                .forEach { operation -> operation.invalidated = true }
+            pendingPersistedInvalidations[normalized] =
+                pendingPersistedInvalidations.getOrDefault(normalized, 0) + 1
         }
-        runCatching { store.invalidate(normalized) }
+        afterPersistedInvalidationMarked()
+        try {
+            synchronized(persistedStoreLock) { runCatching { store.invalidate(normalized) } }
+        } finally {
+            synchronized(metadataLock) {
+                val remaining = pendingPersistedInvalidations.getOrDefault(normalized, 1) - 1
+                if (remaining <= 0) pendingPersistedInvalidations.remove(normalized)
+                else pendingPersistedInvalidations[normalized] = remaining
+            }
+        }
     }
 
     private fun retainSnapshot(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
@@ -379,6 +441,15 @@ internal class CachingLinuxVirtualFileBackend(
         }
     }
 
+    private fun beginMetadataOperation(path: String): LinuxVirtualMetadataOperation =
+        synchronized(metadataLock) {
+            LinuxVirtualMetadataOperation(path).also(activeMetadataOperations::add)
+        }
+
+    private fun endMetadataOperation(operation: LinuxVirtualMetadataOperation) {
+        synchronized(metadataLock) { activeMetadataOperations.remove(operation) }
+    }
+
     private fun recordRefreshFailure(path: String) {
         val now = nowEpochMillis().coerceAtLeast(0L)
         refreshFailures.compute(path) { _, previous ->
@@ -392,6 +463,7 @@ internal class CachingLinuxVirtualFileBackend(
             }
             LinuxVirtualRefreshFailure(
                 consecutiveFailures = failures,
+                recordedAtEpochMillis = now,
                 retryAtEpochMillis = if (now > Long.MAX_VALUE - delay) Long.MAX_VALUE else now + delay,
             )
         }
@@ -415,8 +487,21 @@ internal class CachingLinuxVirtualFileBackend(
 
 private data class LinuxVirtualRefreshFailure(
     val consecutiveFailures: Int,
+    val recordedAtEpochMillis: Long,
     val retryAtEpochMillis: Long,
 )
+
+private class LinuxVirtualMetadataOperation(val path: String) {
+    var invalidated: Boolean = false
+}
+
+private fun String.invalidatesListing(listingPath: String): Boolean {
+    return isEmpty() ||
+        listingPath.isEmpty() ||
+        listingPath == this ||
+        listingPath.startsWith("$this/") ||
+        startsWith("$listingPath/")
+}
 
 private fun defaultLinuxMetadataRefreshExecutor(): ExecutorService =
     Executors.newSingleThreadExecutor { task ->
@@ -872,11 +957,8 @@ internal class LinuxNextcloudVirtualFileSystem(
         writeHandles.clear()
         directoryHandles.clear()
         pendingCreatedFiles.clear()
-        try {
-            umount()
-        } finally {
-            backend.close()
-        }
+        umount()
+        backend.close()
     }
 
     private fun openDirectorySnapshot(path: String): LinuxOpenDirectorySnapshot {
