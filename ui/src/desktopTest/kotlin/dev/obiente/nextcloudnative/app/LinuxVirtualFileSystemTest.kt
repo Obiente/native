@@ -568,6 +568,41 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `mutation does not discard an unrelated directory refresh`() {
+        val fixture = MutableFixtureBackend().apply { addFile("Archive/kept.dat", byteArrayOf(1)) }
+        val listingStarted = CountDownLatch(1)
+        val releaseListing = CountDownLatch(1)
+        val archiveCalls = AtomicInteger(0)
+        val delegate = object : LinuxVirtualFileBackend by fixture {
+            override fun list(path: String): List<LinuxVirtualFileNode> {
+                if (path == "Archive") {
+                    archiveCalls.incrementAndGet()
+                    listingStarted.countDown()
+                    check(releaseListing.await(2L, TimeUnit.SECONDS))
+                }
+                return fixture.list(path)
+            }
+        }
+        val cached = CachingLinuxVirtualFileBackend(delegate, MemoryLinuxVirtualMetadataStore())
+        val workers = Executors.newFixedThreadPool(2)
+        try {
+            val archive = workers.submit<List<String>> {
+                cached.list("Archive").map(LinuxVirtualFileNode::name)
+            }
+            assertTrue(listingStarted.await(2L, TimeUnit.SECONDS))
+            cached.createDirectory("Photos/New")
+            releaseListing.countDown()
+
+            assertEquals(listOf("kept.dat"), archive.get(2L, TimeUnit.SECONDS))
+            assertEquals(1, archiveCalls.get())
+        } finally {
+            releaseListing.countDown()
+            workers.shutdownNow()
+            cached.close()
+        }
+    }
+
+    @Test
     fun `metadata snapshots evict least recently used directories within the global budget`() {
         val delegate = MutableFixtureBackend().apply {
             addFile("Photos/one.dat", byteArrayOf(1))
