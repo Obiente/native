@@ -125,7 +125,7 @@ internal class DesktopSingleInstance private constructor(
                 }
                 if (lock == null) {
                     lockChannel.close()
-                    return@runCatching if (
+                    if (
                         forwardActivation(
                             directory.resolve(INSTANCE_ENDPOINT_NAME).toFile(),
                             activationKind,
@@ -133,10 +133,23 @@ internal class DesktopSingleInstance private constructor(
                             forwardDelayMillis,
                         )
                     ) {
-                        DesktopSingleInstanceStart.Forwarded
-                    } else {
-                        DesktopSingleInstanceStart.Failed
+                        return@runCatching DesktopSingleInstanceStart.Forwarded
                     }
+                    val replacementChannel = FileChannel.open(
+                        lockPath,
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.WRITE,
+                    )
+                    val replacementLock = try {
+                        replacementChannel.tryLock()
+                    } catch (_: OverlappingFileLockException) {
+                        null
+                    }
+                    if (replacementLock == null) {
+                        replacementChannel.close()
+                        return@runCatching DesktopSingleInstanceStart.Failed
+                    }
+                    return@runCatching createPrimary(directory.toFile(), replacementChannel, replacementLock)
                 }
                 createPrimary(directory.toFile(), lockChannel, lock)
             }.getOrElse { DesktopSingleInstanceStart.Failed }

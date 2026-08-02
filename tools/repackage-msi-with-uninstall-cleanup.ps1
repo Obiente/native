@@ -124,7 +124,7 @@ $actionSequence = @'
         REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE
       </Custom>
       <Custom Action="LaunchNextcloudNative" After="InstallFinalize">
-        NOT REMOVE AND UILevel &gt;= 3
+        NOT REMOVE AND UILevel &gt;= 3 AND NOT NEXTCLOUD_NATIVE_UPDATER_HANDOFF
       </Custom>
 '@
 if (-not $mainWix.Contains("    <InstallExecuteSequence>")) {

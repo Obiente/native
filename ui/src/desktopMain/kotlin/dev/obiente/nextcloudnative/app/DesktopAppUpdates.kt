@@ -914,11 +914,19 @@ private val WINDOWS_INSTALLER_HANDOFF_SCRIPT = """
         if (Test-HandoffCancellation) {
             throw 'The Windows installer handoff was cancelled before installer launch.'
         }
-        ${'$'}installerProcess = Start-Process -FilePath ${'$'}InstallerPath -PassThru -Wait
+        ${'$'}msiexecPath = Join-Path ${'$'}env:SystemRoot 'System32\msiexec.exe'
+        if (-not (Test-Path -LiteralPath ${'$'}msiexecPath -PathType Leaf)) {
+            throw 'The Windows Installer service executable is unavailable.'
+        }
+        ${'$'}quotedInstallerPath = '"' + ${'$'}InstallerPath + '"'
+        ${'$'}installerProcess = Start-Process -FilePath ${'$'}msiexecPath `
+            -ArgumentList @('/i', ${'$'}quotedInstallerPath, 'NEXTCLOUD_NATIVE_UPDATER_HANDOFF=1') `
+            -PassThru -Wait
         ${'$'}successfulExitCodes = @(0, 1641, 3010)
         if (${'$'}installerProcess.ExitCode -notin ${'$'}successfulExitCodes) {
             throw "The Windows installer exited with code ${'$'}(${'$'}installerProcess.ExitCode)."
         }
+        Start-Process -FilePath ${'$'}LauncherPath -ErrorAction Stop
     } catch {
         if (-not (Get-Process -Id ${'$'}ParentProcessId -ErrorAction SilentlyContinue) -and
             (Test-Path -LiteralPath ${'$'}LauncherPath -PathType Leaf)) {

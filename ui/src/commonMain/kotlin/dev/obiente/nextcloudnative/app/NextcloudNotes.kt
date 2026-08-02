@@ -624,6 +624,9 @@ internal fun NextcloudNoteEditor(
     session: NextcloudSession,
     note: NextcloudNote,
     onBack: () -> Unit,
+    navigationRequest: NextcloudNativeNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudNativeNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudNativeNavigationRequest) -> Unit = {},
 ) {
     val accountKey = remember(session.serverUrl, session.loginName) {
         session.serverUrl.trimEnd('/').lowercase() + '\u0000' + session.loginName
@@ -720,6 +723,11 @@ internal fun NextcloudNoteEditor(
     }
     fun requestBack() {
         if (dirty) showDiscardConfirmation = true else onBack()
+    }
+    LaunchedEffect(navigationRequest?.sequence) {
+        navigationRequest?.let { request ->
+            if (dirty) showDiscardConfirmation = true else onNavigationConfirmed(request)
+        }
     }
     fun saveNote() {
         if (!dirty || readOnly || saving || contentBytes > MAX_NOTE_BYTES) return
@@ -950,14 +958,24 @@ internal fun NextcloudNoteEditor(
 
     if (showDiscardConfirmation) {
         AlertDialog(
-            onDismissRequest = { showDiscardConfirmation = false },
+            onDismissRequest = {
+                showDiscardConfirmation = false
+                navigationRequest?.let(onNavigationCancelled)
+            },
             title = { Text("Discard unsaved changes?") },
             text = { Text("Your local edits to ${loaded.title} have not been saved.") },
-            dismissButton = { TextButton(onClick = { showDiscardConfirmation = false }) { Text("Keep editing") } },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showDiscardConfirmation = false
+                        navigationRequest?.let(onNavigationCancelled)
+                    },
+                ) { Text("Keep editing") }
+            },
             confirmButton = {
                 Button(onClick = {
                     showDiscardConfirmation = false
-                    onBack()
+                    navigationRequest?.let(onNavigationConfirmed) ?: onBack()
                 }) { Text("Discard") }
             },
         )

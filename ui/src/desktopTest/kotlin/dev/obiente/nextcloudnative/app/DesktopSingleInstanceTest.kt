@@ -2,6 +2,8 @@ package dev.obiente.nextcloudnative.app
 
 import java.net.InetAddress
 import java.net.Socket
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -50,5 +52,34 @@ class DesktopSingleInstanceTest {
             DesktopSingleInstance.acquire(runtime, forwardAttempts = 2, forwardDelayMillis = 1),
         )
         replacement.instance.close()
+    }
+
+    @Test
+    fun launchBecomesPrimaryWhenTheIncumbentExitsDuringForwarding() {
+        val runtime = createTempDirectory("nextcloud-native-instance-race").toFile()
+        val lockPath = runtime.resolve("nextcloud-native.lock").toPath()
+        val incumbentChannel = FileChannel.open(
+            lockPath,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.WRITE,
+        )
+        val incumbentLock = incumbentChannel.lock()
+        val releaser = Thread {
+            Thread.sleep(20)
+            incumbentLock.release()
+            incumbentChannel.close()
+        }
+        releaser.start()
+
+        try {
+            val replacement = assertIs<DesktopSingleInstanceStart.Primary>(
+                DesktopSingleInstance.acquire(runtime, forwardAttempts = 200, forwardDelayMillis = 5),
+            )
+            replacement.instance.close()
+        } finally {
+            releaser.join()
+            if (incumbentLock.isValid) incumbentLock.release()
+            if (incumbentChannel.isOpen) incumbentChannel.close()
+        }
     }
 }
