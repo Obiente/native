@@ -367,12 +367,12 @@ final-device QA, not the only way to test.
 - The human contributor remains the author and is responsible for the complete
   change. Automated tools must not become author or committer and must not add
   bot/assistant `Co-authored-by` trailers.
-- DCO sign-off is controlled by the human contributor. When a maintainer or a
-  protected repository check requires it, an agent may add the human's
-  `Signed-off-by` trailer only after that human explicitly confirms review and
-  authorizes the sign-off. An automated reviewer must never request an agent to
-  manufacture or repair a human sign-off. Cryptographic commit signing remains
-  a separate repository requirement.
+- Every submitted commit must carry the human contributor's `Signed-off-by`
+  trailer. Only that human may add or authorize the trailer after reviewing the
+  commit; an agent must never add, manufacture, or repair it. Automated reviewers
+  must leave DCO enforcement to protected repository checks and maintainers and
+  must not report missing sign-off as a code-review finding. Cryptographic commit
+  signing remains a separate repository requirement.
 - Optional AI disclosure is appreciated in the PR description or an
   `Assisted-by: Tool[:model]` trailer, but it is not mandatory. Never disclose
   private prompts or account data.
