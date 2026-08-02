@@ -48,12 +48,14 @@ internal class DesktopFileReadCache(
     private val preferences: Preferences = Preferences.userRoot()
         .node("dev/obiente/nextcloudnative/virtual-file-cache"),
     private val maximumLoadedAccountIndexes: Int = DEFAULT_MAXIMUM_LOADED_ACCOUNT_INDEXES,
+    private val maximumTotalMetadataEntries: Int = MAX_TOTAL_METADATA_ENTRIES,
 ) {
     private val loadedIndexes = LinkedHashMap<String, CacheIndexV1>(16, 0.75f, true)
     init {
         require(maximumContentBytes > 0L)
         require(maximumEntryBytes in 1L..maximumContentBytes)
         require(maximumLoadedAccountIndexes > 0)
+        require(maximumTotalMetadataEntries >= 2)
     }
 
     @Synchronized
@@ -353,26 +355,52 @@ internal class DesktopFileReadCache(
     }
 
     private fun CacheIndexV1.bounded(): CacheIndexV1 {
+        val perTypeReserve = minOf(MAX_FILES_PER_LISTING, maximumTotalMetadataEntries / 2)
         var retainedMetadataEntries = 0
-        val boundedListings = buildList {
-            listings.sortedByDescending(CachedListingV1::fetchedAtEpochMillis)
-                .take(MAX_LISTINGS)
-                .forEach { listing ->
-                    if (retainedMetadataEntries + listing.files.size <= MAX_TOTAL_METADATA_ENTRIES) {
-                        add(listing)
-                        retainedMetadataEntries += listing.files.size
-                    }
-                }
+        val ordinary = listings.sortedByDescending(CachedListingV1::fetchedAtEpochMillis).take(MAX_LISTINGS)
+        val virtual = virtualListings.sortedByDescending(CachedVirtualListingV1::fetchedAtEpochMillis)
+            .take(MAX_LISTINGS)
+        val boundedListings = mutableListOf<CachedListingV1>()
+        val boundedVirtualListings = mutableListOf<CachedVirtualListingV1>()
+        var ordinaryIndex = 0
+        var virtualIndex = 0
+        var ordinaryEntries = 0
+        var virtualEntries = 0
+        while (ordinaryIndex < ordinary.size) {
+            val candidate = ordinary[ordinaryIndex]
+            if (ordinaryEntries + candidate.files.size > perTypeReserve) break
+            boundedListings += candidate
+            ordinaryEntries += candidate.files.size
+            retainedMetadataEntries += candidate.files.size
+            ordinaryIndex += 1
         }
-        val boundedVirtualListings = buildList {
-            virtualListings.sortedByDescending(CachedVirtualListingV1::fetchedAtEpochMillis)
-                .take(MAX_LISTINGS)
-                .forEach { listing ->
-                    if (retainedMetadataEntries + listing.nodes.size <= MAX_TOTAL_METADATA_ENTRIES) {
-                        add(listing)
-                        retainedMetadataEntries += listing.nodes.size
-                    }
+        while (virtualIndex < virtual.size) {
+            val candidate = virtual[virtualIndex]
+            if (virtualEntries + candidate.nodes.size > perTypeReserve) break
+            boundedVirtualListings += candidate
+            virtualEntries += candidate.nodes.size
+            retainedMetadataEntries += candidate.nodes.size
+            virtualIndex += 1
+        }
+        while (ordinaryIndex < ordinary.size || virtualIndex < virtual.size) {
+            val nextOrdinary = ordinary.getOrNull(ordinaryIndex)
+            val nextVirtual = virtual.getOrNull(virtualIndex)
+            val chooseOrdinary = nextVirtual == null ||
+                nextOrdinary != null && nextOrdinary.fetchedAtEpochMillis >= nextVirtual.fetchedAtEpochMillis
+            if (chooseOrdinary) {
+                val candidate = requireNotNull(nextOrdinary)
+                if (candidate.files.size <= maximumTotalMetadataEntries - retainedMetadataEntries) {
+                    boundedListings += candidate
+                    retainedMetadataEntries += candidate.files.size
                 }
+            } else {
+                val candidate = requireNotNull(nextVirtual)
+                if (candidate.nodes.size <= maximumTotalMetadataEntries - retainedMetadataEntries) {
+                    boundedVirtualListings += candidate
+                    retainedMetadataEntries += candidate.nodes.size
+                }
+            }
+            if (chooseOrdinary) ordinaryIndex += 1 else virtualIndex += 1
         }
         val policyBudget = if (loadPolicy().automaticCleanup) {
             loadPolicy().maximumCacheBytes ?: maximumContentBytes

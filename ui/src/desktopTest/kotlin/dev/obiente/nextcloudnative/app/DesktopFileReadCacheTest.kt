@@ -235,6 +235,45 @@ class DesktopFileReadCacheTest {
         }
     }
 
+    @Test
+    fun `Files metadata cannot consume the reserved virtual listing capacity`() {
+        val root = Files.createTempDirectory("ncn-files-cache-reserve-").toFile()
+        val preferences = testPreferences(root)
+        try {
+            val accountId = "0".repeat(64)
+            val cache = DesktopFileReadCache(
+                root = root,
+                preferences = preferences,
+                maximumTotalMetadataEntries = 10,
+            )
+            repeat(3) { listing ->
+                cache.storeListing(
+                    accountId,
+                    "Folder-$listing",
+                    List(4) { index -> file("Folder-$listing/file-$index.txt", "e-$listing-$index") },
+                    nowEpochMillis = listing.toLong(),
+                )
+            }
+            cache.storeVirtualListingUnlessNewer(
+                accountId = accountId,
+                path = "Virtual",
+                nodes = listOf(LinuxVirtualFileNode("Virtual/photo.raf", "photo.raf", false, 4L, "virtual-e1")),
+                fetchedAtEpochMillis = 10L,
+            )
+
+            val restarted = DesktopFileReadCache(
+                root = root,
+                preferences = preferences,
+                maximumTotalMetadataEntries = 10,
+            )
+            assertEquals("virtual-e1", restarted.cachedVirtualListingSnapshot(accountId, "Virtual")
+                ?.nodes?.single()?.remoteRevision)
+        } finally {
+            runCatching { preferences.removeNode() }
+            root.deleteRecursively()
+        }
+    }
+
     private fun session(password: String = "secret") = NextcloudSession(
         serverUrl = "https://cloud.example.test",
         loginName = "alice",
