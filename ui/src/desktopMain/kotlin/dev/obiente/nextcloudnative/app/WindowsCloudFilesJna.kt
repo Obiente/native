@@ -165,6 +165,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         length: Long,
         message: String,
     ) {
+        recordCallbackFailure("data ${info.normalizedPath} offset=$offset length=$length: $message")
         execute(info, CF_OPERATION_TYPE_TRANSFER_DATA, TRANSFER_PARAMETERS_SIZE) { parameters ->
             parameters.setInt(TRANSFER_FLAGS_OFFSET, 0)
             parameters.setInt(TRANSFER_STATUS_OFFSET, STATUS_CLOUD_FILE_UNSUCCESSFUL)

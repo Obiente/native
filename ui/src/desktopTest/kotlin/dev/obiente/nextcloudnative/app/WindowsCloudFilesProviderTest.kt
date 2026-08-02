@@ -64,8 +64,15 @@ class WindowsCloudFilesProviderTest {
             val childNames = runWindowsCommand("dir", "/b", root.resolve("Apps/Calendar").toString())
             assertEquals(0, childNames.exitCode, childNames.output.toString(Charsets.UTF_8))
             val hydrated = runWindowsCommand("type", root.resolve("Apps/readme.txt").toString())
-            assertEquals(0, hydrated.exitCode, hydrated.output.toString(Charsets.UTF_8))
-            assertContentEquals(ByteArray(5), hydrated.output)
+            val hydrationDiagnostics = buildString {
+                append(hydrated.output.toString(Charsets.UTF_8))
+                append("; backend listings=")
+                append(backend.listedPaths)
+                append("; ")
+                append(api.diagnostics())
+            }
+            assertEquals(0, hydrated.exitCode, hydrationDiagnostics)
+            assertContentEquals(ByteArray(5), hydrated.output, hydrationDiagnostics)
         } finally {
             runCatching { provider.removeSyncRoot() }
             root.toFile().deleteRecursively()
