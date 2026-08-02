@@ -372,7 +372,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/UnifiedSearchScreen.kt": "94a7220513264679ca270e9f2ef99863a1d0c69c952644196eaa4448c077993a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/VirtualFileCache.kt": "35871fd8e61f8ed89406e36908f39396370b6a656e195f07fd6ba753f704f384",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/VirtualFileStorageCenter.kt": "e56f4100e65e071139736b0e18b39d0eb812f90c2b48758caa343e7fdd263969",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/VirtualFolderRetention.kt": "0a29bcf690774f41a741ccd969ad29fd218043d72f943d6817132480547bbb7e",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/VirtualFolderRetention.kt": "96cb3d7ad40614fcb7b25dd298a358b8ab1de0d7e53324dd11aeeb134131875b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShell.kt": "120ad6652ef125dbc2889c19aea4de2af4348a28425d4bbc301c161e8908b5cf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShellLayout.kt": "b1eca80b1dd1ac299c5bd9fe48b3be7db166e69d68e71638c74c838f17f0ebaa",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShellShortcuts.kt": "ffcaee09cae76054495de3e5184a40ef969dd98c36778016228fb5ceb689f337",
