@@ -111,7 +111,7 @@ class MarketingDynamicUiCaptureScenarioTest {
         assertEquals("Garden team", options.first().label)
         assertTrue(resource.fields.any { it.id == "rrule" })
         assertEquals(
-            listOf("garden", "calendar", "tools"),
+            listOf("garden", "calendar", "tools", "truck", "notes", "water", "checklist"),
             marketingDynamicWorkItemRecords.map { record ->
                 nativeRecordPresentation(resource, record).iconKey
             },
@@ -121,6 +121,10 @@ class MarketingDynamicUiCaptureScenarioTest {
                 "Prepare a clear layout for volunteers.",
                 "Check availability for the next work day.",
                 "Verify the shared tools and supplies list.",
+                "Coordinate the shared trailer and delivery window.",
+                "Share arrival details, safety notes, and contacts.",
+                "Verify the outdoor tap and backup water containers.",
+                "Collect the final setup and cleanup responsibilities.",
             ),
             marketingDynamicWorkItemRecords.map { record ->
                 nativeRecordPresentation(resource, record).subtitle
