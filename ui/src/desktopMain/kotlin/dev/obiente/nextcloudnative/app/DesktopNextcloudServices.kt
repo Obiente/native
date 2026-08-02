@@ -32,6 +32,7 @@ import java.util.prefs.Preferences
 import javax.swing.JFileChooser
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -609,6 +610,10 @@ class DesktopNextcloudServices(
     private val virtualRangeCaches = mutableMapOf<String, DesktopVirtualRangeCache>()
     private val virtualFolderHydrationJobs = mutableMapOf<String, Job>()
     private val virtualFolderHydrationMutex = Mutex()
+    private val virtualFolderMutationLock = Any()
+    private val virtualFolderMutationGenerations = mutableMapOf<String, Long>()
+    private val virtualFolderCompletedGenerations = mutableMapOf<String, Long>()
+    private val virtualFolderRetryAtEpochMillis = mutableMapOf<String, Long>()
     private val activeFileRangeSessions = mutableSetOf<NextcloudFileRangeSession>()
     private val fileRangeSessionLock = Any()
     @Volatile
@@ -631,8 +636,8 @@ class DesktopNextcloudServices(
     }
     private val externalFileHandoff = DesktopExternalFileHandoff()
 
-    private fun virtualRangeCache(accountId: String): DesktopVirtualRangeCache =
-        synchronized(virtualRangeCaches) {
+    private fun virtualRangeCache(accountId: String): DesktopVirtualRangeCache {
+        val cache = synchronized(virtualRangeCaches) {
             virtualRangeCaches.getOrPut(accountId) {
                 if (isLinuxDesktop()) {
                     val location = desktopVirtualFileProviderLocation(preferences, accountId)
@@ -646,6 +651,9 @@ class DesktopNextcloudServices(
                 }
             }
         }
+        if (isLinuxDesktop()) cache.requireAvailable()
+        return cache
+    }
 
     private fun scheduleVirtualFolderHydration(
         session: NextcloudSession,
@@ -659,26 +667,34 @@ class DesktopNextcloudServices(
         synchronized(virtualFolderHydrationJobs) {
             if (sessionClearing) return
             if (virtualFolderHydrationJobs[jobKey]?.isActive == true) return
-            val currentStatus = cache.loadValidatedFolderHydrationStatus(accountId, relativePath)
-            val now = System.currentTimeMillis().coerceAtLeast(0L)
-            if (!shouldScheduleVirtualFolderHydration(currentStatus, now)) return
-            if (currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline) {
-                cache.setFolderHydrationStatus(
-                    accountId,
-                    currentStatus.copy(
-                        refreshFailure = null,
-                        refreshing = true,
-                        refreshRetryAtEpochMillis = null,
-                    ),
-                )
-            } else {
-                cache.setFolderHydrationStatus(
-                    accountId,
-                    VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Queued),
-                )
-            }
-            val wasAvailableOffline = currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline
-            virtualFolderHydrationJobs[jobKey] = serviceScope.launch(Dispatchers.IO) {
+        }
+        val now = System.currentTimeMillis().coerceAtLeast(0L)
+        val generationState = synchronized(virtualFolderMutationLock) {
+            val retryAt = virtualFolderRetryAtEpochMillis[jobKey]
+            if (retryAt != null && now < retryAt) return
+            val generation = virtualFolderMutationGenerations.getOrDefault(accountId, 0L)
+            generation to (generation > virtualFolderCompletedGenerations.getOrDefault(jobKey, 0L))
+        }
+        val (generation, mutationRefreshPending) = generationState
+        val currentStatus = cache.loadValidatedFolderHydrationStatus(accountId, relativePath)
+        if (!mutationRefreshPending && !shouldScheduleVirtualFolderHydration(currentStatus, now)) return
+        if (currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline) {
+            cache.setFolderHydrationStatus(
+                accountId,
+                currentStatus.copy(
+                    refreshFailure = null,
+                    refreshing = true,
+                    refreshRetryAtEpochMillis = null,
+                ),
+            )
+        } else {
+            cache.setFolderHydrationStatus(
+                accountId,
+                VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Queued),
+            )
+        }
+        val wasAvailableOffline = currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline
+        val job = serviceScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
                 try {
                     virtualFolderHydrationMutex.withLock {
                         if (
@@ -864,21 +880,28 @@ class DesktopNextcloudServices(
                                 fetchedAtEpochMillis = publishedAt,
                             )
                         }
-                        cache.publishRetainedListings(accountId, relativePath, snapshots)
-                        snapshots.forEach(metadataStore::store)
-                        val protectedPaths = writebacks.pendingWritebacks()
-                            .mapTo(hashSetOf(), DesktopLinuxPendingWriteback::path)
-                        verifiedListings.forEach { (parent, documents) ->
-                            reconcileVirtualRangeChildren(cache, accountId, parent, documents, protectedPaths)
+                        synchronized(virtualFolderMutationLock) {
+                            if (virtualFolderMutationGenerations.getOrDefault(accountId, 0L) != generation) {
+                                throw VirtualFolderRefreshSupersededException()
+                            }
+                            cache.publishRetainedListings(accountId, relativePath, snapshots)
+                            snapshots.forEach(metadataStore::store)
+                            val protectedPaths = writebacks.pendingWritebacks()
+                                .mapTo(hashSetOf(), DesktopLinuxPendingWriteback::path)
+                            verifiedListings.forEach { (parent, documents) ->
+                                reconcileVirtualRangeChildren(cache, accountId, parent, documents, protectedPaths)
+                            }
+                            cache.setFolderHydrationStatus(
+                                accountId,
+                                VirtualFolderHydrationStatus(
+                                    relativePath,
+                                    VirtualFolderHydrationPhase.AvailableOffline,
+                                    verifiedAtEpochMillis = publishedAt,
+                                ),
+                            )
+                            virtualFolderCompletedGenerations[jobKey] = generation
+                            virtualFolderRetryAtEpochMillis.remove(jobKey)
                         }
-                        cache.setFolderHydrationStatus(
-                            accountId,
-                            VirtualFolderHydrationStatus(
-                                relativePath,
-                                VirtualFolderHydrationPhase.AvailableOffline,
-                                verifiedAtEpochMillis = publishedAt,
-                            ),
-                        )
                     }
                 } catch (cancellation: CancellationException) {
                     restoreVirtualFolderStatusAfterCancellation(
@@ -902,6 +925,19 @@ class DesktopNextcloudServices(
                             cancellation.initCause(failure)
                         }
                     }
+                    if (failure is VirtualFolderRefreshSupersededException) {
+                        runCatching {
+                            cache.setFolderHydrationStatus(
+                                accountId,
+                                VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Queued),
+                            )
+                        }
+                        return@launch
+                    }
+                    val retryAt = virtualFolderRefreshRetryAt(System.currentTimeMillis().coerceAtLeast(0L))
+                    synchronized(virtualFolderMutationLock) {
+                        virtualFolderRetryAtEpochMillis[jobKey] = retryAt
+                    }
                     val safeFailure = failure.message?.filterNot(Char::isISOControl)?.take(256)
                         ?.takeIf(String::isNotBlank) ?: "Offline download failed and can be retried."
                     val stillAvailableOffline = wasAvailableOffline && runCatching {
@@ -915,9 +951,7 @@ class DesktopNextcloudServices(
                                 VirtualFolderHydrationPhase.AvailableOffline,
                                 refreshFailure = safeFailure,
                                 verifiedAtEpochMillis = currentStatus.verifiedAtEpochMillis,
-                                refreshRetryAtEpochMillis = virtualFolderRefreshRetryAt(
-                                    System.currentTimeMillis().coerceAtLeast(0L),
-                                ),
+                                refreshRetryAtEpochMillis = retryAt,
                             ),
                         )
                     } else runCatching {
@@ -932,9 +966,22 @@ class DesktopNextcloudServices(
                     }
                 } finally {
                     synchronized(virtualFolderHydrationJobs) { virtualFolderHydrationJobs.remove(jobKey) }
+                    val rerun = synchronized(virtualFolderMutationLock) {
+                        virtualFolderMutationGenerations.getOrDefault(accountId, 0L) >
+                            virtualFolderCompletedGenerations.getOrDefault(jobKey, 0L) &&
+                            System.currentTimeMillis().coerceAtLeast(0L) >=
+                            virtualFolderRetryAtEpochMillis.getOrDefault(jobKey, 0L)
+                    }
+                    if (rerun && !sessionClearing) {
+                        scheduleVirtualFolderHydration(session, userId, relativePath, accountId, cache)
+                    }
                 }
-            }
         }
+        val accepted = synchronized(virtualFolderHydrationJobs) {
+            if (sessionClearing || virtualFolderHydrationJobs[jobKey]?.isActive == true) false
+            else true.also { virtualFolderHydrationJobs[jobKey] = job }
+        }
+        if (accepted) job.start() else job.cancel()
     }
 
     private fun restoreVirtualFolderStatusAfterCancellation(
@@ -971,10 +1018,22 @@ class DesktopNextcloudServices(
         accountId: String,
         path: String,
     ) {
+        synchronized(virtualFolderMutationLock) {
+            val current = virtualFolderMutationGenerations.getOrDefault(accountId, 0L)
+            if (current == Long.MAX_VALUE) {
+                virtualFolderCompletedGenerations.keys.removeIf { key -> key.startsWith("$accountId\u0000") }
+                virtualFolderMutationGenerations[accountId] = 1L
+            } else {
+                virtualFolderMutationGenerations[accountId] = current + 1L
+            }
+        }
         runCatching { invalidateDesktopFileMetadata(accountId, path) }
-        val cache = virtualRangeCache(accountId)
-        val roots = cache.queueRetainedFoldersForRefresh(accountId, path)
-        roots.forEach { root -> scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+        val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
+        val roots = runCatching { cache.queueRetainedFoldersForRefresh(accountId, path) }
+            .getOrDefault(emptyList())
+        roots.forEach { root ->
+            runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+        }
     }
 
     private suspend fun cancelVirtualFolderHydration(accountId: String, relativePath: String) {
@@ -1011,8 +1070,13 @@ class DesktopNextcloudServices(
     private val deckCardDrafts = DesktopDeckCardDraftStore()
     private val fileSyncEngine = DesktopFileSyncEngine(
         minimumFreeSpaceBytes = { fileReadCache.loadPolicy().minimumFreeSpaceBytes },
-        onRemoteMutationCommitted = { session, _, path ->
-            invalidateDesktopFileMetadata(desktopFileCacheAccountId(session), path)
+        onRemoteMutationCommitted = { session, userId, path ->
+            refreshRetainedFoldersAfterMutation(
+                session,
+                userId,
+                desktopFileCacheAccountId(session),
+                path,
+            )
         },
     )
     private val startOnLoginController = DesktopStartOnLoginController()
@@ -1091,17 +1155,23 @@ class DesktopNextcloudServices(
         }
         runCatching { enforceCombinedVirtualFileCachePolicy(accountId, fileReadCache.loadPolicy()) }
         val cache = fileReadCache.virtualFileSummary(accountId)
-        val rangeCacheResult = runCatching { virtualRangeCache(accountId) }
-        val rangeCache = rangeCacheResult.getOrNull()
-        val folderRetention = rangeCache?.loadFolderRetention(accountId) ?: VirtualFolderRetentionState()
+        val rangeCacheResult = runCatching {
+            val current = virtualRangeCache(accountId)
+            current.requireAvailable()
+            Triple(current, current.loadFolderRetention(accountId), current.summary(accountId))
+        }
+        val rangeCache = rangeCacheResult.getOrNull()?.first
+        val folderRetention = rangeCacheResult.getOrNull()?.second ?: VirtualFolderRetentionState()
         if (rangeCache != null) {
             folderRetention.rules.filter { rule ->
                 rule.retention == VirtualFolderRetention.KeepOnDevice
             }.forEach { rule ->
-                scheduleVirtualFolderHydration(session, userId, rule.relativePath, accountId, rangeCache)
+                runCatching {
+                    scheduleVirtualFolderHydration(session, userId, rule.relativePath, accountId, rangeCache)
+                }
             }
         }
-        val ranges = rangeCache?.summary(accountId)
+        val ranges = rangeCacheResult.getOrNull()?.third
         val linux = isLinuxDesktop()
         val windows = isWindowsDesktop()
         val active = synchronized(virtualFileProviderLock) {
@@ -1502,6 +1572,9 @@ class DesktopNextcloudServices(
         }
         cache.setFolderRetention(accountId, normalized, retention)
         if (retention == VirtualFolderRetention.KeepOnDevice) {
+            synchronized(virtualFolderMutationLock) {
+                virtualFolderRetryAtEpochMillis.remove("$accountId\u0000$normalized")
+            }
             cache.setFolderHydrationStatus(
                 accountId,
                 VirtualFolderHydrationStatus(normalized, VirtualFolderHydrationPhase.Queued),
@@ -1512,6 +1585,11 @@ class DesktopNextcloudServices(
             )
         } else {
             cancelVirtualFolderHydration(accountId, normalized)
+            synchronized(virtualFolderMutationLock) {
+                val key = "$accountId\u0000$normalized"
+                virtualFolderRetryAtEpochMillis.remove(key)
+                virtualFolderCompletedGenerations.remove(key)
+            }
             val protected = defaultDesktopLinuxWritebackStore(session).pendingWritebacks()
                 .mapTo(hashSetOf()) { writeback -> writeback.path }
             val freed = cache.dehydrateFolder(accountId, normalized, protected)
@@ -1541,6 +1619,9 @@ class DesktopNextcloudServices(
                     failure.message ?: "This folder is no longer selected for offline use.",
                 )
             }
+        synchronized(virtualFolderMutationLock) {
+            virtualFolderRetryAtEpochMillis.remove("$accountId\u0000$normalized")
+        }
         scheduleVirtualFolderHydration(session, userId, normalized, accountId, cache)
         VirtualFileStorageActionResult.Completed(
             "${normalized.substringAfterLast('/')} will retry downloading in the background.",
@@ -3866,6 +3947,10 @@ internal fun retainedFolderNavigationChild(parentPath: String, retainedRoot: Str
     val child = remainder.substringBefore('/')
     return if (parent.isEmpty()) child else "$parent/$child"
 }
+
+private class VirtualFolderRefreshSupersededException : IllegalStateException(
+    "The retained folder changed while it was being published.",
+)
 
 internal fun shouldScheduleVirtualFolderHydration(
     status: VirtualFolderHydrationStatus?,

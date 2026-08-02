@@ -231,7 +231,7 @@ internal class DesktopVirtualRangeCache(
             ?: return null
         if (
             current.phase != VirtualFolderHydrationPhase.AvailableOffline ||
-            hasIndexedRetainedFolderCoverage(accountId, normalized)
+            hasVerifiedRetainedFolderCoverage(accountId, normalized)
         ) return current
         return VirtualFolderHydrationStatus(normalized, VirtualFolderHydrationPhase.Queued).also { queued ->
             setFolderHydrationStatus(accountId, queued)
@@ -453,25 +453,9 @@ internal class DesktopVirtualRangeCache(
         return completeRevisions(accountId, revisions).size == revisions.distinct().size
     }
 
-    private fun hasIndexedRetainedFolderCoverage(accountId: String, normalized: String): Boolean {
+    private fun hasVerifiedRetainedFolderCoverage(accountId: String, normalized: String): Boolean {
         val revisions = retainedFolderRevisions(accountId, normalized) ?: return false
-        if (revisions.isEmpty()) return true
-        val directory = accountDirectory(accountId)
-        val index = loadRangeIndexFromDirectory(directory) ?: return false
-        val blocksByRevision = index.blocks.groupBy { block ->
-            VirtualRangeRevision(block.path, block.remoteRevision, block.fileSize)
-        }
-        return revisions.distinct().all { revision ->
-            var expectedOffset = 0L
-            val complete = blocksByRevision[revision].orEmpty().sortedBy(CachedRangeBlock::offset).all { block ->
-                if (block.offset != expectedOffset) return@all false
-                val blob = File(directory, block.blobName)
-                if (!blob.isFile || blob.length() != block.length.toLong()) return@all false
-                expectedOffset += block.length
-                true
-            }
-            complete && expectedOffset == revision.fileSize
-        }
+        return completeRevisions(accountId, revisions).size == revisions.distinct().size
     }
 
     private fun retainedFolderRevisions(accountId: String, normalized: String): List<VirtualRangeRevision>? {
@@ -602,7 +586,21 @@ internal class DesktopVirtualRangeCache(
         val normalized = FileOfflineKey(accountId, path).relativePath
         val parent = normalized.substringBeforeLast('/', "")
         val current = loadRetainedMetadataIndex(accountId)
-        val parentStillRequired = loadFolderRetention(accountId).rules.any { rule ->
+        val next = current.copy(
+            listings = current.listings.filterNot { reference ->
+                reference.path == normalized ||
+                    reference.path.startsWith("$normalized/") ||
+                    reference.path == parent
+            },
+        )
+        if (next != current) saveRetainedMetadataIndex(accountId, next)
+    }
+
+    private fun removeDehydratedRetainedListings(accountId: String, path: String) {
+        val normalized = FileOfflineKey(accountId, path).relativePath
+        val parent = normalized.substringBeforeLast('/', "")
+        val current = loadRetainedMetadataIndex(accountId)
+        val parentRequiredBySibling = loadFolderRetention(accountId).rules.any { rule ->
             rule.retention == VirtualFolderRetention.KeepOnDevice &&
                 (parent.isEmpty() || rule.relativePath == parent || rule.relativePath.startsWith("$parent/"))
         }
@@ -610,7 +608,7 @@ internal class DesktopVirtualRangeCache(
             listings = current.listings.filterNot { reference ->
                 reference.path == normalized ||
                     reference.path.startsWith("$normalized/") ||
-                    reference.path == parent && !parentStillRequired
+                    reference.path == parent && !parentRequiredBySibling
             },
         )
         if (next != current) saveRetainedMetadataIndex(accountId, next)
@@ -636,7 +634,7 @@ internal class DesktopVirtualRangeCache(
         val removablePaths = candidates.filter { candidate ->
             activePaths.getOrDefault(FileOfflineKey(accountId, candidate), 0) == 0
         }.toSet()
-        invalidateRetainedListings(accountId, normalized)
+        removeDehydratedRetainedListings(accountId, normalized)
         if (removablePaths.isEmpty()) return 0L
         val removed = current.blocks.filter { block -> block.path in removablePaths }
         removed.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }

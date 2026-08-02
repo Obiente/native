@@ -846,6 +846,68 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `same length block corruption queues a previously available offline folder`() {
+        val directory = Files.createTempDirectory("virtual-range-digest-revalidation-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L, 0L, "data".encodeToByteArray())
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos",
+                mapOf(
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos/photo.raf", "photo.raf", false, 4L, "e1")),
+                        42L,
+                    ),
+                ),
+            )
+            cache.setFolderHydrationStatus(
+                ACCOUNT_ID,
+                VirtualFolderHydrationStatus("Photos", VirtualFolderHydrationPhase.AvailableOffline),
+            )
+            val block = requireNotNull(directory.resolve(ACCOUNT_ID).listFiles())
+                .single { candidate ->
+                    candidate.name.endsWith(".block") &&
+                        candidate.readBytes().contentEquals("data".encodeToByteArray())
+                }
+            block.writeBytes("evil".encodeToByteArray())
+
+            assertEquals(
+                VirtualFolderHydrationPhase.Queued,
+                cache.loadValidatedFolderHydrationStatus(ACCOUNT_ID, "Photos")?.phase,
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `namespace mutation invalidates a retained parent listing`() {
+        val directory = Files.createTempDirectory("virtual-range-parent-invalidation-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos",
+                mapOf(
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos/old.jpg", "old.jpg", false, 4L, "e1")),
+                        42L,
+                    ),
+                ),
+            )
+
+            cache.invalidateRetainedListings(ACCOUNT_ID, "Photos/new.jpg")
+
+            assertEquals(null, cache.loadRetainedListing(ACCOUNT_ID, "Photos"))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `authoritative directory reconciliation removes stale ranges but protects writebacks`() {
         val directory = Files.createTempDirectory("virtual-range-reconcile-").toFile()
         try {
