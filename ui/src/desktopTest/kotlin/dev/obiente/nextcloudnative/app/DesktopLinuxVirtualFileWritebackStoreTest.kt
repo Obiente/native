@@ -161,6 +161,31 @@ class DesktopLinuxVirtualFileWritebackStoreTest {
         }
     }
 
+    @Test
+    fun `recovery discards an untouched write stage without invalidating caches`() {
+        val directory = Files.createTempDirectory("linux-writeback-untouched-recovery-").toFile()
+        try {
+            val remote = FakeWritebackRemote("before".encodeToByteArray(), "etag-1")
+            val store = DesktopLinuxVirtualFileWritebackStore(directory, minimumFreeSpaceBytes = { 0L })
+            val node = LinuxVirtualFileNode("Notes/today.txt", "today.txt", false, 6L, "etag-1")
+            val interrupted = store.open("Notes/today.txt", node, truncate = false, tree = remote) {}
+
+            val invalidated = mutableListOf<String>()
+            assertEquals(
+                DesktopLinuxWritebackRecoveryResult(recoveredCount = 1, retainedCount = 0),
+                DesktopLinuxVirtualFileWritebackStore(directory, minimumFreeSpaceBytes = { 0L })
+                    .recoverPending(remote, invalidated::add),
+            )
+
+            assertEquals(emptyList(), invalidated)
+            assertEquals(emptyList(), store.pendingWritebacks())
+            assertContentEquals("before".encodeToByteArray(), remote.content)
+            interrupted.close()
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     private class FakeWritebackRemote(
         var content: ByteArray,
         var etag: String,
