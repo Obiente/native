@@ -130,6 +130,7 @@ internal class DesktopFileSyncRemoteTree(
             return
         }
         require(current == null) { "The server folder appeared after the sync scan." }
+        notifyMutationCommitted(relativePath)
         execute(
             requestBuilder(fileUrl(fullPath(relativePath)))
                 .header("If-None-Match", "*")
@@ -148,6 +149,7 @@ internal class DesktopFileSyncRemoteTree(
         val destinationPath = fullPath(relativePath)
         val backupPath = replacementBackupPath(destinationPath)
         val currentAtFullPath = current.withPath(destinationPath)
+        notifyMutationCommitted(relativePath)
         moveRemoteDocument(currentAtFullPath, backupPath)
         try {
             execute(
@@ -174,11 +176,13 @@ internal class DesktopFileSyncRemoteTree(
         val current = resolve(relativePath)
         if (expectedRemoteEtag == null) {
             require(current == null) { "The server file appeared after the sync scan." }
+            notifyMutationCommitted(relativePath)
             createFile(fullPath(relativePath), source)
         } else {
             require(current?.entry?.etag == expectedRemoteEtag && !current.isDirectory) {
                 "The server file changed after the sync scan."
             }
+            notifyMutationCommitted(relativePath)
             replaceFileAtomically(fullPath(relativePath), source, expectedRemoteEtag)
         }
         notifyMutationCommitted(relativePath)
@@ -202,6 +206,7 @@ internal class DesktopFileSyncRemoteTree(
         val stagedEtag = createFile(stagingPath, source)
         var protected = false
         try {
+            notifyMutationCommitted(relativePath)
             moveRemoteDocument(current.withPath(destinationPath), backupPath)
             protected = true
             moveRemotePath(
@@ -230,6 +235,7 @@ internal class DesktopFileSyncRemoteTree(
         val builder = requestBuilder(url)
         if (current.isDirectory) builder.header("If", "<$url> ([$expectedRemoteEtag])")
         else builder.header("If-Match", safeEtag(expectedRemoteEtag))
+        notifyMutationCommitted(relativePath)
         execute(builder.delete().build(), "delete item")
         notifyMutationCommitted(relativePath)
     }
@@ -240,6 +246,7 @@ internal class DesktopFileSyncRemoteTree(
         require(resolve(destinationRelativePath) == null) { "The move destination already exists." }
         val current = requireNotNull(resolve(sourceRelativePath)) { "The server item was already removed." }
         require(current.entry.etag == expectedRemoteEtag) { "The server item changed before it could be moved." }
+        notifyMutationCommitted(sourceRelativePath, destinationRelativePath)
         moveRemoteDocument(current.withPath(fullPath(sourceRelativePath)), fullPath(destinationRelativePath))
         notifyMutationCommitted(sourceRelativePath, destinationRelativePath)
     }
@@ -264,6 +271,7 @@ internal class DesktopFileSyncRemoteTree(
         val sourcePath = fullPath(sourceRelativePath)
         val destinationPath = fullPath(destinationRelativePath)
         val backupPath = replacementBackupPath(destinationPath)
+        notifyMutationCommitted(sourceRelativePath, destinationRelativePath)
         moveRemoteDocument(destination.withPath(destinationPath), backupPath)
         try {
             moveRemoteDocument(source.withPath(sourcePath), destinationPath)
@@ -285,6 +293,7 @@ internal class DesktopFileSyncRemoteTree(
         var recovered = false
         val documentsByPath = documents.associateBy { document -> document.entry.relativePath }
         desktopOwnedBackupRecoveryPlan(documentsByPath.keys, MAX_RECOVERY_ITEMS).forEach { (source, destination) ->
+            toRelativePath(destination)?.let(::notifyMutationCommitted)
             moveRemoteDocument(requireNotNull(documentsByPath[source]), destination)
             toRelativePath(destination)?.let(::notifyMutationCommitted)
             recovered = true
