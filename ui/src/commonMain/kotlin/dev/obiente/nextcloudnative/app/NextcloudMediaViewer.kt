@@ -95,6 +95,9 @@ fun NextcloudMediaViewer(
     onSelect: (NextcloudFile) -> Unit,
     onSourceRemoved: (NextcloudFile) -> Unit,
     onClose: () -> Unit,
+    navigationRequest: NextcloudNativeNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudNativeNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudNativeNavigationRequest) -> Unit = {},
     sourceMembers: List<NextcloudFile> = media,
     initialZoom: Float = 1f,
     onStateObserved: (MediaViewerStateObservation) -> Unit = {},
@@ -148,6 +151,7 @@ fun NextcloudMediaViewer(
     var selectedTagIds by remember(selected.path) { mutableStateOf<Set<Long>>(emptySet()) }
     var tagError by remember(selected.path) { mutableStateOf<String?>(null) }
     var tagSaving by remember(selected.path) { mutableStateOf(false) }
+    var activeActionMutations by remember(selected.path) { mutableIntStateOf(0) }
     var tagReloadKey by remember(selected.path) { mutableIntStateOf(0) }
     var externalOpening by remember(selected.path) { mutableStateOf(false) }
     var externalError by remember(selected.path) { mutableStateOf<String?>(null) }
@@ -179,6 +183,13 @@ fun NextcloudMediaViewer(
     }
     var viewerAction by remember(selected.path) { mutableStateOf<MediaViewerAction?>(null) }
     val scope = rememberCoroutineScope()
+    val onActionMutationRunningChanged: (Boolean) -> Unit = remember(selected.path) {
+        { running ->
+            activeActionMutations = (
+                activeActionMutations + if (running) 1 else -1
+                ).coerceAtLeast(0)
+        }
+    }
     val viewerActions = remember(
         selected,
         userId,
@@ -232,6 +243,15 @@ fun NextcloudMediaViewer(
                 externalError = failure.message ?: "Could not prepare this media file."
             }
         }
+    }
+
+    val navigationBlocked = !canConfirmMediaViewerNavigation(
+        editing = editing,
+        tagSaving = tagSaving,
+        activeActionMutations = activeActionMutations,
+    )
+    LaunchedEffect(navigationRequest?.sequence, navigationBlocked) {
+        navigationRequest?.takeIf { !navigationBlocked }?.let(onNavigationConfirmed)
     }
 
     fun openInMediaApp() = handoffToExternalApp(ExternalFileHandoffAction.OpenWith)
@@ -480,9 +500,13 @@ fun NextcloudMediaViewer(
                     false
                 } else {
                     when (event.key) {
-                        Key.DirectionLeft -> (!editing && canGoPrevious).also { if (it) selectPrevious() }
-                        Key.DirectionRight -> (!editing && canGoNext).also { if (it) selectNext() }
-                        Key.Escape -> if (editing) false else true.also { onClose() }
+                        Key.DirectionLeft -> (!navigationBlocked && canGoPrevious).also {
+                            if (it) selectPrevious()
+                        }
+                        Key.DirectionRight -> (!navigationBlocked && canGoNext).also {
+                            if (it) selectNext()
+                        }
+                        Key.Escape -> if (navigationBlocked) false else true.also { onClose() }
                         else -> false
                     }
                 }
@@ -559,6 +583,9 @@ fun NextcloudMediaViewer(
                 session = session,
                 userId = userId,
                 onCancel = { editing = false },
+                navigationRequest = navigationRequest,
+                onNavigationConfirmed = onNavigationConfirmed,
+                onNavigationCancelled = onNavigationCancelled,
                 modifier = Modifier.fillMaxSize(),
             )
         } else if (playbackSource != null && nativeVideoFailure == null) {
@@ -800,13 +827,13 @@ fun NextcloudMediaViewer(
 
             ViewerNavigationButton(
                 previous = true,
-                enabled = canGoPrevious,
+                enabled = !navigationBlocked && canGoPrevious,
                 onClick = ::selectPrevious,
                 modifier = Modifier.align(Alignment.CenterStart).padding(12.dp),
             )
             ViewerNavigationButton(
                 previous = false,
-                enabled = canGoNext,
+                enabled = !navigationBlocked && canGoNext,
                 onClick = ::selectNext,
                 modifier = Modifier.align(Alignment.CenterEnd).padding(12.dp),
             )
@@ -863,11 +890,14 @@ fun NextcloudMediaViewer(
             userId = userId,
             services = services,
             sharingCapabilities = sharingCapabilities,
-            onDismiss = { viewerAction = null },
+            onDismiss = {
+                if (activeActionMutations == 0) viewerAction = null
+            },
             onSourceRemoved = {
                 viewerAction = null
                 onSourceRemoved(selected)
             },
+            onMutationRunningChanged = onActionMutationRunningChanged,
         )
     }
 
@@ -881,6 +911,15 @@ fun NextcloudMediaViewer(
             },
         )
     }
+}
+
+internal fun canConfirmMediaViewerNavigation(
+    editing: Boolean,
+    tagSaving: Boolean,
+    activeActionMutations: Int,
+): Boolean {
+    require(activeActionMutations >= 0) { "Active media mutation count cannot be negative." }
+    return !editing && !tagSaving && activeActionMutations == 0
 }
 
 @Composable

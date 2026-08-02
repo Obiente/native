@@ -78,7 +78,7 @@ internal class DesktopStartOnLoginController(
             Version=1.0
             Name=Nextcloud Native
             Comment=Keep Nextcloud files and virtual files available
-            Exec=${desktopEntryExecArgument(launcher)}
+            Exec=${desktopEntryExecArgument(launcher)} --background
             Icon=nextcloud-native
             Terminal=false
             StartupNotify=false
@@ -120,7 +120,7 @@ internal class DesktopStartOnLoginController(
                 "/t",
                 "REG_SZ",
                 "/d",
-                "\"$launcher\"",
+                "\"$launcher\" --background",
                 "/f",
             )
         } else {

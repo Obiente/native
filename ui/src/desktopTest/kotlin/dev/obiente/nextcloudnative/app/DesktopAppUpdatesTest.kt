@@ -1,7 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
+import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.StandardOpenOption
 import java.util.UUID
 import java.util.prefs.Preferences
 import kotlinx.coroutines.runBlocking
@@ -78,6 +80,135 @@ class DesktopAppUpdatesTest {
         )
         kotlin.test.assertFailsWith<IllegalArgumentException> {
             windowsZoneIdentifier("https://example.invalid/package.msi\r\nZoneId=0", notes)
+        }
+    }
+
+    @Test
+    fun windowsInstallerWaitsForTheAppToExitWithoutShellParsing() {
+        val directory = Files.createTempDirectory("desktop-update-handoff-test").toFile()
+        val packageFile = directory.resolve("nextcloud native;verified.msi").apply { writeText("verified") }
+        val windowsDirectory = directory.resolve("Windows")
+        val powershell = windowsDirectory.resolve("System32/WindowsPowerShell/v1.0/powershell.exe").apply {
+            parentFile.mkdirs()
+            writeText("powershell")
+        }
+        val launcher = directory.resolve("NextcloudNative.exe").apply { writeText("launcher") }
+        val updateGate = directory.resolve("windows-update-in-progress.lock")
+        var command = emptyList<String>()
+        var cancelled = false
+        try {
+            startWindowsInstallerAfterAppExit(
+                packageFile = packageFile,
+                parentProcessId = 42L,
+                windowsDirectory = windowsDirectory,
+                launcherFile = launcher,
+                updateGateFile = updateGate,
+                processStarter = {
+                    command = it
+                    WindowsInstallerHandoffProcess {
+                        cancelled = true
+                        true
+                    }
+                },
+                readinessWaiter = { acknowledgement, token ->
+                    assertEquals(acknowledgement.absolutePath, command[command.indexOf("-AcknowledgementPath") + 1])
+                    assertEquals(token, command[command.indexOf("-AcknowledgementToken") + 1])
+                    true
+                },
+            )
+
+            assertEquals(powershell.absolutePath, command.first())
+            assertEquals("42", command[command.indexOf("-ParentProcessId") + 1])
+            assertEquals(packageFile.absolutePath, command[command.indexOf("-InstallerPath") + 1])
+            assertEquals(launcher.absolutePath, command[command.indexOf("-LauncherPath") + 1])
+            assertEquals(updateGate.absolutePath, command[command.indexOf("-UpdateGatePath") + 1])
+            assertTrue(command[command.indexOf("-CancellationPath") + 1].endsWith(".ack"))
+            assertEquals(64, command[command.indexOf("-CancellationToken") + 1].length)
+            val script = File(command[command.indexOf("-File") + 1])
+            assertTrue(script.isFile)
+            assertTrue(script.readText().contains("Wait-Process -Id \$ParentProcessId"))
+            assertTrue(script.readText().contains("Join-Path \$env:SystemRoot 'System32\\msiexec.exe'"))
+            assertTrue(script.readText().contains("'NEXTCLOUD_NATIVE_UPDATER_HANDOFF=1'"))
+            assertTrue(
+                script.readText().contains(
+                    "Start-Process -FilePath \$LauncherPath -ErrorAction Stop",
+                ),
+            )
+            assertTrue(script.readText().contains("\$successfulExitCodes = @(0, 1641, 3010)"))
+            assertTrue(script.readText().contains("\$installerProcess.ExitCode -notin \$successfulExitCodes"))
+            assertTrue(script.readText().contains("Set-Content -LiteralPath \$AcknowledgementPath"))
+            assertTrue(script.readText().contains("[System.IO.FileShare]::None"))
+            assertTrue(script.readText().indexOf("\$updateGateStream.Dispose()") <
+                script.readText().lastIndexOf("Start-Process -FilePath \$LauncherPath"))
+            assertTrue(script.readText().contains("Test-HandoffCancellation"))
+            assertTrue(script.readText().contains("cancelled before installer launch"))
+            assertTrue(script.readText().contains("--update-handoff-failed"))
+            assertFalse(script.readText().contains(packageFile.absolutePath))
+            assertFalse(cancelled)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun windowsInstallerHandoffKeepsTheAppOpenWithoutReadinessAcknowledgement() {
+        val directory = Files.createTempDirectory("desktop-update-handoff-failure").toFile()
+        val packageFile = directory.resolve("verified.msi").apply { writeText("verified") }
+        val windowsDirectory = directory.resolve("Windows")
+        windowsDirectory.resolve("System32/WindowsPowerShell/v1.0/powershell.exe").apply {
+            parentFile.mkdirs()
+            writeText("powershell")
+        }
+        val launcher = directory.resolve("NextcloudNative.exe").apply { writeText("launcher") }
+        var script: File? = null
+        var cancellationObserved = false
+        var processCancelled = false
+        try {
+            val failure = kotlin.test.assertFailsWith<IllegalStateException> {
+                startWindowsInstallerAfterAppExit(
+                    packageFile = packageFile,
+                    parentProcessId = 42L,
+                    windowsDirectory = windowsDirectory,
+                    launcherFile = launcher,
+                    updateGateFile = directory.resolve("windows-update-in-progress.lock"),
+                    processStarter = { command ->
+                        script = File(command[command.indexOf("-File") + 1])
+                        WindowsInstallerHandoffProcess {
+                            processCancelled = true
+                            val cancellation = File(command[command.indexOf("-CancellationPath") + 1])
+                            val token = command[command.indexOf("-CancellationToken") + 1]
+                            cancellationObserved = cancellation.readText() == token
+                            true
+                        }
+                    },
+                    readinessWaiter = { _, _ -> false },
+                )
+            }
+
+            assertTrue(failure.message.orEmpty().contains("did not confirm"))
+            assertTrue(processCancelled)
+            assertTrue(cancellationObserved)
+            assertFalse(requireNotNull(script).exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun windowsUpdateGateBlocksLaunchesOnlyWhileOwnershipIsHeld() {
+        val directory = Files.createTempDirectory("desktop-update-gate").toFile()
+        val gate = directory.resolve("windows-update-in-progress.lock").apply { writeText("active") }
+        try {
+            FileChannel.open(gate.toPath(), StandardOpenOption.WRITE).use { channel ->
+                channel.lock().use {
+                    assertTrue(desktopUpdateHandoffActive(gate, windows = true))
+                }
+            }
+
+            assertFalse(desktopUpdateHandoffActive(gate, windows = true))
+            assertFalse(gate.exists())
+        } finally {
+            directory.deleteRecursively()
         }
     }
 
@@ -175,14 +306,14 @@ class DesktopAppUpdatesTest {
                 ),
                 target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
                 updateDirectory = directory,
-                openInstaller = { DesktopPackageInstallerOutcome.ConfirmationOpened },
+                openInstaller = { DesktopPackageInstallerOutcome.InstallerHandoffStarted },
             )
             val development = DesktopAppUpdater(
                 preferences = node,
                 buildIdentity = DesktopUpdateBuildIdentity("development", 0, "0.1.0", false, false),
                 target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
                 updateDirectory = directory,
-                openInstaller = { DesktopPackageInstallerOutcome.ConfirmationOpened },
+                openInstaller = { DesktopPackageInstallerOutcome.InstallerHandoffStarted },
             )
 
             assertEquals(AppDistributionChannel.DirectDesktopPackage, release.support().channel)
@@ -202,7 +333,7 @@ class DesktopAppUpdatesTest {
                 ),
                 target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
                 updateDirectory = directory,
-                openInstaller = { DesktopPackageInstallerOutcome.ConfirmationOpened },
+                openInstaller = { DesktopPackageInstallerOutcome.InstallerHandoffStarted },
             )
             assertEquals(AppDistributionChannel.Development, distributionManaged.support().channel)
             assertFalse(distributionManaged.support().canCheckDirectUpdates)
@@ -219,7 +350,7 @@ class DesktopAppUpdatesTest {
                 ),
                 target = DesktopUpdateTarget("windows", "msi", "x86_64"),
                 updateDirectory = directory,
-                openInstaller = { DesktopPackageInstallerOutcome.ConfirmationOpened },
+                openInstaller = { DesktopPackageInstallerOutcome.InstallerHandoffStarted },
             )
             assertEquals(AppDistributionChannel.DirectDesktopPackage, windowsRelease.support().channel)
             assertTrue(windowsRelease.support().canCheckDirectUpdates)
@@ -312,7 +443,7 @@ class DesktopAppUpdatesTest {
                 ),
                 target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
                 updateDirectory = directory,
-                openInstaller = { DesktopPackageInstallerOutcome.ConfirmationOpened },
+                openInstaller = { DesktopPackageInstallerOutcome.InstallerHandoffStarted },
             )
             val alphaRelease = DesktopDirectRelease(
                 updateChannel = AndroidUpdateChannel.Alpha,

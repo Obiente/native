@@ -700,15 +700,33 @@ private val nativeAppIds = setOf(
     "user_status",
 )
 
+enum class NextcloudNativeRoute {
+    Home,
+    Settings,
+    SyncCenter,
+}
+
+data class NextcloudNativeNavigationRequest(
+    val sequence: Long,
+    val route: NextcloudNativeRoute,
+) {
+    init {
+        require(sequence > 0L)
+    }
+}
+
 @Composable
 fun NextcloudNativeApp(
     services: NextcloudPlatformServices,
     presentation: NextcloudPresentation = NextcloudPresentation.Adaptive,
     appUpdateReviewRequest: Long = 0L,
     platformCapabilityRefreshRequest: Long = 0L,
+    navigationRequest: NextcloudNativeNavigationRequest? = null,
+    onNavigationRequestHandled: (Long) -> Unit = {},
 ) {
     var themePreference by remember { mutableStateOf(services.loadThemePreference()) }
     var handledAppUpdateReviewRequest by rememberSaveable { mutableStateOf(0L) }
+    var handledNavigationRequestSequence by remember { mutableStateOf(0L) }
     val darkTheme = isNextcloudDarkTheme(themePreference)
     val pendingAppUpdateReviewRequest = unhandledAppUpdateReviewRequest(
         requested = appUpdateReviewRequest,
@@ -764,6 +782,12 @@ fun NextcloudNativeApp(
                     presentation = presentation,
                     appUpdateReviewRequest = pendingAppUpdateReviewRequest ?: 0L,
                     platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
+                    navigationRequest = navigationRequest,
+                    handledNavigationRequestSequence = handledNavigationRequestSequence,
+                    onNavigationRequestHandled = { sequence ->
+                        handledNavigationRequestSequence = maxOf(handledNavigationRequestSequence, sequence)
+                        onNavigationRequestHandled(sequence)
+                    },
                     onAppUpdateReviewHandled = { request ->
                         handledAppUpdateReviewRequest = maxOf(handledAppUpdateReviewRequest, request)
                     },
@@ -1102,6 +1126,9 @@ private fun AuthenticatedApp(
     presentation: NextcloudPresentation,
     appUpdateReviewRequest: Long,
     platformCapabilityRefreshRequest: Long,
+    navigationRequest: NextcloudNativeNavigationRequest?,
+    handledNavigationRequestSequence: Long,
+    onNavigationRequestHandled: (Long) -> Unit,
     onAppUpdateReviewHandled: (Long) -> Unit,
     themePreference: ThemePreference,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
@@ -1157,12 +1184,57 @@ private fun AuthenticatedApp(
     val appUpdateResult by remember(services) {
         services.observeAppUpdateCheckResult()
     }.collectAsState(null)
+    var pendingEditorNavigationRequest by remember(session) {
+        mutableStateOf<NextcloudNativeNavigationRequest?>(null)
+    }
+
+    fun applyNavigationRequest(request: NextcloudNativeNavigationRequest) {
+        when (request.route) {
+            NextcloudNativeRoute.Home -> {
+                screen = Screen.Root
+                destination = NextcloudDestination.Home
+            }
+            NextcloudNativeRoute.Settings -> {
+                screen = Screen.Root
+                destination = NextcloudDestination.Settings
+            }
+            NextcloudNativeRoute.SyncCenter -> {
+                returnDestination = NextcloudDestination.Settings
+                destination = NextcloudDestination.Settings
+                screen = Screen.OfflineCenter
+            }
+        }
+        onNavigationRequestHandled(request.sequence)
+        pendingEditorNavigationRequest = null
+    }
+
+    fun cancelNavigationRequest(request: NextcloudNativeNavigationRequest) {
+        onNavigationRequestHandled(request.sequence)
+        if (pendingEditorNavigationRequest?.sequence == request.sequence) {
+            pendingEditorNavigationRequest = null
+        }
+    }
 
     LaunchedEffect(appUpdateReviewRequest) {
         if (appUpdateReviewRequest > 0) {
             screen = Screen.Root
             destination = NextcloudDestination.Settings
             onAppUpdateReviewHandled(appUpdateReviewRequest)
+        }
+    }
+
+    LaunchedEffect(navigationRequest?.sequence, screen) {
+        val request = navigationRequest
+            ?.takeIf { it.sequence > handledNavigationRequestSequence }
+            ?: return@LaunchedEffect
+        if (
+            screen is Screen.NoteEditor ||
+            screen is Screen.TextEditor ||
+            screen is Screen.MediaViewer
+        ) {
+            pendingEditorNavigationRequest = request
+        } else {
+            applyNavigationRequest(request)
         }
     }
 
@@ -1564,6 +1636,9 @@ private fun AuthenticatedApp(
             session = session,
             note = current.note,
             onBack = ::navigateBack,
+            navigationRequest = pendingEditorNavigationRequest,
+            onNavigationConfirmed = ::applyNavigationRequest,
+            onNavigationCancelled = ::cancelNavigationRequest,
         )
         is Screen.Chat -> ChatScreen(
             services = services,
@@ -1660,6 +1735,9 @@ private fun AuthenticatedApp(
                         mediaViewerNavigationRepository.release(current.navigationKey)
                         screen = current.returnTo
                     },
+                    navigationRequest = pendingEditorNavigationRequest,
+                    onNavigationConfirmed = ::applyNavigationRequest,
+                    onNavigationCancelled = ::cancelNavigationRequest,
                     sourceMembers = snapshot.sourceMembers,
                 )
             }
@@ -1688,13 +1766,16 @@ private fun AuthenticatedApp(
                 modifier = Modifier.weight(1f),
             )
         }
-            is Screen.TextEditor -> TextEditorScreen(
+        is Screen.TextEditor -> TextEditorScreen(
             services = services,
             session = session,
             userId = serverInfo?.userId.orEmpty(),
             file = current.file,
             onBack = ::navigateBack,
-            )
+            navigationRequest = pendingEditorNavigationRequest,
+            onNavigationConfirmed = ::applyNavigationRequest,
+            onNavigationCancelled = ::cancelNavigationRequest,
+        )
         }
     }
     Column(
@@ -9302,6 +9383,9 @@ private fun TextEditorScreen(
     userId: String,
     file: NextcloudFile,
     onBack: () -> Unit,
+    navigationRequest: NextcloudNativeNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudNativeNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudNativeNavigationRequest) -> Unit = {},
 ) {
     val descriptor = remember(file) { describeDocument(file) }
     val isMarkdown = descriptor.kind == DocumentKind.Markdown
@@ -9355,7 +9439,15 @@ private fun TextEditorScreen(
     }
 
     fun requestBack() {
+        if (saving) return
         if (dirty) confirmDiscard = true else onBack()
+    }
+    LaunchedEffect(navigationRequest?.sequence, saving) {
+        navigationRequest?.let { request ->
+            if (!saving) {
+                if (dirty) confirmDiscard = true else onNavigationConfirmed(request)
+            }
+        }
     }
     PlatformBackHandler(enabled = true, onBack = ::requestBack)
 
@@ -9530,14 +9622,24 @@ private fun TextEditorScreen(
 
     if (confirmDiscard) {
         AlertDialog(
-            onDismissRequest = { confirmDiscard = false },
+            onDismissRequest = {
+                confirmDiscard = false
+                navigationRequest?.let(onNavigationCancelled)
+            },
             title = { Text("Discard unsaved changes?") },
             text = { Text("Your local edits to ${file.name} have not been saved.") },
-            dismissButton = { TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") } },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        confirmDiscard = false
+                        navigationRequest?.let(onNavigationCancelled)
+                    },
+                ) { Text("Keep editing") }
+            },
             confirmButton = {
                 Button(onClick = {
                     confirmDiscard = false
-                    onBack()
+                    navigationRequest?.let(onNavigationConfirmed) ?: onBack()
                 }) { Text("Discard") }
             },
         )
@@ -10508,8 +10610,8 @@ private fun SettingsScreen(
                         enabled = startOnLogin,
                         message = startOnLoginMessage,
                         onEnabledChanged = { enabled ->
-                            startOnLogin = enabled
                             startOnLoginMessage = services.saveStartOnLoginPreference(enabled)
+                            startOnLogin = services.loadStartOnLoginPreference()
                         },
                     )
                 }

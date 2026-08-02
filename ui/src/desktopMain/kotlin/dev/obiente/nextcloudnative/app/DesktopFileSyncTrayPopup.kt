@@ -48,6 +48,8 @@ import java.time.format.DateTimeFormatter
 fun DesktopFileSyncTrayPopup(
     snapshot: DesktopFileSyncTraySnapshot,
     onOpenApp: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenSyncCenter: () -> Unit,
     onSyncNow: () -> Unit,
     onTogglePaused: () -> Unit,
     onQuit: () -> Unit,
@@ -64,7 +66,7 @@ fun DesktopFileSyncTrayPopup(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column {
-            TrayHeader(snapshot = snapshot, onOpenApp = onOpenApp)
+            TrayHeader(snapshot = snapshot, onOpenSettings = onOpenSettings)
             snapshot.overallProgress?.let { progress ->
                 LinearProgressIndicator(
                     progress = { progress },
@@ -75,7 +77,7 @@ fun DesktopFileSyncTrayPopup(
                 snapshot = snapshot,
                 onSyncNow = onSyncNow,
                 onTogglePaused = onTogglePaused,
-                onOpenApp = onOpenApp,
+                onOpenSyncCenter = onOpenSyncCenter,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             TrayActivityList(snapshot = snapshot, onOpenApp = onOpenApp, modifier = Modifier.weight(1f))
@@ -95,7 +97,7 @@ fun DesktopFileSyncTrayPopup(
 @Composable
 private fun TrayHeader(
     snapshot: DesktopFileSyncTraySnapshot,
-    onOpenApp: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(18.dp),
@@ -135,7 +137,7 @@ private fun TrayHeader(
                 )
             }
         }
-        IconButton(onClick = onOpenApp) {
+        IconButton(onClick = onOpenSettings) {
             Icon(NextcloudIcons.Settings, contentDescription = "Open settings")
         }
     }
@@ -146,7 +148,7 @@ private fun TrayQuickActions(
     snapshot: DesktopFileSyncTraySnapshot,
     onSyncNow: () -> Unit,
     onTogglePaused: () -> Unit,
-    onOpenApp: () -> Unit,
+    onOpenSyncCenter: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -175,7 +177,7 @@ private fun TrayQuickActions(
             label = "Sync center",
             icon = NextcloudIcons.FolderOpen,
             enabled = true,
-            onClick = onOpenApp,
+            onClick = onOpenSyncCenter,
             modifier = Modifier.weight(1f),
         )
     }

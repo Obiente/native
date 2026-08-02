@@ -25,7 +25,7 @@ class DesktopStartOnLoginTest {
         assertTrue(controller.configure(enabled = true).configured)
         val entry = File(root, ".config/autostart/nextcloud-native.desktop")
         assertTrue(entry.isFile)
-        assertTrue(entry.readText().contains("Exec=${desktopEntryExecArgument(launcher.absolutePath)}"))
+        assertTrue(entry.readText().contains("Exec=${desktopEntryExecArgument(launcher.absolutePath)} --background"))
         assertFalse(entry.readText().contains("Terminal=true"))
 
         assertTrue(controller.configure(enabled = false).configured)
@@ -51,7 +51,7 @@ class DesktopStartOnLoginTest {
         assertTrue(result.configured)
         assertEquals("reg.exe", command.first())
         assertTrue(command.contains("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"))
-        assertTrue(command.contains("\"${launcher.absolutePath}\""))
+        assertTrue(command.contains("\"${launcher.absolutePath}\" --background"))
     }
 
     @Test
