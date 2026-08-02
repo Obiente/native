@@ -535,7 +535,10 @@ private fun parseDesktopSyncDav(
         setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, true)
         setProperty(XMLInputFactory.IS_COALESCING, false)
     }
-    val reader = factory.createXMLStreamReader(RejectingXmlCdataInputStream(BoundedInputStream(input, maximumBytes)))
+    val reader = factory.createXMLStreamReader(
+        RejectingXmlCdataInputStream(BoundedInputStream(input, maximumBytes)),
+        StandardCharsets.UTF_8.name(),
+    )
     val documents = ArrayList<DesktopRemoteSyncDocument>()
     var response: DesktopDavResponseBuilder? = null
     var textField: String? = null
