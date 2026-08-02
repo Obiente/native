@@ -19,6 +19,7 @@ import java.util.prefs.Preferences
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -563,6 +564,44 @@ class LinuxVirtualFileSystemTest {
         clock.set(5_000L)
         assertEquals(listOf("cached.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
         assertTrue(waitUntil { attempts.get() == 3 })
+        cached.close()
+    }
+
+    @Test
+    fun `refresh failure backoff records stay within the directory budget`() {
+        val delegate = object : LinuxVirtualFileBackend by MutableFixtureBackend() {
+            override fun list(path: String): List<LinuxVirtualFileNode> =
+                error("Simulated offline listing failure for $path")
+        }
+        val staleNode = { path: String ->
+            LinuxVirtualDirectorySnapshot(
+                listOf(LinuxVirtualFileNode("$path/cached.dat", "cached.dat", false, 1L, "cached-etag")),
+                fetchedAtEpochMillis = 1L,
+            )
+        }
+        val store = MemoryLinuxVirtualMetadataStore().apply {
+            seed("First", staleNode("First"))
+            seed("Second", staleNode("Second"))
+            seed("Third", staleNode("Third"))
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = store,
+            nowEpochMillis = { 10_000L },
+            freshForMillis = 1_000L,
+            maximumRetainedDirectories = 2,
+        )
+
+        cached.list("First")
+        assertTrue(waitUntil { cached.hasRecordedRefreshFailure("First") })
+        cached.list("Second")
+        assertTrue(waitUntil { cached.hasRecordedRefreshFailure("Second") })
+        cached.list("Third")
+        assertTrue(waitUntil { cached.hasRecordedRefreshFailure("Third") })
+
+        assertFalse(cached.hasRecordedRefreshFailure("First"))
+        assertTrue(cached.hasRecordedRefreshFailure("Second"))
+        assertTrue(cached.hasRecordedRefreshFailure("Third"))
         cached.close()
     }
 
