@@ -59,6 +59,39 @@ function Read-MsiProperty {
     }
 }
 
+function Read-MsiFileNames {
+    $view = $database.GetType().InvokeMember(
+        "OpenView",
+        "InvokeMethod",
+        $null,
+        $database,
+        @("SELECT ``FileName`` FROM ``File``")
+    )
+    try {
+        $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null) | Out-Null
+        $names = [System.Collections.Generic.List[string]]::new()
+        while ($true) {
+            $record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+            if ($null -eq $record) {
+                break
+            }
+            $encodedName = $record.GetType().InvokeMember(
+                "StringData",
+                "GetProperty",
+                $null,
+                $record,
+                @(1)
+            )
+            foreach ($name in ($encodedName -split "\|")) {
+                $names.Add($name)
+            }
+        }
+        return $names
+    } finally {
+        $view.GetType().InvokeMember("Close", "InvokeMethod", $null, $view, $null) | Out-Null
+    }
+}
+
 $productName = Read-MsiProperty -Name "ProductName"
 $productVersion = Read-MsiProperty -Name "ProductVersion"
 $manufacturer = Read-MsiProperty -Name "Manufacturer"
@@ -76,6 +109,13 @@ if ($manufacturer -ne "Obiente") {
 $expectedUpgradeCode = "{81237D85-C511-47A7-B8DC-C87A5F5C5823}"
 if ($upgradeCode.ToUpperInvariant() -ne $expectedUpgradeCode) {
     throw "Unexpected Windows upgrade identity."
+}
+
+$packagedFiles = @(Read-MsiFileNames)
+foreach ($requiredFile in @("NextcloudNativeShellRegistrar.exe", "NextcloudNative.ico")) {
+    if ($requiredFile -notin $packagedFiles) {
+        throw "The Windows MSI does not contain $requiredFile."
+    }
 }
 
 $signature = Get-AuthenticodeSignature -LiteralPath $package.FullName

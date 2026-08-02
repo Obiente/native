@@ -21,7 +21,13 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-foreach ($path in @($PackageDirectory, $ArgumentsFile, $JpackageResourceDirectory, $AppImage, $Jpackage)) {
+foreach ($path in @(
+    $PackageDirectory,
+    $ArgumentsFile,
+    $JpackageResourceDirectory,
+    $AppImage,
+    $Jpackage
+)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required MSI packaging input does not exist: $path"
     }
@@ -74,6 +80,13 @@ if ($name -ne "NextcloudNative" -or
     -not (Test-Path -LiteralPath (Join-Path $AppImage "NextcloudNative.exe") -PathType Leaf) -or
     -not (Test-Path -LiteralPath (Join-Path $AppImage "app/.jpackage.xml") -PathType Leaf)) {
     throw "The captured package metadata or application image is invalid."
+}
+
+$packagedShellRegistrar = Join-Path $AppImage "NextcloudNativeShellRegistrar.exe"
+$packagedShellIcon = Join-Path $AppImage "NextcloudNative.ico"
+if (-not (Test-Path -LiteralPath $packagedShellRegistrar -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $packagedShellIcon -PathType Leaf)) {
+    throw "The completed Windows application image is missing its shell registration helper or icon."
 }
 
 if (Test-Path -LiteralPath $GeneratedResourceDirectory) {

@@ -221,7 +221,7 @@ class WindowsUninstallCleanupTest {
             closed = true
         }
 
-        override fun registerSyncRoot(root: Path, syncRootIdentity: ByteArray) = unsupported()
+        override fun registerSyncRoot(root: Path, displayName: String, syncRootIdentity: ByteArray) = unsupported()
         override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long = unsupported()
         override fun disconnect(connectionKey: Long) = unsupported()
         override fun createPlaceholders(baseDirectory: Path, placeholders: List<WindowsCloudPlaceholder>) = unsupported()

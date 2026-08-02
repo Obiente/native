@@ -65,6 +65,15 @@ for stale_gate in \
     fi
 done
 
+scope_detector_count="$(grep -Ec '^      - name: Detect (build scopes|Windows desktop changes)$' "$ci")"
+continued_detector_count="$(grep -Fc 'continue-on-error: true' "$ci")"
+if [[ "$scope_detector_count" -ne 2 || "$continued_detector_count" -ne 2 ]]; then
+    printf 'Build scope detection must degrade safely for both build jobs.\n' >&2
+    exit 1
+fi
+require_text "$ci" "steps.changes.outcome != 'success'"
+require_text "$ci" "steps.changes.outcome == 'success'"
+
 if grep -Fq 'pull_request_target:' "$prepare_workflow" "$commit_workflow"; then
     printf 'Capture automation must not execute pull request code with pull_request_target.\n' >&2
     exit 1

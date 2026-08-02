@@ -7,6 +7,8 @@ prerelease="$project_root/.github/workflows/prerelease.yml"
 nightly_notes="$project_root/tools/nightly-release-notes.mjs"
 promotion="$project_root/tools/promote-app-update-channel.sh"
 msi_repackager="$project_root/tools/repackage-msi-with-uninstall-cleanup.ps1"
+msi_verifier="$project_root/tools/verify-windows-package.ps1"
+ui_build="$project_root/ui/build.gradle.kts"
 temporary_directory="$(mktemp -d)"
 trap 'rm -r -- "$temporary_directory"' EXIT
 
@@ -37,6 +39,8 @@ require_text "$nightly" 'runner: windows-latest'
 require_text "$nightly" 'runner: macos-15-intel'
 require_text "$nightly" 'tasks: ":ui:packageDeb :ui:packageRpm"'
 require_text "$nightly" 'tasks: ":ui:packageMsi"'
+require_text "$nightly" 'name: Set up Rust for Windows packaging'
+require_text "$nightly" 'targets: x86_64-pc-windows-msvc'
 require_text "$nightly" 'name: Verify unsigned Windows MSI'
 require_text "$nightly" 'tools/verify-windows-package.ps1'
 require_text "$nightly" 'uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1'
@@ -114,6 +118,8 @@ require_text "$prerelease" '-PncDesktopPackageVersion="${RELEASE_DESKTOP_VERSION
 require_text "$prerelease" '-PncMacosPackageVersion="${RELEASE_DESKTOP_VERSION}"'
 require_text "$prerelease" '-PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}"'
 require_text "$prerelease" 'name: Verify unsigned Windows MSI'
+require_text "$prerelease" 'name: Set up Rust for Windows packaging'
+require_text "$prerelease" 'targets: x86_64-pc-windows-msvc'
 require_text "$prerelease" 'tools/verify-windows-package.ps1'
 require_text "$prerelease" 'uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1'
 require_text "$prerelease" 'subject-path: ui/build/compose/binaries/main/msi/*.msi'
@@ -153,6 +159,13 @@ require_text "$msi_repackager" 'Join-Path $AppImage "app/.jpackage.xml"'
 require_text "$msi_repackager" 'Id="LaunchNextcloudNative"'
 require_text "$msi_repackager" 'NOT REMOVE AND UILevel &gt;= 3 AND NOT NEXTCLOUD_NATIVE_UPDATER_HANDOFF'
 require_text "$msi_repackager" 'Return="asyncNoWait"'
+require_text "$msi_repackager" 'NextcloudNativeShellRegistrar.exe'
+require_text "$msi_repackager" 'NextcloudNative.ico'
+require_text "$msi_verifier" 'NextcloudNativeShellRegistrar.exe'
+require_text "$msi_verifier" 'NextcloudNative.ico'
+require_text "$ui_build" 'val stageWindowsShellAssets by tasks.registering'
+require_text "$ui_build" 'finalizedBy(stageWindowsShellAssets)'
+require_text "$ui_build" 'dependsOn("createDistributable", stageWindowsShellAssets)'
 if grep -Fq 'Join-Path $AppImage "lib/app/.jpackage.xml"' "$msi_repackager"; then
     echo "Windows MSI repackaging must use the Windows jpackage metadata layout." >&2
     exit 1
