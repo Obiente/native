@@ -269,7 +269,10 @@ private fun NativeMusicTabStrip(
 ) {
     Column(Modifier.fillMaxWidth()) {
         LazyRow(
-            modifier = Modifier.fillMaxWidth().selectableGroup(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .selectableGroup(),
             contentPadding = PaddingValues(
                 horizontal = NextcloudSpacing.Medium,
             ),
@@ -280,7 +283,7 @@ private fun NativeMusicTabStrip(
                 Column(
                     modifier = Modifier
                         .widthIn(min = 88.dp)
-                        .heightIn(min = 52.dp)
+                        .height(56.dp)
                         .selectable(
                             selected = selected,
                             role = Role.Tab,
