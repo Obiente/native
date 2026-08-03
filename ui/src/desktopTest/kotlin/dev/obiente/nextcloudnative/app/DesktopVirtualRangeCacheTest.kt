@@ -556,6 +556,37 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `retained tree capacity is rejected before any revision is staged`() {
+        val directory = Files.createTempDirectory("virtual-range-tree-capacity-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(
+                root = directory,
+                maximumBlocks = 2,
+                policy = { nonEvictingTestPolicy() },
+            )
+            val retention = VirtualFolderRetentionState(
+                listOf(VirtualFolderRetentionRule("Photos", VirtualFolderRetention.KeepOnDevice)),
+            )
+
+            assertFailsWith<IllegalArgumentException> {
+                cache.requireRevisionsCapacity(
+                    accountId = ACCOUNT_ID,
+                    revisions = listOf(
+                        VirtualRangeRevision("Photos/one.raf", "e1", 1L),
+                        VirtualRangeRevision("Photos/two.raf", "e2", 1L),
+                        VirtualRangeRevision("Photos/three.raf", "e3", 1L),
+                    ),
+                    blockBytes = 1,
+                    retention = retention,
+                )
+            }
+            assertEquals(0, cache.summary(ACCOUNT_ID).fileCount)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `pinned bytes do not consume the automatic range cache budget`() {
         val directory = Files.createTempDirectory("virtual-range-pinned-budget-").toFile()
         try {

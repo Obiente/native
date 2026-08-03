@@ -348,16 +348,44 @@ internal class DesktopVirtualRangeCache(
         blockBytes: Int,
         retention: VirtualFolderRetentionState?,
     ) {
-        require(fileSize > 0L)
+        requireRevisionsCapacity(
+            accountId = accountId,
+            revisions = listOf(
+                VirtualRangeRevision(path, remoteRevision = "capacity-check", fileSize = fileSize),
+            ),
+            blockBytes = blockBytes,
+            retention = retention,
+        )
+    }
+
+    @Synchronized
+    fun requireRevisionsCapacity(
+        accountId: String,
+        revisions: Collection<VirtualRangeRevision>,
+        blockBytes: Int,
+        retention: VirtualFolderRetentionState? = null,
+    ) {
         require(blockBytes in 1..MAX_BLOCK_BYTES)
-        val normalized = FileOfflineKey(accountId, path).relativePath
-        val requiredBlocks = (fileSize - 1L) / blockBytes.toLong() + 1L
+        if (revisions.isEmpty()) return
+        val revisionsByPath = revisions.associateBy(VirtualRangeRevision::relativePath)
+        require(revisionsByPath.size == revisions.size) {
+            "The retained folder contains duplicate file paths."
+        }
         val effectiveRetention = retention ?: loadFolderRetention(accountId)
         val pinnedOtherBlocks = load(accountId).blocks.count { block ->
-            block.path != normalized &&
+            block.path !in revisionsByPath &&
                 effectiveRetention.retentionFor(block.path) == VirtualFolderRetention.KeepOnDevice
         }
-        require(requiredBlocks <= (maximumBlocks - pinnedOtherBlocks).toLong()) {
+        val availableBlocks = (maximumBlocks - pinnedOtherBlocks).toLong()
+        var requiredBlocks = 0L
+        revisionsByPath.values.forEach { revision ->
+            val revisionBlocks = (revision.fileSize - 1L) / blockBytes.toLong() + 1L
+            require(requiredBlocks <= availableBlocks - revisionBlocks) {
+                "The retained folders exceed the supported virtual-file cache index."
+            }
+            requiredBlocks += revisionBlocks
+        }
+        require(requiredBlocks <= availableBlocks) {
             "The retained folders exceed the supported virtual-file cache index."
         }
     }

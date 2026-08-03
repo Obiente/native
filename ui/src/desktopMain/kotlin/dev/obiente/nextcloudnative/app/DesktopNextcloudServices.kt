@@ -810,6 +810,12 @@ class DesktopNextcloudServices(
                                     size,
                                 )
                             }
+                            cache.requireRevisionsCapacity(
+                                accountId = accountId,
+                                revisions = expectedRevisions,
+                                blockBytes = VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES,
+                                retention = retentionSnapshot,
+                            )
                             val completeRevisions = cache.completeRevisions(accountId, expectedRevisions)
                             retainedFiles.forEach { document ->
                                 val fullPath = document.entry.relativePath

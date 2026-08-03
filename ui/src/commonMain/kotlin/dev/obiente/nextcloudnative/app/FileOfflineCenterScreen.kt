@@ -1551,9 +1551,36 @@ internal fun VirtualFileStorageCard(
                                     key = VirtualFolderRetentionRule::relativePath,
                                 ) { rule ->
                                     val status = hydrationByPath[rule.relativePath]
+                                    var menuExpanded by remember(rule.relativePath) { mutableStateOf(false) }
+                                    val menuActions = buildList {
+                                        if (
+                                            status?.phase == VirtualFolderHydrationPhase.Failed ||
+                                            status?.refreshFailure != null
+                                        ) {
+                                            add(
+                                                NextcloudCardAction(
+                                                    label = "Retry",
+                                                    enabled = !busy,
+                                                    onClick = { onRetryFolder(rule.relativePath) },
+                                                ),
+                                            )
+                                        }
+                                        add(
+                                            NextcloudCardAction(
+                                                label = "Make online-only",
+                                                destructive = true,
+                                                enabled = !busy,
+                                                onClick = { onReleaseFolder(rule.relativePath) },
+                                            ),
+                                        )
+                                    }
                                     Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+                                            onOpen = null,
+                                            onShowActions = { menuExpanded = true },
+                                            actionsLabel = "Show actions for ${rule.relativePath}",
+                                        ),
+                                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
@@ -1587,25 +1614,12 @@ internal fun VirtualFileStorageCard(
                                                 overflow = TextOverflow.Ellipsis,
                                             )
                                         }
-                                        Column(horizontalAlignment = Alignment.End) {
-                                            if (
-                                                status?.phase == VirtualFolderHydrationPhase.Failed ||
-                                                status?.refreshFailure != null
-                                            ) {
-                                                TextButton(
-                                                    enabled = !busy,
-                                                    onClick = { onRetryFolder(rule.relativePath) },
-                                                ) {
-                                                    Text("Retry")
-                                                }
-                                            }
-                                            TextButton(
-                                                enabled = !busy,
-                                                onClick = { onReleaseFolder(rule.relativePath) },
-                                            ) {
-                                                Text("Make online-only")
-                                            }
-                                        }
+                                        NextcloudCardOverflow(
+                                            itemLabel = rule.relativePath,
+                                            actions = menuActions,
+                                            expanded = menuExpanded,
+                                            onExpandedChange = { menuExpanded = it },
+                                        )
                                     }
                                 }
                             }
