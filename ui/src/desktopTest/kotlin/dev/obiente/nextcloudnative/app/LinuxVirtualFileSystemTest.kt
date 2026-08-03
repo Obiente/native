@@ -866,7 +866,9 @@ class LinuxVirtualFileSystemTest {
         )
         val persistedInvalidated = AtomicBoolean(false)
         val store = object : LinuxVirtualMetadataStore {
-            override fun load(path: String): LinuxVirtualDirectorySnapshot? = stale.takeIf { path.isEmpty() }
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = stale.takeIf {
+                path.isEmpty() && !persistedInvalidated.get()
+            }
             override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = true
             override fun invalidate(path: String) {
                 persistedInvalidated.set(true)
