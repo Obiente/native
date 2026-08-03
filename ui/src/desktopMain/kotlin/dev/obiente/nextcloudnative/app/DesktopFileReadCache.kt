@@ -665,7 +665,7 @@ internal class DesktopFileReadCache(
             hydrateListingReferences(
                 accountDirectory(accountId),
                 references,
-                MetadataHydrationBudget(maximumHydratedMetadataBytes),
+                MetadataHydrationBudget.perShard(MAX_METADATA_SHARD_BYTES),
             ).also { listing ->
                 val inlineListings = index.listings.filter { existing ->
                     index.listingShards.none { reference -> reference.path == existing.path }
@@ -705,7 +705,7 @@ internal class DesktopFileReadCache(
             hydrateVirtualListingReferences(
                 accountDirectory(accountId),
                 references,
-                MetadataHydrationBudget(maximumHydratedMetadataBytes),
+                MetadataHydrationBudget.perShard(MAX_METADATA_SHARD_BYTES),
             ).also { listing ->
                 val inlineListings = index.listings.filter { existing ->
                     index.listingShards.none { reference -> reference.path == existing.path }
@@ -1260,13 +1260,22 @@ private data class MetadataShardGroup(
     val entryCount: Int,
 )
 
-private class MetadataHydrationBudget(private val maximumBytes: Long) {
+private class MetadataHydrationBudget(
+    private val maximumBytes: Long,
+    private val cumulative: Boolean = true,
+) {
     private var reservedBytes = 0L
 
     fun reserve(bytes: Long) {
         require(bytes > 0L)
-        if (bytes > maximumBytes - reservedBytes) throw MetadataHydrationBudgetExceededException()
-        reservedBytes += bytes
+        val alreadyReserved = if (cumulative) reservedBytes else 0L
+        if (bytes > maximumBytes - alreadyReserved) throw MetadataHydrationBudgetExceededException()
+        if (cumulative) reservedBytes += bytes
+    }
+
+    companion object {
+        fun perShard(maximumBytes: Long): MetadataHydrationBudget =
+            MetadataHydrationBudget(maximumBytes, cumulative = false)
     }
 }
 

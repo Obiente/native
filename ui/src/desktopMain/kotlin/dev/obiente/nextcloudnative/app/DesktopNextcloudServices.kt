@@ -871,6 +871,9 @@ class DesktopNextcloudServices(
                 services = this@DesktopNextcloudServices,
                 rangeCache = virtualRangeCache,
                 writebacks = writebackStore,
+                onMutationCommitted = { path ->
+                    metadataBackendReference?.invalidateAfterExternalMutation(path)
+                },
                 onAmbiguousMutationResult = { path ->
                     metadataBackendReference?.invalidateAfterExternalMutation(path)
                 },

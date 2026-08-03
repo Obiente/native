@@ -665,11 +665,13 @@ internal class DesktopNextcloudVirtualFileBackend(
     private val services: NextcloudPlatformServices,
     private val rangeCache: DesktopVirtualRangeCache,
     private val writebacks: DesktopLinuxVirtualFileWritebackStore,
+    onMutationCommitted: (relativePath: String) -> Unit = {},
     onAmbiguousMutationResult: (relativePath: String) -> Unit = {},
     private val tree: DesktopFileSyncRemoteTree = DesktopFileSyncRemoteTree(
         session = session,
         userId = userId,
         remoteRootPath = "",
+        onMutationCommitted = onMutationCommitted,
         onAmbiguousMutationResult = onAmbiguousMutationResult,
     ),
 ) : LinuxVirtualFileBackend {

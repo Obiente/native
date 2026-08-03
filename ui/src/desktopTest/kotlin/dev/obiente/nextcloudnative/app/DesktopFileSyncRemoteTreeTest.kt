@@ -72,6 +72,62 @@ class DesktopFileSyncRemoteTreeTest {
     }
 
     @Test
+    fun `confirmed replacement backup move invalidates metadata when later moves fail`() {
+        val confirmed = mutableListOf<String>()
+        var backupPath: String? = null
+        var propfindCount = 0
+        var moveCount = 0
+        fun listing(vararg entries: Pair<String, String>): String = entries.joinToString(
+            prefix = "<d:multistatus xmlns:d=\"DAV:\">",
+            postfix = "</d:multistatus>",
+            separator = "",
+        ) { (path, etag) ->
+            "<d:response><d:href>/remote.php/dav/files/alice/$path</d:href>" +
+                "<d:propstat><d:prop><d:getetag>$etag</d:getetag><d:getcontentlength>4</d:getcontentlength>" +
+                "<d:resourcetype/></d:prop></d:propstat></d:response>"
+        }
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            when (chain.request().method) {
+                "PROPFIND" -> {
+                    propfindCount += 1
+                    val body = if (propfindCount <= 2) {
+                        listing("source.txt" to "source-etag", "destination.txt" to "destination-etag")
+                    } else {
+                        listing("source.txt" to "source-etag", requireNotNull(backupPath) to "destination-etag")
+                    }
+                    response(chain.request(), 207, body)
+                }
+                "MOVE" -> {
+                    moveCount += 1
+                    when (moveCount) {
+                        1 -> {
+                            backupPath = requireNotNull(chain.request().header("Destination"))
+                                .substringAfter("/remote.php/dav/files/alice/")
+                            response(chain.request(), 201)
+                        }
+                        2 -> response(chain.request(), 412)
+                        else -> response(chain.request(), 500)
+                    }
+                }
+                else -> error("Unexpected ${chain.request().method} request")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            userId = "alice",
+            remoteRootPath = "",
+            client = client,
+            onMutationCommitted = confirmed::add,
+        )
+
+        assertFails {
+            tree.moveReplacing("source.txt", "destination.txt", "source-etag", "destination-etag")
+        }
+        assertEquals(listOf("destination.txt"), confirmed)
+        assertEquals(3, moveCount)
+    }
+
+    @Test
     fun `only started mutation exchanges have ambiguous io results`() {
         val failure = IOException("connection closed")
 
