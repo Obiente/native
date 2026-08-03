@@ -956,6 +956,60 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `retained refresh preserves an invalidated open revision until its exact lease closes`() {
+        val directory = Files.createTempDirectory("virtual-range-active-revision-").toFile()
+        try {
+            val retention = VirtualFolderRetentionState(
+                listOf(VirtualFolderRetentionRule("Photos", VirtualFolderRetention.KeepOnDevice)),
+            )
+            val cache = DesktopVirtualRangeCache(
+                root = directory,
+                maximumBlocks = 2,
+                policy = { nonEvictingTestPolicy() },
+            )
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L, 0L, "old!".encodeToByteArray())
+            cache.acquire(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L)
+            cache.invalidate(ACCOUNT_ID, "Photos/photo.raf")
+
+            cache.beginRevisionStaging(
+                ACCOUNT_ID,
+                "Photos/photo.raf",
+                "e2",
+                4L,
+                retention,
+                preservePreviousRevisionUntilPublication = true,
+            ).use { staging ->
+                staging.store(0L, "new!".encodeToByteArray())
+                assertTrue(staging.commitIfComplete())
+            }
+            cache.publishRetainedRevisions(
+                ACCOUNT_ID,
+                "Photos",
+                listOf(VirtualRangeRevision("Photos/photo.raf", "e2", 4L)),
+                retention,
+            )
+
+            assertContentEquals(
+                "old!".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L, 0L, 4),
+            )
+            assertContentEquals(
+                "new!".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/photo.raf", "e2", 4L, 0L, 4),
+            )
+            cache.release(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L)
+            assertNull(cache.readBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L, 0L, 4))
+            assertContentEquals(
+                "new!".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/photo.raf", "e2", 4L, 0L, 4),
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `staged replacement waits while a previous generation is open`() {
         val directory = Files.createTempDirectory("virtual-range-open-generation-").toFile()
         try {

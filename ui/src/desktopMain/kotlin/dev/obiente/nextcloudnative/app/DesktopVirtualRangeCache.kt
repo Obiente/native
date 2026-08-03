@@ -36,6 +36,12 @@ internal data class VirtualRangeRevision(
     }
 }
 
+private data class ActiveVirtualRangeRevision(
+    val file: FileOfflineKey,
+    val remoteRevision: String,
+    val fileSize: Long,
+)
+
 /** Persistent exact-revision block cache used by the Linux virtual filesystem. */
 internal class DesktopVirtualRangeCache(
     private val root: File,
@@ -45,7 +51,8 @@ internal class DesktopVirtualRangeCache(
     private val policy: () -> VirtualFileCachePolicy,
 ) {
     private val activePaths = mutableMapOf<FileOfflineKey, Int>()
-    private val deferredInvalidationPaths = mutableSetOf<FileOfflineKey>()
+    private val activeRevisions = mutableMapOf<ActiveVirtualRangeRevision, Int>()
+    private val deferredInvalidationRevisions = mutableSetOf<ActiveVirtualRangeRevision>()
     private val recoveredAccounts = mutableSetOf<String>()
 
     init {
@@ -75,20 +82,45 @@ internal class DesktopVirtualRangeCache(
     }
 
     @Synchronized
-    fun acquire(accountId: String, path: String) {
+    fun acquire(
+        accountId: String,
+        path: String,
+        remoteRevision: String? = null,
+        fileSize: Long? = null,
+    ) {
         val key = FileOfflineKey(accountId, path)
         activePaths[key] = activePaths.getOrDefault(key, 0) + 1
+        activeRevision(key, remoteRevision, fileSize)?.let { revision ->
+            activeRevisions[revision] = activeRevisions.getOrDefault(revision, 0) + 1
+        }
     }
 
     @Synchronized
-    fun release(accountId: String, path: String) {
+    fun release(
+        accountId: String,
+        path: String,
+        remoteRevision: String? = null,
+        fileSize: Long? = null,
+    ) {
         val key = FileOfflineKey(accountId, path)
         val remaining = activePaths.getOrDefault(key, 1) - 1
-        if (remaining <= 0) {
-            activePaths.remove(key)
-            if (deferredInvalidationPaths.remove(key)) removeExactPath(accountId, key.relativePath)
-        } else {
-            activePaths[key] = remaining
+        if (remaining <= 0) activePaths.remove(key) else activePaths[key] = remaining
+        val revision = activeRevision(key, remoteRevision, fileSize)
+        if (revision != null) {
+            val revisionRemaining = activeRevisions.getOrDefault(revision, 1) - 1
+            if (revisionRemaining <= 0) {
+                activeRevisions.remove(revision)
+                if (deferredInvalidationRevisions.remove(revision)) removeExactRevision(revision)
+            } else {
+                activeRevisions[revision] = revisionRemaining
+            }
+        } else if (remaining <= 0) {
+            deferredInvalidationRevisions.filter { deferred -> deferred.file == key }
+                .toList()
+                .forEach { deferred ->
+                    deferredInvalidationRevisions.remove(deferred)
+                    removeExactRevision(deferred)
+                }
         }
     }
 
@@ -208,8 +240,12 @@ internal class DesktopVirtualRangeCache(
         }
         val removed = candidates.filter { block ->
             val key = FileOfflineKey(accountId, block.path)
-            if (activePaths.getOrDefault(key, 0) > 0) {
-                deferredInvalidationPaths += key
+            val revision = block.activeRevision(accountId)
+            val revisionIsActive = activeRevisions.getOrDefault(revision, 0) > 0
+            val legacyPathLeaseIsActive = activePaths.getOrDefault(key, 0) > 0 &&
+                activeRevisions.keys.none { active -> active.file == key }
+            if (revisionIsActive || legacyPathLeaseIsActive) {
+                deferredInvalidationRevisions += revision
                 false
             } else {
                 true
@@ -440,13 +476,6 @@ internal class DesktopVirtualRangeCache(
         val retainedStatusPaths = next.rules.asSequence()
             .filter { rule -> rule.retention == VirtualFolderRetention.KeepOnDevice }
             .mapTo(hashSetOf(), VirtualFolderRetentionRule::relativePath)
-        if (retention == VirtualFolderRetention.KeepOnDevice) {
-            val normalized = FileOfflineKey(accountId, path).relativePath
-            deferredInvalidationPaths.removeIf { key ->
-                key.accountId == accountId &&
-                    (key.relativePath == normalized || key.relativePath.startsWith("$normalized/"))
-            }
-        }
         saveRetention(
             accountId,
             current.copy(
@@ -507,6 +536,13 @@ internal class DesktopVirtualRangeCache(
 
     @Synchronized
     fun queueRetainedFoldersForListingRefresh(accountId: String, changedPaths: Collection<String>): List<String> {
+        val roots = retainedFoldersAffectedByListingChanges(accountId, changedPaths)
+        if (roots.isEmpty()) return emptyList()
+        return queueRetainedFolderRoots(loadRetention(accountId), accountId, roots)
+    }
+
+    @Synchronized
+    fun retainedFoldersAffectedByListingChanges(accountId: String, changedPaths: Collection<String>): List<String> {
         if (changedPaths.isEmpty()) return emptyList()
         val normalizedPaths = changedPaths.mapTo(linkedSetOf()) { path ->
             FileOfflineKey(accountId, path).relativePath
@@ -525,7 +561,7 @@ internal class DesktopVirtualRangeCache(
             .map(CachedVirtualFolderRule::relativePath)
             .distinct()
             .toList()
-        return queueRetainedFolderRoots(current, accountId, roots)
+        return roots
     }
 
     private fun queueRetainedFolderRoots(
@@ -747,6 +783,9 @@ internal class DesktopVirtualRangeCache(
                         block.fileSize == expected.fileSize
                     ) {
                         block.copy(pendingPublication = false)
+                    } else if (block.isActiveOrDeferred(accountId)) {
+                        deferredInvalidationRevisions += block.activeRevision(accountId)
+                        block.copy(pendingPublication = true)
                     } else {
                         null
                     }
@@ -813,9 +852,17 @@ internal class DesktopVirtualRangeCache(
             .filter { candidate -> candidate !in protectedPaths }
             .toSet()
         candidates.asSequence()
-            .map { candidate -> FileOfflineKey(accountId, candidate) }
-            .filter { key -> activePaths.getOrDefault(key, 0) > 0 }
-            .forEach(deferredInvalidationPaths::add)
+            .flatMap { candidate ->
+                current.blocks.asSequence()
+                    .filter { block -> block.path == candidate }
+                    .map { block -> block.activeRevision(accountId) }
+            }
+            .filter { revision ->
+                activeRevisions.getOrDefault(revision, 0) > 0 ||
+                    activePaths.getOrDefault(revision.file, 0) > 0 &&
+                    activeRevisions.keys.none { active -> active.file == revision.file }
+            }
+            .forEach(deferredInvalidationRevisions::add)
         val removablePaths = candidates.filter { candidate ->
             activePaths.getOrDefault(FileOfflineKey(accountId, candidate), 0) == 0
         }.toSet()
@@ -1032,11 +1079,44 @@ internal class DesktopVirtualRangeCache(
         save(accountId, index.copy(blocks = index.blocks.filterNot { it == record }))
     }
 
-    private fun removeExactPath(accountId: String, path: String) {
-        val current = load(accountId)
-        val removed = current.blocks.filter { block -> block.path == path }
-        removed.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }
-        if (removed.isNotEmpty()) save(accountId, current.copy(blocks = current.blocks.filterNot { it in removed }))
+    private fun removeExactRevision(revision: ActiveVirtualRangeRevision) {
+        val current = load(revision.file.accountId)
+        val removed = current.blocks.filter { block ->
+            block.path == revision.file.relativePath &&
+                block.remoteRevision == revision.remoteRevision &&
+                block.fileSize == revision.fileSize
+        }
+        removed.forEach { block -> File(accountDirectory(revision.file.accountId), block.blobName).delete() }
+        if (removed.isNotEmpty()) {
+            save(
+                revision.file.accountId,
+                current.copy(blocks = current.blocks.filterNot { block -> block in removed }),
+            )
+        }
+    }
+
+    private fun CachedRangeBlock.isActiveOrDeferred(accountId: String): Boolean {
+        val revision = activeRevision(accountId)
+        return revision in deferredInvalidationRevisions ||
+            activeRevisions.getOrDefault(revision, 0) > 0 ||
+            activePaths.getOrDefault(revision.file, 0) > 0 &&
+            activeRevisions.keys.none { active -> active.file == revision.file }
+    }
+
+    private fun CachedRangeBlock.activeRevision(accountId: String) = ActiveVirtualRangeRevision(
+        FileOfflineKey(accountId, path),
+        remoteRevision,
+        fileSize,
+    )
+
+    private fun activeRevision(
+        file: FileOfflineKey,
+        remoteRevision: String?,
+        fileSize: Long?,
+    ): ActiveVirtualRangeRevision? {
+        if (remoteRevision == null && fileSize == null) return null
+        require(!remoteRevision.isNullOrBlank() && fileSize != null && fileSize > 0L)
+        return ActiveVirtualRangeRevision(file, remoteRevision, fileSize)
     }
 
     internal inner class RevisionStaging internal constructor(

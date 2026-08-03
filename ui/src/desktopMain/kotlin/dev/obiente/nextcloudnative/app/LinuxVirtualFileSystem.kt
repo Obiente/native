@@ -796,7 +796,7 @@ internal class DesktopNextcloudVirtualFileBackend(
 
             init {
                 try {
-                    rangeCache.acquire(accountId, currentPath)
+                    rangeCache.acquire(accountId, currentPath, node.remoteRevision, node.size)
                 } catch (failure: Throwable) {
                     runCatching(source::close)
                     runCatching { stagedRevision?.close() }
@@ -857,13 +857,13 @@ internal class DesktopNextcloudVirtualFileBackend(
                 val normalized = path.linuxVirtualPath()
                 if (normalized == currentPath) return
                 val replacement = openRangeSource(normalized)
-                rangeCache.acquire(accountId, normalized)
+                rangeCache.acquire(accountId, normalized, node.remoteRevision, node.size)
                 val previousSource = source
                 val previousPath = currentPath
                 source = replacement
                 currentPath = normalized
                 runCatching(previousSource::close)
-                rangeCache.release(accountId, previousPath)
+                rangeCache.release(accountId, previousPath, node.remoteRevision, node.size)
             }
 
             @Synchronized
@@ -882,7 +882,7 @@ internal class DesktopNextcloudVirtualFileBackend(
                 }
                 runCatching { stagedRevision?.close() }
                     .onFailure { closeFailure -> if (failure == null) failure = closeFailure }
-                rangeCache.release(accountId, currentPath)
+                rangeCache.release(accountId, currentPath, node.remoteRevision, node.size)
                 failure?.let { throw it }
             }
 
