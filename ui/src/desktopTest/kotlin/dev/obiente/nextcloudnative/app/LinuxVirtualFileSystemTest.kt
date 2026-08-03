@@ -290,6 +290,34 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `destructive directory operations ignore a stale cached empty listing`() {
+        val fixture = MutableFixtureBackend().apply {
+            createDirectory("Photos/Trips")
+            addFile("Photos/Trips/new.raf", byteArrayOf(1))
+            createDirectory("Photos/Replacement")
+            addFile("Photos/Replacement/new.raf", byteArrayOf(2))
+            createDirectory("Photos/Source")
+        }
+        val backend = object : LinuxVirtualFileBackend by fixture {
+            override fun list(path: String): List<LinuxVirtualFileNode> =
+                if (path.trim('/') in setOf("Photos/Trips", "Photos/Replacement")) emptyList()
+                else fixture.list(path)
+
+            override fun isDirectoryEmpty(node: LinuxVirtualFileNode): Boolean =
+                fixture.list(node.path).isEmpty()
+        }
+        val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
+
+        assertEquals(-ErrorCodes.ENOTEMPTY(), fileSystem.rmdir("/Photos/Trips"))
+        assertEquals(
+            -ErrorCodes.ENOTEMPTY(),
+            fileSystem.rename("/Photos/Source", "/Photos/Replacement"),
+        )
+        assertNotNull(fixture.resolve("Photos/Trips/new.raf"))
+        assertNotNull(fixture.resolve("Photos/Replacement/new.raf"))
+    }
+
+    @Test
     fun `readdir resumes from the supplied continuation offset`() {
         val backend = MutableFixtureBackend()
         val fileSystem = LinuxNextcloudVirtualFileSystem(backend)
@@ -761,6 +789,43 @@ class LinuxVirtualFileSystemTest {
             assertEquals(2, delegate.listCallCount(""))
         } finally {
             cached.close()
+        }
+    }
+
+    @Test
+    fun `failed persisted invalidation survives a backend remount`() {
+        val delegate = MutableFixtureBackend()
+        val stale = LinuxVirtualDirectorySnapshot(
+            nodes = listOf(LinuxVirtualFileNode("Photos", "Photos", true, 0L, "stale-photos")),
+            fetchedAtEpochMillis = 100L,
+        )
+        var failedInvalidations = emptySet<String>()
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = stale.takeIf { path.isEmpty() }
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean = false
+            override fun invalidate(path: String): Unit = error("Simulated persisted invalidation failure")
+            override fun retainedPaths(): Set<String> = setOf("")
+            override fun failedInvalidations(): Set<String> = failedInvalidations
+            override fun replaceFailedInvalidations(paths: Set<String>) {
+                failedInvalidations = paths.toSet()
+            }
+        }
+        val first = CachingLinuxVirtualFileBackend(delegate, store, freshForMillis = Long.MAX_VALUE)
+        assertEquals(listOf("Photos"), first.list("").map(LinuxVirtualFileNode::name))
+        delegate.createDirectory("Albums")
+        first.invalidateAfterExternalMutation("Albums")
+        assertEquals(setOf("Albums"), failedInvalidations)
+        first.close()
+
+        val remounted = CachingLinuxVirtualFileBackend(delegate, store, freshForMillis = Long.MAX_VALUE)
+        try {
+            assertEquals(
+                setOf("Photos", "Albums"),
+                remounted.list("").mapTo(mutableSetOf(), LinuxVirtualFileNode::name),
+            )
+            assertEquals(1, delegate.listCallCount(""))
+        } finally {
+            remounted.close()
         }
     }
 

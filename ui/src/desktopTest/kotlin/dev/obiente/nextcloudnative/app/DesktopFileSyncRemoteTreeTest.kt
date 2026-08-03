@@ -72,6 +72,62 @@ class DesktopFileSyncRemoteTreeTest {
     }
 
     @Test
+    fun `accepted mutation invalidates metadata before an oversized response fails`() {
+        val invalidated = mutableListOf<String>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            when (chain.request().method) {
+                "PROPFIND" -> response(
+                    chain.request(),
+                    207,
+                    "<d:multistatus xmlns:d=\"DAV:\"></d:multistatus>",
+                )
+                "MKCOL" -> response(chain.request(), 201, "x".repeat(65 * 1024))
+                else -> error("Unexpected ${chain.request().method} request")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            userId = "alice",
+            remoteRootPath = "",
+            client = client,
+            onMutationCommitted = invalidated::add,
+        )
+
+        assertFails { tree.createDirectory("Photos", expectedRemoteEtag = null) }
+        assertEquals(listOf("Photos"), invalidated)
+    }
+
+    @Test
+    fun `directory emptiness is bound to the revision in one authoritative listing`() {
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            response(
+                chain.request(),
+                207,
+                """
+                <d:multistatus xmlns:d="DAV:">
+                  <d:response><d:href>/remote.php/dav/files/alice/Photos/Trips/</d:href>
+                    <d:propstat><d:prop><d:getetag>current-directory</d:getetag>
+                      <d:resourcetype><d:collection/></d:resourcetype>
+                    </d:prop></d:propstat></d:response>
+                  <d:response><d:href>/remote.php/dav/files/alice/Photos/Trips/new.raf</d:href>
+                    <d:propstat><d:prop><d:getetag>new-file</d:getetag><d:getcontentlength>1</d:getcontentlength>
+                      <d:resourcetype/></d:prop></d:propstat></d:response>
+                </d:multistatus>
+                """.trimIndent(),
+            )
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            userId = "alice",
+            remoteRootPath = "",
+            client = client,
+        )
+
+        assertFails { tree.isDirectoryEmpty("Photos/Trips", "stale-directory") }
+        assertFalse(tree.isDirectoryEmpty("Photos/Trips", "current-directory"))
+    }
+
+    @Test
     fun `confirmed replacement backup move invalidates metadata when later moves fail`() {
         val confirmed = mutableListOf<String>()
         var backupPath: String? = null

@@ -42,6 +42,7 @@ internal interface LinuxVirtualFileWriteHandle : AutoCloseable {
 internal interface LinuxVirtualFileBackend : AutoCloseable {
     fun resolve(path: String): LinuxVirtualFileNode?
     fun list(path: String): List<LinuxVirtualFileNode>
+    fun isDirectoryEmpty(node: LinuxVirtualFileNode): Boolean = list(node.path).isEmpty()
     fun open(node: LinuxVirtualFileNode): LinuxVirtualFileReadHandle
     fun openWrite(path: String, existing: LinuxVirtualFileNode?, truncate: Boolean): LinuxVirtualFileWriteHandle
     fun createDirectory(path: String)
@@ -86,6 +87,8 @@ internal interface LinuxVirtualMetadataStore {
     fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean
     fun invalidate(path: String)
     fun retainedPaths(): Set<String>? = null
+    fun failedInvalidations(): Set<String> = emptySet()
+    fun replaceFailedInvalidations(paths: Set<String>) = Unit
 }
 
 internal class DesktopLinuxVirtualMetadataStore(
@@ -108,6 +111,11 @@ internal class DesktopLinuxVirtualMetadataStore(
     override fun invalidate(path: String) = cache.invalidate(accountId, path)
 
     override fun retainedPaths(): Set<String> = cache.cachedVirtualListingPaths(accountId)
+
+    override fun failedInvalidations(): Set<String> = cache.failedVirtualListingInvalidations(accountId)
+
+    override fun replaceFailedInvalidations(paths: Set<String>) =
+        cache.replaceFailedVirtualListingInvalidations(accountId, paths)
 }
 
 /**
@@ -152,6 +160,7 @@ internal class CachingLinuxVirtualFileBackend(
         require(refreshRetryMaxMillis >= refreshRetryBaseMillis)
         require(maximumRetainedMetadataEntries > 0)
         require(maximumRetainedDirectories > 0)
+        failedPersistedInvalidations += store.failedInvalidations()
     }
 
     override fun resolve(path: String): LinuxVirtualFileNode? {
@@ -162,6 +171,8 @@ internal class CachingLinuxVirtualFileBackend(
     }
 
     override fun list(path: String): List<LinuxVirtualFileNode> = snapshot(path.linuxVirtualPath()).nodes
+
+    override fun isDirectoryEmpty(node: LinuxVirtualFileNode): Boolean = delegate.isDirectoryEmpty(node)
 
     internal fun hasRecordedRefreshFailure(path: String): Boolean =
         synchronized(metadataLock) { refreshFailures.containsKey(path.linuxVirtualPath()) }
@@ -324,7 +335,6 @@ internal class CachingLinuxVirtualFileBackend(
         synchronized(metadataLock) {
             activeMetadataOperations.clear()
             pendingPersistedInvalidations.clear()
-            failedPersistedInvalidations.clear()
             revalidatedPersistedListings.clear()
             refreshFailures.clear()
         }
@@ -516,6 +526,7 @@ internal class CachingLinuxVirtualFileBackend(
                 } else {
                     rememberFailedPersistedInvalidation(normalized)
                 }
+                store.replaceFailedInvalidations(failedPersistedInvalidations)
                 val remaining = pendingPersistedInvalidations.getOrDefault(normalized, 1) - 1
                 if (remaining <= 0) pendingPersistedInvalidations.remove(normalized)
                 else pendingPersistedInvalidations[normalized] = remaining
@@ -567,6 +578,7 @@ internal class CachingLinuxVirtualFileBackend(
             }
         }
         pruneUnpairedRevalidatedListings()
+        store.replaceFailedInvalidations(failedPersistedInvalidations)
     }
 
     private fun retainSnapshot(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
@@ -685,6 +697,11 @@ internal class DesktopNextcloudVirtualFileBackend(
 
     override fun list(path: String): List<LinuxVirtualFileNode> =
         tree.list(path.linuxVirtualPath()).map { document -> document.toLinuxNode() }
+
+    override fun isDirectoryEmpty(node: LinuxVirtualFileNode): Boolean {
+        require(node.directory)
+        return tree.isDirectoryEmpty(node.path, node.remoteRevision)
+    }
 
     override fun open(node: LinuxVirtualFileNode): LinuxVirtualFileReadHandle {
         require(!node.directory)
@@ -1057,7 +1074,7 @@ internal class LinuxNextcloudVirtualFileSystem(
             if (existingDestination != null) {
                 if (source.directory && !existingDestination.directory) return -ErrorCodes.ENOTDIR()
                 if (!source.directory && existingDestination.directory) return -ErrorCodes.EISDIR()
-                if (existingDestination.directory && backend.list(destination).isNotEmpty()) {
+                if (existingDestination.directory && !backend.isDirectoryEmpty(existingDestination)) {
                     return -ErrorCodes.ENOTEMPTY()
                 }
                 if (hasOpenReadHandleWithin(destination)) return -ErrorCodes.EBUSY()
@@ -1325,7 +1342,7 @@ internal class LinuxNextcloudVirtualFileSystem(
                 return if (expectDirectory) -ErrorCodes.ENOTDIR() else -ErrorCodes.EISDIR()
             }
             if (expectDirectory) {
-                val hasRemoteChildren = backend.list(normalized).isNotEmpty()
+                val hasRemoteChildren = !backend.isDirectoryEmpty(node)
                 val hasPendingChildren = pendingCreatedFiles.keys.any { pending ->
                     pending.substringBeforeLast('/', "") == normalized
                 }
