@@ -318,7 +318,17 @@ jobs:
             -ExpectedVersion "${env:NIGHTLY_DESKTOP_VERSION}"
 
       - name: Attest Windows MSI provenance
+        id: attest-windows-msi
         if: matrix.platform == 'windows'
+        continue-on-error: true
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ui/build/compose/binaries/main/msi/*.msi
+
+      - name: Retry Windows MSI provenance attestation
+        if: >-
+          matrix.platform == 'windows' &&
+          steps.attest-windows-msi.outcome == 'failure'
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: ui/build/compose/binaries/main/msi/*.msi
