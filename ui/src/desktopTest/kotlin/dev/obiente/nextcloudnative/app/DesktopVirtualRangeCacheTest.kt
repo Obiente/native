@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermission
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -46,6 +47,86 @@ class DesktopVirtualRangeCacheTest {
                 restarted.readBlock(ACCOUNT_ID, "Photos/example.raf", "etag-1", 8L, 0L, 4),
             )
             assertEquals(null, restarted.readBlock(ACCOUNT_ID, "Photos/example.raf", "etag-2", 8L, 0L, 4))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `valid cached bytes remain readable when access time persistence fails`() {
+        val directory = Files.createTempDirectory("virtual-range-read-only-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.storeBlock(ACCOUNT_ID, "Photos/example.raf", "etag-1", 4L, 0L, "data".encodeToByteArray())
+            val accountDirectory = directory.resolve(ACCOUNT_ID).toPath()
+            val indexFile = accountDirectory.resolve("range-index-v1.json").toFile()
+            val indexBeforeRead = indexFile.readText()
+            val originalPermissions = runCatching { Files.getPosixFilePermissions(accountDirectory) }.getOrNull()
+                ?: return
+            try {
+                Files.setPosixFilePermissions(
+                    accountDirectory,
+                    setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_EXECUTE),
+                )
+
+                assertContentEquals(
+                    "data".encodeToByteArray(),
+                    cache.readBlock(
+                        ACCOUNT_ID,
+                        "Photos/example.raf",
+                        "etag-1",
+                        4L,
+                        0L,
+                        4,
+                        nowEpochMillis = 42L,
+                    ),
+                )
+                assertEquals(indexBeforeRead, indexFile.readText())
+            } finally {
+                Files.setPosixFilePermissions(accountDirectory, originalPermissions)
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `startup removes unreferenced cache artifacts without deleting indexed blocks`() {
+        val directory = Files.createTempDirectory("virtual-range-orphans-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.storeBlock(ACCOUNT_ID, "Photos/example.raf", "etag-1", 4L, 0L, "data".encodeToByteArray())
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos",
+                mapOf(
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos/example.raf", "example.raf", false, 4L, "etag-1")),
+                        42L,
+                    ),
+                ),
+            )
+            val accountDirectory = directory.resolve(ACCOUNT_ID)
+            val orphanBlock = accountDirectory.resolve("${"a".repeat(64)}.block").apply { writeText("orphan") }
+            val orphanListing = accountDirectory.resolve("${"b".repeat(64)}.listing").apply { writeText("orphan") }
+            val orphanTemporary = accountDirectory.resolve("${"c".repeat(64)}.block.123.tmp")
+                .apply { writeText("orphan") }
+
+            val restarted = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            assertEquals(4L, restarted.summary(ACCOUNT_ID).cachedBytes)
+
+            assertFalse(orphanBlock.exists())
+            assertFalse(orphanListing.exists())
+            assertFalse(orphanTemporary.exists())
+            assertEquals(
+                listOf("example.raf"),
+                restarted.loadRetainedListing(ACCOUNT_ID, "Photos")?.nodes?.map(LinuxVirtualFileNode::name),
+            )
+            assertContentEquals(
+                "data".encodeToByteArray(),
+                restarted.readBlock(ACCOUNT_ID, "Photos/example.raf", "etag-1", 4L, 0L, 4),
+            )
         } finally {
             directory.deleteRecursively()
         }
@@ -367,6 +448,30 @@ class DesktopVirtualRangeCacheTest {
         requireVirtualFolderListingCapacity(99, maximumListings = 100)
         assertFailsWith<IllegalStateException> {
             requireVirtualFolderListingCapacity(100, maximumListings = 100)
+        }
+    }
+
+    @Test
+    fun `a missing retained sibling does not reject the available hydration target`() {
+        val available = DesktopRemoteSyncDocument(
+            RemoteSyncEntry("Photos/Available", SyncEntryKind.Directory, "directory-etag", null),
+            isDirectory = true,
+        )
+
+        assertEquals(
+            setOf("Photos/Available"),
+            retainedFolderAvailableNavigationTargets("Photos/Available", listOf(available)),
+        )
+        assertEquals(
+            setOf("Photos/Missing/Album"),
+            retainedRootsMissingNavigationTarget(
+                parentPath = "Photos",
+                retainedRoots = listOf("Photos/Available", "Photos/Missing/Album"),
+                availableTargets = setOf("Photos/Available"),
+            ),
+        )
+        assertFailsWith<IllegalStateException> {
+            retainedFolderAvailableNavigationTargets("Photos/Missing", listOf(available))
         }
     }
 
@@ -1077,6 +1182,48 @@ class DesktopVirtualRangeCacheTest {
                 listOf("kept.raf"),
                 requireNotNull(cache.loadRetainedListing(ACCOUNT_ID, "Photos/Archive/Favorites"))
                     .nodes.map(LinuxVirtualFileNode::name),
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `refreshing a parent preserves blocks owned by a nested retained root`() {
+        val directory = Files.createTempDirectory("virtual-range-retained-nested-blocks-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Archive", VirtualFolderRetention.Automatic)
+            cache.setFolderRetention(
+                ACCOUNT_ID,
+                "Photos/Archive/Favorites",
+                VirtualFolderRetention.KeepOnDevice,
+            )
+            cache.storeBlock(ACCOUNT_ID, "Photos/old.raf", "old", 4L, 0L, "old!".encodeToByteArray())
+            cache.storeBlock(
+                ACCOUNT_ID,
+                "Photos/Archive/Favorites/kept.raf",
+                "kept",
+                4L,
+                0L,
+                "keep".encodeToByteArray(),
+            )
+            val retention = cache.loadFolderRetention(ACCOUNT_ID)
+
+            cache.publishRetainedRevisions(ACCOUNT_ID, "Photos", emptyList(), retention)
+
+            assertNull(cache.readBlock(ACCOUNT_ID, "Photos/old.raf", "old", 4L, 0L, 4))
+            assertContentEquals(
+                "keep".encodeToByteArray(),
+                cache.readBlock(
+                    ACCOUNT_ID,
+                    "Photos/Archive/Favorites/kept.raf",
+                    "kept",
+                    4L,
+                    0L,
+                    4,
+                ),
             )
         } finally {
             directory.deleteRecursively()

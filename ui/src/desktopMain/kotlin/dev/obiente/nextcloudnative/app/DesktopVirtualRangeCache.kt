@@ -121,14 +121,16 @@ internal class DesktopVirtualRangeCache(
             removeRecord(accountId, index, record, blob)
             return null
         }
-        save(
-            accountId,
-            index.copy(
-                blocks = index.blocks.map { current ->
-                    if (current == record) current.copy(lastAccessedAtEpochMillis = nowEpochMillis) else current
-                },
-            ),
-        )
+        runCatching {
+            save(
+                accountId,
+                index.copy(
+                    blocks = index.blocks.map { current ->
+                        if (current == record) current.copy(lastAccessedAtEpochMillis = nowEpochMillis) else current
+                    },
+                ),
+            )
+        }
         return bytes
     }
 
@@ -733,6 +735,8 @@ internal class DesktopVirtualRangeCache(
                 val insideRoot = block.path == normalizedRoot || block.path.startsWith("$normalizedRoot/")
                 if (!insideRoot) return@mapNotNull block
                 val expected = expectedByPath[block.path]
+                val nestedRetainedRoot = retention.keepOnDeviceRootFor(block.path)
+                    ?.takeIf { root -> root != normalizedRoot && root.startsWith("$normalizedRoot/") }
                 if (expected != null) {
                     if (
                         block.remoteRevision == expected.remoteRevision &&
@@ -742,6 +746,8 @@ internal class DesktopVirtualRangeCache(
                     } else {
                         null
                     }
+                } else if (nestedRetainedRoot != null) {
+                    block
                 } else if (block.pendingPublication) {
                     null
                 } else if (retention.retentionFor(block.path) == VirtualFolderRetention.KeepOnDevice) {
@@ -1198,6 +1204,7 @@ internal class DesktopVirtualRangeCache(
             }
             if (directory.isDirectory && recoveredAccounts.add(accountId)) {
                 recoverStaleRevisionStages(directory)
+                recoverOrphanedCacheArtifacts(directory)
             }
         }
     }
@@ -1295,6 +1302,51 @@ internal class DesktopVirtualRangeCache(
         }.getOrNull()
     }
 
+    private fun loadRetainedMetadataIndexFromDirectory(directory: File): RetainedMetadataIndex? {
+        val file = File(directory, RETAINED_METADATA_INDEX_FILE)
+        if (!file.isFile || file.length() !in 1L..MAX_RETAINED_METADATA_INDEX_BYTES) return null
+        return runCatching {
+            rangeCacheJson.decodeFromString<RetainedMetadataIndex>(file.readText()).also { index ->
+                index.requireValid()
+            }
+        }.getOrNull()
+    }
+
+    private fun recoverOrphanedCacheArtifacts(directory: File) {
+        val referencedBlocks = loadRangeIndexFromDirectory(directory)
+            ?.blocks
+            ?.mapTo(hashSetOf(), CachedRangeBlock::blobName)
+            .orEmpty()
+            .toMutableSet()
+        directory.listFiles().orEmpty().asSequence()
+            .filter { file -> file.isFile && REVISION_COMMIT_FILE.matches(file.name) }
+            .filter { file -> file.length() in 1L..MAX_COMMIT_JOURNAL_BYTES }
+            .mapNotNull { journal ->
+                runCatching {
+                    journal.readLines().also { names ->
+                        require(names.isNotEmpty() && names.size <= maximumBlocks && names.distinct().size == names.size)
+                        require(names.all(BLOCK_FILE::matches))
+                    }
+                }.getOrNull()
+            }
+            .flatten()
+            .forEach(referencedBlocks::add)
+        val referencedListings = loadRetainedMetadataIndexFromDirectory(directory)
+            ?.listings
+            ?.mapTo(hashSetOf(), RetainedListingReference::blobName)
+            .orEmpty()
+        directory.listFiles().orEmpty().forEach { artifact ->
+            if (!artifact.isFile) return@forEach
+            val orphaned = when {
+                BLOCK_FILE.matches(artifact.name) -> artifact.name !in referencedBlocks
+                LISTING_FILE.matches(artifact.name) -> artifact.name !in referencedListings
+                PUBLISHED_TEMP_FILE.matches(artifact.name) -> true
+                else -> false
+            }
+            if (orphaned) artifact.delete()
+        }
+    }
+
     private fun recoverPromotedRevision(directory: File, stageId: String, referencedBlocks: Set<String>) {
         val journal = File(directory, "range-revision.$stageId.commit")
         if (!journal.isFile || journal.length() !in 1L..MAX_COMMIT_JOURNAL_BYTES) {
@@ -1387,6 +1439,11 @@ internal class DesktopVirtualRangeCache(
             "range-revision\\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\.commit",
         )
         val BLOCK_FILE = Regex("[0-9a-f]{64}\\.block")
+        val LISTING_FILE = Regex("[0-9a-f]{64}\\.listing")
+        val PUBLISHED_TEMP_FILE = Regex(
+            "(?:[0-9a-f]{64}\\.(?:block|listing)|range-index-v1\\.json|folder-retention-v1\\.json|" +
+                "retained-metadata-v1\\.json)\\.[^.]+\\.tmp",
+        )
     }
 }
 

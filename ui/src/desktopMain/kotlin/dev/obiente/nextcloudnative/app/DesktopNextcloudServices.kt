@@ -759,6 +759,7 @@ class DesktopNextcloudServices(
                         val metadataStore = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId)
                         var stableListings: LinkedHashMap<String, List<DesktopRemoteSyncDocument>>? = null
                         var stableRetention: VirtualFolderRetentionState? = null
+                        var stableMissingRetainedRoots: Set<String>? = null
                         var attempt = 0
                         while (stableListings == null && attempt < MAX_VIRTUAL_FOLDER_STABILITY_ATTEMPTS) {
                             attempt += 1
@@ -781,6 +782,7 @@ class DesktopNextcloudServices(
                             )
                             val listings = linkedMapOf<String, List<DesktopRemoteSyncDocument>>()
                             val ancestorTargets = linkedMapOf<String, Set<String>>()
+                            val missingRetainedRoots = linkedSetOf<String>()
                             val survivingRetainedListings = cache.retainedListingCountSurvivingPublication(
                                 accountId,
                                 relativePath,
@@ -816,9 +818,15 @@ class DesktopNextcloudServices(
                                 val targetDocuments = tree.list(parent).filter { document ->
                                     document.entry.relativePath in targets && document.isDirectory
                                 }
-                                check(targetDocuments.mapTo(hashSetOf()) { it.entry.relativePath } == targets) {
-                                    "A retained folder navigation path changed while it was being prepared."
-                                }
+                                val availableTargets = retainedFolderAvailableNavigationTargets(
+                                    currentTarget,
+                                    targetDocuments,
+                                )
+                                missingRetainedRoots += retainedRootsMissingNavigationTarget(
+                                    parent,
+                                    retainedRoots,
+                                    availableTargets,
+                                )
                                 retainedMetadataEntries = nextVirtualFolderRetainedMetadataCount(
                                     retainedMetadataEntries,
                                     targetDocuments.size,
@@ -921,12 +929,14 @@ class DesktopNextcloudServices(
                             if (stable) {
                                 stableListings = listings
                                 stableRetention = retentionSnapshot
+                                stableMissingRetainedRoots = missingRetainedRoots
                             }
                         }
                         val verifiedListings = checkNotNull(stableListings) {
                             "The selected folder kept changing while it was prepared for offline use. Try again shortly."
                         }
                         val verifiedRetention = checkNotNull(stableRetention)
+                        val missingRetainedRoots = checkNotNull(stableMissingRetainedRoots)
                         val expectedPublishedRevisions = verifiedListings.values.asSequence().flatten()
                             .filterNot(DesktopRemoteSyncDocument::isDirectory)
                             .filter { document ->
@@ -983,6 +993,30 @@ class DesktopNextcloudServices(
                                     verifiedAtEpochMillis = publishedAt,
                                 ),
                             )
+                            missingRetainedRoots.forEach { missingRoot ->
+                                val previous = cache.loadFolderHydrationStatus(accountId, missingRoot)
+                                val stillAvailable = runCatching {
+                                    cache.hasCompleteRetainedFolder(accountId, missingRoot)
+                                }.getOrDefault(false)
+                                cache.setFolderHydrationStatus(
+                                    accountId,
+                                    if (stillAvailable) {
+                                        VirtualFolderHydrationStatus(
+                                            missingRoot,
+                                            VirtualFolderHydrationPhase.AvailableOffline,
+                                            refreshFailure =
+                                                "The retained folder is no longer available at its saved path.",
+                                            verifiedAtEpochMillis = previous?.verifiedAtEpochMillis,
+                                        )
+                                    } else {
+                                        VirtualFolderHydrationStatus(
+                                            missingRoot,
+                                            VirtualFolderHydrationPhase.Failed,
+                                            "The retained folder is no longer available at its saved path.",
+                                        )
+                                    },
+                                )
+                            }
                             virtualFolderCompletedGenerations[jobKey] = generation
                             virtualFolderRetryAtEpochMillis.remove(jobKey)
                         }
@@ -4157,6 +4191,23 @@ internal fun retainedFolderNavigationChild(parentPath: String, retainedRoot: Str
     val remainder = if (parent.isEmpty()) root else root.removePrefix("$parent/")
     val child = remainder.substringBefore('/')
     return if (parent.isEmpty()) child else "$parent/$child"
+}
+
+internal fun retainedFolderAvailableNavigationTargets(
+    currentTarget: String,
+    documents: Collection<DesktopRemoteSyncDocument>,
+): Set<String> = documents.mapTo(linkedSetOf()) { document -> document.entry.relativePath }.also { available ->
+    check(currentTarget in available) {
+        "The selected retained folder is no longer available at its saved path."
+    }
+}
+
+internal fun retainedRootsMissingNavigationTarget(
+    parentPath: String,
+    retainedRoots: Collection<String>,
+    availableTargets: Set<String>,
+): Set<String> = retainedRoots.filterTo(linkedSetOf()) { retainedRoot ->
+    retainedFolderNavigationChild(parentPath, retainedRoot)?.let { target -> target !in availableTargets } == true
 }
 
 private class VirtualFolderRefreshSupersededException : IllegalStateException(
