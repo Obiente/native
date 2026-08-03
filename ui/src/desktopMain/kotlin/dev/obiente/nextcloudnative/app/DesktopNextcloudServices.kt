@@ -842,7 +842,7 @@ class DesktopNextcloudServices(
                 )
             }
             if (linuxVirtualFileSystem != null) {
-                runCatching { linuxVirtualFileSystem?.unmount() }
+                linuxVirtualFileSystem?.unmount()
                 linuxVirtualFileSystem = null
                 linuxVirtualMetadataBackend = null
                 linuxVirtualFileMountIdentity = null
@@ -863,16 +863,22 @@ class DesktopNextcloudServices(
                     recoveredWritebackPaths += path
                 },
             )
+            var metadataBackendReference: CachingLinuxVirtualFileBackend? = null
+            val virtualBackend = DesktopNextcloudVirtualFileBackend(
+                session = session,
+                userId = userId,
+                services = this@DesktopNextcloudServices,
+                rangeCache = virtualRangeCache,
+                writebacks = writebackStore,
+                onAmbiguousMutationResult = { path ->
+                    metadataBackendReference?.invalidateAfterExternalMutation(path)
+                },
+            )
             val metadataBackend = CachingLinuxVirtualFileBackend(
-                delegate = DesktopNextcloudVirtualFileBackend(
-                    session = session,
-                    userId = userId,
-                    services = this@DesktopNextcloudServices,
-                    rangeCache = virtualRangeCache,
-                    writebacks = writebackStore,
-                ),
+                delegate = virtualBackend,
                 store = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId),
             )
+            metadataBackendReference = metadataBackend
             recoveredWritebackPaths.forEach(metadataBackend::invalidateAfterExternalMutation)
             val fileSystem = LinuxNextcloudVirtualFileSystem(metadataBackend)
             try {
@@ -926,10 +932,11 @@ class DesktopNextcloudServices(
     override fun close() {
         serviceScope.cancel()
         synchronized(virtualFileProviderLock) {
-            runCatching { linuxVirtualFileSystem?.unmount() }
-            linuxVirtualFileSystem = null
-            linuxVirtualMetadataBackend = null
-            linuxVirtualFileMountIdentity = null
+            if (runCatching { linuxVirtualFileSystem?.unmount() }.isSuccess) {
+                linuxVirtualFileSystem = null
+                linuxVirtualMetadataBackend = null
+                linuxVirtualFileMountIdentity = null
+            }
             runCatching { windowsCloudFilesProvider?.close() }
             windowsCloudFilesProvider = null
             windowsCloudFilesIdentity = null
@@ -1467,7 +1474,7 @@ class DesktopNextcloudServices(
             backgroundFileSyncJob = null
         }
         synchronized(virtualFileProviderLock) {
-            runCatching { linuxVirtualFileSystem?.unmount() }
+            linuxVirtualFileSystem?.unmount()
             linuxVirtualFileSystem = null
             linuxVirtualMetadataBackend = null
             linuxVirtualFileMountIdentity = null

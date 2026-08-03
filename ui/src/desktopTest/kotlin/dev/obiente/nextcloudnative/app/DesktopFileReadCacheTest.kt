@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.prefs.Preferences
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -218,6 +219,50 @@ class DesktopFileReadCacheTest {
         shards.first().writeText("corrupt")
 
         val restored = DesktopFileReadCache(root, preferences = testPreferences(root))
+        assertEquals(1, restored.cachedListingPaths(accountId).size)
+    }
+
+    @Test
+    fun `content-only saves reuse verified metadata shards without reading them again`() = withCache { root, cache ->
+        val accountId = desktopFileCacheAccountId(session())
+        val files = List(200) { index -> file("Library/photo-$index.jpg", "etag-$index") }
+        cache.storeListing(accountId, "Library", files, 10L)
+        val shardReads = AtomicInteger()
+        val restored = DesktopFileReadCache(
+            root = root,
+            preferences = testPreferences(root),
+            metadataShardReadObserver = { shardReads.incrementAndGet() },
+        )
+        assertEquals(files, restored.cachedListing(accountId, "Library"))
+        val readsAfterHydration = shardReads.get()
+
+        assertTrue(
+            restored.storeContent(
+                accountId,
+                "unrelated.bin",
+                NextcloudFileContent(byteArrayOf(1), "application/octet-stream", "unrelated-etag"),
+                20L,
+            ),
+        )
+
+        assertEquals(readsAfterHydration, shardReads.get())
+    }
+
+    @Test
+    fun `startup bounds cumulative metadata shard hydration bytes`() = withCache { root, cache ->
+        val accountId = desktopFileCacheAccountId(session())
+        cache.storeListing(accountId, "First", listOf(file("First/one.jpg", "first")), 10L)
+        cache.storeListing(accountId, "Second", listOf(file("Second/two.jpg", "second")), 20L)
+        val shardBytes = root.resolve(accountId).listFiles().orEmpty()
+            .filter { file -> file.extension == "metadata" }
+            .maxOf { file -> file.length() }
+
+        val restored = DesktopFileReadCache(
+            root = root,
+            preferences = testPreferences(root),
+            maximumHydratedMetadataBytes = shardBytes,
+        )
+
         assertEquals(1, restored.cachedListingPaths(accountId).size)
     }
 

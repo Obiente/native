@@ -1,10 +1,14 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.IOException
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.util.concurrent.Executors
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -41,6 +45,7 @@ class DesktopFileSyncRemoteTreeTest {
     @Test
     fun `confirmed mutation invalidates cached metadata once`() {
         val invalidated = mutableListOf<String>()
+        val ambiguous = mutableListOf<String>()
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             when (chain.request().method) {
                 "PROPFIND" -> response(
@@ -58,10 +63,12 @@ class DesktopFileSyncRemoteTreeTest {
             remoteRootPath = "",
             client = client,
             onMutationCommitted = invalidated::add,
+            onAmbiguousMutationResult = ambiguous::add,
         )
 
         tree.createDirectory("Photos", expectedRemoteEtag = null)
         assertEquals(listOf("Photos"), invalidated)
+        assertEquals(emptyList(), ambiguous)
     }
 
     @Test
@@ -71,6 +78,47 @@ class DesktopFileSyncRemoteTreeTest {
         assertEquals(false, desktopMutationResultIsAmbiguous(networkExchangeStarted = false, failure))
         assertEquals(true, desktopMutationResultIsAmbiguous(networkExchangeStarted = true, failure))
         assertEquals(false, desktopMutationResultIsAmbiguous(networkExchangeStarted = true, IllegalStateException()))
+    }
+
+    @Test
+    fun `lost mutation response invokes only ambiguous metadata recovery`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val worker = Executors.newSingleThreadExecutor()
+        val confirmed = mutableListOf<String>()
+        val ambiguous = mutableListOf<String>()
+        val served = worker.submit {
+            server.accept().use { socket ->
+                val input = socket.getInputStream().buffered()
+                assertTrue(readRequestHeaders(input).startsWith("PROPFIND "))
+                val body = "<d:multistatus xmlns:d=\"DAV:\"></d:multistatus>"
+                socket.getOutputStream().write(
+                    (
+                        "HTTP/1.1 207 Multi-Status\r\n" +
+                            "Content-Length: ${body.encodeToByteArray().size}\r\n" +
+                            "Connection: keep-alive\r\n\r\n" + body
+                        ).encodeToByteArray(),
+                )
+                socket.getOutputStream().flush()
+                assertTrue(readRequestHeaders(input).startsWith("MKCOL "))
+            }
+        }
+        try {
+            val tree = DesktopFileSyncRemoteTree(
+                session = NextcloudSession("http://127.0.0.1:${server.localPort}", "alice", "secret"),
+                userId = "alice",
+                remoteRootPath = "",
+                onMutationCommitted = confirmed::add,
+                onAmbiguousMutationResult = ambiguous::add,
+            )
+
+            assertFails { tree.createDirectory("Photos", expectedRemoteEtag = null) }
+            served.get()
+            assertEquals(emptyList(), confirmed)
+            assertEquals(listOf("Photos"), ambiguous)
+        } finally {
+            runCatching(server::close)
+            worker.shutdownNow()
+        }
     }
 
     @Test
@@ -134,6 +182,26 @@ class DesktopFileSyncRemoteTreeTest {
         .message("test")
         .body(body.toResponseBody())
         .build()
+
+    private fun readRequestHeaders(input: java.io.InputStream): String {
+        val bytes = ArrayList<Byte>()
+        var matched = 0
+        val terminator = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
+        while (matched < terminator.size) {
+            val next = input.read()
+            check(next >= 0) { "The test client closed before sending complete HTTP headers." }
+            val byte = next.toByte()
+            bytes += byte
+            matched = if (byte == terminator[matched]) matched + 1 else if (byte == terminator[0]) 1 else 0
+        }
+        val headers = bytes.toByteArray().decodeToString()
+        val contentLength = Regex("(?im)^Content-Length:\\s*(\\d+)\\s*$")
+            .find(headers)?.groupValues?.get(1)?.toInt() ?: 0
+        repeat(contentLength) {
+            check(input.read() >= 0) { "The test client closed before sending its HTTP body." }
+        }
+        return headers
+    }
 
     @Test
     fun `dav parser rejects external entities`() {
