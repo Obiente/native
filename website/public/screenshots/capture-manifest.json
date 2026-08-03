@@ -262,7 +262,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileCreation.kt": "6d233545021958fbf4a8613d8d5713c3f9c350217738811a548c888af5b95c1a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileIdentityResolution.kt": "f8658c54cf14dec5b60037a27770ea3c2eb06b509bd28d3b9c97c228adfae83a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileIntegrationPlanning.kt": "1421be5a0db7c7d36ad72434e435952d5017ae25db080f2d7eeddc1aea368a1b",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenter.kt": "a2686353e00c9add15ca2c1d1f8ed2dcecf8160d87992d055dc7fb2c39e5f3fa",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenter.kt": "0c599b169d7857f6aaac23fd8ac6d87715fadba0ebe3f032b02acc6837fdbac7",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt": "f8e9e982bd0a0bc77215fad04bf9c626c696444b4022242a949ec96413fcb9d9",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineQueue.kt": "f592e2dcf3fde4467f88e30b570f9612126a7d6a63070c2a17819572ceb68e19",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineQueueSnapshot.kt": "1fb930db8f65e0e410af6eaacde0c4f3d071f4115c39f78a4f49a9532b9f7961",
