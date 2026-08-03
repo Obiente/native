@@ -49,6 +49,7 @@ internal class DesktopFileReadCache(
         .node("dev/obiente/nextcloudnative/virtual-file-cache"),
     private val maximumLoadedAccountIndexes: Int = DEFAULT_MAXIMUM_LOADED_ACCOUNT_INDEXES,
     private val maximumTotalMetadataEntries: Int = MAX_TOTAL_METADATA_ENTRIES,
+    private val maximumIndexBytes: Long = MAX_INDEX_BYTES,
 ) {
     private val loadedIndexes = LinkedHashMap<String, CacheIndexV1>(16, 0.75f, true)
     init {
@@ -56,6 +57,7 @@ internal class DesktopFileReadCache(
         require(maximumEntryBytes in 1L..maximumContentBytes)
         require(maximumLoadedAccountIndexes > 0)
         require(maximumTotalMetadataEntries >= 2)
+        require(maximumIndexBytes in 1L..MAX_INDEX_BYTES)
     }
 
     @Synchronized
@@ -99,11 +101,7 @@ internal class DesktopFileReadCache(
         require(nowEpochMillis >= 0L)
         require(files.size <= MAX_FILES_PER_LISTING) { "The folder contains too many cacheable entries." }
         val normalized = path.cachePath()
-        files.forEach { file ->
-            require(file.path.cachePath() == file.path) { "A cached file path is not canonical." }
-            require(file.name.length <= MAX_FILE_NAME_LENGTH && file.name.none(Char::isISOControl))
-            require(file.etag == null || file.etag.length <= MAX_ETAG_LENGTH && file.etag.none(Char::isISOControl))
-        }
+        files.forEach(::requireValidCachedFile)
         val accountDirectory = accountDirectory(accountId)
         var index = load(accountId)
         val currentByPath = files.associateBy(NextcloudFile::path)
@@ -424,19 +422,180 @@ internal class DesktopFileReadCache(
             listings = boundedListings,
             virtualListings = boundedVirtualListings,
             content = retainedContent,
+            listingShards = emptyList(),
+            virtualListingShards = emptyList(),
         )
+    }
+
+    private fun CacheIndexV1.persistMetadataShards(directory: File): CacheIndexV1 {
+        val ordinaryReferences = listings.flatMap { listing ->
+            val chunks = listing.files.metadataChunks()
+            chunks.mapIndexed { partIndex, files ->
+                val payload = CachedListingShardV1(
+                    path = listing.path,
+                    fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
+                    partIndex = partIndex,
+                    partCount = chunks.size,
+                    files = files,
+                )
+                val encoded = cacheJson.encodeToString(payload).encodeToByteArray()
+                val (blobName, sha256) = publishMetadataShard(directory, encoded)
+                CachedListingShardReferenceV1(
+                    path = listing.path,
+                    fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
+                    partIndex = partIndex,
+                    partCount = chunks.size,
+                    entryCount = files.size,
+                    blobName = blobName,
+                    sha256 = sha256,
+                )
+            }
+        }
+        val virtualReferences = virtualListings.flatMap { listing ->
+            val chunks = listing.nodes.metadataChunks()
+            chunks.mapIndexed { partIndex, nodes ->
+                val payload = CachedVirtualListingShardV1(
+                    path = listing.path,
+                    fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
+                    partIndex = partIndex,
+                    partCount = chunks.size,
+                    nodes = nodes,
+                )
+                val encoded = cacheJson.encodeToString(payload).encodeToByteArray()
+                val (blobName, sha256) = publishMetadataShard(directory, encoded)
+                CachedVirtualListingShardReferenceV1(
+                    path = listing.path,
+                    fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
+                    partIndex = partIndex,
+                    partCount = chunks.size,
+                    entryCount = nodes.size,
+                    blobName = blobName,
+                    sha256 = sha256,
+                )
+            }
+        }
+        return copy(
+            listings = emptyList(),
+            virtualListings = emptyList(),
+            listingShards = ordinaryReferences,
+            virtualListingShards = virtualReferences,
+        ).also { persisted -> persisted.requireValid() }
+    }
+
+    private fun CacheIndexV1.hydrateMetadataShards(directory: File): CacheIndexV1 {
+        val hydratedListings = listingShards
+            .groupBy { reference -> reference.path to reference.fetchedAtEpochMillis }
+            .mapNotNull { (_, references) ->
+                runCatching {
+                    val ordered = references.requireCompleteShardSet()
+                    val files = ordered.flatMap { reference ->
+                        val payload = loadMetadataShard<CachedListingShardV1>(directory, reference.blobName, reference.sha256)
+                        require(
+                            payload.path == reference.path &&
+                                payload.fetchedAtEpochMillis == reference.fetchedAtEpochMillis &&
+                                payload.partIndex == reference.partIndex &&
+                                payload.partCount == reference.partCount &&
+                                payload.files.size == reference.entryCount,
+                        ) { "A Files metadata shard does not match its index reference." }
+                        payload.files
+                    }
+                    CachedListingV1(ordered.first().path, ordered.first().fetchedAtEpochMillis, files)
+                }.getOrNull()
+            }
+        val hydratedVirtualListings = virtualListingShards
+            .groupBy { reference -> reference.path to reference.fetchedAtEpochMillis }
+            .mapNotNull { (_, references) ->
+                runCatching {
+                    val ordered = references.requireCompleteVirtualShardSet()
+                    val nodes = ordered.flatMap { reference ->
+                        val payload = loadMetadataShard<CachedVirtualListingShardV1>(
+                            directory,
+                            reference.blobName,
+                            reference.sha256,
+                        )
+                        require(
+                            payload.path == reference.path &&
+                                payload.fetchedAtEpochMillis == reference.fetchedAtEpochMillis &&
+                                payload.partIndex == reference.partIndex &&
+                                payload.partCount == reference.partCount &&
+                                payload.nodes.size == reference.entryCount,
+                        ) { "A virtual Files metadata shard does not match its index reference." }
+                        payload.nodes
+                    }
+                    CachedVirtualListingV1(ordered.first().path, ordered.first().fetchedAtEpochMillis, nodes)
+                }.getOrNull()
+            }
+        val hydratedPaths = hydratedListings.mapTo(hashSetOf(), CachedListingV1::path)
+        val hydratedVirtualPaths = hydratedVirtualListings.mapTo(hashSetOf(), CachedVirtualListingV1::path)
+        return copy(
+            listings = listings.filterNot { listing -> listing.path in hydratedPaths } + hydratedListings,
+            virtualListings = virtualListings.filterNot { listing -> listing.path in hydratedVirtualPaths } +
+                hydratedVirtualListings,
+            listingShards = emptyList(),
+            virtualListingShards = emptyList(),
+        )
+    }
+
+    private fun <T> List<T>.metadataChunks(): List<List<T>> =
+        if (isEmpty()) listOf(emptyList()) else chunked(MAX_METADATA_SHARD_ENTRIES)
+
+    private fun publishMetadataShard(directory: File, encoded: ByteArray): Pair<String, String> {
+        require(encoded.size.toLong() <= MAX_METADATA_SHARD_BYTES) { "A Files metadata shard is too large." }
+        val sha256 = sha256Hex(encoded)
+        val blobName = "$sha256.$METADATA_SHARD_EXTENSION"
+        val current = File(directory, blobName)
+        if (!current.isFile || current.length() != encoded.size.toLong() || sha256Hex(current.readBytes()) != sha256) {
+            publishBytes(directory, blobName, encoded)
+        }
+        return blobName to sha256
+    }
+
+    private inline fun <reified T> loadMetadataShard(
+        directory: File,
+        blobName: String,
+        expectedSha256: String,
+    ): T {
+        val shard = File(directory, blobName)
+        require(shard.isFile && shard.length() in 1L..MAX_METADATA_SHARD_BYTES) {
+            "A Files metadata shard is missing or too large."
+        }
+        val bytes = shard.readBytes()
+        require(sha256Hex(bytes) == expectedSha256) { "A Files metadata shard failed integrity validation." }
+        return cacheJson.decodeFromString(bytes.toString(Charsets.UTF_8))
+    }
+
+    private fun List<CachedListingShardReferenceV1>.requireCompleteShardSet(): List<CachedListingShardReferenceV1> {
+        val ordered = sortedBy(CachedListingShardReferenceV1::partIndex)
+        val partCount = ordered.first().partCount
+        require(ordered.size == partCount && ordered.map(CachedListingShardReferenceV1::partIndex) == (0 until partCount).toList())
+        require(ordered.all { reference -> reference.partCount == partCount })
+        return ordered
+    }
+
+    private fun List<CachedVirtualListingShardReferenceV1>.requireCompleteVirtualShardSet(): List<CachedVirtualListingShardReferenceV1> {
+        val ordered = sortedBy(CachedVirtualListingShardReferenceV1::partIndex)
+        val partCount = ordered.first().partCount
+        require(
+            ordered.size == partCount &&
+                ordered.map(CachedVirtualListingShardReferenceV1::partIndex) == (0 until partCount).toList(),
+        )
+        require(ordered.all { reference -> reference.partCount == partCount })
+        return ordered
     }
 
     private fun load(accountId: String): CacheIndexV1 {
         loadedIndexes[accountId]?.let { return it }
         val directory = accountDirectory(accountId)
         val indexFile = File(directory, INDEX_FILE_NAME)
-        val loaded = if (!indexFile.isFile || indexFile.length() !in 1..MAX_INDEX_BYTES) {
+        val loaded = if (!indexFile.isFile || indexFile.length() !in 1..maximumIndexBytes) {
             CacheIndexV1()
         } else {
             runCatching {
                 val decoded = cacheJson.decodeFromString<CacheIndexV1>(indexFile.readText(Charsets.UTF_8))
-                decoded.requireValid().bounded()
+                decoded.requireValid()
+                    .hydrateMetadataShards(directory)
+                    .requireValid()
+                    .bounded()
             }.getOrElse { CacheIndexV1() }
         }
         rememberLoadedIndex(accountId, loaded)
@@ -448,13 +607,21 @@ internal class DesktopFileReadCache(
             check(isDirectory || mkdirs()) { "Could not create the desktop Files cache." }
         }
         val bounded = index.bounded()
-        val encoded = cacheJson.encodeToString(bounded).encodeToByteArray()
-        require(encoded.size.toLong() <= MAX_INDEX_BYTES) { "The Files cache index is too large." }
+        val persisted = bounded.persistMetadataShards(directory)
+        val encoded = cacheJson.encodeToString(persisted).encodeToByteArray()
+        require(encoded.size.toLong() <= maximumIndexBytes) { "The Files cache index is too large." }
         publishBytes(directory, INDEX_FILE_NAME, encoded)
         rememberLoadedIndex(accountId, bounded)
         val referenced = bounded.content.mapTo(hashSetOf(), CachedContentV1::blobName)
         directory.listFiles().orEmpty()
             .filter { file -> file.isFile && file.extension == "blob" && file.name !in referenced }
+            .forEach(File::delete)
+        val referencedMetadata = buildSet {
+            persisted.listingShards.mapTo(this, CachedListingShardReferenceV1::blobName)
+            persisted.virtualListingShards.mapTo(this, CachedVirtualListingShardReferenceV1::blobName)
+        }
+        directory.listFiles().orEmpty()
+            .filter { file -> file.isFile && file.extension == METADATA_SHARD_EXTENSION && file.name !in referencedMetadata }
             .forEach(File::delete)
     }
 
@@ -518,19 +685,34 @@ internal class DesktopFileReadCache(
         require(index.version == FORMAT_VERSION)
         require(index.listings.size <= MAX_LISTINGS)
         require(index.virtualListings.size <= MAX_LISTINGS)
+        require(index.listingShards.size <= MAX_METADATA_SHARDS)
+        require(index.virtualListingShards.size <= MAX_METADATA_SHARDS)
         require(index.content.size <= MAX_CONTENT_ENTRIES)
         require(index.listings.map(CachedListingV1::path).distinct().size == index.listings.size)
         require(index.virtualListings.map(CachedVirtualListingV1::path).distinct().size == index.virtualListings.size)
         require(index.content.map(CachedContentV1::path).distinct().size == index.content.size)
+        require(
+            index.listingShards.map { reference ->
+                "${reference.path}\u0000${reference.fetchedAtEpochMillis}\u0000${reference.partIndex}"
+            }.distinct().size == index.listingShards.size,
+        )
+        require(
+            index.virtualListingShards.map { reference ->
+                "${reference.path}\u0000${reference.fetchedAtEpochMillis}\u0000${reference.partIndex}"
+            }.distinct().size == index.virtualListingShards.size,
+        )
+        require(
+            index.listings.sumOf { listing -> listing.files.size.toLong() } +
+                index.virtualListings.sumOf { listing -> listing.nodes.size.toLong() } +
+                index.listingShards.sumOf { reference -> reference.entryCount.toLong() } +
+                index.virtualListingShards.sumOf { reference -> reference.entryCount.toLong() } <=
+                maximumTotalMetadataEntries.toLong(),
+        )
         index.listings.forEach { listing ->
             require(listing.path.cachePath() == listing.path)
             require(listing.fetchedAtEpochMillis >= 0L)
             require(listing.files.size <= MAX_FILES_PER_LISTING)
-            listing.files.forEach { file ->
-                require(file.path.cachePath() == file.path)
-                require(file.name.length <= MAX_FILE_NAME_LENGTH && file.name.none(Char::isISOControl))
-                require(file.etag == null || file.etag.length <= MAX_ETAG_LENGTH && file.etag.none(Char::isISOControl))
-            }
+            listing.files.forEach(::requireValidCachedFile)
         }
         index.virtualListings.forEach { listing ->
             require(listing.path.cachePath() == listing.path)
@@ -551,6 +733,24 @@ internal class DesktopFileReadCache(
             require(content.storedAtEpochMillis >= 0L)
             require(content.lastAccessedAtEpochMillis >= content.storedAtEpochMillis)
         }
+        index.listingShards.forEach { reference -> reference.requireValid() }
+        index.virtualListingShards.forEach { reference -> reference.requireValid() }
+    }
+
+    private fun CachedListingShardReferenceV1.requireValid() {
+        path.cachePath()
+        require(fetchedAtEpochMillis >= 0L)
+        require(partCount in 1..MAX_METADATA_SHARDS_PER_LISTING && partIndex in 0 until partCount)
+        require(entryCount in 0..MAX_METADATA_SHARD_ENTRIES)
+        require(blobName == "$sha256.$METADATA_SHARD_EXTENSION" && sha256.isSha256Hex())
+    }
+
+    private fun CachedVirtualListingShardReferenceV1.requireValid() {
+        path.cachePath()
+        require(fetchedAtEpochMillis >= 0L)
+        require(partCount in 1..MAX_METADATA_SHARDS_PER_LISTING && partIndex in 0 until partCount)
+        require(entryCount in 0..MAX_METADATA_SHARD_ENTRIES)
+        require(blobName == "$sha256.$METADATA_SHARD_EXTENSION" && sha256.isSha256Hex())
     }
 
     private fun requireValidVirtualNode(node: LinuxVirtualFileNode) {
@@ -559,6 +759,30 @@ internal class DesktopFileReadCache(
         require(node.remoteRevision.isNotBlank() && node.remoteRevision.length <= MAX_ETAG_LENGTH)
         require(node.remoteRevision.none(Char::isISOControl))
         require(node.size >= 0L)
+    }
+
+    private fun requireValidCachedFile(file: NextcloudFile) {
+        require(file.path.cachePath() == file.path) { "A cached file path is not canonical." }
+        require(file.name.length <= MAX_FILE_NAME_LENGTH && file.name.none(Char::isISOControl))
+        require(
+            file.mimeType == null ||
+                file.mimeType.length <= MAX_MIME_TYPE_LENGTH && file.mimeType.none(Char::isISOControl),
+        )
+        require(
+            file.lastModified == null ||
+                file.lastModified.length <= MAX_LAST_MODIFIED_LENGTH && file.lastModified.none(Char::isISOControl),
+        )
+        require(file.etag == null || file.etag.length <= MAX_ETAG_LENGTH && file.etag.none(Char::isISOControl))
+        require(
+            file.permissions == null ||
+                file.permissions.length <= MAX_PERMISSIONS_LENGTH && file.permissions.none(Char::isISOControl),
+        )
+        require(file.checksums.size <= MAX_CHECKSUMS)
+        require(file.checksums.all { checksum ->
+            checksum.length <= MAX_CHECKSUM_LENGTH && checksum.none(Char::isISOControl)
+        })
+        require(file.directoryPreviewFileIds.size <= MAX_DIRECTORY_PREVIEW_FILE_IDS)
+        require(file.size == null || file.size >= 0L)
     }
 
     private fun publishBytes(directory: File, name: String, bytes: ByteArray) {
@@ -591,10 +815,23 @@ internal class DesktopFileReadCache(
         const val MAX_LISTINGS = 256
         const val MAX_FILES_PER_LISTING = 50_000
         const val MAX_TOTAL_METADATA_ENTRIES = 250_000
+        const val MAX_METADATA_SHARD_ENTRIES = 64
+        const val MAX_METADATA_SHARDS_PER_LISTING =
+            (MAX_FILES_PER_LISTING + MAX_METADATA_SHARD_ENTRIES - 1) / MAX_METADATA_SHARD_ENTRIES
+        const val MAX_METADATA_SHARDS =
+            (MAX_TOTAL_METADATA_ENTRIES + MAX_METADATA_SHARD_ENTRIES - 1) / MAX_METADATA_SHARD_ENTRIES +
+                MAX_LISTINGS * 2
+        const val MAX_METADATA_SHARD_BYTES = 4L * 1024L * 1024L
+        const val METADATA_SHARD_EXTENSION = "metadata"
         const val MAX_CONTENT_ENTRIES = 256
         const val MAX_FILE_NAME_LENGTH = 1_024
         const val MAX_ETAG_LENGTH = 4_096
         const val MAX_MIME_TYPE_LENGTH = 512
+        const val MAX_LAST_MODIFIED_LENGTH = 128
+        const val MAX_PERMISSIONS_LENGTH = 256
+        const val MAX_CHECKSUMS = 16
+        const val MAX_CHECKSUM_LENGTH = 512
+        const val MAX_DIRECTORY_PREVIEW_FILE_IDS = 64
         const val DEFAULT_MAXIMUM_ENTRY_BYTES = 512L * 1024L * 1024L
         const val DEFAULT_MAXIMUM_CONTENT_BYTES = 256L * 1024L * 1024L * 1024L
         const val DEFAULT_MAXIMUM_LOADED_ACCOUNT_INDEXES = 4
@@ -649,6 +886,8 @@ private data class CacheIndexV1(
     val listings: List<CachedListingV1> = emptyList(),
     val virtualListings: List<CachedVirtualListingV1> = emptyList(),
     val content: List<CachedContentV1> = emptyList(),
+    val listingShards: List<CachedListingShardReferenceV1> = emptyList(),
+    val virtualListingShards: List<CachedVirtualListingShardReferenceV1> = emptyList(),
 )
 
 @Serializable
@@ -662,6 +901,46 @@ private data class CachedListingV1(
 private data class CachedVirtualListingV1(
     val path: String,
     val fetchedAtEpochMillis: Long,
+    val nodes: List<CachedVirtualFileNodeV1>,
+)
+
+@Serializable
+private data class CachedListingShardReferenceV1(
+    val path: String,
+    val fetchedAtEpochMillis: Long,
+    val partIndex: Int,
+    val partCount: Int,
+    val entryCount: Int,
+    val blobName: String,
+    val sha256: String,
+)
+
+@Serializable
+private data class CachedVirtualListingShardReferenceV1(
+    val path: String,
+    val fetchedAtEpochMillis: Long,
+    val partIndex: Int,
+    val partCount: Int,
+    val entryCount: Int,
+    val blobName: String,
+    val sha256: String,
+)
+
+@Serializable
+private data class CachedListingShardV1(
+    val path: String,
+    val fetchedAtEpochMillis: Long,
+    val partIndex: Int,
+    val partCount: Int,
+    val files: List<NextcloudFile>,
+)
+
+@Serializable
+private data class CachedVirtualListingShardV1(
+    val path: String,
+    val fetchedAtEpochMillis: Long,
+    val partIndex: Int,
+    val partCount: Int,
     val nodes: List<CachedVirtualFileNodeV1>,
 )
 

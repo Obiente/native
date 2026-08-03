@@ -1,10 +1,94 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFalse
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 
 class DesktopFileSyncRemoteTreeTest {
+    @Test
+    fun `definitive mutation rejection preserves cached metadata`() {
+        val invalidated = mutableListOf<String>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            when (chain.request().method) {
+                "PROPFIND" -> response(
+                    chain.request(),
+                    207,
+                    "<d:multistatus xmlns:d=\"DAV:\"></d:multistatus>",
+                )
+                "MKCOL" -> response(chain.request(), 412)
+                else -> error("Unexpected ${chain.request().method} request")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            userId = "alice",
+            remoteRootPath = "",
+            client = client,
+            onMutationCommitted = invalidated::add,
+        )
+
+        assertFails { tree.createDirectory("Photos", expectedRemoteEtag = null) }
+        assertEquals(emptyList(), invalidated)
+    }
+
+    @Test
+    fun `confirmed mutation invalidates cached metadata once`() {
+        val invalidated = mutableListOf<String>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            when (chain.request().method) {
+                "PROPFIND" -> response(
+                    chain.request(),
+                    207,
+                    "<d:multistatus xmlns:d=\"DAV:\"></d:multistatus>",
+                )
+                "MKCOL" -> response(chain.request(), 201)
+                else -> error("Unexpected ${chain.request().method} request")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            userId = "alice",
+            remoteRootPath = "",
+            client = client,
+            onMutationCommitted = invalidated::add,
+        )
+
+        tree.createDirectory("Photos", expectedRemoteEtag = null)
+        assertEquals(listOf("Photos"), invalidated)
+    }
+
+    @Test
+    fun `only started mutation exchanges have ambiguous io results`() {
+        val failure = IOException("connection closed")
+
+        assertEquals(false, desktopMutationResultIsAmbiguous(networkExchangeStarted = false, failure))
+        assertEquals(true, desktopMutationResultIsAmbiguous(networkExchangeStarted = true, failure))
+        assertEquals(false, desktopMutationResultIsAmbiguous(networkExchangeStarted = true, IllegalStateException()))
+    }
+
+    @Test
+    fun `pre-network io failure does not invoke ambiguous recovery`() {
+        val executor = DesktopHttpMutationExecutor(
+            OkHttpClient.Builder().addInterceptor { throw IOException("offline") }.build(),
+        )
+        var recovered = false
+
+        assertFails {
+            executor.execute(
+                Request.Builder().url("https://cloud.example.test/remote.php/dav/files/alice/Photos").build(),
+                onAmbiguousNetworkResult = { recovered = true },
+            ) { response -> response.code }
+        }
+        assertFalse(recovered)
+    }
+
     @Test
     fun `dav parser preserves plus signs and reads guarded revisions`() {
         val documents = parseDesktopSyncDav(
@@ -42,6 +126,14 @@ class DesktopFileSyncRemoteTreeTest {
         assertEquals("\"file-etag\"", documents.last().entry.etag)
         assertEquals(1_785_587_696_000L, documents.last().lastModifiedEpochMillis)
     }
+
+    private fun response(request: Request, code: Int, body: String = ""): Response = Response.Builder()
+        .request(request)
+        .protocol(Protocol.HTTP_1_1)
+        .code(code)
+        .message("test")
+        .body(body.toResponseBody())
+        .build()
 
     @Test
     fun `dav parser rejects external entities`() {
