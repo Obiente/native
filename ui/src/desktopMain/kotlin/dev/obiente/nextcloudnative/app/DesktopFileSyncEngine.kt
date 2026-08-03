@@ -17,6 +17,8 @@ internal class DesktopFileSyncEngine(
     private val store: DesktopFileSyncStore = DesktopFileSyncStore(),
     private val stagingRoot: File = desktopFileSyncStagingDirectory(),
     private val minimumFreeSpaceBytes: () -> Long = { 0L },
+    private val onRemoteMutationCommitted: (session: NextcloudSession, userId: String, path: String) -> Unit =
+        { _, _, _ -> },
 ) {
     private val selectedRoots = ConcurrentHashMap<String, File>()
     private val lock = Mutex()
@@ -256,7 +258,15 @@ internal class DesktopFileSyncEngine(
         val root = persisted.roots.firstOrNull { it.id == initialPair.localRootId }
             ?: return FileSyncCenterActionResult.Rejected("The local folder record is missing.")
         val local = DesktopFileSyncLocalTree(File(root.absolutePath))
-        val remote = DesktopFileSyncRemoteTree(session, userId, initialPair.remoteRootPath)
+        val remote = DesktopFileSyncRemoteTree(
+            session = session,
+            userId = userId,
+            remoteRootPath = initialPair.remoteRootPath,
+            onMutationCommitted = { relativePath ->
+                val path = desktopFileSyncRemoteMutationPath(initialPair.remoteRootPath, relativePath)
+                runCatching { onRemoteMutationCommitted(session, userId, path) }
+            },
+        )
         val includes: (String, SyncEntryKind) -> Boolean = { path, kind ->
             initialPair.configuration.includesSyncPath(path, kind)
         }
@@ -690,6 +700,14 @@ internal class DesktopFileSyncEngine(
     private companion object {
         const val MAX_SYNC_FILE_BYTES = 8L * 1024L * 1024L * 1024L
     }
+}
+
+internal fun desktopFileSyncRemoteMutationPath(remoteRootPath: String, relativePath: String): String {
+    val relative = relativePath.trim('/')
+    requireValidSyncPath(relative)
+    val root = remoteRootPath.trim('/')
+    if (root.isNotEmpty()) requireValidSyncPath(root)
+    return listOf(root, relative).filter(String::isNotBlank).joinToString("/")
 }
 
 internal fun reclaimDesktopFileSyncStages(stagingRoot: File): Int {

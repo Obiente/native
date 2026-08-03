@@ -724,6 +724,7 @@ fun NextcloudNativeApp(
     navigationRequest: NextcloudNativeNavigationRequest? = null,
     onNavigationRequestHandled: (Long) -> Unit = {},
 ) {
+    val scope = rememberCoroutineScope()
     var themePreference by remember { mutableStateOf(services.loadThemePreference()) }
     var handledAppUpdateReviewRequest by rememberSaveable { mutableStateOf(0L) }
     var handledNavigationRequestSequence by remember { mutableStateOf(0L) }
@@ -1132,7 +1133,7 @@ private fun AuthenticatedApp(
     onAppUpdateReviewHandled: (Long) -> Unit,
     themePreference: ThemePreference,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
-    onLoggedOut: () -> Unit,
+    onLoggedOut: suspend () -> Unit,
 ) {
     var screen by rememberSaveable(session.serverUrl, session.loginName, stateSaver = screenSaver) {
         mutableStateOf<Screen>(Screen.Root)
@@ -10560,10 +10561,11 @@ private fun SettingsScreen(
     onOfflineCenter: () -> Unit,
     onTransfers: () -> Unit,
     onProjectNews: () -> Unit,
-    onLoggedOut: () -> Unit,
+    onLoggedOut: suspend () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var loggingOut by remember { mutableStateOf(false) }
+    var logoutError by remember { mutableStateOf<String?>(null) }
     var capabilityRefresh by remember { mutableStateOf(0) }
     var startOnLogin by remember(services) { mutableStateOf(services.loadStartOnLoginPreference()) }
     var startOnLoginMessage by remember(services) { mutableStateOf<String?>(null) }
@@ -10867,23 +10869,49 @@ private fun SettingsScreen(
                 }
             }
             item {
-                OutlinedButton(
-                    enabled = !loggingOut,
-                    onClick = {
-                        loggingOut = true
-                        scope.launch {
-                            runCatching { services.revokeSession(session) }
-                            onLoggedOut()
-                        }
-                    },
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                 ) {
-                    Icon(NextcloudIcons.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.size(8.dp))
-                    Text(if (loggingOut) "Signing out..." else "Sign out and revoke access")
+                    OutlinedButton(
+                        enabled = !loggingOut,
+                        onClick = {
+                            loggingOut = true
+                            logoutError = null
+                            scope.launch {
+                                runCatching { services.revokeSession(session) }
+                                runCatching { onLoggedOut() }
+                                    .onFailure { failure ->
+                                        logoutError = logoutCleanupFailureMessage(failure)
+                                        loggingOut = false
+                                    }
+                            }
+                        },
+                    ) {
+                        Icon(NextcloudIcons.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.size(8.dp))
+                        Text(if (loggingOut) "Signing out..." else "Sign out and revoke access")
+                    }
+                    logoutError?.let { message ->
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+internal fun logoutCleanupFailureMessage(failure: Throwable): String {
+    val detail = failure.message.orEmpty()
+        .filterNot(Char::isISOControl)
+        .trim()
+        .take(256)
+        .takeIf(String::isNotEmpty)
+        ?: "Local desktop cleanup did not complete."
+    return "Could not finish signing out. $detail You can retry safely."
 }
 
 @Composable
