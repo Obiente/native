@@ -139,7 +139,6 @@ internal class RetainedLinuxVirtualMetadataStore(
         if (retained.complete) return retained
         val completeFallback = fallback.load(path)?.takeIf(LinuxVirtualDirectorySnapshot::complete)
             ?: return retained.copy(fetchedAtEpochMillis = 0L)
-        if (completeFallback.fetchedAtEpochMillis > retained.fetchedAtEpochMillis) return completeFallback
         return mergeRetainedNavigationListing(completeFallback, retained)
     }
 
@@ -157,6 +156,10 @@ internal class RetainedLinuxVirtualMetadataStore(
 
     override fun retainedPaths(): Set<String>? = fallback.retainedPaths()
 
+    override fun failedInvalidations(): Set<String> = fallback.failedInvalidations()
+
+    override fun replaceFailedInvalidations(paths: Set<String>) = fallback.replaceFailedInvalidations(paths)
+
     override fun invalidate(path: String) {
         rangeCache.invalidateRetainedListings(accountId, path)
         fallback.invalidate(path)
@@ -169,10 +172,14 @@ internal fun mergeRetainedNavigationListing(
 ): LinuxVirtualDirectorySnapshot {
     require(complete.complete && !navigation.complete)
     val nodes = LinkedHashMap(complete.nodesByPath)
-    navigation.nodes.forEach { node -> nodes[node.path] = node }
+    val navigationIsNewer = navigation.fetchedAtEpochMillis >= complete.fetchedAtEpochMillis
+    navigation.nodes.forEach { node ->
+        if (navigationIsNewer) nodes[node.path] = node else nodes.putIfAbsent(node.path, node)
+    }
     return LinuxVirtualDirectorySnapshot(
         nodes = nodes.values.toList(),
         fetchedAtEpochMillis = maxOf(complete.fetchedAtEpochMillis, navigation.fetchedAtEpochMillis),
+        freshAtEpochMillis = maxOf(complete.freshAtEpochMillis, navigation.freshAtEpochMillis),
         generation = maxOf(complete.generation, navigation.generation),
         complete = true,
     )

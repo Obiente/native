@@ -1438,6 +1438,76 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `newer fallback keeps missing retained navigation reachable without replacing live nodes`() {
+        val directory = Files.createTempDirectory("retained-navigation-recovery-").toFile()
+        try {
+            val accountId = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            val cache = DesktopVirtualRangeCache(directory) {
+                VirtualFileCachePolicy(automaticCleanup = false, minimumFreeSpaceBytes = 0L)
+            }
+            cache.setFolderRetention(accountId, "Photos/Missing", VirtualFolderRetention.KeepOnDevice)
+            cache.publishRetainedListings(
+                accountId,
+                "Photos/Missing",
+                mapOf(
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        listOf(
+                            LinuxVirtualFileNode("Photos/Live", "Live", true, 0L, "live-old"),
+                            LinuxVirtualFileNode("Photos/Missing", "Missing", true, 0L, "missing"),
+                        ),
+                        20L,
+                        complete = false,
+                    ),
+                    "Photos/Missing" to LinuxVirtualDirectorySnapshot(emptyList(), 20L),
+                ),
+            )
+            val fallback = MemoryLinuxVirtualMetadataStore().apply {
+                seed(
+                    "Photos",
+                    LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos/Live", "Live", true, 0L, "live-new")),
+                        30L,
+                    ),
+                )
+            }
+
+            val restored = assertNotNull(RetainedLinuxVirtualMetadataStore(cache, accountId, fallback).load("Photos"))
+
+            assertEquals(setOf("Live", "Missing"), restored.nodes.mapTo(hashSetOf(), LinuxVirtualFileNode::name))
+            assertEquals("live-new", restored.nodesByPath.getValue("Photos/Live").remoteRevision)
+            assertEquals("missing", restored.nodesByPath.getValue("Photos/Missing").remoteRevision)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `retained metadata wrapper forwards invalidation quarantine state`() {
+        val directory = Files.createTempDirectory("retained-invalidation-forwarding-").toFile()
+        try {
+            val accountId = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            var failed = emptySet<String>()
+            val fallback = object : LinuxVirtualMetadataStore by MemoryLinuxVirtualMetadataStore() {
+                override fun failedInvalidations(): Set<String> = failed
+                override fun replaceFailedInvalidations(paths: Set<String>) {
+                    failed = paths.toSet()
+                }
+            }
+            val cache = DesktopVirtualRangeCache(directory) {
+                VirtualFileCachePolicy(automaticCleanup = false, minimumFreeSpaceBytes = 0L)
+            }
+            val retained = RetainedLinuxVirtualMetadataStore(cache, accountId, fallback)
+
+            retained.replaceFailedInvalidations(setOf("Photos"))
+
+            assertEquals(setOf("Photos"), retained.failedInvalidations())
+            assertEquals(setOf("Photos"), failed)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `complete retained listing does not revive stale fallback children`() {
         val directory = Files.createTempDirectory("retained-complete-precedence-").toFile()
         try {

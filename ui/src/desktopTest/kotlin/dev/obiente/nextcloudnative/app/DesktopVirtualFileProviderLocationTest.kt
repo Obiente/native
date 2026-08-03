@@ -21,6 +21,27 @@ class DesktopVirtualFileProviderLocationTest {
     }
 
     @Test
+    fun renamingVisibleFolderKeepsTheSameInternalCacheRoot() {
+        val parent = Files.createTempDirectory("virtual-provider-rename-").toFile()
+        val otherParent = Files.createTempDirectory("virtual-provider-move-").toFile()
+        try {
+            val current = VirtualFileProviderLocation(parent.absolutePath, "Nextcloud Native")
+
+            assertEquals(
+                false,
+                desktopVirtualFileCacheRootChanges(current, parent.resolve("Photography").toPath()),
+            )
+            assertEquals(
+                true,
+                desktopVirtualFileCacheRootChanges(current, otherParent.resolve("Photography").toPath()),
+            )
+        } finally {
+            parent.deleteRecursively()
+            otherParent.deleteRecursively()
+        }
+    }
+
+    @Test
     fun unavailableSelectedDriveIsNotRecreatedOnAnotherFilesystem() {
         val temporary = Files.createTempDirectory("virtual-provider-missing-").toFile()
         val missingParent = temporary.resolve("detached-drive")

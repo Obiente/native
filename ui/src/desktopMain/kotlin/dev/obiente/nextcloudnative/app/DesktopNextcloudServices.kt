@@ -217,6 +217,11 @@ internal fun validateDesktopVirtualFileProviderLocation(location: VirtualFilePro
     return target
 }
 
+internal fun desktopVirtualFileCacheRootChanges(
+    current: VirtualFileProviderLocation,
+    target: Path,
+): Boolean = File(current.parentPath).toPath().toAbsolutePath().normalize() != target.parent
+
 internal fun requireValidDesktopVirtualFileCacheRoot(parent: Path) {
     val cacheRoot = parent.resolve(INTERNAL_VIRTUAL_FILE_CACHE_FOLDER_NAME)
     if (Files.notExists(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return
@@ -1693,20 +1698,22 @@ class DesktopNextcloudServices(
                 )
             }
             val currentLocation = desktopVirtualFileProviderLocation(preferences, accountId)
-            val currentCacheResult = runCatching { virtualRangeCache(accountId) }
-            val currentCache = currentCacheResult.getOrNull()
-            if (currentCache == null) {
-                val currentParent = File(currentLocation.parentPath).toPath().toAbsolutePath().normalize()
-                if (!hasInvalidDesktopVirtualFileCacheRoot(currentParent)) currentCacheResult.getOrThrow()
-            } else {
-                currentCache.requireAvailable()
-                if (
-                    currentCache.summary(accountId).cachedBytes > 0L ||
-                    currentCache.loadFolderRetention(accountId).rules.isNotEmpty()
-                ) {
-                    return@withContext VirtualFileStorageActionResult.Rejected(
-                        "Make kept folders online-only and free disposable content before moving the storage drive.",
-                    )
+            if (desktopVirtualFileCacheRootChanges(currentLocation, target)) {
+                val currentCacheResult = runCatching { virtualRangeCache(accountId) }
+                val currentCache = currentCacheResult.getOrNull()
+                if (currentCache == null) {
+                    val currentParent = File(currentLocation.parentPath).toPath().toAbsolutePath().normalize()
+                    if (!hasInvalidDesktopVirtualFileCacheRoot(currentParent)) currentCacheResult.getOrThrow()
+                } else {
+                    currentCache.requireAvailable()
+                    if (
+                        currentCache.summary(accountId).cachedBytes > 0L ||
+                        currentCache.loadFolderRetention(accountId).rules.isNotEmpty()
+                    ) {
+                        return@withContext VirtualFileStorageActionResult.Rejected(
+                            "Make kept folders online-only and free disposable content before moving the storage drive.",
+                        )
+                    }
                 }
             }
             preferences.put(virtualFileProviderRootPreferenceKey(accountId), target.toString())

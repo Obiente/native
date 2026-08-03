@@ -466,6 +466,62 @@ internal class DesktopVirtualRangeCache(
             }
             requiredPendingBlocks += revisionBlocks
         }
+        val projectedPublishedBlocks = projectedExistingPublishedBlocks(
+            currentBlocks,
+            revisionsByPath.keys,
+        ) + revisionsByPath.values.flatMap { revision ->
+            projectedRangeBlocks(revision, blockBytes)
+        }
+        val projectedPublishedIndex = boundedIndex(
+            accountId,
+            RangeCacheIndex(blocks = projectedPublishedBlocks),
+            effectiveRetention,
+        )
+        encodedIndex(projectedPublishedIndex)
+    }
+
+    private fun projectedExistingPublishedBlocks(
+        currentBlocks: List<CachedRangeBlock>,
+        replacedPaths: Set<String>,
+    ): List<CachedRangeBlock> = currentBlocks.asSequence()
+        .filter { block -> block.path !in replacedPaths }
+        .groupBy(CachedRangeBlock::path)
+        .values
+        .flatMap { pathBlocks ->
+            pathBlocks.groupBy { block -> block.remoteRevision to block.fileSize }
+                .values
+                .maxBy { revisionBlocks ->
+                    rangeCacheJson.encodeToString(
+                        RangeCacheIndex(
+                            blocks = revisionBlocks.map { block -> block.copy(pendingPublication = false) },
+                        ),
+                    ).encodeToByteArray().size
+                }
+        }
+        .map { block -> block.copy(pendingPublication = false) }
+
+    private fun projectedRangeBlocks(
+        revision: VirtualRangeRevision,
+        blockBytes: Int,
+    ): List<CachedRangeBlock> = buildList {
+        var offset = 0L
+        while (offset < revision.fileSize) {
+            val length = minOf(blockBytes.toLong(), revision.fileSize - offset).toInt()
+            add(
+                CachedRangeBlock(
+                    path = revision.relativePath,
+                    remoteRevision = revision.remoteRevision,
+                    fileSize = revision.fileSize,
+                    offset = offset,
+                    length = length,
+                    blobName = PROJECTED_BLOCK_HASH + ".block",
+                    sha256 = PROJECTED_BLOCK_HASH,
+                    cachedAtEpochMillis = 0L,
+                    lastAccessedAtEpochMillis = 0L,
+                ),
+            )
+            offset += length
+        }
     }
 
     @Synchronized
@@ -1515,6 +1571,7 @@ internal class DesktopVirtualRangeCache(
         const val MAX_COMMIT_JOURNAL_BYTES = 2L * 1024L * 1024L
         const val MAX_BLOCKS = 20_000
         const val MAX_BLOCK_BYTES = 4 * 1024 * 1024
+        val PROJECTED_BLOCK_HASH = "0".repeat(64)
         val REVISION_STAGE_FILE = Regex(
             "range-revision\\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\..+\\.stage",
         )

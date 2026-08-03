@@ -767,6 +767,36 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `published index byte limit is rejected before revision hydration`() {
+        val directory = Files.createTempDirectory("virtual-range-published-index-capacity-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(
+                root = directory,
+                maximumIndexBytes = 1_024L,
+                maximumBlocks = 2,
+                policy = { nonEvictingTestPolicy() },
+            )
+            val retention = VirtualFolderRetentionState(
+                listOf(VirtualFolderRetentionRule("Photos", VirtualFolderRetention.KeepOnDevice)),
+            )
+
+            assertFailsWith<IllegalArgumentException> {
+                cache.requireRevisionsCapacity(
+                    accountId = ACCOUNT_ID,
+                    revisions = listOf(
+                        VirtualRangeRevision("Photos/${"a".repeat(900)}.raf", "etag", 1L),
+                    ),
+                    blockBytes = 1,
+                    retention = retention,
+                )
+            }
+            assertEquals(0, cache.summary(ACCOUNT_ID).fileCount)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `pinned bytes do not consume the automatic range cache budget`() {
         val directory = Files.createTempDirectory("virtual-range-pinned-budget-").toFile()
         try {

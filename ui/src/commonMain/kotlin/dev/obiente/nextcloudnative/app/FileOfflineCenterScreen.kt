@@ -121,6 +121,7 @@ internal fun FileOfflineCenterScreen(
     var virtualLocationVisible by remember(session, userId) { mutableStateOf(false) }
     var virtualLocationError by remember(session, userId) { mutableStateOf<String?>(null) }
     var virtualFolderPickerVisible by remember(session, userId) { mutableStateOf(false) }
+    var virtualFolderPickerError by remember(session, userId) { mutableStateOf<String?>(null) }
     var releaseVirtualFolderPath by remember(session, userId) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -281,14 +282,20 @@ internal fun FileOfflineCenterScreen(
         scope.launch {
             runCatching { services.setVirtualFolderRetention(session, userId, path, retention) }
                 .onSuccess { result ->
-                    actionMessage = result.virtualFileStorageMessage()
+                    val message = result.virtualFileStorageMessage()
+                    actionMessage = message
                     if (result is VirtualFileStorageActionResult.Completed) {
                         virtualFolderPickerVisible = false
+                        virtualFolderPickerError = null
                         refreshAttempt += 1
+                    } else {
+                        virtualFolderPickerError = message
                     }
                 }
                 .onFailure { failure ->
-                    actionMessage = failure.message ?: "Could not change folder availability."
+                    val message = failure.message ?: "Could not change folder availability."
+                    actionMessage = message
+                    virtualFolderPickerError = message
                 }
             virtualStorageBusy = false
         }
@@ -505,7 +512,10 @@ internal fun FileOfflineCenterScreen(
                             virtualLocationError = null
                             virtualLocationVisible = true
                         },
-                        onChoosePinnedFolder = { virtualFolderPickerVisible = true },
+                        onChoosePinnedFolder = {
+                            virtualFolderPickerError = null
+                            virtualFolderPickerVisible = true
+                        },
                         onReleaseFolder = { path ->
                             releaseVirtualFolderPath = path
                         },
@@ -683,11 +693,20 @@ internal fun FileOfflineCenterScreen(
             session = session,
             userId = userId,
             initialPath = "",
-            onDismiss = { if (!virtualStorageBusy) virtualFolderPickerVisible = false },
+            selectionError = virtualFolderPickerError,
+            onDismiss = {
+                if (!virtualStorageBusy) {
+                    virtualFolderPickerVisible = false
+                    virtualFolderPickerError = null
+                }
+            },
             onSelected = { path ->
                 if (path.isEmpty()) {
-                    actionMessage = "Choose a folder below the Files root."
+                    val message = "Choose a folder below the Files root."
+                    actionMessage = message
+                    virtualFolderPickerError = message
                 } else {
+                    virtualFolderPickerError = null
                     setVirtualFolderRetention(path, VirtualFolderRetention.KeepOnDevice)
                 }
             },
