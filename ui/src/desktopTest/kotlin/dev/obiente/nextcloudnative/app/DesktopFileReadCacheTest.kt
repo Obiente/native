@@ -175,6 +175,53 @@ class DesktopFileReadCacheTest {
     }
 
     @Test
+    fun `large listings are sharded beneath the bounded account index`() {
+        val root = Files.createTempDirectory("ncn-files-cache-shards-").toFile()
+        val preferences = testPreferences(root)
+        val maximumIndexBytes = 64L * 1024L
+        try {
+            val accountId = "a".repeat(64)
+            val files = List(200) { index ->
+                val name = "${index.toString().padStart(3, '0')}-${"x".repeat(900)}.jpg"
+                file("Library/$name", "\"etag-${"y".repeat(500)}-$index\"")
+            }
+            DesktopFileReadCache(
+                root = root,
+                preferences = preferences,
+                maximumIndexBytes = maximumIndexBytes,
+            ).storeListing(accountId, "Library", files, nowEpochMillis = 123_456L)
+
+            val accountDirectory = root.resolve(accountId)
+            assertTrue(accountDirectory.resolve("index-v1.json").length() <= maximumIndexBytes)
+            assertTrue(accountDirectory.listFiles().orEmpty().count { it.extension == "metadata" } > 1)
+
+            val restored = DesktopFileReadCache(
+                root = root,
+                preferences = preferences,
+                maximumIndexBytes = maximumIndexBytes,
+            ).cachedListingSnapshot(accountId, "Library")
+            assertEquals(files, restored?.files)
+            assertEquals(123_456L, restored?.fetchedAtEpochMillis)
+        } finally {
+            runCatching { preferences.removeNode() }
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `one corrupt metadata shard does not discard unrelated listings`() = withCache { root, cache ->
+        val accountId = desktopFileCacheAccountId(session())
+        cache.storeListing(accountId, "Photos", listOf(file("Photos/photo.jpg", "photos")), 10L)
+        cache.storeListing(accountId, "Notes", listOf(file("Notes/note.txt", "notes")), 20L)
+        val shards = root.resolve(accountId).listFiles().orEmpty().filter { it.extension == "metadata" }
+        assertEquals(2, shards.size)
+        shards.first().writeText("corrupt")
+
+        val restored = DesktopFileReadCache(root, preferences = testPreferences(root))
+        assertEquals(1, restored.cachedListingPaths(accountId).size)
+    }
+
+    @Test
     fun `authoritative listing replaces a future timestamp after clock rollback`() = withCache { _, cache ->
         val accountId = desktopFileCacheAccountId(session())
         cache.storeListing(accountId, "Photos", listOf(file("Photos/old.jpg", "old")), 10_000L)
