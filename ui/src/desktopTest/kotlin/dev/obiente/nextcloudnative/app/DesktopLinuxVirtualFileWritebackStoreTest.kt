@@ -62,6 +62,8 @@ class DesktopLinuxVirtualFileWritebackStoreTest {
             assertFails { handle.write(0L, "after!".encodeToByteArray()) }
 
             assertTrue(store.pendingWritebacks().single().dirty)
+            val manifest = directory.listFiles().orEmpty().single { it.name.endsWith(".stage.json") }
+            assertFalse("\"committed\"" in manifest.readText())
             val stage = directory.listFiles().orEmpty().single { it.name.endsWith(".stage") }
             assertContentEquals("before".encodeToByteArray(), stage.readBytes())
 

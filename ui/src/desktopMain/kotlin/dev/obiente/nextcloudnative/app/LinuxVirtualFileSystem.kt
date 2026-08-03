@@ -73,6 +73,7 @@ internal interface LinuxVirtualFileBackend : AutoCloseable {
 internal data class LinuxVirtualDirectorySnapshot(
     val nodes: List<LinuxVirtualFileNode>,
     val fetchedAtEpochMillis: Long,
+    val freshAtEpochMillis: Long = fetchedAtEpochMillis,
     val generation: Long = 0L,
 ) {
     val nodesByPath: Map<String, LinuxVirtualFileNode> = nodes.associateBy(LinuxVirtualFileNode::path)
@@ -395,9 +396,11 @@ internal class CachingLinuxVirtualFileBackend(
         try {
             check(!closed) { "The Linux metadata cache is closed." }
             val requestStartedAtEpochMillis = nowEpochMillis().coerceAtLeast(0L)
+            val nodes = delegate.list(path)
             val snapshot = LinuxVirtualDirectorySnapshot(
-                nodes = delegate.list(path),
+                nodes = nodes,
                 fetchedAtEpochMillis = requestStartedAtEpochMillis,
+                freshAtEpochMillis = nowEpochMillis().coerceAtLeast(requestStartedAtEpochMillis),
                 generation = nextGeneration.getAndIncrement(),
             )
             val published = synchronized(metadataLock) {
@@ -509,6 +512,10 @@ internal class CachingLinuxVirtualFileBackend(
             revalidatedPersistedListings.removeIf { listing -> normalized.invalidatesListing(listing) }
             pendingPersistedInvalidations[normalized] =
                 pendingPersistedInvalidations.getOrDefault(normalized, 0) + 1
+            // Persist the fail-closed quarantine before touching the main cache index. If the
+            // process stops during invalidation, the next process must not restore stale data.
+            rememberFailedPersistedInvalidation(normalized)
+            store.replaceFailedInvalidations(failedPersistedInvalidations)
         }
         afterPersistedInvalidationMarked()
         var persistedInvalidated = false
@@ -523,8 +530,6 @@ internal class CachingLinuxVirtualFileBackend(
                         normalized.isEmpty() || failed == normalized || failed.startsWith("$normalized/")
                     }
                     pruneUnpairedRevalidatedListings()
-                } else {
-                    rememberFailedPersistedInvalidation(normalized)
                 }
                 store.replaceFailedInvalidations(failedPersistedInvalidations)
                 val remaining = pendingPersistedInvalidations.getOrDefault(normalized, 1) - 1
@@ -630,7 +635,7 @@ internal class CachingLinuxVirtualFileBackend(
     }
 
     private fun LinuxVirtualDirectorySnapshot.isFresh(now: Long, duration: Long): Boolean {
-        val age = now - fetchedAtEpochMillis
+        val age = now - freshAtEpochMillis
         return age >= 0L && age <= duration
     }
 

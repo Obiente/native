@@ -55,6 +55,9 @@ internal class DesktopFileReadCache(
 ) {
     private val loadedIndexes = LinkedHashMap<String, CacheIndexV1>(16, 0.75f, true)
     private val failedVirtualListingInvalidations = mutableMapOf<String, Set<String>>()
+    private val virtualListingInvalidationPreferences = preferences.node(
+        "linux-virtual-metadata-invalidations-v1",
+    )
     init {
         require(maximumContentBytes > 0L)
         require(maximumEntryBytes in 1L..maximumContentBytes)
@@ -114,13 +117,27 @@ internal class DesktopFileReadCache(
     }
 
     @Synchronized
-    fun failedVirtualListingInvalidations(accountId: String): Set<String> =
-        failedVirtualListingInvalidations[accountId].orEmpty().toSet()
+    fun failedVirtualListingInvalidations(accountId: String): Set<String> {
+        failedVirtualListingInvalidations[accountId]?.let { return it.toSet() }
+        return if (virtualListingInvalidationPreferences.getBoolean(accountId, false)) {
+            setOf("")
+        } else {
+            emptySet()
+        }
+    }
 
     @Synchronized
     fun replaceFailedVirtualListingInvalidations(accountId: String, paths: Set<String>) {
-        if (paths.isEmpty()) failedVirtualListingInvalidations.remove(accountId)
-        else failedVirtualListingInvalidations[accountId] = paths.toSet()
+        if (paths.isEmpty()) {
+            failedVirtualListingInvalidations.remove(accountId)
+            virtualListingInvalidationPreferences.remove(accountId)
+        } else {
+            failedVirtualListingInvalidations[accountId] = paths.toSet()
+            // One durable bit deliberately quarantines every persisted virtual listing for this
+            // account. It remains safe and bounded even when thousands of paths were affected.
+            virtualListingInvalidationPreferences.putBoolean(accountId, true)
+        }
+        virtualListingInvalidationPreferences.flush()
     }
 
     @Synchronized
