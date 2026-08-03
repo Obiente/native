@@ -1089,6 +1089,49 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `releasing deep retained roots removes every ancestor no longer in use`() {
+        val directory = Files.createTempDirectory("virtual-range-retained-deep-release-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Top/Mid/Leaf", VirtualFolderRetention.KeepOnDevice)
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Top/Mid/Leaf",
+                mapOf(
+                    "" to LinuxVirtualDirectorySnapshot(emptyList(), 42L),
+                    "Top" to LinuxVirtualDirectorySnapshot(emptyList(), 42L),
+                    "Top/Mid" to LinuxVirtualDirectorySnapshot(emptyList(), 42L),
+                    "Top/Mid/Leaf" to LinuxVirtualDirectorySnapshot(emptyList(), 42L),
+                ),
+            )
+            cache.setFolderRetention(ACCOUNT_ID, "Documents/Reports", VirtualFolderRetention.KeepOnDevice)
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Documents/Reports",
+                mapOf(
+                    "" to LinuxVirtualDirectorySnapshot(emptyList(), 43L),
+                    "Documents" to LinuxVirtualDirectorySnapshot(emptyList(), 43L),
+                    "Documents/Reports" to LinuxVirtualDirectorySnapshot(emptyList(), 43L),
+                ),
+            )
+
+            cache.setFolderRetention(ACCOUNT_ID, "Top/Mid/Leaf", VirtualFolderRetention.Automatic)
+            cache.dehydrateFolder(ACCOUNT_ID, "Top/Mid/Leaf", emptySet())
+
+            assertEquals(
+                setOf("", "Documents", "Documents/Reports"),
+                cache.retainedListingPaths(ACCOUNT_ID),
+            )
+
+            cache.setFolderRetention(ACCOUNT_ID, "Documents/Reports", VirtualFolderRetention.Automatic)
+            cache.dehydrateFolder(ACCOUNT_ID, "Documents/Reports", emptySet())
+            assertEquals(emptySet(), cache.retainedListingPaths(ACCOUNT_ID))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `publication preflight counts listings retained by other roots`() {
         val directory = Files.createTempDirectory("virtual-range-retained-preflight-").toFile()
         try {

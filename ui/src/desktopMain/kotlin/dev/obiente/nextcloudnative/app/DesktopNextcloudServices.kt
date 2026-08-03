@@ -3052,7 +3052,8 @@ class DesktopNextcloudServices(
     ): Unit = withContext(Dispatchers.IO) {
         val specification = fileVersionRestoreRequest(userId, file, version)
         val accountId = desktopFileCacheAccountId(session)
-        fun invalidateAffectedMetadata() = invalidateDesktopFileMetadata(accountId, file.path)
+        fun queueAffectedMetadataRefresh() =
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, file.path)
         val response = request(
             method = specification.method,
             url = session.serverUrl + specification.relativePath,
@@ -3064,7 +3065,7 @@ class DesktopNextcloudServices(
             maxResponseBytes = specification.maximumResponseBytes,
             client = noRedirectHttpClient,
             mutationExecutor = noRedirectFileMutationHttpExecutor,
-            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
+            onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
         )
         handleDesktopFileVersionRestoreStatus(response.status) {
             runCatching {
@@ -3097,7 +3098,8 @@ class DesktopNextcloudServices(
             put("If-Match", expectedEtag)
         }
         val accountId = desktopFileCacheAccountId(session)
-        fun invalidateAffectedMetadata() = invalidateDesktopFileMetadata(accountId, path)
+        fun queueAffectedMetadataRefresh() =
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
         val response = request(
             "PUT",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -3106,7 +3108,7 @@ class DesktopNextcloudServices(
             contentType = "text/plain; charset=utf-8",
             headers = headers,
             mutationExecutor = fileMutationHttpExecutor,
-            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
+            onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
         )
         check(response.status != 412) { "The file changed on the server. Reload it before saving your changes." }
         check(response.status in 200..299) { "Saving the text file failed (HTTP ${response.status})." }
@@ -3135,7 +3137,8 @@ class DesktopNextcloudServices(
             "Text files larger than ${MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)} MiB cannot be created in the app."
         }
         val accountId = desktopFileCacheAccountId(session)
-        fun invalidateAffectedMetadata() = invalidateDesktopFileMetadata(accountId, path)
+        fun queueAffectedMetadataRefresh() =
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
         val response = request(
             "PUT",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -3144,7 +3147,7 @@ class DesktopNextcloudServices(
             contentType = "text/plain; charset=utf-8",
             headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
             mutationExecutor = fileMutationHttpExecutor,
-            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
+            onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
         )
         if (response.status == 412) return@withContext SavedTextFile(etag = null, wasCreated = false)
         check(response.status in 200..299) { "Creating the text file failed (HTTP ${response.status})." }
@@ -3168,7 +3171,8 @@ class DesktopNextcloudServices(
         path: String,
     ): Boolean = withContext(Dispatchers.IO) {
         val accountId = desktopFileCacheAccountId(session)
-        fun invalidateAffectedMetadata() = invalidateDesktopFileMetadata(accountId, path)
+        fun queueAffectedMetadataRefresh() =
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
         val response = request(
             method = "MKCOL",
             url = buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -3176,7 +3180,7 @@ class DesktopNextcloudServices(
             headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
             maxResponseBytes = 64 * 1024,
             mutationExecutor = fileMutationHttpExecutor,
-            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
+            onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
         )
         if (response.status in setOf(405, 412)) return@withContext false
         if (response.status !in 200..299) throw fileOperationException(response.status)

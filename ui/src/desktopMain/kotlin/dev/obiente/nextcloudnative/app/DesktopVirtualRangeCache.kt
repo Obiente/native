@@ -648,6 +648,10 @@ internal class DesktopVirtualRangeCache(
     }
 
     @Synchronized
+    internal fun retainedListingPaths(accountId: String): Set<String> =
+        loadRetainedMetadataIndex(accountId).listings.mapTo(linkedSetOf(), RetainedListingReference::path)
+
+    @Synchronized
     fun publishRetainedListings(
         accountId: String,
         retainedRoot: String,
@@ -777,17 +781,19 @@ internal class DesktopVirtualRangeCache(
 
     private fun removeDehydratedRetainedListings(accountId: String, path: String) {
         val normalized = FileOfflineKey(accountId, path).relativePath
-        val parent = normalized.substringBeforeLast('/', "")
         val current = loadRetainedMetadataIndex(accountId)
-        val parentRequiredBySibling = loadFolderRetention(accountId).rules.any { rule ->
-            rule.retention == VirtualFolderRetention.KeepOnDevice &&
-                (parent.isEmpty() || rule.relativePath == parent || rule.relativePath.startsWith("$parent/"))
-        }
+        val releasedAncestors = retainedFolderAncestorListings(normalized).toSet()
+        val requiredByRemainingRoots = loadFolderRetention(accountId).rules.asSequence()
+            .filter { rule -> rule.retention == VirtualFolderRetention.KeepOnDevice }
+            .flatMap { rule ->
+                (retainedFolderAncestorListings(rule.relativePath) + rule.relativePath).asSequence()
+            }
+            .toSet()
         val next = current.copy(
             listings = current.listings.filterNot { reference ->
                 reference.path == normalized ||
                     reference.path.startsWith("$normalized/") ||
-                    reference.path == parent && !parentRequiredBySibling
+                    reference.path in releasedAncestors && reference.path !in requiredByRemainingRoots
             },
         )
         if (next != current) saveRetainedMetadataIndex(accountId, next)
