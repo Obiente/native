@@ -1485,7 +1485,7 @@ class DesktopNextcloudServices(
                 )
             }
             if (linuxVirtualFileSystem != null) {
-                runCatching { linuxVirtualFileSystem?.unmount() }
+                linuxVirtualFileSystem?.unmount()
                 linuxVirtualFileSystem = null
                 linuxVirtualMetadataBackend = null
                 linuxVirtualFileMountIdentity = null
@@ -1514,14 +1514,19 @@ class DesktopNextcloudServices(
                     recoveredWritebackPaths += path
                 },
             )
+            var metadataBackendReference: CachingLinuxVirtualFileBackend? = null
+            val virtualBackend = DesktopNextcloudVirtualFileBackend(
+                session = session,
+                userId = userId,
+                services = this@DesktopNextcloudServices,
+                rangeCache = virtualRangeCache(accountId),
+                writebacks = writebackStore,
+                onAmbiguousMutationResult = { path ->
+                    metadataBackendReference?.invalidateAfterExternalMutation(path)
+                },
+            )
             val metadataBackend = CachingLinuxVirtualFileBackend(
-                delegate = DesktopNextcloudVirtualFileBackend(
-                    session = session,
-                    userId = userId,
-                    services = this@DesktopNextcloudServices,
-                    rangeCache = virtualRangeCache(accountId),
-                    writebacks = writebackStore,
-                ),
+                delegate = virtualBackend,
                 store = RetainedLinuxVirtualMetadataStore(
                     rangeCache = virtualRangeCache(accountId),
                     accountId = accountId,
@@ -1534,6 +1539,7 @@ class DesktopNextcloudServices(
                     refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
                 },
             )
+            metadataBackendReference = metadataBackend
             recoveredWritebackPaths.forEach(metadataBackend::invalidateAfterExternalMutation)
             val fileSystem = LinuxNextcloudVirtualFileSystem(metadataBackend)
             try {
@@ -1775,10 +1781,11 @@ class DesktopNextcloudServices(
         serviceScope.cancel()
         rangeSessions.forEach { source -> runCatching(source::close) }
         synchronized(virtualFileProviderLock) {
-            runCatching { linuxVirtualFileSystem?.unmount() }
-            linuxVirtualFileSystem = null
-            linuxVirtualMetadataBackend = null
-            linuxVirtualFileMountIdentity = null
+            if (runCatching { linuxVirtualFileSystem?.unmount() }.isSuccess) {
+                linuxVirtualFileSystem = null
+                linuxVirtualMetadataBackend = null
+                linuxVirtualFileMountIdentity = null
+            }
             runCatching { windowsCloudFilesProvider?.close() }
             windowsCloudFilesProvider = null
             windowsCloudFilesIdentity = null
@@ -2339,7 +2346,7 @@ class DesktopNextcloudServices(
             }
             syncJob?.join()
             synchronized(virtualFileProviderLock) {
-                runCatching { linuxVirtualFileSystem?.unmount() }
+                linuxVirtualFileSystem?.unmount()
                 linuxVirtualFileSystem = null
                 linuxVirtualMetadataBackend = null
                 linuxVirtualFileMountIdentity = null

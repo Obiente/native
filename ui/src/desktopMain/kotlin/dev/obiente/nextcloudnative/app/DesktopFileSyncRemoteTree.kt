@@ -33,6 +33,7 @@ internal class DesktopFileSyncRemoteTree(
     remoteRootPath: String,
     private val client: OkHttpClient = desktopFileSyncHttpClient(),
     private val onMutationCommitted: (relativePath: String) -> Unit = {},
+    private val onAmbiguousMutationResult: (relativePath: String) -> Unit = onMutationCommitted,
 ) : LinuxVirtualWritebackRemote {
     private val rootPath = remoteRootPath.trim('/')
     private val mutationExecutor = DesktopHttpMutationExecutor(client)
@@ -462,7 +463,7 @@ internal class DesktopFileSyncRemoteTree(
         vararg mutationRelativePaths: String,
     ): String? = mutationExecutor.execute(
         request = request,
-        onAmbiguousNetworkResult = { notifyMutationCommitted(*mutationRelativePaths) },
+        onAmbiguousNetworkResult = { notifyAmbiguousMutationResult(*mutationRelativePaths) },
     ) { response ->
             require(response.code in 200..299) { response.failure(operation) }
             response.header("ETag") ?: response.header("OC-Etag")
@@ -476,7 +477,7 @@ internal class DesktopFileSyncRemoteTree(
         maximumResponseBytes: Long = MAX_ERROR_RESPONSE_BYTES,
     ): ByteArray = mutationExecutor.execute(
         request = request,
-        onAmbiguousNetworkResult = { notifyMutationCommitted(*mutationRelativePaths) },
+        onAmbiguousNetworkResult = { notifyAmbiguousMutationResult(*mutationRelativePaths) },
     ) { response ->
         val accepted = expectedStatus?.let { response.code == it } ?: (response.code in 200..299)
         require(accepted) { response.failure(operation) }
@@ -514,10 +515,18 @@ internal class DesktopFileSyncRemoteTree(
         return normalized.removePrefix("$rootPath/").takeIf { normalized.startsWith("$rootPath/") && it.isNotBlank() }
     }
 
+    private fun notifyAmbiguousMutationResult(vararg relativePaths: String) {
+        notifyMutation(onAmbiguousMutationResult, *relativePaths)
+    }
+
     private fun notifyMutationCommitted(vararg relativePaths: String) {
+        notifyMutation(onMutationCommitted, *relativePaths)
+    }
+
+    private fun notifyMutation(callback: (String) -> Unit, vararg relativePaths: String) {
         relativePaths.asSequence().map(String::trim).map { it.trim('/') }
             .filter(String::isNotBlank).distinct()
-            .forEach { path -> runCatching { onMutationCommitted(path) } }
+            .forEach { path -> runCatching { callback(path) } }
     }
 
     private fun safeEtag(value: String): String = value.also {

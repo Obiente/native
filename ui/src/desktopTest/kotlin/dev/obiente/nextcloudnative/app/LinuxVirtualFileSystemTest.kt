@@ -20,6 +20,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFails
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -55,6 +56,31 @@ class LinuxVirtualFileSystemTest {
         assertContentEquals(bytes.copyOfRange(10, 17), read)
         assertEquals(0, fileSystem.release("/Photos/example.raf", fileInfo))
         assertEquals(1, closed)
+    }
+
+    @Test
+    fun `failed detach closes open handles and retains the backend for retry`() {
+        var handleClosed = 0
+        var backendClosed = 0
+        val fixture = fixtureBackend("content".encodeToByteArray()) { { handleClosed += 1 } }
+        val backend = object : LinuxVirtualFileBackend by fixture {
+            override fun close() {
+                backendClosed += 1
+            }
+        }
+        val fileSystem = LinuxNextcloudVirtualFileSystem(
+            backend = backend,
+            unmountOperation = { error("Simulated detach failure") },
+        )
+        val fileInfo = FuseFileInfo.of(Runtime.getSystemRuntime().memoryManager.allocateDirect(256))
+        assertEquals(0, fileSystem.open("/Photos/example.raf", fileInfo))
+
+        assertFails { fileSystem.unmount() }
+
+        assertEquals(1, handleClosed)
+        assertEquals(0, backendClosed)
+        val output = Runtime.getSystemRuntime().memoryManager.allocateDirect(1)
+        assertEquals(-ErrorCodes.EBADF(), fileSystem.read("/Photos/example.raf", output, 1L, 0L, fileInfo))
     }
 
     @Test
@@ -856,6 +882,40 @@ class LinuxVirtualFileSystemTest {
         } finally {
             releasePersistence.countDown()
             reader.shutdownNow()
+            cached.close()
+        }
+    }
+
+    @Test
+    fun `closing waits for an in-flight metadata publication`() {
+        val delegate = MutableFixtureBackend().apply { addFile("Photos/cached.dat", byteArrayOf(1)) }
+        val persistenceStarted = CountDownLatch(1)
+        val releasePersistence = CountDownLatch(1)
+        val closeFinished = CountDownLatch(1)
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean {
+                persistenceStarted.countDown()
+                check(releasePersistence.await(2L, TimeUnit.SECONDS))
+                return true
+            }
+            override fun invalidate(path: String) = Unit
+        }
+        val cached = CachingLinuxVirtualFileBackend(delegate, store, freshForMillis = Long.MAX_VALUE)
+        val closer = Executors.newSingleThreadExecutor()
+        try {
+            cached.list("Photos")
+            assertTrue(persistenceStarted.await(2L, TimeUnit.SECONDS))
+            closer.execute {
+                cached.close()
+                closeFinished.countDown()
+            }
+            assertFalse(closeFinished.await(100L, TimeUnit.MILLISECONDS))
+            releasePersistence.countDown()
+            assertTrue(closeFinished.await(2L, TimeUnit.SECONDS))
+        } finally {
+            releasePersistence.countDown()
+            closer.shutdownNow()
             cached.close()
         }
     }

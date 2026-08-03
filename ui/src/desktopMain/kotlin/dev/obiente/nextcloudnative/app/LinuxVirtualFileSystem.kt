@@ -391,6 +391,11 @@ internal class CachingLinuxVirtualFileBackend(
     override fun close() {
         if (closed) return
         closed = true
+        refreshExecutor.shutdown()
+        // A persistence task that entered store.store() before close must finish before a new
+        // backend can replace this one. Tasks that were only waiting for the store lock observe
+        // `closed` in their second guarded check and skip publication.
+        synchronized(persistedStoreLock) { }
         refreshExecutor.shutdownNow()
         synchronized(metadataLock) {
             activeMetadataOperations.clear()
@@ -741,7 +746,13 @@ internal class DesktopNextcloudVirtualFileBackend(
     private val services: NextcloudPlatformServices,
     private val rangeCache: DesktopVirtualRangeCache,
     private val writebacks: DesktopLinuxVirtualFileWritebackStore,
-    private val tree: DesktopFileSyncRemoteTree = DesktopFileSyncRemoteTree(session, userId, ""),
+    onAmbiguousMutationResult: (relativePath: String) -> Unit = {},
+    private val tree: DesktopFileSyncRemoteTree = DesktopFileSyncRemoteTree(
+        session = session,
+        userId = userId,
+        remoteRootPath = "",
+        onAmbiguousMutationResult = onAmbiguousMutationResult,
+    ),
     private val requireDurableCacheWrites: Boolean = false,
     private val retentionSnapshot: VirtualFolderRetentionState? = null,
 ) : LinuxVirtualFileBackend {
@@ -962,6 +973,7 @@ internal class LinuxNextcloudVirtualFileSystem(
     private val backend: LinuxVirtualFileBackend,
     private val maximumOpenDirectoryEntries: Int = DEFAULT_MAX_OPEN_DIRECTORY_ENTRIES,
     private val beforeDirectoryHandleRemoval: () -> Unit = {},
+    private val unmountOperation: (LinuxNextcloudVirtualFileSystem) -> Unit = { fileSystem -> fileSystem.umount() },
 ) : FuseStubFS() {
     private val nextHandle = AtomicLong(1L)
     private val readHandles = ConcurrentHashMap<Long, LinuxVirtualFileReadHandle>()
@@ -1228,20 +1240,25 @@ internal class LinuxNextcloudVirtualFileSystem(
     }
 
     fun unmount() {
-        umount()
-        readHandles.values.forEach { runCatching(it::close) }
-        writeHandles.values.map(LinuxOpenWriteReference::shared).distinct().forEach { shared ->
-            runCatching(shared.delegate::close)
+        var detached = false
+        try {
+            unmountOperation(this)
+            detached = true
+        } finally {
+            readHandles.values.forEach { runCatching(it::close) }
+            writeHandles.values.map(LinuxOpenWriteReference::shared).distinct().forEach { shared ->
+                runCatching(shared.delegate::close)
+            }
+            readHandles.clear()
+            readHandlePaths.clear()
+            writeHandles.clear()
+            synchronized(directoryHandleLock) {
+                directoryHandles.clear()
+                openDirectoryEntries = 0L
+            }
+            pendingCreatedFiles.clear()
+            if (detached) backend.close()
         }
-        readHandles.clear()
-        readHandlePaths.clear()
-        writeHandles.clear()
-        synchronized(directoryHandleLock) {
-            directoryHandles.clear()
-            openDirectoryEntries = 0L
-        }
-        pendingCreatedFiles.clear()
-        backend.close()
     }
 
     private fun openDirectorySnapshot(path: String): LinuxOpenDirectorySnapshot {
