@@ -1545,6 +1545,29 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `fallback metadata publication continues after a cache failure`() {
+        val attempted = mutableListOf<String>()
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean {
+                attempted += path
+                if (path == "Photos") error("Simulated optional metadata cache failure")
+                return true
+            }
+            override fun invalidate(path: String) = Unit
+        }
+        val complete = LinuxVirtualDirectorySnapshot(emptyList(), fetchedAtEpochMillis = 1L, complete = true)
+        val partial = LinuxVirtualDirectorySnapshot(emptyList(), fetchedAtEpochMillis = 1L, complete = false)
+
+        publishDesktopLinuxFallbackMetadataBestEffort(
+            store,
+            linkedMapOf("Photos" to complete, "Albums" to complete, "Partial" to partial),
+        )
+
+        assertEquals(listOf("Photos", "Albums"), attempted)
+    }
+
+    @Test
     fun `complete retained listing does not revive stale fallback children`() {
         val directory = Files.createTempDirectory("retained-complete-precedence-").toFile()
         try {

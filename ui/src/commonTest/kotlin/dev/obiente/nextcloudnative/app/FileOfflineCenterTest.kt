@@ -48,6 +48,10 @@ class FileOfflineCenterTest {
             supportsIndividualOfflineFiles = true,
             supportsRecursiveFolderAvailability = true,
         )
+        val recursiveOnly = defaultFileOfflineCenterSnapshot(
+            supportsIndividualOfflineFiles = false,
+            supportsRecursiveFolderAvailability = true,
+        )
 
         assertEquals(FileOfflineCenterSupport.Unsupported, unsupported.support)
         assertEquals(FileOfflineCenterSupport.InventoryUnavailable, inventoryUnavailable.support)
@@ -63,6 +67,10 @@ class FileOfflineCenterTest {
         assertTrue(recursiveInventoryUnavailable.limitations.any { "Files and folders" in it })
         assertTrue(recursiveInventoryUnavailable.limitations.any { "does not upload" in it })
         assertTrue(recursiveInventoryUnavailable.limitations.any { "not implemented" in it })
+        assertEquals(FileOfflineCenterSupport.InventoryUnavailable, recursiveOnly.support)
+        assertEquals(FileOfflineFolderAvailability.RecursiveDownloadOnly, recursiveOnly.folderAvailability)
+        assertTrue(recursiveOnly.limitations.any { "Selected folders" in it })
+        assertTrue(recursiveOnly.limitations.none { "Individual files" in it })
     }
 
     @Test

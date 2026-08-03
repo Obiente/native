@@ -982,7 +982,7 @@ class DesktopNextcloudServices(
                                 expectedPublishedRevisions,
                                 verifiedRetention,
                             )
-                            snapshots.filterValues(LinuxVirtualDirectorySnapshot::complete).forEach(metadataStore::store)
+                            publishDesktopLinuxFallbackMetadataBestEffort(metadataStore, snapshots)
                             val protectedPaths = writebacks.pendingWritebacks()
                                 .mapTo(hashSetOf(), DesktopLinuxPendingWriteback::path)
                             verifiedListings.forEach { (parent, documents) ->
@@ -1287,6 +1287,7 @@ class DesktopNextcloudServices(
 
     override val supportsBidirectionalFileSync: Boolean = true
     override val supportsVirtualFileStorage: Boolean = true
+    override val supportsRecursiveFileOfflineStorage: Boolean get() = isLinuxDesktop()
 
     override suspend fun loadVirtualFileStorage(
         session: NextcloudSession,
@@ -4360,6 +4361,15 @@ internal fun reconcileVirtualRangeChildren(
             protectedPaths.any { protected -> protected == missing || protected.startsWith("$missing/") }
         }
         .forEach { missing -> cache.invalidateDisposableRanges(accountId, missing) }
+}
+
+internal fun publishDesktopLinuxFallbackMetadataBestEffort(
+    store: LinuxVirtualMetadataStore,
+    snapshots: Map<String, LinuxVirtualDirectorySnapshot>,
+) {
+    snapshots.filterValues(LinuxVirtualDirectorySnapshot::complete).forEach { (path, snapshot) ->
+        runCatching { store.store(path, snapshot) }
+    }
 }
 
 internal fun parseDesktopFileVersionDavRecords(xml: ByteArray): List<FileVersionDavRecord> {
