@@ -62,6 +62,8 @@ class DesktopLinuxVirtualFileWritebackStoreTest {
             assertFails { handle.write(0L, "after!".encodeToByteArray()) }
 
             assertTrue(store.pendingWritebacks().single().dirty)
+            val manifest = directory.listFiles().orEmpty().single { it.name.endsWith(".stage.json") }
+            assertFalse("\"committed\"" in manifest.readText())
             val stage = directory.listFiles().orEmpty().single { it.name.endsWith(".stage") }
             assertContentEquals("before".encodeToByteArray(), stage.readBytes())
 
@@ -133,6 +135,54 @@ class DesktopLinuxVirtualFileWritebackStoreTest {
             )
             assertContentEquals("saved!".encodeToByteArray(), remote.content)
             assertEquals(emptyList(), store.pendingWritebacks())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `clean interrupted recovery still invalidates committed metadata`() {
+        val directory = Files.createTempDirectory("linux-writeback-clean-recovery-").toFile()
+        try {
+            val remote = FakeWritebackRemote("before".encodeToByteArray(), "etag-1")
+            val store = DesktopLinuxVirtualFileWritebackStore(directory, minimumFreeSpaceBytes = { 0L })
+            val node = LinuxVirtualFileNode("Notes/today.txt", "today.txt", false, 6L, "etag-1")
+            val interrupted = store.open("Notes/today.txt", node, truncate = false, tree = remote) {}
+            interrupted.write(0L, "saved!".encodeToByteArray())
+            interrupted.flush()
+
+            val invalidated = mutableListOf<String>()
+            assertEquals(
+                DesktopLinuxWritebackRecoveryResult(recoveredCount = 1, retainedCount = 0),
+                DesktopLinuxVirtualFileWritebackStore(directory, minimumFreeSpaceBytes = { 0L })
+                    .recoverPending(remote, invalidated::add),
+            )
+            assertEquals(listOf("Notes/today.txt"), invalidated)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `recovery discards an untouched write stage without invalidating caches`() {
+        val directory = Files.createTempDirectory("linux-writeback-untouched-recovery-").toFile()
+        try {
+            val remote = FakeWritebackRemote("before".encodeToByteArray(), "etag-1")
+            val store = DesktopLinuxVirtualFileWritebackStore(directory, minimumFreeSpaceBytes = { 0L })
+            val node = LinuxVirtualFileNode("Notes/today.txt", "today.txt", false, 6L, "etag-1")
+            val interrupted = store.open("Notes/today.txt", node, truncate = false, tree = remote) {}
+
+            val invalidated = mutableListOf<String>()
+            assertEquals(
+                DesktopLinuxWritebackRecoveryResult(recoveredCount = 1, retainedCount = 0),
+                DesktopLinuxVirtualFileWritebackStore(directory, minimumFreeSpaceBytes = { 0L })
+                    .recoverPending(remote, invalidated::add),
+            )
+
+            assertEquals(emptyList(), invalidated)
+            assertEquals(emptyList(), store.pendingWritebacks())
+            assertContentEquals("before".encodeToByteArray(), remote.content)
+            interrupted.close()
         } finally {
             directory.deleteRecursively()
         }

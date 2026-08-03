@@ -535,10 +535,12 @@ class DesktopNextcloudServices(
         onInstallerConfirmationOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
     )
     private val httpClient = OkHttpClient()
+    private val fileMutationHttpExecutor = DesktopHttpMutationExecutor(httpClient)
     private val noRedirectHttpClient = httpClient.newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
+    private val noRedirectFileMutationHttpExecutor = DesktopHttpMutationExecutor(noRedirectHttpClient)
     private val projectContentHttpClient = buildDesktopProjectContentHttpClient()
     private val contractAcquirer = SignedAppStoreContractAcquirer(
         catalogCache = FileAppStoreCatalogCache(desktopContractCacheDirectory("catalogs")),
@@ -548,6 +550,7 @@ class DesktopNextcloudServices(
     private val virtualRangeCache = defaultDesktopVirtualRangeCache(fileReadCache::loadPolicy)
     private val virtualFileProviderLock = Any()
     private var linuxVirtualFileSystem: LinuxNextcloudVirtualFileSystem? = null
+    private var linuxVirtualMetadataBackend: CachingLinuxVirtualFileBackend? = null
     private var linuxVirtualFileMountIdentity: String? = null
     private var linuxVirtualFileFailure: String? = null
     private var windowsCloudFilesProvider: WindowsCloudFilesProvider? = null
@@ -566,6 +569,9 @@ class DesktopNextcloudServices(
     private val deckCardDrafts = DesktopDeckCardDraftStore()
     private val fileSyncEngine = DesktopFileSyncEngine(
         minimumFreeSpaceBytes = { fileReadCache.loadPolicy().minimumFreeSpaceBytes },
+        onRemoteMutationCommitted = { session, _, path ->
+            invalidateDesktopFileMetadata(desktopFileCacheAccountId(session), path)
+        },
     )
     private val startOnLoginController = DesktopStartOnLoginController()
     private val fileSyncRunLock = Mutex()
@@ -837,8 +843,9 @@ class DesktopNextcloudServices(
                 )
             }
             if (linuxVirtualFileSystem != null) {
-                runCatching { linuxVirtualFileSystem?.unmount() }
+                linuxVirtualFileSystem?.unmount()
                 linuxVirtualFileSystem = null
+                linuxVirtualMetadataBackend = null
                 linuxVirtualFileMountIdentity = null
             }
             val mountPoint = desktopLinuxVirtualFileMountPoint().apply {
@@ -849,26 +856,46 @@ class DesktopNextcloudServices(
                 "The virtual-files mount folder must be empty before it can be activated."
             }
             val writebackStore = defaultDesktopLinuxWritebackStore(session)
+            val recoveredWritebackPaths = linkedSetOf<String>()
             writebackStore.recoverPending(
                 tree = DesktopFileSyncRemoteTree(session, userId, ""),
-                onCommitted = { path -> virtualRangeCache.invalidate(accountId, path) },
+                onCommitted = { path ->
+                    runCatching { virtualRangeCache.invalidate(accountId, path) }
+                    recoveredWritebackPaths += path
+                },
             )
-            val fileSystem = LinuxNextcloudVirtualFileSystem(
-                DesktopNextcloudVirtualFileBackend(
-                    session = session,
-                    userId = userId,
-                    services = this@DesktopNextcloudServices,
-                    rangeCache = virtualRangeCache,
-                    writebacks = writebackStore,
-                ),
+            var metadataBackendReference: CachingLinuxVirtualFileBackend? = null
+            val virtualBackend = DesktopNextcloudVirtualFileBackend(
+                session = session,
+                userId = userId,
+                services = this@DesktopNextcloudServices,
+                rangeCache = virtualRangeCache,
+                writebacks = writebackStore,
+                onMutationCommitted = { path ->
+                    metadataBackendReference?.invalidateAfterExternalMutation(path)
+                },
+                onAmbiguousMutationResult = { path ->
+                    metadataBackendReference?.invalidateAfterExternalMutation(path)
+                },
             )
+            val metadataBackend = CachingLinuxVirtualFileBackend(
+                delegate = virtualBackend,
+                store = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId),
+            )
+            metadataBackendReference = metadataBackend
+            recoveredWritebackPaths.forEach(metadataBackend::invalidateAfterExternalMutation)
+            val fileSystem = LinuxNextcloudVirtualFileSystem(metadataBackend)
             try {
                 fileSystem.mountAt(mountPoint.toPath())
                 linuxVirtualFileSystem = fileSystem
+                linuxVirtualMetadataBackend = metadataBackend
                 linuxVirtualFileMountIdentity = accountId
                 linuxVirtualFileFailure = null
                 preferences.putBoolean(virtualFileProviderPreferenceKey(accountId), true)
             } catch (failure: Throwable) {
+                runCatching(fileSystem::unmount).onFailure {
+                    runCatching(metadataBackend::close)
+                }
                 linuxVirtualFileFailure = failure.message ?: "Unknown FUSE mount failure"
                 throw failure
             }
@@ -885,6 +912,7 @@ class DesktopNextcloudServices(
         synchronized(virtualFileProviderLock) {
             linuxVirtualFileSystem?.unmount()
             linuxVirtualFileSystem = null
+            linuxVirtualMetadataBackend = null
             linuxVirtualFileMountIdentity = null
             linuxVirtualFileFailure = null
             windowsCloudFilesProvider?.close()
@@ -908,12 +936,26 @@ class DesktopNextcloudServices(
     override fun close() {
         serviceScope.cancel()
         synchronized(virtualFileProviderLock) {
-            runCatching { linuxVirtualFileSystem?.unmount() }
-            linuxVirtualFileSystem = null
-            linuxVirtualFileMountIdentity = null
+            if (runCatching { linuxVirtualFileSystem?.unmount() }.isSuccess) {
+                linuxVirtualFileSystem = null
+                linuxVirtualMetadataBackend = null
+                linuxVirtualFileMountIdentity = null
+            }
             runCatching { windowsCloudFilesProvider?.close() }
             windowsCloudFilesProvider = null
             windowsCloudFilesIdentity = null
+        }
+    }
+
+    private fun invalidateDesktopFileMetadata(accountId: String, path: String) {
+        synchronized(virtualFileProviderLock) {
+            val mountedBackend = linuxVirtualMetadataBackend
+                ?.takeIf { linuxVirtualFileMountIdentity == accountId }
+            if (mountedBackend != null) {
+                mountedBackend.invalidateAfterExternalMutation(path)
+            } else {
+                fileReadCache.invalidate(accountId, path)
+            }
         }
     }
 
@@ -1436,8 +1478,9 @@ class DesktopNextcloudServices(
             backgroundFileSyncJob = null
         }
         synchronized(virtualFileProviderLock) {
-            runCatching { linuxVirtualFileSystem?.unmount() }
+            linuxVirtualFileSystem?.unmount()
             linuxVirtualFileSystem = null
+            linuxVirtualMetadataBackend = null
             linuxVirtualFileMountIdentity = null
             linuxVirtualFileFailure = null
             try {
@@ -1619,6 +1662,7 @@ class DesktopNextcloudServices(
         path: String,
     ): NextcloudFileListing = withContext(Dispatchers.IO) {
         val accountId = desktopFileCacheAccountId(session)
+        val requestStartedAtEpochMillis = System.currentTimeMillis().coerceAtLeast(0L)
         try {
             val response = request(
                 "PROPFIND", buildNextcloudFileUrl(session.serverUrl, userId, path), session, DAV_PROPERTIES,
@@ -1627,7 +1671,14 @@ class DesktopNextcloudServices(
             if (response.status == 207) {
                 val files = parseDavFiles(response.body, userId).drop(1)
                     .sortedWith(compareByDescending<NextcloudFile> { it.isDirectory }.thenBy { it.name.lowercase() })
-                runCatching { fileReadCache.storeListing(accountId, path, files) }
+                runCatching {
+                    fileReadCache.storeListingUnlessNewer(
+                        accountId = accountId,
+                        path = path,
+                        files = files,
+                        fetchedAtEpochMillis = requestStartedAtEpochMillis,
+                    )
+                }
                 NextcloudFileListing(files, NextcloudFileListingSource.Network)
             } else {
                 if (response.status >= 500) {
@@ -1838,7 +1889,7 @@ class DesktopNextcloudServices(
                 response.status == 304 && cached != null ->
                     NextcloudFileContent(cached.bytes, cached.mimeType, cached.etag)
                 response.status == 404 -> {
-                    runCatching { fileReadCache.invalidate(accountId, path) }
+                    runCatching { invalidateDesktopFileMetadata(accountId, path) }
                     error("The file no longer exists on the server.")
                 }
                 response.status >= 500 && cached != null ->
@@ -2004,6 +2055,8 @@ class DesktopNextcloudServices(
         version: NextcloudFileVersion,
     ): Unit = withContext(Dispatchers.IO) {
         val specification = fileVersionRestoreRequest(userId, file, version)
+        val accountId = desktopFileCacheAccountId(session)
+        fun invalidateAffectedMetadata() = invalidateDesktopFileMetadata(accountId, file.path)
         val response = request(
             method = specification.method,
             url = session.serverUrl + specification.relativePath,
@@ -2014,9 +2067,14 @@ class DesktopNextcloudServices(
             ),
             maxResponseBytes = specification.maximumResponseBytes,
             client = noRedirectHttpClient,
+            mutationExecutor = noRedirectFileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
         )
+        if (response.status in 200..299) {
+            runCatching(::invalidateAffectedMetadata)
+            return@withContext
+        }
         when (response.status) {
-            in 200..299 -> Unit
             403 -> error("You do not have permission to restore this file version.")
             404 -> error("This historical version no longer exists.")
             409 -> error("The server could not restore this version to the current file.")
@@ -2042,6 +2100,8 @@ class DesktopNextcloudServices(
             put("Accept", "*/*")
             put("If-Match", expectedEtag)
         }
+        val accountId = desktopFileCacheAccountId(session)
+        fun invalidateAffectedMetadata() = invalidateDesktopFileMetadata(accountId, path)
         val response = request(
             "PUT",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -2049,13 +2109,14 @@ class DesktopNextcloudServices(
             rawBody = utf8,
             contentType = "text/plain; charset=utf-8",
             headers = headers,
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
         )
         check(response.status != 412) { "The file changed on the server. Reload it before saving your changes." }
         check(response.status in 200..299) { "Saving the text file failed (HTTP ${response.status})." }
         val etag = response.etag ?: runCatching { loadFileEtag(session, userId, path) }.getOrNull()
-        val accountId = desktopFileCacheAccountId(session)
         runCatching {
-            fileReadCache.invalidate(accountId, path)
+            invalidateAffectedMetadata()
             etag?.let {
                 fileReadCache.storeContent(
                     accountId,
@@ -2077,6 +2138,8 @@ class DesktopNextcloudServices(
         require(utf8.size.toLong() <= MAX_EDITABLE_TEXT_BYTES) {
             "Text files larger than ${MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)} MiB cannot be created in the app."
         }
+        val accountId = desktopFileCacheAccountId(session)
+        fun invalidateAffectedMetadata() = invalidateDesktopFileMetadata(accountId, path)
         val response = request(
             "PUT",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -2084,13 +2147,14 @@ class DesktopNextcloudServices(
             rawBody = utf8,
             contentType = "text/plain; charset=utf-8",
             headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
         )
         if (response.status == 412) return@withContext SavedTextFile(etag = null, wasCreated = false)
         check(response.status in 200..299) { "Creating the text file failed (HTTP ${response.status})." }
         check(response.status == 201) { "The server did not confirm that a new text file was created." }
         runCatching {
-            val accountId = desktopFileCacheAccountId(session)
-            fileReadCache.invalidate(accountId, path)
+            invalidateAffectedMetadata()
             response.etag?.let {
                 fileReadCache.storeContent(
                     accountId,
@@ -2107,19 +2171,21 @@ class DesktopNextcloudServices(
         userId: String,
         path: String,
     ): Boolean = withContext(Dispatchers.IO) {
+        val accountId = desktopFileCacheAccountId(session)
+        fun invalidateAffectedMetadata() = invalidateDesktopFileMetadata(accountId, path)
         val response = request(
             method = "MKCOL",
             url = buildNextcloudFileUrl(session.serverUrl, userId, path),
             session = session,
             headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
             maxResponseBytes = 64 * 1024,
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
         )
         if (response.status in setOf(405, 412)) return@withContext false
         if (response.status !in 200..299) throw fileOperationException(response.status)
         check(response.status == 201) { "The server did not confirm that a new folder was created." }
-        runCatching {
-            fileReadCache.invalidate(desktopFileCacheAccountId(session), path)
-        }
+        runCatching(::invalidateAffectedMetadata)
         true
     }
 
@@ -2137,19 +2203,24 @@ class DesktopNextcloudServices(
                 put("Overwrite", if (spec.overwrite) "T" else "F")
             }
         }
+        val accountId = desktopFileCacheAccountId(session)
+        fun invalidateAffectedMetadata() {
+            runCatching {
+                invalidateDesktopFileMetadata(accountId, spec.sourcePath)
+                spec.destinationPath?.let { invalidateDesktopFileMetadata(accountId, it) }
+            }
+        }
         val response = request(
             method = spec.method,
             url = buildNextcloudFileUrl(session.serverUrl, userId, spec.sourcePath),
             session = session,
             headers = headers,
             maxResponseBytes = 64 * 1024,
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
         )
         if (response.status !in 200..299) throw fileOperationException(response.status)
-        runCatching {
-            val accountId = desktopFileCacheAccountId(session)
-            fileReadCache.invalidate(accountId, spec.sourcePath)
-            spec.destinationPath?.let { fileReadCache.invalidate(accountId, it) }
-        }
+        invalidateAffectedMetadata()
         NextcloudFileMutationResult(spec.destinationPath, response.etag)
     }
 
@@ -2858,6 +2929,8 @@ class DesktopNextcloudServices(
         maxResponseBytes: Long = MAX_API_RESPONSE_BYTES,
         client: OkHttpClient = httpClient,
         streamingBody: RequestBody? = null,
+        mutationExecutor: DesktopHttpMutationExecutor? = null,
+        onAmbiguousMutationResult: () -> Unit = {},
     ): HttpResponse {
         val requestBody = when {
             streamingBody != null -> streamingBody
@@ -2874,16 +2947,22 @@ class DesktopNextcloudServices(
             val encoded = Base64.getEncoder().encodeToString("${it.loginName}:${it.appPassword}".toByteArray())
             builder.header("Authorization", "Basic $encoded")
         }
-        return client.newCall(builder.build()).execute().use { response ->
+        val request = builder.build()
+        fun consumeResponse(response: okhttp3.Response): HttpResponse {
             val responseBody = response.body
             val contentLength = responseBody.contentLength()
             val readLimit = if (response.isSuccessful) maxResponseBytes else MAX_ERROR_RESPONSE_BYTES
             check(contentLength <= readLimit || contentLength == -1L) {
                 "The server response is larger than the allowed ${formatByteLimit(readLimit)} limit."
             }
-            HttpResponse(
+            val bodyBytes = if (mutationExecutor != null && !response.isSuccessful) {
+                runCatching { responseBody.byteStream().readBounded(readLimit) }.getOrDefault(byteArrayOf())
+            } else {
+                responseBody.byteStream().readBounded(readLimit)
+            }
+            return HttpResponse(
                 response.code,
-                responseBody.byteStream().readBounded(readLimit),
+                bodyBytes,
                 responseBody.contentType()?.toString(),
                 response.header("ETag") ?: response.header("OC-Etag"),
                 if (session == null) {
@@ -2897,6 +2976,16 @@ class DesktopNextcloudServices(
                 },
                 response.header("X-Chat-Last-Given"),
                 response.header("Content-Range"),
+            )
+        }
+        return if (mutationExecutor == null) {
+            client.newCall(request).execute().use(::consumeResponse)
+        } else {
+            mutationExecutor.execute(
+                request = request,
+                onAmbiguousNetworkResult = onAmbiguousMutationResult,
+                onAcceptedResponse = onAmbiguousMutationResult,
+                consume = ::consumeResponse,
             )
         }
     }

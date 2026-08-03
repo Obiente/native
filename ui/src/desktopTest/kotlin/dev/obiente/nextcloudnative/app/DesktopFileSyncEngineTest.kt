@@ -9,6 +9,18 @@ import kotlin.test.assertTrue
 
 class DesktopFileSyncEngineTest {
     @Test
+    fun `remote mutation paths include the configured pair root`() {
+        assertEquals(
+            "Photography/Albums/2026/cover.jpg",
+            desktopFileSyncRemoteMutationPath(
+                remoteRootPath = "/Photography/Albums/",
+                relativePath = "/2026/cover.jpg/",
+            ),
+        )
+        assertEquals("cover.jpg", desktopFileSyncRemoteMutationPath("", "cover.jpg"))
+    }
+
+    @Test
     fun `stale owned stages are reclaimed without touching lookalikes`() {
         val root = Files.createTempDirectory("desktop-sync-stage-recovery-").toFile()
         try {
