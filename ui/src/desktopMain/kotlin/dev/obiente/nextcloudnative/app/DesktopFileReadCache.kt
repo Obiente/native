@@ -54,6 +54,7 @@ internal class DesktopFileReadCache(
     private val metadataShardReadObserver: (File) -> Unit = {},
 ) {
     private val loadedIndexes = LinkedHashMap<String, CacheIndexV1>(16, 0.75f, true)
+    private val failedVirtualListingInvalidations = mutableMapOf<String, Set<String>>()
     init {
         require(maximumContentBytes > 0L)
         require(maximumEntryBytes in 1L..maximumContentBytes)
@@ -110,6 +111,16 @@ internal class DesktopFileReadCache(
                 fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
             )
         }
+    }
+
+    @Synchronized
+    fun failedVirtualListingInvalidations(accountId: String): Set<String> =
+        failedVirtualListingInvalidations[accountId].orEmpty().toSet()
+
+    @Synchronized
+    fun replaceFailedVirtualListingInvalidations(accountId: String, paths: Set<String>) {
+        if (paths.isEmpty()) failedVirtualListingInvalidations.remove(accountId)
+        else failedVirtualListingInvalidations[accountId] = paths.toSet()
     }
 
     @Synchronized

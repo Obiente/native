@@ -79,6 +79,23 @@ internal class DesktopFileSyncRemoteTree(
         }.sortedBy { it.entry.relativePath }
     }
 
+    fun isDirectoryEmpty(relativeDirectoryPath: String, expectedRemoteEtag: String): Boolean {
+        val normalizedDirectory = relativeDirectoryPath.trim('/')
+        requireValidSyncPath(normalizedDirectory)
+        val fullDirectoryPath = fullPath(normalizedDirectory)
+        val documents = executeDirectoryListing(directoryListingRequest(fullDirectoryPath))
+        val directory = requireNotNull(
+            documents.singleOrNull { document -> document.entry.relativePath == fullDirectoryPath },
+        ) { "The server folder disappeared before it could be changed." }
+        require(directory.isDirectory && directory.entry.etag == expectedRemoteEtag) {
+            "The server folder changed before it could be changed."
+        }
+        return documents.none { document ->
+            document.entry.relativePath != fullDirectoryPath &&
+                document.entry.relativePath.substringBeforeLast('/', "") == fullDirectoryPath
+        }
+    }
+
     override fun stageDownload(
         relativePath: String,
         expectedRemoteEtag: String,
@@ -307,18 +324,18 @@ internal class DesktopFileSyncRemoteTree(
     }
 
     private fun rawListDirectory(path: String): List<DesktopRemoteSyncDocument> {
-        val documents = executeDirectoryListing(
-            requestBuilder(fileUrl(path))
-                .header("Accept", "application/xml")
-                .header("Depth", "1")
-                .method("PROPFIND", DIRECTORY_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
-                .build(),
-        )
+        val documents = executeDirectoryListing(directoryListingRequest(path))
         val parent = path.trim('/')
         return documents
             .filter { it.entry.relativePath.substringBeforeLast('/', "") == parent }
             .also { require(it.size <= MAX_CHILDREN + MAX_RECOVERY_ITEMS) { "A Nextcloud folder contains too many entries." } }
     }
+
+    private fun directoryListingRequest(path: String): Request = requestBuilder(fileUrl(path))
+        .header("Accept", "application/xml")
+        .header("Depth", "1")
+        .method("PROPFIND", DIRECTORY_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
+        .build()
 
     private fun executeDirectoryListing(request: Request): List<DesktopRemoteSyncDocument> =
         client.newCall(request).execute().use { response ->
@@ -464,10 +481,11 @@ internal class DesktopFileSyncRemoteTree(
     ): String? = mutationExecutor.execute(
         request = request,
         onAmbiguousNetworkResult = { notifyAmbiguousMutationResult(*mutationRelativePaths) },
+        onAcceptedResponse = { notifyMutationCommitted(*mutationRelativePaths) },
     ) { response ->
             require(response.code in 200..299) { response.failure(operation) }
             response.header("ETag") ?: response.header("OC-Etag")
-        }.also { notifyMutationCommitted(*mutationRelativePaths) }
+        }
 
     private fun executeMutation(
         request: Request,
@@ -478,11 +496,12 @@ internal class DesktopFileSyncRemoteTree(
     ): ByteArray = mutationExecutor.execute(
         request = request,
         onAmbiguousNetworkResult = { notifyAmbiguousMutationResult(*mutationRelativePaths) },
+        onAcceptedResponse = { notifyMutationCommitted(*mutationRelativePaths) },
     ) { response ->
         val accepted = expectedStatus?.let { response.code == it } ?: (response.code in 200..299)
         require(accepted) { response.failure(operation) }
         response.body.byteStream().readBounded(maximumResponseBytes)
-    }.also { notifyMutationCommitted(*mutationRelativePaths) }
+    }
 
     private fun execute(
         request: Request,

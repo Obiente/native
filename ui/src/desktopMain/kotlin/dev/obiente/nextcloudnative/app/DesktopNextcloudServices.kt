@@ -3988,7 +3988,12 @@ class DesktopNextcloudServices(
         return if (mutationExecutor == null) {
             client.newCall(request).execute().use(::consumeResponse)
         } else {
-            mutationExecutor.execute(request, onAmbiguousMutationResult, ::consumeResponse)
+            mutationExecutor.execute(
+                request = request,
+                onAmbiguousNetworkResult = onAmbiguousMutationResult,
+                onAcceptedResponse = onAmbiguousMutationResult,
+                consume = ::consumeResponse,
+            )
         }
     }
 

@@ -18,6 +18,7 @@ internal class DesktopHttpMutationExecutor(client: OkHttpClient) {
     fun <T> execute(
         request: Request,
         onAmbiguousNetworkResult: () -> Unit,
+        onAcceptedResponse: () -> Unit = {},
         consume: (Response) -> T,
     ): T {
         val attempt = DesktopHttpMutationAttempt()
@@ -25,7 +26,10 @@ internal class DesktopHttpMutationExecutor(client: OkHttpClient) {
             .tag(DesktopHttpMutationAttempt::class.java, attempt)
             .build()
         return try {
-            trackedClient.newCall(trackedRequest).execute().use(consume)
+            trackedClient.newCall(trackedRequest).execute().use { response ->
+                if (response.isSuccessful) runCatching(onAcceptedResponse)
+                consume(response)
+            }
         } catch (failure: IOException) {
             if (desktopMutationResultIsAmbiguous(attempt.networkExchangeStarted, failure)) {
                 runCatching(onAmbiguousNetworkResult)
