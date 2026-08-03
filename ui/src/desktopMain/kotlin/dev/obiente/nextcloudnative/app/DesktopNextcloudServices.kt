@@ -208,6 +208,20 @@ internal fun validateDesktopVirtualFileProviderLocation(location: VirtualFilePro
     return target
 }
 
+internal fun virtualFileLocationActionMessage(prefix: String, target: Path): String {
+    require(prefix.isNotBlank())
+    val suffix = target.toString()
+    val available = MAX_VIRTUAL_FILE_ACTION_MESSAGE_LENGTH - prefix.length - 1
+    require(available >= 4)
+    val displayedTarget = if (suffix.length <= available) {
+        suffix
+    } else {
+        val tailLength = (available - 3).coerceAtLeast(0)
+        "...${suffix.takeLast(tailLength)}"
+    }
+    return "$prefix$displayedTarget."
+}
+
 internal fun desktopWindowsCloudFilesRoot(
     accountId: String,
     userHome: File = File(System.getProperty("user.home")),
@@ -677,6 +691,8 @@ class DesktopNextcloudServices(
             generation to (generation > virtualFolderCompletedGenerations.getOrDefault(jobKey, 0L))
         }
         val (generation, mutationRefreshPending) = generationState
+        val persistedStatus = cache.loadFolderHydrationStatus(accountId, relativePath)
+        if (!mutationRefreshPending && !shouldScheduleVirtualFolderHydration(persistedStatus, now)) return
         val currentStatus = cache.loadValidatedFolderHydrationStatus(accountId, relativePath)
         if (!mutationRefreshPending && !shouldScheduleVirtualFolderHydration(currentStatus, now)) return
         if (currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline) {
@@ -1047,6 +1063,28 @@ class DesktopNextcloudServices(
         val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
         runCatching { cache.invalidate(accountId, path) }
         val roots = runCatching { cache.queueRetainedFoldersForRefresh(accountId, path) }
+            .getOrDefault(emptyList())
+        synchronized(virtualFolderMutationLock) {
+            advanceAffectedVirtualFolderGenerations(
+                virtualFolderMutationGenerationsByJob,
+                virtualFolderCompletedGenerations,
+                accountId,
+                roots,
+            )
+        }
+        roots.forEach { root ->
+            runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+        }
+    }
+
+    private fun refreshRetainedFoldersAfterRemoteListing(
+        session: NextcloudSession,
+        userId: String,
+        accountId: String,
+        changedPaths: Set<String>,
+    ) {
+        val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
+        val roots = runCatching { cache.queueRetainedFoldersForListingRefresh(accountId, changedPaths) }
             .getOrDefault(emptyList())
         synchronized(virtualFolderMutationLock) {
             advanceAffectedVirtualFolderGenerations(
@@ -1457,6 +1495,9 @@ class DesktopNextcloudServices(
                     rangeCache = virtualRangeCache(accountId),
                     accountId = accountId,
                     fallback = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId),
+                    afterRetainedListingChanged = { changedPaths ->
+                        refreshRetainedFoldersAfterRemoteListing(session, userId, accountId, changedPaths)
+                    },
                 ),
                 afterMutationInvalidated = { path ->
                     refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
@@ -1547,7 +1588,9 @@ class DesktopNextcloudServices(
             }
             val target = validateDesktopVirtualFileProviderLocation(location)
             if (target == desktopLinuxVirtualFileMountPoint(preferences, accountId).toPath()) {
-                return@withContext VirtualFileStorageActionResult.Completed("Virtual files already use $target.")
+                return@withContext VirtualFileStorageActionResult.Completed(
+                    virtualFileLocationActionMessage("Virtual files already use ", target),
+                )
             }
             val currentCache = virtualRangeCache(accountId)
             currentCache.requireAvailable()
@@ -1561,7 +1604,9 @@ class DesktopNextcloudServices(
             }
             preferences.put(virtualFileProviderRootPreferenceKey(accountId), target.toString())
             synchronized(virtualRangeCaches) { virtualRangeCaches.remove(accountId) }
-            VirtualFileStorageActionResult.Completed("Virtual files will appear at $target.")
+            VirtualFileStorageActionResult.Completed(
+                virtualFileLocationActionMessage("Virtual files will appear at ", target),
+            )
         }
     }
 

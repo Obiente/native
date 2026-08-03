@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -58,5 +59,17 @@ class DesktopVirtualFileProviderLocationTest {
     fun internalCacheDirectoryCannotBeUsedAsTheVisibleFolder() {
         assertEquals(false, ".nextcloud-native-cache".isValidVirtualFileProviderFolderName())
         assertEquals(false, ".NEXTCLOUD-NATIVE-CACHE".isValidVirtualFileProviderFolderName())
+    }
+
+    @Test
+    fun locationResultMessagesRemainBoundedForLongValidPaths() {
+        val message = virtualFileLocationActionMessage(
+            "Virtual files will appear at ",
+            Path.of("/", "nested".repeat(1_000)),
+        )
+
+        assertEquals(MAX_VIRTUAL_FILE_ACTION_MESSAGE_LENGTH, message.length)
+        assertEquals(true, message.startsWith("Virtual files will appear at ..."))
+        VirtualFileStorageActionResult.Completed(message)
     }
 }

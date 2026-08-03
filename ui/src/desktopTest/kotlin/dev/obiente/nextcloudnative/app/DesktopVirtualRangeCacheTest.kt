@@ -280,6 +280,74 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `fresh status can be read without running retained content verification`() {
+        val directory = Files.createTempDirectory("virtual-range-cheap-status-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderHydrationStatus(
+                ACCOUNT_ID,
+                VirtualFolderHydrationStatus(
+                    "Photos",
+                    VirtualFolderHydrationPhase.AvailableOffline,
+                    verifiedAtEpochMillis = 42L,
+                ),
+            )
+
+            assertEquals(
+                VirtualFolderHydrationPhase.AvailableOffline,
+                cache.loadFolderHydrationStatus(ACCOUNT_ID, "Photos")?.phase,
+            )
+            assertEquals(
+                VirtualFolderHydrationPhase.Queued,
+                cache.loadValidatedFolderHydrationStatus(ACCOUNT_ID, "Photos")?.phase,
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `remote listing changes queue only affected retained roots`() {
+        val directory = Files.createTempDirectory("virtual-range-listing-refresh-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Excluded", VirtualFolderRetention.Automatic)
+            cache.setFolderRetention(ACCOUNT_ID, "Documents", VirtualFolderRetention.KeepOnDevice)
+            listOf("Photos", "Documents").forEach { root ->
+                cache.setFolderHydrationStatus(
+                    ACCOUNT_ID,
+                    VirtualFolderHydrationStatus(
+                        root,
+                        VirtualFolderHydrationPhase.AvailableOffline,
+                        verifiedAtEpochMillis = 42L,
+                    ),
+                )
+            }
+
+            assertEquals(
+                listOf("Documents"),
+                cache.queueRetainedFoldersForListingRefresh(
+                    ACCOUNT_ID,
+                    setOf(
+                        "Documents/new.txt",
+                        "Photos/Excluded/online-only.txt",
+                        "Unrelated/file.txt",
+                    ),
+                ),
+            )
+            val statusByPath = cache.loadFolderHydrationStatuses(ACCOUNT_ID).associateBy(
+                VirtualFolderHydrationStatus::relativePath,
+            )
+            assertEquals(VirtualFolderHydrationPhase.AvailableOffline, statusByPath.getValue("Photos").phase)
+            assertEquals(VirtualFolderHydrationPhase.Queued, statusByPath.getValue("Documents").phase)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `retained metadata budget rejects the next listing before accumulation`() {
         assertEquals(100, nextVirtualFolderRetainedMetadataCount(40, 60, maximumEntries = 100))
         assertFailsWith<IllegalStateException> {

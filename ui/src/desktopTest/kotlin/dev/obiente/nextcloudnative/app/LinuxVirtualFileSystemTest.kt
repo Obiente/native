@@ -1332,6 +1332,45 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `persisted remote listing reports only changed child paths once`() {
+        val directory = Files.createTempDirectory("retained-listing-change-").toFile()
+        try {
+            val accountId = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            val cache = DesktopVirtualRangeCache(directory) {
+                VirtualFileCachePolicy(automaticCleanup = false, minimumFreeSpaceBytes = 0L)
+            }
+            val fallback = MemoryLinuxVirtualMetadataStore().apply {
+                seed(
+                    "",
+                    LinuxVirtualDirectorySnapshot(
+                        listOf(
+                            LinuxVirtualFileNode("Photos", "Photos", true, 0L, "photos"),
+                            LinuxVirtualFileNode("Documents", "Documents", true, 0L, "documents-old"),
+                        ),
+                        10L,
+                    ),
+                )
+            }
+            val changes = mutableListOf<Set<String>>()
+            val store = RetainedLinuxVirtualMetadataStore(cache, accountId, fallback, changes::add)
+            val refreshed = LinuxVirtualDirectorySnapshot(
+                listOf(
+                    LinuxVirtualFileNode("Photos", "Photos", true, 0L, "photos"),
+                    LinuxVirtualFileNode("Documents", "Documents", true, 0L, "documents-new"),
+                ),
+                20L,
+            )
+
+            assertTrue(store.store("", refreshed))
+            assertEquals(listOf(setOf("Documents")), changes)
+            assertTrue(store.store("", refreshed.copy(fetchedAtEpochMillis = 30L)))
+            assertEquals(1, changes.size)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `failed namespace mutation invalidation requests retained folder recovery`() {
         val failure = IllegalStateException("permission rejected")
         val delegate = object : LinuxVirtualFileBackend by MutableFixtureBackend() {

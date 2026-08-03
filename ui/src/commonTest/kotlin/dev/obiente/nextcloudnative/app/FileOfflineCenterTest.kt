@@ -188,6 +188,34 @@ class FileOfflineCenterTest {
         }
     }
 
+    @Test
+    fun `scheduled retained refreshes keep storage polling at a bounded cadence`() {
+        val available = VirtualFolderHydrationStatus(
+            "Photos",
+            VirtualFolderHydrationPhase.AvailableOffline,
+            refreshFailure = "Server unavailable.",
+            verifiedAtEpochMillis = 1_000L,
+            refreshRetryAtEpochMillis = 20_000L,
+        )
+
+        assertEquals(10_000L, virtualStorageHydrationPollDelay(listOf(available), 5_000L))
+        assertEquals(5_000L, virtualStorageHydrationPollDelay(listOf(available), 15_000L))
+        assertEquals(10_000L, virtualStorageHydrationPollDelay(listOf(available), 20_000L))
+        assertEquals(
+            750L,
+            virtualStorageHydrationPollDelay(
+                listOf(available.copy(refreshing = true, refreshFailure = null, refreshRetryAtEpochMillis = null)),
+                20_000L,
+            ),
+        )
+        assertNull(
+            virtualStorageHydrationPollDelay(
+                listOf(available.copy(refreshFailure = null, refreshRetryAtEpochMillis = null)),
+                20_000L,
+            ),
+        )
+    }
+
     private fun record(
         account: String,
         path: String,

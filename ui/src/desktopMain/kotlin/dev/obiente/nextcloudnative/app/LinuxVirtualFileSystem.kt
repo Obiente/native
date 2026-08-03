@@ -123,6 +123,7 @@ internal class RetainedLinuxVirtualMetadataStore(
     private val rangeCache: DesktopVirtualRangeCache,
     private val accountId: String,
     private val fallback: LinuxVirtualMetadataStore,
+    private val afterRetainedListingChanged: (Set<String>) -> Unit = {},
 ) : LinuxVirtualMetadataStore {
     override fun load(path: String): LinuxVirtualDirectorySnapshot? {
         val retained = rangeCache.loadRetainedListing(accountId, path) ?: return fallback.load(path)
@@ -133,7 +134,17 @@ internal class RetainedLinuxVirtualMetadataStore(
         return mergeRetainedNavigationListing(completeFallback, retained)
     }
 
-    override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = fallback.store(path, snapshot)
+    override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean {
+        val previousNodes = runCatching { fallback.load(path)?.nodesByPath }.getOrNull().orEmpty()
+        val persisted = fallback.store(path, snapshot)
+        if (persisted && previousNodes != snapshot.nodesByPath) {
+            val changedPaths = (previousNodes.keys + snapshot.nodesByPath.keys).filterTo(linkedSetOf()) { nodePath ->
+                previousNodes[nodePath] != snapshot.nodesByPath[nodePath]
+            }
+            if (changedPaths.isNotEmpty()) runCatching { afterRetainedListingChanged(changedPaths) }
+        }
+        return persisted
+    }
 
     override fun retainedPaths(): Set<String>? = fallback.retainedPaths()
 

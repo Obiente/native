@@ -159,7 +159,7 @@ fun formatVirtualFileBytes(bytes: Long): String {
 
 private const val MAX_VIRTUAL_FILE_LIMITATIONS = 8
 private const val MAX_VIRTUAL_FILE_LIMITATION_LENGTH = 512
-private const val MAX_VIRTUAL_FILE_ACTION_MESSAGE_LENGTH = 512
+internal const val MAX_VIRTUAL_FILE_ACTION_MESSAGE_LENGTH = 512
 private const val MAX_VIRTUAL_FILE_LOCATION_LENGTH = 8_192
 private const val MAX_VIRTUAL_FILE_FOLDER_NAME_LENGTH = 128
 private const val INTERNAL_VIRTUAL_FILE_CACHE_FOLDER_NAME = ".nextcloud-native-cache"

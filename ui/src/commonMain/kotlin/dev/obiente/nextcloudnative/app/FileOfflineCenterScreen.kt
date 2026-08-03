@@ -59,6 +59,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlin.time.Clock
 
 @Composable
 internal fun FileOfflineCenterScreen(
@@ -323,17 +324,16 @@ internal fun FileOfflineCenterScreen(
         if (userId.isBlank() || !services.supportsVirtualFileStorage) return@LaunchedEffect
         virtualStorageLoading = true
         try {
-            do {
+            while (true) {
                 val loaded = services.loadVirtualFileStorage(session, userId)
                 virtualStorage = loaded
                 virtualStorageLoading = false
-                val hydrationActive = loaded.folderHydrationStatuses.any { status ->
-                    status.phase == VirtualFolderHydrationPhase.Queued ||
-                        status.phase == VirtualFolderHydrationPhase.Downloading ||
-                        status.refreshing
-                }
-                if (hydrationActive) delay(VIRTUAL_STORAGE_HYDRATION_POLL_MILLIS)
-            } while (hydrationActive)
+                val pollDelay = virtualStorageHydrationPollDelay(
+                    loaded.folderHydrationStatuses,
+                    nowEpochMillis = Clock.System.now().toEpochMilliseconds().coerceAtLeast(0L),
+                ) ?: break
+                delay(pollDelay)
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
@@ -858,7 +858,25 @@ internal fun FileOfflineCenterScreen(
     }
 }
 
+internal fun virtualStorageHydrationPollDelay(
+    statuses: List<VirtualFolderHydrationStatus>,
+    nowEpochMillis: Long,
+): Long? {
+    require(nowEpochMillis >= 0L)
+    if (statuses.any { status ->
+            status.phase == VirtualFolderHydrationPhase.Queued ||
+                status.phase == VirtualFolderHydrationPhase.Downloading ||
+                status.refreshing
+        }
+    ) return VIRTUAL_STORAGE_HYDRATION_POLL_MILLIS
+    val retryAt = statuses.mapNotNull(VirtualFolderHydrationStatus::refreshRetryAtEpochMillis).minOrNull()
+        ?: return null
+    if (retryAt <= nowEpochMillis) return VIRTUAL_STORAGE_RETRY_POLL_MILLIS
+    return (retryAt - nowEpochMillis).coerceAtMost(VIRTUAL_STORAGE_RETRY_POLL_MILLIS)
+}
+
 private const val VIRTUAL_STORAGE_HYDRATION_POLL_MILLIS = 750L
+private const val VIRTUAL_STORAGE_RETRY_POLL_MILLIS = 10_000L
 
 @Composable
 internal fun FolderSyncSection(

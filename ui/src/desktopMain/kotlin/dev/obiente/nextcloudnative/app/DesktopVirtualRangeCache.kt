@@ -226,6 +226,14 @@ internal class DesktopVirtualRangeCache(
         loadRetention(accountId).hydration.map(CachedVirtualFolderHydration::toDomain)
 
     @Synchronized
+    fun loadFolderHydrationStatus(accountId: String, path: String): VirtualFolderHydrationStatus? {
+        val normalized = FileOfflineKey(accountId, path).relativePath
+        return loadRetention(accountId).hydration
+            .firstOrNull { status -> status.relativePath == normalized }
+            ?.toDomain()
+    }
+
+    @Synchronized
     fun loadValidatedFolderHydrationStatus(accountId: String, path: String): VirtualFolderHydrationStatus? {
         val normalized = FileOfflineKey(accountId, path).relativePath
         val current = loadFolderHydrationStatuses(accountId)
@@ -460,19 +468,37 @@ internal class DesktopVirtualRangeCache(
     @Synchronized
     fun queueRetainedFoldersForRefresh(accountId: String, path: String): List<String> {
         val normalized = FileOfflineKey(accountId, path).relativePath
+        return queueRetainedFoldersForListingRefresh(accountId, listOf(normalized))
+    }
+
+    @Synchronized
+    fun queueRetainedFoldersForListingRefresh(accountId: String, changedPaths: Collection<String>): List<String> {
+        if (changedPaths.isEmpty()) return emptyList()
+        val normalizedPaths = changedPaths.mapTo(linkedSetOf()) { path ->
+            FileOfflineKey(accountId, path).relativePath
+        }
         val current = loadRetention(accountId)
+        val retention = current.rules.toDomain()
         val roots = current.rules.asSequence()
             .filter { rule ->
-                rule.retention == VirtualFolderRetention.KeepOnDevice &&
-                    (
-                        normalized == rule.relativePath ||
-                            normalized.startsWith("${rule.relativePath}/") ||
-                            rule.relativePath.startsWith("$normalized/")
-                        )
+                rule.retention == VirtualFolderRetention.KeepOnDevice && normalizedPaths.any { normalized ->
+                    normalized == rule.relativePath ||
+                        rule.relativePath.startsWith("$normalized/") ||
+                        normalized.startsWith("${rule.relativePath}/") &&
+                        retention.retentionFor(normalized) == VirtualFolderRetention.KeepOnDevice
+                }
             }
             .map(CachedVirtualFolderRule::relativePath)
             .distinct()
             .toList()
+        return queueRetainedFolderRoots(current, accountId, roots)
+    }
+
+    private fun queueRetainedFolderRoots(
+        current: VirtualFolderRetentionIndex,
+        accountId: String,
+        roots: List<String>,
+    ): List<String> {
         if (roots.isEmpty()) return emptyList()
         val queued = roots.map { root ->
             CachedVirtualFolderHydration.fromDomain(
