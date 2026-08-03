@@ -58,6 +58,25 @@ class DesktopFileReadCacheTest {
         }
 
     @Test
+    fun `virtual metadata preserves response completion freshness after restart`() =
+        withCache { root, cache ->
+            val accountId = desktopFileCacheAccountId(session())
+            cache.storeVirtualListingUnlessNewer(
+                accountId = accountId,
+                path = "Photos",
+                nodes = listOf(LinuxVirtualFileNode("Photos/a.jpg", "a.jpg", false, 4L, "etag-a")),
+                fetchedAtEpochMillis = 10L,
+                freshAtEpochMillis = 6_010L,
+            )
+
+            val restored = DesktopFileReadCache(root, preferences = testPreferences(root))
+            val snapshot = restored.cachedVirtualListingSnapshot(accountId, "Photos")
+
+            assertEquals(10L, snapshot?.fetchedAtEpochMillis)
+            assertEquals(6_010L, snapshot?.freshAtEpochMillis)
+        }
+
+    @Test
     fun `folder refresh invalidates only removed or changed ETag generations`() = withCache { _, cache ->
         val accountId = desktopFileCacheAccountId(session())
         val stable = file("Notes/stable.md", "\"same\"")

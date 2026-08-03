@@ -98,7 +98,11 @@ internal class DesktopLinuxVirtualMetadataStore(
 ) : LinuxVirtualMetadataStore {
     override fun load(path: String): LinuxVirtualDirectorySnapshot? {
         val listing = cache.cachedVirtualListingSnapshot(accountId, path) ?: return null
-        return LinuxVirtualDirectorySnapshot(listing.nodes, listing.fetchedAtEpochMillis)
+        return LinuxVirtualDirectorySnapshot(
+            nodes = listing.nodes,
+            fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
+            freshAtEpochMillis = listing.freshAtEpochMillis,
+        )
     }
 
     override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean =
@@ -107,6 +111,7 @@ internal class DesktopLinuxVirtualMetadataStore(
             path = path,
             nodes = snapshot.nodes,
             fetchedAtEpochMillis = snapshot.fetchedAtEpochMillis,
+            freshAtEpochMillis = snapshot.freshAtEpochMillis,
         )
 
     override fun invalidate(path: String) = cache.invalidate(accountId, path)
@@ -492,6 +497,7 @@ internal class CachingLinuxVirtualFileBackend(
     private fun invalidate(path: String) {
         val normalized = path.linuxVirtualPath()
         val parent = normalized.substringBeforeLast('/', "")
+        var quarantinePersisted = false
         synchronized(metadataLock) {
             val knownPaths = buildSet {
                 add(normalized)
@@ -515,13 +521,23 @@ internal class CachingLinuxVirtualFileBackend(
             // Persist the fail-closed quarantine before touching the main cache index. If the
             // process stops during invalidation, the next process must not restore stale data.
             rememberFailedPersistedInvalidation(normalized)
-            store.replaceFailedInvalidations(failedPersistedInvalidations)
+            quarantinePersisted = persistFailedInvalidationsBestEffort()
         }
-        afterPersistedInvalidationMarked()
         var persistedInvalidated = false
-        try {
+        if (!quarantinePersisted) {
+            // Preferences can be unavailable even while the cache volume is writable. In that
+            // case remove the affected index before exposing the mutation as complete so a
+            // restart cannot resurrect the stale listing.
             synchronized(persistedStoreLock) {
                 persistedInvalidated = runCatching { store.invalidate(normalized) }.isSuccess
+            }
+        }
+        afterPersistedInvalidationMarked()
+        try {
+            if (!persistedInvalidated) {
+                synchronized(persistedStoreLock) {
+                    persistedInvalidated = runCatching { store.invalidate(normalized) }.isSuccess
+                }
             }
         } finally {
             synchronized(metadataLock) {
@@ -531,7 +547,7 @@ internal class CachingLinuxVirtualFileBackend(
                     }
                     pruneUnpairedRevalidatedListings()
                 }
-                store.replaceFailedInvalidations(failedPersistedInvalidations)
+                persistFailedInvalidationsBestEffort()
                 val remaining = pendingPersistedInvalidations.getOrDefault(normalized, 1) - 1
                 if (remaining <= 0) pendingPersistedInvalidations.remove(normalized)
                 else pendingPersistedInvalidations[normalized] = remaining
@@ -583,7 +599,12 @@ internal class CachingLinuxVirtualFileBackend(
             }
         }
         pruneUnpairedRevalidatedListings()
-        store.replaceFailedInvalidations(failedPersistedInvalidations)
+        persistFailedInvalidationsBestEffort()
+    }
+
+    private fun persistFailedInvalidationsBestEffort(): Boolean {
+        check(Thread.holdsLock(metadataLock))
+        return runCatching { store.replaceFailedInvalidations(failedPersistedInvalidations) }.isSuccess
     }
 
     private fun retainSnapshot(path: String, snapshot: LinuxVirtualDirectorySnapshot) {

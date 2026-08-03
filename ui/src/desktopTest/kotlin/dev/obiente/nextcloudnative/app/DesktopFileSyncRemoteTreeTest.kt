@@ -287,6 +287,24 @@ class DesktopFileSyncRemoteTreeTest {
         assertEquals(1_785_587_696_000L, documents.last().lastModifiedEpochMillis)
     }
 
+    @Test
+    fun `dav parser accepts bounded cdata properties`() {
+        val documents = parseDesktopSyncDav(
+            (
+                "<d:multistatus xmlns:d=\"DAV:\"><d:response>" +
+                    "<d:href><![CDATA[/remote.php/dav/files/alice/Photos/a%20b.jpg]]></d:href>" +
+                    "<d:propstat><d:prop><d:getetag><![CDATA[\"etag-a\"]]></d:getetag>" +
+                    "<d:getcontentlength><![CDATA[4]]></d:getcontentlength>" +
+                    "</d:prop></d:propstat></d:response></d:multistatus>"
+                ).encodeToByteArray(),
+            userId = "alice",
+        )
+
+        assertEquals(listOf("Photos/a b.jpg"), documents.map { it.entry.relativePath })
+        assertEquals("\"etag-a\"", documents.single().entry.etag)
+        assertEquals(4L, documents.single().entry.size)
+    }
+
     private fun response(request: Request, code: Int, body: String = ""): Response = Response.Builder()
         .request(request)
         .protocol(Protocol.HTTP_1_1)

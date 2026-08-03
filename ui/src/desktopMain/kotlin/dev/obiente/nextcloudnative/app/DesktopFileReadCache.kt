@@ -24,6 +24,7 @@ internal data class DesktopCachedFileListing(
 internal data class DesktopCachedVirtualListing(
     val nodes: List<LinuxVirtualFileNode>,
     val fetchedAtEpochMillis: Long,
+    val freshAtEpochMillis: Long = fetchedAtEpochMillis,
 )
 
 internal data class DesktopVirtualFileCacheSummary(
@@ -112,6 +113,7 @@ internal class DesktopFileReadCache(
             DesktopCachedVirtualListing(
                 nodes = listing.nodes.map(CachedVirtualFileNodeV1::toDomain),
                 fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
+                freshAtEpochMillis = listing.freshAtEpochMillis,
             )
         }
     }
@@ -205,9 +207,11 @@ internal class DesktopFileReadCache(
         path: String,
         nodes: List<LinuxVirtualFileNode>,
         fetchedAtEpochMillis: Long,
+        freshAtEpochMillis: Long = fetchedAtEpochMillis,
         nowEpochMillis: Long = System.currentTimeMillis(),
     ): Boolean {
         require(fetchedAtEpochMillis >= 0L)
+        require(freshAtEpochMillis >= fetchedAtEpochMillis)
         require(nowEpochMillis >= 0L)
         require(nodes.size <= MAX_FILES_PER_LISTING) { "The folder contains too many cacheable entries." }
         val normalized = path.cachePath()
@@ -232,6 +236,7 @@ internal class DesktopFileReadCache(
                         path = normalized,
                         fetchedAtEpochMillis = fetchedAtEpochMillis,
                         nodes = nodes.map(CachedVirtualFileNodeV1::fromDomain),
+                        freshAtEpochMillis = freshAtEpochMillis,
                     ),
                 virtualListingShards = index.virtualListingShards.filterNot { reference ->
                     reference.path == normalized
@@ -589,6 +594,7 @@ internal class DesktopFileReadCache(
                     partIndex = partIndex,
                     partCount = chunks.size,
                     nodes = nodes,
+                    freshAtEpochMillis = listing.freshAtEpochMillis,
                 )
                 val encoded = cacheJson.encodeToString(payload).encodeToByteArray()
                 val (blobName, sha256) = publishMetadataShard(directory, encoded)
@@ -600,6 +606,7 @@ internal class DesktopFileReadCache(
                     entryCount = nodes.size,
                     blobName = blobName,
                     sha256 = sha256,
+                    freshAtEpochMillis = listing.freshAtEpochMillis,
                 )
             }
         } + virtualListingShards.filter { reference -> reference.path !in hydratedVirtualPaths }
@@ -630,7 +637,8 @@ internal class DesktopFileReadCache(
     ): List<CachedVirtualListingShardReferenceV1>? {
         val references = virtualListingShards.filter { reference ->
             reference.path == listing.path &&
-                reference.fetchedAtEpochMillis == listing.fetchedAtEpochMillis
+                reference.fetchedAtEpochMillis == listing.fetchedAtEpochMillis &&
+                reference.freshAtEpochMillis == listing.freshAtEpochMillis
         }
         val ordered = runCatching { references.requireCompleteVirtualShardSet() }.getOrNull() ?: return null
         if (ordered.sumOf(CachedVirtualListingShardReferenceV1::entryCount) != listing.nodes.size) return null
@@ -803,13 +811,19 @@ internal class DesktopFileReadCache(
             require(
                 payload.path == reference.path &&
                     payload.fetchedAtEpochMillis == reference.fetchedAtEpochMillis &&
+                    payload.freshAtEpochMillis == reference.freshAtEpochMillis &&
                     payload.partIndex == reference.partIndex &&
                     payload.partCount == reference.partCount &&
                     payload.nodes.size == reference.entryCount,
             ) { "A virtual Files metadata shard does not match its index reference." }
             payload.nodes
         }
-        return CachedVirtualListingV1(ordered.first().path, ordered.first().fetchedAtEpochMillis, nodes)
+        return CachedVirtualListingV1(
+            path = ordered.first().path,
+            fetchedAtEpochMillis = ordered.first().fetchedAtEpochMillis,
+            nodes = nodes,
+            freshAtEpochMillis = ordered.first().freshAtEpochMillis,
+        )
     }
 
     private fun <T> List<T>.metadataChunks(): List<List<T>> =
@@ -992,7 +1006,9 @@ internal class DesktopFileReadCache(
             references.map(CachedListingShardReferenceV1::fetchedAtEpochMillis).distinct().size == 1
         })
         require(index.virtualListingShards.groupBy(CachedVirtualListingShardReferenceV1::path).all { (_, references) ->
-            references.map(CachedVirtualListingShardReferenceV1::fetchedAtEpochMillis).distinct().size == 1
+            references.map { reference ->
+                reference.fetchedAtEpochMillis to reference.freshAtEpochMillis
+            }.distinct().size == 1
         })
         val ordinaryEntries = mutableMapOf<String, Long>()
         index.listings.forEach { listing -> ordinaryEntries[listing.path] = listing.files.size.toLong() }
@@ -1020,6 +1036,7 @@ internal class DesktopFileReadCache(
         index.virtualListings.forEach { listing ->
             require(listing.path.cachePath() == listing.path)
             require(listing.fetchedAtEpochMillis >= 0L)
+            require(listing.freshAtEpochMillis >= listing.fetchedAtEpochMillis)
             require(listing.nodes.size <= MAX_FILES_PER_LISTING)
             listing.nodes.forEach { node -> requireValidVirtualNode(node.toDomain()) }
         }
@@ -1051,6 +1068,7 @@ internal class DesktopFileReadCache(
     private fun CachedVirtualListingShardReferenceV1.requireValid() {
         path.cachePath()
         require(fetchedAtEpochMillis >= 0L)
+        require(freshAtEpochMillis >= fetchedAtEpochMillis)
         require(partCount in 1..MAX_METADATA_SHARDS_PER_LISTING && partIndex in 0 until partCount)
         require(entryCount in 0..MAX_METADATA_SHARD_ENTRIES)
         require(blobName == "$sha256.$METADATA_SHARD_EXTENSION" && sha256.isSha256Hex())
@@ -1206,6 +1224,7 @@ private data class CachedVirtualListingV1(
     val path: String,
     val fetchedAtEpochMillis: Long,
     val nodes: List<CachedVirtualFileNodeV1>,
+    val freshAtEpochMillis: Long = fetchedAtEpochMillis,
 )
 
 @Serializable
@@ -1228,6 +1247,7 @@ private data class CachedVirtualListingShardReferenceV1(
     val entryCount: Int,
     val blobName: String,
     val sha256: String,
+    val freshAtEpochMillis: Long = fetchedAtEpochMillis,
 )
 
 @Serializable
@@ -1246,6 +1266,7 @@ private data class CachedVirtualListingShardV1(
     val partIndex: Int,
     val partCount: Int,
     val nodes: List<CachedVirtualFileNodeV1>,
+    val freshAtEpochMillis: Long = fetchedAtEpochMillis,
 )
 
 @Serializable
