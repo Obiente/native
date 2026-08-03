@@ -69,24 +69,42 @@ internal class DesktopFileReadCache(
 
     @Synchronized
     fun cachedListingPaths(accountId: String): Set<String> =
-        load(accountId).listings.mapTo(linkedSetOf()) { listing -> listing.path }
+        load(accountId).let { index ->
+            buildSet {
+                index.listings.mapTo(this, CachedListingV1::path)
+                index.listingShards.mapTo(this, CachedListingShardReferenceV1::path)
+            }
+        }
 
     @Synchronized
     fun cachedListingSnapshot(accountId: String, path: String): DesktopCachedFileListing? {
         val normalized = path.cachePath()
-        return load(accountId).listings.firstOrNull { it.path == normalized }?.let { listing ->
+        val index = load(accountId)
+        val listing = index.listings.firstOrNull { it.path == normalized }
+            ?: hydrateListingOnDemand(accountId, normalized, index)
+            ?: return null
+        return listing.let {
             DesktopCachedFileListing(listing.files, listing.fetchedAtEpochMillis)
         }
     }
 
     @Synchronized
     fun cachedVirtualListingPaths(accountId: String): Set<String> =
-        load(accountId).virtualListings.mapTo(linkedSetOf()) { listing -> listing.path }
+        load(accountId).let { index ->
+            buildSet {
+                index.virtualListings.mapTo(this, CachedVirtualListingV1::path)
+                index.virtualListingShards.mapTo(this, CachedVirtualListingShardReferenceV1::path)
+            }
+        }
 
     @Synchronized
     fun cachedVirtualListingSnapshot(accountId: String, path: String): DesktopCachedVirtualListing? {
         val normalized = path.cachePath()
-        return load(accountId).virtualListings.firstOrNull { it.path == normalized }?.let { listing ->
+        val index = load(accountId)
+        val listing = index.virtualListings.firstOrNull { it.path == normalized }
+            ?: hydrateVirtualListingOnDemand(accountId, normalized, index)
+            ?: return null
+        return listing.let {
             DesktopCachedVirtualListing(
                 nodes = listing.nodes.map(CachedVirtualFileNodeV1::toDomain),
                 fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
@@ -137,11 +155,15 @@ internal class DesktopFileReadCache(
         require(fetchedAtEpochMillis >= 0L)
         require(nowEpochMillis >= 0L)
         val normalized = path.cachePath()
-        val current = load(accountId).listings.firstOrNull { listing -> listing.path == normalized }
+        val currentTimestamp = load(accountId).let { index ->
+            index.listings.firstOrNull { listing -> listing.path == normalized }?.fetchedAtEpochMillis
+                ?: index.listingShards.asSequence().filter { reference -> reference.path == normalized }
+                    .maxOfOrNull(CachedListingShardReferenceV1::fetchedAtEpochMillis)
+        }
         if (
-            current != null &&
-            current.fetchedAtEpochMillis <= nowEpochMillis &&
-            current.fetchedAtEpochMillis >= fetchedAtEpochMillis
+            currentTimestamp != null &&
+            currentTimestamp <= nowEpochMillis &&
+            currentTimestamp >= fetchedAtEpochMillis
         ) {
             return false
         }
@@ -163,11 +185,14 @@ internal class DesktopFileReadCache(
         val normalized = path.cachePath()
         nodes.forEach(::requireValidVirtualNode)
         val index = load(accountId)
-        val current = index.virtualListings.firstOrNull { listing -> listing.path == normalized }
+        val currentTimestamp =
+            index.virtualListings.firstOrNull { listing -> listing.path == normalized }?.fetchedAtEpochMillis
+                ?: index.virtualListingShards.asSequence().filter { reference -> reference.path == normalized }
+                    .maxOfOrNull(CachedVirtualListingShardReferenceV1::fetchedAtEpochMillis)
         if (
-            current != null &&
-            current.fetchedAtEpochMillis <= nowEpochMillis &&
-            current.fetchedAtEpochMillis >= fetchedAtEpochMillis
+            currentTimestamp != null &&
+            currentTimestamp <= nowEpochMillis &&
+            currentTimestamp >= fetchedAtEpochMillis
         ) {
             return false
         }
@@ -354,6 +379,22 @@ internal class DesktopFileReadCache(
                         listing.path == parent ||
                         normalized.startsWith("${listing.path}/")
                 },
+                listingShards = index.listingShards.filterNot { reference ->
+                    normalized.isEmpty() ||
+                        reference.path.isEmpty() ||
+                        reference.path == normalized ||
+                        reference.path.startsWith("$normalized/") ||
+                        reference.path == parent ||
+                        normalized.startsWith("${reference.path}/")
+                },
+                virtualListingShards = index.virtualListingShards.filterNot { reference ->
+                    normalized.isEmpty() ||
+                        reference.path.isEmpty() ||
+                        reference.path == normalized ||
+                        reference.path.startsWith("$normalized/") ||
+                        reference.path == parent ||
+                        normalized.startsWith("${reference.path}/")
+                },
                 content = index.content.filterNot { it in removed },
             ),
         )
@@ -425,18 +466,57 @@ internal class DesktopFileReadCache(
                 }
             }
             .take(MAX_CONTENT_ENTRIES)
+        val hydratedOrdinaryPaths = listings.mapTo(hashSetOf(), CachedListingV1::path)
+        val hydratedVirtualPaths = virtualListings.mapTo(hashSetOf(), CachedVirtualListingV1::path)
+        val unhydratedGroups = buildList {
+            listingShards.asSequence().filter { reference -> reference.path !in hydratedOrdinaryPaths }
+                .groupBy(CachedListingShardReferenceV1::path)
+                .forEach { (path, references) ->
+                    add(
+                        MetadataShardGroup(
+                            ordinary = true,
+                            path = path,
+                            fetchedAtEpochMillis = references.maxOf(CachedListingShardReferenceV1::fetchedAtEpochMillis),
+                            entryCount = references.sumOf(CachedListingShardReferenceV1::entryCount),
+                        ),
+                    )
+                }
+            virtualListingShards.asSequence().filter { reference -> reference.path !in hydratedVirtualPaths }
+                .groupBy(CachedVirtualListingShardReferenceV1::path)
+                .forEach { (path, references) ->
+                    add(
+                        MetadataShardGroup(
+                            ordinary = false,
+                            path = path,
+                            fetchedAtEpochMillis =
+                                references.maxOf(CachedVirtualListingShardReferenceV1::fetchedAtEpochMillis),
+                            entryCount = references.sumOf(CachedVirtualListingShardReferenceV1::entryCount),
+                        ),
+                    )
+                }
+        }.sortedByDescending(MetadataShardGroup::fetchedAtEpochMillis)
+        var remainingMetadataEntries = maximumTotalMetadataEntries - retainedMetadataEntries
+        val retainedUnhydratedOrdinaryPaths = hashSetOf<String>()
+        val retainedUnhydratedVirtualPaths = hashSetOf<String>()
+        unhydratedGroups.forEach { group ->
+            if (group.entryCount <= remainingMetadataEntries) {
+                if (group.ordinary) retainedUnhydratedOrdinaryPaths += group.path
+                else retainedUnhydratedVirtualPaths += group.path
+                remainingMetadataEntries -= group.entryCount
+            }
+        }
         return copy(
             listings = boundedListings,
             virtualListings = boundedVirtualListings,
             content = retainedContent,
             listingShards = listingShards.filter { reference ->
-                boundedListings.any { listing ->
+                reference.path in retainedUnhydratedOrdinaryPaths || boundedListings.any { listing ->
                     listing.path == reference.path &&
                         listing.fetchedAtEpochMillis == reference.fetchedAtEpochMillis
                 }
             },
             virtualListingShards = virtualListingShards.filter { reference ->
-                boundedVirtualListings.any { listing ->
+                reference.path in retainedUnhydratedVirtualPaths || boundedVirtualListings.any { listing ->
                     listing.path == reference.path &&
                         listing.fetchedAtEpochMillis == reference.fetchedAtEpochMillis
                 }
@@ -445,6 +525,7 @@ internal class DesktopFileReadCache(
     }
 
     private fun CacheIndexV1.persistMetadataShards(directory: File): CacheIndexV1 {
+        val hydratedOrdinaryPaths = listings.mapTo(hashSetOf(), CachedListingV1::path)
         val ordinaryReferences = listings.flatMap { listing ->
             reusableListingShards(directory, listing)?.let { return@flatMap it }
             val chunks = listing.files.metadataChunks()
@@ -468,7 +549,8 @@ internal class DesktopFileReadCache(
                     sha256 = sha256,
                 )
             }
-        }
+        } + listingShards.filter { reference -> reference.path !in hydratedOrdinaryPaths }
+        val hydratedVirtualPaths = virtualListings.mapTo(hashSetOf(), CachedVirtualListingV1::path)
         val virtualReferences = virtualListings.flatMap { listing ->
             reusableVirtualListingShards(directory, listing)?.let { return@flatMap it }
             val chunks = listing.nodes.metadataChunks()
@@ -492,7 +574,7 @@ internal class DesktopFileReadCache(
                     sha256 = sha256,
                 )
             }
-        }
+        } + virtualListingShards.filter { reference -> reference.path !in hydratedVirtualPaths }
         return copy(
             listings = emptyList(),
             virtualListings = emptyList(),
@@ -535,53 +617,29 @@ internal class DesktopFileReadCache(
 
     private fun CacheIndexV1.hydrateMetadataShards(directory: File): CacheIndexV1 {
         val hydrationBudget = MetadataHydrationBudget(maximumHydratedMetadataBytes)
-        val hydratedListings = listingShards
-            .groupBy { reference -> reference.path to reference.fetchedAtEpochMillis }
-            .mapNotNull { (_, references) ->
-                runCatching {
-                    val ordered = references.requireCompleteShardSet()
-                    val files = ordered.flatMap { reference ->
-                        val payload = loadMetadataShard<CachedListingShardV1>(
-                            directory,
-                            reference.blobName,
-                            reference.sha256,
-                            hydrationBudget,
-                        )
-                        require(
-                            payload.path == reference.path &&
-                                payload.fetchedAtEpochMillis == reference.fetchedAtEpochMillis &&
-                                payload.partIndex == reference.partIndex &&
-                                payload.partCount == reference.partCount &&
-                                payload.files.size == reference.entryCount,
-                        ) { "A Files metadata shard does not match its index reference." }
-                        payload.files
-                    }
-                    CachedListingV1(ordered.first().path, ordered.first().fetchedAtEpochMillis, files)
-                }.getOrNull()
+        val hydratedListings = mutableListOf<CachedListingV1>()
+        val invalidListingPaths = mutableSetOf<String>()
+        listingShards.groupBy { reference -> reference.path to reference.fetchedAtEpochMillis }
+            .forEach { (key, references) ->
+                try {
+                    hydratedListings += hydrateListingReferences(directory, references, hydrationBudget)
+                } catch (_: MetadataHydrationBudgetExceededException) {
+                    // Keep valid-looking references for demand loading without growing startup memory.
+                } catch (_: Exception) {
+                    invalidListingPaths += key.first
+                }
             }
-        val hydratedVirtualListings = virtualListingShards
-            .groupBy { reference -> reference.path to reference.fetchedAtEpochMillis }
-            .mapNotNull { (_, references) ->
-                runCatching {
-                    val ordered = references.requireCompleteVirtualShardSet()
-                    val nodes = ordered.flatMap { reference ->
-                        val payload = loadMetadataShard<CachedVirtualListingShardV1>(
-                            directory,
-                            reference.blobName,
-                            reference.sha256,
-                            hydrationBudget,
-                        )
-                        require(
-                            payload.path == reference.path &&
-                                payload.fetchedAtEpochMillis == reference.fetchedAtEpochMillis &&
-                                payload.partIndex == reference.partIndex &&
-                                payload.partCount == reference.partCount &&
-                                payload.nodes.size == reference.entryCount,
-                        ) { "A virtual Files metadata shard does not match its index reference." }
-                        payload.nodes
-                    }
-                    CachedVirtualListingV1(ordered.first().path, ordered.first().fetchedAtEpochMillis, nodes)
-                }.getOrNull()
+        val hydratedVirtualListings = mutableListOf<CachedVirtualListingV1>()
+        val invalidVirtualListingPaths = mutableSetOf<String>()
+        virtualListingShards.groupBy { reference -> reference.path to reference.fetchedAtEpochMillis }
+            .forEach { (key, references) ->
+                try {
+                    hydratedVirtualListings += hydrateVirtualListingReferences(directory, references, hydrationBudget)
+                } catch (_: MetadataHydrationBudgetExceededException) {
+                    // Keep valid-looking references for demand loading without growing startup memory.
+                } catch (_: Exception) {
+                    invalidVirtualListingPaths += key.first
+                }
             }
         val hydratedPaths = hydratedListings.mapTo(hashSetOf(), CachedListingV1::path)
         val hydratedVirtualPaths = hydratedVirtualListings.mapTo(hashSetOf(), CachedVirtualListingV1::path)
@@ -589,7 +647,141 @@ internal class DesktopFileReadCache(
             listings = listings.filterNot { listing -> listing.path in hydratedPaths } + hydratedListings,
             virtualListings = virtualListings.filterNot { listing -> listing.path in hydratedVirtualPaths } +
                 hydratedVirtualListings,
+            listingShards = listingShards.filterNot { reference -> reference.path in invalidListingPaths },
+            virtualListingShards = virtualListingShards.filterNot { reference ->
+                reference.path in invalidVirtualListingPaths
+            },
         )
+    }
+
+    private fun hydrateListingOnDemand(
+        accountId: String,
+        path: String,
+        index: CacheIndexV1,
+    ): CachedListingV1? {
+        val references = index.listingShards.filter { reference -> reference.path == path }
+        if (references.isEmpty()) return null
+        return try {
+            hydrateListingReferences(
+                accountDirectory(accountId),
+                references,
+                MetadataHydrationBudget(maximumHydratedMetadataBytes),
+            ).also { listing ->
+                val inlineListings = index.listings.filter { existing ->
+                    index.listingShards.none { reference -> reference.path == existing.path }
+                }
+                val inlineVirtualListings = index.virtualListings.filter { existing ->
+                    index.virtualListingShards.none { reference -> reference.path == existing.path }
+                }
+                rememberLoadedIndex(
+                    accountId,
+                    index.copy(
+                        listings = inlineListings.filterNot { it.path == path } + listing,
+                        virtualListings = inlineVirtualListings,
+                    )
+                        .bounded().requireValid(),
+                )
+            }
+        } catch (_: MetadataHydrationBudgetExceededException) {
+            null
+        } catch (_: Exception) {
+            rememberLoadedIndex(
+                accountId,
+                index.copy(listingShards = index.listingShards.filterNot { it.path == path })
+                    .bounded().requireValid(),
+            )
+            null
+        }
+    }
+
+    private fun hydrateVirtualListingOnDemand(
+        accountId: String,
+        path: String,
+        index: CacheIndexV1,
+    ): CachedVirtualListingV1? {
+        val references = index.virtualListingShards.filter { reference -> reference.path == path }
+        if (references.isEmpty()) return null
+        return try {
+            hydrateVirtualListingReferences(
+                accountDirectory(accountId),
+                references,
+                MetadataHydrationBudget(maximumHydratedMetadataBytes),
+            ).also { listing ->
+                val inlineListings = index.listings.filter { existing ->
+                    index.listingShards.none { reference -> reference.path == existing.path }
+                }
+                val inlineVirtualListings = index.virtualListings.filter { existing ->
+                    index.virtualListingShards.none { reference -> reference.path == existing.path }
+                }
+                rememberLoadedIndex(
+                    accountId,
+                    index.copy(
+                        listings = inlineListings,
+                        virtualListings = inlineVirtualListings.filterNot { it.path == path } + listing,
+                    ).bounded().requireValid(),
+                )
+            }
+        } catch (_: MetadataHydrationBudgetExceededException) {
+            null
+        } catch (_: Exception) {
+            rememberLoadedIndex(
+                accountId,
+                index.copy(
+                    virtualListingShards = index.virtualListingShards.filterNot { it.path == path },
+                ).bounded().requireValid(),
+            )
+            null
+        }
+    }
+
+    private fun hydrateListingReferences(
+        directory: File,
+        references: List<CachedListingShardReferenceV1>,
+        hydrationBudget: MetadataHydrationBudget,
+    ): CachedListingV1 {
+        val ordered = references.requireCompleteShardSet()
+        val files = ordered.flatMap { reference ->
+            val payload = loadMetadataShard<CachedListingShardV1>(
+                directory,
+                reference.blobName,
+                reference.sha256,
+                hydrationBudget,
+            )
+            require(
+                payload.path == reference.path &&
+                    payload.fetchedAtEpochMillis == reference.fetchedAtEpochMillis &&
+                    payload.partIndex == reference.partIndex &&
+                    payload.partCount == reference.partCount &&
+                    payload.files.size == reference.entryCount,
+            ) { "A Files metadata shard does not match its index reference." }
+            payload.files
+        }
+        return CachedListingV1(ordered.first().path, ordered.first().fetchedAtEpochMillis, files)
+    }
+
+    private fun hydrateVirtualListingReferences(
+        directory: File,
+        references: List<CachedVirtualListingShardReferenceV1>,
+        hydrationBudget: MetadataHydrationBudget,
+    ): CachedVirtualListingV1 {
+        val ordered = references.requireCompleteVirtualShardSet()
+        val nodes = ordered.flatMap { reference ->
+            val payload = loadMetadataShard<CachedVirtualListingShardV1>(
+                directory,
+                reference.blobName,
+                reference.sha256,
+                hydrationBudget,
+            )
+            require(
+                payload.path == reference.path &&
+                    payload.fetchedAtEpochMillis == reference.fetchedAtEpochMillis &&
+                    payload.partIndex == reference.partIndex &&
+                    payload.partCount == reference.partCount &&
+                    payload.nodes.size == reference.entryCount,
+            ) { "A virtual Files metadata shard does not match its index reference." }
+            payload.nodes
+        }
+        return CachedVirtualListingV1(ordered.first().path, ordered.first().fetchedAtEpochMillis, nodes)
     }
 
     private fun <T> List<T>.metadataChunks(): List<List<T>> =
@@ -768,6 +960,12 @@ internal class DesktopFileReadCache(
                 "${reference.path}\u0000${reference.fetchedAtEpochMillis}\u0000${reference.partIndex}"
             }.distinct().size == index.virtualListingShards.size,
         )
+        require(index.listingShards.groupBy(CachedListingShardReferenceV1::path).all { (_, references) ->
+            references.map(CachedListingShardReferenceV1::fetchedAtEpochMillis).distinct().size == 1
+        })
+        require(index.virtualListingShards.groupBy(CachedVirtualListingShardReferenceV1::path).all { (_, references) ->
+            references.map(CachedVirtualListingShardReferenceV1::fetchedAtEpochMillis).distinct().size == 1
+        })
         val ordinaryEntries = mutableMapOf<String, Long>()
         index.listings.forEach { listing -> ordinaryEntries[listing.path] = listing.files.size.toLong() }
         index.listingShards.groupBy(CachedListingShardReferenceV1::path).forEach { (path, references) ->
@@ -1055,16 +1253,26 @@ private data class CachedContentV1(
     val lastAccessedAtEpochMillis: Long = storedAtEpochMillis,
 )
 
+private data class MetadataShardGroup(
+    val ordinary: Boolean,
+    val path: String,
+    val fetchedAtEpochMillis: Long,
+    val entryCount: Int,
+)
+
 private class MetadataHydrationBudget(private val maximumBytes: Long) {
     private var reservedBytes = 0L
 
     fun reserve(bytes: Long) {
-        require(bytes > 0L && bytes <= maximumBytes - reservedBytes) {
-            "The Files metadata hydration budget was exceeded."
-        }
+        require(bytes > 0L)
+        if (bytes > maximumBytes - reservedBytes) throw MetadataHydrationBudgetExceededException()
         reservedBytes += bytes
     }
 }
+
+private class MetadataHydrationBudgetExceededException : IllegalStateException(
+    "The Files metadata hydration budget was exceeded.",
+)
 
 private val cacheJson = Json {
     encodeDefaults = true
