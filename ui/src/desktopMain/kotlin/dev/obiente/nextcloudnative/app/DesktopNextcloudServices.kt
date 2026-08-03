@@ -535,6 +535,7 @@ class DesktopNextcloudServices(
         onInstallerConfirmationOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
     )
     private val httpClient = OkHttpClient()
+    private val fileMutationHttpExecutor = DesktopHttpMutationExecutor(httpClient)
     private val noRedirectHttpClient = httpClient.newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
@@ -2176,19 +2177,24 @@ class DesktopNextcloudServices(
                 put("Overwrite", if (spec.overwrite) "T" else "F")
             }
         }
+        val accountId = desktopFileCacheAccountId(session)
+        fun invalidateAffectedMetadata() {
+            runCatching {
+                invalidateDesktopFileMetadata(accountId, spec.sourcePath)
+                spec.destinationPath?.let { invalidateDesktopFileMetadata(accountId, it) }
+            }
+        }
         val response = request(
             method = spec.method,
             url = buildNextcloudFileUrl(session.serverUrl, userId, spec.sourcePath),
             session = session,
             headers = headers,
             maxResponseBytes = 64 * 1024,
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
         )
         if (response.status !in 200..299) throw fileOperationException(response.status)
-        runCatching {
-            val accountId = desktopFileCacheAccountId(session)
-            invalidateDesktopFileMetadata(accountId, spec.sourcePath)
-            spec.destinationPath?.let { invalidateDesktopFileMetadata(accountId, it) }
-        }
+        invalidateAffectedMetadata()
         NextcloudFileMutationResult(spec.destinationPath, response.etag)
     }
 
@@ -2897,6 +2903,8 @@ class DesktopNextcloudServices(
         maxResponseBytes: Long = MAX_API_RESPONSE_BYTES,
         client: OkHttpClient = httpClient,
         streamingBody: RequestBody? = null,
+        mutationExecutor: DesktopHttpMutationExecutor? = null,
+        onAmbiguousMutationResult: () -> Unit = {},
     ): HttpResponse {
         val requestBody = when {
             streamingBody != null -> streamingBody
@@ -2913,16 +2921,22 @@ class DesktopNextcloudServices(
             val encoded = Base64.getEncoder().encodeToString("${it.loginName}:${it.appPassword}".toByteArray())
             builder.header("Authorization", "Basic $encoded")
         }
-        return client.newCall(builder.build()).execute().use { response ->
+        val request = builder.build()
+        fun consumeResponse(response: okhttp3.Response): HttpResponse {
             val responseBody = response.body
             val contentLength = responseBody.contentLength()
             val readLimit = if (response.isSuccessful) maxResponseBytes else MAX_ERROR_RESPONSE_BYTES
             check(contentLength <= readLimit || contentLength == -1L) {
                 "The server response is larger than the allowed ${formatByteLimit(readLimit)} limit."
             }
-            HttpResponse(
+            val bodyBytes = if (mutationExecutor != null && !response.isSuccessful) {
+                runCatching { responseBody.byteStream().readBounded(readLimit) }.getOrDefault(byteArrayOf())
+            } else {
+                responseBody.byteStream().readBounded(readLimit)
+            }
+            return HttpResponse(
                 response.code,
-                responseBody.byteStream().readBounded(readLimit),
+                bodyBytes,
                 responseBody.contentType()?.toString(),
                 response.header("ETag") ?: response.header("OC-Etag"),
                 if (session == null) {
@@ -2937,6 +2951,11 @@ class DesktopNextcloudServices(
                 response.header("X-Chat-Last-Given"),
                 response.header("Content-Range"),
             )
+        }
+        return if (mutationExecutor == null) {
+            client.newCall(request).execute().use(::consumeResponse)
+        } else {
+            mutationExecutor.execute(request, onAmbiguousMutationResult, ::consumeResponse)
         }
     }
 
