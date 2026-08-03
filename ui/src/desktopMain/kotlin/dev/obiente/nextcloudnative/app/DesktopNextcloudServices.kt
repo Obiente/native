@@ -208,16 +208,16 @@ internal fun validateDesktopVirtualFileProviderLocation(location: VirtualFilePro
     return target
 }
 
-internal fun virtualFileLocationActionMessage(prefix: String, target: Path): String {
+internal fun virtualFileLocationActionMessage(prefix: String, targetPath: String): String {
     require(prefix.isNotBlank())
-    val suffix = target.toString()
+    require(targetPath.isNotBlank())
     val available = MAX_VIRTUAL_FILE_ACTION_MESSAGE_LENGTH - prefix.length - 1
     require(available >= 4)
-    val displayedTarget = if (suffix.length <= available) {
-        suffix
+    val displayedTarget = if (targetPath.length <= available) {
+        targetPath
     } else {
         val tailLength = (available - 3).coerceAtLeast(0)
-        "...${suffix.takeLast(tailLength)}"
+        "...${targetPath.takeLast(tailLength)}"
     }
     return "$prefix$displayedTarget."
 }
@@ -1589,7 +1589,7 @@ class DesktopNextcloudServices(
             val target = validateDesktopVirtualFileProviderLocation(location)
             if (target == desktopLinuxVirtualFileMountPoint(preferences, accountId).toPath()) {
                 return@withContext VirtualFileStorageActionResult.Completed(
-                    virtualFileLocationActionMessage("Virtual files already use ", target),
+                    virtualFileLocationActionMessage("Virtual files already use ", target.toString()),
                 )
             }
             val currentCache = virtualRangeCache(accountId)
@@ -1605,7 +1605,7 @@ class DesktopNextcloudServices(
             preferences.put(virtualFileProviderRootPreferenceKey(accountId), target.toString())
             synchronized(virtualRangeCaches) { virtualRangeCaches.remove(accountId) }
             VirtualFileStorageActionResult.Completed(
-                virtualFileLocationActionMessage("Virtual files will appear at ", target),
+                virtualFileLocationActionMessage("Virtual files will appear at ", target.toString()),
             )
         }
     }
