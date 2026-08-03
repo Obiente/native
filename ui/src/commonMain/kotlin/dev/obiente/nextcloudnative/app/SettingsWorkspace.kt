@@ -53,6 +53,7 @@ internal enum class SettingsWorkspaceSection(
     NotificationsAndDevice("Notifications & device", "Permissions and background features", NextcloudIcons.Activity),
     DesktopApp("Desktop app", "Startup and local integration", NextcloudIcons.Settings),
     Updates("Updates", "Release channel and installation", NextcloudIcons.Refresh),
+    HelpAndGuides("Help & guides", "Learn workflows and find project help", NextcloudIcons.Info),
     Administration("Administration", "Server apps and capabilities", NextcloudIcons.Apps),
 }
 

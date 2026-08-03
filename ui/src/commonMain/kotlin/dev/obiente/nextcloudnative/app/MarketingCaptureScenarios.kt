@@ -740,7 +740,155 @@ enum class MarketingCaptureScenario(
         "desktop", "wide", issue = 56,
         width = 1_440, height = 900, density = 1f,
     ),
+    GuideGetStartedHome(
+        "guide-get-started-home", "guide-get-started-home.png",
+        NextcloudPresentation.Desktop, "Guides", "Get started", "Connected overview",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    GuideGetStartedApps(
+        "guide-get-started-apps", "guide-get-started-apps.png",
+        NextcloudPresentation.Desktop, "Guides", "Get started", "Installed app catalog",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    GuideGetStartedSettings(
+        "guide-get-started-settings", "guide-get-started-settings.png",
+        NextcloudPresentation.Desktop, "Guides", "Get started", "Device settings",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    GuideFolderSyncWorkspace(
+        "guide-folder-sync-workspace", "guide-folder-sync-workspace.png",
+        NextcloudPresentation.Desktop, "Guides", "Folder sync", "Active sync workspace",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_721, height = 914, density = 1f,
+    ),
+    GuideFolderSyncChooseFolders(
+        "guide-folder-sync-choose-folders", "guide-folder-sync-choose-folders.png",
+        NextcloudPresentation.Desktop, "Guides", "Folder sync", "Local and remote mapping",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    GuideFolderSyncRules(
+        "guide-folder-sync-rules", "guide-folder-sync-rules.png",
+        NextcloudPresentation.Adaptive, "Guides", "Folder sync", "Conflict and transfer rules",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 2_200, density = 2.625f,
+    ),
+    GuideOfflineFilesBrowse(
+        "guide-offline-files-browse", "guide-offline-files-browse.png",
+        NextcloudPresentation.Desktop, "Guides", "Offline files", "Files and availability",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    GuideOfflineFilesStorage(
+        "guide-offline-files-storage", "guide-offline-files-storage.png",
+        NextcloudPresentation.Desktop, "Guides", "Offline files", "Protected storage overview",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    GuideOfflineFilesTransfers(
+        "guide-offline-files-transfers", "guide-offline-files-transfers.png",
+        NextcloudPresentation.Desktop, "Guides", "Offline files", "Transfer history",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_280, height = 800, density = 1f,
+    ),
+    GuidePhotoBackupFolders(
+        "guide-photo-backup-folders", "guide-photo-backup-folders.png",
+        NextcloudPresentation.Adaptive, "Guides", "Photo backup", "Media folder discovery",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 2_200, density = 2.625f,
+    ),
+    GuidePhotoBackupQueue(
+        "guide-photo-backup-queue", "guide-photo-backup-queue.png",
+        NextcloudPresentation.Adaptive, "Guides", "Photo backup", "Pending transfer queue",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    GuidePhotoBackupLibrary(
+        "guide-photo-backup-library", "guide-photo-backup-library.png",
+        NextcloudPresentation.Desktop, "Guides", "Photo backup", "Verified photo library",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    GuideCalendarMonth(
+        "guide-calendar-month", "guide-calendar-month.png",
+        NextcloudPresentation.Desktop, "Guides", "Calendar", "Month and event inspector",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    GuideCalendarMobile(
+        "guide-calendar-mobile", "guide-calendar-mobile.png",
+        NextcloudPresentation.Adaptive, "Guides", "Calendar", "Compact mobile agenda",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    GuideCalendarPlanning(
+        "guide-calendar-planning", "guide-calendar-planning.png",
+        NextcloudPresentation.Desktop, "Guides", "Calendar", "Populated planning workspace",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    GuideSwitchAppsCatalog(
+        "guide-switch-apps-catalog", "guide-switch-apps-catalog.png",
+        NextcloudPresentation.Desktop, "Guides", "Switch apps", "Complete app catalog",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    GuideSwitchAppsSidebar(
+        "guide-switch-apps-sidebar", "guide-switch-apps-sidebar.png",
+        NextcloudPresentation.Desktop, "Guides", "Switch apps", "Persistent app shortcuts",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    GuideSwitchAppsNested(
+        "guide-switch-apps-nested", "guide-switch-apps-nested.png",
+        NextcloudPresentation.Desktop, "Guides", "Switch apps", "Nested native collection",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
 }
+
+internal fun MarketingCaptureScenario.guideCaptureSourceScenarioOrNull(): MarketingCaptureScenario? =
+    when (this) {
+        MarketingCaptureScenario.GuideGetStartedHome ->
+            MarketingCaptureScenario.HomepageOverviewDesktopDark
+        MarketingCaptureScenario.GuideGetStartedApps ->
+            MarketingCaptureScenario.AppsWorkspaceDesktopDark
+        MarketingCaptureScenario.GuideGetStartedSettings ->
+            MarketingCaptureScenario.DesktopStartupSettings
+        MarketingCaptureScenario.GuideFolderSyncWorkspace ->
+            MarketingCaptureScenario.FileSyncStatusDesktop
+        MarketingCaptureScenario.GuideFolderSyncChooseFolders -> null
+        MarketingCaptureScenario.GuideFolderSyncRules ->
+            MarketingCaptureScenario.FileSyncRulesMobile
+        MarketingCaptureScenario.GuideOfflineFilesBrowse ->
+            MarketingCaptureScenario.HomepageFilesDesktopDark
+        MarketingCaptureScenario.GuideOfflineFilesStorage ->
+            MarketingCaptureScenario.VirtualFileStorageDesktop
+        MarketingCaptureScenario.GuideOfflineFilesTransfers ->
+            MarketingCaptureScenario.TransferDesktopCompleted
+        MarketingCaptureScenario.GuidePhotoBackupFolders ->
+            MarketingCaptureScenario.MediaBackup
+        MarketingCaptureScenario.GuidePhotoBackupQueue ->
+            MarketingCaptureScenario.TransferMobilePending
+        MarketingCaptureScenario.GuidePhotoBackupLibrary ->
+            MarketingCaptureScenario.PhotoFolderBrowserDesktop
+        MarketingCaptureScenario.GuideCalendarMonth ->
+            MarketingCaptureScenario.CalendarWorkspaceDesktopDark
+        MarketingCaptureScenario.GuideCalendarMobile ->
+            MarketingCaptureScenario.CalendarWorkspaceMobileDark
+        MarketingCaptureScenario.GuideCalendarPlanning ->
+            MarketingCaptureScenario.CalendarWorkspaceDesktopDark
+        MarketingCaptureScenario.GuideSwitchAppsCatalog ->
+            MarketingCaptureScenario.AppsWorkspaceDesktopDark
+        MarketingCaptureScenario.GuideSwitchAppsSidebar ->
+            MarketingCaptureScenario.PhotoFolderBrowserDesktop
+        MarketingCaptureScenario.GuideSwitchAppsNested ->
+            MarketingCaptureScenario.AdaptiveApp
+        else -> null
+    }
 
 data class MarketingCaptureVariant(
     val scenario: MarketingCaptureScenario,
@@ -1477,7 +1625,9 @@ private fun marketingActivity(
 )
 
 @Composable
-internal fun MarketingFileSyncSetupDesktopScenario() {
+internal fun MarketingFileSyncSetupDesktopScenario(
+    initialStep: FileSyncSetupStep = FileSyncSetupStep.Rules,
+) {
     var configuration by remember {
         mutableStateOf(
             FileSyncConfiguration(
@@ -1511,7 +1661,7 @@ internal fun MarketingFileSyncSetupDesktopScenario() {
             onConfigurationChanged = { configuration = it },
             onAdd = {},
             modifier = Modifier.fillMaxWidth().widthIn(max = 920.dp).heightIn(max = 760.dp),
-            initialStep = FileSyncSetupStep.Rules,
+            initialStep = initialStep,
             syntheticScopeSummary = "18,742 files - 123.4 GB - 2,511 RAW",
         )
     }

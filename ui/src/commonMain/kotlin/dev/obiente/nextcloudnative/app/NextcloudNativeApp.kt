@@ -201,6 +201,8 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+internal const val NEXTCLOUD_NATIVE_GUIDES_URL = "https://nc-native.obiente.dev/guides/"
+
 @Serializable
 private sealed interface Screen {
     @Serializable
@@ -872,6 +874,16 @@ fun NextcloudNativeMarketingCapture(
     darkTheme: Boolean = scenario.darkTheme,
     typography: Typography = NextcloudTypography,
 ) {
+    scenario.guideCaptureSourceScenarioOrNull()?.let { sourceScenario ->
+        NextcloudNativeMarketingCapture(
+            scenario = sourceScenario,
+            assets = assets,
+            fixture = fixture,
+            darkTheme = darkTheme,
+            typography = typography,
+        )
+        return
+    }
     NextcloudNativeTheme(darkTheme = darkTheme, typography = typography) {
         NextcloudAppBackground {
             val desktop = scenario.presentation == NextcloudPresentation.Desktop
@@ -955,6 +967,8 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.FileSyncStatusDesktop -> MarketingFileSyncStatusDesktopScenario()
                     MarketingCaptureScenario.ActivityWorkspaceDesktop -> MarketingActivityWorkspaceDesktopScenario()
                     MarketingCaptureScenario.FileSyncSetupDesktop -> MarketingFileSyncSetupDesktopScenario()
+                    MarketingCaptureScenario.GuideFolderSyncChooseFolders ->
+                        MarketingFileSyncSetupDesktopScenario(initialStep = FileSyncSetupStep.Locations)
                     MarketingCaptureScenario.FileSyncSelectionDesktop,
                     MarketingCaptureScenario.FileSyncSelectionMobile,
                     ->
@@ -989,6 +1003,24 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.HomepagePlanningDesktopDark,
                     MarketingCaptureScenario.HomepagePlanningDesktopLight,
                     -> MarketingDeckBoardScenario()
+                    MarketingCaptureScenario.GuideGetStartedHome,
+                    MarketingCaptureScenario.GuideGetStartedApps,
+                    MarketingCaptureScenario.GuideGetStartedSettings,
+                    MarketingCaptureScenario.GuideFolderSyncWorkspace,
+                    MarketingCaptureScenario.GuideFolderSyncRules,
+                    MarketingCaptureScenario.GuideOfflineFilesBrowse,
+                    MarketingCaptureScenario.GuideOfflineFilesStorage,
+                    MarketingCaptureScenario.GuideOfflineFilesTransfers,
+                    MarketingCaptureScenario.GuidePhotoBackupFolders,
+                    MarketingCaptureScenario.GuidePhotoBackupQueue,
+                    MarketingCaptureScenario.GuidePhotoBackupLibrary,
+                    MarketingCaptureScenario.GuideCalendarMonth,
+                    MarketingCaptureScenario.GuideCalendarMobile,
+                    MarketingCaptureScenario.GuideCalendarPlanning,
+                    MarketingCaptureScenario.GuideSwitchAppsCatalog,
+                    MarketingCaptureScenario.GuideSwitchAppsSidebar,
+                    MarketingCaptureScenario.GuideSwitchAppsNested,
+                    -> error("Guide capture aliases must resolve before rendering.")
                 }
             }
         }
@@ -11498,6 +11530,21 @@ private fun SettingsScreen(
                             },
                         )
                     }
+                }
+
+                SettingsWorkspaceSection.Updates -> AppUpdateSettingsCard(
+                    services = services,
+                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
+                )
+
+                SettingsWorkspaceSection.HelpAndGuides -> {
+                    SettingsActionCard(
+                        title = "Guides",
+                        description = "Follow illustrated setup, sync, offline, photo, Calendar, and app workflows",
+                        icon = NextcloudIcons.Info,
+                        onClick = { services.openExternalUrl(NEXTCLOUD_NATIVE_GUIDES_URL) },
+                        trailing = "6 guides",
+                    )
                     SettingsActionCard(
                         title = "Project news",
                         description = "Read release notes and development updates in a cached native view",
@@ -11505,11 +11552,6 @@ private fun SettingsScreen(
                         onClick = onProjectNews,
                     )
                 }
-
-                SettingsWorkspaceSection.Updates -> AppUpdateSettingsCard(
-                    services = services,
-                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
-                )
 
                 SettingsWorkspaceSection.Administration -> {
                     SettingsActionCard(
@@ -11770,6 +11812,40 @@ private fun SettingsScreen(
             }
             item {
                 SectionTitle("Nextcloud Native")
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
+                    onClick = { services.openExternalUrl(NEXTCLOUD_NATIVE_GUIDES_URL) },
+                    color = NextcloudTheme.colors.appTile,
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
+                            Icon(
+                                NextcloudIcons.Info,
+                                contentDescription = null,
+                                modifier = Modifier.padding(12.dp).size(26.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Help & guides", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Illustrated setup, sync, offline, photo, Calendar, and app workflows",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(
+                            NextcloudIcons.ChevronRight,
+                            contentDescription = "Open Nextcloud Native guides",
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
                 Surface(
                     modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
                     onClick = onProjectNews,

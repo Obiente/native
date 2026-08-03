@@ -9,6 +9,7 @@ import {
   normalizeNewsArticleBody,
   parseNewsFrontmatter,
 } from "./content-frontmatter.mjs";
+import { parseGuideFrontmatter } from "./guide-frontmatter.mjs";
 import {
   assertValidNativeNewsFeed,
   nativeNewsFeedRevision,
@@ -37,6 +38,7 @@ const repositoryRoot = path.resolve(websiteRoot, "..");
 const generatedDirectory = path.join(websiteRoot, "src", "generated");
 const publicDirectory = path.join(websiteRoot, "public");
 const newsDirectory = path.join(websiteRoot, "content", "news");
+const guideDirectory = path.join(websiteRoot, "content", "guides");
 const roadmapSnapshotFile = path.join(websiteRoot, "data", "roadmap-snapshot.json");
 const changelogFile = path.join(repositoryRoot, "CHANGELOG.md");
 const changelogRoute = "/changelog/";
@@ -219,6 +221,78 @@ await writeFile(
   `// Generated from repository Markdown. Do not edit.\nexport const docsContent = ${JSON.stringify(docs, null, 2)};\n`,
 );
 
+const guideFiles = (await readdir(guideDirectory))
+  .filter((file) => file.endsWith(".md"))
+  .sort();
+const guides = await Promise.all(
+  guideFiles.map(async (file) => {
+    const source = await readFile(path.join(guideDirectory, file), "utf8");
+    const parsed = parseGuideFrontmatter(source, file);
+    const steps = parsed.steps.map((step) => {
+      const capturePair = articleCapturePair(
+        captureManifest,
+        step.captureScenario,
+        `${file} step ${step.number}`,
+      );
+      const dark = capturePair.dark;
+      const light = capturePair.light;
+      return {
+        ...step,
+        html: markdown.render(step.source),
+        text: textOnly(step.source),
+        imageDark: stableCapturePath(dark),
+        imageLight: stableCapturePath(light),
+        websiteImageDark: websiteCapturePath(captureManifest, dark),
+        websiteImageLight: websiteCapturePath(captureManifest, light),
+        imageWidth: dark.width,
+        imageHeight: dark.height,
+      };
+    });
+    const text = [parsed.introduction, ...steps.map((step) => step.text)].join(" ");
+    const firstStep = steps[0];
+    return {
+      file,
+      path: `/guides/${parsed.metadata.slug}/`,
+      title: parsed.metadata.title,
+      shortTitle: parsed.metadata.title,
+      description: parsed.metadata.description,
+      category: parsed.metadata.category,
+      platforms: parsed.metadata.platforms,
+      durationMinutes: parsed.metadata.durationMinutes,
+      difficulty: parsed.metadata.difficulty,
+      lastUpdated: parsed.metadata.lastUpdated,
+      prerequisites: parsed.metadata.prerequisites,
+      introduction: parsed.introduction,
+      introductionHtml: markdown.render(parsed.introduction),
+      steps,
+      text,
+      readingMinutes: Math.max(1, Math.ceil(text.split(/\s+/u).length / 220)),
+      imageDark: firstStep.imageDark,
+      imageLight: firstStep.imageLight,
+      websiteImageDark: firstStep.websiteImageDark,
+      websiteImageLight: firstStep.websiteImageLight,
+      imageAlt: firstStep.imageAlt,
+      imageWidth: firstStep.imageWidth,
+      imageHeight: firstStep.imageHeight,
+    };
+  }),
+);
+if (new Set(guides.map((guide) => guide.path)).size !== guides.length) {
+  throw new Error("Guide slugs must be unique.");
+}
+const guidesMetadata = guides.map(({ introductionHtml, steps, ...guide }) => ({
+  ...guide,
+  steps: steps.map(({ html, source, ...step }) => step),
+}));
+await writeFile(
+  path.join(generatedDirectory, "guides.js"),
+  `// Generated from task-based guide Markdown. Do not edit.\nexport const guides = ${JSON.stringify(guidesMetadata, null, 2)};\n`,
+);
+await writeFile(
+  path.join(generatedDirectory, "guides-content.js"),
+  `// Generated from task-based guide Markdown. Do not edit.\nexport const guidesContent = ${JSON.stringify(guides, null, 2)};\n`,
+);
+
 let changelogSource;
 let changelogAvailable = true;
 try {
@@ -379,6 +453,11 @@ const searchIndex = [
     contentType: "Product",
   },
   ...docs.map(({ html, ...doc }) => ({ ...doc, contentType: "Documentation" })),
+  ...guides.map(({ introductionHtml, steps, ...guide }) => ({
+    ...guide,
+    contentType: "Guide",
+    headings: steps.map((step) => ({ title: step.title, anchor: `step-${step.number}` })),
+  })),
   ...news.map(({ html, ...post }) => ({ ...post, contentType: "News" })),
   { ...changelog, html: undefined, contentType: "Changelog" },
 ];

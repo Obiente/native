@@ -27,6 +27,7 @@ import {
   PhX as X,
 } from "@phosphor-icons/vue";
 import { docs } from "./generated/docs.js";
+import { guides } from "./generated/guides.js";
 import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
 import { marketingCaptures } from "./generated/captures.js";
@@ -43,6 +44,10 @@ const props = defineProps({
     default: null,
   },
   initialNews: {
+    type: Object,
+    default: null,
+  },
+  initialGuide: {
     type: Object,
     default: null,
   },
@@ -174,10 +179,24 @@ const currentDoc = computed(
 const currentPost = computed(
   () => props.initialNews ?? news.find((post) => post.path === normalizedPath),
 );
+const currentGuide = computed(
+  () => props.initialGuide ?? guides.find((guide) => guide.path === normalizedPath),
+);
 const relatedPosts = computed(() =>
   news.filter((post) => post.path !== currentPost.value?.path).slice(0, 2),
 );
+const relatedGuides = computed(() =>
+  guides
+    .filter((guide) => guide.path !== currentGuide.value?.path)
+    .sort((left, right) => {
+      const leftMatch = left.category === currentGuide.value?.category ? 0 : 1;
+      const rightMatch = right.category === currentGuide.value?.category ? 0 : 1;
+      return leftMatch - rightMatch || left.title.localeCompare(right.title);
+    })
+    .slice(0, 3),
+);
 const isNewsIndex = computed(() => normalizedPath === "/news/");
+const isGuidesIndex = computed(() => normalizedPath === "/guides/");
 const isChangelog = computed(() => normalizedPath === "/changelog/");
 const isVisualQa = computed(() => normalizedPath === "/visual-qa/");
 const isHome = computed(() => normalizedPath === "/");
@@ -246,6 +265,14 @@ async function openSearch() {
   } finally {
     searchLoaded.value = true;
   }
+}
+
+function guideCapture(step) {
+  return resolvedTheme.value === "light" ? step.websiteImageLight : step.websiteImageDark;
+}
+
+function guideHeroCapture(guide) {
+  return resolvedTheme.value === "light" ? guide.websiteImageLight : guide.websiteImageDark;
 }
 
 const searchResults = computed(() => {
@@ -431,6 +458,7 @@ const frequentlyAsked = [
         <a href="/#experience">Experience</a>
         <a href="/#apps">Apps</a>
         <a href="/#native">How it works</a>
+        <a href="/guides/">Guides</a>
         <a href="/roadmap/">Roadmap</a>
         <a href="/news/">Journal</a>
         <a href="/#docs">Docs</a>
@@ -461,7 +489,7 @@ const frequentlyAsked = [
         <button
           class="header-search"
           type="button"
-          aria-label="Search project documentation"
+          aria-label="Search guides and project documentation"
           @click="openSearch"
         >
           <MagnifyingGlass :size="20" weight="bold" aria-hidden="true" />
@@ -483,6 +511,7 @@ const frequentlyAsked = [
         <a href="/#experience">Experience</a>
         <a href="/#apps">Apps</a>
         <a href="/#native">How it works</a>
+        <a href="/guides/">Guides</a>
         <a href="/roadmap/">Roadmap</a>
         <a href="/news/">Journal</a>
         <a href="/#docs">Docs</a>
@@ -500,7 +529,7 @@ const frequentlyAsked = [
         <div class="search-panel-header">
           <div>
             <p class="eyebrow">Project knowledge</p>
-            <h2 id="search-title">Search the documentation</h2>
+            <h2 id="search-title">Search guides and documentation</h2>
           </div>
           <button class="icon-button" type="button" aria-label="Close search" @click="searchOpen = false">
             <X :size="21" weight="bold" aria-hidden="true" />
@@ -786,9 +815,39 @@ const frequentlyAsked = [
               <p class="eyebrow">Built in the open</p>
               <h2>The work is public.</h2>
             </div>
+            <a href="/guides/"><BookOpen :size="22" weight="duotone" aria-hidden="true" /><span><strong>Guides</strong><small>Learn complete workflows step by step</small></span><ArrowRight :size="18" weight="bold" aria-hidden="true" /></a>
             <a href="/roadmap/"><GitBranch :size="22" weight="duotone" aria-hidden="true" /><span><strong>Roadmap</strong><small>Priorities, milestones, and delivery</small></span><ArrowRight :size="18" weight="bold" aria-hidden="true" /></a>
             <a href="/news/"><BookOpen :size="22" weight="duotone" aria-hidden="true" /><span><strong>Journal</strong><small>Product decisions and deeper stories</small></span><ArrowRight :size="18" weight="bold" aria-hidden="true" /></a>
-            <a :href="githubUrl" target="_blank" rel="noreferrer"><GithubLogo :size="22" weight="duotone" aria-hidden="true" /><span><strong>Source</strong><small>Code, issues, and contribution</small></span><ArrowRight :size="18" weight="bold" aria-hidden="true" /></a>
+          </section>
+
+          <section class="guide-home-section section-width" data-reveal>
+            <div class="guide-section-heading">
+              <div class="section-heading compact">
+                <p class="eyebrow">Learn by doing</p>
+                <h2>Follow the whole task, not a list of controls.</h2>
+                <p>Every guide uses current synthetic captures from the real app and explains the safe result you should expect.</p>
+              </div>
+              <a class="text-link" href="/guides/">All guides <ArrowRight :size="18" weight="bold" /></a>
+            </div>
+            <div class="guide-home-grid">
+              <a v-for="guide in guides" :key="guide.path" class="guide-home-card" :href="guide.path">
+                <div class="guide-home-media">
+                  <img
+                    :src="guideHeroCapture(guide)"
+                    :alt="guide.imageAlt"
+                    :width="guide.imageWidth"
+                    :height="guide.imageHeight"
+                    loading="lazy"
+                  />
+                </div>
+                <div class="guide-home-copy">
+                  <span>{{ guide.category }}</span>
+                  <h3>{{ guide.title }}</h3>
+                  <p>{{ guide.description }}</p>
+                  <small>{{ guide.durationMinutes }} min · {{ guide.steps.length }} steps</small>
+                </div>
+              </a>
+            </div>
           </section>
 
           <section id="docs" class="docs-section" data-reveal>
@@ -890,6 +949,57 @@ const frequentlyAsked = [
           </section>
         </div>
       </template>
+
+      <section v-else-if="isGuidesIndex" class="guides-index section-width">
+        <header class="guides-index-heading">
+          <div>
+            <p class="eyebrow">Nextcloud Native guides</p>
+            <h1>Learn a complete workflow.</h1>
+            <p>
+              Start with the outcome you need. Each maintained guide uses synthetic
+              captures from the real app, explains safe choices, and shows what success looks like.
+            </p>
+          </div>
+          <div class="guides-index-summary" aria-label="Guide library summary">
+            <span><strong>{{ guides.length }}</strong> maintained guides</span>
+            <span><strong>{{ guides.reduce((total, guide) => total + guide.steps.length, 0) }}</strong> illustrated steps</span>
+            <span><ShieldCheck :size="16" weight="fill" aria-hidden="true" /> Real Compose UI</span>
+          </div>
+        </header>
+
+        <div class="guides-featured-grid">
+          <a
+            v-for="guide in guides"
+            :key="guide.path"
+            class="guide-index-card"
+            :href="guide.path"
+          >
+            <div class="guide-index-media">
+              <img
+                :src="guideHeroCapture(guide)"
+                :alt="guide.imageAlt"
+                :width="guide.imageWidth"
+                :height="guide.imageHeight"
+                loading="lazy"
+              />
+              <span>{{ guide.category }}</span>
+            </div>
+            <div class="guide-index-copy">
+              <div class="guide-index-meta">
+                <span>{{ guide.durationMinutes }} min</span>
+                <span>{{ guide.steps.length }} steps</span>
+                <span>{{ guide.difficulty }}</span>
+              </div>
+              <h2>{{ guide.title }}</h2>
+              <p>{{ guide.description }}</p>
+              <ul aria-label="Supported platforms">
+                <li v-for="platform in guide.platforms" :key="platform">{{ platform }}</li>
+              </ul>
+              <strong>Open guide <ArrowRight :size="16" weight="bold" aria-hidden="true" /></strong>
+            </div>
+          </a>
+        </div>
+      </section>
 
       <section v-else-if="isVisualQa" class="visual-qa-page section-width">
         <header class="doc-heading visual-qa-heading">
@@ -1059,6 +1169,117 @@ const frequentlyAsked = [
           </section>
         </div>
         <p v-else class="visual-qa-empty">No captures match these filters.</p>
+      </section>
+
+      <section
+        v-else-if="currentGuide"
+        class="guide-page section-width"
+      >
+        <a class="doc-back guide-back" href="/guides/">All Nextcloud Native guides</a>
+        <header class="guide-page-heading">
+          <div>
+            <p class="eyebrow">{{ currentGuide.category }}</p>
+            <h1>{{ currentGuide.title }}</h1>
+            <p>{{ currentGuide.description }}</p>
+          </div>
+          <dl class="guide-facts">
+            <div><dt>Time</dt><dd>{{ currentGuide.durationMinutes }} minutes</dd></div>
+            <div><dt>Steps</dt><dd>{{ currentGuide.steps.length }}</dd></div>
+            <div><dt>Level</dt><dd>{{ currentGuide.difficulty }}</dd></div>
+            <div><dt>Updated</dt><dd>{{ currentGuide.lastUpdated }}</dd></div>
+          </dl>
+          <ul class="guide-platforms" aria-label="Supported platforms">
+            <li v-for="platform in currentGuide.platforms" :key="platform">{{ platform }}</li>
+          </ul>
+        </header>
+
+        <div class="guide-layout">
+          <aside class="guide-toc" aria-label="Guide steps and prerequisites">
+            <div>
+              <p>In this guide</p>
+              <nav>
+                <a
+                  v-for="step in currentGuide.steps"
+                  :key="step.number"
+                  :href="`#step-${step.number}`"
+                >
+                  <span>{{ step.number }}</span>
+                  {{ step.title }}
+                </a>
+              </nav>
+            </div>
+            <div class="guide-prerequisites">
+              <p>Before you start</p>
+              <ul>
+                <li v-for="item in currentGuide.prerequisites" :key="item">{{ item }}</li>
+              </ul>
+            </div>
+          </aside>
+
+          <article class="guide-article">
+            <div class="guide-introduction" v-html="currentGuide.introductionHtml"></div>
+            <ol class="guide-step-list">
+              <li
+                v-for="step in currentGuide.steps"
+                :id="`step-${step.number}`"
+                :key="step.number"
+                class="guide-step"
+              >
+                <header>
+                  <span>Step {{ step.number }}</span>
+                  <h2>{{ step.title }}</h2>
+                </header>
+                <figure>
+                  <a
+                    :href="guideCapture(step)"
+                    target="_blank"
+                    rel="noreferrer"
+                    :aria-label="`Open the step ${step.number} capture at full size`"
+                  >
+                    <img
+                      :src="guideCapture(step)"
+                      :alt="step.imageAlt"
+                      :width="step.imageWidth"
+                      :height="step.imageHeight"
+                      loading="lazy"
+                    />
+                  </a>
+                  <figcaption>
+                    <span>{{ step.imageCaption }}</span>
+                    <span class="capture-provenance"><ShieldCheck :size="15" weight="fill" aria-hidden="true" /> Real Compose UI</span>
+                  </figcaption>
+                </figure>
+                <div class="markdown-body guide-step-body" v-html="step.html"></div>
+                <a v-if="step.number < currentGuide.steps.length" class="guide-next-step" :href="`#step-${step.number + 1}`">
+                  Next: {{ currentGuide.steps[step.number].title }}
+                  <ArrowRight :size="16" weight="bold" aria-hidden="true" />
+                </a>
+              </li>
+            </ol>
+
+            <aside class="guide-complete" aria-labelledby="guide-complete-title">
+              <CloudCheck :size="28" weight="duotone" aria-hidden="true" />
+              <div>
+                <p class="eyebrow">Guide complete</p>
+                <h2 id="guide-complete-title">Keep learning in the same workspace.</h2>
+                <p>Your account state stays in the app. Choose another guide without changing files, settings, or sync pairs.</p>
+              </div>
+            </aside>
+
+            <section class="related-guides" aria-labelledby="related-guides-title">
+              <div>
+                <p class="eyebrow">Continue learning</p>
+                <h2 id="related-guides-title">Related guides</h2>
+              </div>
+              <div>
+                <a v-for="guide in relatedGuides" :key="guide.path" :href="guide.path">
+                  <span><small>{{ guide.category }}</small><strong>{{ guide.title }}</strong></span>
+                  <ArrowRight :size="16" weight="bold" aria-hidden="true" />
+                </a>
+              </div>
+            </section>
+          </article>
+        </div>
       </section>
 
       <section
@@ -1256,6 +1477,7 @@ const frequentlyAsked = [
       <p>An independent AGPL-3.0-or-later project by Obiente.</p>
       <div class="footer-links">
         <a :href="githubUrl">GitHub</a>
+        <a href="/guides/">Guides</a>
         <a href="/roadmap/">Roadmap</a>
         <a href="/news/">Journal</a>
         <a href="/changelog/">Changelog</a>

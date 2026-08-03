@@ -1,10 +1,34 @@
 import { changelog } from "./generated/changelog.js";
 import { docs } from "./generated/docs.js";
+import { guides } from "./generated/guides.js";
 import { news } from "./generated/news.js";
 
 export const siteUrl = "https://nc-native.obiente.dev";
 
 export function metadataFor(path) {
+  const guide = guides.find((entry) => entry.path === path);
+  if (guide) {
+    return {
+      title: `${guide.title} · Nextcloud Native`,
+      description: guide.description,
+      canonical: `${siteUrl}${guide.path}`,
+      type: "article",
+      modified: guide.lastUpdated,
+      image: `${siteUrl}${guide.websiteImageDark}`,
+      imageAlt: guide.imageAlt,
+      imageWidth: guide.imageWidth,
+      imageHeight: guide.imageHeight,
+    };
+  }
+  if (path === "/guides/") {
+    return {
+      title: "Guides · Nextcloud Native",
+      description:
+        "Follow illustrated guides for account setup, folder sync, offline files, photo backup, Calendar, and native app switching in Nextcloud Native.",
+      canonical: `${siteUrl}/guides/`,
+      type: "website",
+    };
+  }
   const post = news.find((entry) => entry.path === path);
   if (post) {
     return {
