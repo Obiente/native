@@ -540,6 +540,7 @@ class DesktopNextcloudServices(
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
+    private val noRedirectFileMutationHttpExecutor = DesktopHttpMutationExecutor(noRedirectHttpClient)
     private val projectContentHttpClient = buildDesktopProjectContentHttpClient()
     private val contractAcquirer = SignedAppStoreContractAcquirer(
         catalogCache = FileAppStoreCatalogCache(desktopContractCacheDirectory("catalogs")),
@@ -2051,6 +2052,8 @@ class DesktopNextcloudServices(
         version: NextcloudFileVersion,
     ): Unit = withContext(Dispatchers.IO) {
         val specification = fileVersionRestoreRequest(userId, file, version)
+        val accountId = desktopFileCacheAccountId(session)
+        fun invalidateAffectedMetadata() = invalidateDesktopFileMetadata(accountId, file.path)
         val response = request(
             method = specification.method,
             url = session.serverUrl + specification.relativePath,
@@ -2061,9 +2064,14 @@ class DesktopNextcloudServices(
             ),
             maxResponseBytes = specification.maximumResponseBytes,
             client = noRedirectHttpClient,
+            mutationExecutor = noRedirectFileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
         )
+        if (response.status in 200..299) {
+            runCatching(::invalidateAffectedMetadata)
+            return@withContext
+        }
         when (response.status) {
-            in 200..299 -> Unit
             403 -> error("You do not have permission to restore this file version.")
             404 -> error("This historical version no longer exists.")
             409 -> error("The server could not restore this version to the current file.")
@@ -2089,6 +2097,8 @@ class DesktopNextcloudServices(
             put("Accept", "*/*")
             put("If-Match", expectedEtag)
         }
+        val accountId = desktopFileCacheAccountId(session)
+        fun invalidateAffectedMetadata() = invalidateDesktopFileMetadata(accountId, path)
         val response = request(
             "PUT",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -2096,13 +2106,14 @@ class DesktopNextcloudServices(
             rawBody = utf8,
             contentType = "text/plain; charset=utf-8",
             headers = headers,
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
         )
         check(response.status != 412) { "The file changed on the server. Reload it before saving your changes." }
         check(response.status in 200..299) { "Saving the text file failed (HTTP ${response.status})." }
         val etag = response.etag ?: runCatching { loadFileEtag(session, userId, path) }.getOrNull()
-        val accountId = desktopFileCacheAccountId(session)
         runCatching {
-            invalidateDesktopFileMetadata(accountId, path)
+            invalidateAffectedMetadata()
             etag?.let {
                 fileReadCache.storeContent(
                     accountId,
@@ -2124,6 +2135,8 @@ class DesktopNextcloudServices(
         require(utf8.size.toLong() <= MAX_EDITABLE_TEXT_BYTES) {
             "Text files larger than ${MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)} MiB cannot be created in the app."
         }
+        val accountId = desktopFileCacheAccountId(session)
+        fun invalidateAffectedMetadata() = invalidateDesktopFileMetadata(accountId, path)
         val response = request(
             "PUT",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -2131,13 +2144,14 @@ class DesktopNextcloudServices(
             rawBody = utf8,
             contentType = "text/plain; charset=utf-8",
             headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
         )
         if (response.status == 412) return@withContext SavedTextFile(etag = null, wasCreated = false)
         check(response.status in 200..299) { "Creating the text file failed (HTTP ${response.status})." }
         check(response.status == 201) { "The server did not confirm that a new text file was created." }
         runCatching {
-            val accountId = desktopFileCacheAccountId(session)
-            invalidateDesktopFileMetadata(accountId, path)
+            invalidateAffectedMetadata()
             response.etag?.let {
                 fileReadCache.storeContent(
                     accountId,
@@ -2154,19 +2168,21 @@ class DesktopNextcloudServices(
         userId: String,
         path: String,
     ): Boolean = withContext(Dispatchers.IO) {
+        val accountId = desktopFileCacheAccountId(session)
+        fun invalidateAffectedMetadata() = invalidateDesktopFileMetadata(accountId, path)
         val response = request(
             method = "MKCOL",
             url = buildNextcloudFileUrl(session.serverUrl, userId, path),
             session = session,
             headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
             maxResponseBytes = 64 * 1024,
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
         )
         if (response.status in setOf(405, 412)) return@withContext false
         if (response.status !in 200..299) throw fileOperationException(response.status)
         check(response.status == 201) { "The server did not confirm that a new folder was created." }
-        runCatching {
-            invalidateDesktopFileMetadata(desktopFileCacheAccountId(session), path)
-        }
+        runCatching(::invalidateAffectedMetadata)
         true
     }
 

@@ -249,7 +249,7 @@ class DesktopFileReadCacheTest {
     }
 
     @Test
-    fun `startup bounds cumulative metadata shard hydration bytes`() = withCache { root, cache ->
+    fun `startup preserves over-budget metadata references for demand loading`() = withCache { root, cache ->
         val accountId = desktopFileCacheAccountId(session())
         cache.storeListing(accountId, "First", listOf(file("First/one.jpg", "first")), 10L)
         cache.storeListing(accountId, "Second", listOf(file("Second/two.jpg", "second")), 20L)
@@ -257,13 +257,35 @@ class DesktopFileReadCacheTest {
             .filter { file -> file.extension == "metadata" }
             .maxOf { file -> file.length() }
 
+        val shardReads = AtomicInteger()
         val restored = DesktopFileReadCache(
             root = root,
             preferences = testPreferences(root),
             maximumHydratedMetadataBytes = shardBytes,
+            metadataShardReadObserver = { shardReads.incrementAndGet() },
         )
 
-        assertEquals(1, restored.cachedListingPaths(accountId).size)
+        assertEquals(setOf("First", "Second"), restored.cachedListingPaths(accountId))
+        assertEquals(1, shardReads.get())
+        assertTrue(
+            restored.storeContent(
+                accountId,
+                "unrelated.bin",
+                NextcloudFileContent(byteArrayOf(1), "application/octet-stream", "unrelated"),
+                30L,
+            ),
+        )
+        assertEquals(1, shardReads.get())
+        assertEquals(listOf(file("First/one.jpg", "first")), restored.cachedListing(accountId, "First"))
+        assertEquals(listOf(file("Second/two.jpg", "second")), restored.cachedListing(accountId, "Second"))
+        assertEquals(3, shardReads.get())
+
+        val restarted = DesktopFileReadCache(
+            root = root,
+            preferences = testPreferences(root),
+            maximumHydratedMetadataBytes = shardBytes,
+        )
+        assertEquals(setOf("First", "Second"), restarted.cachedListingPaths(accountId))
     }
 
     @Test
