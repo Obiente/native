@@ -24,6 +24,7 @@ import kotlin.test.assertFails
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 import ru.serce.jnrfuse.ErrorCodes
 import ru.serce.jnrfuse.struct.FileStat
 import ru.serce.jnrfuse.struct.FuseFileInfo
@@ -1417,6 +1418,260 @@ class LinuxVirtualFileSystemTest {
         cached.createDirectory("Albums")
         assertEquals(listOf("Photos", "Albums"), cached.list("").map(LinuxVirtualFileNode::name))
         assertEquals(2, delegate.listCallCount(""))
+        cached.close()
+    }
+
+    @Test
+    fun `partial retained navigation merges with a complete fallback listing`() {
+        val directory = Files.createTempDirectory("retained-navigation-merge-").toFile()
+        try {
+            val accountId = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            val cache = DesktopVirtualRangeCache(directory) {
+                VirtualFileCachePolicy(
+                    automaticCleanup = false,
+                    maximumCacheBytes = null,
+                    minimumFreeSpaceBytes = 0L,
+                    unusedFileAgeMillis = null,
+                )
+            }
+            cache.setFolderRetention(accountId, "Photos/2026", VirtualFolderRetention.KeepOnDevice)
+            cache.publishRetainedListings(
+                accountId,
+                "Photos/2026",
+                mapOf(
+                    "" to LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos", "Photos", true, 0L, "photos-new")),
+                        20L,
+                        complete = false,
+                    ),
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos/2026", "2026", true, 0L, "2026-new")),
+                        20L,
+                        complete = false,
+                    ),
+                    "Photos/2026" to LinuxVirtualDirectorySnapshot(emptyList(), 20L),
+                ),
+            )
+            val fallback = MemoryLinuxVirtualMetadataStore().apply {
+                seed(
+                    "",
+                    LinuxVirtualDirectorySnapshot(
+                        listOf(
+                            LinuxVirtualFileNode("Photos", "Photos", true, 0L, "photos-old"),
+                            LinuxVirtualFileNode("Documents", "Documents", true, 0L, "documents"),
+                        ),
+                        10L,
+                    ),
+                )
+            }
+            val store = RetainedLinuxVirtualMetadataStore(cache, accountId, fallback)
+
+            val restored = assertNotNull(store.load(""))
+
+            assertTrue(restored.complete)
+            assertEquals(setOf("Photos", "Documents"), restored.nodes.mapTo(hashSetOf(), LinuxVirtualFileNode::name))
+            assertEquals("photos-new", restored.nodesByPath.getValue("Photos").remoteRevision)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `newer fallback keeps missing retained navigation reachable without replacing live nodes`() {
+        val directory = Files.createTempDirectory("retained-navigation-recovery-").toFile()
+        try {
+            val accountId = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            val cache = DesktopVirtualRangeCache(directory) {
+                VirtualFileCachePolicy(automaticCleanup = false, minimumFreeSpaceBytes = 0L)
+            }
+            cache.setFolderRetention(accountId, "Photos/Missing", VirtualFolderRetention.KeepOnDevice)
+            cache.publishRetainedListings(
+                accountId,
+                "Photos/Missing",
+                mapOf(
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        listOf(
+                            LinuxVirtualFileNode("Photos/Live", "Live", true, 0L, "live-old"),
+                            LinuxVirtualFileNode("Photos/Missing", "Missing", true, 0L, "missing"),
+                        ),
+                        20L,
+                        complete = false,
+                    ),
+                    "Photos/Missing" to LinuxVirtualDirectorySnapshot(emptyList(), 20L),
+                ),
+            )
+            val fallback = MemoryLinuxVirtualMetadataStore().apply {
+                seed(
+                    "Photos",
+                    LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos/Live", "Live", true, 0L, "live-new")),
+                        30L,
+                    ),
+                )
+            }
+
+            val restored = assertNotNull(RetainedLinuxVirtualMetadataStore(cache, accountId, fallback).load("Photos"))
+
+            assertEquals(setOf("Live", "Missing"), restored.nodes.mapTo(hashSetOf(), LinuxVirtualFileNode::name))
+            assertEquals("live-new", restored.nodesByPath.getValue("Photos/Live").remoteRevision)
+            assertEquals("missing", restored.nodesByPath.getValue("Photos/Missing").remoteRevision)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `retained metadata wrapper forwards invalidation quarantine state`() {
+        val directory = Files.createTempDirectory("retained-invalidation-forwarding-").toFile()
+        try {
+            val accountId = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            var failed = emptySet<String>()
+            val fallback = object : LinuxVirtualMetadataStore by MemoryLinuxVirtualMetadataStore() {
+                override fun failedInvalidations(): Set<String> = failed
+                override fun replaceFailedInvalidations(paths: Set<String>) {
+                    failed = paths.toSet()
+                }
+            }
+            val cache = DesktopVirtualRangeCache(directory) {
+                VirtualFileCachePolicy(automaticCleanup = false, minimumFreeSpaceBytes = 0L)
+            }
+            val retained = RetainedLinuxVirtualMetadataStore(cache, accountId, fallback)
+
+            retained.replaceFailedInvalidations(setOf("Photos"))
+
+            assertEquals(setOf("Photos"), retained.failedInvalidations())
+            assertEquals(setOf("Photos"), failed)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `fallback metadata publication continues after a cache failure`() {
+        val attempted = mutableListOf<String>()
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = null
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean {
+                attempted += path
+                if (path == "Photos") error("Simulated optional metadata cache failure")
+                return true
+            }
+            override fun invalidate(path: String) = Unit
+        }
+        val complete = LinuxVirtualDirectorySnapshot(emptyList(), fetchedAtEpochMillis = 1L, complete = true)
+        val partial = LinuxVirtualDirectorySnapshot(emptyList(), fetchedAtEpochMillis = 1L, complete = false)
+
+        publishDesktopLinuxFallbackMetadataBestEffort(
+            store,
+            linkedMapOf("Photos" to complete, "Albums" to complete, "Partial" to partial),
+        )
+
+        assertEquals(listOf("Photos", "Albums"), attempted)
+    }
+
+    @Test
+    fun `complete retained listing does not revive stale fallback children`() {
+        val directory = Files.createTempDirectory("retained-complete-precedence-").toFile()
+        try {
+            val accountId = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            val cache = DesktopVirtualRangeCache(directory) {
+                VirtualFileCachePolicy(
+                    automaticCleanup = false,
+                    maximumCacheBytes = null,
+                    minimumFreeSpaceBytes = 0L,
+                    unusedFileAgeMillis = null,
+                )
+            }
+            cache.setFolderRetention(accountId, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.publishRetainedListings(
+                accountId,
+                "Photos",
+                mapOf(
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos/live.raf", "live.raf", false, 4L, "live")),
+                        20L,
+                    ),
+                ),
+            )
+            val fallback = MemoryLinuxVirtualMetadataStore().apply {
+                seed(
+                    "Photos",
+                    LinuxVirtualDirectorySnapshot(
+                        listOf(
+                            LinuxVirtualFileNode("Photos/live.raf", "live.raf", false, 4L, "old"),
+                            LinuxVirtualFileNode("Photos/deleted.raf", "deleted.raf", false, 4L, "deleted"),
+                        ),
+                        10L,
+                    ),
+                )
+            }
+
+            val restored = assertNotNull(RetainedLinuxVirtualMetadataStore(cache, accountId, fallback).load("Photos"))
+
+            assertEquals(listOf("live.raf"), restored.nodes.map(LinuxVirtualFileNode::name))
+            assertEquals("live", restored.nodes.single().remoteRevision)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `persisted remote listing reports only changed child paths once`() {
+        val directory = Files.createTempDirectory("retained-listing-change-").toFile()
+        try {
+            val accountId = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            val cache = DesktopVirtualRangeCache(directory) {
+                VirtualFileCachePolicy(automaticCleanup = false, minimumFreeSpaceBytes = 0L)
+            }
+            val fallback = MemoryLinuxVirtualMetadataStore().apply {
+                seed(
+                    "",
+                    LinuxVirtualDirectorySnapshot(
+                        listOf(
+                            LinuxVirtualFileNode("Photos", "Photos", true, 0L, "photos"),
+                            LinuxVirtualFileNode("Documents", "Documents", true, 0L, "documents-old"),
+                        ),
+                        10L,
+                    ),
+                )
+            }
+            val changes = mutableListOf<Set<String>>()
+            val store = RetainedLinuxVirtualMetadataStore(cache, accountId, fallback, changes::add)
+            val refreshed = LinuxVirtualDirectorySnapshot(
+                listOf(
+                    LinuxVirtualFileNode("Photos", "Photos", true, 0L, "photos"),
+                    LinuxVirtualFileNode("Documents", "Documents", true, 0L, "documents-new"),
+                ),
+                20L,
+            )
+
+            assertTrue(store.store("", refreshed))
+            assertEquals(listOf(setOf("Documents")), changes)
+            assertTrue(store.store("", refreshed.copy(fetchedAtEpochMillis = 30L)))
+            assertEquals(1, changes.size)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `failed namespace mutation invalidation requests retained folder recovery`() {
+        val failure = IllegalStateException("permission rejected")
+        val delegate = object : LinuxVirtualFileBackend by MutableFixtureBackend() {
+            override fun delete(node: LinuxVirtualFileNode) {
+                throw failure
+            }
+        }
+        val invalidatedMutations = mutableListOf<String>()
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = MemoryLinuxVirtualMetadataStore(),
+            afterMutationInvalidated = invalidatedMutations::add,
+        )
+        val node = LinuxVirtualFileNode("Photos/example.raf", "example.raf", false, 4L, "e1")
+
+        assertEquals(failure, assertFailsWith<IllegalStateException> { cached.delete(node) })
+        assertEquals(listOf("Photos/example.raf"), invalidatedMutations)
         cached.close()
     }
 

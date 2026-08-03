@@ -464,7 +464,7 @@ interface NextcloudPlatformServices {
 
     fun saveSession(session: NextcloudSession)
 
-    fun clearSession()
+    suspend fun clearSession()
 
     /** Loads one bounded, account-scoped unsaved Deck editor draft from app-private storage. */
     suspend fun loadDeckCardDraft(
@@ -635,6 +635,37 @@ interface NextcloudPlatformServices {
         userId: String,
     ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
         "A system virtual file provider is not available on this platform.",
+    )
+
+    /** Opens a native directory chooser for the parent of the visible virtual-file folder. */
+    suspend fun chooseVirtualFileProviderParent(initialParentPath: String?): String? = null
+
+    /** Persists a validated provider location. Active providers must be migrated explicitly. */
+    suspend fun saveVirtualFileProviderLocation(
+        session: NextcloudSession,
+        userId: String,
+        location: VirtualFileProviderLocation,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "Changing the virtual-file location is not available on this platform.",
+    )
+
+    /** Persists recursive virtual-folder retention and schedules hydration or safe release. */
+    suspend fun setVirtualFolderRetention(
+        session: NextcloudSession,
+        userId: String,
+        relativePath: String,
+        retention: VirtualFolderRetention,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "Selective virtual folders are not available on this platform.",
+    )
+
+    /** Retries hydration without rewriting the folder-retention tree. */
+    suspend fun retryVirtualFolderHydration(
+        session: NextcloudSession,
+        userId: String,
+        relativePath: String,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "Selective virtual folders are not available on this platform.",
     )
 
     /** Opens the native folder chooser and persists a least-privilege folder grant. */

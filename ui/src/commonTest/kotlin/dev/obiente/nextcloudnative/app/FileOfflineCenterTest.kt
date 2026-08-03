@@ -48,6 +48,10 @@ class FileOfflineCenterTest {
             supportsIndividualOfflineFiles = true,
             supportsRecursiveFolderAvailability = true,
         )
+        val recursiveOnly = defaultFileOfflineCenterSnapshot(
+            supportsIndividualOfflineFiles = false,
+            supportsRecursiveFolderAvailability = true,
+        )
 
         assertEquals(FileOfflineCenterSupport.Unsupported, unsupported.support)
         assertEquals(FileOfflineCenterSupport.InventoryUnavailable, inventoryUnavailable.support)
@@ -63,6 +67,10 @@ class FileOfflineCenterTest {
         assertTrue(recursiveInventoryUnavailable.limitations.any { "Files and folders" in it })
         assertTrue(recursiveInventoryUnavailable.limitations.any { "does not upload" in it })
         assertTrue(recursiveInventoryUnavailable.limitations.any { "not implemented" in it })
+        assertEquals(FileOfflineCenterSupport.InventoryUnavailable, recursiveOnly.support)
+        assertEquals(FileOfflineFolderAvailability.RecursiveDownloadOnly, recursiveOnly.folderAvailability)
+        assertTrue(recursiveOnly.limitations.any { "Selected folders" in it })
+        assertTrue(recursiveOnly.limitations.none { "Individual files" in it })
     }
 
     @Test
@@ -186,6 +194,34 @@ class FileOfflineCenterTest {
         assertFailsWith<IllegalArgumentException> {
             FileOfflineStorageUsage(usedBytes = 20L, capacityBytes = 10L, estimated = false)
         }
+    }
+
+    @Test
+    fun `scheduled retained refreshes keep storage polling at a bounded cadence`() {
+        val available = VirtualFolderHydrationStatus(
+            "Photos",
+            VirtualFolderHydrationPhase.AvailableOffline,
+            refreshFailure = "Server unavailable.",
+            verifiedAtEpochMillis = 1_000L,
+            refreshRetryAtEpochMillis = 20_000L,
+        )
+
+        assertEquals(10_000L, virtualStorageHydrationPollDelay(listOf(available), 5_000L))
+        assertEquals(5_000L, virtualStorageHydrationPollDelay(listOf(available), 15_000L))
+        assertEquals(10_000L, virtualStorageHydrationPollDelay(listOf(available), 20_000L))
+        assertEquals(
+            750L,
+            virtualStorageHydrationPollDelay(
+                listOf(available.copy(refreshing = true, refreshFailure = null, refreshRetryAtEpochMillis = null)),
+                20_000L,
+            ),
+        )
+        assertNull(
+            virtualStorageHydrationPollDelay(
+                listOf(available.copy(refreshFailure = null, refreshRetryAtEpochMillis = null)),
+                20_000L,
+            ),
+        )
     }
 
     private fun record(

@@ -478,7 +478,7 @@ internal class AndroidNextcloudServices(
         deckCardDrafts.clear(session, key)
     }
 
-    override fun clearSession() {
+    override suspend fun clearSession() {
         val accountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
         val scheduler = AndroidFileSyncScheduler(appContext)
         ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.clearSession(

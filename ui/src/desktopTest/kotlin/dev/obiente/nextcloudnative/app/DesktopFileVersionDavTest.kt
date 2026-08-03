@@ -3,6 +3,8 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class DesktopFileVersionDavTest {
     @Test
@@ -28,6 +30,18 @@ class DesktopFileVersionDavTest {
                     .encodeToByteArray(),
             )
         }
+    }
+
+    @Test
+    fun `successful version restore queues mutation reconciliation`() {
+        var reconciled = false
+
+        handleDesktopFileVersionRestoreStatus(204) { reconciled = true }
+
+        assertTrue(reconciled)
+        reconciled = false
+        assertFails { handleDesktopFileVersionRestoreStatus(409) { reconciled = true } }
+        assertFalse(reconciled)
     }
 }
 

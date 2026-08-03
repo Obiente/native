@@ -109,6 +109,18 @@ fun defaultFileOfflineCenterSnapshot(
         ),
         folderAvailability = supportsRecursiveFolderAvailability.toOfflineFolderAvailability(),
     )
+} else if (supportsRecursiveFolderAvailability) {
+    FileOfflineCenterSnapshot(
+        support = FileOfflineCenterSupport.InventoryUnavailable,
+        items = emptyList(),
+        storageUsage = null,
+        limitations = listOf(
+            "Selected folders can be kept available offline through the retained-folder controls.",
+            "Recursive folder availability downloads server changes; it does not upload local edits or mirror local deletions.",
+            OFFLINE_CENTER_NO_BIDIRECTIONAL_SYNC_LIMITATION,
+        ),
+        folderAvailability = FileOfflineFolderAvailability.RecursiveDownloadOnly,
+    )
 } else {
     FileOfflineCenterSnapshot(
         support = FileOfflineCenterSupport.Unsupported,

@@ -1471,6 +1471,10 @@ internal fun MarketingVirtualFileStorageDesktopScenario() {
                     onFreeUp = {},
                     onActivateProvider = {},
                     onDeactivateProvider = {},
+                    onChangeLocation = {},
+                    onChoosePinnedFolder = {},
+                    onReleaseFolder = {},
+                    onRetryFolder = {},
                 )
             }
         }
