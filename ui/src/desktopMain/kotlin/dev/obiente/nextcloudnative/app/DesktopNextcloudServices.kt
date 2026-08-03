@@ -197,6 +197,7 @@ internal fun validateDesktopVirtualFileProviderLocation(location: VirtualFilePro
     val target = parent.resolve(location.folderName).normalize()
     require(target.parent == parent) { "The virtual file folder must stay inside the selected location." }
     require(target.toString().length <= Preferences.MAX_VALUE_LENGTH) { "The selected location path is too long." }
+    requireValidDesktopVirtualFileCacheRoot(parent)
     if (Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
         require(Files.isDirectory(target, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(target)) {
             "The selected virtual file folder is not a regular directory."
@@ -206,6 +207,28 @@ internal fun validateDesktopVirtualFileProviderLocation(location: VirtualFilePro
         }
     }
     return target
+}
+
+internal fun requireValidDesktopVirtualFileCacheRoot(parent: Path) {
+    val cacheRoot = parent.resolve(INTERNAL_VIRTUAL_FILE_CACHE_FOLDER_NAME)
+    if (Files.notExists(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return
+    require(
+        Files.isDirectory(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+            !Files.isSymbolicLink(cacheRoot),
+    ) { "The selected location contains an invalid Nextcloud Native cache folder." }
+}
+
+internal fun hasInvalidDesktopVirtualFileCacheRoot(parent: Path): Boolean {
+    if (
+        !Files.isDirectory(parent, java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+        Files.isSymbolicLink(parent)
+    ) return false
+    val cacheRoot = parent.resolve(INTERNAL_VIRTUAL_FILE_CACHE_FOLDER_NAME)
+    return Files.exists(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+        (
+            !Files.isDirectory(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+                Files.isSymbolicLink(cacheRoot)
+            )
 }
 
 internal fun virtualFileLocationActionMessage(prefix: String, targetPath: String): String {
@@ -657,7 +680,7 @@ class DesktopNextcloudServices(
                 if (isLinuxDesktop()) {
                     val location = desktopVirtualFileProviderLocation(preferences, accountId)
                     DesktopVirtualRangeCache(
-                        root = File(location.parentPath, ".nextcloud-native-cache"),
+                        root = File(location.parentPath, INTERNAL_VIRTUAL_FILE_CACHE_FOLDER_NAME),
                         policy = fileReadCache::loadPolicy,
                         createParentDirectories = false,
                     )
@@ -826,13 +849,14 @@ class DesktopNextcloudServices(
                                     size,
                                 )
                             }
+                            val completeRevisions = cache.completeRevisions(accountId, expectedRevisions)
                             cache.requireRevisionsCapacity(
                                 accountId = accountId,
                                 revisions = expectedRevisions,
                                 blockBytes = VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES,
                                 retention = retentionSnapshot,
+                                pendingRevisions = expectedRevisions.filterNot(completeRevisions::contains),
                             )
-                            val completeRevisions = cache.completeRevisions(accountId, expectedRevisions)
                             retainedFiles.forEach { document ->
                                 val fullPath = document.entry.relativePath
                                 val size = requireNotNull(document.entry.size)
@@ -922,6 +946,12 @@ class DesktopNextcloudServices(
                                 throw VirtualFolderRefreshSupersededException()
                             }
                             cache.publishRetainedListings(accountId, relativePath, snapshots)
+                            cache.publishRetainedRevisions(
+                                accountId,
+                                relativePath,
+                                expectedPublishedRevisions,
+                                verifiedRetention,
+                            )
                             snapshots.filterValues(LinuxVirtualDirectorySnapshot::complete).forEach(metadataStore::store)
                             val protectedPaths = writebacks.pendingWritebacks()
                                 .mapTo(hashSetOf(), DesktopLinuxPendingWriteback::path)
@@ -1592,15 +1622,22 @@ class DesktopNextcloudServices(
                     virtualFileLocationActionMessage("Virtual files already use ", target.toString()),
                 )
             }
-            val currentCache = virtualRangeCache(accountId)
-            currentCache.requireAvailable()
-            if (
-                currentCache.summary(accountId).cachedBytes > 0L ||
-                currentCache.loadFolderRetention(accountId).rules.isNotEmpty()
-            ) {
-                return@withContext VirtualFileStorageActionResult.Rejected(
-                    "Make kept folders online-only and free disposable content before moving the storage drive.",
-                )
+            val currentLocation = desktopVirtualFileProviderLocation(preferences, accountId)
+            val currentCacheResult = runCatching { virtualRangeCache(accountId) }
+            val currentCache = currentCacheResult.getOrNull()
+            if (currentCache == null) {
+                val currentParent = File(currentLocation.parentPath).toPath().toAbsolutePath().normalize()
+                if (!hasInvalidDesktopVirtualFileCacheRoot(currentParent)) currentCacheResult.getOrThrow()
+            } else {
+                currentCache.requireAvailable()
+                if (
+                    currentCache.summary(accountId).cachedBytes > 0L ||
+                    currentCache.loadFolderRetention(accountId).rules.isNotEmpty()
+                ) {
+                    return@withContext VirtualFileStorageActionResult.Rejected(
+                        "Make kept folders online-only and free disposable content before moving the storage drive.",
+                    )
+                }
             }
             preferences.put(virtualFileProviderRootPreferenceKey(accountId), target.toString())
             synchronized(virtualRangeCaches) { virtualRangeCaches.remove(accountId) }

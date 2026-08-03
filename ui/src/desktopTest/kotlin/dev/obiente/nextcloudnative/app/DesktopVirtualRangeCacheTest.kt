@@ -744,6 +744,106 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `retained refresh preserves the published revision until new listings commit`() {
+        val directory = Files.createTempDirectory("virtual-range-pending-publication-").toFile()
+        try {
+            val retention = VirtualFolderRetentionState(
+                listOf(VirtualFolderRetentionRule("Photos", VirtualFolderRetention.KeepOnDevice)),
+            )
+            val cache = DesktopVirtualRangeCache(
+                root = directory,
+                maximumBlocks = 1,
+                policy = { nonEvictingTestPolicy() },
+            )
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L, 0L, "old!".encodeToByteArray())
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos",
+                mapOf(
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos/photo.raf", "photo.raf", false, 4L, "e1")),
+                        10L,
+                    ),
+                ),
+            )
+
+            cache.beginRevisionStaging(
+                ACCOUNT_ID,
+                "Photos/photo.raf",
+                "e2",
+                4L,
+                retention,
+                preservePreviousRevisionUntilPublication = true,
+            ).use { staging ->
+                staging.store(0L, "new!".encodeToByteArray())
+                assertTrue(staging.commitIfComplete())
+            }
+
+            cache.beginRevisionStaging(
+                ACCOUNT_ID,
+                "Photos/photo.raf",
+                "e3",
+                4L,
+                retention,
+                preservePreviousRevisionUntilPublication = true,
+            ).use { staging ->
+                staging.store(0L, "last".encodeToByteArray())
+                assertTrue(staging.commitIfComplete())
+            }
+
+            val restartedBeforePublication = DesktopVirtualRangeCache(
+                root = directory,
+                maximumBlocks = 1,
+                policy = { nonEvictingTestPolicy() },
+            )
+            assertEquals(
+                "e1",
+                restartedBeforePublication.loadRetainedListing(ACCOUNT_ID, "Photos")
+                    ?.nodes?.single()?.remoteRevision,
+            )
+            assertContentEquals(
+                "old!".encodeToByteArray(),
+                restartedBeforePublication.readBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L, 0L, 4),
+            )
+            assertNull(
+                restartedBeforePublication.readBlock(ACCOUNT_ID, "Photos/photo.raf", "e2", 4L, 0L, 4),
+            )
+            assertContentEquals(
+                "last".encodeToByteArray(),
+                restartedBeforePublication.readBlock(ACCOUNT_ID, "Photos/photo.raf", "e3", 4L, 0L, 4),
+            )
+
+            restartedBeforePublication.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos",
+                mapOf(
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos/photo.raf", "photo.raf", false, 4L, "e3")),
+                        20L,
+                    ),
+                ),
+            )
+            restartedBeforePublication.publishRetainedRevisions(
+                ACCOUNT_ID,
+                "Photos",
+                listOf(VirtualRangeRevision("Photos/photo.raf", "e3", 4L)),
+                retention,
+            )
+
+            assertNull(
+                restartedBeforePublication.readBlock(ACCOUNT_ID, "Photos/photo.raf", "e1", 4L, 0L, 4),
+            )
+            assertContentEquals(
+                "last".encodeToByteArray(),
+                restartedBeforePublication.readBlock(ACCOUNT_ID, "Photos/photo.raf", "e3", 4L, 0L, 4),
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `staged replacement waits while a previous generation is open`() {
         val directory = Files.createTempDirectory("virtual-range-open-generation-").toFile()
         try {

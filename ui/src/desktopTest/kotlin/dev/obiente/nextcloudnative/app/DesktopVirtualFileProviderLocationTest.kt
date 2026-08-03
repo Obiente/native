@@ -61,6 +61,25 @@ class DesktopVirtualFileProviderLocationTest {
     }
 
     @Test
+    fun invalidInternalCacheRootIsRejectedBeforeSavingALocation() {
+        val parent = Files.createTempDirectory("virtual-provider-invalid-cache-").toFile()
+        val invalidCache = parent.resolve(INTERNAL_VIRTUAL_FILE_CACHE_FOLDER_NAME)
+        try {
+            invalidCache.writeText("not a directory")
+
+            assertEquals(true, hasInvalidDesktopVirtualFileCacheRoot(parent.toPath()))
+            assertFailsWith<IllegalArgumentException> {
+                validateDesktopVirtualFileProviderLocation(
+                    VirtualFileProviderLocation(parent.absolutePath, "Nextcloud Native"),
+                )
+            }
+            assertEquals("not a directory", invalidCache.readText())
+        } finally {
+            parent.deleteRecursively()
+        }
+    }
+
+    @Test
     fun locationResultMessagesRemainBoundedForLongValidPaths() {
         val message = virtualFileLocationActionMessage(
             "Virtual files will appear at ",

@@ -768,6 +768,7 @@ internal class DesktopNextcloudVirtualFileBackend(
                     node.remoteRevision,
                     node.size,
                     retentionSnapshot,
+                    preservePreviousRevisionUntilPublication = true,
                 )
             } else {
                 null
