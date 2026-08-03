@@ -327,23 +327,35 @@ internal class DesktopVirtualRangeCache(
         path: String,
         remoteRevision: String,
         fileSize: Long,
+        retention: VirtualFolderRetentionState? = null,
     ): RevisionStaging {
         require(remoteRevision.isNotBlank() && fileSize > 0L)
         val normalized = FileOfflineKey(accountId, path).relativePath
         val directory = writableAccountDirectory(accountId)
-        return RevisionStaging(accountId, normalized, remoteRevision, fileSize, directory)
+        return RevisionStaging(accountId, normalized, remoteRevision, fileSize, directory, retention)
     }
 
     @Synchronized
     fun requireRevisionCapacity(accountId: String, path: String, fileSize: Long, blockBytes: Int) {
+        requireRevisionCapacity(accountId, path, fileSize, blockBytes, retention = null)
+    }
+
+    @Synchronized
+    fun requireRevisionCapacity(
+        accountId: String,
+        path: String,
+        fileSize: Long,
+        blockBytes: Int,
+        retention: VirtualFolderRetentionState?,
+    ) {
         require(fileSize > 0L)
         require(blockBytes in 1..MAX_BLOCK_BYTES)
         val normalized = FileOfflineKey(accountId, path).relativePath
         val requiredBlocks = (fileSize - 1L) / blockBytes.toLong() + 1L
-        val retention = loadFolderRetention(accountId)
+        val effectiveRetention = retention ?: loadFolderRetention(accountId)
         val pinnedOtherBlocks = load(accountId).blocks.count { block ->
             block.path != normalized &&
-                retention.retentionFor(block.path) == VirtualFolderRetention.KeepOnDevice
+                effectiveRetention.retentionFor(block.path) == VirtualFolderRetention.KeepOnDevice
         }
         require(requiredBlocks <= (maximumBlocks - pinnedOtherBlocks).toLong()) {
             "The retained folders exceed the supported virtual-file cache index."
@@ -465,7 +477,7 @@ internal class DesktopVirtualRangeCache(
         if (retention.retentionFor(normalized) != VirtualFolderRetention.KeepOnDevice) return null
         val metadataIndex = loadRetainedMetadataIndex(accountId)
         if (retainedFolderAncestorListings(normalized).any { ancestor ->
-                loadRetainedListing(accountId, ancestor, metadataIndex) == null
+                loadRetainedListing(accountId, ancestor, metadataIndex, retention) == null
             }
         ) return null
         val pending = ArrayDeque<String>().apply { add(normalized) }
@@ -475,7 +487,7 @@ internal class DesktopVirtualRangeCache(
             val directory = pending.removeFirst()
             if (!visited.add(directory)) continue
             if (visited.size > MAX_VIRTUAL_FOLDER_RETAINED_LISTINGS) return null
-            val listing = loadRetainedListing(accountId, directory, metadataIndex) ?: return null
+            val listing = loadRetainedListing(accountId, directory, metadataIndex, retention) ?: return null
             listing.nodes.forEach { node ->
                 if (retention.retentionFor(node.path) != VirtualFolderRetention.KeepOnDevice) return@forEach
                 if (node.directory) {
@@ -493,7 +505,8 @@ internal class DesktopVirtualRangeCache(
     @Synchronized
     fun loadRetainedListing(accountId: String, path: String): LinuxVirtualDirectorySnapshot? {
         val normalized = path.trim('/')
-        val covered = loadFolderRetention(accountId).rules.any { rule ->
+        val retention = loadFolderRetention(accountId)
+        val covered = retention.rules.any { rule ->
             rule.retention == VirtualFolderRetention.KeepOnDevice &&
                 (
                     normalized.isEmpty() ||
@@ -503,13 +516,14 @@ internal class DesktopVirtualRangeCache(
                     )
         }
         if (!covered) return null
-        return loadRetainedListing(accountId, normalized, loadRetainedMetadataIndex(accountId))
+        return loadRetainedListing(accountId, normalized, loadRetainedMetadataIndex(accountId), retention)
     }
 
     private fun loadRetainedListing(
         accountId: String,
         normalized: String,
         index: RetainedMetadataIndex,
+        retention: VirtualFolderRetentionState,
     ): LinuxVirtualDirectorySnapshot? {
         val reference = index.listings.firstOrNull { it.path == normalized } ?: return null
         val blob = File(accountDirectory(accountId), reference.blobName)
@@ -519,7 +533,12 @@ internal class DesktopVirtualRangeCache(
             require(sha256Hex(encoded) == reference.sha256)
             rangeCacheJson.decodeFromString<RetainedDirectoryListing>(encoded.decodeToString())
                 .also { listing -> listing.requireValid(normalized) }
-                .toSnapshot()
+                .toSnapshot(
+                    completeWhenUnspecified = retention.rules.any { rule ->
+                        rule.retention == VirtualFolderRetention.KeepOnDevice &&
+                            isCompleteRetainedTreeListing(normalized, rule.relativePath)
+                    },
+                )
         }.getOrNull()
     }
 
@@ -667,6 +686,8 @@ internal class DesktopVirtualRangeCache(
         )
     }
 
+    fun availableFreeBytes(): Long = root.usableSpace.coerceAtLeast(0L)
+
     @Synchronized
     fun freeUp(accountId: String, requestedBytes: Long): VirtualFileEvictionPlan =
         applyEviction(accountId, requestedBytes, System.currentTimeMillis())
@@ -773,9 +794,13 @@ internal class DesktopVirtualRangeCache(
             .forEach(File::delete)
     }
 
-    private fun save(accountId: String, index: RangeCacheIndex) {
+    private fun save(
+        accountId: String,
+        index: RangeCacheIndex,
+        retention: VirtualFolderRetentionState? = null,
+    ) {
         val directory = writableAccountDirectory(accountId)
-        val bounded = boundedIndex(accountId, index)
+        val bounded = boundedIndex(accountId, index, retention)
         val encoded = encodedIndex(bounded)
         publishBytes(directory, INDEX_FILE, encoded)
         val referenced = bounded.blocks.mapTo(hashSetOf(), CachedRangeBlock::blobName)
@@ -802,10 +827,14 @@ internal class DesktopVirtualRangeCache(
         encodedIndex(bounded)
     }
 
-    private fun boundedIndex(accountId: String, index: RangeCacheIndex): RangeCacheIndex {
-        val retention = loadFolderRetention(accountId)
+    private fun boundedIndex(
+        accountId: String,
+        index: RangeCacheIndex,
+        retention: VirtualFolderRetentionState? = null,
+    ): RangeCacheIndex {
+        val effectiveRetention = retention ?: loadFolderRetention(accountId)
         val (pinned, automatic) = index.blocks.partition { block ->
-            retention.retentionFor(block.path) == VirtualFolderRetention.KeepOnDevice
+            effectiveRetention.retentionFor(block.path) == VirtualFolderRetention.KeepOnDevice
         }
         require(pinned.size <= maximumBlocks) {
             "The retained folders exceed the supported virtual-file cache index."
@@ -841,6 +870,7 @@ internal class DesktopVirtualRangeCache(
         private val remoteRevision: String,
         private val fileSize: Long,
         private val directory: File,
+        private val retention: VirtualFolderRetentionState?,
     ) : AutoCloseable {
         private val stageId = UUID.randomUUID().toString()
         private val leaseFile = File(directory, "range-revision.$stageId.lock")
@@ -898,6 +928,7 @@ internal class DesktopVirtualRangeCache(
                 path,
                 stageId,
                 ordered,
+                retention,
             )
             closed = true
             staged.clear()
@@ -927,6 +958,7 @@ internal class DesktopVirtualRangeCache(
         path: String,
         stageId: String,
         staged: List<StagedRangeBlock>,
+        retention: VirtualFolderRetentionState?,
     ) {
         check(activePaths.getOrDefault(FileOfflineKey(accountId, path), 0) <= 1) {
             "The previous retained revision is still open. The refresh will retry after it closes."
@@ -934,7 +966,7 @@ internal class DesktopVirtualRangeCache(
         val current = load(accountId)
         val records = staged.map(StagedRangeBlock::record)
         val next = current.copy(blocks = current.blocks.filterNot { block -> block.path == path } + records)
-        val bounded = boundedIndex(accountId, next)
+        val bounded = boundedIndex(accountId, next, retention)
         require(records.all { record -> record in bounded.blocks }) {
             "The retained folder is larger than the supported virtual-file cache index."
         }
@@ -968,7 +1000,7 @@ internal class DesktopVirtualRangeCache(
                 moved += destination
             }
             syncDirectoryMetadata(journal.parentFile)
-            save(accountId, next)
+            save(accountId, next, retention)
             syncDirectoryMetadata(journal.parentFile)
             journal.delete()
         } catch (failure: Throwable) {
@@ -1238,6 +1270,7 @@ private data class RetainedDirectoryListing(
     val path: String,
     val fetchedAtEpochMillis: Long,
     val nodes: List<RetainedVirtualFileNode>,
+    val complete: Boolean? = null,
 ) {
     fun requireValid(expectedPath: String) {
         require(version == 1 && path == expectedPath && fetchedAtEpochMillis >= 0L)
@@ -1247,9 +1280,10 @@ private data class RetainedDirectoryListing(
         nodes.forEach(RetainedVirtualFileNode::requireValid)
     }
 
-    fun toSnapshot() = LinuxVirtualDirectorySnapshot(
+    fun toSnapshot(completeWhenUnspecified: Boolean) = LinuxVirtualDirectorySnapshot(
         nodes = nodes.map(RetainedVirtualFileNode::toDomain),
         fetchedAtEpochMillis = fetchedAtEpochMillis,
+        complete = complete ?: completeWhenUnspecified,
     )
 
     companion object {
@@ -1257,6 +1291,7 @@ private data class RetainedDirectoryListing(
             path = path,
             fetchedAtEpochMillis = snapshot.fetchedAtEpochMillis,
             nodes = snapshot.nodes.map(RetainedVirtualFileNode.Companion::fromDomain),
+            complete = snapshot.complete,
         ).also { it.requireValid(path) }
     }
 }

@@ -81,6 +81,7 @@ internal data class LinuxVirtualDirectorySnapshot(
     val nodes: List<LinuxVirtualFileNode>,
     val fetchedAtEpochMillis: Long,
     val generation: Long = 0L,
+    val complete: Boolean = true,
 ) {
     val nodesByPath: Map<String, LinuxVirtualFileNode> = nodes.associateBy(LinuxVirtualFileNode::path)
 
@@ -123,8 +124,14 @@ internal class RetainedLinuxVirtualMetadataStore(
     private val accountId: String,
     private val fallback: LinuxVirtualMetadataStore,
 ) : LinuxVirtualMetadataStore {
-    override fun load(path: String): LinuxVirtualDirectorySnapshot? =
-        rangeCache.loadRetainedListing(accountId, path) ?: fallback.load(path)
+    override fun load(path: String): LinuxVirtualDirectorySnapshot? {
+        val retained = rangeCache.loadRetainedListing(accountId, path) ?: return fallback.load(path)
+        if (retained.complete) return retained
+        val completeFallback = fallback.load(path)?.takeIf(LinuxVirtualDirectorySnapshot::complete)
+            ?: return retained.copy(fetchedAtEpochMillis = 0L)
+        if (completeFallback.fetchedAtEpochMillis > retained.fetchedAtEpochMillis) return completeFallback
+        return mergeRetainedNavigationListing(completeFallback, retained)
+    }
 
     override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = fallback.store(path, snapshot)
 
@@ -134,6 +141,21 @@ internal class RetainedLinuxVirtualMetadataStore(
         rangeCache.invalidateRetainedListings(accountId, path)
         fallback.invalidate(path)
     }
+}
+
+internal fun mergeRetainedNavigationListing(
+    complete: LinuxVirtualDirectorySnapshot,
+    navigation: LinuxVirtualDirectorySnapshot,
+): LinuxVirtualDirectorySnapshot {
+    require(complete.complete && !navigation.complete)
+    val nodes = LinkedHashMap(complete.nodesByPath)
+    navigation.nodes.forEach { node -> nodes[node.path] = node }
+    return LinuxVirtualDirectorySnapshot(
+        nodes = nodes.values.toList(),
+        fetchedAtEpochMillis = maxOf(complete.fetchedAtEpochMillis, navigation.fetchedAtEpochMillis),
+        generation = maxOf(complete.generation, navigation.generation),
+        complete = true,
+    )
 }
 
 /**
@@ -710,6 +732,7 @@ internal class DesktopNextcloudVirtualFileBackend(
     private val writebacks: DesktopLinuxVirtualFileWritebackStore,
     private val tree: DesktopFileSyncRemoteTree = DesktopFileSyncRemoteTree(session, userId, ""),
     private val requireDurableCacheWrites: Boolean = false,
+    private val retentionSnapshot: VirtualFolderRetentionState? = null,
 ) : LinuxVirtualFileBackend {
     private val accountId = desktopFileCacheAccountId(session)
 
@@ -728,7 +751,13 @@ internal class DesktopNextcloudVirtualFileBackend(
         return object : LinuxVirtualFileReadHandle {
             private var currentPath = node.path
             private val stagedRevision = if (requireDurableCacheWrites) {
-                rangeCache.beginRevisionStaging(accountId, currentPath, node.remoteRevision, node.size)
+                rangeCache.beginRevisionStaging(
+                    accountId,
+                    currentPath,
+                    node.remoteRevision,
+                    node.size,
+                    retentionSnapshot,
+                )
             } else {
                 null
             }

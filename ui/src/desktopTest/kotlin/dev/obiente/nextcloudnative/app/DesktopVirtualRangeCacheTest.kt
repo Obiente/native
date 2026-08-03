@@ -1,6 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Files
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -288,6 +292,84 @@ class DesktopVirtualRangeCacheTest {
         requireVirtualFolderListingCapacity(99, maximumListings = 100)
         assertFailsWith<IllegalStateException> {
             requireVirtualFolderListingCapacity(100, maximumListings = 100)
+        }
+    }
+
+    @Test
+    fun `lazy hydration jobs occupy their key and only owners remove it`() = runBlocking {
+        val owner = launch(start = CoroutineStart.LAZY) {}
+        val replacement = launch(start = CoroutineStart.LAZY) {}
+        val jobs = mutableMapOf("folder" to owner)
+
+        assertFalse(owner.isActive)
+        assertTrue(owner.occupiesVirtualFolderHydrationSlot())
+        assertFalse(removeVirtualFolderHydrationJobIfOwned(jobs, "folder", replacement))
+        assertEquals(owner, jobs["folder"])
+        assertTrue(removeVirtualFolderHydrationJobIfOwned(jobs, "folder", owner))
+        assertNull(jobs["folder"])
+
+        owner.cancelAndJoin()
+        replacement.cancelAndJoin()
+        assertFalse(owner.occupiesVirtualFolderHydrationSlot())
+    }
+
+    @Test
+    fun `partial retained navigation survives restart without claiming completeness`() {
+        val directory = Files.createTempDirectory("virtual-range-navigation-completeness-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/2026", VirtualFolderRetention.KeepOnDevice)
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos/2026",
+                mapOf(
+                    "" to LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos", "Photos", true, 0L, "photos-new")),
+                        42L,
+                        complete = false,
+                    ),
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        listOf(LinuxVirtualFileNode("Photos/2026", "2026", true, 0L, "2026-new")),
+                        42L,
+                        complete = false,
+                    ),
+                    "Photos/2026" to LinuxVirtualDirectorySnapshot(emptyList(), 42L),
+                ),
+            )
+
+            val restarted = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            assertFalse(requireNotNull(restarted.loadRetainedListing(ACCOUNT_ID, "")).complete)
+            assertFalse(requireNotNull(restarted.loadRetainedListing(ACCOUNT_ID, "Photos")).complete)
+            assertTrue(requireNotNull(restarted.loadRetainedListing(ACCOUNT_ID, "Photos/2026")).complete)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `capacity checks can reuse the traversal retention snapshot`() {
+        val directory = Files.createTempDirectory("virtual-range-retention-snapshot-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(
+                root = directory,
+                maximumBlocks = 1,
+                policy = { nonEvictingTestPolicy() },
+            )
+            cache.storeBlock(ACCOUNT_ID, "Photos/existing.raf", "e1", 4L, 0L, "data".encodeToByteArray())
+            val traversalRetention = VirtualFolderRetentionState()
+                .withRetention("Photos", VirtualFolderRetention.KeepOnDevice)
+
+            assertFailsWith<IllegalArgumentException> {
+                cache.requireRevisionCapacity(
+                    ACCOUNT_ID,
+                    "Documents/new.raf",
+                    4L,
+                    4,
+                    traversalRetention,
+                )
+            }
+        } finally {
+            directory.deleteRecursively()
         }
     }
 
