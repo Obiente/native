@@ -629,6 +629,23 @@ internal class DesktopVirtualRangeCache(
     }
 
     @Synchronized
+    fun retainedListingCountSurvivingPublication(
+        accountId: String,
+        retainedRoot: String,
+        publishedPaths: Set<String>,
+    ): Int {
+        val normalizedRoot = FileOfflineKey(accountId, retainedRoot).relativePath
+        require(normalizedRoot in publishedPaths)
+        publishedPaths.forEach { path -> if (path.isNotEmpty()) FileOfflineKey(accountId, path) }
+        return retainedListingsSurvivingPublication(
+            accountId = accountId,
+            normalizedRoot = normalizedRoot,
+            publishedPaths = publishedPaths,
+            current = loadRetainedMetadataIndex(accountId),
+        ).size
+    }
+
+    @Synchronized
     fun publishRetainedListings(
         accountId: String,
         retainedRoot: String,
@@ -638,6 +655,13 @@ internal class DesktopVirtualRangeCache(
         require(snapshots.isNotEmpty() && normalizedRoot in snapshots)
         require(snapshots.size <= MAX_VIRTUAL_FOLDER_RETAINED_LISTINGS)
         val directory = writableAccountDirectory(accountId)
+        val publishedPaths = snapshots.keys.mapTo(hashSetOf()) { path -> path.trim('/') }
+        require(publishedPaths.size == snapshots.size) { "Retained folder listings contain duplicate paths." }
+        val current = loadRetainedMetadataIndex(accountId)
+        val surviving = retainedListingsSurvivingPublication(accountId, normalizedRoot, publishedPaths, current)
+        check(snapshots.size <= MAX_VIRTUAL_FOLDER_RETAINED_LISTINGS - surviving.size) {
+            "The retained virtual-folder metadata index contains too many listings."
+        }
         val published = snapshots.map { (path, snapshot) ->
             val normalized = path.trim('/')
             RetainedDirectoryListing.fromSnapshot(normalized, snapshot).let { listing ->
@@ -654,28 +678,8 @@ internal class DesktopVirtualRangeCache(
                 RetainedListingReference(normalized, blobName, hash)
             }
         }
-        val publishedPaths = published.mapTo(hashSetOf(), RetainedListingReference::path)
-        val current = loadRetainedMetadataIndex(accountId)
-        val nestedRetainedRoots = loadFolderRetention(accountId).rules.asSequence()
-            .filter { rule ->
-                rule.retention == VirtualFolderRetention.KeepOnDevice &&
-                    rule.relativePath.startsWith("$normalizedRoot/")
-            }
-            .mapTo(hashSetOf(), VirtualFolderRetentionRule::relativePath)
         val next = RetainedMetadataIndex(
-            listings = (
-                current.listings.filterNot { reference ->
-                    val replacedByPublished = reference.path in publishedPaths
-                    val insidePublishedRoot = reference.path == normalizedRoot ||
-                        reference.path.startsWith("$normalizedRoot/")
-                    val requiredByNestedRoot = nestedRetainedRoots.any { nestedRoot ->
-                        reference.path == nestedRoot ||
-                            reference.path.startsWith("$nestedRoot/") ||
-                            nestedRoot.startsWith("${reference.path}/")
-                    }
-                    replacedByPublished || insidePublishedRoot && !requiredByNestedRoot
-                } + published
-                ).sortedBy(RetainedListingReference::path),
+            listings = (surviving + published).sortedBy(RetainedListingReference::path),
         )
         try {
             saveRetainedMetadataIndex(accountId, next)
@@ -685,6 +689,31 @@ internal class DesktopVirtualRangeCache(
                 .filterNot { reference -> reference.blobName in previouslyReferenced }
                 .forEach { reference -> File(directory, reference.blobName).delete() }
             throw failure
+        }
+    }
+
+    private fun retainedListingsSurvivingPublication(
+        accountId: String,
+        normalizedRoot: String,
+        publishedPaths: Set<String>,
+        current: RetainedMetadataIndex,
+    ): List<RetainedListingReference> {
+        val nestedRetainedRoots = loadFolderRetention(accountId).rules.asSequence()
+            .filter { rule ->
+                rule.retention == VirtualFolderRetention.KeepOnDevice &&
+                    rule.relativePath.startsWith("$normalizedRoot/")
+            }
+            .mapTo(hashSetOf(), VirtualFolderRetentionRule::relativePath)
+        return current.listings.filterNot { reference ->
+            val replacedByPublished = reference.path in publishedPaths
+            val insidePublishedRoot = reference.path == normalizedRoot ||
+                reference.path.startsWith("$normalizedRoot/")
+            val requiredByNestedRoot = nestedRetainedRoots.any { nestedRoot ->
+                reference.path == nestedRoot ||
+                    reference.path.startsWith("$nestedRoot/") ||
+                    nestedRoot.startsWith("${reference.path}/")
+            }
+            replacedByPublished || insidePublishedRoot && !requiredByNestedRoot
         }
     }
 

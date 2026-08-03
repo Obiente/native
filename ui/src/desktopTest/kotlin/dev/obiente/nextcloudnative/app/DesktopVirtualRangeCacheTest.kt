@@ -277,6 +277,13 @@ class DesktopVirtualRangeCacheTest {
         assertFalse(shouldScheduleVirtualFolderHydration(backedOff, 19_999L, refreshIntervalMillis = 1_000L))
         assertTrue(shouldScheduleVirtualFolderHydration(backedOff, 20_000L, refreshIntervalMillis = 1_000L))
         assertTrue(shouldScheduleVirtualFolderHydration(backedOff, 9_999L, refreshIntervalMillis = 1_000L))
+        assertTrue(
+            shouldScheduleVirtualFolderHydration(
+                backedOff.copy(verifiedAtEpochMillis = 19_500L),
+                20_000L,
+                refreshIntervalMillis = 10_000L,
+            ),
+        )
     }
 
     @Test
@@ -970,6 +977,46 @@ class DesktopVirtualRangeCacheTest {
             assertEquals(
                 emptyList<LinuxVirtualFileNode>(),
                 requireNotNull(cache.loadRetainedListing(ACCOUNT_ID, "Photos/B")).nodes,
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `publication preflight counts listings retained by other roots`() {
+        val directory = Files.createTempDirectory("virtual-range-retained-preflight-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(directory) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/A", VirtualFolderRetention.KeepOnDevice)
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/B", VirtualFolderRetention.KeepOnDevice)
+            val photos = LinuxVirtualDirectorySnapshot(emptyList(), 42L)
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos/A",
+                mapOf("Photos" to photos, "Photos/A" to LinuxVirtualDirectorySnapshot(emptyList(), 42L)),
+            )
+            cache.publishRetainedListings(
+                ACCOUNT_ID,
+                "Photos/B",
+                mapOf("Photos" to photos, "Photos/B" to LinuxVirtualDirectorySnapshot(emptyList(), 42L)),
+            )
+
+            assertEquals(
+                3,
+                cache.retainedListingCountSurvivingPublication(
+                    ACCOUNT_ID,
+                    "Documents",
+                    setOf("", "Documents"),
+                ),
+            )
+            assertEquals(
+                1,
+                cache.retainedListingCountSurvivingPublication(
+                    ACCOUNT_ID,
+                    "Photos/A",
+                    setOf("", "Photos", "Photos/A"),
+                ),
             )
         } finally {
             directory.deleteRecursively()

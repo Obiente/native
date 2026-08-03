@@ -119,6 +119,7 @@ internal fun FileOfflineCenterScreen(
     var virtualStorageBusy by remember(session, userId) { mutableStateOf(false) }
     var virtualStorageSettingsVisible by remember(session, userId) { mutableStateOf(false) }
     var virtualLocationVisible by remember(session, userId) { mutableStateOf(false) }
+    var virtualLocationError by remember(session, userId) { mutableStateOf<String?>(null) }
     var virtualFolderPickerVisible by remember(session, userId) { mutableStateOf(false) }
     var releaseVirtualFolderPath by remember(session, userId) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -251,17 +252,23 @@ internal fun FileOfflineCenterScreen(
         if (virtualStorageBusy) return
         virtualStorageBusy = true
         actionMessage = null
+        virtualLocationError = null
         scope.launch {
             runCatching { services.saveVirtualFileProviderLocation(session, userId, location) }
                 .onSuccess { result ->
-                    actionMessage = result.virtualFileStorageMessage()
+                    val message = result.virtualFileStorageMessage()
+                    actionMessage = message
                     if (result is VirtualFileStorageActionResult.Completed) {
                         virtualLocationVisible = false
                         refreshAttempt += 1
+                    } else {
+                        virtualLocationError = message
                     }
                 }
                 .onFailure { failure ->
-                    actionMessage = failure.message ?: "Could not change the virtual file location."
+                    val message = failure.message ?: "Could not change the virtual file location."
+                    actionMessage = message
+                    virtualLocationError = message
                 }
             virtualStorageBusy = false
         }
@@ -494,7 +501,10 @@ internal fun FileOfflineCenterScreen(
                         onFreeUp = ::freeUpVirtualStorage,
                         onActivateProvider = { setVirtualFileProviderActive(true) },
                         onDeactivateProvider = { setVirtualFileProviderActive(false) },
-                        onChangeLocation = { virtualLocationVisible = true },
+                        onChangeLocation = {
+                            virtualLocationError = null
+                            virtualLocationVisible = true
+                        },
                         onChoosePinnedFolder = { virtualFolderPickerVisible = true },
                         onReleaseFolder = { path ->
                             releaseVirtualFolderPath = path
@@ -655,7 +665,13 @@ internal fun FileOfflineCenterScreen(
                 services = services,
                 initial = current,
                 busy = virtualStorageBusy,
-                onDismiss = { if (!virtualStorageBusy) virtualLocationVisible = false },
+                error = virtualLocationError,
+                onDismiss = {
+                    if (!virtualStorageBusy) {
+                        virtualLocationVisible = false
+                        virtualLocationError = null
+                    }
+                },
                 onSave = ::saveVirtualFileLocation,
             )
         }
@@ -1675,6 +1691,7 @@ private fun VirtualFileProviderLocationDialog(
     services: NextcloudPlatformServices,
     initial: VirtualFileProviderLocation,
     busy: Boolean,
+    error: String?,
     onDismiss: () -> Unit,
     onSave: (VirtualFileProviderLocation) -> Unit,
 ) {
@@ -1730,6 +1747,7 @@ private fun VirtualFileProviderLocationDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 chooserError?.let { error -> Text(error, color = MaterialTheme.colorScheme.error) }
+                error?.let { message -> Text(message, color = MaterialTheme.colorScheme.error) }
                 Text(
                     "Current: ${initial.parentPath}/${initial.folderName}",
                     style = MaterialTheme.typography.bodySmall,

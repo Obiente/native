@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.prefs.Preferences
 import javax.swing.JFileChooser
+import javax.swing.SwingUtilities
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -80,6 +81,13 @@ internal fun talkMessageHistoryPath(
 }
 
 internal const val NOTES_LIST_RELATIVE_PATH = "/index.php/apps/notes/api/v1/notes?exclude=content"
+
+internal fun <T> invokeOnSwingEventThread(action: () -> T): T {
+    if (SwingUtilities.isEventDispatchThread()) return action()
+    val outcome = AtomicReference<Result<T>>()
+    SwingUtilities.invokeAndWait { outcome.set(runCatching(action)) }
+    return outcome.get().getOrThrow()
+}
 
 internal fun notesDetailRelativePath(noteId: Long): String {
     require(noteId >= 0L) { "The note ID is invalid." }
@@ -772,12 +780,17 @@ class DesktopNextcloudServices(
                             )
                             val listings = linkedMapOf<String, List<DesktopRemoteSyncDocument>>()
                             val ancestorTargets = linkedMapOf<String, Set<String>>()
+                            val survivingRetainedListings = cache.retainedListingCountSurvivingPublication(
+                                accountId,
+                                relativePath,
+                                (retainedFolderAncestorListings(relativePath) + relativePath).toSet(),
+                            )
                             var retainedMetadataEntries = 0
                             fun loadListing(parent: String): List<DesktopRemoteSyncDocument> {
                                 check(parent !in listings) {
                                     "The selected virtual folder contains a repeated directory path."
                                 }
-                                requireVirtualFolderListingCapacity(listings.size)
+                                requireVirtualFolderListingCapacity(survivingRetainedListings + listings.size)
                                 val documents = tree.list(parent)
                                 retainedMetadataEntries = nextVirtualFolderRetainedMetadataCount(
                                     retainedMetadataEntries,
@@ -798,7 +811,7 @@ class DesktopNextcloudServices(
                                     retainedFolderNavigationChild(parent, retainedRoot)
                                 }
                                 check(currentTarget in targets)
-                                requireVirtualFolderListingCapacity(listings.size)
+                                requireVirtualFolderListingCapacity(survivingRetainedListings + listings.size)
                                 val targetDocuments = tree.list(parent).filter { document ->
                                     document.entry.relativePath in targets && document.isDirectory
                                 }
@@ -1592,14 +1605,23 @@ class DesktopNextcloudServices(
 
     override suspend fun chooseVirtualFileProviderParent(initialParentPath: String?): String? =
         withContext(Dispatchers.IO) {
-            val chooser = JFileChooser().apply {
-                dialogTitle = "Choose where Nextcloud Native appears"
-                fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
-                isAcceptAllFileFilterUsed = false
-                initialParentPath?.let(::File)?.takeIf(File::isDirectory)?.let { currentDirectory = it }
+            val selectedFile = invokeOnSwingEventThread {
+                val chooser = JFileChooser().apply {
+                    dialogTitle = "Choose where Nextcloud Native appears"
+                    fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                    isAcceptAllFileFilterUsed = false
+                    initialParentPath?.let(::File)?.takeIf(File::isDirectory)?.let {
+                        currentDirectory = it
+                    }
+                }
+                if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+                    chooser.selectedFile
+                } else {
+                    null
+                }
             }
-            if (chooser.showOpenDialog(null) != JFileChooser.APPROVE_OPTION) return@withContext null
-            val selected = chooser.selectedFile.toPath().toAbsolutePath().normalize()
+            val selected = selectedFile?.toPath()?.toAbsolutePath()?.normalize()
+                ?: return@withContext null
             require(Files.isDirectory(selected, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(selected)) {
                 "Choose a regular local drive or folder, not a symbolic link."
             }
@@ -4140,7 +4162,7 @@ internal fun shouldScheduleVirtualFolderHydration(
     if (status.refreshing) return true
     val verifiedAt = status.verifiedAtEpochMillis ?: return true
     status.refreshRetryAtEpochMillis?.let { retryAt ->
-        if (nowEpochMillis >= verifiedAt && nowEpochMillis < retryAt) return false
+        if (nowEpochMillis >= verifiedAt) return nowEpochMillis >= retryAt
     }
     val age = nowEpochMillis - verifiedAt
     return age < 0L || age >= refreshIntervalMillis
