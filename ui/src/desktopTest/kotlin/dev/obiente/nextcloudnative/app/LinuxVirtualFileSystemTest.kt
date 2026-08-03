@@ -670,6 +670,33 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `slow directory refresh is fresh from response completion`() {
+        val fixture = MutableFixtureBackend().apply {
+            addFile("Photos/new.dat", byteArrayOf(1))
+        }
+        val clock = AtomicLong(0L)
+        val delegate = object : LinuxVirtualFileBackend by fixture {
+            override fun list(path: String): List<LinuxVirtualFileNode> = fixture.list(path).also {
+                clock.set(10_000L)
+            }
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = MemoryLinuxVirtualMetadataStore(),
+            nowEpochMillis = clock::get,
+            freshForMillis = 5_000L,
+        )
+        try {
+            assertEquals(listOf("new.dat"), cached.list("Photos").map(LinuxVirtualFileNode::name))
+            repeat(100) { assertNotNull(cached.resolve("Photos/new.dat")) }
+            TimeUnit.MILLISECONDS.sleep(100L)
+            assertEquals(1, fixture.listCallCount("Photos"))
+        } finally {
+            cached.close()
+        }
+    }
+
+    @Test
     fun `mutation invalidation discards an older in flight directory refresh`() {
         val delegate = MutableFixtureBackend().apply {
             addFile("Photos/existing.dat", byteArrayOf(1))

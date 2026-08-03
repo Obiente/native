@@ -93,7 +93,7 @@ internal class DesktopLinuxVirtualFileWritebackStore(
                         stagedAtEpochMillis = stagedAt,
                         dirty = dirty,
                         stageName = stage.name,
-                        committed = false,
+                        committed = if (dirty) null else false,
                     ),
                 )
                 if (truncate) {
@@ -166,7 +166,7 @@ internal class DesktopLinuxVirtualFileWritebackStore(
                             stagedAtEpochMillis = stagedAt,
                             dirty = true,
                             stageName = stage.name,
-                            committed = false,
+                            committed = null,
                         ),
                     )
                     dirty = true

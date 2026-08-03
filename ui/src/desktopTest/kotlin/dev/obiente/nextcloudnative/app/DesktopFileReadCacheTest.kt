@@ -40,6 +40,24 @@ class DesktopFileReadCacheTest {
     }
 
     @Test
+    fun `failed virtual metadata invalidation quarantines persisted listings after restart`() =
+        withCache { root, cache ->
+            val accountId = desktopFileCacheAccountId(session())
+            val preferences = testPreferences(root)
+            cache.replaceFailedVirtualListingInvalidations(accountId, setOf("Photos/Changed"))
+
+            val restarted = DesktopFileReadCache(root, preferences = preferences)
+            assertEquals(setOf(""), restarted.failedVirtualListingInvalidations(accountId))
+
+            restarted.replaceFailedVirtualListingInvalidations(accountId, emptySet())
+            assertEquals(
+                emptySet(),
+                DesktopFileReadCache(root, preferences = preferences)
+                    .failedVirtualListingInvalidations(accountId),
+            )
+        }
+
+    @Test
     fun `folder refresh invalidates only removed or changed ETag generations`() = withCache { _, cache ->
         val accountId = desktopFileCacheAccountId(session())
         val stable = file("Notes/stable.md", "\"same\"")

@@ -350,6 +350,19 @@ class DesktopFileSyncRemoteTreeTest {
     }
 
     @Test
+    fun `dav parser counts unusable responses against its streaming limit`() {
+        val responses = "<d:response/>".repeat(3)
+
+        assertFails {
+            parseDesktopSyncDav(
+                "<d:multistatus xmlns:d=\"DAV:\">$responses</d:multistatus>".encodeToByteArray(),
+                userId = "alice",
+                maximumDocuments = 2,
+            )
+        }
+    }
+
+    @Test
     fun `dav parser rejects an oversized property without coalescing text`() {
         val oversizedHref = "a".repeat(20_000)
         val response = (

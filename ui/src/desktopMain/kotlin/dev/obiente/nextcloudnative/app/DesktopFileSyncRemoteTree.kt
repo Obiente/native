@@ -639,6 +639,7 @@ private fun parseDesktopSyncDav(
         StandardCharsets.UTF_8.name(),
     )
     val documents = ArrayList<DesktopRemoteSyncDocument>()
+    var responseCount = 0
     var response: DesktopDavResponseBuilder? = null
     var textField: String? = null
     val text = StringBuilder()
@@ -648,7 +649,13 @@ private fun parseDesktopSyncDav(
                 XMLStreamConstants.START_ELEMENT -> {
                     if (reader.namespaceURI == DAV_NAMESPACE) {
                         when (reader.localName) {
-                            "response" -> response = DesktopDavResponseBuilder()
+                            "response" -> {
+                                require(responseCount < maximumDocuments) {
+                                    "A Nextcloud folder contains too many entries."
+                                }
+                                responseCount += 1
+                                response = DesktopDavResponseBuilder()
+                            }
                             "href", "getetag", "getcontentlength", "getlastmodified" -> if (response != null) {
                                 textField = reader.localName
                                 text.clear()
