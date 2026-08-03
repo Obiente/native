@@ -314,6 +314,25 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `remote mutation generations advance only affected retained roots`() {
+        val photos = "$ACCOUNT_ID\u0000Photos"
+        val documents = "$ACCOUNT_ID\u0000Documents"
+        val generations = mutableMapOf(photos to 2L, documents to 7L)
+        val completed = mutableMapOf(photos to 2L, documents to 7L)
+
+        advanceAffectedVirtualFolderGenerations(
+            generations,
+            completed,
+            ACCOUNT_ID,
+            retainedRoots = listOf("Photos"),
+        )
+
+        assertEquals(3L, generations[photos])
+        assertEquals(7L, generations[documents])
+        assertEquals(7L, completed[documents])
+    }
+
+    @Test
     fun `partial retained navigation survives restart without claiming completeness`() {
         val directory = Files.createTempDirectory("virtual-range-navigation-completeness-").toFile()
         try {

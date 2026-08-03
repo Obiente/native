@@ -612,7 +612,7 @@ class DesktopNextcloudServices(
     private val virtualFolderHydrationMutex = Mutex()
     private val virtualFolderRetentionMutex = Mutex()
     private val virtualFolderMutationLock = Any()
-    private val virtualFolderMutationGenerations = mutableMapOf<String, Long>()
+    private val virtualFolderMutationGenerationsByJob = mutableMapOf<String, Long>()
     private val virtualFolderCompletedGenerations = mutableMapOf<String, Long>()
     private val virtualFolderRetryAtEpochMillis = mutableMapOf<String, Long>()
     private val activeFileRangeSessions = mutableSetOf<NextcloudFileRangeSession>()
@@ -673,7 +673,7 @@ class DesktopNextcloudServices(
         val generationState = synchronized(virtualFolderMutationLock) {
             val retryAt = virtualFolderRetryAtEpochMillis[jobKey]
             if (retryAt != null && now < retryAt) return
-            val generation = virtualFolderMutationGenerations.getOrDefault(accountId, 0L)
+            val generation = virtualFolderMutationGenerationsByJob.getOrDefault(jobKey, 0L)
             generation to (generation > virtualFolderCompletedGenerations.getOrDefault(jobKey, 0L))
         }
         val (generation, mutationRefreshPending) = generationState
@@ -894,7 +894,7 @@ class DesktopNextcloudServices(
                         }
                         synchronized(virtualFolderMutationLock) {
                             if (
-                                virtualFolderMutationGenerations.getOrDefault(accountId, 0L) != generation ||
+                                virtualFolderMutationGenerationsByJob.getOrDefault(jobKey, 0L) != generation ||
                                 cache.loadFolderRetention(accountId) != verifiedRetention
                             ) {
                                 throw VirtualFolderRefreshSupersededException()
@@ -986,7 +986,7 @@ class DesktopNextcloudServices(
                         removeVirtualFolderHydrationJobIfOwned(virtualFolderHydrationJobs, jobKey, job)
                     }
                     val rerun = synchronized(virtualFolderMutationLock) {
-                        virtualFolderMutationGenerations.getOrDefault(accountId, 0L) >
+                        virtualFolderMutationGenerationsByJob.getOrDefault(jobKey, 0L) >
                             virtualFolderCompletedGenerations.getOrDefault(jobKey, 0L) &&
                             System.currentTimeMillis().coerceAtLeast(0L) >=
                             virtualFolderRetryAtEpochMillis.getOrDefault(jobKey, 0L)
@@ -1037,20 +1037,19 @@ class DesktopNextcloudServices(
         accountId: String,
         path: String,
     ) {
-        synchronized(virtualFolderMutationLock) {
-            val current = virtualFolderMutationGenerations.getOrDefault(accountId, 0L)
-            if (current == Long.MAX_VALUE) {
-                virtualFolderCompletedGenerations.keys.removeIf { key -> key.startsWith("$accountId\u0000") }
-                virtualFolderMutationGenerations[accountId] = 1L
-            } else {
-                virtualFolderMutationGenerations[accountId] = current + 1L
-            }
-        }
         runCatching { invalidateDesktopFileMetadata(accountId, path) }
         val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
         runCatching { cache.invalidate(accountId, path) }
         val roots = runCatching { cache.queueRetainedFoldersForRefresh(accountId, path) }
             .getOrDefault(emptyList())
+        synchronized(virtualFolderMutationLock) {
+            advanceAffectedVirtualFolderGenerations(
+                virtualFolderMutationGenerationsByJob,
+                virtualFolderCompletedGenerations,
+                accountId,
+                roots,
+            )
+        }
         roots.forEach { root ->
             runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
         }
@@ -1597,6 +1596,21 @@ class DesktopNextcloudServices(
             }
             cancelAllVirtualFolderHydration(accountId).forEach { job -> job.join() }
             val nextRetention = cache.loadFolderRetention(accountId)
+            val retainedJobKeys = nextRetention.rules.asSequence()
+                .filter { rule -> rule.retention == VirtualFolderRetention.KeepOnDevice }
+                .mapTo(hashSetOf()) { rule -> "$accountId\u0000${rule.relativePath}" }
+            val accountJobPrefix = "$accountId\u0000"
+            synchronized(virtualFolderMutationLock) {
+                virtualFolderMutationGenerationsByJob.keys.removeIf { key ->
+                    key.startsWith(accountJobPrefix) && key !in retainedJobKeys
+                }
+                virtualFolderCompletedGenerations.keys.removeIf { key ->
+                    key.startsWith(accountJobPrefix) && key !in retainedJobKeys
+                }
+                virtualFolderRetryAtEpochMillis.keys.removeIf { key ->
+                    key.startsWith(accountJobPrefix) && key !in retainedJobKeys
+                }
+            }
             val result = if (retention == VirtualFolderRetention.KeepOnDevice) {
                 val retainedRoot = checkNotNull(nextRetention.keepOnDeviceRootFor(normalized)) {
                     "The selected folder did not resolve to a retained root."
@@ -1616,6 +1630,7 @@ class DesktopNextcloudServices(
                 synchronized(virtualFolderMutationLock) {
                     val key = "$accountId\u0000$normalized"
                     virtualFolderRetryAtEpochMillis.remove(key)
+                    virtualFolderMutationGenerationsByJob.remove(key)
                     virtualFolderCompletedGenerations.remove(key)
                 }
                 val protected = defaultDesktopLinuxWritebackStore(session).pendingWritebacks()
@@ -2225,6 +2240,14 @@ class DesktopNextcloudServices(
             val hydrationJobs = accountId?.let(::cancelAllVirtualFolderHydration).orEmpty()
             rangeSessions.forEach { source -> runCatching(source::close) }
             hydrationJobs.forEach { job -> job.join() }
+            accountId?.let { clearedAccountId ->
+                val prefix = "$clearedAccountId\u0000"
+                synchronized(virtualFolderMutationLock) {
+                    virtualFolderMutationGenerationsByJob.keys.removeIf { key -> key.startsWith(prefix) }
+                    virtualFolderCompletedGenerations.keys.removeIf { key -> key.startsWith(prefix) }
+                    virtualFolderRetryAtEpochMillis.keys.removeIf { key -> key.startsWith(prefix) }
+                }
+            }
             syncJob?.join()
             synchronized(virtualFileProviderLock) {
                 runCatching { linuxVirtualFileSystem?.unmount() }
@@ -4053,6 +4076,24 @@ internal fun removeVirtualFolderHydrationJobIfOwned(
     if (jobs[key] !== owner) return false
     jobs.remove(key)
     return true
+}
+
+internal fun advanceAffectedVirtualFolderGenerations(
+    generations: MutableMap<String, Long>,
+    completedGenerations: MutableMap<String, Long>,
+    accountId: String,
+    retainedRoots: Iterable<String>,
+) {
+    retainedRoots.forEach { retainedRoot ->
+        val key = "$accountId\u0000$retainedRoot"
+        val current = generations.getOrDefault(key, 0L)
+        if (current == Long.MAX_VALUE) {
+            completedGenerations.remove(key)
+            generations[key] = 1L
+        } else {
+            generations[key] = current + 1L
+        }
+    }
 }
 
 internal fun handleDesktopFileVersionRestoreStatus(status: Int, onRestored: () -> Unit) {
