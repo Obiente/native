@@ -858,6 +858,43 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `failed quarantine persistence removes stale cache before mutation completion`() {
+        val delegate = MutableFixtureBackend()
+        val stale = LinuxVirtualDirectorySnapshot(
+            nodes = listOf(LinuxVirtualFileNode("Photos", "Photos", true, 0L, "stale-photos")),
+            fetchedAtEpochMillis = Long.MAX_VALUE,
+        )
+        val persistedInvalidated = AtomicBoolean(false)
+        val store = object : LinuxVirtualMetadataStore {
+            override fun load(path: String): LinuxVirtualDirectorySnapshot? = stale.takeIf { path.isEmpty() }
+            override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot) = true
+            override fun invalidate(path: String) {
+                persistedInvalidated.set(true)
+            }
+            override fun replaceFailedInvalidations(paths: Set<String>): Unit =
+                error("Simulated unavailable preferences store")
+        }
+        val cached = CachingLinuxVirtualFileBackend(
+            delegate = delegate,
+            store = store,
+            freshForMillis = Long.MAX_VALUE,
+            afterPersistedInvalidationMarked = { assertTrue(persistedInvalidated.get()) },
+        )
+        try {
+            assertEquals(listOf("Photos"), cached.list("").map(LinuxVirtualFileNode::name))
+            cached.createDirectory("Albums")
+
+            assertTrue(persistedInvalidated.get())
+            assertEquals(
+                setOf("Photos", "Albums"),
+                cached.list("").mapTo(mutableSetOf(), LinuxVirtualFileNode::name),
+            )
+        } finally {
+            cached.close()
+        }
+    }
+
+    @Test
     fun `failed stale refresh backs off during cached directory enumeration`() {
         val attempts = AtomicInteger(0)
         val delegate = object : LinuxVirtualFileBackend by MutableFixtureBackend() {
