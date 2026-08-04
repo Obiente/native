@@ -15,6 +15,10 @@ class AndroidFileReadCacheTest {
             permissions = "RGDNVW",
             checksums = listOf("SHA256:abc"),
             originalAccessAllowed = false,
+            favorite = true,
+            ownerId = "morgan",
+            ownerDisplayName = "Morgan Lee",
+            unreadComments = 4,
         )
         cache.storeListing(ACCOUNT_A, "Notes", listOf(file), nowEpochMillis = 42)
 

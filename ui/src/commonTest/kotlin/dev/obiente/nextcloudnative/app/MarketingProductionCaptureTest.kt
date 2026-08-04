@@ -18,6 +18,7 @@ class MarketingProductionCaptureTest {
             "homepage-overview-desktop",
             "homepage-overview-mobile",
             "homepage-files-desktop",
+            "homepage-files-mobile",
             "homepage-photos-desktop",
             "homepage-conversations-desktop",
             "homepage-planning-desktop",
@@ -47,7 +48,7 @@ class MarketingProductionCaptureTest {
     }
 
     @Test
-    fun `homepage files fixture exercises the production grid with useful synthetic content`() {
+    fun `homepage files fixture exercises the production workspace with useful synthetic content`() {
         assertTrue(marketingHomepageFiles.size >= 12)
         assertTrue(marketingHomepageFiles.count(NextcloudFile::isDirectory) >= 5)
         assertTrue(marketingHomepageFiles.count { it.mimeType?.startsWith("image/") == true } >= 3)
@@ -57,6 +58,9 @@ class MarketingProductionCaptureTest {
         assertTrue(marketingHomepageFiles.any { it.mimeType?.startsWith("audio/") == true })
         assertTrue(marketingHomepageFiles.filterNot(NextcloudFile::isDirectory).all { it.fileId != null })
         assertTrue(marketingHomepageFiles.filter { it.hasPreview }.all { !it.etag.isNullOrBlank() })
+        assertTrue(marketingHomepageFiles.count(NextcloudFile::favorite) >= 4)
+        assertTrue(marketingHomepageFiles.any { it.unreadComments > 0 })
+        assertTrue(marketingHomepageFiles.all { !it.ownerDisplayName.isNullOrBlank() })
         assertEquals(NextcloudFileListingSource.Cache, marketingHomepageCachedFileListing.source)
         assertEquals(NextcloudFileListingSource.Network, marketingHomepageFileListing.source)
         assertTrue(marketingHomepageFileOfflineAvailability.values.all {

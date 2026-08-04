@@ -15,7 +15,12 @@ class DesktopFileReadCacheTest {
     fun `metadata and content survive a new cache instance without storing credentials`() = withCache { root, cache ->
         val session = session(password = "first-secret")
         val accountId = desktopFileCacheAccountId(session)
-        val file = file("Notes/vault.md", "\"etag-1\"")
+        val file = file("Notes/vault.md", "\"etag-1\"").copy(
+            favorite = true,
+            ownerId = "morgan",
+            ownerDisplayName = "Morgan Lee",
+            unreadComments = 4,
+        )
         cache.storeListing(accountId, "Notes", listOf(file), nowEpochMillis = 10)
         assertTrue(
             cache.storeContent(

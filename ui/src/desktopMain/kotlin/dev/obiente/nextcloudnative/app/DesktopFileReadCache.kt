@@ -1098,6 +1098,15 @@ internal class DesktopFileReadCache(
             file.permissions == null ||
                 file.permissions.length <= MAX_PERMISSIONS_LENGTH && file.permissions.none(Char::isISOControl),
         )
+        require(
+            file.ownerId == null ||
+                file.ownerId.length <= MAX_FILE_NAME_LENGTH && file.ownerId.none(Char::isISOControl),
+        )
+        require(
+            file.ownerDisplayName == null ||
+                file.ownerDisplayName.length <= MAX_FILE_NAME_LENGTH && file.ownerDisplayName.none(Char::isISOControl),
+        )
+        require(file.unreadComments in 0..1_000_000)
         require(file.checksums.size <= MAX_CHECKSUMS)
         require(file.checksums.all { checksum ->
             checksum.length <= MAX_CHECKSUM_LENGTH && checksum.none(Char::isISOControl)

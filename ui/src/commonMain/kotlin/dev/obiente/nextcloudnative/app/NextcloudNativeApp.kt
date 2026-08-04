@@ -681,7 +681,6 @@ private val photoBrowserStateSaver = Saver<PhotoBrowserState, String>(
     restore = { encoded -> restorePhotoBrowserState(encoded) },
 )
 
-private enum class FileLayout { List, Grid }
 private enum class PersonPhotoSelectionMode { Cover, RemoveFace }
 
 private class MediaCollectionsUiState {
@@ -915,19 +914,48 @@ fun NextcloudNativeMarketingCapture(
                     }
                     MarketingCaptureScenario.HomepageFilesDesktopDark,
                     MarketingCaptureScenario.HomepageFilesDesktopLight,
-                    -> FilesScreen(
-                        services = assets.services,
-                        session = marketingHomepageSession,
-                        userId = marketingHomepageTalkUserId,
-                        fileSharing = nextcloudNativeMarketingFileShareFixture.capabilities,
-                        path = "",
-                        layout = FileLayout.Grid,
-                        onLayoutChanged = {},
-                        onBack = {},
-                        onOpenFolder = {},
-                        onOpenFile = { _, _ -> },
-                        onFileAction = { _, _, _ -> },
-                    )
+                    MarketingCaptureScenario.HomepageFilesMobileDark,
+                    MarketingCaptureScenario.HomepageFilesMobileLight,
+                    -> if (desktop) {
+                        RootShell(
+                            presentation = NextcloudPresentation.Desktop,
+                            selected = NextcloudDestination.Apps,
+                            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
+                            onSelected = {},
+                            identity = marketingDesktopIdentity(fixture, assets.avatar),
+                            activeAppId = "files",
+                        ) {
+                            FilesScreen(
+                                services = assets.services,
+                                session = marketingHomepageSession,
+                                userId = marketingHomepageTalkUserId,
+                                fileSharing = nextcloudNativeMarketingFileShareFixture.capabilities,
+                                path = "",
+                                layout = FileLayout.List,
+                                onLayoutChanged = {},
+                                onBack = {},
+                                onOpenFolder = {},
+                                onOpenFile = { _, _ -> },
+                                onFileAction = { _, _, _ -> },
+                                initialSelectedFilePath = "Product direction.md",
+                            )
+                        }
+                    } else {
+                        FilesScreen(
+                            services = assets.services,
+                            session = marketingHomepageSession,
+                            userId = marketingHomepageTalkUserId,
+                            fileSharing = nextcloudNativeMarketingFileShareFixture.capabilities,
+                            path = "",
+                            layout = FileLayout.List,
+                            onLayoutChanged = {},
+                            onBack = {},
+                            onOpenFolder = {},
+                            onOpenFile = { _, _ -> },
+                            onFileAction = { _, _, _ -> },
+                            initialSelectedFilePath = "Product direction.md",
+                        )
+                    }
                     MarketingCaptureScenario.HomepageConversationsDesktopDark,
                     MarketingCaptureScenario.HomepageConversationsDesktopLight,
                     -> MarketingDesktopConversationsScenario(fixture, assets)
@@ -5893,6 +5921,7 @@ private fun FilesScreen(
     onOpenFolder: (String) -> Unit,
     onOpenFile: (NextcloudFile, List<NextcloudFile>) -> Unit,
     onFileAction: (NextcloudFile, FileMenuAction, List<NextcloudFile>) -> Unit,
+    initialSelectedFilePath: String? = null,
 ) {
     var files by remember(path, userId) { mutableStateOf<List<NextcloudFile>?>(null) }
     var error by remember(path, userId) { mutableStateOf<String?>(null) }
@@ -5911,8 +5940,26 @@ private fun FilesScreen(
     var creationName by remember(path, userId) { mutableStateOf("") }
     var creationError by remember(path, userId) { mutableStateOf<String?>(null) }
     var creationRunning by remember(path, userId) { mutableStateOf(false) }
-    var filterVisible by remember(path, userId) { mutableStateOf(false) }
     var filterQuery by remember(path, userId) { mutableStateOf("") }
+    var searchScope by rememberSaveable(userId, stateSaver = enumSaver<FileSearchScope>()) {
+        mutableStateOf(FileSearchScope.CurrentFolder)
+    }
+    var workspaceFilter by rememberSaveable(userId, stateSaver = enumSaver<FileWorkspaceFilter>()) {
+        mutableStateOf(FileWorkspaceFilter.All)
+    }
+    var sortMode by rememberSaveable(userId, stateSaver = enumSaver<FileSortMode>()) {
+        mutableStateOf(FileSortMode.Name)
+    }
+    var sortDirection by rememberSaveable(userId, stateSaver = enumSaver<FileSortDirection>()) {
+        mutableStateOf(FileSortDirection.Ascending)
+    }
+    var searchResults by remember(userId) { mutableStateOf<List<NextcloudFile>?>(null) }
+    var searchLoading by remember(userId) { mutableStateOf(false) }
+    var searchError by remember(userId) { mutableStateOf<String?>(null) }
+    var favoriteResults by remember(userId) { mutableStateOf<List<NextcloudFile>?>(null) }
+    var favoriteLoading by remember(userId) { mutableStateOf(false) }
+    var favoriteError by remember(userId) { mutableStateOf<String?>(null) }
+    var selectedFilePath by rememberSaveable(path, userId) { mutableStateOf(initialSelectedFilePath) }
     var mutationRunning by remember(path, userId) { mutableStateOf(false) }
     var mutationError by remember(path, userId) { mutableStateOf<String?>(null) }
     var mutationNotice by remember(path, userId) { mutableStateOf<String?>(null) }
@@ -5968,6 +6015,40 @@ private fun FilesScreen(
                 refreshing = false
                 error = nextcloudFileRefreshFailure(hasRetainedFiles, it)
             }
+    }
+    LaunchedEffect(userId, filterQuery, searchScope) {
+        if (searchScope != FileSearchScope.AllFiles) {
+            searchResults = null
+            searchLoading = false
+            searchError = null
+            return@LaunchedEffect
+        }
+        val query = filterQuery.trim()
+        if (query.length < 2 || userId == null) {
+            searchResults = emptyList()
+            searchLoading = false
+            searchError = null
+            return@LaunchedEffect
+        }
+        delay(320)
+        searchLoading = true
+        searchError = null
+        runCatching { services.searchFiles(session, userId, query) }
+            .onSuccess { searchResults = it }
+            .onFailure {
+                searchResults = emptyList()
+                searchError = it.message ?: "Could not search all files."
+            }
+        searchLoading = false
+    }
+    LaunchedEffect(userId, workspaceFilter, loadAttempt) {
+        if (workspaceFilter != FileWorkspaceFilter.Favorites || userId == null) return@LaunchedEffect
+        favoriteLoading = true
+        favoriteError = null
+        runCatching { services.listFavoriteFiles(session, userId) }
+            .onSuccess { favoriteResults = it }
+            .onFailure { favoriteError = it.message ?: "Could not load favorites." }
+        favoriteLoading = false
     }
     LaunchedEffect(mutationNotice) {
         if (mutationNotice != null) {
@@ -6029,6 +6110,35 @@ private fun FilesScreen(
                 renameTarget = file
                 renameValue = file.name
                 mutationError = null
+            }
+            FileMenuAction.AddFavorite, FileMenuAction.RemoveFavorite -> {
+                val favorite = action == FileMenuAction.AddFavorite
+                val previousFiles = files
+                val previousSearchResults = searchResults
+                val previousFavoriteResults = favoriteResults
+                fun applyFavorite(items: List<NextcloudFile>?): List<NextcloudFile>? = items?.map { candidate ->
+                    if (candidate.path == file.path) candidate.copy(favorite = favorite) else candidate
+                }
+                mutationError = null
+                files = applyFavorite(files)
+                searchResults = applyFavorite(searchResults)
+                favoriteResults = applyFavorite(favoriteResults)
+                scope.launch {
+                    runCatching {
+                        services.setFileFavorite(session, requireNotNull(userId), file, favorite)
+                    }.onSuccess {
+                        mutationNotice = if (favorite) {
+                            "${file.name} added to favorites"
+                        } else {
+                            "${file.name} removed from favorites"
+                        }
+                    }.onFailure {
+                        files = previousFiles
+                        searchResults = previousSearchResults
+                        favoriteResults = previousFavoriteResults
+                        mutationError = it.message ?: "Could not update the favorite."
+                    }
+                }
             }
             FileMenuAction.Delete -> {
                 deleteTarget = file
@@ -6153,7 +6263,6 @@ private fun FilesScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ScreenHeader("Files", if (path.isBlank()) "All files" else "/$path", onBack)
         mutationNotice?.let { notice ->
             Surface(
                 color = NextcloudTheme.colors.success.copy(alpha = 0.12f),
@@ -6238,120 +6347,102 @@ private fun FilesScreen(
                 )
             }
         }
+        if (renameTarget == null && transferTarget == null && deleteTarget == null) {
+            mutationError?.let { message ->
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = RoundedCornerShape(NextcloudRadii.Small),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large, vertical = 4.dp),
+                ) {
+                    Text(
+                        message,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Medium),
+                    )
+                }
+            }
+        }
         when {
             error != null && files == null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
             files == null -> LoadingMessage("Loading files...")
-            files?.isEmpty() == true -> EmptyMessage("This folder is empty.")
             else -> {
                 val loadedFiles = requireNotNull(files)
-                val visibleFiles = remember(loadedFiles, filterQuery) { presentFiles(loadedFiles, filterQuery) }
-                Column(modifier = Modifier.fillMaxSize()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.XLarge, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            nextcloudFileListingSummary(
-                                source = listingSource,
-                                visibleCount = visibleFiles.size,
-                                totalCount = loadedFiles.size,
-                                filtered = filterQuery.isNotBlank(),
-                            ),
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Row {
-                            OutlinedButton(
-                                onClick = {
-                                    creationKind = FileCreationKind.Folder
-                                    creationName = ""
-                                    creationError = null
-                                },
-                            ) {
-                                Icon(NextcloudIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.size(6.dp))
-                                Text("New")
-                            }
-                            IconButton(
-                                onClick = {
-                                    filterVisible = !filterVisible
-                                    if (!filterVisible) filterQuery = ""
-                                },
-                            ) {
-                                Icon(NextcloudIcons.Search, contentDescription = "Search this folder")
-                            }
-                            IconButton(
-                                onClick = { loadAttempt += 1 },
-                                enabled = !refreshing,
-                            ) {
-                                if (refreshing) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(20.dp),
-                                        strokeWidth = 2.dp,
-                                    )
-                                } else {
-                                    Icon(NextcloudIcons.Refresh, contentDescription = "Refresh folder")
-                                }
-                            }
-                            IconButton(
-                                onClick = {
-                                    onLayoutChanged(
-                                        if (layout == FileLayout.List) FileLayout.Grid else FileLayout.List,
-                                    )
-                                },
-                            ) {
-                                Icon(
-                                    if (layout == FileLayout.List) NextcloudIcons.Apps else NextcloudIcons.ListView,
-                                    contentDescription = if (layout == FileLayout.List) {
-                                        "Switch to grid layout"
-                                    } else {
-                                        "Switch to list layout"
-                                    },
-                                )
-                            }
-                        }
-                    }
-                    if (filterVisible) {
-                        OutlinedTextField(
-                            value = filterQuery,
-                            onValueChange = { filterQuery = it },
-                            label = { Text("Search this folder") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                                .padding(horizontal = NextcloudSpacing.XLarge, vertical = NextcloudSpacing.Small),
-                        )
-                    }
-                    if (visibleFiles.isEmpty()) {
-                        EmptyMessage("No files match \"${filterQuery.trim()}\".")
-                    } else if (layout == FileLayout.List) {
-                        FileList(
-                            files = visibleFiles,
-                            offlineAvailability = offlineAvailability,
-                            offlineStorageSupported = services.supportsFileOfflineStorage,
-                            fileSharing = fileSharing,
-                            externalHandoffCapability = externalHandoffCapability,
-                            onOpenFolder = onOpenFolder,
-                            onOpenFile = { onOpenFile(it, visibleFiles) },
-                            onAction = { file, action -> dispatchFileAction(file, action, loadedFiles) },
-                        )
-                    } else {
-                        FileGrid(
-                            files = visibleFiles,
-                            offlineAvailability = offlineAvailability,
-                            offlineStorageSupported = services.supportsFileOfflineStorage,
-                            fileSharing = fileSharing,
-                            externalHandoffCapability = externalHandoffCapability,
-                            services = services,
-                            session = session,
-                            userId = userId,
-                            onOpenFolder = onOpenFolder,
-                            onOpenFile = { onOpenFile(it, visibleFiles) },
-                            onAction = { file, action -> dispatchFileAction(file, action, loadedFiles) },
-                        )
-                    }
+                val sourceFiles = when {
+                    searchScope == FileSearchScope.AllFiles -> searchResults.orEmpty()
+                    workspaceFilter == FileWorkspaceFilter.Favorites -> favoriteResults
+                        ?: loadedFiles.filter(NextcloudFile::favorite)
+                    else -> loadedFiles
                 }
+                val offlinePaths = offlineAvailability
+                    .filterValues { it == FileOfflineAvailability.Available }
+                    .keys
+                val visibleFiles = remember(
+                    sourceFiles,
+                    filterQuery,
+                    workspaceFilter,
+                    sortMode,
+                    sortDirection,
+                    offlinePaths,
+                    searchScope,
+                ) {
+                    presentFiles(
+                        files = sourceFiles,
+                        query = if (searchScope == FileSearchScope.CurrentFolder) filterQuery else "",
+                        filter = workspaceFilter,
+                        sortMode = sortMode,
+                        sortDirection = sortDirection,
+                        offlinePaths = offlinePaths,
+                    )
+                }
+                val selectedFile = visibleFiles.firstOrNull { it.path == selectedFilePath }
+                NativeFilesWorkspace(
+                    path = path,
+                    files = visibleFiles,
+                    libraryFiles = sourceFiles,
+                    navigationFiles = loadedFiles,
+                    totalFilesInFolder = if (searchScope == FileSearchScope.AllFiles) sourceFiles.size else loadedFiles.size,
+                    listingSource = listingSource,
+                    refreshing = refreshing,
+                    searchLoading = searchLoading || favoriteLoading,
+                    searchError = searchError ?: favoriteError,
+                    query = filterQuery,
+                    onQueryChanged = { filterQuery = it },
+                    searchScope = searchScope,
+                    onSearchScopeChanged = {
+                        searchScope = it
+                        selectedFilePath = null
+                    },
+                    filter = workspaceFilter,
+                    onFilterChanged = {
+                        workspaceFilter = it
+                        selectedFilePath = null
+                    },
+                    sortMode = sortMode,
+                    onSortModeChanged = { sortMode = it },
+                    sortDirection = sortDirection,
+                    onSortDirectionChanged = { sortDirection = it },
+                    layout = layout,
+                    onLayoutChanged = onLayoutChanged,
+                    offlineAvailability = offlineAvailability,
+                    offlineStorageSupported = services.supportsFileOfflineStorage,
+                    fileSharing = fileSharing,
+                    externalHandoffCapability = externalHandoffCapability,
+                    services = services,
+                    session = session,
+                    userId = userId,
+                    selectedFile = selectedFile,
+                    onSelectedFileChanged = { selectedFilePath = it?.path },
+                    onOpenPath = onOpenFolder,
+                    onOpenFile = { onOpenFile(it, visibleFiles) },
+                    onCreate = {
+                        creationKind = FileCreationKind.Folder
+                        creationName = ""
+                        creationError = null
+                    },
+                    onRefresh = { loadAttempt += 1 },
+                    onAction = { file, action -> dispatchFileAction(file, action, loadedFiles) },
+                )
             }
         }
     }
@@ -7089,7 +7180,7 @@ private fun FileGridTile(
 }
 
 @Composable
-private fun FileActionMenu(
+internal fun FileActionMenu(
     file: NextcloudFile,
     offlineAvailability: FileOfflineAvailability,
     offlineStorageSupported: Boolean,
@@ -7152,6 +7243,8 @@ private fun fileActionIcon(action: FileMenuAction): ImageVector = when (action) 
     FileMenuAction.Preview -> NextcloudIcons.Image
     FileMenuAction.OpenWith -> NextcloudIcons.File
     FileMenuAction.EditText, FileMenuAction.EditWith, FileMenuAction.Rename -> NextcloudIcons.Edit
+    FileMenuAction.AddFavorite -> NextcloudIcons.FavoriteBorder
+    FileMenuAction.RemoveFavorite -> NextcloudIcons.Favorite
     FileMenuAction.Details -> NextcloudIcons.Info
     FileMenuAction.VersionHistory -> NextcloudIcons.Refresh
     FileMenuAction.Download -> NextcloudIcons.Cloud
@@ -12162,7 +12255,7 @@ private fun LoadingMessage(message: String) {
 }
 
 @Composable
-private fun EmptyMessage(message: String) {
+internal fun EmptyMessage(message: String) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(message, modifier = Modifier.padding(NextcloudSpacing.XLarge), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

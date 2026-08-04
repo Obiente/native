@@ -2651,6 +2651,89 @@ class DesktopNextcloudServices(
         }
     }
 
+    override suspend fun searchFiles(
+        session: NextcloudSession,
+        userId: String,
+        query: String,
+        scopePath: String,
+        maximumResults: Int,
+    ): List<NextcloudFile> = withContext(Dispatchers.IO) {
+        val body = buildFileSearchDavRequest(userId, scopePath, query, maximumResults)
+        val response = request(
+            method = "SEARCH",
+            url = session.serverUrl.trimEnd('/') + "/remote.php/dav/",
+            session = session,
+            body = body,
+            contentType = "application/xml; charset=utf-8",
+            headers = mapOf("Accept" to "application/xml"),
+        )
+        if (response.status != 207) throw NextcloudFileListingHttpException(response.status)
+        parseDavFiles(response.body, userId)
+            .distinctBy(NextcloudFile::path)
+            .take(maximumResults)
+    }
+
+    override suspend fun listFavoriteFiles(
+        session: NextcloudSession,
+        userId: String,
+        scopePath: String,
+    ): List<NextcloudFile> = withContext(Dispatchers.IO) {
+        val response = request(
+            method = "REPORT",
+            url = buildNextcloudFileUrl(session.serverUrl, userId, scopePath),
+            session = session,
+            body = buildFavoriteFilesDavReport(),
+            contentType = "application/xml; charset=utf-8",
+            headers = mapOf("Accept" to "application/xml"),
+        )
+        if (response.status != 207) throw NextcloudFileListingHttpException(response.status)
+        parseDavFiles(response.body, userId).distinctBy(NextcloudFile::path)
+    }
+
+    override suspend fun setFileFavorite(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        favorite: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        val safePath = requireSafeFilePath(file.path, allowRoot = false)
+        val expectedEtag = file.etag?.trim().orEmpty()
+        require(expectedEtag.isNotEmpty()) { "Refresh the folder before changing favorites." }
+        val headers = buildMap {
+            put("Accept", "application/xml")
+            putAll(
+                FileWebDavMutationSpec(
+                    method = "PROPPATCH",
+                    sourcePath = safePath,
+                    destinationPath = null,
+                    expectedEtag = expectedEtag,
+                    sourceIsDirectory = file.isDirectory,
+                    overwrite = false,
+                ).conflictConditionHeaders(),
+            )
+        }
+        val accountId = desktopFileCacheAccountId(session)
+        fun refreshMetadata() {
+            runCatching { refreshRetainedFoldersAfterMutation(session, userId, accountId, safePath) }
+        }
+        val response = request(
+            method = "PROPPATCH",
+            url = buildNextcloudFileUrl(session.serverUrl, userId, safePath),
+            session = session,
+            body = buildFileFavoritePropPatch(favorite),
+            contentType = "application/xml; charset=utf-8",
+            headers = headers,
+            maxResponseBytes = 64 * 1024,
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::refreshMetadata,
+        )
+        if (response.status !in 200..299) throw fileOperationException(response.status)
+        check(response.status == 200 || response.status == 207 && fileFavoriteUpdateSucceeded(response.body)) {
+            "The server did not confirm the favorite change."
+        }
+        refreshMetadata()
+    }
+
     override suspend fun listMedia(session: NextcloudSession, userId: String): List<NextcloudFile> =
         withContext(Dispatchers.IO) {
             val pages = collectMediaSearchDavPages(
@@ -4073,11 +4156,33 @@ class DesktopNextcloudServices(
                         fileId = response.firstText(OC, "fileid")?.toLongOrNull(),
                         hasPreview = response.firstText(NC, "has-preview") == "true",
                         etag = response.firstText(DAV, "getetag"),
+                        favorite = response.firstText(OC, "favorite") == "1",
+                        ownerId = response.firstText(OC, "owner-id"),
+                        ownerDisplayName = response.firstText(OC, "owner-display-name"),
+                        unreadComments = response.firstText(OC, "comments-unread")?.toIntOrNull() ?: 0,
                         permissions = response.firstText(OC, "permissions"),
                     ),
                 )
             }
         }
+    }
+
+    private fun fileFavoriteUpdateSucceeded(xml: ByteArray): Boolean {
+        val factory = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            setFeature("http://xml.org/sax/features/external-general-entities", false)
+            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+        }
+        val document = factory.newDocumentBuilder().parse(ByteArrayInputStream(xml))
+        val propstats = document.getElementsByTagNameNS(DAV, "propstat")
+        for (index in 0 until propstats.length) {
+            val propstat = propstats.item(index)
+            val status = propstat.firstText(DAV, "status").orEmpty()
+            val includesFavorite = propstat.childCount(OC, "favorite") > 0
+            if (includesFavorite && status.substringAfter(' ', "").take(3).toIntOrNull() in 200..299) return true
+        }
+        return false
     }
 
     private fun org.w3c.dom.Node.firstText(namespace: String, name: String): String? =
@@ -4183,7 +4288,9 @@ class DesktopNextcloudServices(
         val DAV_PROPERTIES = """
             <?xml version="1.0" encoding="UTF-8"?>
             <d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns"><d:prop>
-              <d:displayname/><d:getcontenttype/><d:getlastmodified/><d:getcontentlength/><d:getetag/><d:resourcetype/><oc:fileid/><oc:size/><oc:permissions/><nc:has-preview/>
+              <d:displayname/><d:getcontenttype/><d:getlastmodified/><d:getcontentlength/><d:getetag/><d:resourcetype/>
+              <oc:fileid/><oc:size/><oc:permissions/><oc:favorite/><oc:owner-id/><oc:owner-display-name/>
+              <oc:comments-unread/><nc:has-preview/>
             </d:prop></d:propfind>
         """.trimIndent()
         val DAV_ETAG_PROPERTY = """

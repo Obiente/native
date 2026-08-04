@@ -196,6 +196,10 @@ internal class AndroidFileReadCache(
         writeNullableLong(file.fileId)
         writeCanonicalBoolean(file.hasPreview)
         writeNullableString(file.etag)
+        writeCanonicalBoolean(file.favorite)
+        writeNullableString(file.ownerId)
+        writeNullableString(file.ownerDisplayName)
+        writeInt(file.unreadComments)
         writeCanonicalBoolean(file.originalAccessAllowed)
         writeNullableString(file.permissions)
         writeInt(file.checksums.size)
@@ -212,6 +216,12 @@ internal class AndroidFileReadCache(
         fileId = readNullableLong(),
         hasPreview = readCanonicalBoolean(),
         etag = readNullableString(),
+        favorite = readCanonicalBoolean(),
+        ownerId = readNullableString(),
+        ownerDisplayName = readNullableString(),
+        unreadComments = readInt().also {
+            requireStored(it in 0..MAX_UNREAD_COMMENTS) { "Files cache unread comment count is invalid." }
+        },
         originalAccessAllowed = readCanonicalBoolean(),
         permissions = readNullableString(),
         checksums = List(readCount("checksum", MAX_CHECKSUMS_PER_FILE)) { readString() },
@@ -289,7 +299,15 @@ internal class AndroidFileReadCache(
         require(file.name.toByteArray().size <= MAX_STRING_BYTES)
         file.size?.let { size -> require(size >= 0L) }
         file.fileId?.let { fileId -> require(fileId >= 0L) }
-        listOf(file.mimeType, file.lastModified, file.etag, file.permissions).forEach { field ->
+        require(file.unreadComments in 0..MAX_UNREAD_COMMENTS)
+        listOf(
+            file.mimeType,
+            file.lastModified,
+            file.etag,
+            file.ownerId,
+            file.ownerDisplayName,
+            file.permissions,
+        ).forEach { field ->
             require(field == null || field.none(Char::isISOControl) && field.toByteArray().size <= MAX_STRING_BYTES)
         }
         require(file.checksums.size <= MAX_CHECKSUMS_PER_FILE)
@@ -346,7 +364,8 @@ internal class AndroidFileReadCache(
 
     private companion object {
         const val MAGIC = 0x4e43464d // NCFM
-        const val FORMAT_VERSION = 1
+        const val FORMAT_VERSION = 2
+        const val MAX_UNREAD_COMMENTS = 1_000_000
         const val STATE_FILE_NAME = "listings-v1.bin"
         const val MAX_STATE_BYTES = 16L * 1024L * 1024L
         const val MAX_STORED_LISTINGS = 512

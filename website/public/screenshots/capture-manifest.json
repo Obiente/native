@@ -49,6 +49,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileActions.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileBrowserPresentation.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileCreation.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileDavQueries.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileIdentityResolution.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileIntegrationPlanning.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenter.kt",
@@ -67,6 +68,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPlanning.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistory.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistorySection.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FilesWorkspace.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GenericNativeFallback.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsScreen.kt",
@@ -276,10 +278,11 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExistingFileShareEditDraft.kt": "df5c2b3ef90a8a7d0ea02d6587b563ebde8e84d471073f718a7d901f2c0a65fb",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExistingFileShareManager.kt": "fc7f8ac5ffb094da9d9a9f05bb2d072b13ff9da9281708f247b546258e0fc2e2",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExternalFileHandoff.kt": "0eb564ced3d56c269a826bc87ea2e770c0eb2112d52c600648c826861db3103f",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileActionPlanning.kt": "59224d8ddde585906e93031a36e47d41cdf1173fc24acc6c3ae38001457a3542",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileActionPlanning.kt": "e34069456db31b913ec373bbbeaefa62878524322a533e60ae3ae29070eed716",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileActions.kt": "697405dcc0290fb5bfd9a9786ec7740ec156168735a9d4efe0f84a0db4839d77",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileBrowserPresentation.kt": "92ff455dcacfeed5c4bce6498cba2034c157c5f75bc2d6369559e34c046662ad",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileBrowserPresentation.kt": "aaba8ecb3bdfca66cc4deb1fd38dbe7a7f3c3219ec857951af2bb4bc0906ff81",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileCreation.kt": "6d233545021958fbf4a8613d8d5713c3f9c350217738811a548c888af5b95c1a",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileDavQueries.kt": "3e298b17a83597e683a2bd1dd0a661f061301a377e4a1ba594e5eaa39e5ff6e4",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileIdentityResolution.kt": "f8658c54cf14dec5b60037a27770ea3c2eb06b509bd28d3b9c97c228adfae83a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileIntegrationPlanning.kt": "1421be5a0db7c7d36ad72434e435952d5017ae25db080f2d7eeddc1aea368a1b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenter.kt": "0c599b169d7857f6aaac23fd8ac6d87715fadba0ebe3f032b02acc6837fdbac7",
@@ -298,6 +301,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPlanning.kt": "2aac41272bba43287c033cc06bfd394f1c003e09c11655e34e71d74b34dfde51",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistory.kt": "fc5d0165cc47bf4e54fd92bf860a0b262c3c5213e0a1e35e16e99db0126657c1",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistorySection.kt": "321ecbc2e388ec3e9befa2f7486f5357e02a9e333f7643b901626d15a2674750",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FilesWorkspace.kt": "e246c850194058ca74247c10e8b830ddc9a80073a1017cf7454364cdf7c611ec",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GenericNativeFallback.kt": "768f8704a9999b45d06e39c61529bd9af370315ff1f33d7eb4f8b463aaaedbbf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt": "8a305fa47dc1977af346078cb5d6b2241e4fc4401796476a51e99e8ad30da38b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsScreen.kt": "9c8a681ec205fec05eadec0a49e7fc2e76eae6d9a2b8e3add5bd8060730b092b",
@@ -310,8 +314,8 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LocalFileUpload.kt": "7cbabc9eaea160376f3e7ba31cd4b47421741b4ac60363046988fb27b98023a8",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt": "74ed912eef556a53b7eb0008946aa5b4425cb69456bea75368d309a39052a331",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCalendarWorkspaceScenario.kt": "59d25d2ec60cb81be50cc408d57920e904139ecad92cfd227825fee5315eb7af",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "c0605de65a48435155a9a37a1c0ba639131dcd6c57df3cb70341c0e48dfbf6d9",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt": "35f49f2008d86306a5e5e63f92b559ceed1d1802f36c3a1fec4b4cb727629b85",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "c8ef4ce1e032ae3cf0e3fb79fcc614643533714f77094f1f6c268071e1921ff7",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt": "75ab130cd489712673b9402a8e2da7b9edab84b4bb3f3f5c8dacb8a03bd86390",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt": "d0d144beece62dec0b26f9bc245693386b98752384294b9d90080d54c25d139e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingLivePhotoCaptureScenarios.kt": "20a74e6b425a56b0ba6d32f28b89c5722f2f9569f1dceeaa621f2f226bec9101",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingMusicWorkspaceCaptureScenarios.kt": "0b0d389bad369beae37b9044c372abd4c0dbb5049a958fb2ba46bed56e7cda16",
@@ -346,12 +350,12 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudFileListing.kt": "4372cbb72541993c53169f861ebb00efc306670d41b860cc0c3c010b431f43b4",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt": "53cc22fed51fe03ef0aaab6a3f849222b0dbfb04fac9c4e3a73057b85c524290",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewerActions.kt": "48aaed6948d1423113d300cc3ab86d244ab76e8225e24988e9855edf74553944",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "b59d09bff68de124eddcc9fd9541b7aaacee06fc3eb408b478e99792ae9137aa",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "943678f21f80b145b7ebf6269c8969edcb857f737b75949f91338808545d2455",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt": "944103dba7d35abd17d21cb2bf5818c19b8148abf6b8d37fcdafdab029abe56b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotesCache.kt": "9223dd455c6a1c35a10769616fceb9dfb2d92ef4d43b0a52c2c29e40f1a196cf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPeople.kt": "cff910ea2cc77211ef81779c49ee0c957851f2b4a3ed32b857b12ded1cee643b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPhotoEditor.kt": "3445cee9cb4e039c3992103f1d71ab5cee4fea9751e5f9282160c64b44e84d4c",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt": "330ab33bb79d03299ad31e87028d9689e11f567e1958e4d4151858d6d5467c9d",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt": "9cc02c78934c5ee60e81f8d5236f6937472e003a40eca1b67d3267a80ffb5684",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotesApi.kt": "e0eb6645fdfb786a942af58ada15d5385c477b4f1a1fc5613ecc14a8c0089c4d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotesFolderOperations.kt": "db6a04cfcd3b25b17c996cdc6dba21847d14f5970e06e6c24a3e2c85139dbe1d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/OfficeDocumentWorkflow.kt": "8d8e3362282230175bdda673d76baccf537220f175539404cf67295fe05bb44b",
@@ -546,7 +550,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "40b6bfa67c5d2b82f22310c40d0e1c505918432d0d8697dfbf1ef540cedb7904"
+            "sha256": "a8c2b1d572d4661b6c384c618cd3dde7810032c1ece3353a6ad1fae062412001"
         },
         {
             "scenario": "homepage-files-desktop-light",
@@ -562,7 +566,39 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "ddd5f87b5b0a551e6d4ca81e8288ecdaa0acfb9588899bc274ffad41c6498419"
+            "sha256": "498011fef3e30080c900ebd4f93834a0c95bd09db615508de8cd921037c1bcfd"
+        },
+        {
+            "scenario": "homepage-files-mobile-dark",
+            "baseScenario": "homepage-files-mobile",
+            "file": "homepage-files-mobile-dark.png",
+            "theme": "dark",
+            "width": 1080,
+            "height": 2400,
+            "density": 2.625,
+            "feature": "Homepage",
+            "surface": "Files workspace",
+            "state": "Synced with offline content",
+            "purpose": "showcase",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "9d73f216310217523e57093862efde56ce9483152f31ea5de09f5b7b6c9c55d1"
+        },
+        {
+            "scenario": "homepage-files-mobile-light",
+            "baseScenario": "homepage-files-mobile",
+            "file": "homepage-files-mobile-light.png",
+            "theme": "light",
+            "width": 1080,
+            "height": 2400,
+            "density": 2.625,
+            "feature": "Homepage",
+            "surface": "Files workspace",
+            "state": "Synced with offline content",
+            "purpose": "showcase",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "46e37a95b3e5c1fefd3b77cc9e34f1a29f613474a8d1e40030ba53e6b742779a"
         },
         {
             "scenario": "homepage-photos-desktop-dark",
@@ -2568,7 +2604,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "40b6bfa67c5d2b82f22310c40d0e1c505918432d0d8697dfbf1ef540cedb7904"
+            "sha256": "a8c2b1d572d4661b6c384c618cd3dde7810032c1ece3353a6ad1fae062412001"
         },
         {
             "scenario": "guide-offline-files-browse-light",
@@ -2584,7 +2620,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "ddd5f87b5b0a551e6d4ca81e8288ecdaa0acfb9588899bc274ffad41c6498419"
+            "sha256": "498011fef3e30080c900ebd4f93834a0c95bd09db615508de8cd921037c1bcfd"
         },
         {
             "scenario": "guide-offline-files-storage",

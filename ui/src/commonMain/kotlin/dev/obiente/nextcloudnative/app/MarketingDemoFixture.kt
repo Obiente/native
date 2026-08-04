@@ -151,6 +151,7 @@ internal val marketingHomepageFiles = listOf(
         size = null,
         fileId = 5_001,
         hasPreview = false,
+        favorite = true,
     ),
     marketingHomepageFile(
         path = "Shared",
@@ -167,6 +168,7 @@ internal val marketingHomepageFiles = listOf(
         size = null,
         fileId = 5_003,
         hasPreview = false,
+        favorite = true,
     ),
     marketingHomepageFile(
         path = "Design system",
@@ -175,6 +177,23 @@ internal val marketingHomepageFiles = listOf(
         size = null,
         fileId = 5_004,
         hasPreview = false,
+    ),
+    marketingHomepageFile(
+        path = "Archive 2025",
+        isDirectory = true,
+        mimeType = "httpd/unix-directory",
+        size = null,
+        fileId = 5_005,
+        hasPreview = false,
+    ),
+    marketingHomepageFile(
+        path = "Research",
+        isDirectory = true,
+        mimeType = "httpd/unix-directory",
+        size = null,
+        fileId = 5_006,
+        hasPreview = false,
+        favorite = true,
     ),
     marketingHomepageFile(
         path = "Field notes.jpg",
@@ -207,6 +226,8 @@ internal val marketingHomepageFiles = listOf(
         size = 14_336,
         fileId = 5_201,
         hasPreview = false,
+        favorite = true,
+        unreadComments = 3,
     ),
     marketingHomepageFile(
         path = "Release checklist.pdf",
@@ -256,6 +277,40 @@ internal val marketingHomepageFiles = listOf(
         fileId = 5_207,
         hasPreview = false,
     ),
+    marketingHomepageFile(
+        path = "Campaign brief.docx",
+        isDirectory = false,
+        mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        size = 384_000,
+        fileId = 5_208,
+        hasPreview = true,
+        unreadComments = 2,
+    ),
+    marketingHomepageFile(
+        path = "Customer research.pdf",
+        isDirectory = false,
+        mimeType = "application/pdf",
+        size = 3_821_568,
+        fileId = 5_209,
+        hasPreview = true,
+        favorite = true,
+    ),
+    marketingHomepageFile(
+        path = "Meeting notes.md",
+        isDirectory = false,
+        mimeType = "text/markdown",
+        size = 28_672,
+        fileId = 5_210,
+        hasPreview = false,
+    ),
+    marketingHomepageFile(
+        path = "Brand assets.zip",
+        isDirectory = false,
+        mimeType = "application/zip",
+        size = 96_468_992,
+        fileId = 5_211,
+        hasPreview = false,
+    ),
 )
 
 internal val marketingHomepageCachedFileListing = NextcloudFileListing(
@@ -280,6 +335,8 @@ private fun marketingHomepageFile(
     size: Long?,
     fileId: Long,
     hasPreview: Boolean,
+    favorite: Boolean = false,
+    unreadComments: Int = 0,
 ) = NextcloudFile(
     path = path,
     name = path,
@@ -290,6 +347,10 @@ private fun marketingHomepageFile(
     fileId = fileId,
     hasPreview = hasPreview,
     etag = "homepage-$fileId",
+    favorite = favorite,
+    ownerId = "morgan",
+    ownerDisplayName = "Morgan Lee",
+    unreadComments = unreadComments,
     permissions = "RGDNVW",
 )
 

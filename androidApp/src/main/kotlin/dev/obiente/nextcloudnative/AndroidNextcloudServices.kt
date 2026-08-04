@@ -46,6 +46,7 @@ import dev.obiente.nextcloudnative.app.FileOfflineAvailability
 import dev.obiente.nextcloudnative.app.FileOfflineCenterActionResult
 import dev.obiente.nextcloudnative.app.FileOfflineCenterSnapshot
 import dev.obiente.nextcloudnative.app.FileOfflineKey
+import dev.obiente.nextcloudnative.app.FileWebDavMutationSpec
 import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
 import dev.obiente.nextcloudnative.app.FileSyncCenterSnapshot
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
@@ -113,6 +114,9 @@ import dev.obiente.nextcloudnative.app.PersistedDeckCardDraft
 import dev.obiente.nextcloudnative.app.boundedPreviewDimension
 import dev.obiente.nextcloudnative.app.boundedActivityLimit
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
+import dev.obiente.nextcloudnative.app.buildFileFavoritePropPatch
+import dev.obiente.nextcloudnative.app.buildFavoriteFilesDavReport
+import dev.obiente.nextcloudnative.app.buildFileSearchDavRequest
 import dev.obiente.nextcloudnative.app.buildNextcloudApiUrl
 import dev.obiente.nextcloudnative.app.prepareMultipartUpload
 import dev.obiente.nextcloudnative.app.buildPeopleMutationUrl
@@ -701,6 +705,84 @@ internal class AndroidNextcloudServices(
         fileReadCache.cachedListing(NextcloudDocumentIds.accountKey(session), path)?.let {
             NextcloudFileListing(it.files, NextcloudFileListingSource.Cache)
         }
+    }
+
+    override suspend fun searchFiles(
+        session: NextcloudSession,
+        userId: String,
+        query: String,
+        scopePath: String,
+        maximumResults: Int,
+    ): List<NextcloudFile> = withContext(Dispatchers.IO) {
+        val response = request(
+            method = "SEARCH",
+            url = session.serverUrl.trimEnd('/') + "/remote.php/dav/",
+            session = session,
+            body = buildFileSearchDavRequest(userId, scopePath, query, maximumResults),
+            contentType = "application/xml; charset=utf-8",
+            headers = mapOf("Accept" to "application/xml"),
+        )
+        if (response.status != 207) throw NextcloudFileListingHttpException(response.status)
+        parseDavFiles(response.body, userId)
+            .distinctBy(NextcloudFile::path)
+            .take(maximumResults)
+    }
+
+    override suspend fun listFavoriteFiles(
+        session: NextcloudSession,
+        userId: String,
+        scopePath: String,
+    ): List<NextcloudFile> = withContext(Dispatchers.IO) {
+        val response = request(
+            method = "REPORT",
+            url = buildNextcloudFileUrl(session.serverUrl, userId, scopePath),
+            session = session,
+            body = buildFavoriteFilesDavReport(),
+            contentType = "application/xml; charset=utf-8",
+            headers = mapOf("Accept" to "application/xml"),
+        )
+        if (response.status != 207) throw NextcloudFileListingHttpException(response.status)
+        parseDavFiles(response.body, userId).distinctBy(NextcloudFile::path)
+    }
+
+    override suspend fun setFileFavorite(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        favorite: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        val safePath = file.path
+        require(safePath.isNotBlank()) { "A file path is required." }
+        val expectedEtag = file.etag?.trim().orEmpty()
+        require(expectedEtag.isNotEmpty()) { "Refresh the folder before changing favorites." }
+        val headers = buildMap {
+            put("Accept", "application/xml")
+            putAll(
+                FileWebDavMutationSpec(
+                    method = "PROPPATCH",
+                    sourcePath = safePath,
+                    destinationPath = null,
+                    expectedEtag = expectedEtag,
+                    sourceIsDirectory = file.isDirectory,
+                    overwrite = false,
+                ).conflictConditionHeaders(),
+            )
+        }
+        val response = request(
+            method = "PROPPATCH",
+            url = buildNextcloudFileUrl(session.serverUrl, userId, safePath),
+            session = session,
+            body = buildFileFavoritePropPatch(favorite),
+            contentType = "application/xml; charset=utf-8",
+            headers = headers,
+            maxResponseBytes = 64 * 1024,
+        )
+        if (response.status !in 200..299) throw fileOperationException(response.status)
+        check(response.status == 200 || response.status == 207 && fileFavoriteUpdateSucceeded(response.body)) {
+            "The server did not confirm the favorite change."
+        }
+        runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(session), safePath) }
+        Unit
     }
 
     override suspend fun loadFileOfflineAvailability(
@@ -2576,11 +2658,27 @@ internal class AndroidNextcloudServices(
                         fileId = response.firstText(OWNCLOUD_NAMESPACE, "fileid")?.toLongOrNull(),
                         hasPreview = response.firstText(NEXTCLOUD_NAMESPACE, "has-preview") == "true",
                         etag = response.firstText(DAV_NAMESPACE, "getetag"),
+                        favorite = response.firstText(OWNCLOUD_NAMESPACE, "favorite") == "1",
+                        ownerId = response.firstText(OWNCLOUD_NAMESPACE, "owner-id"),
+                        ownerDisplayName = response.firstText(OWNCLOUD_NAMESPACE, "owner-display-name"),
+                        unreadComments = response.firstText(OWNCLOUD_NAMESPACE, "comments-unread")?.toIntOrNull() ?: 0,
                         permissions = response.firstText(OWNCLOUD_NAMESPACE, "permissions"),
                     ),
                 )
             }
         }
+    }
+
+    private fun fileFavoriteUpdateSucceeded(xml: ByteArray): Boolean {
+        val document = SafeXmlParser.parse(xml)
+        val propstats = document.getElementsByTagNameNS(DAV_NAMESPACE, "propstat")
+        for (index in 0 until propstats.length) {
+            val propstat = propstats.item(index)
+            val status = propstat.firstText(DAV_NAMESPACE, "status").orEmpty()
+            val includesFavorite = propstat.childCount(OWNCLOUD_NAMESPACE, "favorite") > 0
+            if (includesFavorite && status.substringAfter(' ', "").take(3).toIntOrNull() in 200..299) return true
+        }
+        return false
     }
 
     private fun org.w3c.dom.Node.firstText(namespace: String, localName: String): String? =
@@ -2701,7 +2799,8 @@ internal class AndroidNextcloudServices(
             <d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">
               <d:prop>
                 <d:displayname/><d:getcontenttype/><d:getlastmodified/><d:getcontentlength/><d:getetag/>
-                <d:resourcetype/><oc:fileid/><oc:size/><oc:permissions/><nc:has-preview/>
+                <d:resourcetype/><oc:fileid/><oc:size/><oc:permissions/><oc:favorite/>
+                <oc:owner-id/><oc:owner-display-name/><oc:comments-unread/><nc:has-preview/>
               </d:prop>
             </d:propfind>
         """.trimIndent()
