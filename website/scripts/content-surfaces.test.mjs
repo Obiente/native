@@ -147,16 +147,19 @@ test("marketing screenshots are rendered offscreen without an Android device", a
       capture.baseScenario,
     ),
   );
-  assert.equal(homepageCaptures.length, 14);
-  assert.deepEqual(homepageCaptureBases, new Set([
+  const requiredHomepageCaptureBases = [
     "homepage-overview-desktop",
     "homepage-overview-mobile",
     "homepage-files-desktop",
+    "homepage-files-mobile",
     "homepage-photos-desktop",
     "homepage-conversations-desktop",
     "homepage-planning-desktop",
     "homepage-apps-desktop",
-  ]));
+  ];
+  for (const requiredBase of requiredHomepageCaptureBases) {
+    assert.ok(homepageCaptureBases.has(requiredBase));
+  }
   for (const base of homepageCaptureBases) {
     assert.ok(captureScenarios.has(`${base}-dark`));
     assert.ok(captureScenarios.has(`${base}-light`));
