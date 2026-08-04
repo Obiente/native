@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -1832,34 +1833,50 @@ internal fun MarketingVirtualFileStorageMobileScenario() {
 
 @Composable
 internal fun MarketingVirtualFileStorageDesktopScenario() {
-    Column(modifier = Modifier.fillMaxSize()) {
-        ScreenHeader(
-            title = "Sync & offline",
-            subtitle = "Virtual files and device storage",
-            onBack = {},
-        )
-        Box(
-            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
-            contentAlignment = Alignment.TopCenter,
-        ) {
+    NextcloudDesktopShell(
+        selected = NextcloudDestination.FolderSync,
+        onSelected = {},
+        identity = marketingDesktopIdentity(),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            FileOfflineWorkspaceTabs(
+                selected = FileOfflineWorkspaceSection.VirtualFiles,
+                onSelected = {},
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Column(
-                modifier = Modifier.widthIn(max = 920.dp).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+                modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Large),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
-                Text(
-                    "Keep the whole cloud visible in your file manager",
-                    style = MaterialTheme.typography.headlineSmall,
-                )
-                Text(
-                    "Opened files stay fast in a managed cache. Pins remain offline, while safe " +
-                        "cleanup protects edits, transfers, conflicts, and files in use.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+                        Text("Virtual files", style = MaterialTheme.typography.headlineSmall)
+                        Text(
+                            "Keep your cloud visible locally and choose what must stay available offline",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(999.dp),
+                    ) {
+                        Text(
+                            "Healthy",
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    }
+                }
                 VirtualFileStorageCard(
                     snapshot = marketingVirtualFileStorageSnapshot(
                         support = VirtualFileStorageSupport.Available,
-                        integration = VirtualFilePlatformIntegration.WindowsCloudFiles,
+                        integration = VirtualFilePlatformIntegration.LinuxFilesystemMount,
                     ),
                     loading = false,
                     busy = false,
@@ -1905,6 +1922,42 @@ private fun marketingVirtualFileStorageSnapshot(
         VirtualFilePlatformIntegration.AppleFileProvider -> "Files / Nextcloud Native"
         VirtualFilePlatformIntegration.InAppOnDemandCache -> null
     },
+    providerLocationConfiguration = if (integration == VirtualFilePlatformIntegration.LinuxFilesystemMount) {
+        VirtualFileProviderLocation("Home folder", "Nextcloud Native")
+    } else {
+        null
+    },
+    providerLocationCanChange = integration == VirtualFilePlatformIntegration.LinuxFilesystemMount,
+    folderRetentionRules = if (integration == VirtualFilePlatformIntegration.LinuxFilesystemMount) {
+        listOf(
+            VirtualFolderRetentionRule("Projects/Phoenix", VirtualFolderRetention.KeepOnDevice),
+            VirtualFolderRetentionRule("Photos/Portfolio", VirtualFolderRetention.KeepOnDevice),
+            VirtualFolderRetentionRule("Shared/Field research", VirtualFolderRetention.KeepOnDevice),
+        )
+    } else {
+        emptyList()
+    },
+    folderHydrationStatuses = if (integration == VirtualFilePlatformIntegration.LinuxFilesystemMount) {
+        listOf(
+            VirtualFolderHydrationStatus(
+                relativePath = "Projects/Phoenix",
+                phase = VirtualFolderHydrationPhase.AvailableOffline,
+                verifiedAtEpochMillis = 1,
+            ),
+            VirtualFolderHydrationStatus(
+                relativePath = "Photos/Portfolio",
+                phase = VirtualFolderHydrationPhase.Downloading,
+            ),
+            VirtualFolderHydrationStatus(
+                relativePath = "Shared/Field research",
+                phase = VirtualFolderHydrationPhase.Failed,
+                detail = "Connection interrupted. Existing offline files remain available.",
+            ),
+        )
+    } else {
+        emptyList()
+    },
+    pendingWritebackCount = if (integration == VirtualFilePlatformIntegration.LinuxFilesystemMount) 1 else 0,
 )
 
 @Composable
