@@ -21,6 +21,19 @@ require_text() {
     fi
 }
 
+require_count() {
+    local file="$1"
+    local expected="$2"
+    local count="$3"
+    local actual
+    actual="$(grep -Fc -- "$expected" "$file")"
+    if [[ "$actual" -ne "$count" ]]; then
+        printf '%s contains %s copies of release contract %s; expected %s.\n' \
+            "$file" "$actual" "$expected" "$count" >&2
+        exit 1
+    fi
+}
+
 require_text "$nightly" 'workflow_run:'
 require_text "$nightly" 'github.event.workflow_run.conclusion == '\''success'\'''
 require_text "$nightly" 'github.event.workflow_run.event == '\''push'\'''
@@ -44,6 +57,10 @@ require_text "$nightly" 'targets: x86_64-pc-windows-msvc'
 require_text "$nightly" 'name: Verify unsigned Windows MSI'
 require_text "$nightly" 'tools/verify-windows-package.ps1'
 require_text "$nightly" 'uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1'
+require_count "$nightly" 'uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1' 2
+require_text "$nightly" 'id: attest-windows-msi'
+require_text "$nightly" 'name: Retry Windows MSI provenance attestation'
+require_text "$nightly" "steps.attest-windows-msi.outcome == 'failure'"
 require_text "$nightly" 'subject-path: ui/build/compose/binaries/main/msi/*.msi'
 require_text "$nightly" 'artifact-metadata: write'
 require_text "$nightly" 'attestations: write'
@@ -122,6 +139,10 @@ require_text "$prerelease" 'name: Set up Rust for Windows packaging'
 require_text "$prerelease" 'targets: x86_64-pc-windows-msvc'
 require_text "$prerelease" 'tools/verify-windows-package.ps1'
 require_text "$prerelease" 'uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1'
+require_count "$prerelease" 'uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1' 2
+require_text "$prerelease" 'id: attest-windows-msi'
+require_text "$prerelease" 'name: Retry Windows MSI provenance attestation'
+require_text "$prerelease" "steps.attest-windows-msi.outcome == 'failure'"
 require_text "$prerelease" 'subject-path: ui/build/compose/binaries/main/msi/*.msi'
 require_text "$prerelease" 'artifact-metadata: write'
 require_text "$prerelease" 'attestations: write'

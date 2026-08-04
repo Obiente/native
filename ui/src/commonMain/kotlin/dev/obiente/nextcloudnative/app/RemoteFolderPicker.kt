@@ -225,6 +225,7 @@ internal fun RemoteFolderPickerDialog(
     session: NextcloudSession,
     userId: String,
     initialPath: String,
+    selectionError: String? = null,
     onDismiss: () -> Unit,
     onSelected: (String) -> Unit,
 ) {
@@ -398,6 +399,15 @@ internal fun RemoteFolderPickerDialog(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                }
+                selectionError?.let { message ->
+                    item(key = "selection-error") {
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
                 item(key = "search") {
                     OutlinedTextField(
