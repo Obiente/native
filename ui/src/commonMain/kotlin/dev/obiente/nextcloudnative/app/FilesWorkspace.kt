@@ -836,7 +836,7 @@ private fun NativeFileWorkspaceList(
                             maxLines = 1,
                         )
                         Text(
-                            if (file.isDirectory) "—" else formatWorkspaceBytes(file.size),
+                            if (file.isDirectory) "-" else formatWorkspaceBytes(file.size),
                             modifier = Modifier.width(90.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1184,4 +1184,4 @@ private fun String?.readableFileDate(): String = this
     ?.substringBefore('+')
     ?.removeSuffix("Z")
     ?.takeIf(String::isNotBlank)
-    ?: "—"
+    ?: "-"
