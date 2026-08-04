@@ -301,7 +301,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPlanning.kt": "2aac41272bba43287c033cc06bfd394f1c003e09c11655e34e71d74b34dfde51",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistory.kt": "fc5d0165cc47bf4e54fd92bf860a0b262c3c5213e0a1e35e16e99db0126657c1",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistorySection.kt": "321ecbc2e388ec3e9befa2f7486f5357e02a9e333f7643b901626d15a2674750",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FilesWorkspace.kt": "e246c850194058ca74247c10e8b830ddc9a80073a1017cf7454364cdf7c611ec",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FilesWorkspace.kt": "723e770b80eac03920b4fdcd808c67ed188b09c2041a628b624a5ed3ff552690",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GenericNativeFallback.kt": "768f8704a9999b45d06e39c61529bd9af370315ff1f33d7eb4f8b463aaaedbbf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt": "8a305fa47dc1977af346078cb5d6b2241e4fc4401796476a51e99e8ad30da38b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsScreen.kt": "9c8a681ec205fec05eadec0a49e7fc2e76eae6d9a2b8e3add5bd8060730b092b",
@@ -550,7 +550,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "a8c2b1d572d4661b6c384c618cd3dde7810032c1ece3353a6ad1fae062412001"
+            "sha256": "47fc3dbbc2f648ad83799a418a9b9df31e5a649d2e6a0baf0ba22699f64777c1"
         },
         {
             "scenario": "homepage-files-desktop-light",
@@ -566,7 +566,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "498011fef3e30080c900ebd4f93834a0c95bd09db615508de8cd921037c1bcfd"
+            "sha256": "49455574fcd473c3586db57e85a9e4f182770ad0663e0457e1974ca5603ea9d1"
         },
         {
             "scenario": "homepage-files-mobile-dark",
@@ -2604,7 +2604,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "a8c2b1d572d4661b6c384c618cd3dde7810032c1ece3353a6ad1fae062412001"
+            "sha256": "47fc3dbbc2f648ad83799a418a9b9df31e5a649d2e6a0baf0ba22699f64777c1"
         },
         {
             "scenario": "guide-offline-files-browse-light",
@@ -2620,7 +2620,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "498011fef3e30080c900ebd4f93834a0c95bd09db615508de8cd921037c1bcfd"
+            "sha256": "49455574fcd473c3586db57e85a9e4f182770ad0663e0457e1974ca5603ea9d1"
         },
         {
             "scenario": "guide-offline-files-storage",
