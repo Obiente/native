@@ -258,6 +258,33 @@ class UnifiedSearchTest {
     }
 
     @Test
+    fun `visible results stay bound to the submitted query`() {
+        val files = provider()
+        val oldGroup = firstUnifiedSearchGroup(
+            files,
+            UnifiedSearchPage(
+                name = "Files",
+                entries = listOf(entry("Old result", "/old")),
+                isPaginated = false,
+                nextCursor = null,
+            ),
+        )
+        val oldResults = UnifiedSearchVisibleResults(
+            query = "old",
+            groups = mapOf(files.id to oldGroup),
+            failures = mapOf("mail" to "Old failure"),
+        )
+
+        assertTrue(oldResults.forQuery("new").groups.isEmpty())
+        assertTrue(oldResults.forQuery("new").failures.isEmpty())
+        assertEquals(oldResults, oldResults.forQuery("old"))
+        assertEquals(
+            oldResults,
+            oldResults.updateForQuery("new") { copy(groups = emptyMap()) },
+        )
+    }
+
+    @Test
     fun `ocs failure message is surfaced`() {
         val failure = assertFailsWith<UnifiedSearchException> {
             parseUnifiedSearchProviders(

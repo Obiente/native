@@ -839,7 +839,7 @@ private fun EventEditorDialog(
         else -> recurrencePreset.rule
     }
     val recurrenceValid = recurrencePreset != EventRecurrencePreset.Custom ||
-        recurrenceRule?.startsWith("FREQ=", ignoreCase = true) == true
+        recurrenceRule?.let(::isSupportedCalendarRecurrenceRuleForWrite) == true
     val valid = title.isNotBlank() && date.isIsoCalendarDate() &&
         (allDay || startTime.isCalendarTime() && endTime.isCalendarTime()) && recurrenceValid
 
@@ -879,7 +879,9 @@ private fun EventEditorDialog(
                             value = customRecurrenceRule,
                             onValueChange = { customRecurrenceRule = it },
                             label = { Text("Recurrence rule") },
-                            supportingText = { Text("RFC 5545 rule, for example FREQ=WEEKLY;BYDAY=MO,WE") },
+                            supportingText = {
+                                Text("Daily, weekly, or monthly rule, for example FREQ=WEEKLY;BYDAY=MO,WE")
+                            },
                             isError = !recurrenceValid,
                             modifier = Modifier.fillMaxWidth(),
                         )

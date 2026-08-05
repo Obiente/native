@@ -204,7 +204,7 @@ import kotlinx.serialization.json.Json
 internal const val NEXTCLOUD_NATIVE_GUIDES_URL = "https://nc-native.obiente.dev/guides/"
 
 @Serializable
-private sealed interface Screen {
+internal sealed interface Screen {
     @Serializable
     data object Root : Screen
     @Serializable
@@ -293,7 +293,7 @@ private val navigationStateJson = Json {
 }
 
 @Serializable
-private data class SavedScreen(
+internal data class SavedScreen(
     val kind: String,
     val path: String? = null,
     val appId: String? = null,
@@ -301,6 +301,9 @@ private data class SavedScreen(
     val appNavigation: SavedDynamicAppNavigationState? = null,
     val serverVersion: String? = null,
     val installedAppVersion: String? = null,
+    val conversationToken: String? = null,
+    val routeLabel: String? = null,
+    val noteId: Long? = null,
 )
 
 @Serializable
@@ -312,13 +315,26 @@ internal data class SavedDynamicAppNavigationState(
     val history: List<SavedDynamicNavigationSnapshot> = emptyList(),
 )
 
-private fun Screen.toSavedScreen(): SavedScreen = when (this) {
+internal fun Screen.toSavedScreen(): SavedScreen = when (this) {
     Screen.Root -> SavedScreen("root")
     Screen.Search -> SavedScreen("search")
     is Screen.Files -> SavedScreen("files", path = path.take(MAX_SAVED_FILE_PATH_CHARS))
     Screen.Media, is Screen.PersonMedia, is Screen.MediaViewer -> SavedScreen("media")
-    Screen.Talk, is Screen.Chat -> SavedScreen("talk")
-    Screen.Notes, is Screen.NoteEditor -> SavedScreen("notes")
+    Screen.Talk -> SavedScreen("talk")
+    is Screen.Chat -> SavedScreen(
+        kind = "chat",
+        conversationToken = room.token.takeIf { token ->
+            token.isSafeSavedDynamicNavigationValue(MAX_SAVED_TALK_TOKEN_CHARS)
+        },
+        routeLabel = room.displayName.filterNot(Char::isISOControl)
+            .take(MAX_SAVED_ROUTE_LABEL_CHARS)
+            .takeIf(String::isNotBlank),
+    )
+    Screen.Notes -> SavedScreen("notes")
+    is Screen.NoteEditor -> SavedScreen(
+        kind = "note-editor",
+        noteId = note.id.takeIf { it >= 0L },
+    )
     Screen.Dashboard -> SavedScreen("dashboard")
     Screen.UserStatus -> SavedScreen("user-status")
     Screen.Calendar -> SavedScreen("calendar")
@@ -341,13 +357,43 @@ private fun Screen.toSavedScreen(): SavedScreen = when (this) {
     is Screen.TextEditor -> SavedScreen("files", path = parentPath.take(MAX_SAVED_FILE_PATH_CHARS))
 }
 
-private fun SavedScreen.toScreen(): Screen = when (kind) {
+internal fun SavedScreen.toScreen(): Screen = when (kind) {
     "root" -> Screen.Root
     "search" -> Screen.Search
     "files" -> Screen.Files(path.orEmpty().take(MAX_SAVED_FILE_PATH_CHARS))
     "media" -> Screen.Media
     "talk" -> Screen.Talk
+    "chat" -> conversationToken
+        ?.takeIf { token -> token.isSafeSavedDynamicNavigationValue(MAX_SAVED_TALK_TOKEN_CHARS) }
+        ?.let { token ->
+            Screen.Chat(
+                TalkRoom(
+                    token = token,
+                    displayName = routeLabel?.filterNot(Char::isISOControl)
+                        ?.take(MAX_SAVED_ROUTE_LABEL_CHARS)
+                        ?.takeIf(String::isNotBlank)
+                        ?: "Conversation",
+                    lastMessage = null,
+                    unreadMessages = 0,
+                ),
+            )
+        }
+        ?: Screen.Talk
     "notes" -> Screen.Notes
+    "note-editor" -> noteId?.takeIf { it >= 0L }?.let { restoredId ->
+        Screen.NoteEditor(
+            NextcloudNote(
+                id = restoredId,
+                title = "",
+                modified = 0L,
+                category = "",
+                favorite = false,
+                readOnly = true,
+                content = null,
+                etag = null,
+            ),
+        )
+    } ?: Screen.Notes
     "dashboard" -> Screen.Dashboard
     "user-status" -> Screen.UserStatus
     "calendar" -> Screen.Calendar
@@ -424,6 +470,8 @@ private const val MAX_SAVED_FILE_PATH_CHARS = 2_048
 private const val MAX_SAVED_APP_ID_CHARS = 128
 private const val MAX_SAVED_APP_NAME_CHARS = 256
 private const val MAX_SAVED_VERSION_CHARS = 128
+private const val MAX_SAVED_TALK_TOKEN_CHARS = 256
+private const val MAX_SAVED_ROUTE_LABEL_CHARS = 256
 
 internal data class DynamicContractResumePlan(
     val serverVersion: String?,

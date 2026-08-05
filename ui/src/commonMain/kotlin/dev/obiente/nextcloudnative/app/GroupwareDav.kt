@@ -960,14 +960,81 @@ fun updateGroupwareCalendarEventContent(
 }
 
 private fun requireValidCalendarRecurrenceRule(value: String) {
-    val normalized = value.trim()
-    require(
-        normalized.length in 1..MAX_CALENDAR_RECURRENCE_RULE_LENGTH &&
-            normalized.startsWith("FREQ=", ignoreCase = true) &&
-            normalized.none(Char::isISOControl) &&
-            ':' !in normalized,
-    ) { "The event recurrence rule is invalid." }
+    require(isSupportedCalendarRecurrenceRuleForWrite(value)) {
+        "Use a supported daily, weekly, or monthly recurrence rule."
+    }
 }
+
+internal fun isSupportedCalendarRecurrenceRuleForWrite(value: String): Boolean {
+    val normalized = value.trim().uppercase()
+    if (
+        normalized.length !in 1..MAX_CALENDAR_RECURRENCE_RULE_LENGTH ||
+        normalized.any(Char::isISOControl) ||
+        ':' in normalized
+    ) {
+        return false
+    }
+    val parts = normalized.split(';')
+    val fields = linkedMapOf<String, String>()
+    for (part in parts) {
+        val separator = part.indexOf('=')
+        if (separator <= 0 || separator == part.lastIndex) return false
+        val key = part.substring(0, separator)
+        val fieldValue = part.substring(separator + 1)
+        if (key !in SUPPORTED_CALENDAR_RECURRENCE_FIELDS || fields.put(key, fieldValue) != null) return false
+    }
+    val frequency = fields["FREQ"] ?: return false
+    if (frequency !in SUPPORTED_CALENDAR_RECURRENCE_FREQUENCIES) return false
+    if (fields["INTERVAL"]?.toIntOrNull()?.let { it !in 1..1_000 } == true) return false
+    if ("INTERVAL" in fields && fields["INTERVAL"]?.toIntOrNull() == null) return false
+    if (fields["COUNT"]?.toIntOrNull()?.let { it !in 1..MAX_CALENDAR_OCCURRENCES } == true) return false
+    if ("COUNT" in fields && fields["COUNT"]?.toIntOrNull() == null) return false
+    if ("COUNT" in fields && "UNTIL" in fields) return false
+    if (fields["UNTIL"]?.isSupportedCalendarRecurrenceUntil() == false) return false
+    if (fields["WKST"]?.let { it !in CALENDAR_WEEK_DAYS } == true) return false
+
+    val byDays = fields["BYDAY"]?.split(',').orEmpty()
+    val byMonthDays = fields["BYMONTHDAY"]?.split(',').orEmpty()
+    if ("BYDAY" in fields && byDays.isEmpty()) return false
+    if ("BYMONTHDAY" in fields && byMonthDays.isEmpty()) return false
+    return when (frequency) {
+        "DAILY" -> "BYDAY" !in fields && "BYMONTHDAY" !in fields && "WKST" !in fields
+        "WEEKLY" -> {
+            "BYMONTHDAY" !in fields && byDays.all { it in CALENDAR_WEEK_DAYS }
+        }
+        "MONTHLY" -> {
+            "WKST" !in fields && !("BYDAY" in fields && "BYMONTHDAY" in fields) &&
+                byDays.all(String::isSupportedMonthlyCalendarByDay) &&
+                byMonthDays.all { token -> token.toIntOrNull()?.let { it in -31..31 && it != 0 } == true }
+        }
+        else -> false
+    }
+}
+
+private fun String.isSupportedCalendarRecurrenceUntil(): Boolean = when {
+    length == 8 -> all(Char::isDigit)
+    length == 16 && getOrNull(8) == 'T' && last() == 'Z' ->
+        take(8).all(Char::isDigit) && substring(9, 15).all(Char::isDigit)
+    else -> false
+}
+
+private fun String.isSupportedMonthlyCalendarByDay(): Boolean {
+    val day = takeLast(2)
+    if (day !in CALENDAR_WEEK_DAYS) return false
+    val ordinal = dropLast(2)
+    return ordinal.isEmpty() || ordinal.toIntOrNull()?.let { it in -5..5 && it != 0 } == true
+}
+
+private val SUPPORTED_CALENDAR_RECURRENCE_FREQUENCIES = setOf("DAILY", "WEEKLY", "MONTHLY")
+private val SUPPORTED_CALENDAR_RECURRENCE_FIELDS = setOf(
+    "FREQ",
+    "INTERVAL",
+    "COUNT",
+    "UNTIL",
+    "BYDAY",
+    "BYMONTHDAY",
+    "WKST",
+)
 
 private data class CalendarProperty(val declaration: String, val value: String)
 
