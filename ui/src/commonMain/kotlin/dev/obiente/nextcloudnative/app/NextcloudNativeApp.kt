@@ -304,11 +304,12 @@ private data class SavedScreen(
 )
 
 @Serializable
-private data class SavedDynamicAppNavigationState(
+internal data class SavedDynamicAppNavigationState(
     val selectedViewId: String? = null,
     val selectedRecordId: String? = null,
     val selectedRecordResourceId: String? = null,
     val pathParameterValues: Map<String, String> = emptyMap(),
+    val history: List<SavedDynamicNavigationSnapshot> = emptyList(),
 )
 
 private fun Screen.toSavedScreen(): SavedScreen = when (this) {
@@ -4986,7 +4987,7 @@ internal data class SavedDynamicNavigationSnapshot(
 )
 
 @Serializable
-private data class DynamicAppNavigationState(
+internal data class DynamicAppNavigationState(
     val selectedViewId: String? = null,
     val selectedRecord: NativeRecord? = null,
     val selectedRecordResourceId: String? = null,
@@ -4994,7 +4995,7 @@ private data class DynamicAppNavigationState(
     val history: List<SavedDynamicNavigationSnapshot> = emptyList(),
 )
 
-private fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedDynamicAppNavigationState {
+internal fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedDynamicAppNavigationState {
     val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty()
     val savedRecordId = selectedRecord?.id?.takeIf { value ->
         value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_RECORD_ID_CHARS)
@@ -5009,10 +5010,11 @@ private fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedD
                 value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)
         },
         pathParameterValues = savedParameters,
+        history = normalizeSavedDynamicNavigationHistory(history),
     )
 }
 
-private fun SavedDynamicAppNavigationState.toDynamicAppNavigationState(): DynamicAppNavigationState {
+internal fun SavedDynamicAppNavigationState.toDynamicAppNavigationState(): DynamicAppNavigationState {
     val restoredRecordId = selectedRecordId?.takeIf { value ->
         value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_RECORD_ID_CHARS)
     }
@@ -5028,8 +5030,14 @@ private fun SavedDynamicAppNavigationState.toDynamicAppNavigationState(): Dynami
                 value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)
         },
         pathParameterValues = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty(),
+        history = normalizeSavedDynamicNavigationHistory(history),
     )
 }
+
+private fun normalizeSavedDynamicNavigationHistory(
+    history: List<SavedDynamicNavigationSnapshot>,
+): List<SavedDynamicNavigationSnapshot> =
+    saveDynamicNavigationHistory(restoreDynamicNavigationHistory(history))
 
 internal fun saveDynamicNavigationHistory(
     history: List<DynamicNavigationSnapshot>,

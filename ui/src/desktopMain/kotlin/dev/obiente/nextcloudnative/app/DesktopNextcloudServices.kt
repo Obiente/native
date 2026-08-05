@@ -1882,9 +1882,22 @@ class DesktopNextcloudServices(
         session: NextcloudSession,
         userId: String,
     ): FileSyncCenterSnapshot = withContext(Dispatchers.IO) {
-        val center = fileSyncEngine.loadCenter(session)
+        val center = loadDesktopFileSyncCenter(session)
         publishFileSyncTraySnapshot(center, fileSyncEngine.loadTrayActivities(session))
         center
+    }
+
+    private suspend fun loadDesktopFileSyncCenter(session: NextcloudSession): FileSyncCenterSnapshot {
+        val runtimeConditions = desktopFileSyncRuntimeConditions()
+        return fileSyncEngine.loadCenter(
+            session = session,
+            runState = if (isFileSyncPaused()) {
+                FileSyncPairRunState.Paused
+            } else {
+                FileSyncPairRunState.Active
+            },
+            networkState = runtimeConditions::networkState,
+        )
     }
 
     override suspend fun addFileSyncPair(
@@ -1897,7 +1910,7 @@ class DesktopNextcloudServices(
         fileSyncEngine.addPair(session, localRoot, remoteRootPath, configuration).also {
             runCatching {
                 publishFileSyncTraySnapshot(
-                    fileSyncEngine.loadCenter(session),
+                    loadDesktopFileSyncCenter(session),
                     fileSyncEngine.loadTrayActivities(session),
                 )
             }
@@ -1931,7 +1944,7 @@ class DesktopNextcloudServices(
             } finally {
                 runCatching {
                     publishFileSyncTraySnapshot(
-                        fileSyncEngine.loadCenter(session),
+                        loadDesktopFileSyncCenter(session),
                         fileSyncEngine.loadTrayActivities(session),
                     )
                 }
@@ -1969,7 +1982,7 @@ class DesktopNextcloudServices(
             } finally {
                 runCatching {
                     publishFileSyncTraySnapshot(
-                        fileSyncEngine.loadCenter(session),
+                        loadDesktopFileSyncCenter(session),
                         fileSyncEngine.loadTrayActivities(session),
                     )
                 }
@@ -1985,7 +1998,7 @@ class DesktopNextcloudServices(
         fileSyncEngine.removePair(session, pairId).also {
             runCatching {
                 publishFileSyncTraySnapshot(
-                    fileSyncEngine.loadCenter(session),
+                    loadDesktopFileSyncCenter(session),
                     fileSyncEngine.loadTrayActivities(session),
                 )
             }
@@ -2032,7 +2045,7 @@ class DesktopNextcloudServices(
     suspend fun refreshFileSyncTraySnapshot() = withContext(Dispatchers.IO) {
         val session = loadSession() ?: return@withContext
         publishFileSyncTraySnapshot(
-            fileSyncEngine.loadCenter(session),
+            loadDesktopFileSyncCenter(session),
             fileSyncEngine.loadTrayActivities(session),
         )
     }
@@ -2054,7 +2067,7 @@ class DesktopNextcloudServices(
                 failure.message ?: "Could not load the signed-in account.",
             )
         }
-        val initial = fileSyncEngine.loadCenter(session)
+        val initial = loadDesktopFileSyncCenter(session)
         if (initial.pairs.isEmpty()) {
             publishFileSyncTraySnapshot(initial, emptyList())
             return@withLock FileSyncCenterActionResult.Completed("No desktop sync folders are configured.")
@@ -2114,7 +2127,7 @@ class DesktopNextcloudServices(
         } finally {
             runCatching {
                 publishFileSyncTraySnapshot(
-                    fileSyncEngine.loadCenter(session),
+                    loadDesktopFileSyncCenter(session),
                     fileSyncEngine.loadTrayActivities(session),
                 )
             }

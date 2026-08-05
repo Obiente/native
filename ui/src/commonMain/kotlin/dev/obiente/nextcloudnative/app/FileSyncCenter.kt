@@ -241,6 +241,8 @@ fun FileSyncPair.toCenterSummary(
     localDisplayName: String,
     localRootPath: String? = null,
     scheduleDescription: String? = null,
+    runState: FileSyncPairRunState,
+    networkState: FileSyncNetworkState,
 ): FileSyncPairSummary =
     FileSyncPairSummary(
         id = id,
@@ -272,7 +274,22 @@ fun FileSyncPair.toCenterSummary(
                 ?.takeIf { work.state == FileSyncExecutionState.Skipped }
                 ?.reason
         }.distinct().take(20),
+        runState = runState,
+        networkState = networkState,
     )
+
+fun liveFileSyncNetworkState(
+    networkAvailable: Boolean?,
+    unmeteredNetwork: Boolean?,
+    networkPolicy: FileSyncNetworkPolicy,
+): FileSyncNetworkState = when {
+    networkAvailable == false -> FileSyncNetworkState.WaitingForNetwork
+    networkAvailable != true -> FileSyncNetworkState.Unknown
+    networkPolicy == FileSyncNetworkPolicy.AnyConnection -> FileSyncNetworkState.Available
+    unmeteredNetwork == true -> FileSyncNetworkState.Available
+    unmeteredNetwork == false -> FileSyncNetworkState.WaitingForNetwork
+    else -> FileSyncNetworkState.Unknown
+}
 
 private fun String.isSafeFileSyncCenterText(maxLength: Int): Boolean =
     isNotBlank() && length <= maxLength && none(Char::isISOControl)

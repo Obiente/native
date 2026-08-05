@@ -121,4 +121,35 @@ class DynamicNavigationHistoryPersistenceTest {
         assertEquals("view-5", restored.first().viewId)
         assertEquals("view-19", restored.last().viewId)
     }
+
+    @Test
+    fun `saved dynamic app state retains bounded back history without record values`() {
+        val history = (0 until MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY + 3).map { index ->
+            SavedDynamicNavigationSnapshot(
+                viewId = "view-$index",
+                resourceId = "resource-$index",
+                recordId = "record-$index",
+                recordResourceId = "resource-$index",
+                pathParameterValues = mapOf("parentId" to "parent-$index"),
+            )
+        }
+        val saved = DynamicAppNavigationState(
+            selectedViewId = "view-current",
+            selectedRecord = NativeRecord(
+                id = "record-current",
+                values = mapOf("body" to "private body must not be saved"),
+            ),
+            selectedRecordResourceId = "resource-current",
+            history = history,
+        ).toSavedDynamicAppNavigationState()
+        val encoded = Json.encodeToString(saved)
+        val restored = saved.toDynamicAppNavigationState()
+
+        assertEquals(MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY, saved.history.size)
+        assertEquals("view-3", saved.history.first().viewId)
+        assertEquals("view-18", saved.history.last().viewId)
+        assertEquals(saved.history, restored.history)
+        assertFalse(encoded.contains("private body must not be saved"))
+        assertTrue(encoded.length < 16_000)
+    }
 }

@@ -35,7 +35,11 @@ internal class DesktopFileSyncEngine(
         FileSyncLocalRoot(token, selected.fileName?.toString()?.takeIf(String::isNotBlank) ?: "Selected folder")
     }
 
-    suspend fun loadCenter(session: NextcloudSession): FileSyncCenterSnapshot = lock.withLock {
+    suspend fun loadCenter(
+        session: NextcloudSession,
+        runState: FileSyncPairRunState,
+        networkState: (FileSyncConfiguration) -> FileSyncNetworkState,
+    ): FileSyncCenterSnapshot = lock.withLock {
         store.withExclusiveAccess {
             val accountId = desktopFileCacheAccountId(session)
             val state = store.load()
@@ -47,6 +51,8 @@ internal class DesktopFileSyncEngine(
                         localDisplayName = root?.displayName ?: "Selected folder",
                         localRootPath = root?.absolutePath,
                         scheduleDescription = "Automatic sync while Nextcloud Native is running",
+                        runState = runState,
+                        networkState = networkState(pair.configuration),
                     )
                 },
                 limitation = null,
