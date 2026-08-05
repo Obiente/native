@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -57,5 +58,19 @@ class DesktopSystemFolderPickerTest {
         assertEquals("/", desktopFolderPickerPath("/\n"))
         assertEquals("C:\\", desktopFolderPickerPath("C:\\\n"))
         assertNull(desktopFolderPickerPath("\n  \n"))
+    }
+
+    @Test
+    fun missingLinuxHelpersProduceAnActionableFailureInsteadOfLookingCancelled() {
+        val picker = DesktopSystemFolderPicker(
+            osName = "Linux",
+            environment = emptyMap(),
+            commandAvailable = { false },
+        )
+
+        val failure = assertFailsWith<IllegalStateException> { picker.choose(null) }
+
+        assertTrue(failure.message.orEmpty().contains("zenity or kdialog"))
+        assertTrue(failure.message.orEmpty().contains("desktop portal"))
     }
 }

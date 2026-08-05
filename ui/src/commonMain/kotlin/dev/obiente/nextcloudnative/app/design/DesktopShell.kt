@@ -17,8 +17,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -235,53 +237,56 @@ private fun NextcloudDesktopSidebar(
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
                 color = MaterialTheme.colorScheme.outlineVariant,
             )
-            Text(
-                text = "WORKSPACE",
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            DesktopNextcloudNavigationItems.forEach { item ->
-                NextcloudDesktopNavigationRow(
-                    item = item,
-                    selected = activeAppId == null && selected == item.destination,
-                    onClick = { onSelected(item.destination) },
-                )
-            }
-
-            identity?.shortcuts?.takeIf(List<NextcloudDesktopSidebarApp>::isNotEmpty)?.let { shortcuts ->
+            Column(
+                modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            ) {
                 Text(
-                    text = "PINNED",
+                    text = "WORKSPACE",
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                shortcuts.take(MAX_DESKTOP_SIDEBAR_SHORTCUTS).forEach { app ->
-                    NextcloudDesktopAppShortcutRow(
-                        app = app,
-                        selected = app.id == activeAppId,
-                        onClick = { onOpenApp(app.id) },
+                DesktopNextcloudNavigationItems.forEach { item ->
+                    NextcloudDesktopNavigationRow(
+                        item = item,
+                        selected = activeAppId == null && selected == item.destination,
+                        onClick = { onSelected(item.destination) },
                     )
                 }
-            }
 
-            identity?.recentApp
-                ?.takeIf { recent -> identity.shortcuts.none { it.id == recent.id } }
-                ?.let { recent ->
+                identity?.shortcuts?.takeIf(List<NextcloudDesktopSidebarApp>::isNotEmpty)?.let { shortcuts ->
                     Text(
-                        text = "RECENT",
+                        text = "PINNED",
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    NextcloudDesktopAppShortcutRow(
-                        app = recent,
-                        selected = recent.id == activeAppId,
-                        onClick = { onOpenApp(recent.id) },
-                    )
+                    shortcuts.take(MAX_DESKTOP_SIDEBAR_SHORTCUTS).forEach { app ->
+                        NextcloudDesktopAppShortcutRow(
+                            app = app,
+                            selected = app.id == activeAppId,
+                            onClick = { onOpenApp(app.id) },
+                        )
+                    }
                 }
 
-            Spacer(modifier = Modifier.weight(1f))
+                identity?.recentApp
+                    ?.takeIf { recent -> identity.shortcuts.none { it.id == recent.id } }
+                    ?.let { recent ->
+                        Text(
+                            text = "RECENT",
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        NextcloudDesktopAppShortcutRow(
+                            app = recent,
+                            selected = recent.id == activeAppId,
+                            onClick = { onOpenApp(recent.id) },
+                        )
+                    }
+            }
+
             identity?.let { account ->
                 if (account.syncSummary != null || account.storageLabel != null) {
                     NextcloudDesktopCloudStatus(account = account, onOpenSync = {

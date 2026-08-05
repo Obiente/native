@@ -256,14 +256,22 @@ internal fun nativeMailWorkspaceDetailTarget(
     selectedMessage: NativeMailWorkspaceItem?,
 ): NativeMailMessageRenderTarget? {
     if (selectedMessage == null) return null
-    return currentRecords.firstNotNullOfOrNull { record ->
-        nativeMailMessageRenderTarget(
-            schema = schema,
-            resource = currentResource,
-            record = record,
-            context = context,
-        )
-    } ?: nativeMailMessageRenderTarget(
+    val parentMatchesSelection = context.parentRecord?.let { parent ->
+        val parentResource = context.parentResourceId?.let(schema::resource) ?: return@let false
+        val presentation = nativeMailboxPresentation(parentResource, parent)
+        presentation.kind == NativeMailboxItemKind.Message &&
+            nativeMailWorkspaceRecordKey(parentResource, parent, presentation) ==
+            selectedMessage.nativeMailWorkspaceRecordKey()
+    } == true
+    val currentTarget = currentRecords.firstNotNullOfOrNull { record ->
+        val presentation = nativeMailboxPresentation(currentResource, record)
+        val recordMatchesSelection = presentation.kind == NativeMailboxItemKind.Message &&
+            nativeMailWorkspaceRecordKey(currentResource, record, presentation) ==
+            selectedMessage.nativeMailWorkspaceRecordKey()
+        if (!parentMatchesSelection && !recordMatchesSelection) return@firstNotNullOfOrNull null
+        nativeMailMessageRenderTarget(schema, currentResource, record, context)
+    }
+    return currentTarget ?: nativeMailMessageRenderTarget(
         schema = schema,
         resource = selectedMessage.resource,
         record = selectedMessage.record,

@@ -46,4 +46,16 @@ class AppWorkspacePresentationTest {
         assertEquals(AppWorkspaceCategory.Productivity, appWorkspaceCategory("tables"))
         assertEquals(AppWorkspaceCategory.More, appWorkspaceCategory("unknown_app"))
     }
+
+    @Test
+    fun `real Talk app id receives pinned and recent defaults`() {
+        val presentation = buildAppWorkspacePresentation(
+            apps = apps.filterNot { it.id == "talk" } + NextcloudAppEntry("spreed", "Talk", null),
+            lastOpenedAppId = null,
+        )
+
+        assertTrue(presentation.pinnedEntries.any { it.app.id == "spreed" })
+        assertTrue(presentation.recentEntries.any { it.app.id == "spreed" })
+        assertEquals("spreed", canonicalAppWorkspaceId("talk"))
+    }
 }

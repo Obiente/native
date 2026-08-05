@@ -78,6 +78,7 @@ private sealed interface CalendarLoadState {
     data object Loading : CalendarLoadState
     data class Ready(
         val month: CalendarMonth,
+        val timeWindow: GroupwareDavTimeWindow,
         val calendars: List<GroupwareCalendar>,
         val events: List<GroupwareCalendarEvent>,
     ) : CalendarLoadState
@@ -87,20 +88,30 @@ private sealed interface CalendarLoadState {
 private object CalendarWorkspaceMemoryCache {
     private val entries = linkedMapOf<String, CalendarLoadState.Ready>()
 
-    fun get(session: NextcloudSession, userId: String, month: CalendarMonth): CalendarLoadState.Ready? {
-        val key = key(session, userId, month)
+    fun get(
+        session: NextcloudSession,
+        userId: String,
+        month: CalendarMonth,
+        timeWindow: GroupwareDavTimeWindow,
+    ): CalendarLoadState.Ready? {
+        val key = key(session, userId, month, timeWindow)
         return entries.remove(key)?.also { entries[key] = it }
     }
 
     fun store(session: NextcloudSession, userId: String, value: CalendarLoadState.Ready) {
-        val key = key(session, userId, value.month)
+        val key = key(session, userId, value.month, value.timeWindow)
         entries.remove(key)
         entries[key] = value
         while (entries.size > MAXIMUM_RETAINED_CALENDAR_MONTHS) entries.remove(entries.keys.first())
     }
 
-    private fun key(session: NextcloudSession, userId: String, month: CalendarMonth): String =
-        "${session.serverUrl.trimEnd('/')}\n${session.loginName}\n$userId\n${month.year}-${month.month}"
+    private fun key(
+        session: NextcloudSession,
+        userId: String,
+        month: CalendarMonth,
+        timeWindow: GroupwareDavTimeWindow,
+    ): String = "${session.serverUrl.trimEnd('/')}\n${session.loginName}\n$userId\n" +
+        "${month.year}-${month.month}\n${timeWindow.startUtc}-${timeWindow.endUtc}"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -119,12 +130,13 @@ fun NativeGroupwareCalendarScreen(
     var viewName by rememberSaveable { mutableStateOf(CalendarWorkspaceView.Month.name) }
     val view = CalendarWorkspaceView.entries.firstOrNull { candidate -> candidate.name == viewName }
         ?: CalendarWorkspaceView.Month
+    val queryWindow = calendarWorkspaceQueryWindow(view, month, selectedDate)
     var query by rememberSaveable { mutableStateOf("") }
     var hiddenCalendarHrefs by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     var selectedEventId by rememberSaveable { mutableStateOf<String?>(null) }
     var state by remember(session, userId) {
         mutableStateOf<CalendarLoadState>(
-            CalendarWorkspaceMemoryCache.get(session, userId, month) ?: CalendarLoadState.Loading,
+            CalendarWorkspaceMemoryCache.get(session, userId, month, queryWindow) ?: CalendarLoadState.Loading,
         )
     }
     var refreshing by remember { mutableStateOf(false) }
@@ -165,9 +177,11 @@ fun NativeGroupwareCalendarScreen(
     }
 
     suspend fun reload() {
-        val cached = CalendarWorkspaceMemoryCache.get(session, userId, month)
+        val cached = CalendarWorkspaceMemoryCache.get(session, userId, month, queryWindow)
         if (cached != null) state = cached
-        val retained = cached ?: state as? CalendarLoadState.Ready
+        val retained = cached ?: (state as? CalendarLoadState.Ready)?.takeIf { ready ->
+            calendarReadyMatchesRequest(ready.month, ready.timeWindow, month, queryWindow)
+        }
         refreshError = null
         if (retained == null) {
             state = CalendarLoadState.Loading
@@ -181,22 +195,21 @@ fun NativeGroupwareCalendarScreen(
                 groupwareDavCollectionDiscoveryRequest(home),
             )
             val calendars = parseGroupwareCalendars(calendarResponse)
-            val window = GroupwareDavTimeWindow(month.compactStart, month.next().compactStart)
             val events = calendars.flatMap { calendar ->
                 val response = services.executeGroupwareDav(
                     session,
                     groupwareDavCollectionQueryRequest(
                         collectionHref = calendar.href,
                         kind = GroupwareDavKind.Event,
-                        timeWindow = window,
+                        timeWindow = queryWindow,
                     ),
                 )
                 expandGroupwareCalendarEvents(
                     parseGroupwareCalendarEvents(calendar.href, response),
-                    window,
+                    queryWindow,
                 )
             }.sortedWith(compareBy(GroupwareCalendarEvent::start, GroupwareCalendarEvent::title))
-            CalendarLoadState.Ready(month, calendars, events)
+            CalendarLoadState.Ready(month, queryWindow, calendars, events)
         }.onSuccess { loaded ->
             state = loaded
             CalendarWorkspaceMemoryCache.store(session, userId, loaded)
@@ -211,7 +224,7 @@ fun NativeGroupwareCalendarScreen(
         refreshing = false
     }
 
-    LaunchedEffect(session, userId, month, loadAttempt) { reload() }
+    LaunchedEffect(session, userId, month, queryWindow, loadAttempt) { reload() }
 
     Scaffold(
         topBar = {
@@ -250,7 +263,12 @@ fun NativeGroupwareCalendarScreen(
         Box(modifier = Modifier.fillMaxSize().padding(insets)) {
             val initialLoading = state == CalendarLoadState.Loading
             val displayed = when (val value = state) {
-                CalendarLoadState.Loading -> CalendarLoadState.Ready(month, emptyList(), emptyList())
+                CalendarLoadState.Loading -> CalendarLoadState.Ready(
+                    month,
+                    queryWindow,
+                    emptyList(),
+                    emptyList(),
+                )
                 is CalendarLoadState.Ready -> value
                 is CalendarLoadState.Error -> null
             }
@@ -530,6 +548,13 @@ fun NativeGroupwareCalendarScreen(
     }
 }
 
+internal fun calendarReadyMatchesRequest(
+    readyMonth: CalendarMonth,
+    readyWindow: GroupwareDavTimeWindow,
+    requestedMonth: CalendarMonth,
+    requestedWindow: GroupwareDavTimeWindow,
+): Boolean = readyMonth == requestedMonth && readyWindow == requestedWindow
+
 @Composable
 private fun CalendarError(message: String, retry: () -> Unit) {
     Column(
@@ -774,7 +799,6 @@ private enum class EventRecurrencePreset(
     Daily("Daily", "FREQ=DAILY"),
     Weekly("Weekly", "FREQ=WEEKLY"),
     Monthly("Monthly", "FREQ=MONTHLY"),
-    Yearly("Yearly", "FREQ=YEARLY"),
     Custom("Custom", null),
     ;
 

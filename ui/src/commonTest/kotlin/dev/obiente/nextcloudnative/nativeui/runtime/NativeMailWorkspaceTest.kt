@@ -395,6 +395,36 @@ class NativeMailWorkspaceTest {
     }
 
     @Test
+    fun `message detail never borrows body content from another envelope row`() {
+        val messages = resource("messages", "Messages")
+        val schema = schema(messages)
+        val first = message("mail-1", "personal", "inbox", "First private message").copy(
+            values = message("mail-1", "personal", "inbox", "First private message").values +
+                ("body" to "Private body from the first message"),
+        )
+        val selected = message("mail-2", "personal", "inbox", "Selected message").copy(
+            values = message("mail-2", "personal", "inbox", "Selected message").values +
+                ("body" to "Selected body"),
+        )
+        val selectedItem = NativeMailWorkspaceItem(
+            resource = messages,
+            record = selected,
+            presentation = nativeMailboxPresentation(messages, selected),
+        )
+
+        val detail = nativeMailWorkspaceDetailTarget(
+            schema = schema,
+            currentResource = messages,
+            currentRecords = listOf(first, selected),
+            context = NativeDatasetContext(),
+            selectedMessage = selectedItem,
+        )
+
+        assertEquals("mail-2", detail?.record?.id)
+        assertEquals("Selected body", detail?.presentation?.body)
+    }
+
+    @Test
     fun `message body facet keeps verified siblings from only the selected mailbox`() {
         val messages = resource("messages", "Messages")
         val body = resource("messageBody", "Message body")

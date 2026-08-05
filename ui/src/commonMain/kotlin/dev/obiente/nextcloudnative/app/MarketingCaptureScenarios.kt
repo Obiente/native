@@ -1550,6 +1550,7 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                             completedCount = 802,
                             lastScanEpochMillis = 1,
                             scheduleDescription = "Will resume when Nextcloud is reachable",
+                            networkState = FileSyncNetworkState.WaitingForNetwork,
                         ),
                     ),
                 ),

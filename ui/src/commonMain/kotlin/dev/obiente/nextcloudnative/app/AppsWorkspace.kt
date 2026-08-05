@@ -496,7 +496,10 @@ private fun AppWorkspaceInspector(
             Button(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
                 Text("Open ${entry.app.name}")
             }
-            SettingsLikeFact("Experience", if (entry.nativeWorkspace) "Dedicated native workspace" else "Verified adaptive workspace")
+            SettingsLikeFact(
+                "Experience",
+                if (entry.nativeWorkspace) "Dedicated native workspace" else "Adaptive workspace checked when opened",
+            )
             SettingsLikeFact("Account", serverInfo.displayName)
             SettingsLikeFact("Server", serverInfo.version?.let { "Nextcloud $it" } ?: "Connected")
             if (entry.pinned) SettingsLikeFact("Sidebar", "Pinned shortcut")

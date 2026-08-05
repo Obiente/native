@@ -2808,12 +2808,27 @@ private fun GenericTableCollection(
                 onSortModeChanged = { sortMode = it },
             )
             if (filteredRecords.isEmpty()) {
+                LaunchedEffect(
+                    projection.records.size,
+                    onLoadMore,
+                    loadingMore,
+                    loadMoreError,
+                ) {
+                    if (onLoadMore != null && !loadingMore && loadMoreError == null) {
+                        onLoadMore()
+                    }
+                }
                 GenericCenteredState {
                     Text("No matching records", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Clear or adjust the current search and filters to see more records.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
+                    )
+                    NativeCollectionPagingStatus(
+                        loadingMore = loadingMore,
+                        loadMoreError = loadMoreError,
+                        onRetry = onLoadMore,
                     )
                 }
             } else if (compactRecordList) {
@@ -6177,10 +6192,10 @@ private fun GenericRecordGrid(
             val interaction = onSelectRecord?.let { callback -> Modifier.clickable { callback(record) } } ?: Modifier
             val noteLike = resource.fields.any { field -> field.kind == FieldKind.longText } &&
                 presentation.colorArgb != null
-            var recordImage by remember(resource.id, record.id, recordImageLoader) {
+            var recordImage by remember(resource.id, record, recordImageLoader) {
                 mutableStateOf<NativeRecordImagePreview?>(null)
             }
-            LaunchedEffect(resource.id, record.id, recordImageLoader) {
+            LaunchedEffect(resource.id, record, recordImageLoader) {
                 recordImage = recordImageLoader?.let { loader ->
                     runCatching { loader.load(resource, record) }.getOrNull()
                 }

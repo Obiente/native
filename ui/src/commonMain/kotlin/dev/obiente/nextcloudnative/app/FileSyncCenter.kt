@@ -147,6 +147,17 @@ data class MediaSyncFolderPreview(
 const val MAX_MEDIA_SYNC_FOLDER_PREVIEW_ITEMS = 12
 const val MAX_MEDIA_PREVIEW_THUMBNAIL_BYTES = 256 * 1_024
 
+enum class FileSyncPairRunState {
+    Active,
+    Paused,
+}
+
+enum class FileSyncNetworkState {
+    Unknown,
+    Available,
+    WaitingForNetwork,
+}
+
 data class FileSyncPairSummary(
     val id: String,
     val localDisplayName: String,
@@ -162,6 +173,8 @@ data class FileSyncPairSummary(
     val lastScanEpochMillis: Long?,
     val scheduleDescription: String? = null,
     val skippedReasons: List<String> = emptyList(),
+    val runState: FileSyncPairRunState = FileSyncPairRunState.Active,
+    val networkState: FileSyncNetworkState = FileSyncNetworkState.Unknown,
 ) {
     init {
         require(id.isSafeFileSyncCenterText(256))

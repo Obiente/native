@@ -280,11 +280,11 @@ internal fun RemoteFolderPickerDialog(
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(session, userId, currentPath, loadAttempt) {
+        networkConfirmedPath = null
         val retainingCurrentPath = files != null && displayedPath == currentPath
         if (!retainingCurrentPath) {
             files = null
             listingSource = null
-            networkConfirmedPath = null
             query = ""
         }
         loading = !retainingCurrentPath

@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 class CalendarWorkspacePresentationTest {
     @Test
@@ -32,6 +33,33 @@ class CalendarWorkspacePresentationTest {
         assertEquals(
             listOf("20260727", "20260728", "20260729", "20260730", "20260731", "20260801", "20260802"),
             calendarWeekDates("20260801"),
+        )
+    }
+
+    @Test
+    fun `week query covers every displayed day across month boundaries`() {
+        val window = calendarWorkspaceQueryWindow(
+            view = CalendarWorkspaceView.Week,
+            month = CalendarMonth(2026, 8),
+            selectedDate = "20260801",
+        )
+
+        assertEquals("20260727T000000Z", window.startUtc)
+        assertEquals("20260803T000000Z", window.endUtc)
+    }
+
+    @Test
+    fun `retained calendar data must match the requested month and window`() {
+        val july = GroupwareDavTimeWindow("20260701T000000Z", "20260801T000000Z")
+        val august = GroupwareDavTimeWindow("20260801T000000Z", "20260901T000000Z")
+
+        assertFalse(
+            calendarReadyMatchesRequest(
+                readyMonth = CalendarMonth(2026, 7),
+                readyWindow = july,
+                requestedMonth = CalendarMonth(2026, 8),
+                requestedWindow = august,
+            ),
         )
     }
 

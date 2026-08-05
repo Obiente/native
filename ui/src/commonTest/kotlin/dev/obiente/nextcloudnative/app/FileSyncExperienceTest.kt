@@ -8,11 +8,11 @@ class FileSyncExperienceTest {
     fun `workspace filters represent syncing attention paused and offline states`() {
         val syncing = pair(id = "syncing", running = 2, local = "Studio archive")
         val attention = pair(id = "attention", failed = 1, local = "Client selects")
-        val paused = pair(id = "paused", skipped = 3, local = "Archive 2024")
+        val paused = pair(id = "paused", paused = true, local = "Archive 2024")
         val offline = pair(
             id = "offline",
             local = "Travel library",
-            schedule = "Offline - will resume when the network is reachable",
+            offline = true,
         )
         val pairs = listOf(syncing, attention, paused, offline)
 
@@ -20,6 +20,19 @@ class FileSyncExperienceTest {
         assertEquals(listOf("attention"), filterFileSyncPairs(pairs, FileSyncListFilter.Attention, "").map { it.id })
         assertEquals(listOf("paused"), filterFileSyncPairs(pairs, FileSyncListFilter.Paused, "").map { it.id })
         assertEquals(listOf("offline"), filterFileSyncPairs(pairs, FileSyncListFilter.Offline, "").map { it.id })
+    }
+
+    @Test
+    fun `skipped work and schedule prose do not impersonate live pair state`() {
+        val pair = pair(
+            id = "active",
+            local = "Archive",
+            skipped = 3,
+            schedule = "Runs after a network connection becomes reachable",
+        )
+
+        assertEquals(emptyList(), filterFileSyncPairs(listOf(pair), FileSyncListFilter.Paused, ""))
+        assertEquals(emptyList(), filterFileSyncPairs(listOf(pair), FileSyncListFilter.Offline, ""))
     }
 
     @Test
@@ -50,6 +63,8 @@ class FileSyncExperienceTest {
         failed: Int = 0,
         skipped: Int = 0,
         schedule: String? = null,
+        paused: Boolean = false,
+        offline: Boolean = false,
     ): FileSyncPairSummary = FileSyncPairSummary(
         id = id,
         localDisplayName = local,
@@ -66,5 +81,7 @@ class FileSyncExperienceTest {
         skippedCount = skipped,
         lastScanEpochMillis = null,
         scheduleDescription = schedule,
+        runState = if (paused) FileSyncPairRunState.Paused else FileSyncPairRunState.Active,
+        networkState = if (offline) FileSyncNetworkState.WaitingForNetwork else FileSyncNetworkState.Available,
     )
 }

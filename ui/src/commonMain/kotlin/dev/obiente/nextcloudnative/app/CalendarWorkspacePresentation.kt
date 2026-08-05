@@ -49,6 +49,25 @@ internal fun calendarWeekDates(selectedDate: String): List<String> {
     return (0..6).map { offset -> monday.plusDays(offset).compactValue }
 }
 
+internal fun calendarWorkspaceQueryWindow(
+    view: CalendarWorkspaceView,
+    month: CalendarMonth,
+    selectedDate: String,
+): GroupwareDavTimeWindow {
+    if (view != CalendarWorkspaceView.Week) {
+        return GroupwareDavTimeWindow(month.compactStart, month.next().compactStart)
+    }
+    val week = calendarWeekDates(selectedDate)
+    val first = week.firstOrNull()?.parseCompactCalendarDate()
+        ?: return GroupwareDavTimeWindow(month.compactStart, month.next().compactStart)
+    val endExclusive = week.last().parseCompactCalendarDate()?.plusDays(1)
+        ?: return GroupwareDavTimeWindow(month.compactStart, month.next().compactStart)
+    return GroupwareDavTimeWindow(
+        startUtc = "${first.compactValue}T000000Z",
+        endUtc = "${endExclusive.compactValue}T000000Z",
+    )
+}
+
 internal data class CalendarWorkspaceDate(
     val year: Int,
     val month: Int,

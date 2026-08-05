@@ -462,12 +462,10 @@ internal fun filterFileSyncPairs(
 }
 
 private fun FileSyncPairSummary.isFileSyncPaused(): Boolean =
-    skippedCount > 0 && runningCount == 0
+    runState == FileSyncPairRunState.Paused
 
-private fun FileSyncPairSummary.isFileSyncOffline(): Boolean {
-    val schedule = scheduleDescription.orEmpty().lowercase()
-    return runningCount == 0 && listOf("offline", "network", "reachable", "connection").any(schedule::contains)
-}
+private fun FileSyncPairSummary.isFileSyncOffline(): Boolean =
+    networkState == FileSyncNetworkState.WaitingForNetwork
 
 private fun FileSyncDirection.fileSyncDirectionIcon() = when (this) {
     FileSyncDirection.Bidirectional -> NextcloudIcons.Refresh
@@ -978,12 +976,13 @@ private fun FileSyncHealthIndicator(pair: FileSyncPairSummary) {
 @Composable
 private fun FileSyncHealthBadge(pair: FileSyncPairSummary, modifier: Modifier = Modifier) {
     val attention = pair.failedCount > 0 || pair.conflicts.isNotEmpty()
-    val paused = pair.skippedCount > 0
+    val paused = pair.isFileSyncPaused()
     val label = when {
         attention -> "Attention"
         pair.runningCount > 0 -> "Syncing"
         pair.readyCount > 0 -> "Ready"
         paused -> "Paused"
+        pair.skippedCount > 0 -> "Skipped"
         else -> "Up to date"
     }
     Surface(
@@ -992,6 +991,7 @@ private fun FileSyncHealthBadge(pair: FileSyncPairSummary, modifier: Modifier = 
             attention -> MaterialTheme.colorScheme.errorContainer
             pair.runningCount > 0 -> MaterialTheme.colorScheme.primaryContainer
             paused -> MaterialTheme.colorScheme.tertiaryContainer
+            pair.skippedCount > 0 -> MaterialTheme.colorScheme.surfaceContainerHighest
             else -> MaterialTheme.colorScheme.secondaryContainer
         },
         shape = RoundedCornerShape(999.dp),
@@ -1004,6 +1004,7 @@ private fun FileSyncHealthBadge(pair: FileSyncPairSummary, modifier: Modifier = 
                 attention -> MaterialTheme.colorScheme.onErrorContainer
                 pair.runningCount > 0 -> MaterialTheme.colorScheme.onPrimaryContainer
                 paused -> MaterialTheme.colorScheme.onTertiaryContainer
+                pair.skippedCount > 0 -> MaterialTheme.colorScheme.onSurface
                 else -> MaterialTheme.colorScheme.onSecondaryContainer
             },
             maxLines = 1,
@@ -1068,7 +1069,14 @@ private fun FileSyncDesktopStatusBar(pair: FileSyncPairSummary?) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             FileSyncDesktopStatusItem("Sync engine", if (pair?.runningCount.orZero() > 0) "Running" else "Ready")
-            FileSyncDesktopStatusItem("Network", if (pair?.isFileSyncOffline() == true) "Offline" else "Connected")
+            FileSyncDesktopStatusItem(
+                "Network",
+                when (pair?.networkState) {
+                    FileSyncNetworkState.Available -> "Connected"
+                    FileSyncNetworkState.WaitingForNetwork -> "Offline"
+                    FileSyncNetworkState.Unknown, null -> "Unknown"
+                },
+            )
             FileSyncDesktopStatusItem("Nextcloud", "Connected")
             Spacer(Modifier.weight(1f))
             pair?.let {

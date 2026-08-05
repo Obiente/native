@@ -58,6 +58,34 @@ class DynamicRecordImagePreviewTest {
     }
 
     @Test
+    fun `record generation invalidates a stable preview endpoint`() {
+        val descriptor = compile(PHOTO_CONTRACT, OpenApiTrust.nextcloudSignedAppPackage)
+        val nativeResource = descriptor.toNativeAppSchema().resources.single { it.id == "photos" }
+        val discovery = DynamicDescriptorDiscovery(
+            descriptor = descriptor,
+            sourcePath = "/contract.json",
+            acquisition = DynamicDescriptorAcquisition.SignedAppStorePackage,
+        )
+        fun request(etag: String) = assertNotNull(
+            nativeRecordImageRequest(
+                discovery = discovery,
+                resource = nativeResource,
+                record = NativeRecord(
+                    id = "91",
+                    values = mapOf("id" to "91", "houseId" to "7", "etag" to etag),
+                    bindingContext = mapOf("houseId" to "7"),
+                ),
+            ),
+        )
+
+        val first = request("v1")
+        val refreshed = request("v2")
+
+        assertEquals(first.request.relativePath, refreshed.request.relativePath)
+        assertFalse(first.cacheKey == refreshed.cacheKey)
+    }
+
+    @Test
     fun `untrusted or ambiguous binary reads never enable record image loading`() {
         val untrusted = compile(PHOTO_CONTRACT, OpenApiTrust.sameOriginAdvertisement)
         assertNull(untrusted.resources.single { it.id == "photos" }.recordImagePreview)

@@ -36,13 +36,13 @@ internal fun buildAppWorkspacePresentation(
     val installed = apps
         .asSequence()
         .filterNot { it.id == "dashboard" }
-        .distinctBy(NextcloudAppEntry::id)
+        .distinctBy { app -> canonicalAppWorkspaceId(app.id) }
         .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
         .toList()
-    val installedIds = installed.mapTo(linkedSetOf(), NextcloudAppEntry::id)
+    val installedIds = installed.mapTo(linkedSetOf()) { app -> canonicalAppWorkspaceId(app.id) }
     val pinnedIds = APP_WORKSPACE_PINNED_IDS.filterTo(linkedSetOf()) { it in installedIds }
     val recentIds = buildList {
-        lastOpenedAppId?.takeIf(installedIds::contains)?.let(::add)
+        lastOpenedAppId?.let(::canonicalAppWorkspaceId)?.takeIf(installedIds::contains)?.let(::add)
         APP_WORKSPACE_RECENT_FALLBACK_IDS.forEach { id ->
             if (id in installedIds && id !in this) add(id)
         }
@@ -52,9 +52,9 @@ internal fun buildAppWorkspacePresentation(
             app = app,
             category = appWorkspaceCategory(app.id),
             description = appWorkspaceDescription(app.id),
-            nativeWorkspace = app.id in APP_WORKSPACE_NATIVE_IDS,
-            pinned = app.id in pinnedIds,
-            recent = app.id in recentIds,
+            nativeWorkspace = canonicalAppWorkspaceId(app.id) in APP_WORKSPACE_NATIVE_IDS,
+            pinned = canonicalAppWorkspaceId(app.id) in pinnedIds,
+            recent = canonicalAppWorkspaceId(app.id) in recentIds,
         )
     }
     val normalizedQuery = query.trim()
@@ -70,7 +70,7 @@ internal fun buildAppWorkspacePresentation(
     return AppWorkspacePresentation(
         entries = filtered,
         recentEntries = allEntries.filter(AppWorkspaceEntry::recent)
-            .sortedBy { entry -> recentIds.indexOf(entry.app.id) },
+            .sortedBy { entry -> recentIds.indexOf(canonicalAppWorkspaceId(entry.app.id)) },
         pinnedEntries = allEntries.filter(AppWorkspaceEntry::pinned),
         visibleCategories = AppWorkspaceCategory.entries.filter { candidate ->
             candidate == AppWorkspaceCategory.All || allEntries.any { it.category == candidate }
@@ -120,13 +120,17 @@ private fun Set<String>.indexOf(value: String): Int = indexOfFirst { it == value
     if (index < 0) Int.MAX_VALUE else index
 }
 
-private val APP_WORKSPACE_PINNED_IDS = listOf("files", "photos", "talk", "calendar")
-private val APP_WORKSPACE_RECENT_FALLBACK_IDS = listOf("files", "talk", "calendar")
+internal fun canonicalAppWorkspaceId(appId: String): String = when (appId.lowercase()) {
+    "talk" -> "spreed"
+    else -> appId.lowercase()
+}
+
+private val APP_WORKSPACE_PINNED_IDS = listOf("files", "photos", "spreed", "calendar")
+private val APP_WORKSPACE_RECENT_FALLBACK_IDS = listOf("files", "spreed", "calendar")
 private val APP_WORKSPACE_NATIVE_IDS = setOf(
     "files",
     "photos",
     "memories",
-    "talk",
     "spreed",
     "mail",
     "calendar",

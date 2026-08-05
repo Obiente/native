@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -68,6 +69,17 @@ internal data class SettingsWorkspaceSummary(
     val storageLabel: String? = null,
 )
 
+internal data class SettingsWorkspaceLayout(
+    val categoryWidthDp: Int,
+    val showSummaryPane: Boolean,
+)
+
+internal fun resolveSettingsWorkspaceLayout(availableWidthDp: Int): SettingsWorkspaceLayout =
+    SettingsWorkspaceLayout(
+        categoryWidthDp = if (availableWidthDp < 820) 206 else 246,
+        showSummaryPane = availableWidthDp >= 1_020,
+    )
+
 @Composable
 internal fun DesktopSettingsWorkspace(
     summary: SettingsWorkspaceSummary,
@@ -104,43 +116,49 @@ internal fun DesktopSettingsWorkspace(
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Row(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier.width(246.dp).fillMaxHeight().padding(NextcloudSpacing.Medium),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                Text(
-                    "SETTINGS",
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                SettingsWorkspaceSection.entries.forEach { section ->
-                    SettingsSectionRow(
-                        section = section,
-                        selected = section == selected,
-                        onClick = { selectedName = section.name },
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val layout = resolveSettingsWorkspaceLayout(maxWidth.value.toInt())
+            Row(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier.width(layout.categoryWidthDp.dp).fillMaxHeight()
+                        .verticalScroll(rememberScrollState()).padding(NextcloudSpacing.Medium),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        "SETTINGS",
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    SettingsWorkspaceSection.entries.forEach { section ->
+                        SettingsSectionRow(
+                            section = section,
+                            selected = section == selected,
+                            onClick = { selectedName = section.name },
+                        )
+                    }
+                }
+                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Column(
+                    modifier = Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())
+                        .padding(NextcloudSpacing.Large),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                ) {
+                    Text(selected.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        selected.description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    content(selected)
+                    Spacer(Modifier.height(NextcloudSpacing.Large))
+                }
+                if (layout.showSummaryPane) {
+                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    SettingsSummaryPane(summary = summary, modifier = Modifier.width(286.dp).fillMaxHeight())
                 }
             }
-            VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Column(
-                modifier = Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())
-                    .padding(NextcloudSpacing.Large),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-            ) {
-                Text(selected.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                Text(
-                    selected.description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(2.dp))
-                content(selected)
-                Spacer(Modifier.height(NextcloudSpacing.Large))
-            }
-            VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            SettingsSummaryPane(summary = summary, modifier = Modifier.width(286.dp).fillMaxHeight())
         }
     }
 }

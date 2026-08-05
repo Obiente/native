@@ -29,16 +29,28 @@ internal class DesktopSystemFolderPicker(
     private val runCommand: (DesktopFolderPickerCommand) -> String? = ::runDesktopFolderPickerCommand,
 ) {
     fun choose(initialDirectory: File?): File? {
+        val platform = desktopFolderPickerPlatform(osName)
         val command = desktopFolderPickerCommand(
-            platform = desktopFolderPickerPlatform(osName),
+            platform = platform,
             environment = environment,
             initialDirectory = initialDirectory,
             commandAvailable = commandAvailable,
-        ) ?: return null
+        ) ?: throw IllegalStateException(desktopFolderPickerUnavailableMessage(platform))
         return runCommand(command)
             ?.let(::desktopFolderPickerPath)
             ?.let(::File)
     }
+}
+
+internal fun desktopFolderPickerUnavailableMessage(platform: DesktopFolderPickerPlatform): String = when (platform) {
+    DesktopFolderPickerPlatform.Linux ->
+        "No native folder picker is available. Install zenity or kdialog and make sure your desktop portal is running."
+    DesktopFolderPickerPlatform.MacOs ->
+        "The macOS folder picker is unavailable because osascript could not be found."
+    DesktopFolderPickerPlatform.Windows ->
+        "The Windows folder picker is unavailable because PowerShell could not be found."
+    DesktopFolderPickerPlatform.Unsupported ->
+        "This operating system does not provide a supported native folder picker."
 }
 
 internal fun desktopFolderPickerPlatform(osName: String): DesktopFolderPickerPlatform = when {

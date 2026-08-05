@@ -76,6 +76,7 @@ internal fun nativeRecordImageRequest(
             appId = discovery.descriptor.app.id,
             actionId = action.id,
             recordId = record.id,
+            recordGeneration = nativeRecordImageGeneration(record),
             request = request,
         ),
         contentDescription = resource.recordImageContentDescription(record),
@@ -126,13 +127,30 @@ private fun stableNativeRecordImageCacheKey(
     appId: String,
     actionId: String,
     recordId: String,
+    recordGeneration: String,
     request: NextcloudApiRequest,
-): String = listOf(appId, actionId, recordId)
+): String = listOf(appId, actionId, recordId, recordGeneration)
     .joinToString(":") { value ->
         value.filter { character -> character.isLetterOrDigit() || character in setOf('-', '_', '.') }
             .take(MAX_DYNAMIC_RECORD_IMAGE_CACHE_PART_CHARS)
             .ifBlank { "unknown" }
     } + ":" + request.dynamicReadCacheIdentity()
+
+internal fun nativeRecordImageGeneration(record: NativeRecord): String {
+    val explicitGeneration = record.values.entries.firstNotNullOfOrNull { (key, value) ->
+        value?.takeIf {
+            key.lowercase().filter(Char::isLetterOrDigit) in NATIVE_RECORD_IMAGE_GENERATION_FIELDS
+        }
+    }
+    if (explicitGeneration != null) return explicitGeneration
+    val authoritativeFingerprint = record.values.entries
+        .sortedBy(Map.Entry<String, String?>::key)
+        .joinToString("\u001f") { (key, value) -> "$key\u001e${value.orEmpty()}" }
+        .hashCode()
+        .toUInt()
+        .toString(16)
+    return "record-$authoritativeFingerprint"
+}
 
 internal fun String?.isSupportedDynamicRecordImageContentType(): Boolean =
     this?.substringBefore(';')?.trim()?.lowercase()?.let { type ->
@@ -151,3 +169,12 @@ internal const val MAX_DYNAMIC_RECORD_IMAGE_BYTES: Long = DEFAULT_DYNAMIC_API_RE
 private const val MAX_DYNAMIC_RECORD_IMAGE_DESCRIPTION_CHARS = 512
 private const val MAX_DYNAMIC_RECORD_IMAGE_CACHE_PART_CHARS = 128
 private const val MAX_DYNAMIC_RECORD_IMAGE_CONTENT_TYPE_CHARS = 128
+private val NATIVE_RECORD_IMAGE_GENERATION_FIELDS = setOf(
+    "etag",
+    "generation",
+    "version",
+    "mtime",
+    "modified",
+    "lastmodified",
+    "updatedat",
+)

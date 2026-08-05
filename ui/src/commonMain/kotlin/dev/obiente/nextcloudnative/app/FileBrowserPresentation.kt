@@ -67,7 +67,9 @@ private fun fileComparator(
 ): Comparator<NextcloudFile> {
     val valueComparator = when (mode) {
         FileSortMode.Name -> compareBy<NextcloudFile, String>(String.CASE_INSENSITIVE_ORDER) { it.name }
-        FileSortMode.Modified -> compareBy<NextcloudFile, String?>(nullsLast()) { it.lastModified }
+        FileSortMode.Modified -> compareBy<NextcloudFile, Long?>(nullsLast()) { file ->
+            file.lastModified?.let(::parseDavMediaSearchTimestamp)
+        }
         FileSortMode.Size -> compareBy<NextcloudFile, Long?>(nullsLast()) { it.size }
     }.let { if (direction == FileSortDirection.Descending) it.reversed() else it }
     return compareByDescending<NextcloudFile> { it.isDirectory }

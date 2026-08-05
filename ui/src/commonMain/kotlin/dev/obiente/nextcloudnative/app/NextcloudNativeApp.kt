@@ -292,17 +292,103 @@ private val navigationStateJson = Json {
     encodeDefaults = true
 }
 
+@Serializable
+private data class SavedScreen(
+    val kind: String,
+    val path: String? = null,
+    val appId: String? = null,
+    val appName: String? = null,
+    val appNavigation: SavedDynamicAppNavigationState? = null,
+    val serverVersion: String? = null,
+    val installedAppVersion: String? = null,
+)
+
+@Serializable
+private data class SavedDynamicAppNavigationState(
+    val selectedViewId: String? = null,
+    val selectedRecordId: String? = null,
+    val selectedRecordResourceId: String? = null,
+    val pathParameterValues: Map<String, String> = emptyMap(),
+)
+
+private fun Screen.toSavedScreen(): SavedScreen = when (this) {
+    Screen.Root -> SavedScreen("root")
+    Screen.Search -> SavedScreen("search")
+    is Screen.Files -> SavedScreen("files", path = path.take(MAX_SAVED_FILE_PATH_CHARS))
+    Screen.Media, is Screen.PersonMedia, is Screen.MediaViewer -> SavedScreen("media")
+    Screen.Talk, is Screen.Chat -> SavedScreen("talk")
+    Screen.Notes, is Screen.NoteEditor -> SavedScreen("notes")
+    Screen.Dashboard -> SavedScreen("dashboard")
+    Screen.UserStatus -> SavedScreen("user-status")
+    Screen.Calendar -> SavedScreen("calendar")
+    Screen.Contacts -> SavedScreen("contacts")
+    Screen.Deck -> SavedScreen("deck")
+    Screen.AdminApps -> SavedScreen("admin-apps")
+    Screen.OfflineCenter -> SavedScreen("offline-center")
+    Screen.Transfers -> SavedScreen("transfers")
+    Screen.ProjectNews, is Screen.ProjectNewsArticleView -> SavedScreen("project-news")
+    is Screen.AppInfo -> SavedScreen(
+        kind = "app-info",
+        appId = app.id.take(MAX_SAVED_APP_ID_CHARS),
+        appName = app.name.take(MAX_SAVED_APP_NAME_CHARS),
+        appNavigation = navigation.toSavedDynamicAppNavigationState(),
+        serverVersion = lastKnownServerVersion?.take(MAX_SAVED_VERSION_CHARS),
+        installedAppVersion = lastKnownInstalledAppVersion?.take(MAX_SAVED_VERSION_CHARS),
+    )
+    is Screen.FileInfo -> SavedScreen("files", path = parentPath.take(MAX_SAVED_FILE_PATH_CHARS))
+    is Screen.DocumentPreview -> SavedScreen("files", path = parentPath.take(MAX_SAVED_FILE_PATH_CHARS))
+    is Screen.TextEditor -> SavedScreen("files", path = parentPath.take(MAX_SAVED_FILE_PATH_CHARS))
+}
+
+private fun SavedScreen.toScreen(): Screen = when (kind) {
+    "root" -> Screen.Root
+    "search" -> Screen.Search
+    "files" -> Screen.Files(path.orEmpty().take(MAX_SAVED_FILE_PATH_CHARS))
+    "media" -> Screen.Media
+    "talk" -> Screen.Talk
+    "notes" -> Screen.Notes
+    "dashboard" -> Screen.Dashboard
+    "user-status" -> Screen.UserStatus
+    "calendar" -> Screen.Calendar
+    "contacts" -> Screen.Contacts
+    "deck" -> Screen.Deck
+    "admin-apps" -> Screen.AdminApps
+    "offline-center" -> Screen.OfflineCenter
+    "transfers" -> Screen.Transfers
+    "project-news" -> Screen.ProjectNews
+    "app-info" -> {
+        val restoredAppId = appId?.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_APP_ID_CHARS) }
+        if (restoredAppId == null) {
+            Screen.Root
+        } else {
+            Screen.AppInfo(
+                app = NextcloudAppEntry(
+                    id = restoredAppId,
+                    name = appName?.filterNot(Char::isISOControl)?.take(MAX_SAVED_APP_NAME_CHARS)
+                        ?.takeIf(String::isNotBlank) ?: restoredAppId,
+                    href = null,
+                ),
+                navigation = appNavigation?.toDynamicAppNavigationState() ?: DynamicAppNavigationState(),
+                lastKnownServerVersion = serverVersion?.take(MAX_SAVED_VERSION_CHARS),
+                lastKnownInstalledAppVersion = installedAppVersion?.take(MAX_SAVED_VERSION_CHARS),
+            )
+        }
+    }
+    else -> Screen.Root
+}
+
 private val screenSaver = Saver<Screen, String>(
-    save = { screen -> navigationStateJson.encodeToString(screen) },
+    save = { screen -> navigationStateJson.encodeToString(screen.toSavedScreen()) },
     restore = { encoded ->
-        runCatching { navigationStateJson.decodeFromString<Screen>(encoded) }.getOrDefault(Screen.Root)
+        runCatching { navigationStateJson.decodeFromString<SavedScreen>(encoded).toScreen() }
+            .getOrDefault(Screen.Root)
     },
 )
 
 @Serializable
 private data class SavedAppWorkspaceNavigation(
     val activeAppId: String? = null,
-    val lastScreenByApp: Map<String, Screen> = emptyMap(),
+    val lastScreenByApp: Map<String, SavedScreen> = emptyMap(),
 )
 
 private val appWorkspaceNavigationSaver = Saver<AppWorkspaceNavigationMemory<Screen>, String>(
@@ -310,7 +396,7 @@ private val appWorkspaceNavigationSaver = Saver<AppWorkspaceNavigationMemory<Scr
         navigationStateJson.encodeToString(
             SavedAppWorkspaceNavigation(
                 activeAppId = memory.activeAppId,
-                lastScreenByApp = memory.lastStateByApp,
+                lastScreenByApp = memory.lastStateByApp.mapValues { (_, screen) -> screen.toSavedScreen() },
             ),
         )
     },
@@ -319,15 +405,24 @@ private val appWorkspaceNavigationSaver = Saver<AppWorkspaceNavigationMemory<Scr
             navigationStateJson.decodeFromString<SavedAppWorkspaceNavigation>(encoded)
         }.map { saved ->
             AppWorkspaceNavigationMemory(
-                activeAppId = saved.activeAppId,
+                activeAppId = saved.activeAppId
+                    ?.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_APP_ID_CHARS) },
                 lastStateByApp = saved.lastScreenByApp.entries
+                    .filter { (appId, _) ->
+                        appId.isSafeSavedDynamicNavigationValue(MAX_SAVED_APP_ID_CHARS)
+                    }
                     .toList()
                     .takeLast(MAX_REMEMBERED_APP_WORKSPACES)
-                    .associate { it.toPair() },
+                    .associate { (appId, savedScreen) -> appId to savedScreen.toScreen() },
             )
         }.getOrDefault(AppWorkspaceNavigationMemory())
     },
 )
+
+private const val MAX_SAVED_FILE_PATH_CHARS = 2_048
+private const val MAX_SAVED_APP_ID_CHARS = 128
+private const val MAX_SAVED_APP_NAME_CHARS = 256
+private const val MAX_SAVED_VERSION_CHARS = 128
 
 internal data class DynamicContractResumePlan(
     val serverVersion: String?,
@@ -4899,6 +4994,43 @@ private data class DynamicAppNavigationState(
     val history: List<SavedDynamicNavigationSnapshot> = emptyList(),
 )
 
+private fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedDynamicAppNavigationState {
+    val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty()
+    val savedRecordId = selectedRecord?.id?.takeIf { value ->
+        value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_RECORD_ID_CHARS)
+    }
+    return SavedDynamicAppNavigationState(
+        selectedViewId = selectedViewId?.takeIf { value ->
+            value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)
+        },
+        selectedRecordId = savedRecordId,
+        selectedRecordResourceId = selectedRecordResourceId?.takeIf { value ->
+            savedRecordId != null &&
+                value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)
+        },
+        pathParameterValues = savedParameters,
+    )
+}
+
+private fun SavedDynamicAppNavigationState.toDynamicAppNavigationState(): DynamicAppNavigationState {
+    val restoredRecordId = selectedRecordId?.takeIf { value ->
+        value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_RECORD_ID_CHARS)
+    }
+    return DynamicAppNavigationState(
+        selectedViewId = selectedViewId?.takeIf { value ->
+            value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)
+        },
+        selectedRecord = restoredRecordId?.let { recordId ->
+            NativeRecord(id = recordId, values = emptyMap(), actionSafeIdentity = false)
+        },
+        selectedRecordResourceId = selectedRecordResourceId?.takeIf { value ->
+            restoredRecordId != null &&
+                value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)
+        },
+        pathParameterValues = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty(),
+    )
+}
+
 internal fun saveDynamicNavigationHistory(
     history: List<DynamicNavigationSnapshot>,
 ): List<SavedDynamicNavigationSnapshot> = history
@@ -6050,6 +6182,19 @@ private fun FilesScreen(
             .onFailure { favoriteError = it.message ?: "Could not load favorites." }
         favoriteLoading = false
     }
+    val globalOfflineFiles = when {
+        searchScope == FileSearchScope.AllFiles -> searchResults.orEmpty()
+        workspaceFilter == FileWorkspaceFilter.Favorites -> favoriteResults.orEmpty()
+        else -> emptyList()
+    }
+    LaunchedEffect(userId, services.supportsFileOfflineStorage, globalOfflineFiles) {
+        if (userId == null || !services.supportsFileOfflineStorage || globalOfflineFiles.isEmpty()) {
+            return@LaunchedEffect
+        }
+        runCatching { services.loadFileOfflineAvailability(session, userId, globalOfflineFiles) }
+            .onSuccess { loaded -> offlineAvailability = offlineAvailability + loaded }
+            .onFailure { offlineError = it.message ?: "Could not read offline file status." }
+    }
     LaunchedEffect(mutationNotice) {
         if (mutationNotice != null) {
             delay(3_500)
@@ -6076,11 +6221,13 @@ private fun FilesScreen(
             FileOfflineAvailability.WaitingForNetwork,
         )
     }
-    LaunchedEffect(path, userId, offlineWorkPending) {
+    val trackedOfflineFiles = (files.orEmpty() + searchResults.orEmpty() + favoriteResults.orEmpty())
+        .distinctBy(NextcloudFile::path)
+    LaunchedEffect(path, userId, offlineWorkPending, trackedOfflineFiles) {
         if (!offlineWorkPending || userId == null || !services.supportsFileOfflineStorage) return@LaunchedEffect
         while (true) {
             delay(800)
-            val loaded = files ?: break
+            val loaded = trackedOfflineFiles.takeIf { candidates -> candidates.isNotEmpty() } ?: break
             val refreshed = runCatching {
                 services.loadFileOfflineAvailability(session, userId, loaded)
             }.getOrElse {
@@ -6262,6 +6409,16 @@ private fun FilesScreen(
         }
     }
 
+    fun openFolderFromWorkspace(folderPath: String) {
+        searchScope = FileSearchScope.CurrentFolder
+        workspaceFilter = FileWorkspaceFilter.All
+        filterQuery = ""
+        searchResults = null
+        favoriteResults = null
+        selectedFilePath = null
+        onOpenFolder(folderPath)
+    }
+
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         mutationNotice?.let { notice ->
             Surface(
@@ -6433,7 +6590,7 @@ private fun FilesScreen(
                     userId = userId,
                     selectedFile = selectedFile,
                     onSelectedFileChanged = { selectedFilePath = it?.path },
-                    onOpenPath = onOpenFolder,
+                    onOpenPath = ::openFolderFromWorkspace,
                     onOpenFile = { onOpenFile(it, visibleFiles) },
                     onCreate = {
                         creationKind = FileCreationKind.Folder
@@ -11503,15 +11660,27 @@ private fun SettingsScreen(
                                 enabled = !loggingOut,
                                 onClick = {
                                     loggingOut = true
+                                    logoutError = null
                                     scope.launch {
                                         runCatching { services.revokeSession(session) }
-                                        onLoggedOut()
+                                        runCatching { onLoggedOut() }
+                                            .onFailure { failure ->
+                                                logoutError = logoutCleanupFailureMessage(failure)
+                                                loggingOut = false
+                                            }
                                     }
                                 },
                             ) {
                                 Icon(NextcloudIcons.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.size(8.dp))
                                 Text(if (loggingOut) "Signing out..." else "Sign out and revoke access")
+                            }
+                            logoutError?.let { message ->
+                                Text(
+                                    message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
                             }
                         }
                     }
