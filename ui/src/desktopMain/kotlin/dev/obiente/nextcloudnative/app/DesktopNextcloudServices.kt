@@ -2435,19 +2435,22 @@ class DesktopNextcloudServices(
                 linuxVirtualMetadataBackend = null
                 linuxVirtualFileMountIdentity = null
                 linuxVirtualFileFailure = null
+                val windowsCloudFilesFailureMessage = "Could not remove the Windows Cloud Files root."
+                val provider = windowsCloudFilesProvider
                 try {
-                    if (windowsCloudFilesProvider != null) {
-                        windowsCloudFilesProvider?.removeSyncRoot()
+                    if (provider != null) {
+                        provider.removeSyncRoot()
                         preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
                     } else if (isWindowsDesktop()) {
                         unregisterWindowsCloudFilesRootForUninstall(preferences)
                     }
-                    windowsCloudFilesProvider = null
-                    windowsCloudFilesIdentity = null
                     windowsCloudFilesFailure = null
                 } catch (failure: Throwable) {
-                    windowsCloudFilesFailure = failure.message ?: "Could not remove the Windows Cloud Files root."
-                    throw failure
+                    windowsCloudFilesFailure = failure.message ?: windowsCloudFilesFailureMessage
+                } finally {
+                    runCatching { provider?.close() }
+                    windowsCloudFilesProvider = null
+                    windowsCloudFilesIdentity = null
                 }
             }
             mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
