@@ -25,7 +25,7 @@ for (const route of serverEntry.routes) {
 }
 
 const baseUrl = "https://nc-native.obiente.dev";
-const sitemap = buildSitemap(serverEntry.routes, serverEntry.newsEntries, baseUrl);
+const sitemap = buildSitemap(serverEntry.routes, serverEntry.sitemapEntries, baseUrl);
 await writeFile(path.join(root, "dist", "sitemap.xml"), sitemap);
 const rss = buildRss(serverEntry.newsEntries, baseUrl);
 await writeFile(path.join(root, "dist", "news.xml"), rss);

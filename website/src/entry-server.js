@@ -243,3 +243,14 @@ export const routes = [
   ...docs.map((doc) => doc.path),
 ];
 export const newsEntries = news;
+const latestModification = (entries) => entries
+  .map((entry) => entry.lastUpdated)
+  .filter(Boolean)
+  .sort()
+  .at(-1);
+export const sitemapEntries = [
+  ...news,
+  ...guides,
+  { path: "/news/", lastUpdated: latestModification(news) },
+  { path: "/guides/", lastUpdated: latestModification(guides) },
+];
