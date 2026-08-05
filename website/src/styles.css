@@ -4636,14 +4636,18 @@ h1 span {
 
   .mobile-nav {
     grid-column: 1 / -1;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 6px;
+    display: block;
     padding: 8px 0 14px;
     border-top: 1px solid var(--outline);
   }
 
-  .mobile-nav a {
+  .mobile-nav-primary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .mobile-nav-primary > a {
     min-height: 44px;
     display: flex;
     align-items: center;
@@ -4654,16 +4658,80 @@ h1 span {
     font-weight: 650;
   }
 
-  .mobile-nav a:hover,
-  .mobile-nav a:focus-visible {
+  .mobile-nav-primary > a:hover,
+  .mobile-nav-primary > a:focus-visible {
     background: var(--surface-low);
     color: var(--text);
+  }
+
+  .mobile-nav-tools {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 12px;
+    border-top: 1px solid var(--outline);
+  }
+
+  .mobile-nav-tools > a,
+  .mobile-nav-tools > button {
+    min-width: 0;
+    min-height: 52px;
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border: 1px solid var(--outline);
+    border-radius: 10px;
+    background: var(--surface-low);
+    color: var(--muted);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .mobile-nav-tools > a:hover,
+  .mobile-nav-tools > a:focus-visible,
+  .mobile-nav-tools > button:hover,
+  .mobile-nav-tools > button:focus-visible {
+    border-color: var(--outline-strong);
+    color: var(--text);
+  }
+
+  .mobile-nav-tools svg {
+    color: var(--primary);
+  }
+
+  .mobile-nav-tools span {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .mobile-nav-tools small,
+  .mobile-nav-tools strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-nav-tools small {
+    color: var(--text-subtle);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .mobile-nav-tools strong {
+    color: var(--text);
+    font-size: 12px;
   }
 }
 
 @media (max-width: 760px) {
   .guide-home-section {
-    padding-block: 78px;
+    padding-block: 68px;
   }
 
   .guide-section-heading,
@@ -4690,24 +4758,38 @@ h1 span {
   }
 
   .guides-index {
-    padding-block: 54px 90px;
+    padding-block: 42px 76px;
   }
 
   .guides-index-heading,
   .guide-page-heading {
-    gap: 28px;
+    gap: 24px;
   }
 
   .guides-index-heading h1,
   .guide-page-heading h1 {
-    font-size: clamp(42px, 13vw, 62px);
+    font-size: clamp(40px, 12vw, 54px);
+    line-height: 1;
+  }
+
+  .guides-index-heading > div:first-child > p:last-child,
+  .guide-page-heading > div:first-child > p:last-child {
+    margin-top: 18px;
+    font-size: 16px;
+    line-height: 1.55;
   }
 
   .guides-index-summary {
     width: 100%;
-    padding: 20px 0 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 16px;
+    padding: 18px 0 0;
     border-top: 1px solid var(--outline);
     border-left: 0;
+  }
+
+  .guides-index-summary span:last-child {
+    grid-column: 1 / -1;
   }
 
   .guides-featured-grid {
@@ -4715,7 +4797,16 @@ h1 span {
   }
 
   .guide-index-media {
-    height: min(62vw, 350px);
+    height: auto;
+    aspect-ratio: 16 / 10;
+  }
+
+  .guide-index-copy {
+    padding: 22px;
+  }
+
+  .guide-index-copy h2 {
+    font-size: 24px;
   }
 
   .guide-page {
@@ -4769,43 +4860,68 @@ h1 span {
   }
 
   .site-header {
+    position: sticky;
+    z-index: 60;
+    top: 0;
+    width: 100%;
+    min-height: 64px;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 12px;
+    gap: 10px;
+    padding-inline: 14px;
+    background: color-mix(in srgb, var(--background) 92%, transparent);
+    backdrop-filter: blur(18px);
   }
 
   .brand {
     min-width: 0;
+    gap: 9px;
+  }
+
+  .brand-mark {
+    width: 36px;
+    height: 36px;
+  }
+
+  .brand-mark::before {
+    width: 26px;
+    height: 26px;
+  }
+
+  .brand-copy small {
+    display: none;
+  }
+
+  .brand-copy strong {
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .header-actions {
     gap: 4px;
   }
 
-  .theme-toggle {
-    width: 42px;
-    padding: 0;
-  }
-
-  .theme-toggle span,
-  .header-github {
-    display: none;
-  }
-
-  .theme-toggle {
-    order: 1;
-  }
-
-  .header-search {
-    order: 2;
-  }
-
-  .mobile-menu-button {
-    order: 3;
+  .site-header .theme-toggle,
+  .site-header .header-github {
+    display: none !important;
   }
 
   .mobile-nav {
+    max-height: calc(100dvh - 64px);
+    margin-inline: -14px;
+    overflow-y: auto;
+    padding: 10px 14px 14px;
+    background: var(--background);
+    box-shadow: 0 22px 42px rgb(0 0 0 / 22%);
+  }
+
+  .mobile-nav-primary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    padding-block: 10px 16px;
+  }
+
+  .mobile-nav-primary > a {
+    padding-inline: 10px;
   }
 
   .header-search span {
@@ -4822,12 +4938,23 @@ h1 span {
   }
 
   .product-hero {
-    gap: 48px;
-    padding-block: 64px 74px;
+    gap: 34px;
+    padding-block: 46px 62px;
   }
 
   .product-hero-copy h1 {
-    font-size: clamp(49px, 14vw, 68px);
+    font-size: clamp(42px, 12.5vw, 54px);
+    line-height: 0.99;
+  }
+
+  .product-hero-copy .hero-lede {
+    margin-top: 22px;
+    font-size: 17px;
+    line-height: 1.55;
+  }
+
+  .product-hero .hero-actions {
+    margin-top: 28px;
   }
 
   .hero-availability ul {
@@ -4901,7 +5028,7 @@ h1 span {
 
   .product-hero-mobile {
     position: static;
-    width: min(100%, 390px) !important;
+    width: min(88%, 340px) !important;
     display: block;
     margin-inline: auto;
   }
@@ -5339,10 +5466,22 @@ h1 span {
 
   .doc-page.roadmap-page {
     grid-template-columns: 1fr;
+    padding-block: 30px 72px;
   }
 
   .roadmap-route-heading {
     grid-template-columns: 1fr;
+    gap: 8px;
+    padding-bottom: 18px;
+  }
+
+  .roadmap-route-heading h1 {
+    font-size: 40px;
+  }
+
+  .roadmap-route-heading > p:not(.eyebrow) {
+    font-size: 14px;
+    line-height: 1.55;
   }
 
   .roadmap-route-heading .eyebrow,
@@ -5369,7 +5508,7 @@ h1 span {
   }
 
   .guide-facts {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .header-github span {
@@ -5387,10 +5526,12 @@ h1 span {
   .hero-actions {
     align-items: stretch;
     flex-direction: column;
+    gap: 10px;
   }
 
   .button {
     width: 100%;
+    min-height: 50px;
   }
 
   .preview-chip,
@@ -5461,11 +5602,11 @@ h1 span {
 }
 
 @media (max-width: 370px) {
-  .brand-copy {
-    display: none;
+  .brand-copy strong {
+    font-size: 12px;
   }
 
-  .mobile-nav {
+  .mobile-nav-tools {
     grid-template-columns: 1fr;
   }
 }

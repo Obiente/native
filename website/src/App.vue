@@ -466,17 +466,6 @@ const frequentlyAsked = [
 
       <div class="header-actions">
         <button
-          class="mobile-menu-button"
-          type="button"
-          aria-label="Toggle primary navigation"
-          aria-controls="mobile-site-navigation"
-          :aria-expanded="mobileNavOpen"
-          @click="mobileNavOpen = !mobileNavOpen"
-        >
-          <X v-if="mobileNavOpen" :size="21" weight="bold" aria-hidden="true" />
-          <Menu v-else :size="21" weight="bold" aria-hidden="true" />
-        </button>
-        <button
           class="theme-toggle"
           type="button"
           :aria-label="`Theme: ${themeLabel}. Activate to change theme.`"
@@ -495,6 +484,17 @@ const frequentlyAsked = [
           <MagnifyingGlass :size="20" weight="bold" aria-hidden="true" />
           <span>Search</span>
         </button>
+        <button
+          class="mobile-menu-button"
+          type="button"
+          aria-label="Toggle primary navigation"
+          aria-controls="mobile-site-navigation"
+          :aria-expanded="mobileNavOpen"
+          @click="mobileNavOpen = !mobileNavOpen"
+        >
+          <X v-if="mobileNavOpen" :size="21" weight="bold" aria-hidden="true" />
+          <Menu v-else :size="21" weight="bold" aria-hidden="true" />
+        </button>
         <a class="header-github" :href="githubUrl" target="_blank" rel="noreferrer">
           <GithubLogo :size="20" weight="fill" aria-hidden="true" />
           <span>GitHub</span>
@@ -506,17 +506,32 @@ const frequentlyAsked = [
         id="mobile-site-navigation"
         class="mobile-nav"
         aria-label="Mobile primary navigation"
-        @click="mobileNavOpen = false"
       >
-        <a href="/">Home</a>
-        <a href="/#experience">Experience</a>
-        <a href="/#apps">Apps</a>
-        <a href="/#native">How it works</a>
-        <a href="/guides/">Guides</a>
-        <a href="/roadmap/">Roadmap</a>
-        <a href="/news/">Journal</a>
-        <a href="/#docs">Docs</a>
-        <a :href="githubUrl" target="_blank" rel="noreferrer">GitHub</a>
+        <div class="mobile-nav-primary">
+          <a href="/" @click="mobileNavOpen = false">Home</a>
+          <a href="/#experience" @click="mobileNavOpen = false">Experience</a>
+          <a href="/#apps" @click="mobileNavOpen = false">Apps</a>
+          <a href="/#native" @click="mobileNavOpen = false">How it works</a>
+          <a href="/guides/" @click="mobileNavOpen = false">Guides</a>
+          <a href="/roadmap/" @click="mobileNavOpen = false">Roadmap</a>
+          <a href="/news/" @click="mobileNavOpen = false">Journal</a>
+          <a href="/#docs" @click="mobileNavOpen = false">Docs</a>
+        </div>
+        <div class="mobile-nav-tools">
+          <button
+            class="mobile-theme-button"
+            type="button"
+            :aria-label="`Theme: ${themeLabel}. Activate to change theme.`"
+            @click="cycleTheme"
+          >
+            <component :is="themeIcon" :size="19" weight="bold" aria-hidden="true" />
+            <span><small>Appearance</small><strong>{{ themeLabel }}</strong></span>
+          </button>
+          <a :href="githubUrl" target="_blank" rel="noreferrer">
+            <GithubLogo :size="19" weight="fill" aria-hidden="true" />
+            <span><small>Project</small><strong>Open GitHub</strong></span>
+          </a>
+        </div>
       </nav>
     </header>
 
@@ -971,7 +986,7 @@ const frequentlyAsked = [
 
         <div class="guides-featured-grid">
           <a
-            v-for="guide in guides"
+            v-for="(guide, guideIndex) in guides"
             :key="guide.path"
             class="guide-index-card"
             :href="guide.path"
@@ -982,7 +997,8 @@ const frequentlyAsked = [
                 :alt="guide.imageAlt"
                 :width="guide.imageWidth"
                 :height="guide.imageHeight"
-                loading="lazy"
+                :loading="guideIndex < 2 ? 'eager' : 'lazy'"
+                :fetchpriority="guideIndex === 0 ? 'high' : 'auto'"
               />
               <span>{{ guide.category }}</span>
             </div>
