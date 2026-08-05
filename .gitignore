@@ -40,6 +40,7 @@ Thumbs.db
 # Provider-neutral static homepage output
 /website/node_modules/
 /website/dist/
+/website/dist-indexnow/
 /website/dist-ssr/
 /website/.npm-cache/
 /website/src/generated/
