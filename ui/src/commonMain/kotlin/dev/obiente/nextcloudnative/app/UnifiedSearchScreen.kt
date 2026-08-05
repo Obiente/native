@@ -71,9 +71,8 @@ internal fun NextcloudUnifiedSearchScreen(
     var submittedQuery by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
     var selectedProviderIds by remember(session) { mutableStateOf<Set<String>>(emptySet()) }
     var includeExternal by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf(false) }
-    var groups by remember(session) { mutableStateOf<Map<String, UnifiedSearchGroup>>(emptyMap()) }
-    var failures by remember(session) { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var searching by remember(session) { mutableStateOf(false) }
+    var visibleResults by remember(session) { mutableStateOf(UnifiedSearchVisibleResults()) }
+    var searchingQuery by remember(session) { mutableStateOf<String?>(null) }
     var loadingMore by remember(session) { mutableStateOf<Set<String>>(emptySet()) }
     val scope = rememberCoroutineScope()
 
@@ -95,26 +94,47 @@ internal fun NextcloudUnifiedSearchScreen(
     }
     LaunchedEffect(client, activeProviders, submittedQuery, includeExternal, from) {
         if (submittedQuery.isBlank() || providers == null) {
-            groups = emptyMap()
-            failures = emptyMap()
-            searching = false
+            visibleResults = UnifiedSearchVisibleResults()
+            loadingMore = emptySet()
+            searchingQuery = null
             return@LaunchedEffect
         }
-        groups = emptyMap()
-        failures = emptyMap()
-        searching = true
+        val requestQuery = submittedQuery
+        visibleResults = UnifiedSearchVisibleResults(query = requestQuery)
+        loadingMore = emptySet()
+        searchingQuery = requestQuery
+        var refreshedGroups = emptyMap<String, UnifiedSearchGroup>()
+        var refreshedFailures = emptyMap<String, String>()
         client.searchAll(
             providers = activeProviders,
-            request = UnifiedSearchRequest(term = submittedQuery, from = from),
+            request = UnifiedSearchRequest(term = requestQuery, from = from),
             includeExternalProviders = includeExternal,
         ) { outcome ->
             when (outcome) {
-                is UnifiedSearchProviderOutcome.Results -> groups = groups + (outcome.provider.id to outcome.group)
-                is UnifiedSearchProviderOutcome.Failure -> failures = failures + (outcome.provider.id to outcome.message)
+                is UnifiedSearchProviderOutcome.Results -> {
+                    refreshedGroups = refreshedGroups + (outcome.provider.id to outcome.group)
+                    visibleResults = visibleResults.updateForQuery(requestQuery) {
+                        copy(groups = refreshedGroups, failures = refreshedFailures)
+                    }
+                }
+                is UnifiedSearchProviderOutcome.Failure -> {
+                    refreshedFailures = refreshedFailures + (outcome.provider.id to outcome.message)
+                    visibleResults = visibleResults.updateForQuery(requestQuery) {
+                        copy(groups = refreshedGroups, failures = refreshedFailures)
+                    }
+                }
             }
         }
-        searching = false
+        visibleResults = visibleResults.updateForQuery(requestQuery) {
+            copy(groups = refreshedGroups, failures = refreshedFailures)
+        }
+        if (searchingQuery == requestQuery) searchingQuery = null
     }
+
+    val currentResults = visibleResults.forQuery(submittedQuery)
+    val groups = currentResults.groups
+    val failures = currentResults.failures
+    val searching = submittedQuery.isNotBlank() && searchingQuery == submittedQuery
 
     Column(modifier = Modifier.fillMaxSize()) {
         UnifiedSearchHeader(onBack = onBack)
@@ -221,22 +241,29 @@ internal fun NextcloudUnifiedSearchScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 enabled = group.provider.id !in loadingMore,
                                 onClick = {
+                                    val requestQuery = submittedQuery
                                     loadingMore += group.provider.id
                                     scope.launch {
                                         runCatching {
                                             client.loadNextPage(
                                                 group,
-                                                UnifiedSearchRequest(term = submittedQuery, from = from),
+                                                UnifiedSearchRequest(term = requestQuery, from = from),
                                             )
                                         }.onSuccess { updated ->
-                                            groups = groups + (group.provider.id to updated)
+                                            visibleResults = visibleResults.updateForQuery(requestQuery) {
+                                                copy(groups = groups + (group.provider.id to updated))
+                                            }
                                         }.onFailure { failure ->
-                                            failures = failures + (
-                                                group.provider.id to unifiedSearchFailureMessage(
-                                                    failure,
-                                                    "Could not load more results.",
+                                            visibleResults = visibleResults.updateForQuery(requestQuery) {
+                                                copy(
+                                                    failures = failures + (
+                                                        group.provider.id to unifiedSearchFailureMessage(
+                                                            failure,
+                                                            "Could not load more results.",
+                                                        )
+                                                    ),
                                                 )
-                                            )
+                                            }
                                         }
                                         loadingMore -= group.provider.id
                                     }
@@ -271,6 +298,20 @@ internal fun NextcloudUnifiedSearchScreen(
         }
     }
 }
+
+internal data class UnifiedSearchVisibleResults(
+    val query: String? = null,
+    val groups: Map<String, UnifiedSearchGroup> = emptyMap(),
+    val failures: Map<String, String> = emptyMap(),
+)
+
+internal fun UnifiedSearchVisibleResults.forQuery(submittedQuery: String): UnifiedSearchVisibleResults =
+    takeIf { query == submittedQuery } ?: UnifiedSearchVisibleResults(query = submittedQuery)
+
+internal inline fun UnifiedSearchVisibleResults.updateForQuery(
+    query: String,
+    update: UnifiedSearchVisibleResults.() -> UnifiedSearchVisibleResults,
+): UnifiedSearchVisibleResults = if (this.query == query) update() else this
 
 @Composable
 private fun UnifiedSearchHeader(onBack: () -> Unit) {

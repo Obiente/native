@@ -120,6 +120,22 @@ For a local check, `docker compose -f website/compose.yml up --build` provides
 the same image. In production, place the container behind the Obiente reverse
 proxy and terminate TLS there.
 
+### IndexNow
+
+Production images prepare an IndexNow payload from the canonical sitemap and
+publish the protocol verification key at the site root. The production Obiente
+Cloud deployment must set `INDEXNOW_PRODUCTION=1`; the submitter is fail-closed
+when that variable is absent or has any other value. On container startup, a
+background deployment hook waits until the exact static-build fingerprint is
+visible at `https://nc-native.obiente.dev` before submitting that build's
+crawlable URLs to the global IndexNow endpoint. HTTP 200 and the initial
+key-verification HTTP 202 response are recorded as successful for that
+container, so an ordinary restart does not notify the same build again.
+
+Do not expose `INDEXNOW_PRODUCTION=1` to pull-request previews. Local and preview
+containers leave it unset and exit before contacting IndexNow, even when their
+static output happens to match the production website.
+
 The canonical hostname is currently configured as
 `https://nc-native.obiente.dev` in the prerender and crawler metadata. Change
 that value in `src/entry-server.js`, `scripts/prerender.mjs`,

@@ -7,6 +7,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 internal data class DesktopFileSyncRuntimeConditions(
+    val networkAvailable: Boolean?,
     val unmeteredNetwork: Boolean?,
     val hasBattery: Boolean,
     val batteryPercent: Int?,
@@ -18,8 +19,8 @@ internal data class DesktopFileSyncRuntimeConditions(
 
     fun allows(configuration: FileSyncConfiguration): Boolean {
         val networkAllowed = when (configuration.networkPolicy) {
-            FileSyncNetworkPolicy.AnyConnection -> true
-            FileSyncNetworkPolicy.Unmetered -> unmeteredNetwork == true
+            FileSyncNetworkPolicy.AnyConnection -> networkAvailable != false
+            FileSyncNetworkPolicy.Unmetered -> networkAvailable != false && unmeteredNetwork == true
         }
         val powerAllowed = when (configuration.powerPolicy) {
             FileSyncPowerPolicy.AnyPower -> true
@@ -31,6 +32,9 @@ internal data class DesktopFileSyncRuntimeConditions(
         return networkAllowed && powerAllowed
     }
 
+    fun networkState(configuration: FileSyncConfiguration): FileSyncNetworkState =
+        liveFileSyncNetworkState(networkAvailable, unmeteredNetwork, configuration.networkPolicy)
+
     private companion object {
         const val BATTERY_LOW_PERCENT = 15
     }
@@ -40,7 +44,13 @@ internal fun desktopFileSyncRuntimeConditions(): DesktopFileSyncRuntimeCondition
     isWindowsDesktop() -> windowsFileSyncRuntimeConditions()
     System.getProperty("os.name").orEmpty().lowercase().contains("linux") ->
         linuxFileSyncRuntimeConditions()
-    else -> DesktopFileSyncRuntimeConditions(null, hasBattery = false, null, null)
+    else -> DesktopFileSyncRuntimeConditions(
+        networkAvailable = null,
+        unmeteredNetwork = null,
+        hasBattery = false,
+        batteryPercent = null,
+        externalPowerConnected = null,
+    )
 }
 
 private fun linuxFileSyncRuntimeConditions(): DesktopFileSyncRuntimeConditions {
@@ -52,10 +62,17 @@ private fun linuxFileSyncRuntimeConditions(): DesktopFileSyncRuntimeConditions {
         .mapNotNull { it.resolve("online").readProbeText()?.toIntOrNull() }
         .takeIf(List<Int>::isNotEmpty)
         ?.any { it == 1 }
+    val networkProbe = runDesktopProbe(
+        "nmcli",
+        "-t",
+        "-f",
+        "GENERAL.STATE,GENERAL.METERED",
+        "device",
+        "show",
+    )
     return DesktopFileSyncRuntimeConditions(
-        unmeteredNetwork = parseNmcliMeteredProbe(
-            runDesktopProbe("nmcli", "-t", "-f", "GENERAL.STATE,GENERAL.METERED", "device", "show"),
-        ),
+        networkAvailable = parseNmcliConnectivityProbe(networkProbe),
+        unmeteredNetwork = parseNmcliMeteredProbe(networkProbe),
         hasBattery = batteries.isNotEmpty(),
         batteryPercent = batteryPercent,
         externalPowerConnected = externalPower,
@@ -85,9 +102,14 @@ private fun windowsFileSyncRuntimeConditions(): DesktopFileSyncRuntimeConditions
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        "[Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]::GetInternetConnectionProfile().GetConnectionCost().NetworkCostType",
+        "${'$'}profile = [Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]::GetInternetConnectionProfile(); if (${'$'}null -eq ${'$'}profile) { 'Disconnected' } else { ${'$'}profile.GetConnectionCost().NetworkCostType }",
     )?.trim()
     return DesktopFileSyncRuntimeConditions(
+        networkAvailable = when (networkCost) {
+            "Disconnected" -> false
+            "Unrestricted", "Fixed", "Variable" -> true
+            else -> null
+        },
         unmeteredNetwork = when (networkCost) {
             "Unrestricted" -> true
             "Fixed", "Variable" -> false
@@ -97,6 +119,19 @@ private fun windowsFileSyncRuntimeConditions(): DesktopFileSyncRuntimeConditions
         batteryPercent = batteryPercent,
         externalPowerConnected = externalPower,
     )
+}
+
+internal fun parseNmcliConnectivityProbe(output: String?): Boolean? {
+    val states = output.orEmpty().lineSequence()
+        .mapNotNull { line ->
+            line.takeIf { it.startsWith("GENERAL.STATE:") }
+                ?.substringAfter(':')
+                ?.substringBefore(' ')
+                ?.toIntOrNull()
+        }
+        .toList()
+    if (states.isEmpty()) return null
+    return states.any { it == NM_DEVICE_STATE_ACTIVATED }
 }
 
 internal fun parseNmcliMeteredProbe(output: String?): Boolean? {
@@ -127,6 +162,7 @@ private fun File.readProbeText(): String? = runCatching {
 }.getOrNull()
 
 private const val MAX_PROBE_OUTPUT_CHARS = 16_384
+private const val NM_DEVICE_STATE_ACTIVATED = 100
 
 internal interface DesktopKernelPowerApi : StdCallLibrary {
     fun GetSystemPowerStatus(status: DesktopSystemPowerStatus): Int

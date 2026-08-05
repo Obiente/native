@@ -89,6 +89,13 @@ data class NextcloudFile(
     val fileId: Long?,
     val hasPreview: Boolean,
     val etag: String? = null,
+    /** Server-backed Files favorite state exposed through the `oc:favorite` DAV property. */
+    val favorite: Boolean = false,
+    /** Account identity supplied by DAV for shared and federated items, when available. */
+    val ownerId: String? = null,
+    val ownerDisplayName: String? = null,
+    /** Number of comments the server reports as unread for this item. */
+    val unreadComments: Int = 0,
     /**
      * Whether callers may read the original object rather than a bounded server preview.
      *
@@ -549,6 +556,34 @@ interface NextcloudPlatformServices {
         userId: String,
         path: String,
     ): NextcloudFileListing? = null
+
+    /** Recursively searches Files through the authenticated account's DAV search endpoint. */
+    suspend fun searchFiles(
+        session: NextcloudSession,
+        userId: String,
+        query: String,
+        scopePath: String = "",
+        maximumResults: Int = 200,
+    ): List<NextcloudFile> = listFiles(session, userId, scopePath)
+        .filter { file -> file.name.contains(query.trim(), ignoreCase = true) }
+        .take(maximumResults)
+
+    /** Recursively lists server-backed favorites from the requested DAV scope. */
+    suspend fun listFavoriteFiles(
+        session: NextcloudSession,
+        userId: String,
+        scopePath: String = "",
+    ): List<NextcloudFile> = listFiles(session, userId, scopePath).filter(NextcloudFile::favorite)
+
+    /** Updates the server-backed favorite property and returns only after DAV confirms the write. */
+    suspend fun setFileFavorite(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        favorite: Boolean,
+    ) {
+        error("File favorites are not supported on this platform.")
+    }
 
     /** Returns persisted availability for the supplied files, keyed by canonical relative path. */
     suspend fun loadFileOfflineAvailability(

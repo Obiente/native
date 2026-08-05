@@ -12,7 +12,7 @@ class DesktopShellShortcutsTest {
             destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.One, true),
         )
         assertEquals(
-            NextcloudDestination.Apps,
+            NextcloudDestination.FolderSync,
             destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.Two, true),
         )
         assertEquals(
@@ -20,7 +20,7 @@ class DesktopShellShortcutsTest {
             destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.Three, true),
         )
         assertEquals(
-            NextcloudDestination.Settings,
+            NextcloudDestination.Apps,
             destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.Four, true),
         )
     }

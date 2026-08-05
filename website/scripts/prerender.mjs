@@ -2,6 +2,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { prepareIndexNowArtifacts } from "./indexnow.mjs";
 import { buildRss, buildSitemap } from "./xml-feeds.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,10 +25,17 @@ for (const route of serverEntry.routes) {
 }
 
 const baseUrl = "https://nc-native.obiente.dev";
-const sitemap = buildSitemap(serverEntry.routes, serverEntry.newsEntries, baseUrl);
+const sitemap = buildSitemap(serverEntry.routes, serverEntry.sitemapEntries, baseUrl);
 await writeFile(path.join(root, "dist", "sitemap.xml"), sitemap);
 const rss = buildRss(serverEntry.newsEntries, baseUrl);
 await writeFile(path.join(root, "dist", "news.xml"), rss);
+const indexNow = await prepareIndexNowArtifacts({
+  distDirectory: path.join(root, "dist"),
+  privateDirectory: path.join(root, "dist-indexnow"),
+  sitemap,
+  siteUrl: baseUrl,
+});
 await rm(path.join(root, "dist-ssr"), { recursive: true, force: true });
 
 console.log(`Prerendered ${serverEntry.routes.length} crawlable routes.`);
+console.log(`Prepared ${indexNow.urlCount} IndexNow URLs for deployment ${indexNow.fingerprint}.`);

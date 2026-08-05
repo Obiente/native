@@ -29,6 +29,7 @@ internal data class NativeMailboxPresentation(
     val timestamp: String?,
     val unread: Boolean,
     val unreadCount: Int?,
+    val threadSize: Int?,
     val flagged: Boolean,
     val attachmentCount: Int,
 )
@@ -47,6 +48,42 @@ internal data class NativeMailMessageRenderTarget(
     val resource: ResourceSpec,
     val record: NativeRecord,
     val presentation: NativeMailMessageDetailPresentation,
+)
+
+/**
+ * Keeps Mail sender labels focused on the person instead of repeating an address that is already
+ * available in message details. Unknown envelope formats remain unchanged rather than guessed.
+ */
+internal fun nativeMailSenderLabel(sender: String?): String? {
+    val trimmed = sender?.trim()?.takeIf(String::isNotBlank) ?: return null
+    val displayName = MAIL_SENDER_WITH_ADDRESS.matchEntire(trimmed)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.trim()
+        ?.trim('"')
+        ?.takeIf(String::isNotBlank)
+    return displayName ?: trimmed
+}
+
+/**
+ * Formats the common ISO envelope timestamp compactly for message rows without depending on the
+ * device locale. Other server-provided formats are preserved verbatim.
+ */
+internal fun nativeMailTimestampLabel(timestamp: String?): String? {
+    val trimmed = timestamp?.trim()?.takeIf(String::isNotBlank) ?: return null
+    val match = MAIL_ISO_TIMESTAMP.matchEntire(trimmed) ?: return trimmed
+    val monthIndex = match.groupValues[2].toIntOrNull() ?: return trimmed
+    val month = MAIL_MONTH_NAMES.getOrNull(monthIndex - 1) ?: return trimmed
+    val day = match.groupValues[3].toIntOrNull() ?: return trimmed
+    return "$month $day, ${match.groupValues[4]}:${match.groupValues[5]}"
+}
+
+private val MAIL_SENDER_WITH_ADDRESS = Regex("^\\s*(.*?)\\s*<[^<>]+>\\s*$")
+private val MAIL_ISO_TIMESTAMP = Regex(
+    "^(\\d{4})-(\\d{2})-(\\d{2})[Tt ](\\d{2}):(\\d{2})(?::\\d{2}(?:\\.\\d+)?)?(?:Z|[+-]\\d{2}:?\\d{2})?$",
+)
+private val MAIL_MONTH_NAMES = listOf(
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 )
 
 internal enum class NativeMediaItemKind {
@@ -226,6 +263,8 @@ internal fun nativeMailboxPresentation(
         ?.takeIf(String::isNotBlank)
     val timestamp = values.formattedTimestamp()
     val flagged = values.boolean("flagged", "starred", "favorite", "favourite") == true || "flagged" in flags
+    val threadSize = values.int("messagecount", "messagescount", "threadsize", "threadcount")
+        ?: values.arraySize("messages")
     val attachmentCount = values.int("attachmentcount", "attachmentscount")
         ?: values.arraySize("attachments")
         ?: if (values.boolean("hasattachments", "hasattachment") == true) 1 else 0
@@ -237,6 +276,7 @@ internal fun nativeMailboxPresentation(
         timestamp = timestamp,
         unread = unread,
         unreadCount = unreadCount,
+        threadSize = threadSize?.takeIf { count -> kind == NativeMailboxItemKind.Message && count > 1 },
         flagged = flagged,
         attachmentCount = attachmentCount,
     )
@@ -251,9 +291,9 @@ internal fun nativeMailMessageDetailPresentation(
     val words = semanticTokens(resource.id, resource.name)
     val messageShape = values.hasAny("subject") &&
         values.hasAny("from", "sender", "author", "fromemail") &&
-        values.hasAny("body", "content", "text", "htmlbody")
+        values.hasAny("body", "bodyhtml", "bodyplain", "content", "htmlbody", "messagebody", "text")
     if (!messageShape && words.none { it in MESSAGE_WORDS }) return null
-    val body = values.string("body", "content", "text", "htmlbody")
+    val body = values.string("body", "bodyhtml", "bodyplain", "content", "htmlbody", "messagebody", "text")
     if (body.isNullOrBlank() && !messageShape) return null
     return NativeMailMessageDetailPresentation(
         subject = values.string("subject", "title") ?: "(No subject)",
@@ -261,11 +301,53 @@ internal fun nativeMailMessageDetailPresentation(
         recipients = values.string("to", "recipients", "recipient"),
         timestamp = values.formattedTimestamp(),
         body = body,
-        htmlBody = values.boolean("hashtmlbody", "html", "ishtml") == true,
+        htmlBody = values.boolean("hashtmlbody", "html", "ishtml") == true ||
+            values.hasAny("bodyhtml", "htmlbody"),
         attachmentCount = values.arraySize("attachments")
             ?: values.int("attachmentcount", "attachmentscount")
             ?: 0,
     )
+}
+
+/** Converts a bounded nested thread response into independently renderable message bodies. */
+internal fun nativeMailThreadPresentations(
+    resource: ResourceSpec,
+    record: NativeRecord,
+): List<NativeMailMessageDetailPresentation> {
+    val threadItems = record.structuredValues.entries.firstNotNullOfOrNull { (key, value) ->
+        if (key.semanticKey() !in setOf("messages", "threadmessages", "conversationmessages")) {
+            return@firstNotNullOfOrNull null
+        }
+        value as? NativeStructuredValue.ListValue
+    } ?: return emptyList()
+    return threadItems.items.mapIndexedNotNull { index, item ->
+        val message = item as? NativeStructuredValue.ObjectValue ?: return@mapIndexedNotNull null
+        val values = mutableMapOf<String, String?>()
+        val structuredValues = mutableMapOf<String, NativeStructuredValue>()
+        message.entries.forEach { entry ->
+            when (val value = entry.value) {
+                is NativeStructuredValue.Scalar -> values[entry.key] = value.value
+                is NativeStructuredValue.ListValue,
+                is NativeStructuredValue.ObjectValue,
+                -> structuredValues[entry.key] = value
+            }
+        }
+        val id = listOf("id", "messageid", "uid")
+            .firstNotNullOfOrNull { alias ->
+                values.entries.firstOrNull { (key, _) -> key.semanticKey() == alias }?.value
+            }
+            ?.takeIf(String::isNotBlank)
+            ?: "thread-message-$index"
+        nativeMailMessageDetailPresentation(
+            resource = resource,
+            record = NativeRecord(
+                id = id,
+                values = values,
+                structuredValues = structuredValues,
+                actionSafeIdentity = false,
+            ),
+        )
+    }
 }
 
 /**

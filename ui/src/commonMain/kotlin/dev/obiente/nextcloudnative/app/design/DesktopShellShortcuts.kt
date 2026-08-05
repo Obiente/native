@@ -16,10 +16,9 @@ fun destinationForNextcloudDesktopShortcut(
     if (!primaryModifierPressed) return null
     return when (key) {
         NextcloudDesktopShortcutKey.One -> NextcloudDestination.Home
-        NextcloudDesktopShortcutKey.Two -> NextcloudDestination.Apps
+        NextcloudDesktopShortcutKey.Two -> NextcloudDestination.FolderSync
         NextcloudDesktopShortcutKey.Three -> NextcloudDestination.Activity
-        NextcloudDesktopShortcutKey.Four,
-        NextcloudDesktopShortcutKey.Comma,
-        -> NextcloudDestination.Settings
+        NextcloudDesktopShortcutKey.Four -> NextcloudDestination.Apps
+        NextcloudDesktopShortcutKey.Comma -> NextcloudDestination.Settings
     }
 }

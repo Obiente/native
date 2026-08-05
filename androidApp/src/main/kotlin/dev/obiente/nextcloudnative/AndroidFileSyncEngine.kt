@@ -2,6 +2,8 @@ package dev.obiente.nextcloudnative
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import dev.obiente.nextcloudnative.app.FileSyncBaseline
 import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
@@ -13,6 +15,8 @@ import dev.obiente.nextcloudnative.app.FileSyncExecutionCommand
 import dev.obiente.nextcloudnative.app.FileSyncExecutionSuccess
 import dev.obiente.nextcloudnative.app.FileSyncExecutionState
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
+import dev.obiente.nextcloudnative.app.FileSyncNetworkState
+import dev.obiente.nextcloudnative.app.FileSyncPairRunState
 import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
@@ -30,6 +34,7 @@ import dev.obiente.nextcloudnative.app.retryFileSyncOperation
 import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import dev.obiente.nextcloudnative.app.toCenterSummary
 import dev.obiente.nextcloudnative.app.includesSyncPath
+import dev.obiente.nextcloudnative.app.liveFileSyncNetworkState
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -90,9 +95,24 @@ internal class AndroidFileSyncEngine(context: Context) {
                     pair.toCenterSummary(
                         persisted.localDisplayNames[pair.id] ?: "Selected folder",
                         scheduleDescription = pair.configuration.scheduleDescription(),
+                        runState = FileSyncPairRunState.Active,
+                        networkState = currentNetworkState(pair.configuration),
                     )
                 },
         )
+    }
+
+    private fun currentNetworkState(configuration: FileSyncConfiguration): FileSyncNetworkState {
+        val connectivity = appContext.getSystemService(ConnectivityManager::class.java)
+            ?: return FileSyncNetworkState.Unknown
+        val activeNetwork = connectivity.activeNetwork
+            ?: return FileSyncNetworkState.WaitingForNetwork
+        val capabilities = connectivity.getNetworkCapabilities(activeNetwork)
+            ?: return FileSyncNetworkState.Unknown
+        val networkAvailable = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        val unmetered = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+        return liveFileSyncNetworkState(networkAvailable, unmetered, configuration.networkPolicy)
     }
 
     /**

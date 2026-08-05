@@ -12,7 +12,11 @@ RUN npm run --prefix website build
 
 FROM nginx:stable-alpine
 
+RUN apk add --no-cache curl
+
 COPY website/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /source/website/dist /usr/share/nginx/html
+COPY --from=build /source/website/dist-indexnow /opt/indexnow
+COPY --chmod=755 website/docker/indexnow-notify.sh /docker-entrypoint.d/40-indexnow-notify.sh
 
 EXPOSE 80

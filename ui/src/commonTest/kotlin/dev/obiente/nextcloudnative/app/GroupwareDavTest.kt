@@ -246,6 +246,94 @@ END:VCALENDAR</c:calendar-data>
     }
 
     @Test
+    fun `calendar serializer creates preserves and removes recurrence safely`() {
+        val content = createGroupwareCalendarEventContent(
+            uid = "event-recurring",
+            title = "Planning",
+            start = "20260803T090000Z",
+            end = "20260803T100000Z",
+            allDay = false,
+            recurrenceRule = "FREQ=WEEKLY;BYDAY=MO,WE",
+        )
+        assertTrue("RRULE:FREQ=WEEKLY;BYDAY=MO,WE" in content)
+
+        val event = requireNotNull(
+            parseGroupwareCalendarEvent(
+                calendarHref = "/remote.php/dav/calendars/person/work/",
+                href = "/remote.php/dav/calendars/person/work/event-recurring.ics",
+                etag = "event-etag",
+                content = content,
+            ),
+        )
+        val preserved = updateGroupwareCalendarEventContent(
+            event = event,
+            title = event.title,
+            start = event.start,
+            end = event.end,
+            allDay = event.allDay,
+            location = event.location,
+            description = event.description,
+        )
+        assertTrue("RRULE:FREQ=WEEKLY;BYDAY=MO,WE" in preserved)
+
+        val removed = updateGroupwareCalendarEventContent(
+            event = event,
+            title = event.title,
+            start = event.start,
+            end = event.end,
+            allDay = event.allDay,
+            location = event.location,
+            description = event.description,
+            recurrenceRule = null,
+        )
+        assertFalse("RRULE:" in removed)
+        assertFailsWith<IllegalArgumentException> {
+            createGroupwareCalendarEventContent(
+                uid = "invalid-recurrence",
+                title = "Unsafe",
+                start = "20260803T090000Z",
+                end = null,
+                allDay = false,
+                recurrenceRule = "FREQ=WEEKLY\nATTENDEE:mailto:other@example.invalid",
+            )
+        }
+    }
+
+    @Test
+    fun `calendar writes reject recurrence rules the local expander cannot reproduce`() {
+        listOf(
+            "FREQ=YEARLY",
+            "FREQ=HOURLY",
+            "FREQ=DAILY;BYDAY=MO",
+            "FREQ=WEEKLY;BYDAY=1MO",
+            "FREQ=MONTHLY;BYDAY=1MO;BYMONTHDAY=1",
+            "FREQ=MONTHLY;BYSETPOS=1;BYDAY=MO",
+            "FREQ=WEEKLY;INTERVAL=zero",
+            "FREQ=DAILY;COUNT=3;UNTIL=20260830T090000Z",
+        ).forEach { rule ->
+            assertFalse(isSupportedCalendarRecurrenceRuleForWrite(rule), rule)
+            assertFailsWith<IllegalArgumentException>(rule) {
+                createGroupwareCalendarEventContent(
+                    uid = "unsupported-recurrence",
+                    title = "Planning",
+                    start = "20260803T090000Z",
+                    end = null,
+                    allDay = false,
+                    recurrenceRule = rule,
+                )
+            }
+        }
+        listOf(
+            "FREQ=DAILY;INTERVAL=2;COUNT=4",
+            "FREQ=WEEKLY;BYDAY=MO,WE;WKST=MO",
+            "FREQ=MONTHLY;BYDAY=1MO;UNTIL=20261231T235959Z",
+            "FREQ=MONTHLY;BYMONTHDAY=-1",
+        ).forEach { rule ->
+            assertTrue(isSupportedCalendarRecurrenceRuleForWrite(rule), rule)
+        }
+    }
+
+    @Test
     fun `daily recurrence respects interval count exclusions and stable identities`() {
         val master = calendarEvent(
             """

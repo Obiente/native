@@ -39,6 +39,14 @@ class NativeSemanticPresentationsTest {
     }
 
     @Test
+    fun `mail row labels prefer a sender name and compact ISO timestamp`() {
+        assertEquals("Ada", nativeMailSenderLabel("Ada <ada@example.test>"))
+        assertEquals("plain@example.test", nativeMailSenderLabel("plain@example.test"))
+        assertEquals("Jul 29, 08:42", nativeMailTimestampLabel("2026-07-29T08:42:00Z"))
+        assertEquals("Server time unknown", nativeMailTimestampLabel("Server time unknown"))
+    }
+
+    @Test
     fun `mailbox counts become folder badges without treating zero as unread`() {
         val resource = resource("mailboxes", "Mailboxes", "name", "unread")
         val unread = nativeMailboxPresentation(
@@ -54,6 +62,24 @@ class NativeSemanticPresentationsTest {
         assertEquals(7, unread.unreadCount)
         assertTrue(unread.unread)
         assertFalse(empty.unread)
+    }
+
+    @Test
+    fun `mail thread rows retain their message count`() {
+        val presentation = nativeMailboxPresentation(
+            resource("threads", "Threads", "subject", "from", "messageCount"),
+            NativeRecord(
+                id = "thread-42",
+                values = mapOf(
+                    "subject" to "Release checklist",
+                    "from" to "Ada <ada@example.test>",
+                    "messageCount" to "4",
+                ),
+            ),
+        )
+
+        assertEquals(NativeMailboxItemKind.Message, presentation.kind)
+        assertEquals(4, presentation.threadSize)
     }
 
     @Test
@@ -80,6 +106,42 @@ class NativeSemanticPresentationsTest {
         assertEquals("2026-06-15 14:09", presentation?.timestamp)
         assertEquals("<p>The build is ready.</p>", presentation?.body)
         assertTrue(presentation?.htmlBody == true)
+    }
+
+    @Test
+    fun `bounded nested thread messages become individual native details`() {
+        fun scalar(value: String) = NativeStructuredValue.Scalar(
+            value = value,
+            kind = NativeStructuredScalarKind.string,
+        )
+        fun message(id: String, sender: String, body: String) = NativeStructuredValue.ObjectValue(
+            entries = listOf(
+                NativeStructuredEntry("id", "Id", scalar(id)),
+                NativeStructuredEntry("subject", "Subject", scalar("Release checklist")),
+                NativeStructuredEntry("from", "From", scalar(sender)),
+                NativeStructuredEntry("body", "Body", scalar(body)),
+                NativeStructuredEntry("hasHtmlBody", "HTML", scalar("true")),
+            ),
+        )
+        val presentations = nativeMailThreadPresentations(
+            resource("threads", "Threads", "subject", "from", "messages"),
+            NativeRecord(
+                id = "thread-42",
+                values = mapOf("subject" to "Release checklist"),
+                structuredValues = mapOf(
+                    "messages" to NativeStructuredValue.ListValue(
+                        items = listOf(
+                            message("41", "Ada <ada@example.test>", "<p>Ready for review.</p>"),
+                            message("42", "Mira <mira@example.test>", "<p>I will review it.</p>"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(2, presentations.size)
+        assertEquals("Ada <ada@example.test>", presentations.first().sender)
+        assertEquals("<p>I will review it.</p>", presentations.last().body)
     }
 
     @Test

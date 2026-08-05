@@ -15,6 +15,9 @@ class DesktopFileSyncRuntimeConditionsTest {
             parseNmcliMeteredProbe("GENERAL.STATE:100 (connected)\nGENERAL.METERED:guess-yes") == true,
         )
         assertNull(parseNmcliMeteredProbe("GENERAL.STATE:30 (disconnected)\nGENERAL.METERED:unknown"))
+        assertTrue(parseNmcliConnectivityProbe("GENERAL.STATE:100 (connected)\nGENERAL.METERED:no") == true)
+        assertFalse(parseNmcliConnectivityProbe("GENERAL.STATE:30 (disconnected)\nGENERAL.METERED:unknown") == true)
+        assertNull(parseNmcliConnectivityProbe(null))
     }
 
     @Test
@@ -24,8 +27,14 @@ class DesktopFileSyncRuntimeConditionsTest {
             networkPolicy = FileSyncNetworkPolicy.Unmetered,
             powerPolicy = FileSyncPowerPolicy.Charging,
         )
-        assertTrue(DesktopFileSyncRuntimeConditions(true, true, 40, true).allows(configuration))
-        assertFalse(DesktopFileSyncRuntimeConditions(false, true, 40, true).allows(configuration))
-        assertFalse(DesktopFileSyncRuntimeConditions(true, true, 40, false).allows(configuration))
+        assertTrue(
+            DesktopFileSyncRuntimeConditions(true, true, true, 40, true).allows(configuration),
+        )
+        assertFalse(
+            DesktopFileSyncRuntimeConditions(false, false, true, 40, true).allows(configuration),
+        )
+        assertFalse(
+            DesktopFileSyncRuntimeConditions(true, true, true, 40, false).allows(configuration),
+        )
     }
 }

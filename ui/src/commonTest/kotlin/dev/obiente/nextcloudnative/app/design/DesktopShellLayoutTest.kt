@@ -50,6 +50,16 @@ class DesktopShellLayoutTest {
         assertEquals(252, layout.navigationWidthDp)
         assertNull(layout.contentMaximumWidthDp)
         assertTrue(layout.supportsAuxiliaryPane)
+        assertEquals(
+            listOf(
+                NextcloudDestination.Home,
+                NextcloudDestination.FolderSync,
+                NextcloudDestination.Activity,
+                NextcloudDestination.Apps,
+                NextcloudDestination.Settings,
+            ),
+            DesktopNextcloudNavigationItems.map(NextcloudNavigationItem::destination),
+        )
     }
 
     @Test
@@ -63,6 +73,33 @@ class DesktopShellLayoutTest {
         assertEquals(NextcloudNavigationStyle.CompactRail, layout.navigationStyle)
         assertEquals(76, layout.navigationWidthDp)
         assertNull(layout.contentMaximumWidthDp)
+    }
+
+    @Test
+    fun `desktop app workspace keeps the useful expanded global sidebar`() {
+        val layout = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 1_440,
+            destination = NextcloudDestination.Apps,
+            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
+        )
+
+        assertEquals(NextcloudNavigationStyle.ExpandedSidebar, layout.navigationStyle)
+        assertEquals(252, layout.navigationWidthDp)
+        assertTrue(layout.supportsAuxiliaryPane)
+    }
+
+    @Test
+    fun `narrow desktop app workspace still collapses to a rail`() {
+        val layout = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 760,
+            destination = NextcloudDestination.Apps,
+            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
+        )
+
+        assertEquals(NextcloudNavigationStyle.CompactRail, layout.navigationStyle)
+        assertEquals(76, layout.navigationWidthDp)
     }
 
     @Test

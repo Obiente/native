@@ -2,6 +2,8 @@ import { renderToString } from "@vue/server-renderer";
 import { createServerApp } from "./site.js";
 import { docs } from "./generated/docs.js";
 import { docsContent } from "./generated/docs-content.js";
+import { guides } from "./generated/guides.js";
+import { guidesContent } from "./generated/guides-content.js";
 import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
 import { marketingCaptures } from "./generated/captures.js";
@@ -45,6 +47,7 @@ export async function render(pathname) {
   const props = {
     initialPath,
     initialDoc: docsContent.find((doc) => doc.path === initialPath) ?? null,
+    initialGuide: guidesContent.find((guide) => guide.path === initialPath) ?? null,
     initialNews: news.find((post) => post.path === initialPath) ?? null,
   };
   const app = createServerApp(props);
@@ -76,7 +79,7 @@ export async function render(pathname) {
     isAccessibleForFree: true,
     inLanguage: "en",
     downloadUrl: "https://github.com/Obiente/nc-native/releases",
-    softwareHelp: `${siteUrl}/contributing/`,
+    softwareHelp: `${siteUrl}/guides/`,
     featureList: [
       "Native Nextcloud account connection on mobile, tablet, and desktop",
       "Files, previews, sharing, version history, offline folders, and two-way sync with explicit conflicts",
@@ -104,6 +107,7 @@ export async function render(pathname) {
     },
   ];
   if (initialPath !== "/") {
+    const guide = guides.find((entry) => entry.path === initialPath);
     structuredData.push({
       "@context": "https://schema.org",
       "@type": "BreadcrumbList",
@@ -121,14 +125,43 @@ export async function render(pathname) {
               name: "News",
               item: `${siteUrl}/news/`,
             }]
-          : []),
+          : guide
+            ? [{
+                "@type": "ListItem",
+                position: 2,
+                name: "Guides",
+                item: `${siteUrl}/guides/`,
+              }]
+            : []),
         {
           "@type": "ListItem",
-          position: metadata.published ? 3 : 2,
+          position: metadata.published || guide ? 3 : 2,
           name: metadata.title.replace(" · Nextcloud Native", ""),
           item: metadata.canonical,
         },
       ],
+    });
+  }
+  const currentGuide = guides.find((guide) => guide.path === initialPath);
+  if (currentGuide) {
+    structuredData.push({
+      "@context": "https://schema.org",
+      "@type": "HowTo",
+      name: currentGuide.title,
+      description: currentGuide.description,
+      totalTime: `PT${currentGuide.durationMinutes}M`,
+      supply: currentGuide.prerequisites.map((name) => ({ "@type": "HowToSupply", name })),
+      step: currentGuide.steps.map((step) => ({
+        "@type": "HowToStep",
+        position: step.number,
+        name: step.title,
+        text: step.text,
+        url: `${siteUrl}${currentGuide.path}#step-${step.number}`,
+        image: `${siteUrl}${step.imageDark}`,
+      })),
+      image: `${siteUrl}${currentGuide.imageDark}`,
+      inLanguage: "en",
+      isAccessibleForFree: true,
     });
   }
   if (metadata.published) {
@@ -201,10 +234,23 @@ export async function render(pathname) {
 
 export const routes = [
   "/",
+  "/guides/",
   "/news/",
   "/visual-qa/",
   changelog.path,
   ...news.map((post) => post.path),
+  ...guides.map((guide) => guide.path),
   ...docs.map((doc) => doc.path),
 ];
 export const newsEntries = news;
+const latestModification = (entries) => entries
+  .map((entry) => entry.lastUpdated)
+  .filter(Boolean)
+  .sort()
+  .at(-1);
+export const sitemapEntries = [
+  ...news,
+  ...guides,
+  { path: "/news/", lastUpdated: latestModification(news) },
+  { path: "/guides/", lastUpdated: latestModification(guides) },
+];

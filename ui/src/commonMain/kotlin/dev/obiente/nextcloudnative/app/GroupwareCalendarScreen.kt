@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,10 +28,12 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,15 +53,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
-private enum class CalendarDisplayMode { Month, Agenda }
-
-private data class CalendarMonth(val year: Int, val month: Int) {
+internal data class CalendarMonth(val year: Int, val month: Int) {
     init {
         require(month in 1..12)
     }
@@ -74,10 +77,41 @@ private data class CalendarMonth(val year: Int, val month: Int) {
 private sealed interface CalendarLoadState {
     data object Loading : CalendarLoadState
     data class Ready(
+        val month: CalendarMonth,
+        val timeWindow: GroupwareDavTimeWindow,
         val calendars: List<GroupwareCalendar>,
         val events: List<GroupwareCalendarEvent>,
     ) : CalendarLoadState
     data class Error(val message: String) : CalendarLoadState
+}
+
+private object CalendarWorkspaceMemoryCache {
+    private val entries = linkedMapOf<String, CalendarLoadState.Ready>()
+
+    fun get(
+        session: NextcloudSession,
+        userId: String,
+        month: CalendarMonth,
+        timeWindow: GroupwareDavTimeWindow,
+    ): CalendarLoadState.Ready? {
+        val key = key(session, userId, month, timeWindow)
+        return entries.remove(key)?.also { entries[key] = it }
+    }
+
+    fun store(session: NextcloudSession, userId: String, value: CalendarLoadState.Ready) {
+        val key = key(session, userId, value.month, value.timeWindow)
+        entries.remove(key)
+        entries[key] = value
+        while (entries.size > MAXIMUM_RETAINED_CALENDAR_MONTHS) entries.remove(entries.keys.first())
+    }
+
+    private fun key(
+        session: NextcloudSession,
+        userId: String,
+        month: CalendarMonth,
+        timeWindow: GroupwareDavTimeWindow,
+    ): String = "${session.serverUrl.trimEnd('/')}\n${session.loginName}\n$userId\n" +
+        "${month.year}-${month.month}\n${timeWindow.startUtc}-${timeWindow.endUtc}"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -88,137 +122,268 @@ fun NativeGroupwareCalendarScreen(
     userId: String,
     onBack: () -> Unit,
 ) {
-    var month by remember { mutableStateOf(currentCalendarMonth()) }
-    var selectedDate by remember { mutableStateOf(currentCalendarDate()) }
-    var mode by remember { mutableStateOf(CalendarDisplayMode.Month) }
-    var state by remember { mutableStateOf<CalendarLoadState>(CalendarLoadState.Loading) }
+    val initialMonth = remember { currentCalendarMonth() }
+    var monthYear by rememberSaveable { mutableStateOf(initialMonth.year) }
+    var monthNumber by rememberSaveable { mutableStateOf(initialMonth.month) }
+    val month = CalendarMonth(monthYear, monthNumber)
+    var selectedDate by rememberSaveable { mutableStateOf(currentCalendarDate()) }
+    var viewName by rememberSaveable { mutableStateOf(CalendarWorkspaceView.Month.name) }
+    val view = CalendarWorkspaceView.entries.firstOrNull { candidate -> candidate.name == viewName }
+        ?: CalendarWorkspaceView.Month
+    val queryWindow = calendarWorkspaceQueryWindow(view, month, selectedDate)
+    var query by rememberSaveable { mutableStateOf("") }
+    var hiddenCalendarHrefs by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    var selectedEventId by rememberSaveable { mutableStateOf<String?>(null) }
+    var state by remember(session, userId) {
+        mutableStateOf<CalendarLoadState>(
+            CalendarWorkspaceMemoryCache.get(session, userId, month, queryWindow) ?: CalendarLoadState.Loading,
+        )
+    }
+    var refreshing by remember { mutableStateOf(false) }
+    var refreshError by remember { mutableStateOf<String?>(null) }
     var loadAttempt by remember { mutableStateOf(0) }
     var editing by remember { mutableStateOf<GroupwareCalendarEvent?>(null) }
-    var creating by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<GroupwareCalendarEvent?>(null) }
+    var deletingInProgress by remember { mutableStateOf(false) }
+    var creating by rememberSaveable { mutableStateOf(false) }
     var mutationError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val desktop = LocalNextcloudWorkspaceCapabilities.current.isDesktop
+
+    fun selectMonth(value: CalendarMonth) {
+        monthYear = value.year
+        monthNumber = value.month
+    }
+
+    fun navigateCalendar(direction: Int) {
+        if (view == CalendarWorkspaceView.Week) {
+            val date = selectedDate.parseCompactCalendarDate()?.plusDays(direction * 7) ?: return
+            selectedDate = date.compactValue
+            selectMonth(CalendarMonth(date.year, date.month))
+        } else {
+            val next = if (direction < 0) month.previous() else month.next()
+            selectMonth(next)
+            selectedDate = "${next.isoPrefix}01"
+        }
+        selectedEventId = null
+    }
+
+    fun selectToday() {
+        val today = currentCalendarDate()
+        val date = requireNotNull(today.parseCompactCalendarDate())
+        selectMonth(CalendarMonth(date.year, date.month))
+        selectedDate = today
+        selectedEventId = null
+    }
 
     suspend fun reload() {
-        state = CalendarLoadState.Loading
-        state = runCatching {
+        val cached = CalendarWorkspaceMemoryCache.get(session, userId, month, queryWindow)
+        if (cached != null) state = cached
+        val retained = cached ?: (state as? CalendarLoadState.Ready)?.takeIf { ready ->
+            calendarReadyMatchesRequest(ready.month, ready.timeWindow, month, queryWindow)
+        }
+        refreshError = null
+        if (retained == null) {
+            state = CalendarLoadState.Loading
+        } else {
+            refreshing = true
+        }
+        runCatching {
             val home = groupwareCalendarHomeHref(userId)
             val calendarResponse = services.executeGroupwareDav(
                 session,
                 groupwareDavCollectionDiscoveryRequest(home),
             )
             val calendars = parseGroupwareCalendars(calendarResponse)
-            val window = GroupwareDavTimeWindow(month.compactStart, month.next().compactStart)
             val events = calendars.flatMap { calendar ->
                 val response = services.executeGroupwareDav(
                     session,
                     groupwareDavCollectionQueryRequest(
                         collectionHref = calendar.href,
                         kind = GroupwareDavKind.Event,
-                        timeWindow = window,
+                        timeWindow = queryWindow,
                     ),
                 )
                 expandGroupwareCalendarEvents(
                     parseGroupwareCalendarEvents(calendar.href, response),
-                    window,
+                    queryWindow,
                 )
             }.sortedWith(compareBy(GroupwareCalendarEvent::start, GroupwareCalendarEvent::title))
-            CalendarLoadState.Ready(calendars, events)
-        }.getOrElse { CalendarLoadState.Error(it.message ?: "Could not load calendars.") }
+            CalendarLoadState.Ready(month, queryWindow, calendars, events)
+        }.onSuccess { loaded ->
+            state = loaded
+            CalendarWorkspaceMemoryCache.store(session, userId, loaded)
+        }.onFailure { failure ->
+            val message = failure.message ?: "Could not load calendars."
+            if (retained == null) {
+                state = CalendarLoadState.Error(message)
+            } else {
+                refreshError = message
+            }
+        }
+        refreshing = false
     }
 
-    LaunchedEffect(session, userId, month, loadAttempt) { reload() }
+    LaunchedEffect(session, userId, month, queryWindow, loadAttempt) { reload() }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Calendar", fontWeight = FontWeight.SemiBold)
-                        Text(
-                            month.title,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(NextcloudIcons.Back, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { loadAttempt += 1 }) {
-                        Icon(NextcloudIcons.Refresh, contentDescription = "Refresh calendars")
-                    }
-                    IconButton(
-                        onClick = { creating = true },
-                        enabled = (state as? CalendarLoadState.Ready)?.calendars?.any { it.writable } == true,
-                    ) {
-                        Icon(NextcloudIcons.Add, contentDescription = "Create event")
-                    }
-                },
-            )
+            if (!desktop) {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text("Calendar", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                month.title,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(NextcloudIcons.Back, contentDescription = "Back")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { loadAttempt += 1 }) {
+                            Icon(NextcloudIcons.Refresh, contentDescription = "Refresh calendars")
+                        }
+                        IconButton(
+                            onClick = { creating = true },
+                            enabled = (state as? CalendarLoadState.Ready)?.calendars?.any { it.writable } == true,
+                        ) {
+                            Icon(NextcloudIcons.Add, contentDescription = "Create event")
+                        }
+                    },
+                )
+            }
         },
     ) { insets ->
-        Column(
-            modifier = Modifier.fillMaxSize().padding(insets),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = {
-                    month = month.previous()
-                    selectedDate = "${month.isoPrefix}01"
-                }) {
-                    Icon(NextcloudIcons.Back, contentDescription = "Previous month")
-                }
-                FilterChip(
-                    selected = mode == CalendarDisplayMode.Month,
-                    onClick = { mode = CalendarDisplayMode.Month },
-                    label = { Text("Month") },
+        Box(modifier = Modifier.fillMaxSize().padding(insets)) {
+            val initialLoading = state == CalendarLoadState.Loading
+            val displayed = when (val value = state) {
+                CalendarLoadState.Loading -> CalendarLoadState.Ready(
+                    month,
+                    queryWindow,
+                    emptyList(),
+                    emptyList(),
                 )
-                FilterChip(
-                    selected = mode == CalendarDisplayMode.Agenda,
-                    onClick = { mode = CalendarDisplayMode.Agenda },
-                    label = { Text("Agenda") },
-                )
-                Box(modifier = Modifier.weight(1f))
-                TextButton(onClick = {
-                    month = currentCalendarMonth()
-                    selectedDate = currentCalendarDate()
-                }) { Text("Today") }
-                IconButton(onClick = {
-                    month = month.next()
-                    selectedDate = "${month.isoPrefix}01"
-                }) {
-                    Icon(NextcloudIcons.ChevronRight, contentDescription = "Next month")
-                }
+                is CalendarLoadState.Ready -> value
+                is CalendarLoadState.Error -> null
             }
-
-            when (val value = state) {
-                CalendarLoadState.Loading -> Box(
+            if (displayed == null) {
+                CalendarError((state as CalendarLoadState.Error).message) { loadAttempt += 1 }
+            } else if (!initialLoading && displayed.calendars.isEmpty()) {
+                CalendarError("No event calendars were found.") { loadAttempt += 1 }
+            } else if (desktop) {
+                val selectedEvent = displayed.events.firstOrNull { event ->
+                    event.instanceId == selectedEventId
+                }
+                DesktopGroupwareCalendarWorkspace(
+                    month = displayed.month,
+                    selectedDate = selectedDate,
+                    view = view,
+                    calendars = displayed.calendars,
+                    events = displayed.events,
+                    hiddenCalendarHrefs = hiddenCalendarHrefs.toSet(),
+                    query = query,
+                    selectedEvent = selectedEvent,
+                    loading = initialLoading,
+                    onPrevious = { navigateCalendar(-1) },
+                    onNext = { navigateCalendar(1) },
+                    onToday = ::selectToday,
+                    onViewChanged = { selected -> viewName = selected.name },
+                    onQueryChanged = { query = it },
+                    onCalendarVisibilityChanged = { href, visible ->
+                        hiddenCalendarHrefs = if (visible) {
+                            hiddenCalendarHrefs - href
+                        } else {
+                            (hiddenCalendarHrefs + href).distinct()
+                        }
+                        if (!visible && selectedEvent?.calendarHref == href) selectedEventId = null
+                    },
+                    onSelectDate = { date -> selectedDate = date; selectedEventId = null },
+                    onSelectEvent = { event -> selectedEventId = event?.instanceId },
+                    onCreateEvent = { creating = true },
+                    onRefresh = { loadAttempt += 1 },
+                    onEditEvent = { event -> editing = event.copy(status = EDITING_MARKER) },
+                    onDeleteEvent = { event ->
+                        mutationError = null
+                        deleting = event
+                    },
+                )
+            } else {
+                Column(
                     modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) { CircularProgressIndicator() }
-
-                is CalendarLoadState.Error -> CalendarError(value.message) { loadAttempt += 1 }
-                is CalendarLoadState.Ready -> {
-                    if (value.calendars.isEmpty()) {
-                        CalendarError("No event calendars were found.") { loadAttempt += 1 }
-                    } else if (mode == CalendarDisplayMode.Month) {
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = { navigateCalendar(-1) }) {
+                            Icon(NextcloudIcons.Back, contentDescription = "Previous month")
+                        }
+                        FilterChip(
+                            selected = view == CalendarWorkspaceView.Month,
+                            onClick = { viewName = CalendarWorkspaceView.Month.name },
+                            label = { Text("Month") },
+                        )
+                        FilterChip(
+                            selected = view == CalendarWorkspaceView.Agenda,
+                            onClick = { viewName = CalendarWorkspaceView.Agenda.name },
+                            label = { Text("Agenda") },
+                        )
+                        Box(modifier = Modifier.weight(1f))
+                        TextButton(onClick = ::selectToday) { Text("Today") }
+                        IconButton(onClick = { navigateCalendar(1) }) {
+                            Icon(NextcloudIcons.ChevronRight, contentDescription = "Next month")
+                        }
+                    }
+                    val visibleEvents = displayed.events.filter { event ->
+                        event.calendarHref !in hiddenCalendarHrefs
+                    }
+                    if (view == CalendarWorkspaceView.Month) {
                         MonthCalendar(
-                            month = month,
+                            month = displayed.month,
                             selectedDate = selectedDate,
-                            events = value.events,
+                            events = visibleEvents,
                             onSelectDate = { selectedDate = it },
                             onSelectEvent = { editing = it },
                             modifier = Modifier.weight(1f),
                         )
                     } else {
-                        CalendarAgenda(value.events, onSelectEvent = { editing = it }, modifier = Modifier.weight(1f))
+                        CalendarAgenda(
+                            visibleEvents,
+                            onSelectEvent = { editing = it },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+            if (initialLoading || refreshing) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
+                )
+            }
+            refreshError?.let { message ->
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    shape = RoundedCornerShape(NextcloudRadii.Small),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = NextcloudSpacing.Medium),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        Text(message, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
                     }
                 }
             }
@@ -250,6 +415,7 @@ fun NativeGroupwareCalendarScreen(
                                 allDay = draft.allDay,
                                 location = draft.location,
                                 description = draft.description,
+                                recurrenceRule = draft.recurrenceRule,
                             ),
                         ).toGroupwareDavRequest()
                         val response = services.executeGroupwareDav(session, request)
@@ -284,6 +450,7 @@ fun NativeGroupwareCalendarScreen(
                                 allDay = draft.allDay,
                                 location = draft.location,
                                 description = draft.description,
+                                recurrenceRule = draft.recurrenceRule,
                             )
                             val request = GroupwareDavMutationSpec(
                                 kind = GroupwareDavKind.Event,
@@ -310,30 +477,83 @@ fun NativeGroupwareCalendarScreen(
                 onDismiss = { editing = null },
                 onEdit = { creating = false; editing = event.copy(status = EDITING_MARKER) },
                 onDelete = {
+                    editing = null
                     mutationError = null
-                    scope.launch {
-                        runCatching {
-                            val request = GroupwareDavMutationSpec(
-                                kind = GroupwareDavKind.Event,
-                                mutation = GroupwareDavMutation.Delete,
-                                objectHref = event.href,
-                                etag = event.etag,
-                            ).toGroupwareDavRequest()
-                            val response = services.executeGroupwareDav(session, request)
-                            check(response.status in 200..299) {
-                                "Deleting the event failed (HTTP ${response.status})."
-                            }
-                        }.onSuccess {
-                            editing = null
-                            loadAttempt += 1
-                        }.onFailure { mutationError = it.message ?: "Could not delete the event." }
-                    }
+                    deleting = event
                 },
                 error = mutationError,
             )
         }
     }
+
+    deleting?.let { event ->
+        AlertDialog(
+            onDismissRequest = { if (!deletingInProgress) deleting = null },
+            title = { Text("Delete ${event.title}?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                    Text("This permanently removes the event from its Nextcloud calendar.")
+                    if (event.recurrenceRule != null) {
+                        Text(
+                            "This event repeats. Deleting it removes the complete series.",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    mutationError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !deletingInProgress,
+                    onClick = { deleting = null; mutationError = null },
+                ) { Text("Cancel") }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !deletingInProgress,
+                    onClick = {
+                        deletingInProgress = true
+                        mutationError = null
+                        scope.launch {
+                            runCatching {
+                                val request = GroupwareDavMutationSpec(
+                                    kind = GroupwareDavKind.Event,
+                                    mutation = GroupwareDavMutation.Delete,
+                                    objectHref = event.href,
+                                    etag = event.etag,
+                                ).toGroupwareDavRequest()
+                                val response = services.executeGroupwareDav(session, request)
+                                check(response.status in 200..299) {
+                                    "Deleting the event failed (HTTP ${response.status})."
+                                }
+                            }.onSuccess {
+                                deleting = null
+                                selectedEventId = null
+                                loadAttempt += 1
+                            }.onFailure { failure ->
+                                mutationError = failure.message ?: "Could not delete the event."
+                            }
+                            deletingInProgress = false
+                        }
+                    },
+                ) {
+                    if (deletingInProgress) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Delete")
+                    }
+                }
+            },
+        )
+    }
 }
+
+internal fun calendarReadyMatchesRequest(
+    readyMonth: CalendarMonth,
+    readyWindow: GroupwareDavTimeWindow,
+    requestedMonth: CalendarMonth,
+    requestedWindow: GroupwareDavTimeWindow,
+): Boolean = readyMonth == requestedMonth && readyWindow == requestedWindow
 
 @Composable
 private fun CalendarError(message: String, retry: () -> Unit) {
@@ -449,7 +669,7 @@ private fun MonthCalendar(
 }
 
 @Composable
-private fun CalendarAgenda(
+internal fun CalendarAgenda(
     events: List<GroupwareCalendarEvent>,
     onSelectEvent: (GroupwareCalendarEvent) -> Unit,
     modifier: Modifier = Modifier,
@@ -564,10 +784,29 @@ private data class EventDraft(
     val allDay: Boolean,
     val location: String,
     val description: String,
+    val recurrenceRule: String?,
 ) {
     fun startValue(): String = date.isoDateToCompact() + if (allDay) "" else "T${startTime.timeToCompact()}00Z"
     fun endValue(): String? = if (allDay) nextIsoDate(date)?.isoDateToCompact()
     else date.isoDateToCompact() + "T${endTime.timeToCompact()}00Z"
+}
+
+private enum class EventRecurrencePreset(
+    val label: String,
+    val rule: String?,
+) {
+    None("Does not repeat", null),
+    Daily("Daily", "FREQ=DAILY"),
+    Weekly("Weekly", "FREQ=WEEKLY"),
+    Monthly("Monthly", "FREQ=MONTHLY"),
+    Custom("Custom", null),
+    ;
+
+    companion object {
+        fun forRule(rule: String?): EventRecurrencePreset = entries.firstOrNull { preset ->
+            preset != Custom && preset.rule?.equals(rule, ignoreCase = true) == true
+        } ?: if (rule.isNullOrBlank()) None else Custom
+    }
 }
 
 @Composable
@@ -587,9 +826,22 @@ private fun EventEditorDialog(
     var allDay by remember(event) { mutableStateOf(event?.allDay ?: false) }
     var location by remember(event) { mutableStateOf(event?.location.orEmpty()) }
     var description by remember(event) { mutableStateOf(event?.description.orEmpty()) }
+    var recurrencePresetName by remember(event) {
+        mutableStateOf(EventRecurrencePreset.forRule(event?.recurrenceRule).name)
+    }
+    var customRecurrenceRule by remember(event) { mutableStateOf(event?.recurrenceRule.orEmpty()) }
     var calendar by remember(calendars) { mutableStateOf(calendars.firstOrNull()) }
+    val recurrencePreset = EventRecurrencePreset.entries.firstOrNull { it.name == recurrencePresetName }
+        ?: EventRecurrencePreset.None
+    val recurrenceRule = when (recurrencePreset) {
+        EventRecurrencePreset.None -> null
+        EventRecurrencePreset.Custom -> customRecurrenceRule.trim().takeIf(String::isNotBlank)
+        else -> recurrencePreset.rule
+    }
+    val recurrenceValid = recurrencePreset != EventRecurrencePreset.Custom ||
+        recurrenceRule?.let(::isSupportedCalendarRecurrenceRuleForWrite) == true
     val valid = title.isNotBlank() && date.isIsoCalendarDate() &&
-        (allDay || startTime.isCalendarTime() && endTime.isCalendarTime())
+        (allDay || startTime.isCalendarTime() && endTime.isCalendarTime()) && recurrenceValid
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -603,6 +855,37 @@ private fun EventEditorDialog(
                         label = { Text("Title") },
                         modifier = Modifier.fillMaxWidth(),
                     )
+                }
+                item {
+                    Text("Repeats", style = MaterialTheme.typography.labelLarge)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                        items(EventRecurrencePreset.entries) { preset ->
+                            FilterChip(
+                                selected = recurrencePreset == preset,
+                                onClick = {
+                                    recurrencePresetName = preset.name
+                                    if (preset == EventRecurrencePreset.Custom && customRecurrenceRule.isBlank()) {
+                                        customRecurrenceRule = "FREQ=WEEKLY;INTERVAL=2"
+                                    }
+                                },
+                                label = { Text(preset.label) },
+                            )
+                        }
+                    }
+                }
+                if (recurrencePreset == EventRecurrencePreset.Custom) {
+                    item {
+                        OutlinedTextField(
+                            value = customRecurrenceRule,
+                            onValueChange = { customRecurrenceRule = it },
+                            label = { Text("Recurrence rule") },
+                            supportingText = {
+                                Text("Daily, weekly, or monthly rule, for example FREQ=WEEKLY;BYDAY=MO,WE")
+                            },
+                            isError = !recurrenceValid,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
                 item {
                     OutlinedTextField(
@@ -678,7 +961,16 @@ private fun EventEditorDialog(
                 enabled = valid && calendar != null,
                 onClick = {
                     onSave(
-                        EventDraft(title, date, startTime, endTime, allDay, location, description),
+                        EventDraft(
+                            title,
+                            date,
+                            startTime,
+                            endTime,
+                            allDay,
+                            location,
+                            description,
+                            recurrenceRule,
+                        ),
                         requireNotNull(calendar),
                     )
                 },
@@ -688,17 +980,17 @@ private fun EventEditorDialog(
     )
 }
 
-private fun GroupwareCalendarEvent.displayTimeRange(): String {
+internal fun GroupwareCalendarEvent.displayTimeRange(): String {
     if (allDay) return "All day"
     val startTime = start.compactTime()
     val endTime = end?.compactTime()
     return if (endTime == null) startTime else "$startTime - $endTime"
 }
 
-private fun String.compactTime(): String =
+internal fun String.compactTime(): String =
     if (length >= 13 && getOrNull(8) == 'T') "${substring(9, 11)}:${substring(11, 13)}" else "09:00"
 
-private fun String.displayCalendarDate(): String {
+internal fun String.displayCalendarDate(): String {
     if (length != 8) return this
     val year = take(4).toIntOrNull() ?: return this
     val month = substring(4, 6).toIntOrNull()?.takeIf { it in 1..12 } ?: return this
@@ -768,20 +1060,6 @@ private fun epochDayToCivil(epochDay: Long): Triple<Int, Int, Int> {
     return Triple(year, month, day)
 }
 
-private fun dayOfWeekMondayFirst(year: Int, month: Int, day: Int): Int {
-    var adjustedYear = year
-    var adjustedMonth = month
-    if (adjustedMonth < 3) {
-        adjustedMonth += 12
-        adjustedYear -= 1
-    }
-    val k = adjustedYear % 100
-    val j = adjustedYear / 100
-    val h = (day + (13 * (adjustedMonth + 1)) / 5 + k + k / 4 + j / 4 + 5 * j) % 7
-    val sundayFirst = (h + 6) % 7
-    return (sundayFirst + 6) % 7
-}
-
 internal fun groupwareCalendarDaysInMonth(year: Int, month: Int): Int = when (month) {
     2 -> if (year % 400 == 0 || year % 4 == 0 && year % 100 != 0) 29 else 28
     4, 6, 9, 11 -> 30
@@ -794,3 +1072,4 @@ private val MONTH_NAMES = listOf(
 )
 private val WEEK_DAYS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 private const val EDITING_MARKER = "__editing__"
+private const val MAXIMUM_RETAINED_CALENDAR_MONTHS = 24

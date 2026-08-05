@@ -71,8 +71,17 @@ data class DynamicResource(
     val fields: List<DynamicField> = emptyList(),
     val capabilityIds: List<String> = emptyList(),
     val permissionIds: List<String> = emptyList(),
+    /** Exact trusted binary GET used to render bounded previews for records in this resource. */
+    val recordImagePreview: DynamicRecordImagePreviewSpec? = null,
     val confidence: Confidence,
     val provenance: List<Provenance> = emptyList(),
+)
+
+@Serializable
+data class DynamicRecordImagePreviewSpec(
+    val actionId: String,
+    /** Contract-declared successful response media types, normalized without parameters. */
+    val declaredContentTypes: List<String>,
 )
 
 @Serializable

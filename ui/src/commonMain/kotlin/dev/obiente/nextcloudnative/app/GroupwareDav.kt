@@ -892,11 +892,13 @@ fun createGroupwareCalendarEventContent(
     allDay: Boolean,
     location: String? = null,
     description: String? = null,
+    recurrenceRule: String? = null,
 ): String {
     require(uid.isNotBlank() && uid.none(Char::isISOControl)) { "The event id is invalid." }
     require(title.isNotBlank()) { "An event title is required." }
     require(start.isCalendarDateValue(allDay)) { "The event start is invalid." }
     require(end == null || end.isCalendarDateValue(allDay)) { "The event end is invalid." }
+    recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
     val dateParameter = if (allDay) ";VALUE=DATE" else ""
     return buildList {
         add("BEGIN:VCALENDAR")
@@ -909,6 +911,7 @@ fun createGroupwareCalendarEventContent(
         add("SUMMARY:${title.escapeCalendarText()}")
         location?.takeIf(String::isNotBlank)?.let { add("LOCATION:${it.escapeCalendarText()}") }
         description?.takeIf(String::isNotBlank)?.let { add("DESCRIPTION:${it.escapeCalendarText()}") }
+        recurrenceRule?.trim()?.takeIf(String::isNotBlank)?.let { add("RRULE:$it") }
         add("END:VEVENT")
         add("END:VCALENDAR")
     }.joinToString("\r\n", postfix = "\r\n")
@@ -922,13 +925,15 @@ fun updateGroupwareCalendarEventContent(
     allDay: Boolean,
     location: String?,
     description: String?,
+    recurrenceRule: String? = event.recurrenceRule,
 ): String {
+    recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
     val original = event.rawCalendar.unfoldCalendarLines().toMutableList()
     val eventStart = original.indexOfFirst { it.equals("BEGIN:VEVENT", ignoreCase = true) }
     val eventEnd = original.indexOfFirst { it.equals("END:VEVENT", ignoreCase = true) }
     if (eventStart < 0 || eventEnd <= eventStart) {
         return createGroupwareCalendarEventContent(
-            event.uid, title, start, end, allDay, location, description,
+            event.uid, title, start, end, allDay, location, description, recurrenceRule,
         )
     }
     val replacements = linkedMapOf(
@@ -937,6 +942,7 @@ fun updateGroupwareCalendarEventContent(
         "SUMMARY" to "SUMMARY:${title.escapeCalendarText()}",
         "LOCATION" to location?.takeIf(String::isNotBlank)?.let { "LOCATION:${it.escapeCalendarText()}" },
         "DESCRIPTION" to description?.takeIf(String::isNotBlank)?.let { "DESCRIPTION:${it.escapeCalendarText()}" },
+        "RRULE" to recurrenceRule?.trim()?.takeIf(String::isNotBlank)?.let { "RRULE:$it" },
     )
     replacements.forEach { (name, replacement) ->
         val index = (eventStart + 1 until eventEnd).firstOrNull { lineIndex ->
@@ -952,6 +958,83 @@ fun updateGroupwareCalendarEventContent(
     }
     return original.joinToString("\r\n", postfix = "\r\n")
 }
+
+private fun requireValidCalendarRecurrenceRule(value: String) {
+    require(isSupportedCalendarRecurrenceRuleForWrite(value)) {
+        "Use a supported daily, weekly, or monthly recurrence rule."
+    }
+}
+
+internal fun isSupportedCalendarRecurrenceRuleForWrite(value: String): Boolean {
+    val normalized = value.trim().uppercase()
+    if (
+        normalized.length !in 1..MAX_CALENDAR_RECURRENCE_RULE_LENGTH ||
+        normalized.any(Char::isISOControl) ||
+        ':' in normalized
+    ) {
+        return false
+    }
+    val parts = normalized.split(';')
+    val fields = linkedMapOf<String, String>()
+    for (part in parts) {
+        val separator = part.indexOf('=')
+        if (separator <= 0 || separator == part.lastIndex) return false
+        val key = part.substring(0, separator)
+        val fieldValue = part.substring(separator + 1)
+        if (key !in SUPPORTED_CALENDAR_RECURRENCE_FIELDS || fields.put(key, fieldValue) != null) return false
+    }
+    val frequency = fields["FREQ"] ?: return false
+    if (frequency !in SUPPORTED_CALENDAR_RECURRENCE_FREQUENCIES) return false
+    if (fields["INTERVAL"]?.toIntOrNull()?.let { it !in 1..1_000 } == true) return false
+    if ("INTERVAL" in fields && fields["INTERVAL"]?.toIntOrNull() == null) return false
+    if (fields["COUNT"]?.toIntOrNull()?.let { it !in 1..MAX_CALENDAR_OCCURRENCES } == true) return false
+    if ("COUNT" in fields && fields["COUNT"]?.toIntOrNull() == null) return false
+    if ("COUNT" in fields && "UNTIL" in fields) return false
+    if (fields["UNTIL"]?.isSupportedCalendarRecurrenceUntil() == false) return false
+    if (fields["WKST"]?.let { it !in CALENDAR_WEEK_DAYS } == true) return false
+
+    val byDays = fields["BYDAY"]?.split(',').orEmpty()
+    val byMonthDays = fields["BYMONTHDAY"]?.split(',').orEmpty()
+    if ("BYDAY" in fields && byDays.isEmpty()) return false
+    if ("BYMONTHDAY" in fields && byMonthDays.isEmpty()) return false
+    return when (frequency) {
+        "DAILY" -> "BYDAY" !in fields && "BYMONTHDAY" !in fields && "WKST" !in fields
+        "WEEKLY" -> {
+            "BYMONTHDAY" !in fields && byDays.all { it in CALENDAR_WEEK_DAYS }
+        }
+        "MONTHLY" -> {
+            "WKST" !in fields && !("BYDAY" in fields && "BYMONTHDAY" in fields) &&
+                byDays.all(String::isSupportedMonthlyCalendarByDay) &&
+                byMonthDays.all { token -> token.toIntOrNull()?.let { it in -31..31 && it != 0 } == true }
+        }
+        else -> false
+    }
+}
+
+private fun String.isSupportedCalendarRecurrenceUntil(): Boolean = when {
+    length == 8 -> all(Char::isDigit)
+    length == 16 && getOrNull(8) == 'T' && last() == 'Z' ->
+        take(8).all(Char::isDigit) && substring(9, 15).all(Char::isDigit)
+    else -> false
+}
+
+private fun String.isSupportedMonthlyCalendarByDay(): Boolean {
+    val day = takeLast(2)
+    if (day !in CALENDAR_WEEK_DAYS) return false
+    val ordinal = dropLast(2)
+    return ordinal.isEmpty() || ordinal.toIntOrNull()?.let { it in -5..5 && it != 0 } == true
+}
+
+private val SUPPORTED_CALENDAR_RECURRENCE_FREQUENCIES = setOf("DAILY", "WEEKLY", "MONTHLY")
+private val SUPPORTED_CALENDAR_RECURRENCE_FIELDS = setOf(
+    "FREQ",
+    "INTERVAL",
+    "COUNT",
+    "UNTIL",
+    "BYDAY",
+    "BYMONTHDAY",
+    "WKST",
+)
 
 private data class CalendarProperty(val declaration: String, val value: String)
 
@@ -1191,6 +1274,7 @@ private const val MAX_DAV_SYNC_PAGES = 100
 private const val MAX_DAV_SYNC_TOKEN_LENGTH = 4_096
 private const val MAX_DAV_HREF_LENGTH = 4_096
 private const val MAX_DAV_ETAG_LENGTH = 1_024
+private const val MAX_CALENDAR_RECURRENCE_RULE_LENGTH = 1_024
 private const val MAX_DAV_OBJECT_BYTES = 1 * 1024 * 1024
 private const val DAV_DISCOVERY_RESPONSE_BYTES = 1L * 1024L * 1024L
 private const val DAV_COLLECTION_RESPONSE_BYTES = 4L * 1024L * 1024L

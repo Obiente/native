@@ -223,10 +223,6 @@ fun parseDashboardItems(
                 overlayIconUrl = item.optionalDashboardLink("overlayIconUrl"),
                 sinceId = item.requiredDashboardText("sinceId", MAX_DASHBOARD_CURSOR_LENGTH),
             )
-        }.also { parsed ->
-            require(parsed.map(NativeDashboardItem::sinceId).distinct().size == parsed.size) {
-                "The dashboard widget returned duplicate item cursors."
-            }
         }
     }
 }

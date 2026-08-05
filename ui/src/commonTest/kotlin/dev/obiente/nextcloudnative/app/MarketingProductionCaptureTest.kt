@@ -18,6 +18,7 @@ class MarketingProductionCaptureTest {
             "homepage-overview-desktop",
             "homepage-overview-mobile",
             "homepage-files-desktop",
+            "homepage-files-mobile",
             "homepage-photos-desktop",
             "homepage-conversations-desktop",
             "homepage-planning-desktop",
@@ -47,13 +48,19 @@ class MarketingProductionCaptureTest {
     }
 
     @Test
-    fun `homepage files fixture exercises the production grid with useful synthetic content`() {
-        assertTrue(marketingHomepageFiles.count(NextcloudFile::isDirectory) >= 3)
+    fun `homepage files fixture exercises the production workspace with useful synthetic content`() {
+        assertTrue(marketingHomepageFiles.size >= 12)
+        assertTrue(marketingHomepageFiles.count(NextcloudFile::isDirectory) >= 5)
         assertTrue(marketingHomepageFiles.count { it.mimeType?.startsWith("image/") == true } >= 3)
         assertTrue(marketingHomepageFiles.any { it.mimeType == "text/markdown" })
         assertTrue(marketingHomepageFiles.any { it.mimeType == "application/pdf" })
+        assertTrue(marketingHomepageFiles.any { it.mimeType?.startsWith("video/") == true })
+        assertTrue(marketingHomepageFiles.any { it.mimeType?.startsWith("audio/") == true })
         assertTrue(marketingHomepageFiles.filterNot(NextcloudFile::isDirectory).all { it.fileId != null })
         assertTrue(marketingHomepageFiles.filter { it.hasPreview }.all { !it.etag.isNullOrBlank() })
+        assertTrue(marketingHomepageFiles.count(NextcloudFile::favorite) >= 4)
+        assertTrue(marketingHomepageFiles.any { it.unreadComments > 0 })
+        assertTrue(marketingHomepageFiles.all { !it.ownerDisplayName.isNullOrBlank() })
         assertEquals(NextcloudFileListingSource.Cache, marketingHomepageCachedFileListing.source)
         assertEquals(NextcloudFileListingSource.Network, marketingHomepageFileListing.source)
         assertTrue(marketingHomepageFileOfflineAvailability.values.all {
@@ -63,10 +70,23 @@ class MarketingProductionCaptureTest {
 
     @Test
     fun `home fixture provides useful deterministic dashboard content`() {
-        assertEquals(4, marketingDashboardSnapshot.widgets.size)
+        assertEquals(8, marketingDashboardSnapshot.widgets.size)
         assertTrue(marketingDashboardSnapshot.widgets.all { widget ->
-            marketingDashboardSnapshot.itemsByWidget[widget.id].orEmpty().isNotEmpty()
+            marketingDashboardSnapshot.itemsByWidget[widget.id].orEmpty().size >= 2
         })
+        assertTrue(marketingDashboardSnapshot.itemsByWidget.values.sumOf { it.size } >= 25)
+        assertEquals(6, marketingHomepageTalkPage.messages.size)
+    }
+
+    @Test
+    fun `apps command center capture covers both desktop themes`() {
+        val captures = marketingCaptureVariants.filter { variant ->
+            variant.baseScenario == "apps-workspace-desktop"
+        }
+
+        assertEquals(2, captures.size)
+        assertEquals(setOf(MarketingCaptureTheme.Dark, MarketingCaptureTheme.Light), captures.map { it.theme }.toSet())
+        assertTrue(captures.all { it.scenario.purpose == MarketingCapturePurpose.Showcase })
     }
 
     @Test

@@ -7,13 +7,15 @@ export function escapeXml(value) {
     .replaceAll("'", "&apos;");
 }
 
-export function buildSitemap(routes, newsEntries, baseUrl) {
+export function buildSitemap(routes, contentEntries, baseUrl) {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
     ...routes.map((route) => {
-      const post = newsEntries.find((entry) => entry.path === route);
-      const lastModified = post ? `<lastmod>${escapeXml(post.lastUpdated)}</lastmod>` : "";
+      const entry = contentEntries.find((candidate) => candidate.path === route);
+      const lastModified = entry?.lastUpdated
+        ? `<lastmod>${escapeXml(entry.lastUpdated)}</lastmod>`
+        : "";
       return `  <url><loc>${escapeXml(`${baseUrl}${route}`)}</loc>${lastModified}</url>`;
     }),
     "</urlset>",

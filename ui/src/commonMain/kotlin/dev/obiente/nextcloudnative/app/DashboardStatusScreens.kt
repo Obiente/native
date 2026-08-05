@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,10 +15,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -29,6 +30,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -38,6 +40,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -45,9 +48,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragHandle
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -144,7 +153,9 @@ internal fun NativeDashboardPresentation(
     onSearch: (() -> Unit)? = null,
     onSettings: (() -> Unit)? = null,
 ) {
-    var customizeWorkspace by remember(workspaceLayout.scope) { mutableStateOf(false) }
+    var customizeWorkspace by rememberSaveable(workspaceLayout.scope.persistenceKey) {
+        mutableStateOf(false)
+    }
     var workspacePersistenceError by remember(workspaceLayout.scope) { mutableStateOf<String?>(null) }
     var activeWorkspaceLayout by remember(workspaceLayout.scope) { mutableStateOf(workspaceLayout) }
     LaunchedEffect(workspaceLayout) {
@@ -154,7 +165,11 @@ internal fun NativeDashboardPresentation(
     Column(modifier = Modifier.fillMaxSize()) {
         DashboardHeader(
             title = "Home",
-            subtitle = "Your cloud at a glance",
+            subtitle = when (workspaceLayout.scope.formFactor) {
+                HomeFormFactor.Phone -> "What needs you next"
+                HomeFormFactor.Tablet -> "Your cloud, ready to continue"
+                HomeFormFactor.Desktop -> "Your work across Nextcloud"
+            },
             onBack = onBack,
             onRefresh = onRefresh,
             onCustomize = { customizeWorkspace = true },
@@ -194,58 +209,65 @@ internal fun NativeDashboardPresentation(
                 current.status?.let { status ->
                     CurrentStatusStrip(status = status, onClick = onOpenStatus)
                 }
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(330.dp),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(NextcloudSpacing.XLarge),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                ) {
-                    items(
-                        effectiveLayout.visibleSections,
-                        key = { section -> section.id.value },
-                    ) { section ->
-                        when (section.id) {
-                            HomeSectionIds.QuickActions -> DashboardQuickActionsCard(
-                                installedApps = installedApps,
-                                onOpenApp = onOpenApp,
-                            )
-
-                            else -> bindingsBySection[section.id]?.let { binding ->
-                                DashboardWidgetCard(
-                                    widget = binding.widget,
-                                    items = current.snapshot.itemsByWidget[binding.widget.id].orEmpty(),
-                                    size = section.size,
-                                    onOpenLink = onOpenLink,
-                                )
-                            }
+                val sectionLabels = remember(bindings) {
+                    buildMap {
+                        put(HomeSectionIds.QuickActions, "Quick actions")
+                        bindings.forEach { put(it.sectionId, it.widget.title) }
+                    }
+                }
+                val updateWorkspaceLayout: (HomeWorkspaceLayout, Boolean) -> Unit = { updated, persist ->
+                    activeWorkspaceLayout = updated
+                    if (persist) {
+                        workspacePersistenceError = if (onWorkspaceLayoutChanged(updated)) {
+                            null
+                        } else {
+                            "Your changes are active, but could not be saved on this device."
                         }
                     }
                 }
-
                 if (customizeWorkspace) {
-                    HomeWorkspaceCustomizerDialog(
+                    HomeWorkspaceEditBar(
                         layout = effectiveLayout,
-                        sectionLabels = buildMap {
-                            put(HomeSectionIds.QuickActions, "Quick actions")
-                            bindings.forEach { put(it.sectionId, it.widget.title) }
-                        },
+                        sectionLabels = sectionLabels,
                         persistenceError = workspacePersistenceError,
-                        onDismiss = {
+                        onRestoreDefaults = {
+                            updateWorkspaceLayout(
+                                effectiveLayout.restoreDefaults().reconcileAvailableSections(
+                                    effectiveLayout.sections.map(HomeWorkspaceSection::id),
+                                ),
+                                true,
+                            )
+                        },
+                        onShow = { sectionId ->
+                            updateWorkspaceLayout(effectiveLayout.show(sectionId), true)
+                        },
+                        onDone = {
                             customizeWorkspace = false
                             workspacePersistenceError = null
                         },
-                        onSave = { updated ->
-                            activeWorkspaceLayout = updated
-                            if (onWorkspaceLayoutChanged(updated)) {
-                                customizeWorkspace = false
-                                workspacePersistenceError = null
-                            } else {
-                                workspacePersistenceError =
-                                    "Your changes are active, but could not be saved on this device."
-                            }
-                        },
                     )
+                }
+                HomeWorkspaceSurface(
+                    layout = effectiveLayout,
+                    editing = customizeWorkspace,
+                    sectionLabels = sectionLabels,
+                    onLayoutChanged = updateWorkspaceLayout,
+                ) { section ->
+                    when (section.id) {
+                        HomeSectionIds.QuickActions -> DashboardQuickActionsCard(
+                            installedApps = installedApps,
+                            onOpenApp = onOpenApp,
+                        )
+
+                        else -> bindingsBySection[section.id]?.let { binding ->
+                            DashboardWidgetCard(
+                                widget = binding.widget,
+                                items = current.snapshot.itemsByWidget[binding.widget.id].orEmpty(),
+                                size = section.size,
+                                onOpenLink = onOpenLink,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -477,106 +499,276 @@ private fun DashboardQuickActionsCard(
 }
 
 @Composable
-private fun HomeWorkspaceCustomizerDialog(
+private fun HomeWorkspaceEditBar(
     layout: HomeWorkspaceLayout,
     sectionLabels: Map<HomeSectionId, String>,
     persistenceError: String?,
-    onDismiss: () -> Unit,
-    onSave: (HomeWorkspaceLayout) -> Unit,
+    onRestoreDefaults: () -> Unit,
+    onShow: (HomeSectionId) -> Unit,
+    onDone: () -> Unit,
 ) {
-    var draft by remember(layout) { mutableStateOf(layout) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Customize home") },
-        text = {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().heightIn(max = 540.dp),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(
+            horizontal = NextcloudSpacing.XLarge,
+            vertical = NextcloudSpacing.Small,
+        ),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             ) {
-                persistenceError?.let { message ->
-                    item {
-                        Text(message, color = MaterialTheme.colorScheme.error)
-                    }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Arrange Home", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Drag each card where it belongs. Its controls stay with the card.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
-                items(draft.sections, key = { section -> section.id.value }) { section ->
-                    val index = draft.sections.indexOfFirst { it.id == section.id }
-                    Surface(
-                        color = NextcloudTheme.colors.appTile,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    sectionLabels[section.id] ?: "Dashboard section",
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                TextButton(
-                                    enabled = index > 0,
-                                    onClick = { draft = draft.move(section.id, index - 1) },
-                                ) {
-                                    Text("Up")
-                                }
-                                TextButton(
-                                    enabled = index < draft.sections.lastIndex,
-                                    onClick = { draft = draft.move(section.id, index + 1) },
-                                ) {
-                                    Text("Down")
-                                }
-                            }
-                            FilterChip(
-                                selected = section.visible,
-                                onClick = {
-                                    draft = if (section.visible) {
-                                        draft.hide(section.id)
-                                    } else {
-                                        draft.show(section.id)
-                                    }
-                                },
-                                label = { Text(if (section.visible) "Shown" else "Hidden") },
-                            )
-                            LazyRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                            ) {
-                                items(HomeSectionSize.entries) { size ->
-                                    FilterChip(
-                                        selected = section.size == size,
-                                        onClick = { draft = draft.resize(section.id, size) },
-                                        label = { Text(size.name) },
-                                    )
-                                }
-                            }
+                TextButton(onClick = onRestoreDefaults) { Text("Reset") }
+                Button(onClick = onDone) { Text("Done") }
+            }
+            persistenceError?.let { message ->
+                Text(message, color = MaterialTheme.colorScheme.error)
+            }
+            if (layout.hiddenSections.isNotEmpty()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                ) {
+                    layout.hiddenSections.forEach { section ->
+                        OutlinedButton(onClick = { onShow(section.id) }) {
+                            Text("Show ${sectionLabels[section.id] ?: "section"}")
                         }
                     }
                 }
             }
-        },
-        dismissButton = {
-            Row {
-                TextButton(
-                    onClick = {
-                        draft = draft.restoreDefaults()
-                            .reconcileAvailableSections(layout.sections.map(HomeWorkspaceSection::id))
-                    },
-                ) {
-                    Text("Restore defaults")
-                }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
-            }
-        },
-        confirmButton = {
-            Button(onClick = { onSave(draft) }) { Text("Save") }
-        },
-    )
+        }
+    }
 }
+
+@Composable
+private fun HomeWorkspaceSurface(
+    layout: HomeWorkspaceLayout,
+    editing: Boolean,
+    sectionLabels: Map<HomeSectionId, String>,
+    onLayoutChanged: (HomeWorkspaceLayout, Boolean) -> Unit,
+    sectionContent: @Composable (HomeWorkspaceSection) -> Unit,
+) {
+    val sectionBounds = remember(layout.scope) { mutableStateMapOf<HomeSectionId, Rect>() }
+    var draggingSectionId by remember(layout.scope) { mutableStateOf<HomeSectionId?>(null) }
+    var dragPosition by remember(layout.scope) { mutableStateOf<Offset?>(null) }
+
+    fun moveDraggedSection(position: Offset) {
+        val sourceId = draggingSectionId ?: return
+        val targetId = sectionBounds.entries.firstOrNull { (_, bounds) ->
+            bounds.contains(position)
+        }?.key ?: return
+        if (targetId == sourceId) return
+        val destinationIndex = layout.sections.indexOfFirst { it.id == targetId }
+        if (destinationIndex >= 0) {
+            onLayoutChanged(layout.move(sourceId, destinationIndex), false)
+        }
+    }
+
+    val content: @Composable (HomeWorkspaceSection) -> Unit = { item ->
+        val index = layout.sections.indexOfFirst { it.id == item.id }
+        HomeWorkspaceSectionContainer(
+            section = item,
+            label = sectionLabels[item.id] ?: "Dashboard section",
+            index = index,
+            sectionCount = layout.sections.size,
+            editing = editing,
+            dragging = draggingSectionId == item.id,
+            onBoundsChanged = { bounds -> sectionBounds[item.id] = bounds },
+            onDragStart = { position ->
+                draggingSectionId = item.id
+                dragPosition = position
+            },
+            onDrag = { delta ->
+                dragPosition?.let { current ->
+                    val position = current + delta
+                    dragPosition = position
+                    moveDraggedSection(position)
+                }
+            },
+            onDragEnd = {
+                draggingSectionId = null
+                dragPosition = null
+                onLayoutChanged(layout, true)
+            },
+            onDragCancel = {
+                draggingSectionId = null
+                dragPosition = null
+            },
+            onMoveEarlier = {
+                onLayoutChanged(layout.move(item.id, index - 1), true)
+            },
+            onMoveLater = {
+                onLayoutChanged(layout.move(item.id, index + 1), true)
+            },
+            onResize = {
+                onLayoutChanged(layout.resize(item.id, item.size.nextHomeSectionSize()), true)
+            },
+            onHide = {
+                onLayoutChanged(layout.hide(item.id), true)
+            },
+        ) {
+            sectionContent(item)
+        }
+    }
+
+    when (layout.scope.formFactor) {
+        HomeFormFactor.Phone -> MobileHomeWorkspace(layout.visibleSections, content)
+        HomeFormFactor.Tablet -> TabletHomeWorkspace(layout.visibleSections, content)
+        HomeFormFactor.Desktop -> DesktopHomeWorkspace(layout.visibleSections, content)
+    }
+}
+
+@Composable
+private fun MobileHomeWorkspace(
+    sections: List<HomeWorkspaceSection>,
+    sectionContent: @Composable (HomeWorkspaceSection) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start = NextcloudSpacing.Medium,
+            top = NextcloudSpacing.Medium,
+            end = NextcloudSpacing.Medium,
+            bottom = NextcloudSpacing.XXLarge,
+        ),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+    ) {
+        items(sections, key = { item -> item.id.value }) { item ->
+            sectionContent(item)
+        }
+    }
+}
+
+@Composable
+private fun TabletHomeWorkspace(
+    sections: List<HomeWorkspaceSection>,
+    sectionContent: @Composable (HomeWorkspaceSection) -> Unit,
+) {
+    LazyVerticalStaggeredGrid(
+        columns = StaggeredGridCells.Adaptive(300.dp),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(NextcloudSpacing.Large),
+        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+        verticalItemSpacing = NextcloudSpacing.Large,
+    ) {
+        items(sections, key = { item -> item.id.value }) { item ->
+            sectionContent(item)
+        }
+    }
+}
+
+@Composable
+private fun DesktopHomeWorkspace(
+    sections: List<HomeWorkspaceSection>,
+    sectionContent: @Composable (HomeWorkspaceSection) -> Unit,
+) {
+    LazyVerticalStaggeredGrid(
+        columns = StaggeredGridCells.Adaptive(340.dp),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start = NextcloudSpacing.XLarge,
+            top = NextcloudSpacing.Large,
+            end = NextcloudSpacing.XLarge,
+            bottom = NextcloudSpacing.XXLarge,
+        ),
+        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+        verticalItemSpacing = NextcloudSpacing.Large,
+    ) {
+        items(sections, key = { item -> item.id.value }) { item ->
+            sectionContent(item)
+        }
+    }
+}
+
+@Composable
+private fun HomeWorkspaceSectionContainer(
+    section: HomeWorkspaceSection,
+    label: String,
+    index: Int,
+    sectionCount: Int,
+    editing: Boolean,
+    dragging: Boolean,
+    onBoundsChanged: (Rect) -> Unit,
+    onDragStart: (Offset) -> Unit,
+    onDrag: (Offset) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit,
+    onMoveEarlier: () -> Unit,
+    onMoveLater: () -> Unit,
+    onResize: () -> Unit,
+    onHide: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coordinates -> onBoundsChanged(coordinates.boundsInWindow()) }
+            .graphicsLayer { alpha = if (dragging) 0.62f else 1f },
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+    ) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+            content()
+            if (editing) {
+                Surface(
+                    modifier = Modifier.align(Alignment.TopEnd).padding(NextcloudSpacing.XSmall),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = CircleShape,
+                    shadowElevation = 2.dp,
+                ) {
+                    NextcloudBoardDragHandle(
+                        itemLabel = label,
+                        dragActive = dragging,
+                        onDragStart = onDragStart,
+                        onDrag = onDrag,
+                        onDragEnd = onDragEnd,
+                        onDragCancel = onDragCancel,
+                    )
+                }
+            }
+        }
+        if (editing) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                shape = RoundedCornerShape(NextcloudRadii.Small),
+            ) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.XSmall),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                ) {
+                    OutlinedButton(enabled = index > 0, onClick = onMoveEarlier) {
+                        Text("Earlier")
+                    }
+                    OutlinedButton(enabled = index in 0 until sectionCount - 1, onClick = onMoveLater) {
+                        Text("Later")
+                    }
+                    TextButton(onClick = onResize) {
+                        Text("Size: ${section.size.name.lowercase()}")
+                    }
+                    TextButton(onClick = onHide) { Text("Hide") }
+                }
+            }
+        }
+    }
+}
+
+private fun HomeSectionSize.nextHomeSectionSize(): HomeSectionSize =
+    HomeSectionSize.entries[(ordinal + 1) % HomeSectionSize.entries.size]
 
 @Composable
 private fun DashboardWidgetCard(
@@ -819,6 +1011,25 @@ private sealed interface UserStatusSurfaceState {
     data class Failed(val message: String) : UserStatusSurfaceState
 }
 
+private object UserStatusWorkspaceMemoryCache {
+    private val entries = linkedMapOf<String, UserStatusSurfaceState.Available>()
+
+    fun get(session: NextcloudSession): UserStatusSurfaceState.Available? {
+        val key = key(session)
+        return entries.remove(key)?.also { entries[key] = it }
+    }
+
+    fun store(session: NextcloudSession, value: UserStatusSurfaceState.Available) {
+        val key = key(session)
+        entries.remove(key)
+        entries[key] = value
+        while (entries.size > MAXIMUM_RETAINED_STATUS_ACCOUNTS) entries.remove(entries.keys.first())
+    }
+
+    private fun key(session: NextcloudSession): String =
+        "${session.serverUrl.trimEnd('/')}\n${session.loginName}"
+}
+
 private enum class StatusExpiryChoice(val label: String, val seconds: Long?) {
     Never("No expiry", null),
     OneHour("1 hour", 60L * 60L),
@@ -832,7 +1043,13 @@ internal fun NativeUserStatusScreen(
     session: NextcloudSession,
     onBack: () -> Unit,
 ) {
-    var state by remember(session) { mutableStateOf<UserStatusSurfaceState>(UserStatusSurfaceState.Loading) }
+    var state by remember(session) {
+        mutableStateOf<UserStatusSurfaceState>(
+            UserStatusWorkspaceMemoryCache.get(session) ?: UserStatusSurfaceState.Loading,
+        )
+    }
+    var refreshing by remember(session) { mutableStateOf(false) }
+    var refreshError by remember(session) { mutableStateOf<String?>(null) }
     var refreshAttempt by remember(session) { mutableStateOf(0) }
     var customMessage by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
     var customIcon by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
@@ -848,7 +1065,15 @@ internal fun NativeUserStatusScreen(
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(session, refreshAttempt) {
-        state = UserStatusSurfaceState.Loading
+        val cached = UserStatusWorkspaceMemoryCache.get(session)
+        if (cached != null) state = cached
+        val retained = cached ?: state as? UserStatusSurfaceState.Available
+        refreshError = null
+        if (retained == null) {
+            state = UserStatusSurfaceState.Loading
+        } else {
+            refreshing = true
+        }
         runCatching {
             val capabilities = parseUserStatusCapabilities(
                 services.executeNextcloudApi(session, userStatusCapabilitiesRequest()),
@@ -873,6 +1098,7 @@ internal fun NativeUserStatusScreen(
             }
         }.onSuccess { loaded ->
             state = loaded
+            UserStatusWorkspaceMemoryCache.store(session, loaded)
             if (!draftInitialized) {
                 customMessage = loaded.status.message.orEmpty()
                 customIcon = loaded.status.icon.orEmpty().takeIf {
@@ -881,10 +1107,14 @@ internal fun NativeUserStatusScreen(
                 draftInitialized = true
             }
         }.onFailure { failure ->
-            state = UserStatusSurfaceState.Failed(
-                failure.message ?: "Your status could not be loaded.",
-            )
+            val message = failure.message ?: "Your status could not be loaded."
+            if (retained == null) {
+                state = UserStatusSurfaceState.Failed(message)
+            } else {
+                refreshError = message
+            }
         }
+        refreshing = false
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -894,6 +1124,27 @@ internal fun NativeUserStatusScreen(
             onBack = onBack,
             onRefresh = { refreshAttempt += 1 },
         )
+        if (refreshing) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        refreshError?.let { message ->
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(
+                    horizontal = NextcloudSpacing.Large,
+                    vertical = NextcloudSpacing.Small,
+                ),
+                color = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                shape = RoundedCornerShape(NextcloudRadii.Small),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = NextcloudSpacing.Medium),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(message, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { refreshAttempt += 1 }) { Text("Retry") }
+                }
+            }
+        }
         when (val current = state) {
             UserStatusSurfaceState.Loading -> DashboardLoading()
             is UserStatusSurfaceState.Failed -> DashboardFailure(
@@ -1131,6 +1382,8 @@ internal fun NativeUserStatusScreen(
         }
     }
 }
+
+private const val MAXIMUM_RETAINED_STATUS_ACCOUNTS = 4
 
 @Composable
 private fun CurrentUserStatusCard(status: NativeUserStatus) {

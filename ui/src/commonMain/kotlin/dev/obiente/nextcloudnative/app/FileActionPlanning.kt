@@ -6,6 +6,8 @@ enum class FileMenuAction {
     OpenWith,
     EditText,
     EditWith,
+    AddFavorite,
+    RemoveFavorite,
     Details,
     VersionHistory,
     Download,
@@ -116,6 +118,14 @@ fun planFileActions(
             val reason = boundedDownloadReason ?: if (!hasVersion) "Refresh the folder before editing this file." else null
             add(action(FileMenuAction.EditWith, "Edit with...", FileActionPlacement.Overflow, reason))
         }
+        add(
+            action(
+                if (file.favorite) FileMenuAction.RemoveFavorite else FileMenuAction.AddFavorite,
+                if (file.favorite) "Remove from favorites" else "Add to favorites",
+                FileActionPlacement.Overflow,
+                mutationReason,
+            ),
+        )
         add(PlannedFileAction(FileMenuAction.Details, "Details", FileActionPlacement.Overflow))
         if (!file.isDirectory && file.fileId != null) {
             add(
@@ -401,6 +411,8 @@ private val filesScreenImplementedActions = setOf(
     FileMenuAction.Preview,
     FileMenuAction.OpenWith,
     FileMenuAction.EditText,
+    FileMenuAction.AddFavorite,
+    FileMenuAction.RemoveFavorite,
     FileMenuAction.Details,
     FileMenuAction.VersionHistory,
     FileMenuAction.Rename,

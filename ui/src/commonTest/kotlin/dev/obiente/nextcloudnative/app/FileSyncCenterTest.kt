@@ -137,7 +137,11 @@ class FileSyncCenterTest {
             nextWorkId = 2,
         )
 
-        val summary = pair.toCenterSummary("Vault")
+        val summary = pair.toCenterSummary(
+            localDisplayName = "Vault",
+            runState = FileSyncPairRunState.Active,
+            networkState = FileSyncNetworkState.Available,
+        )
 
         assertEquals("Vault", summary.localDisplayName)
         assertEquals(1, summary.conflicts.size)
@@ -168,7 +172,14 @@ class FileSyncCenterTest {
             ),
         )
 
-        assertEquals(2, pair.toCenterSummary("Camera").completedCount)
+        assertEquals(
+            2,
+            pair.toCenterSummary(
+                localDisplayName = "Camera",
+                runState = FileSyncPairRunState.Active,
+                networkState = FileSyncNetworkState.Available,
+            ).completedCount,
+        )
     }
 
     @Test
@@ -203,9 +214,35 @@ class FileSyncCenterTest {
             nextWorkId = 2,
         )
 
-        val summary = pair.toCenterSummary("Projects")
+        val summary = pair.toCenterSummary(
+            localDisplayName = "Projects",
+            runState = FileSyncPairRunState.Paused,
+            networkState = FileSyncNetworkState.WaitingForNetwork,
+        )
 
         assertEquals(1, summary.skippedCount)
         assertEquals(listOf(reason), summary.skippedReasons)
+        assertEquals(FileSyncPairRunState.Paused, summary.runState)
+        assertEquals(FileSyncNetworkState.WaitingForNetwork, summary.networkState)
+    }
+
+    @Test
+    fun `live network state distinguishes offline metered and unknown connections`() {
+        assertEquals(
+            FileSyncNetworkState.WaitingForNetwork,
+            liveFileSyncNetworkState(false, null, FileSyncNetworkPolicy.AnyConnection),
+        )
+        assertEquals(
+            FileSyncNetworkState.WaitingForNetwork,
+            liveFileSyncNetworkState(true, false, FileSyncNetworkPolicy.Unmetered),
+        )
+        assertEquals(
+            FileSyncNetworkState.Available,
+            liveFileSyncNetworkState(true, true, FileSyncNetworkPolicy.Unmetered),
+        )
+        assertEquals(
+            FileSyncNetworkState.Unknown,
+            liveFileSyncNetworkState(null, null, FileSyncNetworkPolicy.AnyConnection),
+        )
     }
 }

@@ -20,6 +20,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -242,6 +243,7 @@ internal fun RemoteFolderPickerDialog(
         mutableStateOf<NextcloudFileListingSource?>(null)
     }
     var networkConfirmedPath by remember(session, userId) { mutableStateOf<String?>(null) }
+    var displayedPath by remember(session, userId) { mutableStateOf<String?>(null) }
     var loading by remember(session, userId) { mutableStateOf(true) }
     var refreshing by remember(session, userId) { mutableStateOf(false) }
     var error by remember(session, userId) { mutableStateOf<String?>(null) }
@@ -278,13 +280,16 @@ internal fun RemoteFolderPickerDialog(
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(session, userId, currentPath, loadAttempt) {
-        files = null
-        listingSource = null
         networkConfirmedPath = null
-        loading = true
-        refreshing = false
+        val retainingCurrentPath = files != null && displayedPath == currentPath
+        if (!retainingCurrentPath) {
+            files = null
+            listingSource = null
+            query = ""
+        }
+        loading = !retainingCurrentPath
+        refreshing = retainingCurrentPath
         error = null
-        query = ""
         missingDestination = null
         val cached = runCatching {
             services.listFilesCachedWithSource(session, userId, currentPath)
@@ -292,6 +297,7 @@ internal fun RemoteFolderPickerDialog(
         if (cached != null) {
             files = cached.files
             listingSource = cached.source
+            displayedPath = currentPath
             loading = false
             refreshing = true
         }
@@ -300,6 +306,7 @@ internal fun RemoteFolderPickerDialog(
             .onSuccess { listing ->
                 files = listing.files
                 listingSource = listing.source
+                displayedPath = currentPath
                 networkConfirmedPath = currentPath.takeIf {
                     listing.source == NextcloudFileListingSource.Network
                 }
@@ -769,7 +776,9 @@ internal fun RemoteFileSyncSelectionDialog(
         mutableStateOf(initialSelection.distinct().sorted())
     }
     var files by remember(session, userId, root) { mutableStateOf<List<NextcloudFile>?>(null) }
+    var displayedAbsolutePath by remember(session, userId, root) { mutableStateOf<String?>(null) }
     var networkConfirmed by remember(session, userId, root) { mutableStateOf(false) }
+    var refreshing by remember(session, userId, root) { mutableStateOf(false) }
     var loading by remember(session, userId, root) { mutableStateOf(true) }
     var error by remember(session, userId, root) { mutableStateOf<String?>(null) }
     var loadAttempt by rememberSaveable(session.serverUrl, session.loginName, userId, root) {
@@ -780,14 +789,19 @@ internal fun RemoteFileSyncSelectionDialog(
     }
 
     LaunchedEffect(session, userId, absoluteCurrentPath, loadAttempt) {
-        loading = true
-        files = null
-        networkConfirmed = false
+        val retainingCurrentPath = files != null && displayedAbsolutePath == absoluteCurrentPath
+        loading = !retainingCurrentPath
+        refreshing = retainingCurrentPath
+        if (!retainingCurrentPath) {
+            files = null
+            networkConfirmed = false
+        }
         error = null
         runCatching { services.listFilesWithSource(session, userId, absoluteCurrentPath) }
             .rethrowRemoteFolderCancellation()
             .onSuccess { listing ->
                 files = listing.files
+                displayedAbsolutePath = absoluteCurrentPath
                 networkConfirmed = listing.source == NextcloudFileListingSource.Network
                 if (!networkConfirmed) error = "Connect to Nextcloud to verify selectable items."
             }
@@ -795,6 +809,7 @@ internal fun RemoteFileSyncSelectionDialog(
                 error = failure.message ?: "Could not open this mapped Nextcloud folder."
             }
         loading = false
+        refreshing = false
     }
 
     val visibleItems = remember(files, absoluteCurrentPath, root) {
@@ -921,6 +936,33 @@ internal fun RemoteFileSyncSelectionDialog(
                                 onCheckedChange = { toggle(currentRelativePath) },
                             )
                             Text("Select this folder", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+                if (refreshing) {
+                    item(key = "selection-refreshing") {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+                if (error != null && files != null) {
+                    item(key = "selection-refresh-error") {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            shape = RoundedCornerShape(NextcloudRadii.Small),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = NextcloudSpacing.Medium),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    requireNotNull(error),
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
+                            }
                         }
                     }
                 }

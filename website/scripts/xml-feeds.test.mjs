@@ -20,13 +20,22 @@ test("XML output escapes every reserved character", () => {
   assert.match(rss, /a&amp;b/);
 });
 
-test("sitemap uses the living article update date", () => {
-  const route = "/news/updated/";
+test("sitemap uses accurate update metadata for every content route kind", () => {
+  const newsRoute = "/news/updated/";
+  const guideRoute = "/guides/calendar/";
   const sitemap = buildSitemap(
-    [route],
-    [{ path: route, date: "2026-07-20", lastUpdated: "2026-07-24" }],
+    [newsRoute, guideRoute, "/architecture/"],
+    [
+      { path: newsRoute, date: "2026-07-20", lastUpdated: "2026-07-24" },
+      { path: guideRoute, lastUpdated: "2026-08-03" },
+    ],
     "https://example.invalid",
   );
   assert.match(sitemap, /<lastmod>2026-07-24<\/lastmod>/);
   assert.doesNotMatch(sitemap, /<lastmod>2026-07-20<\/lastmod>/);
+  assert.match(
+    sitemap,
+    /<loc>https:\/\/example\.invalid\/guides\/calendar\/<\/loc><lastmod>2026-08-03<\/lastmod>/,
+  );
+  assert.match(sitemap, /<loc>https:\/\/example\.invalid\/architecture\/<\/loc><\/url>/);
 });

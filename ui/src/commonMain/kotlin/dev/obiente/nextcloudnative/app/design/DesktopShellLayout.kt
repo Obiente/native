@@ -18,6 +18,19 @@ enum class NextcloudNavigationStyle {
     ExpandedSidebar,
 }
 
+/**
+ * Identifies the content presented beside the persistent desktop navigation.
+ *
+ * The global Nextcloud sidebar remains useful in both cases: pinned and recent apps stay reachable
+ * while an app is open, so switching workspaces never requires returning to the Apps destination.
+ * Contextual app navigation belongs inside the app content area rather than replacing the global
+ * workspace switcher.
+ */
+enum class NextcloudDesktopWorkspaceKind {
+    Root,
+    AppWorkspace,
+}
+
 data class NextcloudRootShellLayout(
     val navigationStyle: NextcloudNavigationStyle,
     val navigationWidthDp: Int,
@@ -37,6 +50,7 @@ fun resolveNextcloudRootShellLayout(
     presentation: NextcloudPresentation,
     availableWidthDp: Int,
     destination: NextcloudDestination,
+    desktopWorkspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
 ): NextcloudRootShellLayout = when (presentation) {
     NextcloudPresentation.Adaptive -> {
         if (availableWidthDp < NextcloudWorkspaceBreakpoints.AdaptiveRailDp) {
@@ -54,6 +68,7 @@ fun resolveNextcloudRootShellLayout(
                 workspaceMarginDp = 0,
                 contentMaximumWidthDp = when (destination) {
                     NextcloudDestination.Apps -> 1_120
+                    NextcloudDestination.FolderSync -> 1_120
                     else -> 720
                 },
                 supportsAuxiliaryPane = false,

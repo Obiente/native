@@ -7,8 +7,8 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
+import dev.obiente.nextcloudnative.app.design.NextcloudDesktopWorkspaceKind
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 
@@ -69,11 +69,9 @@ internal fun MarketingPhotoFolderScenario(
         NextcloudDesktopShell(
             selected = NextcloudDestination.Apps,
             onSelected = {},
-            identity = NextcloudDesktopIdentity(
-                displayName = "Obiente",
-                cloudName = "Nextcloud",
-                avatar = assets.avatar,
-            ),
+            identity = marketingDesktopIdentity(avatar = assets.avatar),
+            activeAppId = "photos",
+            workspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
             content = content,
         )
     } else {

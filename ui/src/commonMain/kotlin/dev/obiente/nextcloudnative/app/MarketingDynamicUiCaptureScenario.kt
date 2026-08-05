@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,6 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestination
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestinationSection
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationMode
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationModel
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionWorkspaceScaffold
@@ -220,6 +220,58 @@ internal val marketingDynamicWorkItemRecords = listOf(
             "rrule" to "FREQ=MONTHLY",
         ),
     ),
+    NativeRecord(
+        id = "work-item-4",
+        values = mapOf(
+            "title" to "Book tool delivery",
+            "description" to "Coordinate the shared trailer and delivery window.",
+            "icon" to "truck",
+            "color" to "2563EB",
+            "status" to "planned",
+            "groupId" to "group-1",
+            "sendReminders" to "true",
+            "rrule" to "",
+        ),
+    ),
+    NativeRecord(
+        id = "work-item-5",
+        values = mapOf(
+            "title" to "Publish volunteer briefing",
+            "description" to "Share arrival details, safety notes, and contacts.",
+            "icon" to "notes",
+            "color" to "7C3AED",
+            "status" to "in-progress",
+            "groupId" to "group-2",
+            "sendReminders" to "false",
+            "rrule" to "",
+        ),
+    ),
+    NativeRecord(
+        id = "work-item-6",
+        values = mapOf(
+            "title" to "Confirm water access",
+            "description" to "Verify the outdoor tap and backup water containers.",
+            "icon" to "water",
+            "color" to "0284C7",
+            "status" to "ready",
+            "groupId" to "group-1",
+            "sendReminders" to "true",
+            "rrule" to "",
+        ),
+    ),
+    NativeRecord(
+        id = "work-item-7",
+        values = mapOf(
+            "title" to "Prepare day-of checklist",
+            "description" to "Collect the final setup and cleanup responsibilities.",
+            "icon" to "checklist",
+            "color" to "059669",
+            "status" to "planned",
+            "groupId" to "group-2",
+            "sendReminders" to "true",
+            "rrule" to "FREQ=WEEKLY",
+        ),
+    ),
 )
 
 internal val marketingDynamicRelatedGroupRecords = List(marketingDynamicUiFixture.relationOptionCount) { index ->
@@ -382,6 +434,22 @@ private val marketingContextMenuDestinations = marketingContextMenuViews.map { v
         id = view.id,
         label = view.title,
         accessibilityId = view.sourceActionId,
+        supportingText = when (view.component) {
+            NativeComponent.taskList -> "Track and complete shared work"
+            NativeComponent.mediaGrid -> "Browse workspace photos and media"
+            NativeComponent.contactList -> "Manage workspace members"
+            NativeComponent.timeline -> "Review recent workspace activity"
+            NativeComponent.dataTable -> "Adjust workspace preferences"
+            else -> "Browse and manage ${view.title.lowercase()}"
+        },
+        section = if (
+            view.component == NativeComponent.contactList ||
+            view.component == NativeComponent.dataTable
+        ) {
+            NextcloudCollectionDestinationSection.Manage
+        } else {
+            NextcloudCollectionDestinationSection.Primary
+        },
     )
 }
 
@@ -397,8 +465,9 @@ private fun MarketingDynamicContextMenuCapture(
     NextcloudCollectionWorkspaceScaffold(
         model = navigationModel,
         mode = NextcloudCollectionNavigationMode.Drawer,
-        title = fixture.appName,
-        subtitle = "Garden renewal",
+        workspaceLabel = fixture.appName,
+        contentTitle = "Garden renewal",
+        contentSubtitle = "Overview",
         onBack = {},
         hasHierarchyBack = true,
         onDestinationSelected = {},
@@ -419,57 +488,72 @@ private fun MarketingDynamicDesktopCapture(
     fixture: MarketingDynamicUiFixture,
     modifier: Modifier,
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-    ) {
-        Column(
-            modifier = Modifier.weight(0.9f).fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Text(
-                fixture.breadcrumbs.joinToString(" / "),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            MarketingStaleReadOnlyBanner()
-            GenericNativeAppScreen(
-                schema = marketingDynamicUiSchema,
-                view = marketingDynamicListView,
-                state = NativeScreenState.Ready(marketingDynamicWorkItemRecords),
-                actionExecutor = marketingCaptureActionExecutor,
-                modifier = Modifier.weight(1f),
-                datasetContext = marketingDynamicDatasetContext,
-                showCollectionCreateAction = true,
-            )
-            Box(modifier = Modifier.fillMaxWidth().height(280.dp)) {
-                GenericNativeAppScreen(
-                    schema = marketingDynamicUiSchema,
-                    view = marketingDynamicFormView,
-                    state = NativeScreenState.Error(
-                        message = "Related choices could not be loaded. The current selection remains unchanged.",
-                        retry = {},
-                        retryLabel = "Retry",
-                    ),
-                    actionExecutor = marketingCaptureActionExecutor,
-                    datasetContext = marketingDynamicDatasetContext,
-                )
+    val destinations = listOf(
+        NextcloudCollectionDestination(
+            id = marketingDynamicListView.id,
+            label = "Work items",
+            supportingText = "3 active items",
+            accessibilityId = marketingDynamicListView.sourceActionId,
+        ),
+        NextcloudCollectionDestination(
+            id = "notes",
+            label = "Notes",
+            supportingText = "Shared project notes",
+            accessibilityId = "notes.list",
+        ),
+        NextcloudCollectionDestination(
+            id = "media",
+            label = "Photos",
+            supportingText = "Project photos and files",
+            accessibilityId = "media.list",
+        ),
+        NextcloudCollectionDestination(
+            id = "members",
+            label = "Members",
+            supportingText = "People with workspace access",
+            accessibilityId = "members.list",
+            section = NextcloudCollectionDestinationSection.Manage,
+        ),
+        NextcloudCollectionDestination(
+            id = "preferences",
+            label = "Preferences",
+            supportingText = "Workspace behavior and defaults",
+            accessibilityId = "preferences.read",
+            section = NextcloudCollectionDestinationSection.Manage,
+        ),
+    )
+    NextcloudCollectionWorkspaceScaffold(
+        model = NextcloudCollectionNavigationModel.create(
+            destinations = destinations,
+            selectedDestinationId = marketingDynamicListView.id,
+        ),
+        mode = NextcloudCollectionNavigationMode.Sidebar,
+        workspaceLabel = fixture.appName,
+        contentTitle = "Work items",
+        contentSubtitle = "Garden renewal",
+        onBack = {},
+        hasHierarchyBack = true,
+        onDestinationSelected = {},
+        destinationIcon = { destination ->
+            when (destination.id) {
+                marketingDynamicListView.id -> NextcloudIcons.Task
+                "notes" -> NextcloudIcons.File
+                "media" -> NextcloudIcons.Photo
+                "members" -> NextcloudIcons.People
+                else -> NextcloudIcons.Settings
             }
-        }
-        Column(
-            modifier = Modifier.weight(1.1f).fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            GenericNativeAppScreen(
-                schema = marketingDynamicUiSchema,
-                view = marketingDynamicFormView,
-                state = NativeScreenState.Ready(emptyList()),
-                actionExecutor = marketingCaptureActionExecutor,
-                modifier = Modifier.weight(1f),
-                datasetContext = marketingDynamicDatasetContext,
-            )
-            MarketingExpandedRelationCaptureState()
-        }
+        },
+        modifier = modifier.fillMaxSize(),
+    ) {
+        GenericNativeAppScreen(
+            schema = marketingDynamicUiSchema,
+            view = marketingDynamicListView,
+            state = NativeScreenState.Ready(marketingDynamicWorkItemRecords),
+            actionExecutor = marketingCaptureActionExecutor,
+            modifier = Modifier.fillMaxSize(),
+            datasetContext = marketingDynamicDatasetContext,
+            showCollectionCreateAction = true,
+        )
     }
 }
 
@@ -542,27 +626,6 @@ private fun MarketingDynamicContractHeader(
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun MarketingStaleReadOnlyBanner() {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.tertiaryContainer,
-        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-        shape = MaterialTheme.shapes.medium,
-    ) {
-        Column(
-            modifier = Modifier.padding(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-        ) {
-            Text("Cached read-only snapshot", fontWeight = FontWeight.SemiBold)
-            Text(
-                "Browsing remains available. Mutation controls are suppressed until the contract is verified.",
-                style = MaterialTheme.typography.bodySmall,
-            )
         }
     }
 }

@@ -12,6 +12,7 @@
 **/build
 target
 website/dist
+website/dist-indexnow
 website/dist-ssr
 website/node_modules
 website/.npm-cache
