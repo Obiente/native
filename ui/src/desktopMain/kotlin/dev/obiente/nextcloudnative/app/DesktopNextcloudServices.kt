@@ -4180,7 +4180,7 @@ class DesktopNextcloudServices(
             val propstat = propstats.item(index)
             val status = propstat.firstText(DAV, "status").orEmpty()
             val includesFavorite = propstat.childCount(OC, "favorite") > 0
-            if (includesFavorite && status.substringAfter(' ', "").take(3).toIntOrNull() in 200..299) return true
+            if (includesFavorite && parseDavStatusCode(status) in 200..299) return true
         }
         return false
     }

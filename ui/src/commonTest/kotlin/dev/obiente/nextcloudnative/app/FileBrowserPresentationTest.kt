@@ -5,6 +5,14 @@ import kotlin.test.assertEquals
 
 class FileBrowserChronologicalSortingTest {
     @Test
+    fun `favorites remain the source when global search was previously active`() {
+        assertEquals(
+            FileWorkspaceSource.Favorites,
+            fileWorkspaceSource(FileSearchScope.AllFiles, FileWorkspaceFilter.Favorites),
+        )
+    }
+
+    @Test
     fun `modified sorting compares DAV timestamps chronologically`() {
         val files = listOf(
             file("monday.txt", "Mon, 03 Jun 2024 09:00:00 GMT"),

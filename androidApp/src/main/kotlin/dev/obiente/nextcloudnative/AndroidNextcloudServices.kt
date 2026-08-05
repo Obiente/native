@@ -38,6 +38,7 @@ import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import dev.obiente.nextcloudnative.app.NextcloudFileListing
 import dev.obiente.nextcloudnative.app.NextcloudFileListingHttpException
+import dev.obiente.nextcloudnative.app.parseDavStatusCode
 import dev.obiente.nextcloudnative.app.NextcloudFileListingSource
 import dev.obiente.nextcloudnative.app.FileVersionDavRecord
 import dev.obiente.nextcloudnative.app.FileVersionHistory
@@ -2676,7 +2677,7 @@ internal class AndroidNextcloudServices(
             val propstat = propstats.item(index)
             val status = propstat.firstText(DAV_NAMESPACE, "status").orEmpty()
             val includesFavorite = propstat.childCount(OWNCLOUD_NAMESPACE, "favorite") > 0
-            if (includesFavorite && status.substringAfter(' ', "").take(3).toIntOrNull() in 200..299) return true
+            if (includesFavorite && parseDavStatusCode(status) in 200..299) return true
         }
         return false
     }

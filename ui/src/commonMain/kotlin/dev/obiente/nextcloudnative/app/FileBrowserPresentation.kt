@@ -8,6 +8,17 @@ enum class FileSortMode { Name, Modified, Size }
 
 enum class FileSortDirection { Ascending, Descending }
 
+enum class FileWorkspaceSource { CurrentFolder, Favorites, GlobalSearch }
+
+fun fileWorkspaceSource(
+    searchScope: FileSearchScope,
+    filter: FileWorkspaceFilter,
+): FileWorkspaceSource = when {
+    filter == FileWorkspaceFilter.Favorites -> FileWorkspaceSource.Favorites
+    searchScope == FileSearchScope.AllFiles -> FileWorkspaceSource.GlobalSearch
+    else -> FileWorkspaceSource.CurrentFolder
+}
+
 data class FileBreadcrumb(
     val label: String,
     val path: String,

@@ -36,6 +36,14 @@ class FileSyncExperienceTest {
     }
 
     @Test
+    fun `inspector selection never escapes the filtered pair list`() {
+        val visible = listOf(pair(id = "visible", local = "Visible"))
+
+        assertEquals("visible", inspectedFileSyncPair(visible, selectedPairId = "hidden")?.id)
+        assertEquals(null, inspectedFileSyncPair(emptyList(), selectedPairId = "hidden"))
+    }
+
+    @Test
     fun `workspace search matches names paths and directions without changing order`() {
         val pairs = listOf(
             pair(id = "photos", local = "Studio archive", localPath = "Pictures/Studio", remote = "Photos/Studio"),

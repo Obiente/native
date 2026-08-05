@@ -21,10 +21,10 @@ fun buildFileSearchDavRequest(
     require(maximumResults in 1..500) { "File search can return between 1 and 500 results." }
     val scope = buildString {
         append("/files/")
-        append(safeUserId.escapeFileDavXml())
+        append(safeUserId.encodeFileDavPathSegment())
         if (safeScope.isNotEmpty()) {
             append('/')
-            append(safeScope.escapeFileDavXml())
+            append(safeScope.split('/').joinToString("/") { segment -> segment.encodeFileDavPathSegment() })
         }
     }
     val literal = "%${safeQuery.escapeFileDavLikeLiteral().escapeFileDavXml()}%"
@@ -65,6 +65,29 @@ fun buildFavoriteFilesDavReport(): String = """
     </oc:filter-files>
 """.trimIndent()
 
+fun parseDavStatusCode(statusLine: String): Int? {
+    val tokens = statusLine.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
+    if (tokens.size < 2 || !tokens[0].startsWith("HTTP/", ignoreCase = true)) return null
+    return tokens[1].takeIf { token -> token.length == 3 && token.all(Char::isDigit) }?.toIntOrNull()
+}
+
+private fun String.encodeFileDavPathSegment(): String = buildString {
+    for (byte in this@encodeFileDavPathSegment.encodeToByteArray()) {
+        val value = byte.toInt() and 0xFF
+        val character = value.toChar()
+        if (
+            character in 'a'..'z' || character in 'A'..'Z' || character in '0'..'9' ||
+            character == '-' || character == '.' || character == '_' || character == '~'
+        ) {
+            append(character)
+        } else {
+            append('%')
+            append(HEX_DIGITS[value ushr 4])
+            append(HEX_DIGITS[value and 0x0F])
+        }
+    }
+}
+
 private fun String.escapeFileDavLikeLiteral(): String = buildString(length) {
     for (character in this@escapeFileDavLikeLiteral) {
         if (character == '%' || character == '_') append('\\')
@@ -86,3 +109,5 @@ private fun String.escapeFileDavXml(): String = buildString(length) {
         )
     }
 }
+
+private const val HEX_DIGITS = "0123456789ABCDEF"

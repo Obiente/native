@@ -113,7 +113,7 @@ internal fun FileSyncWorkspace(
     val visiblePairs = remember(pairs, filter, searchQuery) {
         filterFileSyncPairs(pairs, filter, searchQuery)
     }
-    val selectedPair = pairs.firstOrNull { it.id == selectedPairId }
+    val selectedPair = inspectedFileSyncPair(visiblePairs, selectedPairId)
 
     BoxWithConstraints(modifier = modifier) {
         val desktop = maxWidth >= 940.dp
@@ -145,7 +145,7 @@ internal fun FileSyncWorkspace(
                     onSearchQueryChanged = { searchQuery = it },
                 )
                 if (desktop) {
-                    val inspectedPair = selectedPair ?: visiblePairs.firstOrNull()
+                    val inspectedPair = selectedPair
                     Row(
                         modifier = if (fillAvailableHeight) {
                             Modifier.weight(1f).fillMaxWidth()
@@ -205,6 +205,12 @@ internal fun FileSyncWorkspace(
         }
     }
 }
+
+internal fun inspectedFileSyncPair(
+    visiblePairs: List<FileSyncPairSummary>,
+    selectedPairId: String?,
+): FileSyncPairSummary? = visiblePairs.firstOrNull { pair -> pair.id == selectedPairId }
+    ?: visiblePairs.firstOrNull()
 
 @Composable
 private fun FileSyncWorkspaceHeader(

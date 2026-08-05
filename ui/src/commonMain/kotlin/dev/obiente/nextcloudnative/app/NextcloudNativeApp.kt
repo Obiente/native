@@ -6182,10 +6182,11 @@ private fun FilesScreen(
             .onFailure { favoriteError = it.message ?: "Could not load favorites." }
         favoriteLoading = false
     }
-    val globalOfflineFiles = when {
-        searchScope == FileSearchScope.AllFiles -> searchResults.orEmpty()
-        workspaceFilter == FileWorkspaceFilter.Favorites -> favoriteResults.orEmpty()
-        else -> emptyList()
+    val workspaceSource = fileWorkspaceSource(searchScope, workspaceFilter)
+    val globalOfflineFiles = when (workspaceSource) {
+        FileWorkspaceSource.Favorites -> favoriteResults.orEmpty()
+        FileWorkspaceSource.GlobalSearch -> searchResults.orEmpty()
+        FileWorkspaceSource.CurrentFolder -> emptyList()
     }
     LaunchedEffect(userId, services.supportsFileOfflineStorage, globalOfflineFiles) {
         if (userId == null || !services.supportsFileOfflineStorage || globalOfflineFiles.isEmpty()) {
@@ -6525,11 +6526,11 @@ private fun FilesScreen(
             files == null -> LoadingMessage("Loading files...")
             else -> {
                 val loadedFiles = requireNotNull(files)
-                val sourceFiles = when {
-                    searchScope == FileSearchScope.AllFiles -> searchResults.orEmpty()
-                    workspaceFilter == FileWorkspaceFilter.Favorites -> favoriteResults
+                val sourceFiles = when (workspaceSource) {
+                    FileWorkspaceSource.Favorites -> favoriteResults
                         ?: loadedFiles.filter(NextcloudFile::favorite)
-                    else -> loadedFiles
+                    FileWorkspaceSource.GlobalSearch -> searchResults.orEmpty()
+                    FileWorkspaceSource.CurrentFolder -> loadedFiles
                 }
                 val offlinePaths = offlineAvailability
                     .filterValues { it == FileOfflineAvailability.Available }
@@ -6573,6 +6574,9 @@ private fun FilesScreen(
                     filter = workspaceFilter,
                     onFilterChanged = {
                         workspaceFilter = it
+                        if (it == FileWorkspaceFilter.Favorites) {
+                            searchScope = FileSearchScope.CurrentFolder
+                        }
                         selectedFilePath = null
                     },
                     sortMode = sortMode,

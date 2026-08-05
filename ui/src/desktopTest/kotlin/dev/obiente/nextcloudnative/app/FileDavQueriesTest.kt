@@ -14,10 +14,30 @@ class FileDavQueriesTest {
             maximumResults = 80,
         )
 
-        assertTrue("/files/morgan&amp;lee/Projects &amp; Planning" in request)
+        assertTrue("/files/morgan%26lee/Projects%20%26%20Planning" in request)
         assertTrue("%Q3 &lt;draft&gt;%" in request)
         assertTrue("<d:nresults>80</d:nresults>" in request)
         assertFalse("morgan&lee" in request)
+    }
+
+    @Test
+    fun searchScopeEncodesPercentAndUnicodePerPathSegment() {
+        val request = buildFileSearchDavRequest(
+            userId = "morgan%team",
+            scopePath = "Café/100% ready",
+            query = "notes",
+            maximumResults = 20,
+        )
+
+        assertTrue("/files/morgan%25team/Caf%C3%A9/100%25%20ready" in request)
+    }
+
+    @Test
+    fun propstatStatusParsesTheWebDavProtocolToken() {
+        assertTrue(parseDavStatusCode("HTTP/1.1 200 OK") == 200)
+        assertTrue(parseDavStatusCode("HTTP/2 204") == 204)
+        assertTrue(parseDavStatusCode("HTTP/1.1 409 Conflict") == 409)
+        assertTrue(parseDavStatusCode("1.1 200 OK") == null)
     }
 
     @Test
