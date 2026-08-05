@@ -1482,6 +1482,7 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                             completedCount = 341,
                             lastScanEpochMillis = 1,
                             scheduleDescription = "Manual sync on this desktop",
+                            networkState = FileSyncNetworkState.Available,
                         ),
                         FileSyncPairSummary(
                             id = "fixture-client",
@@ -1513,6 +1514,7 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                             completedCount = 86,
                             lastScanEpochMillis = 1,
                             scheduleDescription = "Manual sync on this desktop",
+                            networkState = FileSyncNetworkState.Available,
                         ),
                         FileSyncPairSummary(
                             id = "fixture-documents",
@@ -1532,6 +1534,7 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                             completedCount = 219,
                             lastScanEpochMillis = 1,
                             scheduleDescription = "Manual sync on this desktop",
+                            networkState = FileSyncNetworkState.Available,
                         ),
                         FileSyncPairSummary(
                             id = "fixture-archive",
