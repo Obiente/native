@@ -2404,6 +2404,7 @@ class DesktopNextcloudServices(
     }
 
     override suspend fun clearSession() = withContext(Dispatchers.IO) {
+        val userHome = File(System.getProperty("user.home"))
         val rangeSessions = synchronized(fileRangeSessionLock) {
             sessionClearing = true
             activeFileRangeSessions.toList()
@@ -2440,7 +2441,6 @@ class DesktopNextcloudServices(
                 try {
                     if (provider != null) {
                         provider.removeSyncRoot()
-                        preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
                     } else if (isWindowsDesktop()) {
                         unregisterWindowsCloudFilesRootForUninstall(preferences)
                     }
@@ -2451,6 +2451,29 @@ class DesktopNextcloudServices(
                     runCatching { provider?.close() }
                     windowsCloudFilesProvider = null
                     windowsCloudFilesIdentity = null
+                    preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
+                    accountId?.let {
+                        clearWindowsCloudFilesRootPreferences(
+                            preferences,
+                            it,
+                            desktopWindowsCloudFilesRoot(it, userHome).toPath(),
+                        )
+                        clearWindowsCloudFilesRootPreferences(
+                            preferences,
+                            it,
+                            desktopLegacyWindowsCloudFilesRoot(it, userHome).toPath(),
+                        )
+                    }
+                    if (isWindowsDesktop()) {
+                        val uninstallFailure = runCatching {
+                            unregisterWindowsCloudFilesRootForUninstall(preferences, userHome = userHome)
+                        }.exceptionOrNull()
+                        if (uninstallFailure != null) {
+                            windowsCloudFilesFailure = windowsCloudFilesFailure ?: (
+                                uninstallFailure.message ?: windowsCloudFilesFailureMessage
+                            )
+                        }
+                    }
                 }
             }
             mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
@@ -2458,8 +2481,10 @@ class DesktopNextcloudServices(
             )
             val server = preferences.get(KEY_SERVER, null)
             val login = preferences.get(KEY_LOGIN, null)
-            if (server != null && login != null) {
-                secretStore.clear(desktopSessionSecretReference(server, login))
+            runCatching {
+                if (server != null && login != null) {
+                    secretStore.clear(desktopSessionSecretReference(server, login))
+                }
             }
             preferences.remove(KEY_SERVER)
             preferences.remove(KEY_LOGIN)
