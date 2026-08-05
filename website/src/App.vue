@@ -508,6 +508,7 @@ const frequentlyAsked = [
         aria-label="Mobile primary navigation"
         @click="mobileNavOpen = false"
       >
+        <a href="/">Home</a>
         <a href="/#experience">Experience</a>
         <a href="/#apps">Apps</a>
         <a href="/#native">How it works</a>
@@ -515,6 +516,7 @@ const frequentlyAsked = [
         <a href="/roadmap/">Roadmap</a>
         <a href="/news/">Journal</a>
         <a href="/#docs">Docs</a>
+        <a :href="githubUrl" target="_blank" rel="noreferrer">GitHub</a>
       </nav>
     </header>
 

@@ -99,6 +99,7 @@ body {
 button,
 a {
   font: inherit;
+  touch-action: manipulation;
 }
 
 a {
@@ -115,9 +116,13 @@ svg {
   display: block;
 }
 
+img {
+  max-width: 100%;
+}
+
 .site-shell {
   min-height: 100vh;
-  overflow: hidden;
+  overflow-x: clip;
   background: var(--background);
   color: var(--text);
   transition:
@@ -4318,10 +4323,12 @@ h1 span {
 
 .guide-step figure > a {
   display: block;
+  line-height: 0;
 }
 
 .guide-step figure img {
   width: 100%;
+  height: auto;
   max-height: 720px;
   object-fit: contain;
   object-position: center top;
@@ -4749,6 +4756,10 @@ h1 span {
     gap: 10px;
   }
 
+  .guide-step figure img {
+    max-height: none;
+  }
+
   .related-guides {
     gap: 22px;
   }
@@ -4757,8 +4768,44 @@ h1 span {
     width: min(calc(100% - 28px), var(--content-width));
   }
 
+  .site-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+  }
+
+  .brand {
+    min-width: 0;
+  }
+
+  .header-actions {
+    gap: 4px;
+  }
+
+  .theme-toggle {
+    width: 42px;
+    padding: 0;
+  }
+
+  .theme-toggle span,
+  .header-github {
+    display: none;
+  }
+
+  .theme-toggle {
+    order: 1;
+  }
+
+  .header-search {
+    order: 2;
+  }
+
+  .mobile-menu-button {
+    order: 3;
+  }
+
   .mobile-nav {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding-block: 10px 16px;
   }
 
   .header-search span {
@@ -5325,10 +5372,6 @@ h1 span {
     grid-template-columns: 1fr;
   }
 
-  .brand > span:last-child {
-    display: none;
-  }
-
   .header-github span {
     display: none;
   }
@@ -5364,8 +5407,18 @@ h1 span {
   }
 
   .search-panel {
+    max-height: calc(100dvh - 36px);
+    overflow-y: auto;
     padding: 20px;
     border-radius: 18px;
+  }
+
+  .search-panel-header h2 {
+    font-size: 22px;
+  }
+
+  .search-result {
+    min-height: 56px;
   }
 
   .search-result small {
@@ -5398,8 +5451,22 @@ h1 span {
     display: none;
   }
 
+  .markdown-body {
+    overflow-wrap: anywhere;
+  }
+
   .footer-brand > span:last-child {
     display: inline;
+  }
+}
+
+@media (max-width: 370px) {
+  .brand-copy {
+    display: none;
+  }
+
+  .mobile-nav {
+    grid-template-columns: 1fr;
   }
 }
 
