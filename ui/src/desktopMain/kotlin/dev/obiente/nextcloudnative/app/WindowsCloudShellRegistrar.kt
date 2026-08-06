@@ -113,32 +113,22 @@ internal fun migrateWindowsSyncRootRegistration(
     registerBrandedShellRoot: () -> WindowsShellRegistrationResult,
     registerCloudFilesRoot: () -> Unit,
 ): WindowsSyncRootRegistrationMode {
+    fun tryBrandedShellRootAfterCleanup(): WindowsSyncRootRegistrationMode? {
+        if (!unregisterCloudFilesRoot()) return null
+        return when (registerBrandedShellRoot()) {
+            WindowsShellRegistrationResult.Registered -> WindowsSyncRootRegistrationMode.BrandedShell
+            WindowsShellRegistrationResult.OwnedPathConflict,
+            WindowsShellRegistrationResult.UnsafeConflict,
+            WindowsShellRegistrationResult.Failed -> null
+        }
+    }
+
     if (shellAvailable) {
         when (registerBrandedShellRoot()) {
-            WindowsShellRegistrationResult.Registered -> {
-                return WindowsSyncRootRegistrationMode.BrandedShell
-            }
-            WindowsShellRegistrationResult.OwnedPathConflict -> {
-                if (unregisterCloudFilesRoot()) {
-                    when (registerBrandedShellRoot()) {
-                        WindowsShellRegistrationResult.Registered -> {
-                            return WindowsSyncRootRegistrationMode.BrandedShell
-                        }
-                        WindowsShellRegistrationResult.UnsafeConflict -> {
-                            error(
-                                "Windows refused to replace a Cloud Files registration with " +
-                                    "conflicting ownership or path metadata.",
-                            )
-                        }
-                        WindowsShellRegistrationResult.OwnedPathConflict -> {
-                            error("The owned Windows Cloud Files path conflict persisted after cleanup.")
-                        }
-                        WindowsShellRegistrationResult.Failed -> Unit
-                    }
-                }
-            }
+            WindowsShellRegistrationResult.Registered -> return WindowsSyncRootRegistrationMode.BrandedShell
+            WindowsShellRegistrationResult.OwnedPathConflict,
             WindowsShellRegistrationResult.UnsafeConflict -> {
-                error("Windows refused to replace a Cloud Files registration with conflicting ownership or path metadata.")
+                tryBrandedShellRootAfterCleanup()?.let { return it }
             }
             WindowsShellRegistrationResult.Failed -> Unit
         }

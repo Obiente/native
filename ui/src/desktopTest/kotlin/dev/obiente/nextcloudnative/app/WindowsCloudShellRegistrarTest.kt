@@ -8,7 +8,6 @@ import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -159,43 +158,47 @@ class WindowsCloudShellRegistrarTest {
     }
 
     @Test
-    fun unsafeConflictDuringOwnedPathRetryDoesNotFallBack() {
+    fun unsafeConflictDuringOwnedPathRetryFallsBackToCloudFilesRegistration() {
+        val events = mutableListOf<String>()
         var attempts = 0
-        var fallbackAttempted = false
+        val mode = migrateWindowsSyncRootRegistration(
+            shellAvailable = true,
+            unregisterCloudFilesRoot = { events += "unregister"; true },
+            registerBrandedShellRoot = {
+                events += "shell"
+                if (attempts++ == 0) {
+                    WindowsShellRegistrationResult.OwnedPathConflict
+                } else {
+                    WindowsShellRegistrationResult.UnsafeConflict
+                }
+            },
+            registerCloudFilesRoot = { events += "fallback" },
+        )
 
-        assertFailsWith<IllegalStateException> {
-            migrateWindowsSyncRootRegistration(
-                shellAvailable = true,
-                unregisterCloudFilesRoot = { true },
-                registerBrandedShellRoot = {
-                    if (attempts++ == 0) {
-                        WindowsShellRegistrationResult.OwnedPathConflict
-                    } else {
-                        WindowsShellRegistrationResult.UnsafeConflict
-                    }
-                },
-                registerCloudFilesRoot = { fallbackAttempted = true },
-            )
-        }
-
+        assertEquals(WindowsSyncRootRegistrationMode.CloudFilesOnly, mode)
+        assertEquals(listOf("shell", "unregister", "shell", "fallback"), events)
         assertEquals(2, attempts)
-        assertFalse(fallbackAttempted)
     }
 
     @Test
-    fun repeatedOwnedPathConflictDoesNotFallBack() {
-        var fallbackAttempted = false
+    fun repeatedOwnedPathConflictFallsBackToCloudFilesRegistration() {
+        val events = mutableListOf<String>()
+        var attempts = 0
 
-        assertFailsWith<IllegalStateException> {
-            migrateWindowsSyncRootRegistration(
-                shellAvailable = true,
-                unregisterCloudFilesRoot = { true },
-                registerBrandedShellRoot = { WindowsShellRegistrationResult.OwnedPathConflict },
-                registerCloudFilesRoot = { fallbackAttempted = true },
-            )
-        }
+        val mode = migrateWindowsSyncRootRegistration(
+            shellAvailable = true,
+            unregisterCloudFilesRoot = { events += "unregister"; true },
+            registerBrandedShellRoot = {
+                events += "shell"
+                attempts++
+                WindowsShellRegistrationResult.OwnedPathConflict
+            },
+            registerCloudFilesRoot = { events += "fallback" },
+        )
 
-        assertFalse(fallbackAttempted)
+        assertEquals(WindowsSyncRootRegistrationMode.CloudFilesOnly, mode)
+        assertEquals(listOf("shell", "unregister", "shell", "fallback"), events)
+        assertEquals(2, attempts)
     }
 
     @Test
@@ -216,19 +219,20 @@ class WindowsCloudShellRegistrarTest {
     }
 
     @Test
-    fun unsafeRegistrationConflictDoesNotFallBackToPathBasedRegistration() {
-        var fallbackAttempted = false
+    fun unsafeRegistrationConflictFallsBackToPathBasedRegistration() {
+        val events = mutableListOf<String>()
+        val mode = migrateWindowsSyncRootRegistration(
+            shellAvailable = true,
+            unregisterCloudFilesRoot = { events += "unregister"; true },
+            registerBrandedShellRoot = {
+                events += "shell"
+                WindowsShellRegistrationResult.UnsafeConflict
+            },
+            registerCloudFilesRoot = { events += "fallback" },
+        )
 
-        assertFailsWith<IllegalStateException> {
-            migrateWindowsSyncRootRegistration(
-                shellAvailable = true,
-                unregisterCloudFilesRoot = { true },
-                registerBrandedShellRoot = { WindowsShellRegistrationResult.UnsafeConflict },
-                registerCloudFilesRoot = { fallbackAttempted = true },
-            )
-        }
-
-        assertFalse(fallbackAttempted)
+        assertEquals(WindowsSyncRootRegistrationMode.CloudFilesOnly, mode)
+        assertEquals(listOf("shell", "unregister", "shell", "fallback"), events)
     }
 
     @Test
