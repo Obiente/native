@@ -211,9 +211,11 @@ fun scanFileSyncPair(
     remoteEntries: List<RemoteSyncEntry>,
     nowEpochMillis: Long,
     maximumWorkItems: Int = MAX_FILE_SYNC_WORK_ITEMS,
+    reservedNonExecutableWorkItems: Int = 0,
 ): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
     require(nowEpochMillis >= 0)
     require(maximumWorkItems in 1..MAX_FILE_SYNC_WORK_ITEMS)
+    require(reservedNonExecutableWorkItems in 0 until maximumWorkItems)
     require(localEntries.size <= MAX_FILE_SYNC_ENTRIES) { "The local sync snapshot is too large." }
     require(remoteEntries.size <= MAX_FILE_SYNC_ENTRIES) { "The remote sync snapshot is too large." }
     require(pair.workItems.none { it.state == FileSyncExecutionState.Running }) {
@@ -239,17 +241,49 @@ fun scanFileSyncPair(
     val baselineByPath = scopedBaselines.associateBy(FileSyncBaseline::relativePath)
     val existingWorkByPath = pair.workItems.associateBy(FileSyncWorkItem::relativePath)
     val plan = planFileSync(scopedLocalEntries, scopedRemoteEntries, scopedBaselines, pair.configuration)
-    var nextId = pair.nextWorkId
-    val work = plan.operations.sortedWith(
+    fun stableExistingWork(operation: FileSyncOperation): FileSyncWorkItem? {
+        val path = operation.relativePath
+        return existingWorkByPath[path]?.takeIf { current ->
+            current.sameGeneration(operation, localByPath[path], remoteByPath[path], baselineByPath[path])
+        }
+    }
+    val sortedOperations = plan.operations.sortedWith(
         fileSyncOperationComparator(pair.configuration, localByPath, remoteByPath),
-    ).take(maximumWorkItems).map { operation ->
+    )
+    val selectedOperations = if (reservedNonExecutableWorkItems == 0) {
+        sortedOperations.take(maximumWorkItems)
+    } else {
+        val maximumExecutableWorkItems = maximumWorkItems - reservedNonExecutableWorkItems
+        val executable = ArrayList<FileSyncOperation>(maximumExecutableWorkItems)
+        val retainedNonExecutable = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
+        val newDecisions = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
+        val newSkipped = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
+        sortedOperations.forEach { operation ->
+            val existing = stableExistingWork(operation)
+            val effectiveOperation = existing?.operation ?: operation
+            when {
+                effectiveOperation.isExecutable() && executable.size < maximumExecutableWorkItems ->
+                    executable += operation
+                existing != null && retainedNonExecutable.size < reservedNonExecutableWorkItems ->
+                    retainedNonExecutable += operation
+                effectiveOperation is FileSyncOperation.NeedsDecision &&
+                    newDecisions.size < reservedNonExecutableWorkItems -> newDecisions += operation
+                effectiveOperation is FileSyncOperation.Skipped &&
+                    newSkipped.size < reservedNonExecutableWorkItems -> newSkipped += operation
+            }
+        }
+        val remainingAfterRetained = reservedNonExecutableWorkItems - retainedNonExecutable.size
+        val selectedDecisions = newDecisions.take(remainingAfterRetained)
+        val remainingAfterDecisions = remainingAfterRetained - selectedDecisions.size
+        executable + retainedNonExecutable + selectedDecisions + newSkipped.take(remainingAfterDecisions)
+    }
+    var nextId = pair.nextWorkId
+    val work = selectedOperations.map { operation ->
         val path = operation.relativePath
         val local = localByPath[path]
         val remote = remoteByPath[path]
         val baseline = baselineByPath[path]
-        existingWorkByPath[path]?.takeIf { current ->
-            current.sameGeneration(operation, local, remote, baseline)
-        } ?: FileSyncWorkItem(
+        stableExistingWork(operation) ?: FileSyncWorkItem(
             id = nextId.also {
                 require(it < Long.MAX_VALUE) { "The sync work ID space is exhausted." }
                 nextId += 1

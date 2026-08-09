@@ -404,6 +404,33 @@ class FileSyncCoordinatorTest {
         assertEquals(10_001L, scanned.nextWorkId)
     }
 
+    @Test
+    fun `non executable work cannot crowd transfers out of a reserved desktop batch`() {
+        val excludedLocal = (0 until 10_000).map { index ->
+            local("Local/file-${index.toString().padStart(5, '0')}.jpg", "local-$index")
+        }
+        val configuration = FileSyncConfiguration(
+            direction = FileSyncDirection.DownloadOnly,
+            deviceLabel = "Workstation",
+        )
+
+        val scanned = scanFileSyncPair(
+            state(configuration = configuration),
+            PAIR_ID,
+            localEntries = excludedLocal,
+            remoteEntries = listOf(remote("Remote/download.jpg", "remote-download")),
+            nowEpochMillis = 10L,
+            maximumWorkItems = 20_000,
+            reservedNonExecutableWorkItems = 10_000,
+        ).pair()
+
+        assertEquals(10_001, scanned.workItems.size)
+        assertEquals(10_000, scanned.workItems.count { it.state == FileSyncExecutionState.Skipped })
+        assertIs<FileSyncOperation.Download>(
+            scanned.workItems.single { it.state == FileSyncExecutionState.Ready }.operation,
+        )
+    }
+
     private fun state(
         baselines: List<FileSyncBaseline> = emptyList(),
         configuration: FileSyncConfiguration = FileSyncConfiguration(deviceLabel = "Test phone"),

@@ -282,7 +282,8 @@ internal class DesktopFileSyncEngine(
                 localEntries,
                 remoteEntries,
                 System.currentTimeMillis(),
-                maximumWorkItems = DESKTOP_FILE_SYNC_WORK_BATCH,
+                maximumWorkItems = DESKTOP_FILE_SYNC_MAXIMUM_WORK_ITEMS,
+                reservedNonExecutableWorkItems = DESKTOP_FILE_SYNC_NON_EXECUTABLE_RESERVE,
             ),
         )
         if (resetExhaustedFailures) {
@@ -300,7 +301,9 @@ internal class DesktopFileSyncEngine(
         store.save(persisted)
 
         val pairLabel = syncPairLabel(root.displayName, initialPair.remoteRootPath)
-        val plannedWorkItems = persisted.coordinator.pairs.first { it.id == pairId }.workItems.size
+        val plannedExecutableWorkItems = persisted.coordinator.pairs.first { it.id == pairId }.workItems.count {
+            it.state != FileSyncExecutionState.AwaitingDecision && it.state != FileSyncExecutionState.Skipped
+        }
         val totalOperations = persisted.coordinator.pairs.first { it.id == pairId }.workItems.count {
             it.state == FileSyncExecutionState.Ready
         }
@@ -393,7 +396,7 @@ internal class DesktopFileSyncEngine(
         val pair = persisted.coordinator.pairs.first { it.id == pairId }
         val conflicts = pair.workItems.count { it.state == FileSyncExecutionState.AwaitingDecision }
         val failures = pair.workItems.count { it.state == FileSyncExecutionState.Failed }
-        if (shouldContinueDesktopFileSyncBatch(plannedWorkItems, completed) && shouldContinue()) {
+        if (shouldContinueDesktopFileSyncBatch(plannedExecutableWorkItems, completed) && shouldContinue()) {
             return runPairLocked(
                 session = session,
                 userId = userId,
@@ -725,10 +728,15 @@ internal class DesktopFileSyncEngine(
     }
 }
 
-internal fun shouldContinueDesktopFileSyncBatch(plannedWorkItems: Int, completedOperations: Int): Boolean =
-    plannedWorkItems == DESKTOP_FILE_SYNC_WORK_BATCH && completedOperations > 0
+internal fun shouldContinueDesktopFileSyncBatch(
+    plannedExecutableWorkItems: Int,
+    completedOperations: Int,
+): Boolean = plannedExecutableWorkItems == DESKTOP_FILE_SYNC_WORK_BATCH && completedOperations > 0
 
 private const val DESKTOP_FILE_SYNC_WORK_BATCH = 10_000
+private const val DESKTOP_FILE_SYNC_NON_EXECUTABLE_RESERVE = 10_000
+private const val DESKTOP_FILE_SYNC_MAXIMUM_WORK_ITEMS =
+    DESKTOP_FILE_SYNC_WORK_BATCH + DESKTOP_FILE_SYNC_NON_EXECUTABLE_RESERVE
 
 internal fun desktopFileSyncRemoteMutationPath(remoteRootPath: String, relativePath: String): String {
     val relative = relativePath.trim('/')
