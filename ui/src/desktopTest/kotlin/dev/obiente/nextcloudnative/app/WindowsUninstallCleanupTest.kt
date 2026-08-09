@@ -11,6 +11,31 @@ import kotlin.test.assertTrue
 
 class WindowsUninstallCleanupTest {
     @Test
+    fun loadsOnlyLiveAccountScopedRecoveryRoots() {
+        val preferences = Preferences.userRoot().node("windows-recovery-root-test-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-recovery-root-home").toFile()
+        val liveAccountId = "a".repeat(64)
+        val missingAccountId = "b".repeat(64)
+        val liveRoot = home.resolve("live").apply { assertTrue(mkdirs()) }
+        try {
+            preferences.put(windowsCloudFilesRootPreferenceKey(liveAccountId), liveRoot.absolutePath)
+            preferences.put(
+                windowsCloudFilesRootPreferenceKey(missingAccountId),
+                home.resolve("missing").absolutePath,
+            )
+            preferences.put("wcfr.future-format", liveRoot.absolutePath)
+
+            assertEquals(
+                mapOf(liveAccountId to liveRoot.toPath()),
+                persistedWindowsCloudFilesRecoveryRoots(preferences),
+            )
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
     fun cloudFilesCleanupTreatsOnlyMissingRootsAsAlreadyAbsent() {
         assertTrue(isWindowsCloudFilesRootAbsentResult(0xC000CF13.toInt(), rootMissing = false))
         assertTrue(isWindowsCloudFilesRootAbsentResult(0xD000CF13.toInt(), rootMissing = false))

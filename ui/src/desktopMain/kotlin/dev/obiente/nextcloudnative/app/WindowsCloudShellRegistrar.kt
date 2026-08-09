@@ -32,6 +32,9 @@ internal enum class WindowsShellUnregistrationResult {
 
 internal class PackagedWindowsCloudShellRegistrar(
     launcherPath: String? = packagedDesktopLauncherPath(),
+    private val recoveryRootsProvider: () -> Map<String, Path> = {
+        runCatching(::persistedWindowsCloudFilesRecoveryRoots).getOrDefault(emptyMap())
+    },
     private val processRunner: (List<String>, Long) -> Int? = ::runWindowsShellRegistrar,
 ) : WindowsCloudShellRegistrar {
     private val installationDirectory = launcherPath
@@ -57,17 +60,37 @@ internal class PackagedWindowsCloudShellRegistrar(
         require(Files.isDirectory(normalizedRoot) && !Files.isSymbolicLink(normalizedRoot))
         val executable = helper?.takeIf(File::isFile) ?: return WindowsShellRegistrationResult.Failed
         val iconResource = icon?.takeIf(File::isFile) ?: return WindowsShellRegistrationResult.Failed
+        val command = mutableListOf(
+            executable.absolutePath,
+            "register",
+            normalizedRoot.toString(),
+            accountId,
+            displayName,
+            iconResource.absolutePath,
+            syncRootIdentity.lowercaseHex(),
+        )
+        recoveryRootsProvider()
+            .asSequence()
+            .filter { (recoveryAccountId, recoveryRoot) ->
+                recoveryAccountId != accountId &&
+                    isWindowsShellAccountId(recoveryAccountId) &&
+                    recoveryRoot.isAbsolute &&
+                    recoveryRoot.toString().length <= MAX_RECOVERY_ROOT_PATH_CHARACTERS &&
+                    Files.isDirectory(recoveryRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                    !Files.isSymbolicLink(recoveryRoot)
+            }
+            .sortedBy(Map.Entry<String, Path>::key)
+            .take(MAX_RECOVERY_ROOTS)
+            .forEach { (recoveryAccountId, recoveryRoot) ->
+                command += listOf(
+                    RECOVERABLE_ROOT_ARGUMENT,
+                    recoveryAccountId,
+                    recoveryRoot.normalize().toString(),
+                )
+            }
         val exitCode = runCatching {
             processRunner(
-                listOf(
-                    executable.absolutePath,
-                    "register",
-                    normalizedRoot.toString(),
-                    accountId,
-                    displayName,
-                    iconResource.absolutePath,
-                    syncRootIdentity.lowercaseHex(),
-                ),
+                command,
                 REGISTRATION_TIMEOUT_SECONDS,
             )
         }.getOrNull()
@@ -98,7 +121,10 @@ internal class PackagedWindowsCloudShellRegistrar(
 
     private companion object {
         const val MAX_SYNC_ROOT_IDENTITY_BYTES = 4_096
+        const val MAX_RECOVERY_ROOTS = 16
+        const val MAX_RECOVERY_ROOT_PATH_CHARACTERS = 1_024
         const val REGISTRATION_TIMEOUT_SECONDS = 30L
+        const val RECOVERABLE_ROOT_ARGUMENT = "--recoverable-root"
     }
 }
 

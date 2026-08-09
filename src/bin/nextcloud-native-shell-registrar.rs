@@ -2,6 +2,10 @@
 
 #[cfg(windows)]
 const PROVIDER_ID: &str = "Obiente.NextcloudNative";
+#[cfg(windows)]
+const RECOVERABLE_ROOT_ARGUMENT: &str = "--recoverable-root";
+#[cfg(windows)]
+const MAX_RECOVERABLE_ROOTS: usize = 16;
 #[cfg(any(windows, test))]
 const ACCOUNT_ID_LENGTH: usize = 64;
 #[cfg(any(windows, test))]
@@ -89,6 +93,32 @@ fn existing_registration_action(
         (false, true, _) => ExistingRegistrationAction::RetainOwnedRecovery,
         (false, false, _) => ExistingRegistrationAction::IgnoreForeign,
     }
+}
+
+#[cfg(any(windows, test))]
+fn account_id_from_sync_root_id(value: &str) -> Option<&str> {
+    let (provider_and_sid, account_id) = value.rsplit_once('!')?;
+    if provider_and_sid.starts_with("Obiente.NextcloudNative!") && valid_account_id(account_id) {
+        Some(account_id)
+    } else {
+        None
+    }
+}
+
+#[cfg(any(windows, test))]
+fn recoverable_root_matches(
+    recoverable_roots: &std::collections::HashMap<String, std::path::PathBuf>,
+    account_id: &str,
+    registered_path: &std::path::Path,
+) -> bool {
+    recoverable_roots
+        .get(account_id)
+        .is_some_and(|recovery_root| {
+            matches!(
+                registered_path_state(registered_path, recovery_root),
+                Ok(RegisteredPathState::SameExisting)
+            )
+        })
 }
 
 #[cfg(windows)]
@@ -210,12 +240,14 @@ fn sid_string(bytes: &[u8]) -> Option<String> {
 #[cfg(windows)]
 mod platform {
     use super::{
-        ExistingRegistrationAction, OwnedCurrentRegistrationState, PROVIDER_ID,
-        RegisteredPathState, RegistrationNotFound, UnsafeRegistrationConflict, decode_identity_hex,
+        ExistingRegistrationAction, MAX_RECOVERABLE_ROOTS, OwnedCurrentRegistrationState,
+        PROVIDER_ID, RECOVERABLE_ROOT_ARGUMENT, RegisteredPathState, RegistrationNotFound,
+        UnsafeRegistrationConflict, account_id_from_sync_root_id, decode_identity_hex,
         existing_registration_action, is_windows_absence_hresult,
-        paths_refer_to_same_existing_entry, registered_path_state, sid_string, valid_account_id,
-        valid_display_name,
+        paths_refer_to_same_existing_entry, recoverable_root_matches, registered_path_state,
+        sid_string, valid_account_id, valid_display_name,
     };
+    use std::collections::HashMap;
     use std::ffi::{OsStr, OsString};
     use std::mem::size_of;
     use std::path::{Path, PathBuf};
@@ -288,7 +320,8 @@ mod platform {
 
     fn non_current_registration_state(
         existing: &StorageProviderSyncRootInfo,
-        root: &Path,
+        existing_id: &HSTRING,
+        recoverable_roots: &HashMap<String, PathBuf>,
     ) -> OwnedCurrentRegistrationState {
         let existing_path = match existing.Path().and_then(|folder| folder.Path()) {
             Ok(path) => path,
@@ -297,10 +330,23 @@ mod platform {
             }
             Err(_) => return OwnedCurrentRegistrationState::UnsafeExistingPath,
         };
-        match registered_path_state(&PathBuf::from(existing_path.to_os_string()), root) {
+        let registered_path = PathBuf::from(existing_path.to_os_string());
+        match registered_path_state(&registered_path, &registered_path) {
             Ok(RegisteredPathState::Missing) => OwnedCurrentRegistrationState::Replaceable,
-            Ok(RegisteredPathState::SameExisting | RegisteredPathState::DifferentExisting)
-            | Err(_) => OwnedCurrentRegistrationState::UnsafeExistingPath,
+            Ok(RegisteredPathState::SameExisting) => {
+                let existing_id_value = existing_id.to_string();
+                let Some(account_id) = account_id_from_sync_root_id(&existing_id_value) else {
+                    return OwnedCurrentRegistrationState::UnsafeExistingPath;
+                };
+                if recoverable_root_matches(recoverable_roots, account_id, &registered_path) {
+                    OwnedCurrentRegistrationState::Replaceable
+                } else {
+                    OwnedCurrentRegistrationState::UnsafeExistingPath
+                }
+            }
+            Ok(RegisteredPathState::DifferentExisting) | Err(_) => {
+                OwnedCurrentRegistrationState::UnsafeExistingPath
+            }
         }
     }
 
@@ -412,6 +458,7 @@ mod platform {
         display_name: String,
         icon: PathBuf,
         identity_hex: String,
+        recoverable_roots: HashMap<String, PathBuf>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if !valid_account_id(&account_id) {
             return Err("invalid account identity".into());
@@ -479,7 +526,7 @@ mod platform {
             }
             let provider_owned = existing_provider_id == PROVIDER_GUID;
             let cleanup_state = if provider_owned {
-                non_current_registration_state(&existing, &root)
+                non_current_registration_state(&existing, &existing_id, &recoverable_roots)
             } else {
                 OwnedCurrentRegistrationState::UnsafeExistingPath
             };
@@ -590,10 +637,41 @@ mod platform {
                     .next()
                     .and_then(|value| value.into_string().ok())
                     .ok_or("invalid sync root identity")?;
-                if values.next().is_some() {
-                    return Err("unexpected arguments".into());
+                let mut recoverable_roots = HashMap::new();
+                while let Some(argument) = values.next() {
+                    if argument != OsStr::new(RECOVERABLE_ROOT_ARGUMENT) {
+                        return Err("unexpected arguments".into());
+                    }
+                    let recovery_account_id = values
+                        .next()
+                        .and_then(|value| value.into_string().ok())
+                        .ok_or("invalid recovery account identity")?;
+                    if !valid_account_id(&recovery_account_id) {
+                        return Err("invalid recovery account identity".into());
+                    }
+                    let recovery_root = values
+                        .next()
+                        .map(PathBuf::from)
+                        .filter(|path| path.is_absolute())
+                        .ok_or("invalid recovery root")?;
+                    if recoverable_roots.len() >= MAX_RECOVERABLE_ROOTS {
+                        return Err("too many recovery roots".into());
+                    }
+                    if recoverable_roots
+                        .insert(recovery_account_id, recovery_root)
+                        .is_some()
+                    {
+                        return Err("duplicate recovery account identity".into());
+                    }
                 }
-                register(root, account_id, display_name, icon, identity_hex)
+                register(
+                    root,
+                    account_id,
+                    display_name,
+                    icon,
+                    identity_hex,
+                    recoverable_roots,
+                )
             }
             Some("unregister") => {
                 let root = values
@@ -786,7 +864,39 @@ mod tests {
                 .expect("classify different registration path"),
             RegisteredPathState::DifferentExisting
         );
+        let account_id = "a5".repeat(32);
+        let mut recoverable_roots = std::collections::HashMap::new();
+        recoverable_roots.insert(account_id.clone(), registered.clone());
+        assert!(recoverable_root_matches(
+            &recoverable_roots,
+            &account_id,
+            &registered,
+        ));
+        assert!(!recoverable_root_matches(
+            &recoverable_roots,
+            &account_id,
+            &requested,
+        ));
 
         std::fs::remove_dir_all(&base).expect("remove registration path fixture");
+    }
+
+    #[test]
+    fn extracts_only_owned_well_formed_account_ids_from_sync_root_ids() {
+        let account_id = "a5".repeat(32);
+        assert_eq!(
+            account_id_from_sync_root_id(&format!(
+                "Obiente.NextcloudNative!S-1-5-21-1000!{account_id}"
+            )),
+            Some(account_id.as_str())
+        );
+        assert_eq!(
+            account_id_from_sync_root_id(&format!("Other.Provider!S-1-5-21-1000!{account_id}")),
+            None
+        );
+        assert_eq!(
+            account_id_from_sync_root_id("Obiente.NextcloudNative!S-1-5-21-1000!invalid"),
+            None
+        );
     }
 }

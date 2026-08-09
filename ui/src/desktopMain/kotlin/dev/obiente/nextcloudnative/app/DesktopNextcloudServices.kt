@@ -273,6 +273,32 @@ internal fun windowsCloudFilesRootPreferenceKey(accountId: String): String {
     }
 }
 
+internal fun persistedWindowsCloudFilesRecoveryRoots(
+    preferences: Preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative"),
+): Map<String, Path> = preferences.keys()
+    .asSequence()
+    .filter { key -> key.startsWith(KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX) }
+    .mapNotNull { key ->
+        val accountId = key.removePrefix(KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX)
+        if (accountId.length != 64 || accountId.any { it !in '0'..'9' && it !in 'a'..'f' }) {
+            return@mapNotNull null
+        }
+        val value = preferences.get(key, null)
+            ?.takeIf { it.length <= Preferences.MAX_VALUE_LENGTH }
+            ?: return@mapNotNull null
+        val path = runCatching { File(value).toPath().normalize() }.getOrNull()
+            ?.takeIf(Path::isAbsolute)
+            ?: return@mapNotNull null
+        if (
+            !Files.isDirectory(path, java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+            Files.isSymbolicLink(path)
+        ) {
+            return@mapNotNull null
+        }
+        accountId to path
+    }
+    .toMap()
+
 private fun desktopLegacyWindowsCloudFilesRoot(accountId: String, userHome: File): File =
     File(File(userHome, "Nextcloud Native"), accountId)
 
