@@ -17,6 +17,11 @@ import kotlinx.coroutines.sync.Mutex
 
 class AndroidFileSyncEngineInvariantTest {
     @Test
+    fun androidPlanningRetainsTheSnapshotCompatibleWorkLimit() {
+        assertEquals(10_000, ANDROID_FILE_SYNC_MAX_WORK_ITEMS)
+    }
+
+    @Test
     fun pairRemovalDoesNotPersistOrCancelWhenLedgerCleanupFails() = runBlocking {
         val events = mutableListOf<String>()
 

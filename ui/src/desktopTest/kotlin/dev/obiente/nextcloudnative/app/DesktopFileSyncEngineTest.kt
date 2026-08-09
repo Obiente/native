@@ -9,6 +9,46 @@ import kotlin.test.assertTrue
 
 class DesktopFileSyncEngineTest {
     @Test
+    fun `desktop execution preparation retries a large queue in one state transition`() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Pictures",
+            configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+        )
+        val planned = scanFileSyncPair(
+            FileSyncCoordinatorState(listOf(pair)),
+            pair.id,
+            localEntries = listOf(
+                LocalSyncEntry("first.jpg", SyncEntryKind.File, "local-first"),
+                LocalSyncEntry("second.jpg", SyncEntryKind.File, "local-second"),
+            ),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        ).pairs.single()
+        val retryable = planned.workItems[0].copy(
+            state = FileSyncExecutionState.Failed,
+            attemptCount = 1,
+            failureMessage = "Temporary failure",
+        )
+        val exhausted = planned.workItems[1].copy(
+            state = FileSyncExecutionState.Failed,
+            attemptCount = MAX_FILE_SYNC_ATTEMPTS,
+            failureMessage = "Repeated failure",
+        )
+        val failed = planned.copy(workItems = listOf(retryable, exhausted))
+
+        val automatic = failed.prepareForDesktopExecution(resetExhaustedFailures = false)
+        assertEquals(FileSyncExecutionState.Ready, automatic.workItems[0].state)
+        assertEquals(FileSyncExecutionState.Failed, automatic.workItems[1].state)
+
+        val explicit = failed.prepareForDesktopExecution(resetExhaustedFailures = true)
+        assertTrue(explicit.workItems.all { it.state == FileSyncExecutionState.Ready })
+        assertEquals(0, explicit.workItems[1].attemptCount)
+    }
+
+    @Test
     fun `remote mutation paths include the configured pair root`() {
         assertEquals(
             "Photography/Albums/2026/cover.jpg",
