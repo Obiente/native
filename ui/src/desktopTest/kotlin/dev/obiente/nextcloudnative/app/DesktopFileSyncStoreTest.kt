@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import java.io.File
 import java.nio.file.Files
+import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -9,8 +10,146 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class DesktopFileSyncStoreTest {
+    @Test
+    fun `legacy json state imports once into the transactional database`() {
+        val directory = Files.createTempDirectory("desktop-sync-legacy-import-").toFile()
+        try {
+            val pair = FileSyncPair(
+                id = "legacy-pair",
+                accountId = "account",
+                localRootId = "legacy-root",
+                remoteRootPath = "Documents",
+                configuration = FileSyncConfiguration(deviceLabel = "Linux workstation"),
+                baselines = listOf(
+                    FileSyncBaseline("Notes/readme.md", SyncEntryKind.File, "local-1", "remote-1"),
+                ),
+            )
+            val legacy = File(directory, "file-sync-state.json")
+            val coordinator = Base64.getEncoder().encodeToString(
+                encodeFileSyncCoordinatorSnapshot(FileSyncCoordinatorState(listOf(pair))),
+            )
+            legacy.writeText(Json.encodeToString(buildJsonObject {
+                put("schemaVersion", 1)
+                put("coordinatorBase64", coordinator)
+                put("roots", buildJsonArray {
+                    add(buildJsonObject {
+                        put("id", "legacy-root")
+                        put("absolutePath", directory.absolutePath)
+                        put("displayName", "Documents")
+                    })
+                })
+            }))
+            val database = File(directory, "file-sync-state-v2.db")
+            val store = DesktopFileSyncStore(database, legacy)
+
+            assertEquals(pair, store.load().coordinator.pairs.single())
+            store.save(DesktopFileSyncPersistedState())
+
+            assertTrue(legacy.isFile)
+            assertTrue(DesktopFileSyncStore(database, legacy).load().coordinator.pairs.isEmpty())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `sqlite store preserves more than the legacy folder entry ceiling`() {
+        val directory = Files.createTempDirectory("desktop-sync-large-store-").toFile()
+        try {
+            val baselines = (0..20_000).map { index ->
+                val path = "Archive/file-${index.toString().padStart(5, '0')}.jpg"
+                FileSyncBaseline(path, SyncEntryKind.File, "local-$index", "remote-$index")
+            }
+            val pair = FileSyncPair(
+                id = "large-pair",
+                accountId = "account",
+                localRootId = "large-root",
+                remoteRootPath = "Archive",
+                configuration = FileSyncConfiguration(deviceLabel = "Linux workstation"),
+                baselines = baselines,
+            )
+            val root = DesktopFileSyncRootRecord("large-root", directory.absolutePath, "Archive")
+            val store = DesktopFileSyncStore(File(directory, "state.db"), legacyStateFile = null)
+
+            store.save(DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(pair)), listOf(root)))
+            assertEquals(20_001, store.load().coordinator.pairs.single().baselines.size)
+
+            val updated = pair.copy(
+                baselines = baselines.dropLast(1) + baselines.last().copy(remoteEtag = "remote-updated"),
+                lastScanEpochMillis = 42L,
+            )
+            store.save(DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(updated)), listOf(root)))
+            val restored = store.load().coordinator.pairs.single()
+            assertEquals(42L, restored.lastScanEpochMillis)
+            assertEquals("remote-updated", restored.baselines.last().remoteEtag)
+            assertEquals(20_001, restored.baselines.size)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `execution transitions update only their durable work and baseline rows`() {
+        val directory = Files.createTempDirectory("desktop-sync-transition-").toFile()
+        try {
+            val pair = FileSyncPair(
+                id = "transition-pair",
+                accountId = "account",
+                localRootId = "transition-root",
+                remoteRootPath = "Documents",
+                configuration = FileSyncConfiguration(deviceLabel = "Linux workstation"),
+            )
+            val scanned = scanFileSyncPair(
+                FileSyncCoordinatorState(listOf(pair)),
+                pair.id,
+                localEntries = listOf(LocalSyncEntry("Notes/readme.md", SyncEntryKind.File, "local-1")),
+                remoteEntries = emptyList(),
+                nowEpochMillis = 10L,
+            )
+            val claim = claimNextFileSyncOperation(scanned, pair.id, nowEpochMillis = 20L)
+            val running = claim.state.pairs.single().workItems.single()
+            val root = DesktopFileSyncRootRecord(pair.localRootId, directory.absolutePath, "Documents")
+            val store = DesktopFileSyncStore(File(directory, "state.db"), legacyStateFile = null)
+            var persisted = DesktopFileSyncPersistedState(claim.state, listOf(root))
+            store.save(persisted)
+
+            val success = FileSyncExecutionSuccess(
+                synchronizedBaselines = listOf(
+                    FileSyncBaseline("Notes/readme.md", SyncEntryKind.File, "local-1", "remote-1"),
+                ),
+            )
+            persisted = persisted.copy(
+                coordinator = completeFileSyncOperation(
+                    persisted.coordinator,
+                    pair.id,
+                    running.id,
+                    success,
+                ),
+            )
+            store.saveExecutionTransition(
+                state = persisted,
+                pairId = pair.id,
+                workId = running.id,
+                workItem = null,
+                synchronizedBaselines = success.synchronizedBaselines,
+            )
+
+            val restored = DesktopFileSyncStore(File(directory, "state.db"), legacyStateFile = null).load()
+            assertTrue(restored.coordinator.pairs.single().workItems.isEmpty())
+            assertEquals(success.synchronizedBaselines, restored.coordinator.pairs.single().baselines)
+            assertEquals(listOf(root), restored.roots)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     @Test
     fun `download capacity includes reserve and both same-store copies`() {
         assertEquals(250L, requiredDesktopDownloadFreeBytes(100L, 50L, sameStore = true))

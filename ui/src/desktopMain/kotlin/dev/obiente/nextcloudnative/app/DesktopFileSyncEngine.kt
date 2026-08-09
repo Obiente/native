@@ -246,6 +246,7 @@ internal class DesktopFileSyncEngine(
         onProgress: (DesktopFileSyncProgressEvent) -> Unit,
         shouldContinue: () -> Boolean,
         resetExhaustedFailures: Boolean,
+        completedBefore: Int = 0,
     ): FileSyncCenterActionResult {
         reclaimDesktopFileSyncStages(stagingRoot)
         var persisted = store.load()
@@ -281,6 +282,7 @@ internal class DesktopFileSyncEngine(
                 localEntries,
                 remoteEntries,
                 System.currentTimeMillis(),
+                maximumWorkItems = DESKTOP_FILE_SYNC_WORK_BATCH,
             ),
         )
         if (resetExhaustedFailures) {
@@ -298,6 +300,7 @@ internal class DesktopFileSyncEngine(
         store.save(persisted)
 
         val pairLabel = syncPairLabel(root.displayName, initialPair.remoteRootPath)
+        val plannedWorkItems = persisted.coordinator.pairs.first { it.id == pairId }.workItems.size
         val totalOperations = persisted.coordinator.pairs.first { it.id == pairId }.workItems.count {
             it.state == FileSyncExecutionState.Ready
         }
@@ -306,10 +309,10 @@ internal class DesktopFileSyncEngine(
             if (!shouldContinue()) break
             val claim = claimNextFileSyncOperation(persisted.coordinator, pairId, System.currentTimeMillis())
             persisted = persisted.copy(coordinator = claim.state)
-            store.save(persisted)
             val command = claim.command ?: break
             val runningWork = persisted.coordinator.pairs.first { it.id == pairId }
                 .workItems.first { it.id == command.workId }
+            store.saveExecutionTransition(persisted, pairId, command.workId, runningWork)
             val sizeBytes = runningWork.observedLocal?.size ?: runningWork.observedRemote?.size
             onProgress(
                 DesktopFileSyncProgressEvent(
@@ -318,8 +321,8 @@ internal class DesktopFileSyncEngine(
                     relativePath = runningWork.relativePath,
                     pairLabel = pairLabel,
                     operation = command.operation,
-                    completedOperations = completed,
-                    totalOperations = totalOperations,
+                    completedOperations = completedBefore + completed,
+                    totalOperations = completedBefore + totalOperations,
                     sizeBytes = sizeBytes,
                     stage = DesktopFileSyncProgressStage.Started,
                 ),
@@ -334,7 +337,14 @@ internal class DesktopFileSyncEngine(
                         success,
                     ),
                 )
-                store.save(persisted)
+                store.saveExecutionTransition(
+                    state = persisted,
+                    pairId = pairId,
+                    workId = command.workId,
+                    workItem = null,
+                    synchronizedBaselines = success.synchronizedBaselines,
+                    removedBaselinePaths = success.removedRelativePaths.toSet(),
+                )
                 completed += 1
                 onProgress(
                     DesktopFileSyncProgressEvent(
@@ -343,8 +353,8 @@ internal class DesktopFileSyncEngine(
                         relativePath = runningWork.relativePath,
                         pairLabel = pairLabel,
                         operation = command.operation,
-                        completedOperations = completed,
-                        totalOperations = totalOperations,
+                        completedOperations = completedBefore + completed,
+                        totalOperations = completedBefore + totalOperations,
                         sizeBytes = sizeBytes,
                         stage = DesktopFileSyncProgressStage.Completed,
                     ),
@@ -361,7 +371,9 @@ internal class DesktopFileSyncEngine(
                         safeMessage,
                     ),
                 )
-                store.save(persisted)
+                val failedWork = persisted.coordinator.pairs.first { it.id == pairId }
+                    .workItems.first { it.id == command.workId }
+                store.saveExecutionTransition(persisted, pairId, command.workId, failedWork)
                 onProgress(
                     DesktopFileSyncProgressEvent(
                         pairId = pairId,
@@ -369,8 +381,8 @@ internal class DesktopFileSyncEngine(
                         relativePath = runningWork.relativePath,
                         pairLabel = pairLabel,
                         operation = command.operation,
-                        completedOperations = completed,
-                        totalOperations = totalOperations,
+                        completedOperations = completedBefore + completed,
+                        totalOperations = completedBefore + totalOperations,
                         sizeBytes = sizeBytes,
                         stage = DesktopFileSyncProgressStage.Failed,
                         failureMessage = safeMessage,
@@ -381,9 +393,21 @@ internal class DesktopFileSyncEngine(
         val pair = persisted.coordinator.pairs.first { it.id == pairId }
         val conflicts = pair.workItems.count { it.state == FileSyncExecutionState.AwaitingDecision }
         val failures = pair.workItems.count { it.state == FileSyncExecutionState.Failed }
+        if (shouldContinueDesktopFileSyncBatch(plannedWorkItems, completed) && shouldContinue()) {
+            return runPairLocked(
+                session = session,
+                userId = userId,
+                pairId = pairId,
+                onProgress = onProgress,
+                shouldContinue = shouldContinue,
+                resetExhaustedFailures = false,
+                completedBefore = completedBefore + completed,
+            )
+        }
+        val completedTotal = completedBefore + completed
         val message = buildString {
-            append(completed).append(" sync operation")
-            if (completed != 1) append('s')
+            append(completedTotal).append(" sync operation")
+            if (completedTotal != 1) append('s')
             append(" completed.")
             if (conflicts > 0) append(' ').append(conflicts).append(" conflicts need review.")
             if (failures > 0) append(' ').append(failures).append(" operations failed.")
@@ -700,6 +724,11 @@ internal class DesktopFileSyncEngine(
         const val MAX_SYNC_FILE_BYTES = 8L * 1024L * 1024L * 1024L
     }
 }
+
+internal fun shouldContinueDesktopFileSyncBatch(plannedWorkItems: Int, completedOperations: Int): Boolean =
+    plannedWorkItems == DESKTOP_FILE_SYNC_WORK_BATCH && completedOperations > 0
+
+private const val DESKTOP_FILE_SYNC_WORK_BATCH = 10_000
 
 internal fun desktopFileSyncRemoteMutationPath(remoteRootPath: String, relativePath: String): String {
     val relative = relativePath.trim('/')

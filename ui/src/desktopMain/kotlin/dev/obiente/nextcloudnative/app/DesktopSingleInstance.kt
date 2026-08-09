@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 
 internal enum class DesktopActivationKind(val wireValue: String) {
+    Background("background"),
     ShowWindow("show"),
     UpdateHandoffFailed("update-handoff-failed"),
     ;

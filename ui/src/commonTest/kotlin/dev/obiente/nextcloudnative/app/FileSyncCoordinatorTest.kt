@@ -383,6 +383,27 @@ class FileSyncCoordinatorTest {
         }
     }
 
+    @Test
+    fun `large snapshots are planned in bounded priority batches`() {
+        val entries = (0..20_000).map { index ->
+            local("Archive/file-${index.toString().padStart(5, '0')}.jpg", "local-$index")
+        }
+
+        val scanned = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            entries,
+            emptyList(),
+            nowEpochMillis = 10L,
+            maximumWorkItems = 10_000,
+        ).pair()
+
+        assertEquals(10_000, scanned.workItems.size)
+        assertEquals("Archive/file-00000.jpg", scanned.workItems.first().relativePath)
+        assertEquals("Archive/file-09999.jpg", scanned.workItems.last().relativePath)
+        assertEquals(10_001L, scanned.nextWorkId)
+    }
+
     private fun state(
         baselines: List<FileSyncBaseline> = emptyList(),
         configuration: FileSyncConfiguration = FileSyncConfiguration(deviceLabel = "Test phone"),

@@ -532,7 +532,7 @@ internal class DesktopFileSyncLocalTree(
     private companion object {
         const val REVISION_PREFIX = "desktop-v2"
         const val SHA256_HEX_LENGTH = 64
-        const val MAX_ENTRIES = 20_000
+        const val MAX_ENTRIES = MAX_FILE_SYNC_ENTRIES
         const val MAX_DEPTH = 64
         const val BUFFER_BYTES = 64 * 1024
         const val DOWNLOAD_MARKER = ".nextcloud-native-download-"

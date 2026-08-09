@@ -210,8 +210,10 @@ fun scanFileSyncPair(
     localEntries: List<LocalSyncEntry>,
     remoteEntries: List<RemoteSyncEntry>,
     nowEpochMillis: Long,
+    maximumWorkItems: Int = MAX_FILE_SYNC_WORK_ITEMS,
 ): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
     require(nowEpochMillis >= 0)
+    require(maximumWorkItems in 1..MAX_FILE_SYNC_WORK_ITEMS)
     require(localEntries.size <= MAX_FILE_SYNC_ENTRIES) { "The local sync snapshot is too large." }
     require(remoteEntries.size <= MAX_FILE_SYNC_ENTRIES) { "The remote sync snapshot is too large." }
     require(pair.workItems.none { it.state == FileSyncExecutionState.Running }) {
@@ -235,15 +237,17 @@ fun scanFileSyncPair(
     val localByPath = scopedLocalEntries.associateBy(LocalSyncEntry::relativePath)
     val remoteByPath = scopedRemoteEntries.associateBy(RemoteSyncEntry::relativePath)
     val baselineByPath = scopedBaselines.associateBy(FileSyncBaseline::relativePath)
+    val existingWorkByPath = pair.workItems.associateBy(FileSyncWorkItem::relativePath)
     val plan = planFileSync(scopedLocalEntries, scopedRemoteEntries, scopedBaselines, pair.configuration)
-    require(plan.operations.size <= MAX_FILE_SYNC_WORK_ITEMS) { "The sync plan contains too much work." }
     var nextId = pair.nextWorkId
-    val work = plan.operations.map { operation ->
+    val work = plan.operations.sortedWith(
+        fileSyncOperationComparator(pair.configuration, localByPath, remoteByPath),
+    ).take(maximumWorkItems).map { operation ->
         val path = operation.relativePath
         val local = localByPath[path]
         val remote = remoteByPath[path]
         val baseline = baselineByPath[path]
-        pair.workItems.firstOrNull { current ->
+        existingWorkByPath[path]?.takeIf { current ->
             current.sameGeneration(operation, local, remote, baseline)
         } ?: FileSyncWorkItem(
             id = nextId.also {
@@ -305,34 +309,46 @@ fun scanFileSyncPair(
                 structuralBaselines +
                 contentVerifiedBaselines
             ).sortedBy(FileSyncBaseline::relativePath),
-        workItems = work.sortedWith(fileSyncExecutionComparator(pair.configuration)),
+        workItems = work,
         nextWorkId = nextId,
         lastScanEpochMillis = nowEpochMillis,
     )
 }
 
-private fun fileSyncExecutionComparator(
+private fun fileSyncOperationComparator(
     configuration: FileSyncConfiguration,
-): Comparator<FileSyncWorkItem> = Comparator { left, right ->
-    val leftDelete = left.operation is FileSyncOperation.DeleteLocal ||
-        left.operation is FileSyncOperation.DeleteRemote
-    val rightDelete = right.operation is FileSyncOperation.DeleteLocal ||
-        right.operation is FileSyncOperation.DeleteRemote
-    val leftDirectory = left.observedLocal?.kind == SyncEntryKind.Directory ||
-        left.observedRemote?.kind == SyncEntryKind.Directory
-    val rightDirectory = right.observedLocal?.kind == SyncEntryKind.Directory ||
-        right.observedRemote?.kind == SyncEntryKind.Directory
-    when {
+    localByPath: Map<String, LocalSyncEntry>,
+    remoteByPath: Map<String, RemoteSyncEntry>,
+): Comparator<FileSyncOperation> = Comparator { left, right ->
+    compareFileSyncOperations(
+        left,
+        localByPath[left.relativePath]?.kind ?: remoteByPath[left.relativePath]?.kind,
+        right,
+        localByPath[right.relativePath]?.kind ?: remoteByPath[right.relativePath]?.kind,
+        configuration,
+    )
+}
+
+private fun compareFileSyncOperations(
+    left: FileSyncOperation,
+    leftKind: SyncEntryKind?,
+    right: FileSyncOperation,
+    rightKind: SyncEntryKind?,
+    configuration: FileSyncConfiguration,
+): Int {
+    val leftDelete = left is FileSyncOperation.DeleteLocal || left is FileSyncOperation.DeleteRemote
+    val rightDelete = right is FileSyncOperation.DeleteLocal || right is FileSyncOperation.DeleteRemote
+    val leftDirectory = leftKind == SyncEntryKind.Directory
+    val rightDirectory = rightKind == SyncEntryKind.Directory
+    return when {
         leftDelete != rightDelete -> if (leftDelete) 1 else -1
         leftDelete && leftDirectory != rightDirectory -> if (leftDirectory) 1 else -1
         leftDelete -> compareValues(
-            right.relativePath.count { it == '/' },
-            left.relativePath.count { it == '/' },
+            right.relativePath.count { it == '/' }, left.relativePath.count { it == '/' },
         ).takeIf { it != 0 } ?: compareValues(left.relativePath, right.relativePath)
         leftDirectory != rightDirectory -> if (leftDirectory) -1 else 1
         leftDirectory -> compareValues(
-            left.relativePath.count { it == '/' },
-            right.relativePath.count { it == '/' },
+            left.relativePath.count { it == '/' }, right.relativePath.count { it == '/' },
         ).takeIf { it != 0 } ?: compareValues(left.relativePath, right.relativePath)
         else -> compareValues(
             configuration.fileSyncPriority(left.relativePath),
@@ -741,7 +757,7 @@ private fun requireUniqueCoordinatorPaths(paths: List<String>, source: String) {
 }
 
 internal const val MAX_FILE_SYNC_PAIRS = 64
-internal const val MAX_FILE_SYNC_ENTRIES = 20_000
+internal const val MAX_FILE_SYNC_ENTRIES = 100_000
 internal const val MAX_FILE_SYNC_WORK_ITEMS = 20_000
 internal const val MAX_FILE_SYNC_RESULT_PATHS = 3
 internal const val MAX_FILE_SYNC_ATTEMPTS = 20

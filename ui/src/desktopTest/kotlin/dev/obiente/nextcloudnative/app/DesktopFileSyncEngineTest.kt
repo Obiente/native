@@ -9,6 +9,13 @@ import kotlin.test.assertTrue
 
 class DesktopFileSyncEngineTest {
     @Test
+    fun `a full large-tree batch continues when conflicts or failures remain`() {
+        assertTrue(shouldContinueDesktopFileSyncBatch(10_000, completedOperations = 9_999))
+        assertFalse(shouldContinueDesktopFileSyncBatch(10_000, completedOperations = 0))
+        assertFalse(shouldContinueDesktopFileSyncBatch(9_999, completedOperations = 9_999))
+    }
+
+    @Test
     fun `remote mutation paths include the configured pair root`() {
         assertEquals(
             "Photography/Albums/2026/cover.jpg",

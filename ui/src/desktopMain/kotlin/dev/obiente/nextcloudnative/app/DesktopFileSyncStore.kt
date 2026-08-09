@@ -1,18 +1,16 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.sqlite.SQLiteConnection
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import androidx.sqlite.execSQL
 import java.io.File
-import java.io.FileOutputStream
 import java.io.RandomAccessFile
-import java.nio.file.AtomicMoveNotSupportedException
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 internal data class DesktopFileSyncRootRecord(
@@ -37,10 +35,16 @@ internal data class DesktopFileSyncPersistedState(
     }
 }
 
-internal class DesktopFileSyncStore(private val stateFile: File = desktopFileSyncStateFile()) {
+internal class DesktopFileSyncStore(
+    private val stateFile: File = desktopFileSyncDatabaseFile(),
+    private val legacyStateFile: File? = stateFile.parentFile
+        ?.resolve("file-sync-state.json")
+        ?.takeIf { stateFile.name == "file-sync-state-v2.db" },
+) {
     private val transactionKey = runCatching(stateFile::getCanonicalPath).getOrElse {
         stateFile.toPath().toAbsolutePath().normalize().toString()
     }
+    private var lastLoaded: DesktopFileSyncPersistedState? = null
 
     /** Serializes one complete load-mutate-save transaction across app processes. */
     fun <T> withExclusiveAccess(block: () -> T): T = processLocks
@@ -56,51 +60,321 @@ internal class DesktopFileSyncStore(private val stateFile: File = desktopFileSyn
 
     @Synchronized
     fun load(): DesktopFileSyncPersistedState {
-        if (!stateFile.exists()) return DesktopFileSyncPersistedState()
-        require(stateFile.isFile && stateFile.length() in 1..MAX_STATE_BYTES) {
-            "Desktop folder sync state exceeds its safe storage limit."
+        val connection = openDatabase()
+        return try {
+            initializeSchema(connection)
+            migrateLegacyState(connection)
+            readDatabase(connection).also { lastLoaded = it }
+        } finally {
+            connection.close()
         }
-        val snapshot = stateJson.decodeFromString<DesktopFileSyncSnapshotV1>(stateFile.readText())
-        require(snapshot.schemaVersion == FORMAT_VERSION) { "Desktop folder sync state version is unsupported." }
-        val coordinator = decodeFileSyncCoordinatorSnapshot(Base64.getDecoder().decode(snapshot.coordinatorBase64))
-        val roots = snapshot.roots.map {
-            DesktopFileSyncRootRecord(it.id, it.absolutePath, it.displayName)
-        }
-        return DesktopFileSyncPersistedState(coordinator, roots)
     }
 
     @Synchronized
     fun save(state: DesktopFileSyncPersistedState) {
-        val snapshot = DesktopFileSyncSnapshotV1(
-            coordinatorBase64 = Base64.getEncoder().encodeToString(
-                encodeFileSyncCoordinatorSnapshot(state.coordinator),
-            ),
-            roots = state.roots.sortedBy(DesktopFileSyncRootRecord::id).map {
-                DesktopFileSyncRootSnapshotV1(it.id, it.absolutePath, it.displayName)
-            },
-        )
-        val bytes = stateJson.encodeToString(snapshot).encodeToByteArray()
-        require(bytes.size.toLong() <= MAX_STATE_BYTES) { "Desktop folder sync state is too large." }
+        DesktopFileSyncPersistedState(state.coordinator, state.roots)
+        val connection = openDatabase()
+        try {
+            initializeSchema(connection)
+            migrateLegacyState(connection)
+            val before = lastLoaded ?: readDatabase(connection)
+            transaction(connection) { persistDifference(connection, before, state) }
+            lastLoaded = state
+        } finally {
+            connection.close()
+        }
+    }
+
+    /** Persists one claimed, completed, or failed transfer without diffing the entire large-tree snapshot. */
+    @Synchronized
+    fun saveExecutionTransition(
+        state: DesktopFileSyncPersistedState,
+        pairId: String,
+        workId: Long,
+        workItem: FileSyncWorkItem?,
+        synchronizedBaselines: List<FileSyncBaseline> = emptyList(),
+        removedBaselinePaths: Set<String> = emptySet(),
+    ) {
+        DesktopFileSyncPersistedState(state.coordinator, state.roots)
+        val pair = state.coordinator.pairs.firstOrNull { it.id == pairId }
+            ?: error("The desktop folder sync pair no longer exists.")
+        require(workItem == null || workItem.id == workId)
+        require(synchronizedBaselines.map(FileSyncBaseline::relativePath).distinct().size == synchronizedBaselines.size)
+        require(synchronizedBaselines.none { it.relativePath in removedBaselinePaths })
+        val connection = openDatabase()
+        try {
+            initializeSchema(connection)
+            migrateLegacyState(connection)
+            transaction(connection) {
+                upsertPairRecord(connection, pair)
+                persistWorkRecord(connection, pairId, workId, workItem)
+                synchronizedBaselines.forEach { baseline -> upsertBaselineRecord(connection, pairId, baseline) }
+                removedBaselinePaths.forEach { path ->
+                    delete(connection, "DELETE FROM sync_baselines WHERE pair_id = ? AND relative_path = ?", pairId, path)
+                }
+            }
+            lastLoaded = state
+        } finally {
+            connection.close()
+        }
+    }
+
+    private fun openDatabase(): SQLiteConnection {
         val parent = requireNotNull(stateFile.parentFile)
         check(parent.isDirectory || parent.mkdirs()) { "Could not create desktop folder sync storage." }
-        val temporary = File.createTempFile("${stateFile.name}.", ".tmp", parent)
-        try {
-            FileOutputStream(temporary).use { output ->
-                output.write(bytes)
-                output.fd.sync()
+        return BundledSQLiteDriver().open(stateFile.absolutePath)
+    }
+
+    private fun initializeSchema(connection: SQLiteConnection) {
+        connection.execSQL("PRAGMA foreign_keys = ON")
+        connection.execSQL("PRAGMA journal_mode = WAL")
+        connection.execSQL("PRAGMA synchronous = FULL")
+        connection.execSQL(
+            "CREATE TABLE IF NOT EXISTS sync_metadata (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)",
+        )
+        connection.execSQL(
+            "CREATE TABLE IF NOT EXISTS sync_roots (" +
+                "id TEXT PRIMARY KEY NOT NULL, absolute_path TEXT NOT NULL, display_name TEXT NOT NULL)",
+        )
+        connection.execSQL(
+            "CREATE TABLE IF NOT EXISTS sync_pairs (id TEXT PRIMARY KEY NOT NULL, record BLOB NOT NULL)",
+        )
+        connection.execSQL(
+            "CREATE TABLE IF NOT EXISTS sync_baselines (" +
+                "pair_id TEXT NOT NULL, relative_path TEXT NOT NULL, record BLOB NOT NULL, " +
+                "PRIMARY KEY(pair_id, relative_path), " +
+                "FOREIGN KEY(pair_id) REFERENCES sync_pairs(id) ON DELETE CASCADE)",
+        )
+        connection.execSQL(
+            "CREATE TABLE IF NOT EXISTS sync_work (" +
+                "pair_id TEXT NOT NULL, work_id INTEGER NOT NULL, record BLOB NOT NULL, " +
+                "PRIMARY KEY(pair_id, work_id), " +
+                "FOREIGN KEY(pair_id) REFERENCES sync_pairs(id) ON DELETE CASCADE)",
+        )
+        val schemaVersion = metadataValue(connection, SCHEMA_VERSION_KEY)
+        if (schemaVersion == null) {
+            putMetadata(connection, SCHEMA_VERSION_KEY, DATABASE_SCHEMA_VERSION)
+        } else {
+            require(schemaVersion == DATABASE_SCHEMA_VERSION) {
+                "The desktop folder sync database version is unsupported."
             }
-            try {
-                Files.move(
-                    temporary.toPath(),
-                    stateFile.toPath(),
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(temporary.toPath(), stateFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    private fun migrateLegacyState(connection: SQLiteConnection) {
+        if (metadataValue(connection, LEGACY_IMPORT_KEY) != null) return
+        val legacy = legacyStateFile?.takeIf(File::isFile)?.let(::decodeLegacyState)
+        transaction(connection) {
+            if (legacy != null) persistDifference(connection, DesktopFileSyncPersistedState(), legacy)
+            putMetadata(connection, LEGACY_IMPORT_KEY, if (legacy == null) "absent" else "imported")
+        }
+    }
+
+    private fun readDatabase(connection: SQLiteConnection): DesktopFileSyncPersistedState {
+        val roots = connection.prepare(
+            "SELECT id, absolute_path, display_name FROM sync_roots ORDER BY id",
+        ).use { statement ->
+            buildList {
+                while (statement.step()) {
+                    add(DesktopFileSyncRootRecord(statement.getText(0), statement.getText(1), statement.getText(2)))
+                }
             }
-        } finally {
-            temporary.delete()
+        }
+        val pairRecords = connection.prepare("SELECT id, record FROM sync_pairs ORDER BY id").use { statement ->
+            buildList {
+                while (statement.step()) {
+                    val pair = decodeFileSyncPairRecord(statement.getBlob(1))
+                    require(pair.id == statement.getText(0))
+                    add(pair)
+                }
+            }
+        }
+        val baselines = mutableMapOf<String, MutableList<FileSyncBaseline>>()
+        connection.prepare(
+            "SELECT pair_id, relative_path, record FROM sync_baselines ORDER BY pair_id, relative_path",
+        ).use { statement ->
+            while (statement.step()) {
+                val pairId = statement.getText(0)
+                val baseline = decodeFileSyncBaselineRecord(statement.getBlob(2))
+                require(baseline.relativePath == statement.getText(1))
+                baselines.getOrPut(pairId, ::mutableListOf) += baseline
+            }
+        }
+        val work = mutableMapOf<String, MutableList<FileSyncWorkItem>>()
+        connection.prepare("SELECT pair_id, work_id, record FROM sync_work ORDER BY pair_id, work_id").use { statement ->
+            while (statement.step()) {
+                val pairId = statement.getText(0)
+                val item = decodeFileSyncWorkRecord(statement.getBlob(2))
+                require(item.id == statement.getLong(1))
+                work.getOrPut(pairId, ::mutableListOf) += item
+            }
+        }
+        val pairs = pairRecords.map { pair ->
+            pair.copy(
+                baselines = baselines.remove(pair.id).orEmpty(),
+                workItems = work.remove(pair.id).orEmpty(),
+            )
+        }
+        require(baselines.isEmpty() && work.isEmpty()) { "Desktop folder sync rows reference a missing pair." }
+        return DesktopFileSyncPersistedState(
+            coordinator = recoverInterruptedFileSyncWork(FileSyncCoordinatorState(pairs)),
+            roots = roots,
+        )
+    }
+
+    private fun persistDifference(
+        connection: SQLiteConnection,
+        before: DesktopFileSyncPersistedState,
+        after: DesktopFileSyncPersistedState,
+    ) {
+        val oldRoots = before.roots.associateBy(DesktopFileSyncRootRecord::id)
+        val newRoots = after.roots.associateBy(DesktopFileSyncRootRecord::id)
+        (oldRoots.keys - newRoots.keys).forEach { id -> delete(connection, "DELETE FROM sync_roots WHERE id = ?", id) }
+        newRoots.forEach { (id, root) ->
+            if (oldRoots[id] != root) {
+                connection.prepare(
+                    "INSERT OR REPLACE INTO sync_roots(id, absolute_path, display_name) VALUES (?, ?, ?)",
+                ).use { statement ->
+                    statement.bindText(1, id)
+                    statement.bindText(2, root.absolutePath)
+                    statement.bindText(3, root.displayName)
+                    check(!statement.step())
+                }
+            }
+        }
+
+        val oldPairs = before.coordinator.pairs.associateBy(FileSyncPair::id)
+        val newPairs = after.coordinator.pairs.associateBy(FileSyncPair::id)
+        (oldPairs.keys - newPairs.keys).forEach { id -> delete(connection, "DELETE FROM sync_pairs WHERE id = ?", id) }
+        newPairs.forEach { (pairId, pair) ->
+            val oldPair = oldPairs[pairId]
+            val pairRecord = pair.copy(baselines = emptyList(), workItems = emptyList())
+            val oldPairRecord = oldPair?.copy(baselines = emptyList(), workItems = emptyList())
+            if (pairRecord != oldPairRecord) {
+                upsertPairRecord(connection, pair)
+            }
+            persistBaselines(connection, pairId, oldPair?.baselines.orEmpty(), pair.baselines)
+            persistWork(connection, pairId, oldPair?.workItems.orEmpty(), pair.workItems)
+        }
+    }
+
+    private fun persistBaselines(
+        connection: SQLiteConnection,
+        pairId: String,
+        before: List<FileSyncBaseline>,
+        after: List<FileSyncBaseline>,
+    ) {
+        val old = before.associateBy(FileSyncBaseline::relativePath)
+        val current = after.associateBy(FileSyncBaseline::relativePath)
+        (old.keys - current.keys).forEach { path ->
+            delete(connection, "DELETE FROM sync_baselines WHERE pair_id = ? AND relative_path = ?", pairId, path)
+        }
+        current.forEach { (path, baseline) ->
+            if (old[path] != baseline) {
+                upsertBaselineRecord(connection, pairId, baseline)
+            }
+        }
+    }
+
+    private fun persistWork(
+        connection: SQLiteConnection,
+        pairId: String,
+        before: List<FileSyncWorkItem>,
+        after: List<FileSyncWorkItem>,
+    ) {
+        val old = before.associateBy(FileSyncWorkItem::id)
+        val current = after.associateBy(FileSyncWorkItem::id)
+        (old.keys - current.keys).forEach { id ->
+            connection.prepare("DELETE FROM sync_work WHERE pair_id = ? AND work_id = ?").use { statement ->
+                statement.bindText(1, pairId)
+                statement.bindLong(2, id)
+                check(!statement.step())
+            }
+        }
+        current.forEach { (id, item) ->
+            if (old[id] != item) {
+                persistWorkRecord(connection, pairId, id, item)
+            }
+        }
+    }
+
+    private fun upsertPairRecord(connection: SQLiteConnection, pair: FileSyncPair) {
+        connection.prepare(
+            "INSERT INTO sync_pairs(id, record) VALUES (?, ?) " +
+                "ON CONFLICT(id) DO UPDATE SET record = excluded.record",
+        ).use { statement ->
+            statement.bindText(1, pair.id)
+            statement.bindBlob(2, encodeFileSyncPairRecord(pair.copy(baselines = emptyList(), workItems = emptyList())))
+            check(!statement.step())
+        }
+    }
+
+    private fun upsertBaselineRecord(
+        connection: SQLiteConnection,
+        pairId: String,
+        baseline: FileSyncBaseline,
+    ) {
+        connection.prepare(
+            "INSERT OR REPLACE INTO sync_baselines(pair_id, relative_path, record) VALUES (?, ?, ?)",
+        ).use { statement ->
+            statement.bindText(1, pairId)
+            statement.bindText(2, baseline.relativePath)
+            statement.bindBlob(3, encodeFileSyncBaselineRecord(baseline))
+            check(!statement.step())
+        }
+    }
+
+    private fun persistWorkRecord(
+        connection: SQLiteConnection,
+        pairId: String,
+        workId: Long,
+        workItem: FileSyncWorkItem?,
+    ) {
+        if (workItem == null) {
+            connection.prepare("DELETE FROM sync_work WHERE pair_id = ? AND work_id = ?").use { statement ->
+                statement.bindText(1, pairId)
+                statement.bindLong(2, workId)
+                check(!statement.step())
+            }
+            return
+        }
+        connection.prepare("INSERT OR REPLACE INTO sync_work(pair_id, work_id, record) VALUES (?, ?, ?)")
+            .use { statement ->
+                statement.bindText(1, pairId)
+                statement.bindLong(2, workId)
+                statement.bindBlob(3, encodeFileSyncWorkRecord(workItem))
+                check(!statement.step())
+            }
+    }
+
+    private fun delete(connection: SQLiteConnection, sql: String, vararg values: String) {
+        connection.prepare(sql).use { statement ->
+            values.forEachIndexed { index, value -> statement.bindText(index + 1, value) }
+            check(!statement.step())
+        }
+    }
+
+    private fun metadataValue(connection: SQLiteConnection, key: String): String? =
+        connection.prepare("SELECT value FROM sync_metadata WHERE key = ?").use { statement ->
+            statement.bindText(1, key)
+            if (statement.step()) statement.getText(0) else null
+        }
+
+    private fun putMetadata(connection: SQLiteConnection, key: String, value: String) {
+        connection.prepare("INSERT OR REPLACE INTO sync_metadata(key, value) VALUES (?, ?)").use { statement ->
+            statement.bindText(1, key)
+            statement.bindText(2, value)
+            check(!statement.step())
+        }
+    }
+
+    private inline fun <T> transaction(connection: SQLiteConnection, block: () -> T): T {
+        connection.execSQL("BEGIN IMMEDIATE TRANSACTION")
+        return try {
+            block().also { connection.execSQL("COMMIT") }
+        } catch (failure: Throwable) {
+            runCatching { connection.execSQL("ROLLBACK") }
+            throw failure
         }
     }
 
@@ -123,11 +397,22 @@ private data class DesktopFileSyncRootSnapshotV1(
     val displayName: String,
 )
 
-private fun desktopFileSyncStateFile(): File {
+private fun desktopFileSyncDatabaseFile(): File {
     val xdgState = System.getenv("XDG_STATE_HOME")?.takeIf(String::isNotBlank)
     val root = xdgState?.let(::File)
         ?: File(System.getProperty("user.home"), ".local/state")
-    return File(root, "nextcloud-native/file-sync-state.json")
+    return File(root, "nextcloud-native/file-sync-state-v2.db")
+}
+
+private fun decodeLegacyState(stateFile: File): DesktopFileSyncPersistedState {
+    require(stateFile.isFile && stateFile.length() in 1..MAX_LEGACY_STATE_BYTES) {
+        "Desktop folder sync state exceeds its safe storage limit."
+    }
+    val snapshot = stateJson.decodeFromString<DesktopFileSyncSnapshotV1>(stateFile.readText())
+    require(snapshot.schemaVersion == FORMAT_VERSION) { "Desktop folder sync state version is unsupported." }
+    val coordinator = decodeFileSyncCoordinatorSnapshot(Base64.getDecoder().decode(snapshot.coordinatorBase64))
+    val roots = snapshot.roots.map { DesktopFileSyncRootRecord(it.id, it.absolutePath, it.displayName) }
+    return DesktopFileSyncPersistedState(coordinator, roots)
 }
 
 private val stateJson = Json {
@@ -138,4 +423,7 @@ private val stateJson = Json {
 }
 
 private const val FORMAT_VERSION = 1
-private const val MAX_STATE_BYTES = 17L * 1024L * 1024L
+private const val MAX_LEGACY_STATE_BYTES = 17L * 1024L * 1024L
+private const val LEGACY_IMPORT_KEY = "legacy_v1_import"
+private const val SCHEMA_VERSION_KEY = "schema_version"
+private const val DATABASE_SCHEMA_VERSION = "2"

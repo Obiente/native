@@ -553,7 +553,7 @@ internal class DesktopFileSyncRemoteTree(
     }
 
     private companion object {
-        const val MAX_ENTRIES = 20_000
+        const val MAX_ENTRIES = MAX_FILE_SYNC_ENTRIES
         const val MAX_CHILDREN = 50_000
         const val MAX_RECOVERY_ITEMS = 32
         const val MAX_DEPTH = 64
