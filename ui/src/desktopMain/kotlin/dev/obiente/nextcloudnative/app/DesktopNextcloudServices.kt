@@ -1540,6 +1540,9 @@ class DesktopNextcloudServices(
         val accountId = desktopFileCacheAccountId(session)
         synchronized(virtualFileProviderLock) {
             if (isWindowsDesktop()) {
+                val recordCloudFilesDiagnostic: (SupportDiagnosticEventDraft) -> Unit = { event ->
+                    supportDiagnostics.recordForAccountIdentity(accountId, event)
+                }
                 if (windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId) {
                     return@withContext VirtualFileStorageActionResult.Completed(
                         "Windows Cloud Files are already connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
@@ -1564,8 +1567,8 @@ class DesktopNextcloudServices(
                         val legacyProvider = WindowsCloudFilesProvider(
                             root = legacyRoot,
                             backend = backend,
-                            api = JnaWindowsCloudFilesApi(recordDiagnostic = supportDiagnostics::record),
-                            recordDiagnostic = supportDiagnostics::record,
+                            api = JnaWindowsCloudFilesApi(recordDiagnostic = recordCloudFilesDiagnostic),
+                            recordDiagnostic = recordCloudFilesDiagnostic,
                         )
                         try {
                             legacyProvider.start()
@@ -1577,7 +1580,7 @@ class DesktopNextcloudServices(
                             throw failure
                         }
                     } else {
-                        JnaWindowsCloudFilesApi(recordDiagnostic = supportDiagnostics::record).use { cleanupApi ->
+                        JnaWindowsCloudFilesApi(recordDiagnostic = recordCloudFilesDiagnostic).use { cleanupApi ->
                             unregisterSupersededWindowsCloudFilesRoot(
                                 preferences = preferences,
                                 accountId = accountId,
@@ -1596,12 +1599,12 @@ class DesktopNextcloudServices(
                     )
                     throw failure
                 }
-                val api = JnaWindowsCloudFilesApi(recordDiagnostic = supportDiagnostics::record)
+                val api = JnaWindowsCloudFilesApi(recordDiagnostic = recordCloudFilesDiagnostic)
                 val provider = WindowsCloudFilesProvider(
                     root = root,
                     backend = backend,
                     api = api,
-                    recordDiagnostic = supportDiagnostics::record,
+                    recordDiagnostic = recordCloudFilesDiagnostic,
                 )
                 try {
                     provider.start()
@@ -2011,14 +2014,15 @@ class DesktopNextcloudServices(
         remoteRootPath: String,
         configuration: FileSyncConfiguration,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountId = desktopFileCacheAccountId(session)
         val diagnosticFields = listOf(
             SupportDiagnosticFieldDraft("local_root", localRoot.localRootId, SupportDiagnosticValuePrivacy.LocalPath),
             SupportDiagnosticFieldDraft("remote_root", remoteRootPath, SupportDiagnosticValuePrivacy.RemotePath),
         )
-        diagnoseDesktopSupportFailure("sync.pair-add", diagnosticFields) {
+        diagnoseDesktopSupportFailure(accountId, "sync.pair-add", diagnosticFields) {
             fileSyncEngine.addPair(session, localRoot, remoteRootPath, configuration)
         }.also { result ->
-            recordDesktopFileSyncResult("sync.pair-add", diagnosticFields, result)
+            recordDesktopFileSyncResult(accountId, "sync.pair-add", diagnosticFields, result)
             runCatching {
                 publishFileSyncTraySnapshot(
                     loadDesktopFileSyncCenter(session),
@@ -2033,10 +2037,11 @@ class DesktopNextcloudServices(
         userId: String,
         pairId: String,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountId = desktopFileCacheAccountId(session)
         val diagnosticFields = listOf(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
         )
-        diagnoseDesktopSupportFailure("sync.pair-run", diagnosticFields) {
+        diagnoseDesktopSupportFailure(accountId, "sync.pair-run", diagnosticFields) {
             fileSyncRunLock.withLock {
                 if (isFileSyncPaused()) {
                     return@withLock FileSyncCenterActionResult.Rejected(
@@ -2052,7 +2057,7 @@ class DesktopNextcloudServices(
                         session,
                         userId,
                         pairId,
-                        onProgress = ::publishFileSyncProgress,
+                        onProgress = { event -> publishFileSyncProgress(accountId, event) },
                         shouldContinue = { !isFileSyncPaused() },
                         resetExhaustedFailures = true,
                     )
@@ -2065,7 +2070,7 @@ class DesktopNextcloudServices(
                     }
                 }
             }
-        }.also { result -> recordDesktopFileSyncResult("sync.pair-run", diagnosticFields, result) }
+        }.also { result -> recordDesktopFileSyncResult(accountId, "sync.pair-run", diagnosticFields, result) }
     }
 
     override suspend fun resolveFileSyncConflict(
@@ -2075,12 +2080,13 @@ class DesktopNextcloudServices(
         workId: Long,
         choice: FileSyncDecisionChoice,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountId = desktopFileCacheAccountId(session)
         val diagnosticFields = listOf(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
             SupportDiagnosticFieldDraft("work", workId.toString()),
             SupportDiagnosticFieldDraft("choice", choice.name.lowercase()),
         )
-        diagnoseDesktopSupportFailure("sync.conflict-resolve", diagnosticFields) {
+        diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve", diagnosticFields) {
             fileSyncRunLock.withLock {
                 if (isFileSyncPaused()) {
                     return@withLock FileSyncCenterActionResult.Rejected(
@@ -2098,7 +2104,7 @@ class DesktopNextcloudServices(
                         pairId,
                         workId,
                         choice,
-                        onProgress = ::publishFileSyncProgress,
+                        onProgress = { event -> publishFileSyncProgress(accountId, event) },
                         shouldContinue = { !isFileSyncPaused() },
                     )
                 } finally {
@@ -2110,7 +2116,9 @@ class DesktopNextcloudServices(
                     }
                 }
             }
-        }.also { result -> recordDesktopFileSyncResult("sync.conflict-resolve", diagnosticFields, result) }
+        }.also { result ->
+            recordDesktopFileSyncResult(accountId, "sync.conflict-resolve", diagnosticFields, result)
+        }
     }
 
     override suspend fun removeFileSyncPair(
@@ -2118,13 +2126,14 @@ class DesktopNextcloudServices(
         userId: String,
         pairId: String,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountId = desktopFileCacheAccountId(session)
         val diagnosticFields = listOf(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
         )
-        diagnoseDesktopSupportFailure("sync.pair-remove", diagnosticFields) {
+        diagnoseDesktopSupportFailure(accountId, "sync.pair-remove", diagnosticFields) {
             fileSyncEngine.removePair(session, pairId)
         }.also { result ->
-            recordDesktopFileSyncResult("sync.pair-remove", diagnosticFields, result)
+            recordDesktopFileSyncResult(accountId, "sync.pair-remove", diagnosticFields, result)
             runCatching {
                 publishFileSyncTraySnapshot(
                     loadDesktopFileSyncCenter(session),
@@ -2198,6 +2207,7 @@ class DesktopNextcloudServices(
         }
         val session = loadSession()
             ?: return@withLock FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
+        val accountId = desktopFileCacheAccountId(session)
         val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
             return@withLock FileSyncCenterActionResult.Rejected(
                 failure.message ?: "Could not load the signed-in account.",
@@ -2234,7 +2244,7 @@ class DesktopNextcloudServices(
                         session,
                         userId,
                         pair.id,
-                        onProgress = ::publishFileSyncProgress,
+                        onProgress = { event -> publishFileSyncProgress(accountId, event) },
                         shouldContinue = { !isFileSyncPaused() && runtimeAllowsPair() },
                         resetExhaustedFailures = source == DesktopFileSyncRunSource.Tray,
                     )
@@ -2344,9 +2354,10 @@ class DesktopNextcloudServices(
         )
     }
 
-    private fun publishFileSyncProgress(event: DesktopFileSyncProgressEvent) {
+    private fun publishFileSyncProgress(accountId: String, event: DesktopFileSyncProgressEvent) {
         if (event.stage == DesktopFileSyncProgressStage.Failed) {
-            supportDiagnostics.record(
+            supportDiagnostics.recordForAccountIdentity(
+                accountId,
                 SupportDiagnosticEventDraft(
                     severity = SupportDiagnosticSeverity.Error,
                     component = SupportDiagnosticComponent.Sync,
@@ -2430,11 +2441,13 @@ class DesktopNextcloudServices(
     }
 
     private fun recordDesktopFileSyncResult(
+        accountId: String,
         operation: String,
         fields: List<SupportDiagnosticFieldDraft>,
         result: FileSyncCenterActionResult,
     ) {
-        supportDiagnostics.record(
+        supportDiagnostics.recordForAccountIdentity(
+            accountId,
             SupportDiagnosticEventDraft(
                 severity = if (result is FileSyncCenterActionResult.Completed) {
                     SupportDiagnosticSeverity.Info
@@ -2459,6 +2472,7 @@ class DesktopNextcloudServices(
     }
 
     private suspend fun <T> diagnoseDesktopSupportFailure(
+        accountId: String,
         operation: String,
         fields: List<SupportDiagnosticFieldDraft>,
         block: suspend () -> T,
@@ -2469,7 +2483,8 @@ class DesktopNextcloudServices(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
-            supportDiagnostics.record(
+            supportDiagnostics.recordForAccountIdentity(
+                accountId,
                 SupportDiagnosticEventDraft(
                     severity = SupportDiagnosticSeverity.Error,
                     component = SupportDiagnosticComponent.Sync,
@@ -2490,7 +2505,8 @@ class DesktopNextcloudServices(
         root: Path,
         failure: Throwable,
     ) {
-        supportDiagnostics.record(
+        supportDiagnostics.recordForAccountIdentity(
+            accountId,
             SupportDiagnosticEventDraft(
                 severity = SupportDiagnosticSeverity.Error,
                 component = SupportDiagnosticComponent.VirtualFiles,

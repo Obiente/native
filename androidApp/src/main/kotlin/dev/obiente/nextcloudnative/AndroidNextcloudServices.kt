@@ -1173,13 +1173,14 @@ internal class AndroidNextcloudServices(
         remoteRootPath: String,
         configuration: FileSyncConfiguration,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val fields = listOf(
             SupportDiagnosticFieldDraft("local_root", localRoot.localRootId, SupportDiagnosticValuePrivacy.LocalPath),
             SupportDiagnosticFieldDraft("remote_root", remoteRootPath, SupportDiagnosticValuePrivacy.RemotePath),
         )
-        diagnoseSupportFailure(SupportDiagnosticComponent.Sync, "sync.pair-add", fields) {
+        diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-add", fields) {
             fileSyncEngine.addPair(session, userId, localRoot, remoteRootPath, configuration)
-        }.also { result -> recordFileSyncResult("sync.pair-add", fields, result) }
+        }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-add", fields, result) }
     }
 
     override suspend fun runFileSyncPair(
@@ -1187,10 +1188,11 @@ internal class AndroidNextcloudServices(
         userId: String,
         pairId: String,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val fields = listOf(SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier))
-        diagnoseSupportFailure(SupportDiagnosticComponent.Sync, "sync.pair-run", fields) {
+        diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-run", fields) {
             fileSyncEngine.runPair(session, userId, pairId)
-        }.also { result -> recordFileSyncResult("sync.pair-run", fields, result) }
+        }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-run", fields, result) }
     }
 
     override suspend fun resolveFileSyncConflict(
@@ -1200,14 +1202,15 @@ internal class AndroidNextcloudServices(
         workId: Long,
         choice: FileSyncDecisionChoice,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val fields = listOf(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
             SupportDiagnosticFieldDraft("work", workId.toString()),
             SupportDiagnosticFieldDraft("choice", choice.name.lowercase()),
         )
-        diagnoseSupportFailure(SupportDiagnosticComponent.Sync, "sync.conflict-resolve", fields) {
+        diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.conflict-resolve", fields) {
             fileSyncEngine.resolveConflictAndRun(session, userId, pairId, workId, choice)
-        }.also { result -> recordFileSyncResult("sync.conflict-resolve", fields, result) }
+        }.also { result -> recordFileSyncResult(accountIdentity, "sync.conflict-resolve", fields, result) }
     }
 
     override suspend fun removeFileSyncPair(
@@ -1215,10 +1218,11 @@ internal class AndroidNextcloudServices(
         userId: String,
         pairId: String,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val fields = listOf(SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier))
-        diagnoseSupportFailure(SupportDiagnosticComponent.Sync, "sync.pair-remove", fields) {
+        diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-remove", fields) {
             fileSyncEngine.removePair(session, pairId)
-        }.also { result -> recordFileSyncResult("sync.pair-remove", fields, result) }
+        }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-remove", fields, result) }
     }
 
     override suspend fun listMedia(
@@ -2626,7 +2630,8 @@ internal class AndroidNextcloudServices(
                 }
             } catch (failure: Throwable) {
                 Log.e(LOG_TAG, "Loading Talk conversations failed", failure)
-                recordSupportDiagnostic(
+                recordRequestDiagnostic(
+                    session,
                     SupportDiagnosticEventDraft(
                         severity = SupportDiagnosticSeverity.Error,
                         component = SupportDiagnosticComponent.Talk,
@@ -2689,7 +2694,8 @@ internal class AndroidNextcloudServices(
             }
         } catch (failure: Throwable) {
             Log.e(LOG_TAG, "Loading Talk messages failed", failure)
-            recordSupportDiagnostic(
+            recordRequestDiagnostic(
+                session,
                 SupportDiagnosticEventDraft(
                     severity = SupportDiagnosticSeverity.Error,
                     component = SupportDiagnosticComponent.Talk,
@@ -2886,6 +2892,7 @@ internal class AndroidNextcloudServices(
     }
 
     private suspend fun <T> diagnoseSupportFailure(
+        accountIdentity: String,
         component: SupportDiagnosticComponent,
         operation: String,
         fields: List<SupportDiagnosticFieldDraft> = emptyList(),
@@ -2897,7 +2904,8 @@ internal class AndroidNextcloudServices(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
-            recordSupportDiagnostic(
+            recordSupportDiagnosticForAccountIdentity(
+                accountIdentity,
                 SupportDiagnosticEventDraft(
                     severity = SupportDiagnosticSeverity.Error,
                     component = component,
@@ -2913,11 +2921,13 @@ internal class AndroidNextcloudServices(
     }
 
     private fun recordFileSyncResult(
+        accountIdentity: String,
         operation: String,
         fields: List<SupportDiagnosticFieldDraft>,
         result: FileSyncCenterActionResult,
     ) {
-        recordSupportDiagnostic(
+        recordSupportDiagnosticForAccountIdentity(
+            accountIdentity,
             SupportDiagnosticEventDraft(
                 severity = if (result is FileSyncCenterActionResult.Completed) {
                     SupportDiagnosticSeverity.Info
