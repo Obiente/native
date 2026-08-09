@@ -517,6 +517,8 @@ internal class AndroidNextcloudServices(
 
     override fun supportDiagnosticsSummary(): SupportDiagnosticsSummary = supportDiagnostics.summary()
 
+    override fun supportDiagnosticsRevisions() = supportDiagnostics.revisions()
+
     override suspend fun exportSupportDiagnostics(
         reproductionSteps: String,
     ): SupportDiagnosticsExportResult = supportBundleExporter.export(
@@ -580,7 +582,10 @@ internal class AndroidNextcloudServices(
                 }.getOrNull()
             },
             accountIdOf = NextcloudDocumentIds::accountKey,
-        )?.also(::registerSessionPrivateValues)
+        )?.also { session ->
+            registerSessionPrivateValues(session)
+            supportDiagnostics.setActiveAccount(session.serverUrl, session.loginName)
+        }
     }
 
     override fun saveSession(session: NextcloudSession) {
@@ -619,6 +624,7 @@ internal class AndroidNextcloudServices(
         if (previousAccountId != null && previousAccountId != replacementAccountId) {
             nativeMediaPreviewCache.clearAccount(previousAccountId)
         }
+        supportDiagnostics.setActiveAccount(session.serverUrl, session.loginName)
         notifyDocumentsRootsChanged()
     }
 
@@ -658,6 +664,7 @@ internal class AndroidNextcloudServices(
             )
             accountId?.let(nativeMediaPreviewCache::clearAccount)
             notifyDocumentsRootsChanged()
+            supportDiagnostics.setActiveAccount(null, null)
         } catch (failure: Throwable) {
             recordSupportDiagnostic(
                 SupportDiagnosticEventDraft(

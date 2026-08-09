@@ -122,6 +122,7 @@ data class SupportDiagnosticEvent(
     val code: String? = null,
     val durationMillis: Long? = null,
     val attempt: Int? = null,
+    val accountScope: String? = null,
     val messageFingerprint: String? = null,
     val fields: List<SupportDiagnosticField> = emptyList(),
     val exception: SupportDiagnosticException? = null,
@@ -133,6 +134,7 @@ data class SupportDiagnosticEvent(
         require(SUPPORT_DIAGNOSTIC_OPERATION.matches(operation))
         require(SUPPORT_DIAGNOSTIC_OPERATION.matches(outcome))
         require(code == null || code.length <= MAX_SUPPORT_DIAGNOSTIC_CODE_LENGTH && code.none(Char::isISOControl))
+        require(accountScope == null || SUPPORT_DIAGNOSTIC_ALIAS.matches(accountScope))
         require(messageFingerprint == null || SUPPORT_DIAGNOSTIC_ALIAS.matches(messageFingerprint))
         require(fields.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
         require(fields.all { field ->
@@ -202,6 +204,7 @@ internal class SupportDiagnosticSanitizer(
     fun sanitize(
         sequence: Long,
         occurredAtEpochMillis: Long,
+        accountScope: String? = null,
         draft: SupportDiagnosticEventDraft,
     ): SupportDiagnosticEvent = SupportDiagnosticEvent(
         sequence = sequence,
@@ -213,6 +216,7 @@ internal class SupportDiagnosticSanitizer(
         code = draft.code?.let { sanitizeText(it, MAX_SUPPORT_DIAGNOSTIC_CODE_LENGTH) },
         durationMillis = draft.durationMillis,
         attempt = draft.attempt,
+        accountScope = accountScope,
         messageFingerprint = draft.message
             ?.takeIf(String::isNotBlank)
             ?.let { privateAlias("message", it.take(MAX_SUPPORT_DIAGNOSTIC_RAW_TEXT_LENGTH)) },
@@ -292,6 +296,7 @@ internal class SupportDiagnosticSanitizer(
         value = value.replace(UNIX_PATH_VALUE) { match -> privateAlias("local-path", match.value) }
         value = value.replace(RELATIVE_PATH_VALUE) { match -> privateAlias("remote-path", match.value) }
         value = value.replace(FILE_NAME_VALUE) { match -> privateAlias("file", match.value) }
+        value = value.replace(IPV6_ADDRESS_VALUE) { match -> privateAlias("address", match.value) }
         value = value.replace(IP_ADDRESS_VALUE) { match -> privateAlias("address", match.value) }
         value = value.replace(UUID_VALUE) { match -> privateAlias("id", match.value.lowercase()) }
         value = value.replace(LONG_HEX_VALUE) { match -> privateAlias("id", match.value.lowercase()) }
@@ -334,7 +339,7 @@ private const val MAX_SUPPORT_DIAGNOSTIC_CAUSE_DEPTH = 4
 private const val MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH = 180
 private const val MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH = 120
 private const val MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH = 120
-private const val SUPPORT_DIAGNOSTIC_ALIAS_LENGTH = 16
+internal const val SUPPORT_DIAGNOSTIC_ALIAS_LENGTH = 16
 
 private val SUPPORT_DIAGNOSTIC_FIELD_NAME = Regex("^[a-z][a-z0-9_.-]{0,63}$")
 private val SUPPORT_DIAGNOSTIC_OPERATION = Regex("^[a-z][a-z0-9._-]{0,79}$")
@@ -359,6 +364,11 @@ private val FILE_NAME_VALUE = Regex(
 )
 private val IP_ADDRESS_VALUE = Regex(
     "(?<![A-Za-z0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?![A-Za-z0-9])",
+)
+private val IPV6_ADDRESS_VALUE = Regex(
+    "(?i)(?<![A-Za-z0-9:])(?:\\[(?=[0-9A-F:.%]*:)[0-9A-F:.]+(?:%[A-Za-z0-9._-]+)?\\]|" +
+        "(?=[0-9A-F:.%]*:)(?:[0-9A-F]{0,4}:){2,7}(?:[0-9A-F]{0,4}|" +
+        "(?:[0-9]{1,3}\\.){3}[0-9]{1,3})(?:%[A-Za-z0-9._-]+)?)(?![A-Za-z0-9:])",
 )
 private val UUID_VALUE = Regex(
     "(?i)(?<![A-F0-9])[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}(?![A-F0-9])",

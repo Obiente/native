@@ -2721,6 +2721,8 @@ class DesktopNextcloudServices(
     override fun supportDiagnosticsSummary(): SupportDiagnosticsSummary =
         supportDiagnostics.summary()
 
+    override fun supportDiagnosticsRevisions() = supportDiagnostics.revisions()
+
     override suspend fun exportSupportDiagnostics(
         reproductionSteps: String,
     ): SupportDiagnosticsExportResult = supportBundleExporter.export(
@@ -2785,6 +2787,7 @@ class DesktopNextcloudServices(
             ?.takeIf(String::isNotBlank)
             ?: return null
         listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
+        supportDiagnostics.setActiveAccount(server, login)
         return NextcloudSession(server, login, password)
     }
 
@@ -2798,6 +2801,7 @@ class DesktopNextcloudServices(
         )
         preferences.put(KEY_SERVER, session.serverUrl)
         preferences.put(KEY_LOGIN, session.loginName)
+        supportDiagnostics.setActiveAccount(session.serverUrl, session.loginName)
         synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
     }
@@ -2933,6 +2937,7 @@ class DesktopNextcloudServices(
             }
             preferences.remove(KEY_SERVER)
             preferences.remove(KEY_LOGIN)
+            supportDiagnostics.setActiveAccount(null, null)
             cleared = true
         } finally {
             if (!cleared) {

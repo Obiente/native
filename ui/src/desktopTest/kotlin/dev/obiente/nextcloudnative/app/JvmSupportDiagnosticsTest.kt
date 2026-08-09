@@ -86,6 +86,66 @@ class JvmSupportDiagnosticsTest {
     }
 
     @Test
+    fun clockRollbackDoesNotHideExpiredEventsBehindAFutureEvent() {
+        val root = createTempDirectory("support-diagnostics-clock-rollback").toFile()
+        var now = MAX_SUPPORT_DIAGNOSTIC_AGE_MILLIS * 3L
+        val diagnostics = diagnostics(root) { now }
+        diagnostics.record(failureEvent("/srv/fixtures/future.jpg").copy(operation = "clock.future"))
+        now = 0L
+        diagnostics.record(failureEvent("/srv/fixtures/expired.jpg").copy(operation = "clock.expired"))
+        now = MAX_SUPPORT_DIAGNOSTIC_AGE_MILLIS + 1L
+
+        diagnostics.record(failureEvent("/srv/fixtures/current.jpg").copy(operation = "clock.current"))
+
+        val operations = diagnostics.summary().recentEvents.map { it.operation }
+        assertEquals(listOf("clock.future", "clock.current"), operations)
+    }
+
+    @Test
+    fun accountScopedReportsExcludeOtherAccountsWhileRetainingGlobalEvents() {
+        val root = createTempDirectory("support-diagnostics-account-scope").toFile()
+        val diagnostics = diagnostics(root)
+        diagnostics.record(failureEvent("/srv/fixtures/global.jpg").copy(operation = "app.global"))
+        diagnostics.setActiveAccount("https://first.example.test", "first-user")
+        diagnostics.record(failureEvent("/srv/fixtures/first.jpg").copy(operation = "sync.first-account"))
+        diagnostics.setActiveAccount("https://second.example.test", "second-user")
+        diagnostics.record(failureEvent("/srv/fixtures/second.jpg").copy(operation = "sync.second-account"))
+
+        val summary = diagnostics.summary()
+        assertEquals(2, summary.eventCount)
+        assertEquals(listOf("app.global", "sync.second-account"), summary.recentEvents.map { it.operation })
+
+        val destination = File(root, "second-account.zip")
+        diagnostics.writeBundle(destination, "", emptyList())
+        ZipFile(destination).use { zip ->
+            val events = zip.getInputStream(assertNotNull(zip.getEntry("events.jsonl")))
+                .bufferedReader()
+                .use { it.readText() }
+            assertTrue("sync.second-account" in events)
+            assertTrue("app.global" in events)
+            assertFalse("sync.first-account" in events)
+        }
+    }
+
+    @Test
+    fun oneEvictionDoesNotTriggerAFullHistoryRewrite() {
+        assertFalse(
+            shouldCompactSupportDiagnosticHistory(
+                discardedBytes = 1L,
+                physicalBytes = MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES,
+                appendedBytes = 1L,
+            ),
+        )
+        assertTrue(
+            shouldCompactSupportDiagnosticHistory(
+                discardedBytes = MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES,
+                physicalBytes = 0L,
+                appendedBytes = 1L,
+            ),
+        )
+    }
+
+    @Test
     fun concurrentWritersProduceACompleteBoundedHistory() {
         val root = createTempDirectory("support-diagnostics-concurrent").toFile()
         val diagnostics = diagnostics(root)

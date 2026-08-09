@@ -12300,7 +12300,10 @@ internal fun logoutCleanupFailureMessage(failure: Throwable): String {
 private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) {
     val scope = rememberCoroutineScope()
     var refresh by remember { mutableStateOf(0) }
-    val summary = remember(services, refresh) { services.supportDiagnosticsSummary() }
+    val diagnosticsRevision by remember(services) {
+        services.supportDiagnosticsRevisions()
+    }.collectAsState(0L)
+    val summary = remember(services, diagnosticsRevision, refresh) { services.supportDiagnosticsSummary() }
     var reproductionSteps by rememberSaveable { mutableStateOf("") }
     var exporting by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
@@ -12414,7 +12417,12 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
             )
 
             if (summary.recentEvents.isNotEmpty()) {
-                OutlinedButton(onClick = { showPreview = !showPreview }) {
+                OutlinedButton(
+                    onClick = {
+                        refresh += 1
+                        showPreview = !showPreview
+                    },
+                ) {
                     Text(if (showPreview) "Hide event preview" else "Preview recent events")
                 }
                 if (showPreview) {
@@ -12461,6 +12469,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                     onClick = {
                         exporting = true
                         status = null
+                        refresh += 1
                         scope.launch {
                             status = when (val result = services.exportSupportDiagnostics(reproductionSteps)) {
                                 is SupportDiagnosticsExportResult.Exported ->
@@ -12470,6 +12479,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                                 is SupportDiagnosticsExportResult.Unsupported -> result.reason
                             }
                             exporting = false
+                            refresh += 1
                         }
                     },
                 ) {

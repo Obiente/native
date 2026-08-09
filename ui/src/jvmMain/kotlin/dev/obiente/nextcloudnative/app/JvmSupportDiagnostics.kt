@@ -14,6 +14,9 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -34,8 +37,11 @@ class JvmSupportDiagnostics(
     private val redactionKey: ByteArray
     private val sanitizer: SupportDiagnosticSanitizer
     private val events = ArrayDeque<SupportDiagnosticEvent>()
+    private val revision = MutableStateFlow(0L)
     private var nextSequence = 1L
     private var storedEventBytes = 0L
+    private var discardedHistoryBytes = 0L
+    private var activeAccountScope: String? = null
     private var storageAvailable = false
 
     init {
@@ -58,6 +64,25 @@ class JvmSupportDiagnostics(
         synchronized(lock) { sanitizer.registerPrivateValue(value) }
     }
 
+    fun setActiveAccount(serverUrl: String?, loginName: String?) {
+        synchronized(lock) {
+            val nextScope = if (serverUrl.isNullOrBlank() || loginName.isNullOrBlank()) {
+                null
+            } else {
+                sanitizer.registerPrivateValue(serverUrl)
+                sanitizer.registerPrivateValue(loginName)
+                val identity = "${serverUrl.length}:$serverUrl${loginName.length}:$loginName"
+                "<account:${keyedAlias("account\u0000$identity").take(SUPPORT_DIAGNOSTIC_ALIAS_LENGTH)}>"
+            }
+            if (activeAccountScope != nextScope) {
+                activeAccountScope = nextScope
+                publishRevision()
+            }
+        }
+    }
+
+    fun revisions(): StateFlow<Long> = revision.asStateFlow()
+
     fun record(draft: SupportDiagnosticEventDraft) {
         if (!storageAvailable) return
         synchronized(lock) {
@@ -65,22 +90,26 @@ class JvmSupportDiagnostics(
                 val event = sanitizer.sanitize(
                     sequence = nextSequence++,
                     occurredAtEpochMillis = nowEpochMillis().coerceAtLeast(0L),
+                    accountScope = activeAccountScope,
                     draft = draft,
                 )
                 val encodedLine = SUPPORT_JSON.encodeToString(event).encodeToByteArray()
-                val previousStoredBytes = storedEventBytes
                 events.addLast(event)
                 storedEventBytes += encodedLine.size.toLong() + 1L
-                val compacted = pruneEvents(event.occurredAtEpochMillis)
+                discardedHistoryBytes += pruneEvents(event.occurredAtEpochMillis)
                 if (
-                    !compacted &&
                     historyFile.isFile &&
-                    historyFile.length() == previousStoredBytes
+                    !shouldCompactSupportDiagnosticHistory(
+                        discardedBytes = discardedHistoryBytes,
+                        physicalBytes = historyFile.length(),
+                        appendedBytes = encodedLine.size.toLong() + 1L,
+                    )
                 ) {
                     appendHistoryLine(encodedLine)
                 } else {
                     persistHistory()
                 }
+                publishRevision()
             }.onFailure {
                 storageAvailable = false
             }
@@ -88,7 +117,10 @@ class JvmSupportDiagnostics(
     }
 
     fun summary(): SupportDiagnosticsSummary = synchronized(lock) {
-        val snapshot = events.toList()
+        if (storageAvailable) {
+            discardedHistoryBytes += pruneEvents(nowEpochMillis().coerceAtLeast(0L))
+        }
+        val snapshot = visibleEvents()
         SupportDiagnosticsSummary(
             available = storageAvailable,
             eventCount = snapshot.size,
@@ -97,7 +129,7 @@ class JvmSupportDiagnostics(
             oldestEventAtEpochMillis = snapshot.firstOrNull()?.occurredAtEpochMillis,
             newestEventAtEpochMillis = snapshot.lastOrNull()?.occurredAtEpochMillis,
             components = snapshot.mapTo(linkedSetOf(), SupportDiagnosticEvent::component),
-            storedBytes = historyFile.takeIf(File::isFile)?.length()?.coerceAtLeast(0L) ?: 0L,
+            storedBytes = snapshot.sumOf(::encodedEventBytes),
             includedFiles = SUPPORT_BUNDLE_INCLUDED_FILES,
             recentEvents = snapshot.takeLast(MAX_SUPPORT_DIAGNOSTIC_PREVIEW_EVENTS).map { event ->
                 SupportDiagnosticPreviewEvent(
@@ -123,6 +155,7 @@ class JvmSupportDiagnostics(
             events.clear()
             storedEventBytes = 0L
             persistHistory()
+            publishRevision()
             true
         }.getOrElse {
             storageAvailable = false
@@ -138,8 +171,9 @@ class JvmSupportDiagnostics(
         check(storageAvailable) { "Private diagnostic storage is unavailable." }
         require(featureState.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
         val createdAt = nowEpochMillis().coerceAtLeast(0L)
-        if (pruneEvents(createdAt)) persistHistory()
-        val snapshot = events.toList()
+        discardedHistoryBytes += pruneEvents(createdAt)
+        if (discardedHistoryBytes > 0L) persistHistory()
+        val snapshot = visibleEvents()
         val report = SupportBundleReport(
             createdAtEpochMillis = createdAt,
             environment = environment.safeForReport(),
@@ -187,11 +221,10 @@ class JvmSupportDiagnostics(
             return
         }
         val loaded: List<SupportDiagnosticEvent> = historyFile.bufferedReader(Charsets.UTF_8).useLines { lines ->
-            lines.take(MAX_SUPPORT_DIAGNOSTIC_EVENTS + 1)
-                .mapNotNull { line ->
-                    if (line.length > MAX_SUPPORT_DIAGNOSTIC_EVENT_LINE_LENGTH) return@mapNotNull null
-                    runCatching { SUPPORT_JSON.decodeFromString<SupportDiagnosticEvent>(line) }.getOrNull()
-                }
+            lines.mapNotNull { line ->
+                if (line.length > MAX_SUPPORT_DIAGNOSTIC_EVENT_LINE_LENGTH) return@mapNotNull null
+                runCatching { SUPPORT_JSON.decodeFromString<SupportDiagnosticEvent>(line) }.getOrNull()
+            }
                 .toList()
                 .sortedBy(SupportDiagnosticEvent::sequence)
                 .takeLast(MAX_SUPPORT_DIAGNOSTIC_EVENTS)
@@ -200,26 +233,34 @@ class JvmSupportDiagnostics(
         events.addAll(loaded)
         storedEventBytes = loaded.sumOf(::encodedEventBytes)
         nextSequence = loaded.size.toLong() + 1L
-        pruneEvents(nowEpochMillis().coerceAtLeast(0L))
+        discardedHistoryBytes += pruneEvents(nowEpochMillis().coerceAtLeast(0L))
         persistHistory()
     }
 
-    private fun pruneEvents(now: Long): Boolean {
-        var removed = false
+    private fun pruneEvents(now: Long): Long {
+        var removedBytes = 0L
         val cutoff = (now - MAX_SUPPORT_DIAGNOSTIC_AGE_MILLIS).coerceAtLeast(0L)
-        while (events.firstOrNull()?.occurredAtEpochMillis?.let { it < cutoff } == true) {
-            storedEventBytes -= encodedEventBytes(events.removeFirst())
-            removed = true
+        val iterator = events.iterator()
+        while (iterator.hasNext()) {
+            val event = iterator.next()
+            if (event.occurredAtEpochMillis < cutoff) {
+                val eventBytes = encodedEventBytes(event)
+                iterator.remove()
+                storedEventBytes -= eventBytes
+                removedBytes += eventBytes
+            }
         }
         while (events.size > MAX_SUPPORT_DIAGNOSTIC_EVENTS) {
-            storedEventBytes -= encodedEventBytes(events.removeFirst())
-            removed = true
+            val eventBytes = encodedEventBytes(events.removeFirst())
+            storedEventBytes -= eventBytes
+            removedBytes += eventBytes
         }
         while (events.isNotEmpty() && storedEventBytes > MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES) {
-            storedEventBytes -= encodedEventBytes(events.removeFirst())
-            removed = true
+            val eventBytes = encodedEventBytes(events.removeFirst())
+            storedEventBytes -= eventBytes
+            removedBytes += eventBytes
         }
-        return removed
+        return removedBytes
     }
 
     private fun persistHistory() {
@@ -230,16 +271,26 @@ class JvmSupportDiagnostics(
         require(bytes.size.toLong() <= MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES)
         writeFileAtomically(historyFile, bytes)
         storedEventBytes = bytes.size.toLong()
+        discardedHistoryBytes = 0L
     }
 
     private fun appendHistoryLine(encodedLine: ByteArray) {
         require(storedEventBytes <= MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES)
+        require(historyFile.length() + encodedLine.size.toLong() + 1L <= MAX_SUPPORT_DIAGNOSTIC_PHYSICAL_HISTORY_BYTES)
         FileOutputStream(historyFile, true).use { output ->
             output.write(encodedLine)
             output.write('\n'.code)
             output.fd.sync()
         }
-        require(historyFile.length() == storedEventBytes)
+        require(historyFile.length() <= MAX_SUPPORT_DIAGNOSTIC_PHYSICAL_HISTORY_BYTES)
+    }
+
+    private fun visibleEvents(): List<SupportDiagnosticEvent> = events.filter { event ->
+        event.accountScope == null || event.accountScope == activeAccountScope
+    }
+
+    private fun publishRevision() {
+        revision.value = if (revision.value == Long.MAX_VALUE) 0L else revision.value + 1L
     }
 
     private fun encodedEventBytes(event: SupportDiagnosticEvent): Long =
@@ -432,7 +483,10 @@ private val SUPPORT_JSON = Json {
 private const val SUPPORT_DIAGNOSTIC_HISTORY_FILE = "events-v1.jsonl"
 private const val SUPPORT_DIAGNOSTIC_REDACTION_KEY_FILE = "redaction-key-v1"
 private const val REDACTION_KEY_BYTES = 32
-private const val MAX_SUPPORT_DIAGNOSTIC_HISTORY_READ_BYTES = MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES * 2L
+private const val SUPPORT_DIAGNOSTIC_COMPACTION_SLACK_BYTES = 256L * 1_024L
+private const val MAX_SUPPORT_DIAGNOSTIC_PHYSICAL_HISTORY_BYTES =
+    MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES + SUPPORT_DIAGNOSTIC_COMPACTION_SLACK_BYTES
+private const val MAX_SUPPORT_DIAGNOSTIC_HISTORY_READ_BYTES = MAX_SUPPORT_DIAGNOSTIC_PHYSICAL_HISTORY_BYTES
 private const val MAX_SUPPORT_DIAGNOSTIC_EVENT_LINE_LENGTH = 64 * 1_024
 private const val MAX_SUPPORT_BUNDLE_UNCOMPRESSED_BYTES = 3L * 1024L * 1024L
 private const val MAX_SUPPORT_BUNDLE_ARCHIVE_BYTES = 4L * 1024L * 1024L
@@ -440,3 +494,15 @@ private const val MAX_SUPPORT_ENVIRONMENT_VALUE_LENGTH = 160
 private const val MAX_JVM_SUPPORT_EXCEPTION_FRAMES = 32
 private const val MAX_JVM_SUPPORT_CAUSE_DEPTH = 6
 private const val MAX_SUPPORT_DIAGNOSTIC_PREVIEW_EVENTS = 20
+
+internal fun shouldCompactSupportDiagnosticHistory(
+    discardedBytes: Long,
+    physicalBytes: Long,
+    appendedBytes: Long,
+): Boolean {
+    require(discardedBytes >= 0L)
+    require(physicalBytes >= 0L)
+    require(appendedBytes >= 0L)
+    return discardedBytes >= SUPPORT_DIAGNOSTIC_COMPACTION_SLACK_BYTES ||
+        physicalBytes + appendedBytes > MAX_SUPPORT_DIAGNOSTIC_PHYSICAL_HISTORY_BYTES
+}

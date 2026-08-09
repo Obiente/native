@@ -96,6 +96,23 @@ class SupportDiagnosticsTest {
     }
 
     @Test
+    fun sanitizesBareBracketedAndZoneQualifiedIpv6Addresses() {
+        val addresses = listOf(
+            "2001:db8::1",
+            "[2001:db8:0:1::20]",
+            "fe80::1234%wlan0",
+            "::ffff:192.0.2.10",
+        )
+
+        val sanitized = sanitizer.sanitizeUserDescription(
+            addresses.joinToString(prefix = "Servers: ", separator = ", "),
+        )
+
+        addresses.forEach { address -> assertFalse(address in sanitized, address) }
+        assertTrue("<address:" in sanitized)
+    }
+
+    @Test
     fun sanitizesExceptionMessagesAndBoundsFramesAndCauses() {
         val privatePath = "/srv/fixtures/Pictures/private.jpg"
         val frames = (1..40).map { index ->

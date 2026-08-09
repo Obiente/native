@@ -477,6 +477,9 @@ interface NextcloudPlatformServices {
         explanation = "Anonymized support reports are unavailable on this platform.",
     )
 
+    /** Emits after the visible diagnostic history changes so an open support card stays current. */
+    fun supportDiagnosticsRevisions(): Flow<Long> = flowOf(0L)
+
     /** Creates a local sanitized report and opens the platform-owned save or share flow. */
     suspend fun exportSupportDiagnostics(reproductionSteps: String): SupportDiagnosticsExportResult =
         SupportDiagnosticsExportResult.Unsupported(
