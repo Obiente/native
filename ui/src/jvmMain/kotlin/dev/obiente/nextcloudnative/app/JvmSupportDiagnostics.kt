@@ -72,25 +72,38 @@ class JvmSupportDiagnostics(
                 sanitizer.registerPrivateValue(serverUrl)
                 sanitizer.registerPrivateValue(loginName)
                 val identity = "${serverUrl.length}:$serverUrl${loginName.length}:$loginName"
-                "<account:${keyedAlias("account\u0000$identity").take(SUPPORT_DIAGNOSTIC_ALIAS_LENGTH)}>"
+                accountScope(identity)
             }
-            if (activeAccountScope != nextScope) {
-                activeAccountScope = nextScope
-                publishRevision()
-            }
+            updateActiveAccountScope(nextScope)
+        }
+    }
+
+    fun setActiveAccountIdentity(accountIdentity: String?) {
+        synchronized(lock) {
+            updateActiveAccountScope(accountIdentity?.takeIf(String::isNotBlank)?.let(::accountScope))
         }
     }
 
     fun revisions(): StateFlow<Long> = revision.asStateFlow()
 
-    fun record(draft: SupportDiagnosticEventDraft) {
+    fun record(draft: SupportDiagnosticEventDraft) = recordWithScope(draft) { activeAccountScope }
+
+    fun recordForAccountIdentity(accountIdentity: String?, draft: SupportDiagnosticEventDraft) =
+        recordWithScope(draft) {
+            accountIdentity?.takeIf(String::isNotBlank)?.let(::accountScope)
+        }
+
+    private fun recordWithScope(
+        draft: SupportDiagnosticEventDraft,
+        scope: () -> String?,
+    ) {
         if (!storageAvailable) return
         synchronized(lock) {
             runCatching {
                 val event = sanitizer.sanitize(
                     sequence = nextSequence++,
                     occurredAtEpochMillis = nowEpochMillis().coerceAtLeast(0L),
-                    accountScope = activeAccountScope,
+                    accountScope = scope(),
                     draft = draft,
                 )
                 val encodedLine = SUPPORT_JSON.encodeToString(event).encodeToByteArray()
@@ -112,6 +125,7 @@ class JvmSupportDiagnostics(
                 publishRevision()
             }.onFailure {
                 storageAvailable = false
+                publishRevision()
             }
         }
     }
@@ -287,6 +301,16 @@ class JvmSupportDiagnostics(
 
     private fun visibleEvents(): List<SupportDiagnosticEvent> = events.filter { event ->
         event.accountScope == null || event.accountScope == activeAccountScope
+    }
+
+    private fun accountScope(identity: String): String =
+        "<account:${keyedAlias("account\u0000$identity").take(SUPPORT_DIAGNOSTIC_ALIAS_LENGTH)}>"
+
+    private fun updateActiveAccountScope(nextScope: String?) {
+        if (activeAccountScope != nextScope) {
+            activeAccountScope = nextScope
+            publishRevision()
+        }
     }
 
     private fun publishRevision() {

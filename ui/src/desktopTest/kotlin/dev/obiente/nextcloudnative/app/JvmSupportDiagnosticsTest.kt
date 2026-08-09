@@ -106,9 +106,13 @@ class JvmSupportDiagnosticsTest {
         val root = createTempDirectory("support-diagnostics-account-scope").toFile()
         val diagnostics = diagnostics(root)
         diagnostics.record(failureEvent("/srv/fixtures/global.jpg").copy(operation = "app.global"))
-        diagnostics.setActiveAccount("https://first.example.test", "first-user")
+        diagnostics.setActiveAccountIdentity("first-account")
         diagnostics.record(failureEvent("/srv/fixtures/first.jpg").copy(operation = "sync.first-account"))
-        diagnostics.setActiveAccount("https://second.example.test", "second-user")
+        diagnostics.setActiveAccountIdentity("second-account")
+        diagnostics.recordForAccountIdentity(
+            "first-account",
+            failureEvent("/srv/fixtures/abandoned.jpg").copy(operation = "sync.abandoned-first-account"),
+        )
         diagnostics.record(failureEvent("/srv/fixtures/second.jpg").copy(operation = "sync.second-account"))
 
         val summary = diagnostics.summary()
@@ -124,7 +128,24 @@ class JvmSupportDiagnosticsTest {
             assertTrue("sync.second-account" in events)
             assertTrue("app.global" in events)
             assertFalse("sync.first-account" in events)
+            assertFalse("sync.abandoned-first-account" in events)
         }
+    }
+
+    @Test
+    fun storageFailurePublishesARevisionAndDisablesExportState() {
+        val root = createTempDirectory("support-diagnostics-storage-failure").toFile()
+        val diagnostics = diagnostics(root)
+        diagnostics.record(failureEvent("/srv/fixtures/first.jpg"))
+        val history = File(root, "events-v1.jsonl")
+        assertTrue(history.delete())
+        assertTrue(history.mkdir())
+        val revisionBeforeFailure = diagnostics.revisions().value
+
+        diagnostics.record(failureEvent("/srv/fixtures/second.jpg"))
+
+        assertFalse(diagnostics.summary().available)
+        assertTrue(diagnostics.revisions().value > revisionBeforeFailure)
     }
 
     @Test

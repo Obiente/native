@@ -113,6 +113,19 @@ class SupportDiagnosticsTest {
     }
 
     @Test
+    fun redactsCompleteExplicitlyLabeledMultiwordCredentials() {
+        val words = listOf("correct", "horse", "battery", "staple")
+
+        val sanitized = sanitizer.sanitizeUserDescription(
+            "Login failed\npassphrase=${words.joinToString(" ")}\nRetry still fails",
+        )
+
+        words.forEach { word -> assertFalse(word in sanitized, word) }
+        assertTrue("passphrase=<secret>" in sanitized)
+        assertTrue("Retry still fails" in sanitized)
+    }
+
+    @Test
     fun sanitizesExceptionMessagesAndBoundsFramesAndCauses() {
         val privatePath = "/srv/fixtures/Pictures/private.jpg"
         val frames = (1..40).map { index ->

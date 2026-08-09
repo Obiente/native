@@ -144,6 +144,7 @@ internal class DeckAttachmentUploadWorker(
             recordUploadDiagnostic(
                 severity = SupportDiagnosticSeverity.Warning,
                 outcome = "process-recovery",
+                accountId = initial.accountId,
                 jobId = jobId,
             )
             return@withContext Result.success()
@@ -162,6 +163,7 @@ internal class DeckAttachmentUploadWorker(
             recordUploadDiagnostic(
                 severity = SupportDiagnosticSeverity.Warning,
                 outcome = "account-unavailable",
+                accountId = initial.accountId,
                 jobId = jobId,
             )
             return@withContext Result.failure()
@@ -181,6 +183,7 @@ internal class DeckAttachmentUploadWorker(
             recordUploadDiagnostic(
                 severity = SupportDiagnosticSeverity.Warning,
                 outcome = "source-unavailable",
+                accountId = initial.accountId,
                 jobId = jobId,
             )
             return@withContext Result.failure()
@@ -225,6 +228,7 @@ internal class DeckAttachmentUploadWorker(
                         DurableUploadState.Uploading,
                         -> error("Only failed upload states are diagnosed here.")
                     },
+                    accountId = initial.accountId,
                     jobId = jobId,
                     code = "HTTP:${response.status}",
                 )
@@ -242,6 +246,7 @@ internal class DeckAttachmentUploadWorker(
             recordUploadDiagnostic(
                 severity = SupportDiagnosticSeverity.Error,
                 outcome = "outcome-unknown",
+                accountId = initial.accountId,
                 jobId = jobId,
                 failure = failure,
             )
@@ -253,11 +258,13 @@ internal class DeckAttachmentUploadWorker(
     private fun recordUploadDiagnostic(
         severity: SupportDiagnosticSeverity,
         outcome: String,
+        accountId: String,
         jobId: String,
         code: String? = null,
         failure: Throwable? = null,
     ) {
-        AndroidSupportDiagnostics.get(applicationContext).record(
+        AndroidSupportDiagnostics.get(applicationContext).recordForAccountIdentity(
+            accountId,
             SupportDiagnosticEventDraft(
                 severity = severity,
                 component = SupportDiagnosticComponent.Media,

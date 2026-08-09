@@ -487,7 +487,7 @@ interface NextcloudPlatformServices {
         )
 
     /** Clears only diagnostic history. The private alias key remains stable across reports. */
-    fun clearSupportDiagnostics(): Boolean = false
+    suspend fun clearSupportDiagnostics(): Boolean = false
 
     /** Records a structured event. Implementations sanitize it before app-private persistence. */
     fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) = Unit

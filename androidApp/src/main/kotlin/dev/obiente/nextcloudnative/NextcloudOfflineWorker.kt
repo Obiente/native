@@ -48,7 +48,8 @@ internal class NextcloudOfflineWorker(
             when (AndroidFileOfflineRepository(applicationContext).execute(accountId, userId, jobId, cancellation)) {
                 AndroidOfflineExecutionOutcome.Complete -> Result.success()
                 AndroidOfflineExecutionOutcome.Retry -> {
-                    diagnostics.record(
+                    diagnostics.recordForAccountIdentity(
+                        accountId,
                         SupportDiagnosticEventDraft(
                             severity = SupportDiagnosticSeverity.Warning,
                             component = SupportDiagnosticComponent.Storage,
@@ -69,7 +70,8 @@ internal class NextcloudOfflineWorker(
             }
         } catch (failure: Throwable) {
             if (isStopped || coroutineJob?.isCancelled == true) throw failure
-            diagnostics.record(
+            diagnostics.recordForAccountIdentity(
+                accountId,
                 SupportDiagnosticEventDraft(
                     severity = SupportDiagnosticSeverity.Error,
                     component = SupportDiagnosticComponent.Storage,

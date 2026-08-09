@@ -2740,7 +2740,9 @@ class DesktopNextcloudServices(
         ),
     )
 
-    override fun clearSupportDiagnostics(): Boolean = supportDiagnostics.clear()
+    override suspend fun clearSupportDiagnostics(): Boolean = withContext(Dispatchers.IO) {
+        supportDiagnostics.clear()
+    }
 
     override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) {
         supportDiagnostics.record(event)

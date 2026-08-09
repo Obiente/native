@@ -348,7 +348,8 @@ private val SUPPORT_DIAGNOSTIC_ALIAS = Regex("^<[a-z-]+:[a-f0-9]{16}>$")
 private val CONTROL_CHARACTERS = Regex("[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]")
 private val WHITESPACE = Regex("\\s+")
 private val SENSITIVE_HEADER_LINE = Regex(
-    "(?im)\\b(authorization|proxy-authorization|cookie|set-cookie)\\s*[:=]\\s*[^\\r\\n]*",
+    "(?im)\\b(authorization|proxy-authorization|cookie|set-cookie|password|passphrase|" +
+        "app[-_ ]?password|token|secret)\\s*[:=]\\s*[^\\r\\n]*",
 )
 private val AUTHORIZATION_VALUE = Regex(
     "(?i)\\b(authorization|proxy-authorization|cookie|set-cookie|password|passphrase|app[-_ ]?password|token|secret)\\s*[:=]\\s*(?:(?:bearer|basic)\\s+)?[^\\s,;]+",

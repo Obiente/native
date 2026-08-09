@@ -532,7 +532,7 @@ internal class AndroidNextcloudServices(
         ),
     )
 
-    override fun clearSupportDiagnostics(): Boolean = supportDiagnostics.clear()
+    override suspend fun clearSupportDiagnostics(): Boolean = supportDiagnostics.clear()
 
     override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) {
         supportDiagnostics.record(event)
@@ -584,7 +584,7 @@ internal class AndroidNextcloudServices(
             accountIdOf = NextcloudDocumentIds::accountKey,
         )?.also { session ->
             registerSessionPrivateValues(session)
-            supportDiagnostics.setActiveAccount(session.serverUrl, session.loginName)
+            supportDiagnostics.setActiveAccountIdentity(NextcloudDocumentIds.accountKey(session))
         }
     }
 
@@ -624,7 +624,7 @@ internal class AndroidNextcloudServices(
         if (previousAccountId != null && previousAccountId != replacementAccountId) {
             nativeMediaPreviewCache.clearAccount(previousAccountId)
         }
-        supportDiagnostics.setActiveAccount(session.serverUrl, session.loginName)
+        supportDiagnostics.setActiveAccountIdentity(NextcloudDocumentIds.accountKey(session))
         notifyDocumentsRootsChanged()
     }
 
@@ -664,7 +664,7 @@ internal class AndroidNextcloudServices(
             )
             accountId?.let(nativeMediaPreviewCache::clearAccount)
             notifyDocumentsRootsChanged()
-            supportDiagnostics.setActiveAccount(null, null)
+            supportDiagnostics.setActiveAccountIdentity(null)
         } catch (failure: Throwable) {
             recordSupportDiagnostic(
                 SupportDiagnosticEventDraft(
@@ -2927,7 +2927,7 @@ internal class AndroidNextcloudServices(
         val diagnostics = supportDiagnostics
         val mainThread = appContext.mainLooper.thread
         Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
-            diagnostics.record(
+            diagnostics.recordBeforeProcessExit(
                 SupportDiagnosticEventDraft(
                     severity = SupportDiagnosticSeverity.Error,
                     component = SupportDiagnosticComponent.App,

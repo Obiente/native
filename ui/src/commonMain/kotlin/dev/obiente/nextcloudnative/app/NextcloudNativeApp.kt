@@ -12322,13 +12322,16 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
             },
             confirmButton = {
                 TextButton(
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                     onClick = {
                         confirmClear = false
-                        status = if (services.clearSupportDiagnostics()) {
-                            refresh += 1
-                            "Diagnostic history cleared."
-                        } else {
-                            "Diagnostic history could not be cleared."
+                        scope.launch {
+                            status = if (services.clearSupportDiagnostics()) {
+                                refresh += 1
+                                "Diagnostic history cleared."
+                            } else {
+                                "Diagnostic history could not be cleared."
+                            }
                         }
                     },
                 ) { Text("Clear history") }
