@@ -1285,9 +1285,9 @@ class DesktopNextcloudServices(
         return jobs
     }
 
-    private suspend fun reconcileConfiguredVirtualFolders() {
+    private suspend fun reconcileConfiguredVirtualFolders(session: NextcloudSession?) {
         if (!isLinuxDesktop()) return
-        val session = loadSession() ?: return
+        session ?: return
         val accountId = desktopFileCacheAccountId(session)
         val cache = virtualRangeCache(accountId)
         val kept = cache.loadFolderRetention(accountId).rules.filter { rule ->
@@ -1345,12 +1345,25 @@ class DesktopNextcloudServices(
             backgroundFileSyncJob = serviceScope.launch {
                 restoreConfirmedStartOnLoginRegistration()
                 while (isActive) {
+                    val syncSession = loadSession()
                     if (!isFileSyncPaused()) {
-                        runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
-                            .onFailure(::publishBackgroundFileSyncFailure)
+                        runCatching {
+                            syncAllFileSyncPairs(DesktopFileSyncRunSource.Background, syncSession)
+                        }.onFailure { failure ->
+                            publishBackgroundFileSyncFailure(
+                                syncSession?.let(::desktopFileCacheAccountId),
+                                failure,
+                            )
+                        }
                     }
-                    runCatching { reconcileConfiguredVirtualFolders() }
-                        .onFailure(::publishBackgroundFileSyncFailure)
+                    val virtualFolderSession = loadSession()
+                    runCatching { reconcileConfiguredVirtualFolders(virtualFolderSession) }
+                        .onFailure { failure ->
+                            publishBackgroundFileSyncFailure(
+                                virtualFolderSession?.let(::desktopFileCacheAccountId),
+                                failure,
+                            )
+                        }
                     delay(DESKTOP_FILE_SYNC_INTERVAL_MILLIS)
                 }
             }
@@ -2181,8 +2194,14 @@ class DesktopNextcloudServices(
         )
         if (!paused) {
             serviceScope.launch {
-                runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Resume) }
-                    .onFailure(::publishBackgroundFileSyncFailure)
+                val session = loadSession()
+                runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Resume, session) }
+                    .onFailure { failure ->
+                        publishBackgroundFileSyncFailure(
+                            session?.let(::desktopFileCacheAccountId),
+                            failure,
+                        )
+                    }
             }
         }
     }
@@ -2196,16 +2215,17 @@ class DesktopNextcloudServices(
     }
 
     suspend fun syncAllFileSyncPairsFromTray(): FileSyncCenterActionResult =
-        syncAllFileSyncPairs(DesktopFileSyncRunSource.Tray)
+        syncAllFileSyncPairs(DesktopFileSyncRunSource.Tray, loadSession())
 
     private suspend fun syncAllFileSyncPairs(
         source: DesktopFileSyncRunSource,
+        capturedSession: NextcloudSession?,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
         fileSyncRunLock.withLock {
         if (isFileSyncPaused()) {
             return@withLock FileSyncCenterActionResult.Rejected("Desktop syncing is paused.")
         }
-        val session = loadSession()
+        val session = capturedSession
             ?: return@withLock FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
         val accountId = desktopFileCacheAccountId(session)
         val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
@@ -2417,16 +2437,19 @@ class DesktopNextcloudServices(
         )
     }
 
-    private fun publishBackgroundFileSyncFailure(failure: Throwable) {
-        supportDiagnostics.record(
-            SupportDiagnosticEventDraft(
-                severity = SupportDiagnosticSeverity.Error,
-                component = SupportDiagnosticComponent.Sync,
-                operation = "sync.background-run",
-                outcome = "failed",
-                exception = failure.toSupportDiagnosticExceptionDraft(),
-            ),
+    private fun publishBackgroundFileSyncFailure(accountId: String?, failure: Throwable) {
+        val event = SupportDiagnosticEventDraft(
+            severity = SupportDiagnosticSeverity.Error,
+            component = SupportDiagnosticComponent.Sync,
+            operation = "sync.background-run",
+            outcome = "failed",
+            exception = failure.toSupportDiagnosticExceptionDraft(),
         )
+        if (accountId == null) {
+            supportDiagnostics.record(event)
+        } else {
+            supportDiagnostics.recordForAccountIdentity(accountId, event)
+        }
         val current = mutableFileSyncTraySnapshot.value
         val message = failure.message
             ?.takeIf { it.isNotBlank() && it.none(Char::isISOControl) }

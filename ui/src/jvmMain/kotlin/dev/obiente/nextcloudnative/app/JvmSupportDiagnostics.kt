@@ -49,6 +49,7 @@ class JvmSupportDiagnostics(
             require(this.root.isDirectory || this.root.mkdirs()) {
                 "Could not create the private diagnostics directory."
             }
+            removeOrphanedDiagnosticTemporaryFiles()
             loadOrCreateRedactionKey()
         }
         redactionKey = initialized.getOrElse { randomBytes(REDACTION_KEY_BYTES) }
@@ -251,6 +252,21 @@ class JvmSupportDiagnostics(
         nextSequence = loaded.size.toLong() + 1L
         discardedHistoryBytes += pruneEvents(nowEpochMillis().coerceAtLeast(0L))
         persistHistory()
+    }
+
+    private fun removeOrphanedDiagnosticTemporaryFiles() {
+        Files.newDirectoryStream(root.toPath()).use { entries ->
+            entries.forEach { path ->
+                val name = path.fileName.toString()
+                val recognized = name.endsWith(".tmp") && (
+                    name.startsWith(".$SUPPORT_DIAGNOSTIC_HISTORY_FILE.") ||
+                        name.startsWith(".$SUPPORT_DIAGNOSTIC_REDACTION_KEY_FILE.")
+                )
+                if (recognized && Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    Files.deleteIfExists(path)
+                }
+            }
+        }
     }
 
     private fun pruneEvents(now: Long): Long {

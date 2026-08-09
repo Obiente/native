@@ -94,8 +94,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -12520,7 +12522,10 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
             status?.let { message ->
                 Text(
                     message,
-                    modifier = Modifier.semantics { contentDescription = message },
+                    modifier = Modifier.semantics {
+                        contentDescription = message
+                        liveRegion = LiveRegionMode.Polite
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

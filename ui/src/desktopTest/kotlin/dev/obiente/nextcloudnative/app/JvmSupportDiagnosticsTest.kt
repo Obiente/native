@@ -48,6 +48,24 @@ class JvmSupportDiagnosticsTest {
     }
 
     @Test
+    fun startupRemovesOnlyOrphanedDiagnosticTemporaryFiles() {
+        val root = createTempDirectory("support-diagnostics-orphaned-temporary-files").toFile()
+        val historyTemporaryFile = File(root, ".events-v1.jsonl.interrupted.tmp")
+        val keyTemporaryFile = File(root, ".redaction-key-v1.interrupted.tmp")
+        val unrelatedTemporaryFile = File(root, ".unrelated.interrupted.tmp")
+        historyTemporaryFile.writeText("incomplete history")
+        keyTemporaryFile.writeText("incomplete key")
+        unrelatedTemporaryFile.writeText("keep")
+
+        diagnostics(root)
+
+        assertFalse(historyTemporaryFile.exists())
+        assertFalse(keyTemporaryFile.exists())
+        assertTrue(unrelatedTemporaryFile.isFile)
+        assertEquals("keep", unrelatedTemporaryFile.readText())
+    }
+
+    @Test
     fun tornFinalAppendIsDroppedWhileEarlierEventsSurviveRestart() {
         val root = createTempDirectory("support-diagnostics-torn-append").toFile()
         val original = diagnostics(root)
