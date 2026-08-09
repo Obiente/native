@@ -241,6 +241,9 @@ fun scanFileSyncPair(
     val baselineByPath = scopedBaselines.associateBy(FileSyncBaseline::relativePath)
     val existingWorkByPath = pair.workItems.associateBy(FileSyncWorkItem::relativePath)
     val plan = planFileSync(scopedLocalEntries, scopedRemoteEntries, scopedBaselines, pair.configuration)
+    require(plan.operations.size <= MAX_FILE_SYNC_WORK_ITEMS) {
+        "The sync snapshot requires too many operations. Narrow the selected folders."
+    }
     fun stableExistingWork(operation: FileSyncOperation): FileSyncWorkItem? {
         val path = operation.relativePath
         return existingWorkByPath[path]?.takeIf { current ->
@@ -255,8 +258,9 @@ fun scanFileSyncPair(
     } else {
         val maximumExecutableWorkItems = maximumWorkItems - reservedNonExecutableWorkItems
         val executable = ArrayList<FileSyncOperation>(maximumExecutableWorkItems)
-        val retainedNonExecutable = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
+        val retainedDecisions = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
         val newDecisions = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
+        val retainedOther = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
         val newSkipped = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
         sortedOperations.forEach { operation ->
             val existing = stableExistingWork(operation)
@@ -266,18 +270,20 @@ fun scanFileSyncPair(
             when {
                 canRunAutomatically && executable.size < maximumExecutableWorkItems ->
                     executable += operation
-                existing != null && retainedNonExecutable.size < reservedNonExecutableWorkItems ->
-                    retainedNonExecutable += operation
                 effectiveOperation is FileSyncOperation.NeedsDecision &&
-                    newDecisions.size < reservedNonExecutableWorkItems -> newDecisions += operation
+                    existing != null && retainedDecisions.size < reservedNonExecutableWorkItems ->
+                    retainedDecisions += operation
+                effectiveOperation is FileSyncOperation.NeedsDecision &&
+                    newDecisions.size < reservedNonExecutableWorkItems ->
+                    newDecisions += operation
+                existing != null && retainedOther.size < reservedNonExecutableWorkItems ->
+                    retainedOther += operation
                 effectiveOperation is FileSyncOperation.Skipped &&
                     newSkipped.size < reservedNonExecutableWorkItems -> newSkipped += operation
             }
         }
-        val remainingAfterRetained = reservedNonExecutableWorkItems - retainedNonExecutable.size
-        val selectedDecisions = newDecisions.take(remainingAfterRetained)
-        val remainingAfterDecisions = remainingAfterRetained - selectedDecisions.size
-        executable + retainedNonExecutable + selectedDecisions + newSkipped.take(remainingAfterDecisions)
+        executable + (retainedDecisions + newDecisions + retainedOther + newSkipped)
+            .take(reservedNonExecutableWorkItems)
     }
     var nextId = pair.nextWorkId
     val work = selectedOperations.map { operation ->
@@ -803,7 +809,7 @@ private fun requireUniqueCoordinatorPaths(paths: List<String>, source: String) {
 
 internal const val MAX_FILE_SYNC_PAIRS = 64
 internal const val MAX_FILE_SYNC_ENTRIES = 100_000
-internal const val MAX_FILE_SYNC_WORK_ITEMS = 20_000
+internal const val MAX_FILE_SYNC_WORK_ITEMS = MAX_FILE_SYNC_ENTRIES
 internal const val MAX_FILE_SYNC_RESULT_PATHS = 3
 internal const val MAX_FILE_SYNC_ATTEMPTS = 20
 internal const val MAX_FILE_SYNC_ID_LENGTH = 256

@@ -182,7 +182,7 @@ data class FileSyncPairSummary(
         require(localRootPath == null || localRootPath.isSafeFileSyncCenterText(2_048))
         if (remoteRootPath.isNotEmpty()) requireValidSyncPath(remoteRootPath)
         require(listOf(readyCount, runningCount, failedCount, skippedCount, completedCount).all { it >= 0 })
-        require(conflicts.size <= 20_000)
+        require(conflicts.size <= MAX_FILE_SYNC_WORK_ITEMS)
         require(conflicts.map(FileSyncConflictSummary::workId).distinct().size == conflicts.size)
         require(lastScanEpochMillis == null || lastScanEpochMillis >= 0L)
         require(scheduleDescription == null || scheduleDescription.isSafeFileSyncCenterText(256))
@@ -241,6 +241,7 @@ fun FileSyncPair.toCenterSummary(
     localDisplayName: String,
     localRootPath: String? = null,
     scheduleDescription: String? = null,
+    completedCount: Int = baselines.size,
     runState: FileSyncPairRunState,
     networkState: FileSyncNetworkState,
 ): FileSyncPairSummary =
@@ -266,7 +267,7 @@ fun FileSyncPair.toCenterSummary(
         },
         failedCount = workItems.count { it.state == FileSyncExecutionState.Failed },
         skippedCount = workItems.count { it.state == FileSyncExecutionState.Skipped },
-        completedCount = baselines.size,
+        completedCount = completedCount,
         lastScanEpochMillis = lastScanEpochMillis,
         scheduleDescription = scheduleDescription,
         skippedReasons = workItems.mapNotNull { work ->

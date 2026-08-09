@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import java.io.File
 import java.nio.file.Files
 import java.util.Base64
@@ -9,6 +10,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFails
 import kotlin.test.assertTrue
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -49,8 +51,8 @@ class DesktopFileSyncStoreTest {
             val database = File(directory, "file-sync-state-v2.db")
             val store = DesktopFileSyncStore(database, legacy)
 
-            assertEquals(pair, store.load().coordinator.pairs.single())
-            store.save(DesktopFileSyncPersistedState())
+            assertEquals(pair, store.loadPair(pair.id).coordinator.pairs.single())
+            store.deletePair(pair.id, pair.localRootId, deleteRoot = true)
 
             assertTrue(legacy.isFile)
             assertTrue(DesktopFileSyncStore(database, legacy).load().coordinator.pairs.isEmpty())
@@ -78,18 +80,70 @@ class DesktopFileSyncStoreTest {
             val root = DesktopFileSyncRootRecord("large-root", directory.absolutePath, "Archive")
             val store = DesktopFileSyncStore(File(directory, "state.db"), legacyStateFile = null)
 
-            store.save(DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(pair)), listOf(root)))
-            assertEquals(20_001, store.load().coordinator.pairs.single().baselines.size)
+            store.savePair(
+                DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(pair)), listOf(root)),
+                pair.id,
+            )
+            assertEquals(20_001, store.loadPair(pair.id).coordinator.pairs.single().baselines.size)
 
             val updated = pair.copy(
                 baselines = baselines.dropLast(1) + baselines.last().copy(remoteEtag = "remote-updated"),
                 lastScanEpochMillis = 42L,
             )
-            store.save(DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(updated)), listOf(root)))
-            val restored = store.load().coordinator.pairs.single()
+            store.savePair(
+                DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(updated)), listOf(root)),
+                pair.id,
+            )
+            val restored = store.loadPair(pair.id).coordinator.pairs.single()
             assertEquals(42L, restored.lastScanEpochMillis)
             assertEquals("remote-updated", restored.baselines.last().remoteEtag)
             assertEquals(20_001, restored.baselines.size)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `pair and account reads do not decode unrelated baseline rows`() {
+        val directory = Files.createTempDirectory("desktop-sync-scoped-read-").toFile()
+        try {
+            fun pair(id: String, rootId: String, path: String) = FileSyncPair(
+                id = id,
+                accountId = "account",
+                localRootId = rootId,
+                remoteRootPath = path,
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+                baselines = listOf(FileSyncBaseline("file.jpg", SyncEntryKind.File, "local", "remote")),
+            )
+            val primary = pair("primary-pair", "primary-root", "Primary")
+            val secondary = pair("secondary-pair", "secondary-root", "Secondary")
+            val roots = listOf(
+                DesktopFileSyncRootRecord(primary.localRootId, directory.absolutePath, "Primary"),
+                DesktopFileSyncRootRecord(secondary.localRootId, directory.absolutePath, "Secondary"),
+            )
+            val database = File(directory, "state.db")
+            val store = DesktopFileSyncStore(database, legacyStateFile = null)
+            val persisted = DesktopFileSyncPersistedState(
+                FileSyncCoordinatorState(listOf(primary, secondary)),
+                roots,
+            )
+            store.savePair(persisted, primary.id)
+            store.savePair(persisted, secondary.id)
+
+            BundledSQLiteDriver().open(database.absolutePath).use { connection ->
+                connection.prepare("UPDATE sync_baselines SET record = ? WHERE pair_id = ?").use { statement ->
+                    statement.bindBlob(1, byteArrayOf(0))
+                    statement.bindText(2, secondary.id)
+                    assertFalse(statement.step())
+                }
+            }
+
+            assertEquals(primary, store.loadPair(primary.id).coordinator.pairs.single())
+            val overview = store.load()
+            assertEquals(2, overview.coordinator.pairs.size)
+            assertTrue(overview.coordinator.pairs.all { it.baselines.isEmpty() && it.workItems.isEmpty() })
+            assertEquals(1, store.loadAccount("account").completedCountsByPairId.getValue(secondary.id))
+            assertFails { store.loadPair(secondary.id) }
         } finally {
             directory.deleteRecursively()
         }
@@ -118,7 +172,7 @@ class DesktopFileSyncStoreTest {
             val root = DesktopFileSyncRootRecord(pair.localRootId, directory.absolutePath, "Documents")
             val store = DesktopFileSyncStore(File(directory, "state.db"), legacyStateFile = null)
             var persisted = DesktopFileSyncPersistedState(claim.state, listOf(root))
-            store.save(persisted)
+            store.savePair(persisted, pair.id)
 
             val success = FileSyncExecutionSuccess(
                 synchronizedBaselines = listOf(
@@ -141,7 +195,8 @@ class DesktopFileSyncStoreTest {
                 synchronizedBaselines = success.synchronizedBaselines,
             )
 
-            val restored = DesktopFileSyncStore(File(directory, "state.db"), legacyStateFile = null).load()
+            val restored = DesktopFileSyncStore(File(directory, "state.db"), legacyStateFile = null)
+                .loadPair(pair.id)
             assertTrue(restored.coordinator.pairs.single().workItems.isEmpty())
             assertEquals(success.synchronizedBaselines, restored.coordinator.pairs.single().baselines)
             assertEquals(listOf(root), restored.roots)
@@ -224,8 +279,8 @@ class DesktopFileSyncStoreTest {
             )
             val store = DesktopFileSyncStore(File(directory, "state.json"))
 
-            store.save(expected)
-            val restored = store.load()
+            store.savePair(expected, pair.id)
+            val restored = store.loadPair(pair.id)
 
             assertEquals(
                 FileSyncExecutionState.Ready,
