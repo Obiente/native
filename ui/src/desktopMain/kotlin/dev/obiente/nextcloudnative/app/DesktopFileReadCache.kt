@@ -1145,7 +1145,7 @@ internal class DesktopFileReadCache(
         const val MAX_LISTINGS = 256
         const val MAX_FILES_PER_LISTING = 50_000
         const val MAX_TOTAL_METADATA_ENTRIES = 250_000
-        const val MAX_METADATA_SHARD_ENTRIES = 64
+        const val MAX_METADATA_SHARD_ENTRIES = 256
         const val MAX_METADATA_SHARDS_PER_LISTING =
             (MAX_FILES_PER_LISTING + MAX_METADATA_SHARD_ENTRIES - 1) / MAX_METADATA_SHARD_ENTRIES
         const val MAX_METADATA_SHARDS =
@@ -1205,8 +1205,15 @@ private fun sha256Hex(value: ByteArray): String = MessageDigest.getInstance("SHA
     .digest(value)
     .toHex()
 
-private fun ByteArray.toHex(): String =
-    joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+private fun ByteArray.toHex(): String = buildString(size * 2) {
+    for (byte in this@toHex) {
+        val value = byte.toInt() and 0xff
+        append(HEX_DIGITS[value ushr 4])
+        append(HEX_DIGITS[value and 0x0f])
+    }
+}
+
+private const val HEX_DIGITS = "0123456789abcdef"
 
 private fun String.isSha256Hex(): Boolean =
     length == 64 && all { it in '0'..'9' || it in 'a'..'f' }

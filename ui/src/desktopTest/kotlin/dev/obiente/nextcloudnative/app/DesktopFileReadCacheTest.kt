@@ -210,6 +210,10 @@ class DesktopFileReadCacheTest {
         }
 
         cache.storeListing(accountId, "Library", files, nowEpochMillis = 123_456)
+        assertEquals(
+            24,
+            root.resolve(accountId).listFiles().orEmpty().count { it.extension == "metadata" },
+        )
         val restored = DesktopFileReadCache(root, preferences = testPreferences(root))
         val listing = restored.cachedListingSnapshot(accountId, "Library")
 
@@ -224,7 +228,7 @@ class DesktopFileReadCacheTest {
         val maximumIndexBytes = 64L * 1024L
         try {
             val accountId = "a".repeat(64)
-            val files = List(200) { index ->
+            val files = List(300) { index ->
                 val name = "${index.toString().padStart(3, '0')}-${"x".repeat(900)}.jpg"
                 file("Library/$name", "\"etag-${"y".repeat(500)}-$index\"")
             }
@@ -293,7 +297,7 @@ class DesktopFileReadCacheTest {
     @Test
     fun `startup preserves over-budget metadata references for demand loading`() = withCache { root, cache ->
         val accountId = desktopFileCacheAccountId(session())
-        val largeListing = List(65) { index -> file("First/$index.jpg", "first-$index") }
+        val largeListing = List(257) { index -> file("First/$index.jpg", "first-$index") }
         cache.storeListing(accountId, "First", largeListing, 10L)
         cache.storeListing(accountId, "Second", listOf(file("Second/two.jpg", "second")), 20L)
         val shardBytes = root.resolve(accountId).listFiles().orEmpty()

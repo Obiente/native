@@ -129,7 +129,7 @@ internal class DesktopStartOnLoginController(
 
                 [Service]
                 Type=exec
-                ExecStart=${systemdExecArgument(launcher)} --background
+                ExecStart=${systemdExecArgument(launcher)} --background --service
                 Restart=on-failure
                 RestartSec=5s
                 TimeoutStopSec=20s
@@ -239,6 +239,29 @@ internal fun handoffLinuxAutostartToUserService(
     return runCatching {
         processRunner(listOf("systemctl", "--user", "start", LINUX_USER_SERVICE_NAME)) == 0
     }.getOrDefault(false)
+}
+
+/**
+ * Gives an ordinary launcher invocation to the configured user service, then asks that supervised
+ * process to show its window. The caller continues normally when either step fails.
+ */
+internal fun handoffLinuxForegroundLaunchToUserService(
+    osName: String = System.getProperty("os.name").orEmpty(),
+    userHome: File = File(System.getProperty("user.home")),
+    linuxConfigHome: File = linuxDesktopConfigHome(userHome),
+    processRunner: (List<String>) -> Int = { command ->
+        ProcessBuilder(command).redirectErrorStream(true).start().also { process ->
+            process.inputStream.bufferedReader().use { it.readText() }
+        }.waitFor()
+    },
+    activationForwarder: () -> Boolean,
+): Boolean {
+    if (!osName.lowercase().contains("linux")) return false
+    if (!File(linuxConfigHome, "systemd/user/$LINUX_USER_SERVICE_NAME").isFile) return false
+    val started = runCatching {
+        processRunner(listOf("systemctl", "--user", "start", LINUX_USER_SERVICE_NAME)) == 0
+    }.getOrDefault(false)
+    return started && runCatching(activationForwarder).getOrDefault(false)
 }
 
 private fun linuxDesktopConfigHome(userHome: File): File = System.getenv("XDG_CONFIG_HOME")

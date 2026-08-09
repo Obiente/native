@@ -77,7 +77,8 @@ fun main() = application {
         title = "Nextcloud Native tray QA",
         state = rememberWindowState(width = 430.dp, height = 560.dp),
         undecorated = true,
-        transparent = true,
+        // Keep the QA surface opaque so it renders without a compositor under Xvfb.
+        transparent = false,
         resizable = false,
     ) {
         NextcloudNativeTheme(darkTheme = false) {

@@ -761,6 +761,7 @@ internal fun combinedAutomaticCacheExcess(
 
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
+    private val onKeepRunningInBackgroundChanged: (Boolean) -> Unit = {},
     private val onDesktopUpdateInstallerOpened: (String) -> Unit = {},
     supportDiagnosticsRoot: File? = null,
     providedSupportDiagnostics: AsyncJvmSupportDiagnostics? = null,
@@ -2265,6 +2266,16 @@ class DesktopNextcloudServices(
         }.getOrElse { failure ->
             failure.message ?: "Start on login could not be updated."
         }
+    }
+
+    override val supportsKeepRunningInBackground: Boolean = true
+
+    override fun loadKeepRunningInBackgroundPreference(): Boolean =
+        preferences.getBoolean(KEY_KEEP_RUNNING_IN_BACKGROUND, true)
+
+    override fun saveKeepRunningInBackgroundPreference(enabled: Boolean) {
+        preferences.putBoolean(KEY_KEEP_RUNNING_IN_BACKGROUND, enabled)
+        onKeepRunningInBackgroundChanged(enabled)
     }
 
     private fun restoreConfirmedStartOnLoginRegistration() {
@@ -4956,6 +4967,7 @@ class DesktopNextcloudServices(
         const val KEY_LOGIN = "login"
         const val KEY_FILE_SYNC_PAUSED = "file_sync_paused"
         const val KEY_START_ON_LOGIN = "start_on_login"
+        const val KEY_KEEP_RUNNING_IN_BACKGROUND = "keep_running_in_background"
         const val DESKTOP_FILE_SYNC_INTERVAL_MILLIS = 2L * 60L * 1_000L
         const val USER_AGENT = "Nextcloud-Native/0.1.0 (Desktop)"
         const val DAV = "DAV:"

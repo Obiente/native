@@ -35,7 +35,11 @@ class DesktopStartOnLoginTest {
         assertFalse(entry.readText().contains("Terminal=true"))
         val service = File(root, ".config/systemd/user/nextcloud-native.service")
         assertTrue(service.isFile)
-        assertTrue(service.readText().contains("ExecStart=${systemdExecArgument(launcher.absolutePath)} --background"))
+        assertTrue(
+            service.readText().contains(
+                "ExecStart=${systemdExecArgument(launcher.absolutePath)} --background --service",
+            ),
+        )
         assertTrue(service.readText().contains("PartOf=graphical-session.target"))
         assertTrue(service.readText().contains("Restart=on-failure"))
         assertTrue(Files.isSymbolicLink(File(root, ".config/systemd/user/graphical-session.target.wants/nextcloud-native.service").toPath()))
@@ -64,6 +68,33 @@ class DesktopStartOnLoginTest {
             ),
         )
         assertEquals(listOf("systemctl", "--user", "start", "nextcloud-native.service"), command)
+    }
+
+    @Test
+    fun linuxForegroundLaunchStartsAndActivatesTheConfiguredUserService() {
+        val root = createTempDirectory("nextcloud-native-startup-foreground-handoff").toFile()
+        File(root, ".config/systemd/user").mkdirs()
+        File(root, ".config/systemd/user/nextcloud-native.service").writeText("configured")
+        var command: List<String>? = null
+        var forwarded = false
+
+        assertTrue(
+            handoffLinuxForegroundLaunchToUserService(
+                osName = "Linux",
+                userHome = root,
+                linuxConfigHome = File(root, ".config"),
+                processRunner = {
+                    command = it
+                    0
+                },
+                activationForwarder = {
+                    forwarded = true
+                    true
+                },
+            ),
+        )
+        assertEquals(listOf("systemctl", "--user", "start", "nextcloud-native.service"), command)
+        assertTrue(forwarded)
     }
 
     @Test

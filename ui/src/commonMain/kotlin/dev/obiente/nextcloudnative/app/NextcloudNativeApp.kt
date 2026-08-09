@@ -1283,36 +1283,15 @@ private fun MarketingDesktopStartupSettingsScenario(
                 syncLabel = "4 active syncs",
                 storageLabel = "34.2 GB of 100 GB used",
             ),
-            initialSection = SettingsWorkspaceSection.SyncAndStorage,
+            initialSection = SettingsWorkspaceSection.DesktopApp,
         ) { section ->
             when (section) {
-                SettingsWorkspaceSection.SyncAndStorage -> {
-                    SettingsActionCard(
-                        title = "Folder sync workspace",
-                        description = "4 active pairs · 341 downloads · 87 uploads · 1.2 GB queued",
-                        icon = NextcloudIcons.Cloud,
-                        onClick = {},
-                        trailing = "Healthy",
-                    )
-                    SettingsActionCard(
-                        title = "Virtual files",
-                        description = "123.4 GB represented locally · 8.6 GB hydrated",
-                        icon = NextcloudIcons.FolderOpen,
-                        onClick = {},
-                        trailing = "On",
-                    )
-                    SettingsActionCard(
-                        title = "Media transfers",
-                        description = "2 active · 5 queued · 1 retry available",
-                        icon = NextcloudIcons.Refresh,
-                        onClick = {},
-                    )
-                    SettingsActionCard(
-                        title = "Storage policy",
-                        description = "Keep pinned files and recently opened work available offline",
-                        icon = NextcloudIcons.Favorite,
-                        onClick = {},
-                        trailing = "Balanced",
+                SettingsWorkspaceSection.DesktopApp -> {
+                    DesktopBackgroundSettingsCard(enabled = true, onEnabledChanged = {})
+                    DesktopStartOnLoginSettingsCard(
+                        enabled = true,
+                        message = "Nextcloud Native will start in your desktop session and recover after a crash.",
+                        onEnabledChanged = {},
                     )
                 }
                 else -> SettingsActionCard(
@@ -11678,6 +11657,9 @@ private fun SettingsScreen(
     var capabilityRefresh by remember { mutableStateOf(0) }
     var startOnLogin by remember(services) { mutableStateOf(services.loadStartOnLoginPreference()) }
     var startOnLoginMessage by remember(services) { mutableStateOf<String?>(null) }
+    var keepRunningInBackground by remember(services) {
+        mutableStateOf(services.loadKeepRunningInBackgroundPreference())
+    }
     val platformCapabilities = remember(services, capabilityRefresh, platformCapabilityRefreshRequest) {
         services.platformCapabilities()
     }
@@ -11847,6 +11829,15 @@ private fun SettingsScreen(
                 }
 
                 SettingsWorkspaceSection.DesktopApp -> {
+                    if (services.supportsKeepRunningInBackground) {
+                        DesktopBackgroundSettingsCard(
+                            enabled = keepRunningInBackground,
+                            onEnabledChanged = { enabled ->
+                                services.saveKeepRunningInBackgroundPreference(enabled)
+                                keepRunningInBackground = services.loadKeepRunningInBackgroundPreference()
+                            },
+                        )
+                    }
                     if (services.supportsStartOnLogin) {
                         DesktopStartOnLoginSettingsCard(
                             enabled = startOnLogin,
@@ -11954,17 +11945,28 @@ private fun SettingsScreen(
                     }
                 }
             }
-            if (services.supportsStartOnLogin) {
+            if (services.supportsStartOnLogin || services.supportsKeepRunningInBackground) {
                 item {
                     SectionTitle("Desktop")
-                    DesktopStartOnLoginSettingsCard(
-                        enabled = startOnLogin,
-                        message = startOnLoginMessage,
-                        onEnabledChanged = { enabled ->
-                            startOnLoginMessage = services.saveStartOnLoginPreference(enabled)
-                            startOnLogin = services.loadStartOnLoginPreference()
-                        },
-                    )
+                    if (services.supportsKeepRunningInBackground) {
+                        DesktopBackgroundSettingsCard(
+                            enabled = keepRunningInBackground,
+                            onEnabledChanged = { enabled ->
+                                services.saveKeepRunningInBackgroundPreference(enabled)
+                                keepRunningInBackground = services.loadKeepRunningInBackgroundPreference()
+                            },
+                        )
+                    }
+                    if (services.supportsStartOnLogin) {
+                        DesktopStartOnLoginSettingsCard(
+                            enabled = startOnLogin,
+                            message = startOnLoginMessage,
+                            onEnabledChanged = { enabled ->
+                                startOnLoginMessage = services.saveStartOnLoginPreference(enabled)
+                                startOnLogin = services.loadStartOnLoginPreference()
+                            },
+                        )
+                    }
                 }
             }
             item {
@@ -12585,6 +12587,46 @@ internal fun DesktopStartOnLoginSettingsCard(
                         modifier = Modifier.padding(top = NextcloudSpacing.Small),
                     )
                 }
+            }
+            Switch(checked = enabled, onCheckedChange = null)
+        }
+    }
+}
+
+@Composable
+internal fun DesktopBackgroundSettingsCard(
+    enabled: Boolean,
+    onEnabledChanged: (Boolean) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
+        color = NextcloudTheme.colors.appTile,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().toggleable(
+                value = enabled,
+                role = Role.Switch,
+                onValueChange = onEnabledChanged,
+            ).padding(NextcloudSpacing.Large),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
+                Icon(
+                    NextcloudIcons.Cloud,
+                    contentDescription = null,
+                    modifier = Modifier.padding(12.dp).size(26.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Keep running when the window closes", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Keep sync and virtual files active in the tray. Use Quit from the activity panel to stop the app.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Switch(checked = enabled, onCheckedChange = null)
         }

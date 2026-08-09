@@ -23,7 +23,9 @@ internal data class LinuxVirtualFileNode(
     val directory: Boolean,
     val size: Long,
     val remoteRevision: String,
-)
+) {
+    val inode: Long = stableLinuxVirtualInode(path)
+}
 
 internal fun DesktopRemoteSyncDocument.toLinuxVirtualFileNode(): LinuxVirtualFileNode = LinuxVirtualFileNode(
     path = entry.relativePath,
@@ -90,6 +92,24 @@ internal data class LinuxVirtualDirectorySnapshot(
     init {
         require(nodesByPath.size == nodes.size) { "A Linux directory snapshot contains duplicate paths." }
     }
+}
+
+/**
+ * Large WebDAV directories are expensive to enumerate and rarely benefit from five-second polling.
+ * Known local and in-app mutations still invalidate their snapshots immediately.
+ */
+internal fun linuxVirtualMetadataFreshnessMillis(
+    entryCount: Int,
+    minimumFreshnessMillis: Long,
+): Long {
+    require(entryCount >= 0 && minimumFreshnessMillis >= 0L)
+    val adaptiveFreshness = when {
+        entryCount <= 512 -> 5_000L
+        entryCount <= 4_096 -> 30_000L
+        entryCount <= 16_384 -> 5 * 60_000L
+        else -> 15 * 60_000L
+    }
+    return maxOf(minimumFreshnessMillis, adaptiveFreshness)
 }
 
 internal interface LinuxVirtualMetadataStore {
@@ -211,6 +231,8 @@ internal class CachingLinuxVirtualFileBackend(
     private val afterMutationInvalidated: (String) -> Unit = {},
 ) : LinuxVirtualFileBackend {
     private val snapshots = LinkedHashMap<String, LinuxVirtualDirectorySnapshot>(16, 0.75f, true)
+    private val fastSnapshots = ConcurrentHashMap<String, LinuxVirtualDirectorySnapshot>()
+    private val fastNodes = ConcurrentHashMap<String, LinuxFastVirtualNode>()
     private val refreshes = ConcurrentHashMap<String, CompletableFuture<LinuxVirtualDirectorySnapshot?>>()
     private val blockingRefreshPermits = Semaphore(MAX_CONCURRENT_BLOCKING_REFRESHES, true)
     private val refreshFailures = LinkedHashMap<String, LinuxVirtualRefreshFailure>(16, 0.75f, true)
@@ -239,8 +261,14 @@ internal class CachingLinuxVirtualFileBackend(
     override fun resolve(path: String): LinuxVirtualFileNode? {
         val normalized = path.linuxVirtualPath()
         if (normalized.isEmpty()) return ROOT_NODE
+        fastNodes[normalized]?.let { cached ->
+            maybeRefresh(cached.parentPath, cached.snapshot)
+            return cached.node
+        }
         val parent = normalized.substringBeforeLast('/', "")
-        return snapshot(parent).nodesByPath[normalized]
+        val cached = fastSnapshots[parent] ?: snapshot(parent)
+        maybeRefresh(parent, cached)
+        return cached.nodesByPath[normalized]
     }
 
     override fun list(path: String): List<LinuxVirtualFileNode> = snapshot(path.linuxVirtualPath()).nodes
@@ -267,7 +295,7 @@ internal class CachingLinuxVirtualFileBackend(
 
     private fun snapshot(normalized: String): LinuxVirtualDirectorySnapshot {
         synchronized(metadataLock) { snapshots[normalized] }?.let { cached ->
-            if (!cached.isFresh(nowEpochMillis(), freshForMillis)) refreshAsync(normalized)
+            maybeRefresh(normalized, cached)
             return cached
         }
         val operation = beginMetadataOperation(normalized)
@@ -298,10 +326,17 @@ internal class CachingLinuxVirtualFileBackend(
             endMetadataOperation(operation)
         }
         if (cached != null) {
-            if (!cached.isFresh(nowEpochMillis(), freshForMillis)) refreshAsync(normalized)
+            maybeRefresh(normalized, cached)
             return cached
         }
         return refreshBlocking(normalized)
+    }
+
+    private fun maybeRefresh(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
+        if (refreshes.containsKey(path)) return
+        if (!snapshot.isFresh(nowEpochMillis(), snapshot.adaptiveFreshnessMillis())) {
+            refreshAsync(path)
+        }
     }
 
     override fun open(node: LinuxVirtualFileNode): LinuxVirtualFileReadHandle = delegate.open(node)
@@ -422,6 +457,9 @@ internal class CachingLinuxVirtualFileBackend(
         synchronized(persistedStoreLock) { }
         refreshExecutor.shutdownNow()
         synchronized(metadataLock) {
+            snapshots.clear()
+            fastSnapshots.clear()
+            fastNodes.clear()
             activeMetadataOperations.clear()
             pendingPersistedInvalidations.clear()
             revalidatedPersistedListings.clear()
@@ -592,7 +630,8 @@ internal class CachingLinuxVirtualFileBackend(
             knownPaths.filterTo(mutableSetOf()) { cachedPath ->
                 normalized.invalidatesListing(cachedPath)
             }.forEach { cachedPath ->
-                snapshots.remove(cachedPath)
+                snapshots.remove(cachedPath)?.let(::removeFastNodes)
+                fastSnapshots.remove(cachedPath)
                 refreshFailures.remove(cachedPath)
             }
             activeMetadataOperations
@@ -697,7 +736,14 @@ internal class CachingLinuxVirtualFileBackend(
 
     private fun retainSnapshot(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
         check(Thread.holdsLock(metadataLock))
-        snapshots[path] = snapshot
+        snapshots.put(path, snapshot)?.let { previous ->
+            fastSnapshots.remove(path, previous)
+            removeFastNodes(previous)
+        }
+        fastSnapshots[path] = snapshot
+        snapshot.nodes.forEach { node ->
+            fastNodes[node.path] = LinuxFastVirtualNode(node, path, snapshot)
+        }
         var retainedEntries = snapshots.values.sumOf { retained -> retained.nodes.size }
         val iterator = snapshots.entries.iterator()
         while (
@@ -708,6 +754,16 @@ internal class CachingLinuxVirtualFileBackend(
             val evicted = iterator.next()
             retainedEntries -= evicted.value.nodes.size
             iterator.remove()
+            fastSnapshots.remove(evicted.key, evicted.value)
+            removeFastNodes(evicted.value)
+        }
+    }
+
+    private fun removeFastNodes(snapshot: LinuxVirtualDirectorySnapshot) {
+        snapshot.nodes.forEach { node ->
+            fastNodes.computeIfPresent(node.path) { _, cached ->
+                cached.takeUnless { it.snapshot === snapshot }
+            }
         }
     }
 
@@ -748,6 +804,13 @@ internal class CachingLinuxVirtualFileBackend(
         return age >= 0L && age <= duration
     }
 
+    private fun LinuxVirtualDirectorySnapshot.adaptiveFreshnessMillis(): Long =
+        if (freshForMillis == DEFAULT_FRESH_MILLIS) {
+            linuxVirtualMetadataFreshnessMillis(nodes.size, freshForMillis)
+        } else {
+            freshForMillis
+        }
+
     private companion object {
         const val DEFAULT_FRESH_MILLIS = 5_000L
         const val DEFAULT_REFRESH_RETRY_BASE_MILLIS = 1_000L
@@ -765,6 +828,12 @@ private data class LinuxVirtualRefreshFailure(
     val consecutiveFailures: Int,
     val recordedAtEpochMillis: Long,
     val retryAtEpochMillis: Long,
+)
+
+private data class LinuxFastVirtualNode(
+    val node: LinuxVirtualFileNode,
+    val parentPath: String,
+    val snapshot: LinuxVirtualDirectorySnapshot,
 )
 
 private class LinuxVirtualMetadataOperation(val path: String) {
@@ -1038,6 +1107,10 @@ internal class LinuxNextcloudVirtualFileSystem(
     private var openDirectoryEntries = 0L
     private val pendingCreatedFiles = ConcurrentHashMap<String, LinuxSharedWriteHandle>()
     private val namespaceLock = Any()
+    @Volatile
+    private var mountedUid: Long? = null
+    @Volatile
+    private var mountedGid: Long? = null
 
     init {
         require(maximumOpenDirectoryEntries > 0)
@@ -1286,6 +1359,7 @@ internal class LinuxNextcloudVirtualFileSystem(
                 "-o", "attr_timeout=5",
                 "-o", "entry_timeout=5",
                 "-o", "negative_timeout=1",
+                "-o", "use_ino",
                 "-o", "big_writes",
             ),
         )
@@ -1388,14 +1462,17 @@ internal class LinuxNextcloudVirtualFileSystem(
         }
 
     private fun fillStat(node: LinuxVirtualFileNode, stat: FileStat) {
+        stat.st_ino.set(node.inode)
         stat.st_mode.set(
             if (node.directory) FileStat.S_IFDIR or DIRECTORY_PERMISSIONS
             else FileStat.S_IFREG or FILE_PERMISSIONS,
         )
         stat.st_nlink.set(if (node.directory) 2 else 1)
         stat.st_size.set(node.size)
-        stat.st_uid.set(context.uid.get())
-        stat.st_gid.set(context.gid.get())
+        val uid = mountedUid ?: context.uid.get().also { mountedUid = it }
+        val gid = mountedGid ?: context.gid.get().also { mountedGid = it }
+        stat.st_uid.set(uid)
+        stat.st_gid.set(gid)
     }
 
     private fun registerWriteHandle(shared: LinuxSharedWriteHandle, writable: Boolean): Long {
@@ -1527,6 +1604,15 @@ internal class LinuxNextcloudVirtualFileSystem(
     }
 }
 
+/** Stable across refreshes and app restarts so file managers can reconcile large directory models. */
+internal fun stableLinuxVirtualInode(path: String): Long {
+    var hash = -0x340d631b7bdddcdbL
+    path.forEach { character ->
+        hash = (hash xor character.code.toLong()) * 0x100000001b3L
+    }
+    return (hash and Long.MAX_VALUE).coerceAtLeast(2L)
+}
+
 private data class LinuxOpenDirectorySnapshot(
     val path: String,
     val entries: List<LinuxOpenDirectoryEntry>,
@@ -1555,9 +1641,26 @@ private data class LinuxOpenWriteReference(
 )
 
 private fun String.linuxVirtualPath(): String {
-    val normalized = trim('/')
-    if (normalized.isEmpty()) return ""
-    require(normalized.split('/').none { it.isEmpty() || it == "." || it == ".." })
-    require('\u0000' !in normalized)
-    return normalized
+    var start = 0
+    while (start < length && this[start] == '/') start += 1
+    var end = length
+    while (end > start && this[end - 1] == '/') end -= 1
+    if (start == end) return ""
+
+    var segmentStart = start
+    for (index in start..end) {
+        val character = if (index < end) this[index] else '/'
+        require(character != '\u0000')
+        if (character != '/') continue
+        require(index > segmentStart)
+        val segmentLength = index - segmentStart
+        require(
+            segmentLength != 1 || this[segmentStart] != '.',
+        )
+        require(
+            segmentLength != 2 || this[segmentStart] != '.' || this[segmentStart + 1] != '.',
+        )
+        segmentStart = index + 1
+    }
+    return if (start == 0 && end == length) this else substring(start, end)
 }

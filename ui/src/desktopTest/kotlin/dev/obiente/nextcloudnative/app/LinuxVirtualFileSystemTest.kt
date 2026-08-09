@@ -30,6 +30,24 @@ import ru.serce.jnrfuse.struct.FileStat
 import ru.serce.jnrfuse.struct.FuseFileInfo
 
 class LinuxVirtualFileSystemTest {
+    @Test
+    fun largeDirectoryMetadataUsesAnAdaptiveFreshnessWindow() {
+        assertEquals(5_000L, linuxVirtualMetadataFreshnessMillis(128, 5_000L))
+        assertEquals(30_000L, linuxVirtualMetadataFreshnessMillis(2_000, 5_000L))
+        assertEquals(300_000L, linuxVirtualMetadataFreshnessMillis(9_520, 5_000L))
+        assertEquals(900_000L, linuxVirtualMetadataFreshnessMillis(20_000, 5_000L))
+        assertEquals(Long.MAX_VALUE, linuxVirtualMetadataFreshnessMillis(20_000, Long.MAX_VALUE))
+    }
+
+    @Test
+    fun virtualInodesAreStableAndPathSpecific() {
+        val first = stableLinuxVirtualInode("Photos/Camera/frame-0001.raf")
+
+        assertTrue(first > 1L)
+        assertEquals(first, stableLinuxVirtualInode("Photos/Camera/frame-0001.raf"))
+        assertFalse(first == stableLinuxVirtualInode("Photos/Camera/frame-0002.raf"))
+    }
+
     @Before
     fun requireLinux() {
         assumeTrue(
