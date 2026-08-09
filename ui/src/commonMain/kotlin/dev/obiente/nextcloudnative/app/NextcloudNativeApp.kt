@@ -12324,7 +12324,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
     LaunchedEffect(services, diagnosticsRevision, refresh) {
         summary = services.loadSupportDiagnosticsSummary()
     }
-    var reproductionSteps by rememberSaveable { mutableStateOf("") }
+    var reproductionSteps by remember { mutableStateOf("") }
     var exporting by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }

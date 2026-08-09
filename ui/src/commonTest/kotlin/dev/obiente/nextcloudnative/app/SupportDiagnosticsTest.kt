@@ -163,6 +163,48 @@ class SupportDiagnosticsTest {
     }
 
     @Test
+    fun redactsUnderscoredCredentialAssignments() {
+        val credentials = listOf(
+            "access_token" to "short-access-value",
+            "client_secret" to "short-client-value",
+            "refresh_token" to "short-refresh-value",
+            "api_key" to "short-api-value",
+        )
+
+        val sanitized = sanitizer.sanitizeUserDescription(
+            credentials.joinToString("\n") { (label, value) -> "\"$label\": \"$value\"" },
+        )
+
+        credentials.forEach { (label, value) ->
+            assertFalse(value in sanitized, label)
+            assertTrue("$label=<secret>" in sanitized, sanitized)
+        }
+    }
+
+    @Test
+    fun pseudonymizesDurableNumericIdentifiers() {
+        val value = "48721"
+
+        val sanitized = sanitizer.sanitize(
+            sequence = 1L,
+            occurredAtEpochMillis = 1L,
+            draft = SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Error,
+                component = SupportDiagnosticComponent.Sync,
+                operation = "sync.item",
+                outcome = "failed",
+                fields = listOf(
+                    SupportDiagnosticFieldDraft("work", value, SupportDiagnosticValuePrivacy.Identifier),
+                ),
+            ),
+        )
+
+        val work = sanitized.fields.single().value
+        assertFalse(value in work)
+        assertTrue(work.startsWith("<id:"), work)
+    }
+
+    @Test
     fun sanitizesExceptionMessagesAndBoundsFramesAndCauses() {
         val privatePath = "/srv/fixtures/Pictures/private.jpg"
         val frames = (1..40).map { index ->

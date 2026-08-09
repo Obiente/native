@@ -61,7 +61,11 @@ internal class NextcloudOfflineWorker(
                                     accountId,
                                     SupportDiagnosticValuePrivacy.Identifier,
                                 ),
-                                SupportDiagnosticFieldDraft("job", jobId.toString()),
+                                SupportDiagnosticFieldDraft(
+                                    "job",
+                                    jobId.toString(),
+                                    SupportDiagnosticValuePrivacy.Identifier,
+                                ),
                             ),
                         ),
                     )
@@ -79,7 +83,11 @@ internal class NextcloudOfflineWorker(
                     outcome = "failed",
                     fields = listOf(
                         SupportDiagnosticFieldDraft("account", accountId, SupportDiagnosticValuePrivacy.Identifier),
-                        SupportDiagnosticFieldDraft("job", jobId.toString()),
+                        SupportDiagnosticFieldDraft(
+                            "job",
+                            jobId.toString(),
+                            SupportDiagnosticValuePrivacy.Identifier,
+                        ),
                     ),
                     exception = failure.toSupportDiagnosticExceptionDraft(),
                 ),

@@ -1205,7 +1205,11 @@ internal class AndroidNextcloudServices(
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val fields = listOf(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
-            SupportDiagnosticFieldDraft("work", workId.toString()),
+            SupportDiagnosticFieldDraft(
+                "work",
+                workId.toString(),
+                SupportDiagnosticValuePrivacy.Identifier,
+            ),
             SupportDiagnosticFieldDraft("choice", choice.name.lowercase()),
         )
         diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.conflict-resolve", fields) {

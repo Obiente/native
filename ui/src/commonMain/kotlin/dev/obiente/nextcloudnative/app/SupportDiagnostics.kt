@@ -347,12 +347,17 @@ private val SUPPORT_DIAGNOSTIC_CODE = Regex("^[A-Za-z0-9._:-]{1,96}$")
 private val SUPPORT_DIAGNOSTIC_ALIAS = Regex("^<[a-z-]+:[a-f0-9]{16}>$")
 private val CONTROL_CHARACTERS = Regex("[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]")
 private val WHITESPACE = Regex("\\s+")
+private const val SENSITIVE_CREDENTIAL_LABEL_PATTERN =
+    "authorization|proxy-authorization|cookie|set-cookie|" +
+        "(?:[a-z][a-z0-9-]*_)*(?:password|passphrase|token|secret)|" +
+        "(?:api|private|secret)[-_ ]?key"
 private val SENSITIVE_HEADER_LINE = Regex(
-    "(?im)[\"']?\\b(authorization|proxy-authorization|cookie|set-cookie|password|passphrase|" +
-        "app[-_ ]?password|token|secret)\\b[\"']?\\s*(?::|=|\\bis\\b|\\bwas\\b)\\s*[^\\r\\n]*",
+    "(?im)[\"']?\\b($SENSITIVE_CREDENTIAL_LABEL_PATTERN)\\b[\"']?" +
+        "\\s*(?::|=|\\bis\\b|\\bwas\\b)\\s*[^\\r\\n]*",
 )
 private val AUTHORIZATION_VALUE = Regex(
-    "(?i)\\b(authorization|proxy-authorization|cookie|set-cookie|password|passphrase|app[-_ ]?password|token|secret)\\s*[:=]\\s*(?:(?:bearer|basic)\\s+)?[^\\s,;]+",
+    "(?i)\\b($SENSITIVE_CREDENTIAL_LABEL_PATTERN)\\b\\s*[:=]\\s*" +
+        "(?:(?:bearer|basic)\\s+)?[^\\s,;]+",
 )
 private val BEARER_OR_BASIC_VALUE = Regex("(?i)\\b(?:bearer|basic)\\s+[A-Za-z0-9+/=_-]{8,}")
 private val URL_VALUE = Regex("(?i)\\b(?:https?|dav|webdav)://[^\\s\"'<>]+")

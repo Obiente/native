@@ -2096,7 +2096,11 @@ class DesktopNextcloudServices(
         val accountId = desktopFileCacheAccountId(session)
         val diagnosticFields = listOf(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
-            SupportDiagnosticFieldDraft("work", workId.toString()),
+            SupportDiagnosticFieldDraft(
+                "work",
+                workId.toString(),
+                SupportDiagnosticValuePrivacy.Identifier,
+            ),
             SupportDiagnosticFieldDraft("choice", choice.name.lowercase()),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve", diagnosticFields) {
@@ -2386,7 +2390,11 @@ class DesktopNextcloudServices(
                     message = event.failureMessage,
                     fields = listOf(
                         SupportDiagnosticFieldDraft("pair", event.pairId, SupportDiagnosticValuePrivacy.Identifier),
-                        SupportDiagnosticFieldDraft("work", event.workId.toString()),
+                        SupportDiagnosticFieldDraft(
+                            "work",
+                            event.workId.toString(),
+                            SupportDiagnosticValuePrivacy.Identifier,
+                        ),
                         SupportDiagnosticFieldDraft(
                             "relative_path",
                             event.relativePath,
