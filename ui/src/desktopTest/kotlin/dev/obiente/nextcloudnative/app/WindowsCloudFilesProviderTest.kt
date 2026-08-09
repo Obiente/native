@@ -157,6 +157,263 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun concurrentCallbackPlaceholderCreationDoesNotFailStartup() {
+        val root = createTempDirectory("windows-cloud-placeholder-race")
+        val identity = WindowsCloudFileIdentity("account-01", "Apps", "revision", 0L, true)
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { baseDirectory, placeholders ->
+                placeholders.forEach { created ->
+                    seed(
+                        baseDirectory.resolve(created.name),
+                        WindowsCloudPlaceholderState.InSync,
+                        WindowsCloudFileIdentityCodec.decode(created.identity),
+                    )
+                }
+                throw WindowsCloudFilesOperationException(
+                    "create Windows Cloud Files placeholders",
+                    0x800700B7.toInt(),
+                )
+            }
+        }
+        val provider = WindowsCloudFilesProvider(root, FakeBackend(ByteArray(0), listOf(identity)), api)
+
+        try {
+            provider.start()
+
+            assertEquals(identity, api.decodedIdentity(root.resolve("Apps")))
+            assertEquals(listOf(root.resolve("Apps")), api.updatedPaths)
+            assertTrue(api.disconnectAttempts.isEmpty())
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun collisionRecoveryPreservesTheAuthoritativeNewerGeneration() {
+        val root = createTempDirectory("windows-cloud-placeholder-generation")
+        val old = WindowsCloudFileIdentity("account-01", "report.txt", "old", 5L, false)
+        val current = old.copy(remoteRevision = "current")
+        val backend = FakeBackend("fresh".encodeToByteArray(), listOf(old)).apply { seedRemote(current) }
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { baseDirectory, placeholders ->
+                seed(
+                    baseDirectory.resolve(placeholders.single().name),
+                    WindowsCloudPlaceholderState.InSync,
+                    current,
+                )
+                throw WindowsCloudFilesOperationException(
+                    "create Windows Cloud Files placeholders",
+                    0x800700B7.toInt(),
+                )
+            }
+        }
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+
+        try {
+            provider.start()
+
+            assertEquals(current, api.decodedIdentity(root.resolve("report.txt")))
+            assertTrue(api.invalidatedUpdates.isEmpty())
+            assertEquals(listOf("", ""), backend.listedPaths.take(2))
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun partialBatchRetryUsesTheRefreshedRemoteGeneration() {
+        val root = createTempDirectory("windows-cloud-placeholder-partial-batch")
+        val first = WindowsCloudFileIdentity("account-01", "Apps", "apps", 0L, true)
+        val oldSecond = WindowsCloudFileIdentity("account-01", "report.txt", "old", 5L, false)
+        val currentSecond = oldSecond.copy(remoteRevision = "current")
+        val backend = FakeBackend("fresh".encodeToByteArray(), listOf(first, oldSecond)).apply {
+            seedRemote(currentSecond)
+        }
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { baseDirectory, placeholders ->
+                val created = placeholders.first()
+                seed(
+                    baseDirectory.resolve(created.name),
+                    WindowsCloudPlaceholderState.InSync,
+                    WindowsCloudFileIdentityCodec.decode(created.identity),
+                )
+                throw WindowsCloudFilesOperationException(
+                    "create Windows Cloud Files placeholders",
+                    0x800700B7.toInt(),
+                )
+            }
+        }
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+
+        try {
+            provider.start()
+
+            val retried = api.createdPlaceholderBatches.last().single()
+            assertEquals(currentSecond, WindowsCloudFileIdentityCodec.decode(retried.identity))
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun collisionRevalidatesAPlaceholderGenerationThatAdvancedAfterRefresh() {
+        val root = createTempDirectory("windows-cloud-placeholder-revalidation")
+        val old = WindowsCloudFileIdentity("account-01", "report.txt", "old", 5L, false)
+        val intermediate = old.copy(remoteRevision = "intermediate")
+        val current = old.copy(remoteRevision = "current")
+        val backend = FakeBackend("fresh".encodeToByteArray(), listOf(old)).apply {
+            queueList(listOf(old), listOf(intermediate))
+            seedRemote(current)
+        }
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { baseDirectory, placeholders ->
+                seed(
+                    baseDirectory.resolve(placeholders.single().name),
+                    WindowsCloudPlaceholderState.InSync,
+                    current,
+                )
+                throw WindowsCloudFilesOperationException(
+                    "create Windows Cloud Files placeholders",
+                    0x800700B7.toInt(),
+                )
+            }
+        }
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+
+        try {
+            provider.start()
+
+            assertEquals(current, api.decodedIdentity(root.resolve("report.txt")))
+            assertEquals(listOf("report.txt"), backend.resolvedPaths)
+            assertTrue(api.invalidatedUpdates.isEmpty())
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun collisionWithAnotherRemotePathFailsClosed() {
+        val root = createTempDirectory("windows-cloud-placeholder-name-conflict")
+        val listed = WindowsCloudFileIdentity("account-01", "Report", "listed", 0L, true)
+        val conflicting = listed.copy(path = "report", remoteRevision = "conflicting")
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { baseDirectory, placeholders ->
+                seed(
+                    baseDirectory.resolve(placeholders.single().name),
+                    WindowsCloudPlaceholderState.InSync,
+                    conflicting,
+                )
+                throw WindowsCloudFilesOperationException(
+                    "create Windows Cloud Files placeholders",
+                    0x800700B7.toInt(),
+                )
+            }
+        }
+        val provider = WindowsCloudFilesProvider(root, FakeBackend(ByteArray(0), listOf(listed)), api)
+
+        try {
+            val failure = assertFailsWith<IllegalStateException> { provider.start() }
+            assertTrue(failure.message.orEmpty().contains("same Windows path"))
+            assertEquals(listOf(1L), api.disconnectAttempts)
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun dirtyCollisionWithoutAReadableIdentityFailsClosed() {
+        val root = createTempDirectory("windows-cloud-placeholder-dirty-identity")
+        val identity = WindowsCloudFileIdentity("account-01", "edit.txt", "revision", 5L, false)
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { baseDirectory, placeholders ->
+                seedState(
+                    baseDirectory.resolve(placeholders.single().name),
+                    WindowsCloudPlaceholderState.Dirty,
+                )
+                throw WindowsCloudFilesOperationException(
+                    "create Windows Cloud Files placeholders",
+                    0x800700B7.toInt(),
+                )
+            }
+        }
+        val provider = WindowsCloudFilesProvider(root, FakeBackend("local".encodeToByteArray(), listOf(identity)), api)
+
+        try {
+            val failure = assertFailsWith<IllegalStateException> { provider.start() }
+            assertTrue(failure.message.orEmpty().contains("Could not verify the existing"))
+            assertEquals(listOf(1L), api.disconnectAttempts)
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun ordinaryLocalEntryCreatedDuringPlaceholderRaceIsPreserved() {
+        val root = createTempDirectory("windows-cloud-local-placeholder-race")
+        val localBytes = "local recovery data".encodeToByteArray()
+        val identity = WindowsCloudFileIdentity(
+            "account-01",
+            "draft.txt",
+            "revision",
+            localBytes.size.toLong(),
+            false,
+        )
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { baseDirectory, placeholders ->
+                baseDirectory.resolve(placeholders.single().name).writeBytes(localBytes)
+                throw WindowsCloudFilesOperationException(
+                    "create Windows Cloud Files placeholders",
+                    0x800700B7.toInt(),
+                )
+            }
+        }
+        val backend = FakeBackend("different remote bytes".encodeToByteArray(), listOf(identity))
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+
+        try {
+            provider.start()
+
+            assertContentEquals(localBytes, root.resolve("draft.txt").toFile().readBytes())
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (provider.summary().failedWritebackCount == 0 && System.nanoTime() < deadline) Thread.yield()
+            assertEquals(1, provider.summary().failedWritebackCount)
+            assertEquals(1, provider.summary().pendingWritebackCount)
+            assertTrue(api.disconnectAttempts.isEmpty())
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun unrelatedPlaceholderCreationFailureStillStopsStartup() {
+        val root = createTempDirectory("windows-cloud-placeholder-failure")
+        val identity = WindowsCloudFileIdentity("account-01", "Apps", "revision", 0L, true)
+        val failure = WindowsCloudFilesOperationException(
+            "create Windows Cloud Files placeholders",
+            0x80070005.toInt(),
+        )
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { _, _ -> throw failure }
+        }
+        val provider = WindowsCloudFilesProvider(root, FakeBackend(ByteArray(0), listOf(identity)), api)
+
+        try {
+            assertEquals(failure, assertFailsWith<WindowsCloudFilesOperationException> { provider.start() })
+            assertEquals(listOf(1L), api.disconnectAttempts)
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun missingRegistrationDuringConnectIsRepairedAndRetriedOnce() {
         val root = createTempDirectory("windows-cloud-connect-repair")
         val api = FakeApi().apply {
@@ -502,6 +759,24 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun `startup retains hydrated bytes for metadata-only placeholder updates`() {
+        val root = createTempDirectory("windows-cloud-metadata-refresh-")
+        val local = root.resolve("example.raf")
+        local.writeBytes("cached bytes".encodeToByteArray())
+        val old = fixtureIdentity(size = local.toFile().length()).copy(path = "example.raf")
+        val fresh = old.copy(lastModifiedEpochMillis = 1_000L)
+        val backend = FakeBackend("cached bytes".encodeToByteArray(), listed = listOf(fresh))
+        val api = FakeApi().apply { seed(local, WindowsCloudPlaceholderState.InSync, old) }
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+
+        provider.start()
+
+        assertTrue(api.invalidatedUpdates.isEmpty())
+        assertEquals(fresh, api.decodedIdentity(local))
+        provider.close()
+    }
+
+    @Test
     fun `recovery uploads against the dirty placeholder revision`() {
         val root = createTempDirectory("windows-cloud-recovery-")
         val local = root.resolve("edit.txt")
@@ -775,15 +1050,20 @@ class WindowsCloudFilesProviderTest {
         val uploadExpectedRevisions = mutableListOf<String?>()
         val operations = mutableListOf<String>()
         val listedPaths = CopyOnWriteArrayList<String>()
-        private val remoteIdentities = mutableMapOf<String, WindowsCloudFileIdentity>()
+        val resolvedPaths = CopyOnWriteArrayList<String>()
+        private val remoteIdentities = listed.associateBy { identity -> identity.path }.toMutableMap()
         private val remoteContents = mutableMapOf<String, ByteArray>()
+        private val scriptedLists = ArrayDeque<List<WindowsCloudFileIdentity>>()
 
         override fun resolve(path: String): WindowsCloudFileIdentity? = synchronized(this) {
+            resolvedPaths += path
             remoteIdentities[path]
         }
-        override fun list(path: String): List<WindowsCloudFileIdentity> {
+        override fun list(path: String): List<WindowsCloudFileIdentity> = synchronized(this) {
             listedPaths += path
-            return listed.filter { it.path.substringBeforeLast('/', "") == path }
+            if (scriptedLists.isNotEmpty()) return@synchronized scriptedLists.removeFirst()
+            listed.mapNotNull { identity -> remoteIdentities[identity.path] }
+                .filter { identity -> identity.path.substringBeforeLast('/', "") == path }
         }
 
         override fun open(identity: WindowsCloudFileIdentity): WindowsCloudFileReadHandle {
@@ -802,6 +1082,9 @@ class WindowsCloudFilesProviderTest {
             expectedRemoteRevision: String?,
         ): WindowsCloudFileIdentity {
             synchronized(this) {
+                check(expectedRemoteRevision != null || remoteIdentities[path] == null) {
+                    "The server file appeared after the sync scan."
+                }
                 if (uploadFailuresRemaining > 0) {
                     uploadFailuresRemaining -= 1
                     error("Simulated transient upload failure")
@@ -831,6 +1114,7 @@ class WindowsCloudFilesProviderTest {
         }
 
         override fun createDirectory(path: String): WindowsCloudFileIdentity = synchronized(this) {
+            check(remoteIdentities[path] == null) { "The server folder appeared after the sync scan." }
             WindowsCloudFileIdentity(accountId, path, "\"directory\"", 0L, true).also { created ->
                 operations += "mkdir:$path"
                 remoteIdentities[path] = created
@@ -844,6 +1128,14 @@ class WindowsCloudFilesProviderTest {
         fun awaitUploads(): Boolean = uploadLatch.await(5, TimeUnit.SECONDS)
         fun awaitFirstUploadStarted(): Boolean = firstUploadStarted.await(5, TimeUnit.SECONDS)
         fun releaseFirstUpload() = firstUploadRelease.countDown()
+
+        fun seedRemote(identity: WindowsCloudFileIdentity) = synchronized(this) {
+            remoteIdentities[identity.path] = identity
+        }
+
+        fun queueList(vararg responses: List<WindowsCloudFileIdentity>) = synchronized(this) {
+            scriptedLists.addAll(responses)
+        }
     }
 
     private class FakeApi(
@@ -861,7 +1153,9 @@ class WindowsCloudFilesProviderTest {
         private val states = HashMap<Path, WindowsCloudPlaceholderState>()
         private val identities = HashMap<Path, ByteArray>()
         val transfers = mutableListOf<Pair<Long, ByteArray>>()
+        val createdPlaceholderBatches = mutableListOf<List<WindowsCloudPlaceholder>>()
         val invalidatedUpdates = mutableListOf<Path>()
+        val updatedPaths = mutableListOf<Path>()
         var completedPlaceholders = emptyList<WindowsCloudPlaceholder>()
         var lastRenameAccepted = false
         var unregisteredRoot: Path? = null
@@ -869,6 +1163,7 @@ class WindowsCloudFilesProviderTest {
         val connectFailures = mutableListOf<WindowsCloudFilesOperationException>()
         val disconnectAttempts = mutableListOf<Long>()
         var disconnectFailure: RuntimeException? = null
+        var createPlaceholdersHook: ((Path, List<WindowsCloudPlaceholder>) -> Unit)? = null
         var closed = false
         val lifecycleEvents = mutableListOf<String>()
 
@@ -891,6 +1186,11 @@ class WindowsCloudFilesProviderTest {
         }
         override fun createPlaceholders(baseDirectory: Path, placeholders: List<WindowsCloudPlaceholder>) {
             lifecycleEvents += "create"
+            createdPlaceholderBatches.add(placeholders)
+            createPlaceholdersHook?.also { hook ->
+                createPlaceholdersHook = null
+                hook(baseDirectory, placeholders)
+            }
         }
         override fun transferData(info: WindowsCloudCallbackInfo, offset: Long, bytes: ByteArray) {
             synchronized(transfers) { transfers += offset to bytes.copyOf() }
@@ -928,6 +1228,7 @@ class WindowsCloudFilesProviderTest {
             invalidateContent: Boolean,
             preserveSyncState: Boolean,
         ) {
+            updatedPaths.add(path)
             if (!preserveSyncState) states[path] = WindowsCloudPlaceholderState.InSync
             identities[path] = placeholder.identity.copyOf()
             if (invalidateContent) invalidatedUpdates.add(path)
@@ -956,6 +1257,11 @@ class WindowsCloudFilesProviderTest {
         fun seed(path: Path, state: WindowsCloudPlaceholderState, identity: WindowsCloudFileIdentity) {
             states[path] = state
             identities[path] = WindowsCloudFileIdentityCodec.encode(identity)
+        }
+
+        fun seedState(path: Path, state: WindowsCloudPlaceholderState) {
+            states[path] = state
+            identities.remove(path)
         }
     }
 }
