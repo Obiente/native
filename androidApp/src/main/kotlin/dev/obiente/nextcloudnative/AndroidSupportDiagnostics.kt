@@ -6,21 +6,62 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
 import dev.obiente.nextcloudnative.app.AsyncJvmSupportDiagnostics
+import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
+import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsEnvironment
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
+import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.system.exitProcess
+
+private val UNCAUGHT_DIAGNOSTIC_HANDLER_INSTALLED = AtomicBoolean(false)
+
+internal fun installAndroidUncaughtDiagnosticHandler(context: Context) {
+    if (!UNCAUGHT_DIAGNOSTIC_HANDLER_INSTALLED.compareAndSet(false, true)) return
+    val appContext = context.applicationContext ?: context
+    val previous = Thread.getDefaultUncaughtExceptionHandler()
+    val mainThread = appContext.mainLooper.thread
+    Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
+        try {
+            AndroidSupportDiagnostics.get(appContext).recordBeforeProcessExit(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.App,
+                    operation = "app.uncaught-exception",
+                    outcome = "failed",
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("main_thread", (thread === mainThread).toString()),
+                    ),
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+        } catch (_: Throwable) {
+            // Crash reporting must never prevent the platform handler from terminating the process.
+        } finally {
+            if (previous != null) {
+                previous.uncaughtException(thread, failure)
+            } else {
+                android.os.Process.killProcess(android.os.Process.myPid())
+                exitProcess(10)
+            }
+        }
+    }
+}
 
 internal object AndroidSupportDiagnostics {
     @Volatile
     private var instance: AsyncJvmSupportDiagnostics? = null
 
     fun get(context: Context): AsyncJvmSupportDiagnostics = instance ?: synchronized(this) {
+        val appContext = context.applicationContext ?: context
         instance ?: AsyncJvmSupportDiagnostics(
-            root = File(context.applicationContext.filesDir, "support-diagnostics"),
+            root = File(appContext.filesDir, "support-diagnostics"),
             environment = SupportDiagnosticsEnvironment(
                 appVersion = BuildConfig.VERSION_NAME,
                 packageVersion = BuildConfig.VERSION_CODE.toString(),

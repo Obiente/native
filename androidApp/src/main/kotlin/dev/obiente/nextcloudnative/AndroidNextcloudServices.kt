@@ -326,7 +326,6 @@ internal class AndroidNextcloudServices(
 
     init {
         supportDiagnostics.registerPrivateValue(System.getProperty("user.home"))
-        if (activity != null) installUncaughtDiagnosticHandler()
     }
 
     override val supportsFileOfflineStorage: Boolean = true
@@ -2955,38 +2954,6 @@ internal class AndroidNextcloudServices(
         )
     }
 
-    private fun installUncaughtDiagnosticHandler() {
-        if (!UNCAUGHT_DIAGNOSTIC_HANDLER_INSTALLED.compareAndSet(false, true)) return
-        val previous = Thread.getDefaultUncaughtExceptionHandler()
-        val diagnostics = supportDiagnostics
-        val mainThread = appContext.mainLooper.thread
-        Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
-            try {
-                diagnostics.recordBeforeProcessExit(
-                    SupportDiagnosticEventDraft(
-                        severity = SupportDiagnosticSeverity.Error,
-                        component = SupportDiagnosticComponent.App,
-                        operation = "app.uncaught-exception",
-                        outcome = "failed",
-                        fields = listOf(
-                            SupportDiagnosticFieldDraft("main_thread", (thread === mainThread).toString()),
-                        ),
-                        exception = failure.toSupportDiagnosticExceptionDraft(),
-                    ),
-                )
-            } catch (_: Throwable) {
-                // Crash reporting must never prevent the platform handler from terminating the process.
-            } finally {
-                if (previous != null) {
-                    previous.uncaughtException(thread, failure)
-                } else {
-                    android.os.Process.killProcess(android.os.Process.myPid())
-                    kotlin.system.exitProcess(10)
-                }
-            }
-        }
-    }
-
     private fun elapsedMillis(startedNanos: Long): Long =
         (System.nanoTime() - startedNanos).coerceAtLeast(0L) / 1_000_000L
 
@@ -3179,7 +3146,6 @@ internal class AndroidNextcloudServices(
     }
 
     private companion object {
-        val UNCAUGHT_DIAGNOSTIC_HANDLER_INSTALLED = AtomicBoolean(false)
         const val KEY_THEME = "theme_preference"
         const val KEY_LAST_OPENED_APP = "last_opened_app"
         const val KEY_SESSION = "encrypted_session"

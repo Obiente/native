@@ -25,7 +25,7 @@ class WindowsCloudFilesProviderTest {
         assertEquals(
             0,
             windowsCloudFailedPlaceholderIndex(
-                entryResults = listOf(0x800700B7.toInt(), 0),
+                firstFailedEntryIndex = 0,
                 processedCount = 0,
                 placeholderCount = 2,
             ),
@@ -33,10 +33,20 @@ class WindowsCloudFilesProviderTest {
         assertEquals(
             1,
             windowsCloudFailedPlaceholderIndex(
-                entryResults = listOf(0, 0),
+                firstFailedEntryIndex = null,
                 processedCount = 1,
                 placeholderCount = 2,
             ),
+        )
+    }
+
+    @Test
+    fun placeholderDiagnosticResultSamplesStayBounded() {
+        assertEquals(0, windowsCloudPlaceholderDiagnosticSampleSize(0))
+        assertEquals(4, windowsCloudPlaceholderDiagnosticSampleSize(4))
+        assertEquals(
+            MAX_WINDOWS_CLOUD_PLACEHOLDER_DIAGNOSTIC_RESULTS,
+            windowsCloudPlaceholderDiagnosticSampleSize(100_000),
         )
     }
 
