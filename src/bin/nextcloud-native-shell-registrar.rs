@@ -53,6 +53,7 @@ enum ExistingRegistrationAction {
     KeepCurrent,
     ReplaceCurrent,
     RemoveStaleOwned,
+    RetainOwnedRecovery,
     IgnoreForeign,
     RejectUnsafeCurrent,
 }
@@ -82,7 +83,10 @@ fn existing_registration_action(
             ExistingRegistrationAction::RejectUnsafeCurrent
         }
         (true, false, _) => ExistingRegistrationAction::RejectUnsafeCurrent,
-        (false, true, _) => ExistingRegistrationAction::RemoveStaleOwned,
+        (false, true, OwnedCurrentRegistrationState::Replaceable) => {
+            ExistingRegistrationAction::RemoveStaleOwned
+        }
+        (false, true, _) => ExistingRegistrationAction::RetainOwnedRecovery,
         (false, false, _) => ExistingRegistrationAction::IgnoreForeign,
     }
 }
@@ -282,6 +286,24 @@ mod platform {
         })
     }
 
+    fn non_current_registration_state(
+        existing: &StorageProviderSyncRootInfo,
+        root: &Path,
+    ) -> OwnedCurrentRegistrationState {
+        let existing_path = match existing.Path().and_then(|folder| folder.Path()) {
+            Ok(path) => path,
+            Err(failure) if is_windows_absence_hresult(failure.code().0) => {
+                return OwnedCurrentRegistrationState::Replaceable;
+            }
+            Err(_) => return OwnedCurrentRegistrationState::UnsafeExistingPath,
+        };
+        match registered_path_state(&PathBuf::from(existing_path.to_os_string()), root) {
+            Ok(RegisteredPathState::Missing) => OwnedCurrentRegistrationState::Replaceable,
+            Ok(RegisteredPathState::SameExisting | RegisteredPathState::DifferentExisting)
+            | Err(_) => OwnedCurrentRegistrationState::UnsafeExistingPath,
+        }
+    }
+
     fn unregister_owned_registration(id: &HSTRING) -> windows::core::Result<()> {
         match StorageProviderSyncRootManager::Unregister(id) {
             Ok(()) => Ok(()),
@@ -436,6 +458,7 @@ mod platform {
                         return Err(Box::new(UnsafeRegistrationConflict));
                     }
                     ExistingRegistrationAction::RemoveStaleOwned
+                    | ExistingRegistrationAction::RetainOwnedRecovery
                     | ExistingRegistrationAction::IgnoreForeign => unreachable!(),
                 }
             }
@@ -454,11 +477,13 @@ mod platform {
             if existing_id == id {
                 continue;
             }
-            match existing_registration_action(
-                false,
-                existing_provider_id == PROVIDER_GUID,
-                OwnedCurrentRegistrationState::Ready,
-            ) {
+            let provider_owned = existing_provider_id == PROVIDER_GUID;
+            let cleanup_state = if provider_owned {
+                non_current_registration_state(&existing, &root)
+            } else {
+                OwnedCurrentRegistrationState::UnsafeExistingPath
+            };
+            match existing_registration_action(false, provider_owned, cleanup_state) {
                 ExistingRegistrationAction::ReplaceCurrent
                 | ExistingRegistrationAction::RemoveStaleOwned => {
                     // Older versions could leave account registrations behind after an interrupted
@@ -466,6 +491,7 @@ mod platform {
                     unregister_owned_registration(&existing_id)?;
                 }
                 ExistingRegistrationAction::KeepCurrent
+                | ExistingRegistrationAction::RetainOwnedRecovery
                 | ExistingRegistrationAction::IgnoreForeign => {}
                 ExistingRegistrationAction::RejectUnsafeCurrent => {
                     return Err(Box::new(UnsafeRegistrationConflict));
@@ -709,8 +735,16 @@ mod tests {
             ExistingRegistrationAction::RejectUnsafeCurrent
         );
         assert_eq!(
-            existing_registration_action(false, true, OwnedCurrentRegistrationState::Ready),
+            existing_registration_action(false, true, OwnedCurrentRegistrationState::Replaceable,),
             ExistingRegistrationAction::RemoveStaleOwned
+        );
+        assert_eq!(
+            existing_registration_action(
+                false,
+                true,
+                OwnedCurrentRegistrationState::UnsafeExistingPath,
+            ),
+            ExistingRegistrationAction::RetainOwnedRecovery
         );
         assert_eq!(
             existing_registration_action(false, false, OwnedCurrentRegistrationState::Ready),
