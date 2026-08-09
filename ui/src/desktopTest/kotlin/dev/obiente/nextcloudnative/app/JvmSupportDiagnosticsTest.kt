@@ -12,6 +12,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 
 class JvmSupportDiagnosticsTest {
@@ -146,6 +147,29 @@ class JvmSupportDiagnosticsTest {
 
         assertFalse(diagnostics.summary().available)
         assertTrue(diagnostics.revisions().value > revisionBeforeFailure)
+    }
+
+    @Test
+    fun coldStartCrashMarkerIsRecoveredIntoTheNextReport() {
+        val root = createTempDirectory("support-diagnostics-cold-crash").toFile()
+        File(root, "pending-cold-start-crash-v1").writeText("pending\n")
+        val diagnostics = AsyncJvmSupportDiagnostics(
+            root = root,
+            environment = environment(),
+            workerName = "support-diagnostics-test",
+        )
+        val destination = File(root, "cold-crash-report.zip")
+
+        runBlocking { diagnostics.writeBundle(destination, "", emptyList()) }
+        diagnostics.close()
+
+        ZipFile(destination).use { zip ->
+            val events = zip.getInputStream(assertNotNull(zip.getEntry("events.jsonl")))
+                .bufferedReader()
+                .use { it.readText() }
+            assertTrue("app.previous-cold-start-crash" in events)
+        }
+        assertFalse(File(root, "pending-cold-start-crash-v1").exists())
     }
 
     @Test
@@ -298,15 +322,17 @@ class JvmSupportDiagnosticsTest {
         nowEpochMillis: () -> Long = { 1_000_000L },
     ): JvmSupportDiagnostics = JvmSupportDiagnostics(
         root = root.absoluteFile,
-        environment = SupportDiagnosticsEnvironment(
-            appVersion = "nightly-test",
-            packageVersion = "1.0.0",
-            platform = "Windows",
-            operatingSystemVersion = "11",
-            architecture = "amd64",
-        ),
+        environment = environment(),
         nowEpochMillis = nowEpochMillis,
         randomBytes = { size -> ByteArray(size) { index -> (index + 1).toByte() } },
+    )
+
+    private fun environment(): SupportDiagnosticsEnvironment = SupportDiagnosticsEnvironment(
+        appVersion = "nightly-test",
+        packageVersion = "1.0.0",
+        platform = "Windows",
+        operatingSystemVersion = "11",
+        architecture = "amd64",
     )
 
     private fun ByteArray.toHex(): String = joinToString("") { byte ->

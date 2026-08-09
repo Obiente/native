@@ -700,10 +700,14 @@ internal fun combinedAutomaticCacheExcess(
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
     private val onDesktopUpdateInstallerOpened: (String) -> Unit = {},
+    supportDiagnosticsRoot: File? = null,
 ) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
-    private val supportDiagnostics = JvmSupportDiagnostics(
-        root = desktopSupportDiagnosticsDirectory(),
+    private val ownsTemporarySupportDiagnosticsRoot = supportDiagnosticsRoot == null
+    private val resolvedSupportDiagnosticsRoot = supportDiagnosticsRoot
+        ?: Files.createTempDirectory("nextcloud-native-test-diagnostics").toFile()
+    private val supportDiagnostics = AsyncJvmSupportDiagnostics(
+        root = resolvedSupportDiagnosticsRoot,
         environment = SupportDiagnosticsEnvironment(
             appVersion = System.getProperty(DESKTOP_VERSION_NAME_PROPERTY, "development"),
             packageVersion = System.getProperty(DESKTOP_PACKAGE_VERSION_PROPERTY, "development"),
@@ -711,6 +715,7 @@ class DesktopNextcloudServices(
             operatingSystemVersion = System.getProperty("os.version", "Unknown"),
             architecture = System.getProperty("os.arch", "Unknown"),
         ),
+        workerName = "nextcloud-support-diagnostics",
     )
     private val supportBundleExporter = DesktopSupportBundleExporter(supportDiagnostics)
     private val secretStore = defaultDesktopSecretStore()
@@ -763,14 +768,6 @@ class DesktopNextcloudServices(
 
     init {
         supportDiagnostics.registerPrivateValue(System.getProperty("user.home"))
-        supportDiagnostics.record(
-            SupportDiagnosticEventDraft(
-                severity = SupportDiagnosticSeverity.Info,
-                component = SupportDiagnosticComponent.App,
-                operation = "app.process",
-                outcome = "started",
-            ),
-        )
     }
 
     private fun virtualRangeCache(accountId: String): DesktopVirtualRangeCache {
@@ -1965,6 +1962,8 @@ class DesktopNextcloudServices(
             windowsCloudFilesProvider = null
             windowsCloudFilesIdentity = null
         }
+        supportDiagnostics.close()
+        if (ownsTemporarySupportDiagnosticsRoot) resolvedSupportDiagnosticsRoot.deleteRecursively()
     }
 
     private fun invalidateDesktopFileMetadata(accountId: String, path: String) {
@@ -2755,7 +2754,7 @@ class DesktopNextcloudServices(
     fun installUncaughtDiagnosticHandler() {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
-            supportDiagnostics.record(
+            supportDiagnostics.recordBeforeProcessExit(
                 SupportDiagnosticEventDraft(
                     severity = SupportDiagnosticSeverity.Error,
                     component = SupportDiagnosticComponent.App,
@@ -2789,8 +2788,9 @@ class DesktopNextcloudServices(
             ?.takeIf(String::isNotBlank)
             ?: return null
         listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
-        supportDiagnostics.setActiveAccount(server, login)
-        return NextcloudSession(server, login, password)
+        return NextcloudSession(server, login, password).also { session ->
+            supportDiagnostics.setActiveAccountIdentity(desktopFileCacheAccountId(session))
+        }
     }
 
     override fun saveSession(session: NextcloudSession) {
@@ -2803,7 +2803,7 @@ class DesktopNextcloudServices(
         )
         preferences.put(KEY_SERVER, session.serverUrl)
         preferences.put(KEY_LOGIN, session.loginName)
-        supportDiagnostics.setActiveAccount(session.serverUrl, session.loginName)
+        supportDiagnostics.setActiveAccountIdentity(desktopFileCacheAccountId(session))
         synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
     }
@@ -2939,7 +2939,7 @@ class DesktopNextcloudServices(
             }
             preferences.remove(KEY_SERVER)
             preferences.remove(KEY_LOGIN)
-            supportDiagnostics.setActiveAccount(null, null)
+            supportDiagnostics.setActiveAccountIdentity(null)
             cleared = true
         } finally {
             if (!cleared) {
@@ -4582,7 +4582,8 @@ class DesktopNextcloudServices(
                 )
             }
             if (result.status !in 200..399) {
-                supportDiagnostics.record(
+                recordDesktopRequestDiagnostic(
+                    session,
                     SupportDiagnosticEventDraft(
                         severity = if (result.status >= 500) {
                             SupportDiagnosticSeverity.Error
@@ -4609,7 +4610,8 @@ class DesktopNextcloudServices(
             }
             result
         } catch (failure: Throwable) {
-            supportDiagnostics.record(
+            recordDesktopRequestDiagnostic(
+                session,
                 SupportDiagnosticEventDraft(
                     severity = SupportDiagnosticSeverity.Error,
                     component = SupportDiagnosticComponent.Network,
@@ -4625,6 +4627,17 @@ class DesktopNextcloudServices(
                 ),
             )
             throw failure
+        }
+    }
+
+    private fun recordDesktopRequestDiagnostic(
+        session: NextcloudSession?,
+        event: SupportDiagnosticEventDraft,
+    ) {
+        if (session == null) {
+            supportDiagnostics.record(event)
+        } else {
+            supportDiagnostics.recordForAccountIdentity(desktopFileCacheAccountId(session), event)
         }
     }
 

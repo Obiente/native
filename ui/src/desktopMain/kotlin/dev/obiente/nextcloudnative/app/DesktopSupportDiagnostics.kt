@@ -10,7 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 internal class DesktopSupportBundleExporter(
-    private val diagnostics: JvmSupportDiagnostics,
+    private val diagnostics: AsyncJvmSupportDiagnostics,
     private val chooseDestination: (String) -> File? = ::chooseDesktopSupportBundleDestination,
 ) {
     suspend fun export(

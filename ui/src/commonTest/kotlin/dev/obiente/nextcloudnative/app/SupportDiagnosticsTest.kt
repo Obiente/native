@@ -126,6 +126,18 @@ class SupportDiagnosticsTest {
     }
 
     @Test
+    fun redactsQuotedJsonCredentialAssignments() {
+        val credential = listOf("fixture", "credential").joinToString("-")
+
+        val sanitized = sanitizer.sanitizeUserDescription(
+            "{\"user\":\"person\",\"password\":\"$credential\"}",
+        )
+
+        assertFalse(credential in sanitized)
+        assertTrue("password=<secret>" in sanitized)
+    }
+
+    @Test
     fun sanitizesExceptionMessagesAndBoundsFramesAndCauses() {
         val privatePath = "/srv/fixtures/Pictures/private.jpg"
         val frames = (1..40).map { index ->

@@ -33,6 +33,7 @@ import dev.obiente.nextcloudnative.app.NextcloudNativeNavigationRequest
 import dev.obiente.nextcloudnative.app.NextcloudNativeRoute
 import dev.obiente.nextcloudnative.app.ThemePreference
 import dev.obiente.nextcloudnative.app.applyDesktopNativeWindowFrame
+import dev.obiente.nextcloudnative.app.desktopSupportDiagnosticsDirectory
 import dev.obiente.nextcloudnative.app.desktopUpdateHandoffActive
 import dev.obiente.nextcloudnative.app.tooltip
 import dev.obiente.nextcloudnative.app.unregisterWindowsCloudFilesRootForUninstall
@@ -98,6 +99,7 @@ fun main(arguments: Array<String>) {
                     scope.launch { updaterExitRequested.value = true }
                 }
             },
+            supportDiagnosticsRoot = desktopSupportDiagnosticsDirectory(),
         ).also {
             it.installUncaughtDiagnosticHandler()
             themePreference.value = it.loadThemePreference()

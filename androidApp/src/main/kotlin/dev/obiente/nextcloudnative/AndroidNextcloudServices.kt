@@ -2814,7 +2814,8 @@ internal class AndroidNextcloudServices(
                 )
             }
             if (result.status !in 200..399) {
-                recordSupportDiagnostic(
+                recordRequestDiagnostic(
+                    session,
                     SupportDiagnosticEventDraft(
                         severity = if (result.status >= 500) {
                             SupportDiagnosticSeverity.Error
@@ -2840,7 +2841,8 @@ internal class AndroidNextcloudServices(
             }
             result
         } catch (failure: Throwable) {
-            recordSupportDiagnostic(
+            recordRequestDiagnostic(
+                session,
                 SupportDiagnosticEventDraft(
                     severity = SupportDiagnosticSeverity.Error,
                     component = SupportDiagnosticComponent.Network,
@@ -2856,6 +2858,17 @@ internal class AndroidNextcloudServices(
                 ),
             )
             throw failure
+        }
+    }
+
+    private fun recordRequestDiagnostic(
+        session: NextcloudSession?,
+        event: SupportDiagnosticEventDraft,
+    ) {
+        if (session == null) {
+            supportDiagnostics.record(event)
+        } else {
+            supportDiagnostics.recordForAccountIdentity(NextcloudDocumentIds.accountKey(session), event)
         }
     }
 
