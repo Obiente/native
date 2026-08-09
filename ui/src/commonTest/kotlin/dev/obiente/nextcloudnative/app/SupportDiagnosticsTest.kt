@@ -182,6 +182,25 @@ class SupportDiagnosticsTest {
     }
 
     @Test
+    fun redactsCamelCaseCredentialAssignments() {
+        val credentials = listOf(
+            "accessToken" to "short-access-value",
+            "refreshToken" to "short-refresh-value",
+            "clientSecret" to "short-client-value",
+            "apiKey" to "short-api-value",
+        )
+
+        val sanitized = sanitizer.sanitizeUserDescription(
+            credentials.joinToString("\n") { (label, value) -> "\"$label\": \"$value\"" },
+        )
+
+        credentials.forEach { (label, value) ->
+            assertFalse(value in sanitized, label)
+            assertTrue("$label=<secret>" in sanitized, sanitized)
+        }
+    }
+
+    @Test
     fun pseudonymizesDurableNumericIdentifiers() {
         val value = "48721"
 

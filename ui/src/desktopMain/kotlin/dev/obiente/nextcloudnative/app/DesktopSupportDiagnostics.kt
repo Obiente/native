@@ -5,6 +5,7 @@ import java.awt.FileDialog
 import java.awt.Frame
 import java.awt.GraphicsEnvironment
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -69,6 +70,50 @@ internal fun desktopSupportPlatformName(osName: String = System.getProperty("os.
     else -> "Desktop"
 }
 
+internal fun createDesktopSupportDiagnostics(
+    root: File = desktopSupportDiagnosticsDirectory(),
+): AsyncJvmSupportDiagnostics = AsyncJvmSupportDiagnostics(
+    root = root,
+    environment = SupportDiagnosticsEnvironment(
+        appVersion = System.getProperty(DESKTOP_VERSION_NAME_PROPERTY, "development"),
+        packageVersion = System.getProperty(DESKTOP_PACKAGE_VERSION_PROPERTY, "development"),
+        platform = desktopSupportPlatformName(),
+        operatingSystemVersion = System.getProperty("os.version", "Unknown"),
+        architecture = System.getProperty("os.arch", "Unknown"),
+    ),
+    workerName = "nextcloud-support-diagnostics",
+)
+
+internal fun installDesktopUncaughtDiagnosticHandler(diagnostics: AsyncJvmSupportDiagnostics) {
+    DESKTOP_CRASH_DIAGNOSTICS.set(diagnostics)
+    if (!DESKTOP_CRASH_HANDLER_INSTALLED.compareAndSet(false, true)) return
+    val previous = Thread.getDefaultUncaughtExceptionHandler()
+    Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
+        try {
+            DESKTOP_CRASH_DIAGNOSTICS.get()?.recordBeforeProcessExit(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.App,
+                    operation = "app.uncaught-exception",
+                    outcome = "failed",
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("awt_thread", EventQueue.isDispatchThread().toString()),
+                    ),
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+        } catch (_: Throwable) {
+            // Crash reporting must never prevent the platform handler from terminating the process.
+        } finally {
+            if (previous != null) {
+                previous.uncaughtException(thread, failure)
+            } else {
+                failure.printStackTrace(System.err)
+            }
+        }
+    }
+}
+
 private fun chooseDesktopSupportBundleDestination(fileName: String): File? {
     require(fileName.matches(Regex("[a-z0-9-]+\\.zip")))
     check(!GraphicsEnvironment.isHeadless()) { "A graphical save dialog is unavailable." }
@@ -108,3 +153,5 @@ private fun File.normalizeSupportBundleDestination(): File {
 }
 
 private const val MAX_SUPPORT_BUNDLE_FILE_NAME_LENGTH = 180
+private val DESKTOP_CRASH_HANDLER_INSTALLED = AtomicBoolean(false)
+private val DESKTOP_CRASH_DIAGNOSTICS = AtomicReference<AsyncJvmSupportDiagnostics?>()

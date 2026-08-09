@@ -9,7 +9,6 @@ import dev.obiente.nextcloudnative.contracts.FileVerifiedContractCache
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
 import java.awt.Desktop
-import java.awt.EventQueue
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.io.ByteArrayInputStream
@@ -701,21 +700,17 @@ class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
     private val onDesktopUpdateInstallerOpened: (String) -> Unit = {},
     supportDiagnosticsRoot: File? = null,
+    providedSupportDiagnostics: AsyncJvmSupportDiagnostics? = null,
 ) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
-    private val ownsTemporarySupportDiagnosticsRoot = supportDiagnosticsRoot == null
-    private val resolvedSupportDiagnosticsRoot = supportDiagnosticsRoot
-        ?: Files.createTempDirectory("nextcloud-native-test-diagnostics").toFile()
-    private val supportDiagnostics = AsyncJvmSupportDiagnostics(
-        root = resolvedSupportDiagnosticsRoot,
-        environment = SupportDiagnosticsEnvironment(
-            appVersion = System.getProperty(DESKTOP_VERSION_NAME_PROPERTY, "development"),
-            packageVersion = System.getProperty(DESKTOP_PACKAGE_VERSION_PROPERTY, "development"),
-            platform = desktopSupportPlatformName(),
-            operatingSystemVersion = System.getProperty("os.version", "Unknown"),
-            architecture = System.getProperty("os.arch", "Unknown"),
-        ),
-        workerName = "nextcloud-support-diagnostics",
+    private val ownsTemporarySupportDiagnosticsRoot = providedSupportDiagnostics == null && supportDiagnosticsRoot == null
+    private val resolvedSupportDiagnosticsRoot = supportDiagnosticsRoot ?: if (providedSupportDiagnostics == null) {
+        Files.createTempDirectory("nextcloud-native-test-diagnostics").toFile()
+    } else {
+        null
+    }
+    private val supportDiagnostics = providedSupportDiagnostics ?: createDesktopSupportDiagnostics(
+        requireNotNull(resolvedSupportDiagnosticsRoot),
     )
     private val supportBundleExporter = DesktopSupportBundleExporter(supportDiagnostics)
     private val secretStore = defaultDesktopSecretStore()
@@ -767,6 +762,7 @@ class DesktopNextcloudServices(
     private val externalFileHandoff = DesktopExternalFileHandoff()
 
     init {
+        require(providedSupportDiagnostics == null || supportDiagnosticsRoot == null)
         supportDiagnostics.registerPrivateValue(System.getProperty("user.home"))
     }
 
@@ -1980,7 +1976,7 @@ class DesktopNextcloudServices(
             windowsCloudFilesIdentity = null
         }
         supportDiagnostics.close()
-        if (ownsTemporarySupportDiagnosticsRoot) resolvedSupportDiagnosticsRoot.deleteRecursively()
+        if (ownsTemporarySupportDiagnosticsRoot) requireNotNull(resolvedSupportDiagnosticsRoot).deleteRecursively()
     }
 
     private fun invalidateDesktopFileMetadata(accountId: String, path: String) {
@@ -2804,34 +2800,6 @@ class DesktopNextcloudServices(
 
     override fun registerSupportDiagnosticPrivateValue(value: String?) {
         supportDiagnostics.registerPrivateValue(value)
-    }
-
-    fun installUncaughtDiagnosticHandler() {
-        val previous = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
-            try {
-                supportDiagnostics.recordBeforeProcessExit(
-                    SupportDiagnosticEventDraft(
-                        severity = SupportDiagnosticSeverity.Error,
-                        component = SupportDiagnosticComponent.App,
-                        operation = "app.uncaught-exception",
-                        outcome = "failed",
-                        fields = listOf(
-                            SupportDiagnosticFieldDraft("awt_thread", EventQueue.isDispatchThread().toString()),
-                        ),
-                        exception = failure.toSupportDiagnosticExceptionDraft(),
-                    ),
-                )
-            } catch (_: Throwable) {
-                // Crash reporting must never prevent the platform handler from terminating the process.
-            } finally {
-                if (previous != null) {
-                    previous.uncaughtException(thread, failure)
-                } else {
-                    failure.printStackTrace(System.err)
-                }
-            }
-        }
     }
 
     override fun loadLastOpenedAppId(): String = preferences.get(KEY_LAST_OPENED_APP, "files")

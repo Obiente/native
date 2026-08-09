@@ -135,7 +135,14 @@ class JvmSupportDiagnostics(
 
     fun summary(): SupportDiagnosticsSummary = synchronized(lock) {
         if (storageAvailable) {
-            discardedHistoryBytes += pruneEvents(nowEpochMillis().coerceAtLeast(0L))
+            val expiredBytes = pruneEvents(nowEpochMillis().coerceAtLeast(0L))
+            discardedHistoryBytes += expiredBytes
+            if (expiredBytes > 0L) {
+                runCatching(::persistHistory).onFailure {
+                    storageAvailable = false
+                    publishRevision()
+                }
+            }
         }
         val snapshot = visibleEvents()
         SupportDiagnosticsSummary(

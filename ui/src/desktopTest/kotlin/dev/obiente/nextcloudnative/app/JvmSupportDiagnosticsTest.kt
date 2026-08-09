@@ -105,6 +105,20 @@ class JvmSupportDiagnosticsTest {
     }
 
     @Test
+    fun summaryPersistsRetentionPruningWithoutANewEvent() {
+        val root = createTempDirectory("support-diagnostics-summary-retention").toFile()
+        var now = MAX_SUPPORT_DIAGNOSTIC_AGE_MILLIS
+        val diagnostics = diagnostics(root) { now }
+        diagnostics.record(failureEvent("/srv/fixtures/expired.jpg"))
+        now += MAX_SUPPORT_DIAGNOSTIC_AGE_MILLIS + 1L
+
+        assertEquals(0, diagnostics.summary().eventCount)
+
+        assertEquals("", File(root, "events-v1.jsonl").readText())
+        assertEquals(0, diagnostics(root) { now }.summary().eventCount)
+    }
+
+    @Test
     fun clockRollbackDoesNotHideExpiredEventsBehindAFutureEvent() {
         val root = createTempDirectory("support-diagnostics-clock-rollback").toFile()
         var now = MAX_SUPPORT_DIAGNOSTIC_AGE_MILLIS * 3L
