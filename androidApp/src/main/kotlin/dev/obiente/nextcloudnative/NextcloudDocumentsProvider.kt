@@ -142,7 +142,10 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             "The document root belongs to another account."
         }
         val account = resolveAccount(session)
-        val result = providerCall("Could not search this Nextcloud account.") {
+        val result = providerCall(
+            message = "Could not search this Nextcloud account.",
+            accountIdentity = NextcloudDocumentIds.accountKey(session),
+        ) {
             webDav.searchFiles(session, account.userId, query)
         }
         result.files.forEach { cursor.addDocumentRow(session, it) }
@@ -244,6 +247,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                         recordProviderFailure(
                             operation = "documents.cache-publish",
                             failure = failure,
+                            accountIdentity = NextcloudDocumentIds.accountKey(session),
                             remotePath = file.path,
                         )
                     }
@@ -535,6 +539,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         recordProviderFailure(
             operation = "documents.writeback",
             failure = failure,
+            accountIdentity = writeback.accountId,
             remotePath = writeback.remotePath,
             fields = listOf(SupportDiagnosticFieldDraft("recovery_complete", wasRetained.toString())),
         )
@@ -594,6 +599,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 recordProviderFailure(
                     operation = "documents.cache-invalidate",
                     failure = failure,
+                    accountIdentity = NextcloudDocumentIds.accountKey(session),
                     remotePath = path,
                 )
             }
@@ -662,21 +668,30 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         ?: throw FileNotFoundException("Sign in to Nextcloud Native to browse files.")
 
     private fun requireReference(documentId: String, session: NextcloudSession): NextcloudDocumentReference =
-        providerCall("This Nextcloud document ID is no longer valid.") {
+        providerCall(
+            message = "This Nextcloud document ID is no longer valid.",
+            accountIdentity = NextcloudDocumentIds.accountKey(session),
+        ) {
             NextcloudDocumentIds.requireForSession(documentId, session)
         }
 
     private fun resolveAccount(session: NextcloudSession): ResolvedAccount {
         val accountKey = NextcloudDocumentIds.accountKey(session)
         cachedAccount?.takeIf { it.accountKey == accountKey }?.let { return it }
-        return providerCall("Could not resolve the signed-in Nextcloud account.") {
+        return providerCall(
+            message = "Could not resolve the signed-in Nextcloud account.",
+            accountIdentity = accountKey,
+        ) {
             val info = runBlocking(Dispatchers.IO) { services.loadServerInfo(session) }
             ResolvedAccount(accountKey, info.userId).also { cachedAccount = it }
         }
     }
 
     private fun findDocument(session: NextcloudSession, account: ResolvedAccount, path: String): NextcloudFile =
-        providerCall("The requested Nextcloud document was not found.") {
+        providerCall(
+            message = "The requested Nextcloud document was not found.",
+            accountIdentity = account.accountKey,
+        ) {
             val parent = NextcloudDocumentIds.parentPath(path)
             runBlocking(Dispatchers.IO) {
                 services.listFiles(session, account.userId, parent)
@@ -694,7 +709,11 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             }
     }
 
-    private inline fun <T> providerCall(message: String, operation: () -> T): T = try {
+    private inline fun <T> providerCall(
+        message: String,
+        accountIdentity: String? = null,
+        operation: () -> T,
+    ): T = try {
         operation()
     } catch (failure: FileNotFoundException) {
         throw failure
@@ -703,6 +722,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         recordProviderFailure(
             operation = "documents.provider-call",
             failure = failure,
+            accountIdentity = accountIdentity,
             fields = listOf(SupportDiagnosticFieldDraft("provider_message", message)),
         )
         throw FileNotFoundException(message).also { it.initCause(failure) }
@@ -711,25 +731,29 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     private fun recordProviderFailure(
         operation: String,
         failure: Throwable,
+        accountIdentity: String? = null,
         remotePath: String? = null,
         fields: List<SupportDiagnosticFieldDraft> = emptyList(),
     ) {
         runCatching {
-            services.recordSupportDiagnostic(
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Error,
-                    component = SupportDiagnosticComponent.VirtualFiles,
-                    operation = operation,
-                    outcome = "failed",
-                    fields = buildList {
-                        remotePath?.let {
-                            add(SupportDiagnosticFieldDraft("remote_path", it, SupportDiagnosticValuePrivacy.RemotePath))
-                        }
-                        addAll(fields)
-                    },
-                    exception = failure.toSupportDiagnosticExceptionDraft(),
-                ),
+            val event = SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Error,
+                component = SupportDiagnosticComponent.VirtualFiles,
+                operation = operation,
+                outcome = "failed",
+                fields = buildList {
+                    remotePath?.let {
+                        add(SupportDiagnosticFieldDraft("remote_path", it, SupportDiagnosticValuePrivacy.RemotePath))
+                    }
+                    addAll(fields)
+                },
+                exception = failure.toSupportDiagnosticExceptionDraft(),
             )
+            if (accountIdentity == null) {
+                services.recordSupportDiagnostic(event)
+            } else {
+                services.recordSupportDiagnosticForAccountIdentity(accountIdentity, event)
+            }
         }
     }
 

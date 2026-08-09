@@ -41,6 +41,7 @@ class AsyncJvmSupportDiagnostics(
     private var initializationFailed = false
 
     private var activeAccountIdentity: String? = null
+    private var drainScheduled = false
 
     init {
         scope.launch {
@@ -52,6 +53,7 @@ class AsyncJvmSupportDiagnostics(
                     synchronized(lock) {
                         initializationFailed = true
                         pending.clear()
+                        drainScheduled = false
                     }
                     ready.completeExceptionally(failure)
                 }
@@ -118,7 +120,9 @@ class AsyncJvmSupportDiagnostics(
         submit(PendingOperation.SetActiveAccount(normalized))
     }
 
-    fun summary(): SupportDiagnosticsSummary = delegate?.summary() ?: SupportDiagnosticsSummary(
+    fun summary(): SupportDiagnosticsSummary = delegate?.summary() ?: unavailableSummary()
+
+    private fun unavailableSummary(): SupportDiagnosticsSummary = SupportDiagnosticsSummary(
         available = false,
         eventCount = 0,
         warningCount = 0,
@@ -137,8 +141,16 @@ class AsyncJvmSupportDiagnostics(
 
     fun revisions(): StateFlow<Long> = revision.asStateFlow()
 
+    suspend fun loadSummary(): SupportDiagnosticsSummary = runCatching {
+        withContext(dispatcher) {
+            ready.await().also(::drainPendingSnapshot).summary()
+        }
+    }.getOrElse { unavailableSummary() }
+
     suspend fun clear(): Boolean = runCatching {
-        withContext(dispatcher) { ready.await().clear() }
+        withContext(dispatcher) {
+            ready.await().also(::drainPendingSnapshot).clear()
+        }
     }.getOrDefault(false).also { publishRevision() }
 
     suspend fun writeBundle(
@@ -146,7 +158,7 @@ class AsyncJvmSupportDiagnostics(
         reproductionSteps: String,
         featureState: List<SupportDiagnosticFieldDraft>,
     ): File = withContext(dispatcher) {
-        ready.await().writeBundle(destination, reproductionSteps, featureState)
+        ready.await().also(::drainPendingSnapshot).writeBundle(destination, reproductionSteps, featureState)
     }
 
     override fun close() {
@@ -168,12 +180,15 @@ class AsyncJvmSupportDiagnostics(
             val operations = pending.toList()
             pending.clear()
             delegate = created
+            drainScheduled = true
             operations
         }
         val pendingHadCrash = queued.any(PendingOperation::isUncaughtException)
         queued.forEach { operation -> operation.apply(created) }
         when {
-            pendingHadCrash -> coldCrashMarker.delete()
+            pendingHadCrash -> {
+                if (created.summary().available) coldCrashMarker.delete()
+            }
             coldCrashMarker.isFile -> {
                 created.record(
                     SupportDiagnosticEventDraft(
@@ -183,24 +198,66 @@ class AsyncJvmSupportDiagnostics(
                         outcome = "recovered",
                     ),
                 )
-                coldCrashMarker.delete()
+                if (created.summary().available) coldCrashMarker.delete()
             }
         }
+        scheduleQueuedDrain(created)
     }
 
     private fun submit(operation: PendingOperation) {
-        val current = synchronized(lock) {
+        val drain = synchronized(lock) {
             if (initializationFailed) return
-            delegate ?: run {
-                enqueue(operation)
-                null
+            enqueue(operation)
+            delegate?.takeIf {
+                if (drainScheduled) {
+                    false
+                } else {
+                    drainScheduled = true
+                    true
+                }
             }
         }
-        if (current != null) {
-            scope.launch {
-                operation.apply(current)
-                publishRevision()
+        if (drain != null) {
+            scope.launch { drainPendingBatch(drain) }
+        }
+    }
+
+    private fun drainPendingBatch(current: JvmSupportDiagnostics) {
+        val batch = synchronized(lock) {
+            buildList {
+                repeat(minOf(MAX_DRAIN_BATCH_SIZE, pending.size)) {
+                    add(pending.removeFirst())
+                }
             }
+        }
+        if (batch.isNotEmpty()) {
+            batch.forEach { operation -> operation.apply(current) }
+            publishRevision()
+        }
+        scheduleQueuedDrain(current)
+    }
+
+    private fun drainPendingSnapshot(current: JvmSupportDiagnostics) {
+        val snapshot = synchronized(lock) {
+            pending.toList().also { pending.clear() }
+        }
+        if (snapshot.isNotEmpty()) {
+            snapshot.forEach { operation -> operation.apply(current) }
+            publishRevision()
+        }
+    }
+
+    private fun scheduleQueuedDrain(current: JvmSupportDiagnostics) {
+        val shouldContinue = synchronized(lock) {
+            if (pending.isEmpty()) {
+                drainScheduled = false
+                false
+            } else {
+                true
+            }
+        }
+        if (shouldContinue) {
+            scope.launch { drainPendingBatch(current) }
         }
     }
 
@@ -259,6 +316,7 @@ class AsyncJvmSupportDiagnostics(
 
     private companion object {
         const val MAX_PENDING_OPERATIONS = 512
+        const val MAX_DRAIN_BATCH_SIZE = 32
         const val COLD_CRASH_INITIALIZATION_WAIT_MILLIS = 2_000L
         const val CLOSE_WAIT_SECONDS = 2L
         const val COLD_CRASH_MARKER_FILE = "pending-cold-start-crash-v1"

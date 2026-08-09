@@ -50,7 +50,8 @@ internal class NextcloudFileSyncWorker(
         val engine = AndroidFileSyncEngine(applicationContext)
         val result = runCatching { engine.runPair(session, userId, pairId) }
             .getOrElse { failure ->
-                services.recordSupportDiagnostic(
+                services.recordSupportDiagnosticForAccountIdentity(
+                    accountId,
                     SupportDiagnosticEventDraft(
                         severity = SupportDiagnosticSeverity.Error,
                         component = SupportDiagnosticComponent.Sync,
@@ -82,7 +83,8 @@ internal class NextcloudFileSyncWorker(
             )
         }
         if (pair.failedCount > 0 || result is FileSyncCenterActionResult.Rejected) {
-            services.recordSupportDiagnostic(
+            services.recordSupportDiagnosticForAccountIdentity(
+                accountId,
                 SupportDiagnosticEventDraft(
                     severity = SupportDiagnosticSeverity.Warning,
                     component = SupportDiagnosticComponent.Sync,

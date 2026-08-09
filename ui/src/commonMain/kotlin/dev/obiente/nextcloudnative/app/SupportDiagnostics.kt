@@ -358,7 +358,9 @@ private val BEARER_OR_BASIC_VALUE = Regex("(?i)\\b(?:bearer|basic)\\s+[A-Za-z0-9
 private val URL_VALUE = Regex("(?i)\\b(?:https?|dav|webdav)://[^\\s\"'<>]+")
 private val EMAIL_VALUE = Regex("(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b")
 private val WINDOWS_PATH_VALUE = Regex("(?i)(?:[A-Z]:[\\\\/]|\\\\\\\\)[^\\r\\n\"<>|,;)]{2,}")
-private val UNIX_PATH_VALUE = Regex("(?<![A-Za-z0-9])/(?:[^\\s/:]+/)+[^\\s,;)]*")
+private val UNIX_PATH_VALUE = Regex(
+    "(?<![A-Za-z0-9])/(?:[^\\s/:\"'<>|]+/)*[^\\s/:\"'<>|,;)]+",
+)
 private val RELATIVE_PATH_VALUE = Regex("(?<![A-Za-z0-9:/])(?:[^\\s/:]+/)+[^\\s,;)]*")
 private val FILE_NAME_VALUE = Regex(
     "(?i)(?<![A-Za-z0-9._-])[^\\s/\\\\]+\\.(?:[A-Z][A-Z0-9]{0,11}|7Z)(?![A-Za-z0-9._-])",

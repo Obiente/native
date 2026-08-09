@@ -196,6 +196,24 @@ class JvmSupportDiagnosticsTest {
     }
 
     @Test
+    fun previousColdStartCrashMarkerSurvivesFailedRecoveryPersistence() {
+        val root = createTempDirectory("support-diagnostics-cold-crash-recovery-failure").toFile()
+        val marker = File(root, "pending-cold-start-crash-v1")
+        marker.writeText("pending\n")
+        assertTrue(File(root, "events-v1.jsonl").mkdir())
+        val diagnostics = AsyncJvmSupportDiagnostics(
+            root = root,
+            environment = environment(),
+            workerName = "support-diagnostics-test",
+        )
+
+        runBlocking { diagnostics.loadSummary() }
+        diagnostics.close()
+
+        assertEquals("pending\n", marker.readText())
+    }
+
+    @Test
     fun oneEvictionDoesNotTriggerAFullHistoryRewrite() {
         assertFalse(
             shouldCompactSupportDiagnosticHistory(

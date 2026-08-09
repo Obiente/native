@@ -113,6 +113,18 @@ class SupportDiagnosticsTest {
     }
 
     @Test
+    fun redactsSingleComponentAbsolutePaths() {
+        val privatePaths = listOf("/Family", "/TaxRecords")
+
+        val sanitized = sanitizer.sanitizeUserDescription(
+            "Opening ${privatePaths.joinToString(" and ")} fails.",
+        )
+
+        privatePaths.forEach { path -> assertFalse(path in sanitized, path) }
+        assertEquals(2, "<local-path:".toRegex().findAll(sanitized).count())
+    }
+
+    @Test
     fun redactsCompleteExplicitlyLabeledMultiwordCredentials() {
         val words = listOf("correct", "horse", "battery", "staple")
 

@@ -2725,8 +2725,8 @@ class DesktopNextcloudServices(
 
     override fun cancelAppUpdate(): Boolean = appUpdater.cancelUpdate()
 
-    override fun supportDiagnosticsSummary(): SupportDiagnosticsSummary =
-        supportDiagnostics.summary()
+    override suspend fun loadSupportDiagnosticsSummary(): SupportDiagnosticsSummary =
+        supportDiagnostics.loadSummary()
 
     override fun supportDiagnosticsRevisions() = supportDiagnostics.revisions()
 
@@ -2762,22 +2762,27 @@ class DesktopNextcloudServices(
     fun installUncaughtDiagnosticHandler() {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
-            supportDiagnostics.recordBeforeProcessExit(
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Error,
-                    component = SupportDiagnosticComponent.App,
-                    operation = "app.uncaught-exception",
-                    outcome = "failed",
-                    fields = listOf(
-                        SupportDiagnosticFieldDraft("awt_thread", EventQueue.isDispatchThread().toString()),
+            try {
+                supportDiagnostics.recordBeforeProcessExit(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.App,
+                        operation = "app.uncaught-exception",
+                        outcome = "failed",
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft("awt_thread", EventQueue.isDispatchThread().toString()),
+                        ),
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
                     ),
-                    exception = failure.toSupportDiagnosticExceptionDraft(),
-                ),
-            )
-            if (previous != null) {
-                previous.uncaughtException(thread, failure)
-            } else {
-                failure.printStackTrace(System.err)
+                )
+            } catch (_: Throwable) {
+                // Crash reporting must never prevent the platform handler from terminating the process.
+            } finally {
+                if (previous != null) {
+                    previous.uncaughtException(thread, failure)
+                } else {
+                    failure.printStackTrace(System.err)
+                }
             }
         }
     }

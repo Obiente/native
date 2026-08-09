@@ -464,7 +464,7 @@ interface NextcloudPlatformServices {
     fun saveStartOnLoginPreference(enabled: Boolean): String? = null
 
     /** Summary of bounded, already-sanitized application diagnostics kept in private storage. */
-    fun supportDiagnosticsSummary(): SupportDiagnosticsSummary = SupportDiagnosticsSummary(
+    suspend fun loadSupportDiagnosticsSummary(): SupportDiagnosticsSummary = SupportDiagnosticsSummary(
         available = false,
         eventCount = 0,
         warningCount = 0,

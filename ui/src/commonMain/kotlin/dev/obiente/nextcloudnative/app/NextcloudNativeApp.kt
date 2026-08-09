@@ -12303,7 +12303,25 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
     val diagnosticsRevision by remember(services) {
         services.supportDiagnosticsRevisions()
     }.collectAsState(0L)
-    val summary = remember(services, diagnosticsRevision, refresh) { services.supportDiagnosticsSummary() }
+    var summary by remember(services) {
+        mutableStateOf(
+            SupportDiagnosticsSummary(
+                available = false,
+                eventCount = 0,
+                warningCount = 0,
+                errorCount = 0,
+                oldestEventAtEpochMillis = null,
+                newestEventAtEpochMillis = null,
+                components = emptySet(),
+                storedBytes = 0L,
+                includedFiles = SUPPORT_BUNDLE_INCLUDED_FILES,
+                explanation = "Loading private diagnostic history...",
+            ),
+        )
+    }
+    LaunchedEffect(services, diagnosticsRevision, refresh) {
+        summary = services.loadSupportDiagnosticsSummary()
+    }
     var reproductionSteps by rememberSaveable { mutableStateOf("") }
     var exporting by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }

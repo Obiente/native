@@ -515,7 +515,7 @@ internal class AndroidNextcloudServices(
 
     override fun cancelAppUpdate(): Boolean = projectContent.cancelUpdate()
 
-    override fun supportDiagnosticsSummary(): SupportDiagnosticsSummary = supportDiagnostics.summary()
+    override suspend fun loadSupportDiagnosticsSummary(): SupportDiagnosticsSummary = supportDiagnostics.loadSummary()
 
     override fun supportDiagnosticsRevisions() = supportDiagnostics.revisions()
 
@@ -536,6 +536,13 @@ internal class AndroidNextcloudServices(
 
     override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) {
         supportDiagnostics.record(event)
+    }
+
+    internal fun recordSupportDiagnosticForAccountIdentity(
+        accountIdentity: String,
+        event: SupportDiagnosticEventDraft,
+    ) {
+        supportDiagnostics.recordForAccountIdentity(accountIdentity, event)
     }
 
     override fun registerSupportDiagnosticPrivateValue(value: String?) {
@@ -2940,23 +2947,28 @@ internal class AndroidNextcloudServices(
         val diagnostics = supportDiagnostics
         val mainThread = appContext.mainLooper.thread
         Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
-            diagnostics.recordBeforeProcessExit(
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Error,
-                    component = SupportDiagnosticComponent.App,
-                    operation = "app.uncaught-exception",
-                    outcome = "failed",
-                    fields = listOf(
-                        SupportDiagnosticFieldDraft("main_thread", (thread === mainThread).toString()),
+            try {
+                diagnostics.recordBeforeProcessExit(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.App,
+                        operation = "app.uncaught-exception",
+                        outcome = "failed",
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft("main_thread", (thread === mainThread).toString()),
+                        ),
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
                     ),
-                    exception = failure.toSupportDiagnosticExceptionDraft(),
-                ),
-            )
-            if (previous != null) {
-                previous.uncaughtException(thread, failure)
-            } else {
-                android.os.Process.killProcess(android.os.Process.myPid())
-                kotlin.system.exitProcess(10)
+                )
+            } catch (_: Throwable) {
+                // Crash reporting must never prevent the platform handler from terminating the process.
+            } finally {
+                if (previous != null) {
+                    previous.uncaughtException(thread, failure)
+                } else {
+                    android.os.Process.killProcess(android.os.Process.myPid())
+                    kotlin.system.exitProcess(10)
+                }
             }
         }
     }
