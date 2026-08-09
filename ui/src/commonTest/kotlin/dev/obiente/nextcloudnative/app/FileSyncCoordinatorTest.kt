@@ -431,9 +431,57 @@ class FileSyncCoordinatorTest {
         )
     }
 
+    @Test
+    fun `exhausted failures cannot crowd transfers out of a reserved desktop batch`() {
+        val exhaustedLocal = (0 until 10_000).map { index ->
+            local("Archive/file-${index.toString().padStart(5, '0')}.jpg", "local-$index")
+        }
+        val exhaustedWork = exhaustedLocal.mapIndexed { index, entry ->
+            FileSyncWorkItem(
+                id = index + 1L,
+                relativePath = entry.relativePath,
+                observedLocal = entry,
+                observedRemote = null,
+                observedBaseline = null,
+                operation = FileSyncOperation.Upload(entry.relativePath, expectedRemoteEtag = null),
+                state = FileSyncExecutionState.Failed,
+                attemptCount = MAX_FILE_SYNC_ATTEMPTS,
+                lastAttemptEpochMillis = 9L,
+                failureMessage = "Automatic retries exhausted",
+            )
+        }
+        val initial = state(
+            workItems = exhaustedWork,
+            nextWorkId = 10_001L,
+        )
+
+        val scanned = scanFileSyncPair(
+            initial,
+            PAIR_ID,
+            localEntries = exhaustedLocal,
+            remoteEntries = listOf(remote("Remote/download.jpg", "remote-download")),
+            nowEpochMillis = 10L,
+            maximumWorkItems = 20_000,
+            reservedNonExecutableWorkItems = 10_000,
+        ).pair()
+
+        assertEquals(10_001, scanned.workItems.size)
+        assertEquals(
+            10_000,
+            scanned.workItems.count {
+                it.state == FileSyncExecutionState.Failed && it.attemptCount == MAX_FILE_SYNC_ATTEMPTS
+            },
+        )
+        assertIs<FileSyncOperation.Download>(
+            scanned.workItems.single { it.state == FileSyncExecutionState.Ready }.operation,
+        )
+    }
+
     private fun state(
         baselines: List<FileSyncBaseline> = emptyList(),
         configuration: FileSyncConfiguration = FileSyncConfiguration(deviceLabel = "Test phone"),
+        workItems: List<FileSyncWorkItem> = emptyList(),
+        nextWorkId: Long = 1L,
     ) = FileSyncCoordinatorState(
         pairs = listOf(
             FileSyncPair(
@@ -443,6 +491,8 @@ class FileSyncCoordinatorTest {
                 remoteRootPath = "Notes",
                 configuration = configuration,
                 baselines = baselines,
+                workItems = workItems,
+                nextWorkId = nextWorkId,
             ),
         ),
     )

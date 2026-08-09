@@ -261,8 +261,10 @@ fun scanFileSyncPair(
         sortedOperations.forEach { operation ->
             val existing = stableExistingWork(operation)
             val effectiveOperation = existing?.operation ?: operation
+            val canRunAutomatically = effectiveOperation.isExecutable() &&
+                (existing == null || existing.canRunAutomatically())
             when {
-                effectiveOperation.isExecutable() && executable.size < maximumExecutableWorkItems ->
+                canRunAutomatically && executable.size < maximumExecutableWorkItems ->
                     executable += operation
                 existing != null && retainedNonExecutable.size < reservedNonExecutableWorkItems ->
                     retainedNonExecutable += operation
@@ -666,6 +668,15 @@ private fun FileSyncOperation.initialExecutionState(): FileSyncExecutionState = 
 
 private fun FileSyncOperation.isExecutable(): Boolean =
     this !is FileSyncOperation.NeedsDecision && this !is FileSyncOperation.Skipped
+
+private fun FileSyncWorkItem.canRunAutomatically(): Boolean = when (state) {
+    FileSyncExecutionState.Ready -> true
+    FileSyncExecutionState.Failed -> attemptCount < MAX_FILE_SYNC_ATTEMPTS
+    FileSyncExecutionState.AwaitingDecision,
+    FileSyncExecutionState.Running,
+    FileSyncExecutionState.Skipped,
+    -> false
+}
 
 private fun FileSyncOperation.executionFootprint(): Set<String> = when (this) {
     is FileSyncOperation.KeepBoth -> setOf(relativePath, localConflictPath, remoteConflictPath)
