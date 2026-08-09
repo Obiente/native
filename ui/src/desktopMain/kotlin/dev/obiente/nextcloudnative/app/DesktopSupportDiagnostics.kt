@@ -26,11 +26,12 @@ internal class DesktopSupportBundleExporter(
                 )
             }
             ?: return@withContext SupportDiagnosticsExportResult.Cancelled
-        val normalized = destination.absoluteFile.normalizeSupportBundleDestination()
         runCatching {
+            val normalized = destination.absoluteFile.normalizeSupportBundleDestination()
             diagnostics.writeBundle(normalized, reproductionSteps, featureState)
+            normalized
         }.fold(
-            onSuccess = {
+            onSuccess = { normalized ->
                 SupportDiagnosticsExportResult.Exported(normalized.absolutePath)
             },
             onFailure = { failure ->
@@ -86,22 +87,36 @@ internal fun createDesktopSupportDiagnostics(
 
 internal fun installDesktopUncaughtDiagnosticHandler(diagnostics: AsyncJvmSupportDiagnostics) {
     DESKTOP_CRASH_DIAGNOSTICS.set(diagnostics)
+    installDesktopDiagnosticHandler()
+}
+
+internal fun installDesktopBootstrapUncaughtDiagnosticHandler(root: File) {
+    DESKTOP_BOOTSTRAP_CRASH_ROOT.set(root.absoluteFile.normalize())
+    installDesktopDiagnosticHandler()
+}
+
+private fun installDesktopDiagnosticHandler() {
     if (!DESKTOP_CRASH_HANDLER_INSTALLED.compareAndSet(false, true)) return
     val previous = Thread.getDefaultUncaughtExceptionHandler()
     Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
         try {
-            DESKTOP_CRASH_DIAGNOSTICS.get()?.recordBeforeProcessExit(
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Error,
-                    component = SupportDiagnosticComponent.App,
-                    operation = "app.uncaught-exception",
-                    outcome = "failed",
-                    fields = listOf(
-                        SupportDiagnosticFieldDraft("awt_thread", EventQueue.isDispatchThread().toString()),
+            val diagnostics = DESKTOP_CRASH_DIAGNOSTICS.get()
+            if (diagnostics == null) {
+                DESKTOP_BOOTSTRAP_CRASH_ROOT.get()?.let(::persistJvmSupportDiagnosticsColdCrashMarker)
+            } else {
+                diagnostics.recordBeforeProcessExit(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.App,
+                        operation = "app.uncaught-exception",
+                        outcome = "failed",
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft("awt_thread", EventQueue.isDispatchThread().toString()),
+                        ),
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
                     ),
-                    exception = failure.toSupportDiagnosticExceptionDraft(),
-                ),
-            )
+                )
+            }
         } catch (_: Throwable) {
             // Crash reporting must never prevent the platform handler from terminating the process.
         } finally {
@@ -145,8 +160,12 @@ private fun defaultDesktopExportDirectory(): File? = sequenceOf(
 
 private fun File.normalizeSupportBundleDestination(): File {
     val name = if (name.endsWith(".zip", ignoreCase = true)) name else "$name.zip"
-    require(name.length <= MAX_SUPPORT_BUNDLE_FILE_NAME_LENGTH)
-    require(name.none { it == '/' || it == '\\' || it.code < 0x20 })
+    require(name.length <= MAX_SUPPORT_BUNDLE_FILE_NAME_LENGTH) {
+        "The selected report file name is too long."
+    }
+    require(name.none { it == '/' || it == '\\' || it.code < 0x20 }) {
+        "The selected report file name contains unsupported characters."
+    }
     val parent = requireNotNull(parentFile).absoluteFile
     require(parent.isDirectory) { "The selected export folder is unavailable." }
     return File(parent, name).absoluteFile
@@ -155,3 +174,4 @@ private fun File.normalizeSupportBundleDestination(): File {
 private const val MAX_SUPPORT_BUNDLE_FILE_NAME_LENGTH = 180
 private val DESKTOP_CRASH_HANDLER_INSTALLED = AtomicBoolean(false)
 private val DESKTOP_CRASH_DIAGNOSTICS = AtomicReference<AsyncJvmSupportDiagnostics?>()
+private val DESKTOP_BOOTSTRAP_CRASH_ROOT = AtomicReference<File?>()

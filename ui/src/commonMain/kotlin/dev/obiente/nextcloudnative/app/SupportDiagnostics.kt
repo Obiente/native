@@ -191,7 +191,7 @@ internal class SupportDiagnosticSanitizer(
 
     fun registerPrivateValue(value: String?) {
         value?.trim()
-            ?.takeIf { it.length in MIN_PRIVATE_VALUE_LENGTH..MAX_PRIVATE_VALUE_LENGTH }
+            ?.takeIf { it.isNotEmpty() && it.length <= MAX_PRIVATE_VALUE_LENGTH }
             ?.let { privateValue ->
                 privateValues.remove(privateValue)
                 privateValues.add(privateValue)
@@ -284,7 +284,12 @@ internal class SupportDiagnosticSanitizer(
                 }
             }
         privateValues.sortedByDescending(String::length).forEach { privateValue ->
-            value = value.replace(privateValue, privateAlias("private", privateValue), ignoreCase = true)
+            val alias = privateAlias("private", privateValue)
+            value = if (privateValue.length >= MIN_UNBOUNDED_PRIVATE_VALUE_LENGTH) {
+                value.replace(privateValue, alias, ignoreCase = true)
+            } else {
+                value.replaceShortPrivateValue(privateValue, alias)
+            }
         }
         value = value.replace(AUTHORIZATION_VALUE) { match ->
             "${match.groupValues[1]}=<secret>"
@@ -313,6 +318,28 @@ internal class SupportDiagnosticSanitizer(
         }
         .ifBlank { "Unknown" }
         .take(maximumLength)
+
+    private fun String.replaceShortPrivateValue(privateValue: String, alias: String): String = buildString(length) {
+        var cursor = 0
+        while (cursor < this@replaceShortPrivateValue.length) {
+            val match = this@replaceShortPrivateValue.indexOf(privateValue, cursor, ignoreCase = true)
+            if (match < 0) {
+                append(this@replaceShortPrivateValue, cursor, this@replaceShortPrivateValue.length)
+                break
+            }
+            append(this@replaceShortPrivateValue, cursor, match)
+            val end = match + privateValue.length
+            val startsAtBoundary = match == 0 || !this@replaceShortPrivateValue[match - 1].isLetterOrDigit()
+            val endsAtBoundary = end == this@replaceShortPrivateValue.length ||
+                !this@replaceShortPrivateValue[end].isLetterOrDigit()
+            if (startsAtBoundary && endsAtBoundary) {
+                append(alias)
+            } else {
+                append(this@replaceShortPrivateValue, match, end)
+            }
+            cursor = end
+        }
+    }
 }
 
 internal const val SUPPORT_DIAGNOSTIC_EVENT_SCHEMA_VERSION = 1
@@ -328,7 +355,7 @@ internal val SUPPORT_BUNDLE_INCLUDED_FILES = listOf(
     "manifest.json",
 )
 
-private const val MIN_PRIVATE_VALUE_LENGTH = 3
+private const val MIN_UNBOUNDED_PRIVATE_VALUE_LENGTH = 3
 private const val MAX_PRIVATE_VALUE_LENGTH = 4_096
 private const val MAX_REGISTERED_PRIVATE_VALUES = 128
 private const val MAX_SUPPORT_DIAGNOSTIC_RAW_TEXT_LENGTH = 16_384

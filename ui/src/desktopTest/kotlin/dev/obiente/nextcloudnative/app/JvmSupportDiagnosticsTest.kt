@@ -184,7 +184,7 @@ class JvmSupportDiagnosticsTest {
     @Test
     fun coldStartCrashMarkerIsRecoveredIntoTheNextReport() {
         val root = createTempDirectory("support-diagnostics-cold-crash").toFile()
-        File(root, "pending-cold-start-crash-v1").writeText("pending\n")
+        persistJvmSupportDiagnosticsColdCrashMarker(root)
         val diagnostics = AsyncJvmSupportDiagnostics(
             root = root,
             environment = environment(),
@@ -201,7 +201,7 @@ class JvmSupportDiagnosticsTest {
                 .use { it.readText() }
             assertTrue("app.previous-cold-start-crash" in events)
         }
-        assertFalse(File(root, "pending-cold-start-crash-v1").exists())
+        assertFalse(File(root, SUPPORT_DIAGNOSTICS_COLD_CRASH_MARKER_FILE).exists())
     }
 
     @Test

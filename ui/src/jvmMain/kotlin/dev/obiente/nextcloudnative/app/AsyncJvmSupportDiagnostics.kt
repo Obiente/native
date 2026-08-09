@@ -33,7 +33,7 @@ class AsyncJvmSupportDiagnostics(
     private val initializationComplete = CountDownLatch(1)
     private val revision = MutableStateFlow(0L)
     private val pending = ArrayDeque<PendingOperation>()
-    private val coldCrashMarker = File(this.root, COLD_CRASH_MARKER_FILE)
+    private val coldCrashMarker = File(this.root, SUPPORT_DIAGNOSTICS_COLD_CRASH_MARKER_FILE)
 
     @Volatile
     private var delegate: JvmSupportDiagnostics? = null
@@ -288,13 +288,7 @@ class AsyncJvmSupportDiagnostics(
     }
 
     private fun persistColdCrashMarker() {
-        runCatching {
-            require(root.isDirectory || root.mkdirs())
-            FileOutputStream(coldCrashMarker).use { output ->
-                output.write(COLD_CRASH_MARKER_CONTENT)
-                output.fd.sync()
-            }
-        }
+        persistJvmSupportDiagnosticsColdCrashMarker(root)
     }
 
     private fun publishRevision() {
@@ -334,7 +328,19 @@ class AsyncJvmSupportDiagnostics(
         const val MAX_DRAIN_BATCH_SIZE = 32
         const val COLD_CRASH_INITIALIZATION_WAIT_MILLIS = 2_000L
         const val CLOSE_WAIT_SECONDS = 2L
-        const val COLD_CRASH_MARKER_FILE = "pending-cold-start-crash-v1"
-        val COLD_CRASH_MARKER_CONTENT = "pending\n".encodeToByteArray()
     }
 }
+
+internal fun persistJvmSupportDiagnosticsColdCrashMarker(root: File) {
+    runCatching {
+        val normalizedRoot = root.absoluteFile.normalize()
+        require(normalizedRoot.isDirectory || normalizedRoot.mkdirs())
+        FileOutputStream(File(normalizedRoot, SUPPORT_DIAGNOSTICS_COLD_CRASH_MARKER_FILE)).use { output ->
+            output.write(SUPPORT_DIAGNOSTICS_COLD_CRASH_MARKER_CONTENT)
+            output.fd.sync()
+        }
+    }
+}
+
+internal const val SUPPORT_DIAGNOSTICS_COLD_CRASH_MARKER_FILE = "pending-cold-start-crash-v1"
+private val SUPPORT_DIAGNOSTICS_COLD_CRASH_MARKER_CONTENT = "pending\n".encodeToByteArray()

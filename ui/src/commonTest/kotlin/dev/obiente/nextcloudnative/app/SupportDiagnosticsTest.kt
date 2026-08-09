@@ -96,6 +96,22 @@ class SupportDiagnosticsTest {
     }
 
     @Test
+    fun redactsShortRegisteredAccountValuesOnlyAtTextBoundaries() {
+        sanitizer.registerPrivateValue("xy")
+        sanitizer.registerPrivateValue("q")
+
+        val sanitized = sanitizer.sanitizeUserDescription(
+            "Signed in as xy and account q failed while proxy and opaque remained available.",
+        )
+
+        assertFalse("as xy and" in sanitized)
+        assertFalse("account q failed" in sanitized)
+        assertTrue("proxy" in sanitized)
+        assertTrue("opaque" in sanitized)
+        assertEquals(2, "<private:".toRegex().findAll(sanitized).count())
+    }
+
+    @Test
     fun sanitizesBareBracketedAndZoneQualifiedIpv6Addresses() {
         val addresses = listOf(
             "2001:db8::1",

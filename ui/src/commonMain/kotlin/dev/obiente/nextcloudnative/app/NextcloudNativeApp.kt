@@ -12495,15 +12495,22 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                         status = null
                         refresh += 1
                         scope.launch {
-                            status = when (val result = services.exportSupportDiagnostics(reproductionSteps)) {
-                                is SupportDiagnosticsExportResult.Exported ->
-                                    "Report prepared: ${result.destination}"
-                                SupportDiagnosticsExportResult.Cancelled -> "Report export cancelled."
-                                is SupportDiagnosticsExportResult.Failed -> result.message
-                                is SupportDiagnosticsExportResult.Unsupported -> result.reason
+                            try {
+                                status = when (val result = services.exportSupportDiagnostics(reproductionSteps)) {
+                                    is SupportDiagnosticsExportResult.Exported ->
+                                        "Report prepared: ${result.destination}"
+                                    SupportDiagnosticsExportResult.Cancelled -> "Report export cancelled."
+                                    is SupportDiagnosticsExportResult.Failed -> result.message
+                                    is SupportDiagnosticsExportResult.Unsupported -> result.reason
+                                }
+                            } catch (cancellation: CancellationException) {
+                                throw cancellation
+                            } catch (_: Throwable) {
+                                status = "The anonymized support report could not be saved."
+                            } finally {
+                                exporting = false
+                                refresh += 1
                             }
-                            exporting = false
-                            refresh += 1
                         }
                     },
                 ) {

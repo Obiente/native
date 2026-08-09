@@ -1341,22 +1341,15 @@ class DesktopNextcloudServices(
             backgroundFileSyncJob = serviceScope.launch {
                 restoreConfirmedStartOnLoginRegistration()
                 while (isActive) {
-                    val syncSession = loadSession()
                     if (!isFileSyncPaused()) {
-                        runCatching {
-                            syncAllFileSyncPairs(DesktopFileSyncRunSource.Background, syncSession)
-                        }.onFailure { failure ->
-                            publishBackgroundFileSyncFailure(
-                                syncSession?.let(::desktopFileCacheAccountId),
-                                failure,
-                            )
-                        }
+                        runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
                     }
                     val virtualFolderSession = loadSession()
                     runCatching { reconcileConfiguredVirtualFolders(virtualFolderSession) }
                         .onFailure { failure ->
-                            publishBackgroundFileSyncFailure(
+                            publishFileSyncRunFailure(
                                 virtualFolderSession?.let(::desktopFileCacheAccountId),
+                                DesktopFileSyncRunSource.Background,
                                 failure,
                             )
                         }
@@ -2194,14 +2187,7 @@ class DesktopNextcloudServices(
         )
         if (!paused) {
             serviceScope.launch {
-                val session = loadSession()
-                runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Resume, session) }
-                    .onFailure { failure ->
-                        publishBackgroundFileSyncFailure(
-                            session?.let(::desktopFileCacheAccountId),
-                            failure,
-                        )
-                    }
+                runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Resume) }
             }
         }
     }
@@ -2215,89 +2201,99 @@ class DesktopNextcloudServices(
     }
 
     suspend fun syncAllFileSyncPairsFromTray(): FileSyncCenterActionResult =
-        syncAllFileSyncPairs(DesktopFileSyncRunSource.Tray, loadSession())
+        syncAllFileSyncPairs(DesktopFileSyncRunSource.Tray)
 
     private suspend fun syncAllFileSyncPairs(
         source: DesktopFileSyncRunSource,
-        capturedSession: NextcloudSession?,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncRunLock.withLock {
-        if (isFileSyncPaused()) {
-            return@withLock FileSyncCenterActionResult.Rejected("Desktop syncing is paused.")
-        }
-        val session = capturedSession
-            ?: return@withLock FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
-        val accountId = desktopFileCacheAccountId(session)
-        val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
-            return@withLock FileSyncCenterActionResult.Rejected(
-                failure.message ?: "Could not load the signed-in account.",
-            )
-        }
-        val initial = loadDesktopFileSyncCenter(session)
-        if (initial.pairs.isEmpty()) {
-            publishFileSyncTraySnapshot(initial, emptyList())
-            return@withLock FileSyncCenterActionResult.Completed("No desktop sync folders are configured.")
-        }
-        mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
-            phase = DesktopFileSyncTrayPhase.Syncing,
-            message = if (source == DesktopFileSyncRunSource.Background) {
-                "Checking for changes"
-            } else {
-                "Syncing all folders"
-            },
-            accountLabel = session.loginName,
-        )
+        var diagnosticAccountId: String? = null
         try {
-            var failures = 0
-            var waitingForConditions = 0
-            initial.pairs.forEach { pair ->
-                if (isFileSyncPaused()) return@forEach
-                fun runtimeAllowsPair(): Boolean =
-                    source == DesktopFileSyncRunSource.Tray ||
-                        desktopFileSyncRuntimeConditions().allows(pair.configuration)
-                if (!runtimeAllowsPair()) {
-                    waitingForConditions += 1
-                    return@forEach
+            fileSyncRunLock.withLock {
+                if (isFileSyncPaused()) {
+                    return@withLock FileSyncCenterActionResult.Rejected("Desktop syncing is paused.")
                 }
-                val result = try {
-                    fileSyncEngine.runPair(
-                        session,
-                        userId,
-                        pair.id,
-                        onProgress = { event -> publishFileSyncProgress(accountId, event) },
-                        shouldContinue = { !isFileSyncPaused() && runtimeAllowsPair() },
-                        resetExhaustedFailures = source == DesktopFileSyncRunSource.Tray,
+                val session = loadSession()
+                    ?: return@withLock FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
+                val accountId = desktopFileCacheAccountId(session)
+                diagnosticAccountId = accountId
+                val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
+                    return@withLock FileSyncCenterActionResult.Rejected(
+                        failure.message ?: "Could not load the signed-in account.",
                     )
-                } catch (cancellation: CancellationException) {
-                    throw cancellation
-                } catch (_: Throwable) {
-                    failures += 1
-                    return@forEach
                 }
-                if (result is FileSyncCenterActionResult.Rejected) failures += 1
-                if (source != DesktopFileSyncRunSource.Tray && !runtimeAllowsPair()) {
-                    waitingForConditions += 1
+                val initial = loadDesktopFileSyncCenter(session)
+                if (initial.pairs.isEmpty()) {
+                    publishFileSyncTraySnapshot(initial, emptyList())
+                    return@withLock FileSyncCenterActionResult.Completed("No desktop sync folders are configured.")
                 }
-            }
-            if (failures == 0) {
-                FileSyncCenterActionResult.Completed(
-                    if (waitingForConditions == 0) {
-                        "All desktop sync folders were checked."
+                mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+                    phase = DesktopFileSyncTrayPhase.Syncing,
+                    message = if (source == DesktopFileSyncRunSource.Background) {
+                        "Checking for changes"
                     } else {
-                        "$waitingForConditions desktop sync folder(s) are waiting for their network or power rules."
+                        "Syncing all folders"
                     },
+                    accountLabel = session.loginName,
                 )
-            } else {
-                FileSyncCenterActionResult.Rejected("$failures desktop sync folders need attention.")
+                try {
+                    var failures = 0
+                    var waitingForConditions = 0
+                    initial.pairs.forEach { pair ->
+                        if (isFileSyncPaused()) return@forEach
+                        fun runtimeAllowsPair(): Boolean =
+                            source == DesktopFileSyncRunSource.Tray ||
+                                desktopFileSyncRuntimeConditions().allows(pair.configuration)
+                        if (!runtimeAllowsPair()) {
+                            waitingForConditions += 1
+                            return@forEach
+                        }
+                        val result = try {
+                            fileSyncEngine.runPair(
+                                session,
+                                userId,
+                                pair.id,
+                                onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                                shouldContinue = { !isFileSyncPaused() && runtimeAllowsPair() },
+                                resetExhaustedFailures = source == DesktopFileSyncRunSource.Tray,
+                            )
+                        } catch (cancellation: CancellationException) {
+                            throw cancellation
+                        } catch (_: Throwable) {
+                            failures += 1
+                            return@forEach
+                        }
+                        if (result is FileSyncCenterActionResult.Rejected) failures += 1
+                        if (source != DesktopFileSyncRunSource.Tray && !runtimeAllowsPair()) {
+                            waitingForConditions += 1
+                        }
+                    }
+                    if (failures == 0) {
+                        FileSyncCenterActionResult.Completed(
+                            if (waitingForConditions == 0) {
+                                "All desktop sync folders were checked."
+                            } else {
+                                "$waitingForConditions desktop sync folder(s) are waiting for their network or power rules."
+                            },
+                        )
+                    } else {
+                        FileSyncCenterActionResult.Rejected("$failures desktop sync folders need attention.")
+                    }
+                } finally {
+                    runCatching {
+                        publishFileSyncTraySnapshot(
+                            loadDesktopFileSyncCenter(session),
+                            fileSyncEngine.loadTrayActivities(session),
+                        )
+                    }
+                }
             }
-        } finally {
-            runCatching {
-                publishFileSyncTraySnapshot(
-                    loadDesktopFileSyncCenter(session),
-                    fileSyncEngine.loadTrayActivities(session),
-                )
-            }
-        }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            publishFileSyncRunFailure(diagnosticAccountId, source, failure)
+            FileSyncCenterActionResult.Rejected(
+                failure.message ?: "The desktop sync check failed.",
+            )
         }
     }
 
@@ -2441,11 +2437,15 @@ class DesktopNextcloudServices(
         )
     }
 
-    private fun publishBackgroundFileSyncFailure(accountId: String?, failure: Throwable) {
+    private fun publishFileSyncRunFailure(
+        accountId: String?,
+        source: DesktopFileSyncRunSource,
+        failure: Throwable,
+    ) {
         val event = SupportDiagnosticEventDraft(
             severity = SupportDiagnosticSeverity.Error,
             component = SupportDiagnosticComponent.Sync,
-            operation = "sync.background-run",
+            operation = "sync.${source.name.lowercase()}-run",
             outcome = "failed",
             exception = failure.toSupportDiagnosticExceptionDraft(),
         )
