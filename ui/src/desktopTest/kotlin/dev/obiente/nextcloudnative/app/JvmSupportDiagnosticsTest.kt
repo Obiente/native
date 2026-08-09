@@ -173,6 +173,29 @@ class JvmSupportDiagnosticsTest {
     }
 
     @Test
+    fun coldStartCrashKeepsAFallbackMarkerWhenHistoryPersistenceFails() {
+        val root = createTempDirectory("support-diagnostics-cold-crash-failure").toFile()
+        assertTrue(File(root, "events-v1.jsonl").mkdir())
+        val diagnostics = AsyncJvmSupportDiagnostics(
+            root = root,
+            environment = environment(),
+            workerName = "support-diagnostics-test",
+        )
+
+        diagnostics.recordBeforeProcessExit(
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Error,
+                component = SupportDiagnosticComponent.App,
+                operation = "app.uncaught-exception",
+                outcome = "failed",
+            ),
+        )
+        diagnostics.close()
+
+        assertEquals("pending\n", File(root, "pending-cold-start-crash-v1").readText())
+    }
+
+    @Test
     fun oneEvictionDoesNotTriggerAFullHistoryRewrite() {
         assertFalse(
             shouldCompactSupportDiagnosticHistory(

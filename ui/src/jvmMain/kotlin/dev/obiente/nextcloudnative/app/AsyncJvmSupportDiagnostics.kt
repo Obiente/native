@@ -83,13 +83,17 @@ class AsyncJvmSupportDiagnostics(
         }
         if (current != null) {
             operation.apply(current)
+            if (!current.summary().available) persistColdCrashMarker()
             publishRevision()
             return
         }
         val initialized = runCatching {
             initializationComplete.await(COLD_CRASH_INITIALIZATION_WAIT_MILLIS, TimeUnit.MILLISECONDS)
         }.getOrDefault(false)
-        if (!initialized || delegate == null) persistColdCrashMarker()
+        val initializedDelegate = delegate
+        if (!initialized || initializedDelegate == null || !initializedDelegate.summary().available) {
+            persistColdCrashMarker()
+        }
     }
 
     fun registerPrivateValue(value: String?) {
@@ -160,13 +164,14 @@ class AsyncJvmSupportDiagnostics(
                 outcome = "started",
             ),
         )
-        val pendingHadCrash = synchronized(lock) {
-            val hadCrash = pending.any(PendingOperation::isUncaughtException)
-            pending.forEach { operation -> operation.apply(created) }
+        val queued = synchronized(lock) {
+            val operations = pending.toList()
             pending.clear()
             delegate = created
-            hadCrash
+            operations
         }
+        val pendingHadCrash = queued.any(PendingOperation::isUncaughtException)
+        queued.forEach { operation -> operation.apply(created) }
         when {
             pendingHadCrash -> coldCrashMarker.delete()
             coldCrashMarker.isFile -> {
