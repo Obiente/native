@@ -259,6 +259,43 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun collisionRevalidatesAPlaceholderGenerationThatAdvancedAfterRefresh() {
+        val root = createTempDirectory("windows-cloud-placeholder-revalidation")
+        val old = WindowsCloudFileIdentity("account-01", "report.txt", "old", 5L, false)
+        val intermediate = old.copy(remoteRevision = "intermediate")
+        val current = old.copy(remoteRevision = "current")
+        val backend = FakeBackend("fresh".encodeToByteArray(), listOf(old)).apply {
+            queueList(listOf(old), listOf(intermediate))
+            seedRemote(current)
+        }
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { baseDirectory, placeholders ->
+                seed(
+                    baseDirectory.resolve(placeholders.single().name),
+                    WindowsCloudPlaceholderState.InSync,
+                    current,
+                )
+                throw WindowsCloudFilesOperationException(
+                    "create Windows Cloud Files placeholders",
+                    0x800700B7.toInt(),
+                )
+            }
+        }
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+
+        try {
+            provider.start()
+
+            assertEquals(current, api.decodedIdentity(root.resolve("report.txt")))
+            assertEquals(listOf("report.txt"), backend.resolvedPaths)
+            assertTrue(api.invalidatedUpdates.isEmpty())
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun collisionWithAnotherRemotePathFailsClosed() {
         val root = createTempDirectory("windows-cloud-placeholder-name-conflict")
         val listed = WindowsCloudFileIdentity("account-01", "Report", "listed", 0L, true)
@@ -1013,14 +1050,18 @@ class WindowsCloudFilesProviderTest {
         val uploadExpectedRevisions = mutableListOf<String?>()
         val operations = mutableListOf<String>()
         val listedPaths = CopyOnWriteArrayList<String>()
+        val resolvedPaths = CopyOnWriteArrayList<String>()
         private val remoteIdentities = listed.associateBy { identity -> identity.path }.toMutableMap()
         private val remoteContents = mutableMapOf<String, ByteArray>()
+        private val scriptedLists = ArrayDeque<List<WindowsCloudFileIdentity>>()
 
         override fun resolve(path: String): WindowsCloudFileIdentity? = synchronized(this) {
+            resolvedPaths += path
             remoteIdentities[path]
         }
         override fun list(path: String): List<WindowsCloudFileIdentity> = synchronized(this) {
             listedPaths += path
+            if (scriptedLists.isNotEmpty()) return@synchronized scriptedLists.removeFirst()
             listed.mapNotNull { identity -> remoteIdentities[identity.path] }
                 .filter { identity -> identity.path.substringBeforeLast('/', "") == path }
         }
@@ -1090,6 +1131,10 @@ class WindowsCloudFilesProviderTest {
 
         fun seedRemote(identity: WindowsCloudFileIdentity) = synchronized(this) {
             remoteIdentities[identity.path] = identity
+        }
+
+        fun queueList(vararg responses: List<WindowsCloudFileIdentity>) = synchronized(this) {
+            scriptedLists.addAll(responses)
         }
     }
 

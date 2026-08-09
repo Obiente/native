@@ -788,12 +788,25 @@ internal class WindowsCloudFilesProvider(
             return true
         }
         check(state == WindowsCloudPlaceholderState.InSync)
-        val authoritative = requireNotNull(authoritativeIdentity) {
+        var authoritative = requireNotNull(authoritativeIdentity) {
             "The remote item disappeared while reconciling a Windows placeholder collision."
         }.also { current ->
             require(current.accountId == backend.accountId && current.path == listedIdentity.path) {
                 "The resolved Windows placeholder identity does not match the requested remote item."
             }
+        }
+        if (existing != authoritative) {
+            authoritative = requireNotNull(backend.resolve(listedIdentity.path)) {
+                "The remote item disappeared while revalidating a Windows placeholder collision."
+            }.also { current ->
+                require(current.accountId == backend.accountId && current.path == listedIdentity.path) {
+                    "The revalidated Windows placeholder identity does not match the requested remote item."
+                }
+            }
+            val rechecked = api.placeholderIdentity(localPath)
+                ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
+                ?: return false
+            if (rechecked != existing) return false
         }
         val contentChanged = existing.remoteRevision != authoritative.remoteRevision ||
             existing.size != authoritative.size ||
