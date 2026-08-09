@@ -11,10 +11,10 @@ class MarketingGuideCaptureScenarioTest {
         val guideScenarios = MarketingCaptureScenario.entries.filter { it.feature == "Guides" }
         val guideVariants = marketingCaptureVariants.filter { it.scenario.feature == "Guides" }
 
-        assertEquals(18, guideScenarios.size)
+        assertEquals(30, guideScenarios.size)
         assertEquals(guideScenarios.size * MarketingCaptureTheme.entries.size, guideVariants.size)
         guideScenarios.forEach { scenario ->
-            if (scenario == MarketingCaptureScenario.GuideFolderSyncChooseFolders) {
+            if (scenario == MarketingCaptureScenario.GuideLinuxFolderSyncLocations) {
                 assertEquals(null, scenario.guideCaptureSourceScenarioOrNull())
             } else {
                 assertNotNull(scenario.guideCaptureSourceScenarioOrNull())

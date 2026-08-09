@@ -31,6 +31,11 @@ import { guides } from "./generated/guides.js";
 import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
 import { marketingCaptures } from "./generated/captures.js";
+import {
+  guidePlatformHubForPath,
+  guidePlatformHubs,
+  guidesForPlatformHub,
+} from "./guide-platforms.js";
 import RoadmapDashboard from "./components/RoadmapDashboard.vue";
 import ArticleRoadmap from "./components/ArticleRoadmap.vue";
 
@@ -189,14 +194,23 @@ const relatedGuides = computed(() =>
   guides
     .filter((guide) => guide.path !== currentGuide.value?.path)
     .sort((left, right) => {
+      const leftPlatform = left.platform === currentGuide.value?.platform ? 0 : 1;
+      const rightPlatform = right.platform === currentGuide.value?.platform ? 0 : 1;
       const leftMatch = left.category === currentGuide.value?.category ? 0 : 1;
       const rightMatch = right.category === currentGuide.value?.category ? 0 : 1;
-      return leftMatch - rightMatch || left.title.localeCompare(right.title);
+      return leftPlatform - rightPlatform || leftMatch - rightMatch || left.title.localeCompare(right.title);
     })
     .slice(0, 3),
 );
 const isNewsIndex = computed(() => normalizedPath === "/news/");
 const isGuidesIndex = computed(() => normalizedPath === "/guides/");
+const currentGuidePlatformHub = computed(() => guidePlatformHubForPath(normalizedPath));
+const isGuidesLanding = computed(() => isGuidesIndex.value || currentGuidePlatformHub.value !== null);
+const visibleGuideLibrary = computed(() =>
+  currentGuidePlatformHub.value
+    ? guidesForPlatformHub(guides, currentGuidePlatformHub.value)
+    : guides,
+);
 const isChangelog = computed(() => normalizedPath === "/changelog/");
 const isVisualQa = computed(() => normalizedPath === "/visual-qa/");
 const isHome = computed(() => normalizedPath === "/");
@@ -298,13 +312,13 @@ const searchResults = computed(() => {
 const nativePromises = [
   {
     icon: SquaresFour,
-    title: "Your apps are all there",
-    body: "Files, Photos, Talk, Calendar, Mail, Notes, Deck, and the other apps on your server live under the same account.",
+    title: "Your installed apps are discoverable",
+    body: "Files, Photos, Talk, Calendar, Mail, Notes, Deck, and other server apps share one account, with native support shown at its verified level.",
   },
   {
     icon: Desktop,
     title: "It uses the device you are holding",
-    body: "A phone gets touch controls and share sheets. A desktop gets resizable panes, keyboard navigation, context menus, and drag and drop.",
+    body: "Android gets touch controls, system Back, and share sheets. Linux and Windows use resizable panes, pointer actions, and desktop file integration where implemented.",
   },
   {
     icon: ShieldCheck,
@@ -317,8 +331,8 @@ const appFamilies = [
   {
     icon: File,
     title: "Files and documents",
-    apps: "Files, Notes, Office, search, sharing, versions, offline folders, and two-way sync",
-    body: "Browse, edit, share, recover, and synchronize ordinary files through native pickers and file managers. Offline work remains explicit and conflicts never disappear behind a generic success message.",
+    apps: "Files, Notes, search, sharing foundations, Android offline storage, folder pairs, and desktop virtual files",
+    body: "Browse and preview ordinary files, edit guarded text content, and use platform file integration. Sync, cache, and conflict state remain explicit while the alpha is still being hardened.",
     captureDark: "homepage-files-desktop-dark",
     captureLight: "homepage-files-desktop-light",
     captureFallback: "obsidian-vault-sync",
@@ -326,8 +340,8 @@ const appFamilies = [
   {
     icon: Camera,
     title: "Photos and memories",
-    apps: "Photos, Memories, Recognize, albums, Live Photos, backup, sharing, and non-destructive editing",
-    body: "Move from a timeline to albums, recognized people, full-quality originals, edits, and verified backup without leaving the same native media library.",
+    apps: "Photos, Memories, Recognize people, albums, RAW previews, Live Photos, and Android media backup state",
+    body: "Browse timelines, folders, albums, and recognized people, inspect native previews, and follow exact-version Android backup state. Editing remains a foundation, not a complete shipped workflow.",
     captureDark: "homepage-photos-desktop-dark",
     captureLight: "homepage-photos-desktop-light",
     captureFallback: "photo-folder-browser-desktop",
@@ -335,8 +349,8 @@ const appFamilies = [
   {
     icon: ChatCircleDots,
     title: "Conversations and people",
-    apps: "Talk messages and calls, Mail, Contacts, shared files, notifications, and presence",
-    body: "Messages, calls, mail, contacts, and shared files retain their account and object context, with system notifications and communication controls where the platform provides them.",
+    apps: "Talk room history and rich message cards, Mail and Contacts workspaces, shared files, status, and notification foundations",
+    body: "Talk history is readable through typed message cards, while Mail, Contacts, and communication actions remain at different levels of completeness. Native calling is not shipped yet.",
     captureDark: "homepage-conversations-desktop-dark",
     captureLight: "homepage-conversations-desktop-light",
     captureFallback: "file-share-group-desktop",
@@ -344,8 +358,8 @@ const appFamilies = [
   {
     icon: ListChecks,
     title: "Planning and everyday work",
-    apps: "Calendar, Tasks, Deck, Tables, Cookbook, Cospend, Music, dashboards, and administration",
-    body: "Work with events, tasks, boards, tables, recipes, budgets, music, and server administration through interfaces suited to the job rather than a universal list of fields.",
+    apps: "Calendar, Tasks, Deck, Tables, Cookbook, Cospend, Music, dashboards, and administration inventory",
+    body: "Calendar has direct CalDAV workflows. Other planning, media, and administration surfaces use native semantics at different levels of completeness and with capability-gated actions.",
     captureDark: "homepage-planning-desktop-dark",
     captureLight: "homepage-planning-desktop-light",
     captureFallback: "deck-board-desktop",
@@ -373,13 +387,13 @@ const selectedAppCapture = computed(() =>
 const platforms = [
   {
     icon: Desktop,
-    name: "Mobile and tablet",
-    body: "Android, iPhone, and iPad use touch-first navigation, native sharing, background transfer, notifications, media controls, file providers, and layouts that adapt from a phone to a large screen.",
+    name: "Android mobile and tablet",
+    body: "Android is the active mobile target, with touch-first navigation, system Files integration, permissions, and durable background work. iPhone and iPad builds are planned but not available.",
   },
   {
     icon: Code,
-    name: "Desktop",
-    body: "Linux, Windows, and macOS use resizable multi-pane workspaces, keyboard navigation, context menus, drag and drop, native file access, system notifications, and desktop media controls.",
+    name: "Linux and Windows desktop",
+    body: "Linux and Windows have authenticated alpha packages and OS-specific file integration. macOS has an early packaging artifact but no supported Keychain-backed login yet.",
   },
 ];
 
@@ -413,12 +427,12 @@ const frequentlyAsked = [
   {
     question: "Can I keep normal folders and an Obsidian vault in sync?",
     answer:
-      "Yes. Folder pairs connect a normal device folder with a Nextcloud folder, keep files visible to Obsidian and other editors, work offline, and preserve both versions when changes conflict.",
+      "Folder pairs connect a normal device folder with a Nextcloud folder and expose direction, deletion, conflict, and scheduling policy. Keep independent backups while this workflow remains alpha.",
   },
   {
     question: "Can it back up photos and safely make space on my device?",
     answer:
-      "Yes. Backup distinguishes waiting, uploading, verified, changed, failed, and cloud-only files. Storage cleanup is offered only for the exact file version verified on your selected server.",
+      "Android backup distinguishes pending, uploading, backed-up, changed, failed, and cloud-only files. A complete camera-roll cleanup action is not exposed yet, so keep originals and use an independent backup.",
   },
   {
     question: "How does it work with so many Nextcloud apps?",
@@ -585,8 +599,8 @@ const frequentlyAsked = [
               <p class="eyebrow">An independent client by Obiente</p>
               <h1>Your Nextcloud deserves <span>a real app.</span></h1>
               <p class="hero-lede">
-                Use Files, Photos, Talk, Calendar, and the apps installed on your
-                server from one client on phone, tablet, and desktop.
+                Test Files, Photos, Talk, Calendar, and installed-app workspaces in
+                the current Android, Linux, and Windows alpha builds.
               </p>
               <div class="hero-actions">
                 <a class="button button-primary" href="https://github.com/Obiente/nc-native/releases" target="_blank" rel="noreferrer">
@@ -624,13 +638,13 @@ const frequentlyAsked = [
             <div class="hero-foundation" aria-label="Availability and project details">
               <div class="hero-foundation-platforms">
                 <div class="hero-availability">
-                  <p>Available for</p>
+                  <p>Platform status</p>
                   <ul>
                     <li><WindowsLogo :size="21" weight="fill" aria-hidden="true" /><span>Windows</span></li>
-                    <li class="platform-pending"><AppleLogo :size="21" weight="fill" aria-hidden="true" /><span>macOS</span></li>
+                    <li class="platform-pending"><AppleLogo :size="21" weight="fill" aria-hidden="true" /><span>macOS preview</span></li>
                     <li><LinuxLogo :size="21" weight="fill" aria-hidden="true" /><span>Linux</span></li>
                     <li><AndroidLogo :size="21" weight="fill" aria-hidden="true" /><span>Android</span></li>
-                    <li class="platform-pending"><DeviceMobile :size="21" weight="fill" aria-hidden="true" /><span>iOS</span></li>
+                    <li class="platform-pending"><DeviceMobile :size="21" weight="fill" aria-hidden="true" /><span>iOS planned</span></li>
                   </ul>
                 </div>
               </div>
@@ -663,11 +677,11 @@ const frequentlyAsked = [
           <section id="experience" class="native-promise section-width" data-reveal>
             <div class="section-heading compact">
               <p class="eyebrow">Everyday work</p>
-              <h2>Open a file. Share a photo. Answer a call.</h2>
+              <h2>Open a file. Review a photo. Read a message.</h2>
               <p>
-                Nextcloud Native uses your device's file picker, share sheet,
-                notifications, background work, keyboard, and touch controls. Your
-                account and permissions stay with you as you move between them.
+                Nextcloud Native uses verified server APIs and the platform
+                integrations implemented for Android, Linux, and Windows. Capability
+                checks keep unavailable actions out of otherwise useful workspaces.
               </p>
             </div>
 
@@ -967,26 +981,48 @@ const frequentlyAsked = [
         </div>
       </template>
 
-      <section v-else-if="isGuidesIndex" class="guides-index section-width">
+      <section v-else-if="isGuidesLanding" class="guides-index section-width">
         <header class="guides-index-heading">
           <div>
-            <p class="eyebrow">Nextcloud Native guides</p>
-            <h1>Learn a complete workflow.</h1>
+            <p class="eyebrow">
+              {{ currentGuidePlatformHub ? `${currentGuidePlatformHub.device} guides` : "Nextcloud Native guides" }}
+            </p>
+            <h1>{{ currentGuidePlatformHub?.title ?? "Choose your platform, then finish a workflow." }}</h1>
             <p>
-              Start with the outcome you need. Each maintained guide uses synthetic
-              captures from the real app, explains safe choices, and shows what success looks like.
+              {{ currentGuidePlatformHub?.summary ?? "Android, Linux, and Windows do not share identical permissions, background behavior, or file integration. Start with your platform for instructions and screenshots that match the product you can actually use." }}
             </p>
           </div>
           <div class="guides-index-summary" aria-label="Guide library summary">
-            <span><strong>{{ guides.length }}</strong> maintained guides</span>
-            <span><strong>{{ guides.reduce((total, guide) => total + guide.steps.length, 0) }}</strong> illustrated steps</span>
+            <span><strong>{{ visibleGuideLibrary.length }}</strong> maintained guides</span>
+            <span><strong>{{ visibleGuideLibrary.reduce((total, guide) => total + guide.steps.length, 0) }}</strong> illustrated steps</span>
             <span><ShieldCheck :size="16" weight="fill" aria-hidden="true" /> Real Compose UI</span>
           </div>
         </header>
 
+        <nav class="guide-platform-nav" aria-label="Filter guides by platform">
+          <a href="/guides/" :aria-current="isGuidesIndex ? 'page' : undefined">All guides</a>
+          <a
+            v-for="hub in guidePlatformHubs"
+            :key="hub.slug"
+            :href="`/guides/${hub.slug}/`"
+            :aria-current="currentGuidePlatformHub?.slug === hub.slug ? 'page' : undefined"
+          >
+            <span>{{ hub.device }}</span>
+            <strong>{{ hub.label }}</strong>
+          </a>
+        </nav>
+
+        <aside v-if="isGuidesIndex" class="guide-availability-note">
+          <strong>Platform availability</strong>
+          <p>
+            Android, Linux, and Windows have authenticated alpha builds. macOS packaging is early
+            and does not yet have supported Keychain login. iPhone and iPad builds are not available.
+          </p>
+        </aside>
+
         <div class="guides-featured-grid">
           <a
-            v-for="(guide, guideIndex) in guides"
+            v-for="(guide, guideIndex) in visibleGuideLibrary"
             :key="guide.path"
             class="guide-index-card"
             :href="guide.path"
@@ -1000,7 +1036,7 @@ const frequentlyAsked = [
                 :loading="guideIndex < 2 ? 'eager' : 'lazy'"
                 :fetchpriority="guideIndex === 0 ? 'high' : 'auto'"
               />
-              <span>{{ guide.category }}</span>
+              <span>{{ guide.platform }} · {{ guide.category }}</span>
             </div>
             <div class="guide-index-copy">
               <div class="guide-index-meta">
@@ -1193,10 +1229,12 @@ const frequentlyAsked = [
         v-else-if="currentGuide"
         class="guide-page section-width"
       >
-        <a class="doc-back guide-back" href="/guides/">All Nextcloud Native guides</a>
+        <a class="doc-back guide-back" :href="`/guides/${currentGuide.platformSlug}/`">
+          All {{ currentGuide.platform }} guides
+        </a>
         <header class="guide-page-heading">
           <div>
-            <p class="eyebrow">{{ currentGuide.category }}</p>
+            <p class="eyebrow">{{ currentGuide.platform }} · {{ currentGuide.device }} · {{ currentGuide.category }}</p>
             <h1>{{ currentGuide.title }}</h1>
             <p>{{ currentGuide.description }}</p>
           </div>

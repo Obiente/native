@@ -569,7 +569,7 @@ private fun CalendarError(message: String, retry: () -> Unit) {
 }
 
 @Composable
-private fun MonthCalendar(
+internal fun MonthCalendar(
     month: CalendarMonth,
     selectedDate: String,
     events: List<GroupwareCalendarEvent>,
@@ -807,6 +807,29 @@ private enum class EventRecurrencePreset(
             preset != Custom && preset.rule?.equals(rule, ignoreCase = true) == true
         } ?: if (rule.isNullOrBlank()) None else Custom
     }
+}
+
+@Composable
+internal fun MarketingCalendarEventEditorCapture() {
+    EventEditorDialog(
+        event = null,
+        initialDate = "20260804",
+        calendars = listOf(
+            GroupwareCalendar(
+                href = "/remote.php/dav/calendars/synthetic/personal/",
+                displayName = "Personal",
+                writable = true,
+            ),
+            GroupwareCalendar(
+                href = "/remote.php/dav/calendars/synthetic/product/",
+                displayName = "Product team",
+                writable = true,
+            ),
+        ),
+        onDismiss = {},
+        error = null,
+        onSave = { _, _ -> },
+    )
 }
 
 @Composable

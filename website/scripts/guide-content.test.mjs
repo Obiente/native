@@ -18,7 +18,9 @@ test("guide source contract rejects incomplete task instructions", () => {
     "slug: useful-guide",
     "description: A sufficiently detailed guide description that explains the complete user outcome.",
     "category: Start here",
-    "platforms: Android, Desktop",
+    "platform: Android",
+    "device: Mobile",
+    "platforms: Android",
     "durationMinutes: 5",
     "difficulty: Getting started",
     "lastUpdated: 2026-08-03",
@@ -56,10 +58,12 @@ test("guide library is complete, illustrated, searchable, and privacy safe", asy
   }
 
   for (const guide of guidesContent) {
-    assert.match(guide.path, /^\/guides\/[a-z0-9-]+\/$/u);
+    assert.match(guide.path, /^\/guides\/(android|desktop|linux|windows)\/[a-z0-9-]+\/$/u);
     assert.ok(guide.steps.length >= 3);
     assert.ok(guide.prerequisites.length >= 1);
     assert.ok(guide.platforms.length >= 1);
+    assert.ok(["Android", "Desktop", "Linux", "Windows"].includes(guide.platform));
+    assert.ok(["Mobile", "Desktop"].includes(guide.device));
     assert.ok(guide.text.split(/\s+/u).filter(Boolean).length >= 250);
     assert.doesNotMatch(guide.text, /Yaro|Doornberg|\/home\/|crunchy/iu);
     assert.ok(guide.introductionHtml.includes("<p>"));
@@ -89,13 +93,14 @@ test("guide routes expose task navigation and responsive step captures", async (
   const styles = await readFile(path.join(websiteRoot, "src", "styles.css"), "utf8");
   const server = await readFile(path.join(websiteRoot, "src", "entry-server.js"), "utf8");
 
-  assert.match(app, /v-else-if="isGuidesIndex"/u);
+  assert.match(app, /v-else-if="isGuidesLanding"/u);
   assert.match(app, /v-else-if="currentGuide"/u);
   assert.match(app, /aria-label="Guide steps and prerequisites"/u);
   assert.match(app, /class="guide-next-step"/u);
   assert.match(app, /Real Compose UI/u);
   assert.match(styles, /\.guide-layout\s*\{[^}]*grid-template-columns:/su);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*\.guide-layout\s*\{[^}]*grid-template-columns:\s*1fr;/su);
-  assert.match(server, /"@type": "HowTo"/u);
+  assert.match(server, /"@type": "TechArticle"/u);
+  assert.match(server, /"@type": "HowToStep"/u);
   assert.match(server, /"\/guides\/"/u);
 });

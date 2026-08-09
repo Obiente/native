@@ -3,6 +3,8 @@ const requiredGuideMetadata = [
   "slug",
   "description",
   "category",
+  "platform",
+  "device",
   "platforms",
   "durationMinutes",
   "difficulty",
@@ -14,6 +16,8 @@ const requiredGuideMetadata = [
 const guideSlug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const guideDate = /^\d{4}-\d{2}-\d{2}$/;
 const guideDifficulty = new Set(["Getting started", "Everyday", "Advanced"]);
+const guidePlatforms = new Set(["Android", "Desktop", "Linux", "Windows"]);
+const guideDevices = new Set(["Mobile", "Desktop"]);
 
 function commaSeparated(value) {
   return value.split(",").map((entry) => entry.trim()).filter(Boolean);
@@ -85,6 +89,8 @@ export function parseGuideFrontmatter(source, file) {
   const prerequisites = commaSeparated(metadata.prerequisites);
   if (
     !guideSlug.test(metadata.slug) ||
+    !guidePlatforms.has(metadata.platform) ||
+    !guideDevices.has(metadata.device) ||
     !guideDate.test(metadata.lastUpdated) ||
     !Number.isInteger(durationMinutes) ||
     durationMinutes < 1 ||
@@ -106,6 +112,7 @@ export function parseGuideFrontmatter(source, file) {
   return {
     metadata: {
       ...metadata,
+      platformSlug: metadata.platform.toLowerCase(),
       durationMinutes,
       platforms,
       prerequisites,
