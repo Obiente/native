@@ -393,10 +393,9 @@ private val CONTROL_CHARACTERS = Regex("[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\
 private val WHITESPACE = Regex("\\s+")
 private const val SENSITIVE_CREDENTIAL_LABEL_PATTERN =
     "authorization|proxy-authorization|cookie|set-cookie|" +
-        "(?:access|refresh|id|auth|session)Token|(?:client|consumer)Secret|" +
-        "(?:app)Password|(?:api|private|secret)Key|" +
-        "(?:[a-z][a-z0-9-]*_)*(?:password|passphrase|token|secret)|" +
-        "(?:api|private|secret)[-_ ]?key"
+        "(?:[a-z][a-z0-9_-]*)?(?:password|passphrase|passwd|passcode|pwd|token|secret|credential)s?" +
+        "(?:[-_](?:confirmation|confirm|value))?|" +
+        "(?:api|private|secret|client|consumer)[-_ ]?key"
 private val SENSITIVE_HEADER_LINE = Regex(
     "(?im)[\"']?\\b($SENSITIVE_CREDENTIAL_LABEL_PATTERN)\\b[\"']?" +
         "\\s*(?::|=|\\bis\\b|\\bwas\\b)\\s*[^\\r\\n]*",

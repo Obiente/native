@@ -17,6 +17,23 @@ import org.json.JSONObject
 
 class JvmSupportDiagnosticsTest {
     @Test
+    fun asyncCloseFlushesEveryQueuedDrainBatchBeforeShutdown() {
+        val root = createTempDirectory("support-diagnostics-close-flush").toFile()
+        val diagnostics = AsyncJvmSupportDiagnostics(
+            root = root,
+            environment = environment(),
+            workerName = "support-diagnostics-close-flush-test",
+        )
+
+        repeat(96) { index ->
+            diagnostics.record(failureEvent("/srv/fixtures/private-$index.jpg"))
+        }
+        diagnostics.close()
+
+        assertEquals(97, File(root, "events-v1.jsonl").readLines().size)
+    }
+
+    @Test
     fun persistsOnlySanitizedEventsAndLoadsThemAfterRestart() {
         val root = createTempDirectory("support-diagnostics").toFile()
         val first = diagnostics(root)

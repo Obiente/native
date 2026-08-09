@@ -235,6 +235,26 @@ class SupportDiagnosticsTest {
     }
 
     @Test
+    fun redactsCommonPasswordAndCredentialAliases() {
+        val credential = listOf("short", "credential").joinToString("-")
+        val labels = listOf(
+            "passwd",
+            "passcode",
+            "pwd",
+            "credentials",
+            "newPassword",
+            "password_confirmation",
+        )
+
+        labels.forEach { label ->
+            val sanitized = sanitizer.sanitizeUserDescription("$label=$credential")
+
+            assertFalse(credential in sanitized, label)
+            assertEquals("$label=<secret>", sanitized, label)
+        }
+    }
+
+    @Test
     fun pseudonymizesDurableNumericIdentifiers() {
         val value = "48721"
 

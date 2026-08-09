@@ -43,6 +43,7 @@ class AsyncJvmSupportDiagnostics(
 
     private var activeAccountIdentity: String? = null
     private var drainScheduled = false
+    private var closing = false
 
     init {
         scope.launch {
@@ -173,6 +174,20 @@ class AsyncJvmSupportDiagnostics(
     }
 
     override fun close() {
+        val shouldClose = synchronized(lock) {
+            if (closing) {
+                false
+            } else {
+                closing = true
+                true
+            }
+        }
+        if (!shouldClose) return
+        runCatching {
+            executor.submit {
+                delegate?.let(::drainPendingSnapshot)
+            }.get(CLOSE_WAIT_SECONDS, TimeUnit.SECONDS)
+        }
         executor.shutdown()
         runCatching { executor.awaitTermination(CLOSE_WAIT_SECONDS, TimeUnit.SECONDS) }
         dispatcher.close()
@@ -221,7 +236,7 @@ class AsyncJvmSupportDiagnostics(
     }
 
     private fun submitLocked(operation: PendingOperation): JvmSupportDiagnostics? {
-        if (initializationFailed) return null
+        if (initializationFailed || closing) return null
         enqueue(operation)
         return delegate?.takeIf {
             if (drainScheduled) {
