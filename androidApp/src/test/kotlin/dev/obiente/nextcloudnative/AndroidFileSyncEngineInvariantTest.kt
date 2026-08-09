@@ -1,5 +1,14 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.FileSyncConfiguration
+import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
+import dev.obiente.nextcloudnative.app.FileSyncDirection
+import dev.obiente.nextcloudnative.app.FileSyncOperation
+import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.LocalSyncEntry
+import dev.obiente.nextcloudnative.app.RemoteSyncEntry
+import dev.obiente.nextcloudnative.app.SyncEntryKind
+import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
@@ -19,6 +28,43 @@ class AndroidFileSyncEngineInvariantTest {
     @Test
     fun androidPlanningRetainsTheSnapshotCompatibleWorkLimit() {
         assertEquals(10_000, ANDROID_FILE_SYNC_MAX_WORK_ITEMS)
+        assertEquals(1_000, ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE)
+        assertTrue(ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE in 1 until ANDROID_FILE_SYNC_MAX_WORK_ITEMS)
+    }
+
+    @Test
+    fun androidPlanningKeepsActionableWorkBeyondAFullSkippedPrefix() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Pictures",
+            configuration = FileSyncConfiguration(
+                direction = FileSyncDirection.DownloadOnly,
+                deviceLabel = "Phone",
+            ),
+        )
+        val localEntries = (0 until ANDROID_FILE_SYNC_MAX_WORK_ITEMS).map { index ->
+            val suffix = index.toString().padStart(5, '0')
+            LocalSyncEntry("Local/$suffix.jpg", SyncEntryKind.File, "local-$suffix")
+        }
+        val remoteOnly = RemoteSyncEntry("Remote/download.jpg", SyncEntryKind.File, "remote-download")
+
+        val planned = scanFileSyncPair(
+            FileSyncCoordinatorState(listOf(pair)),
+            pair.id,
+            localEntries,
+            listOf(remoteOnly),
+            nowEpochMillis = 10L,
+            maximumWorkItems = ANDROID_FILE_SYNC_MAX_WORK_ITEMS,
+            reservedNonExecutableWorkItems = ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
+        ).pairs.single()
+
+        assertTrue(planned.workItems.any { it.operation is FileSyncOperation.Download })
+        assertTrue(
+            planned.workItems.count { it.operation is FileSyncOperation.Skipped } <=
+                ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
+        )
     }
 
     @Test

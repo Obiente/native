@@ -299,6 +299,7 @@ internal class DesktopFileSyncEngine(
         val totalOperations = executableWork.size
         val conflicts = plannedPair.workItems.count { it.state == FileSyncExecutionState.AwaitingDecision }
         var failures = plannedPair.workItems.count { it.state == FileSyncExecutionState.Failed }
+        val baselinePaths = plannedPair.baselines.mapTo(mutableSetOf(), FileSyncBaseline::relativePath)
         var completed = 0
         for (plannedWork in executableWork) {
             if (!shouldContinue()) break
@@ -323,6 +324,7 @@ internal class DesktopFileSyncEngine(
                 ),
             )
             try {
+                requireDesktopFileSyncBaselineCapacity(command.operation, baselinePaths)
                 val success = execute(command, runningWork, local, remote)
                 execution = execution.copy(
                     coordinator = completeFileSyncOperation(
@@ -340,6 +342,8 @@ internal class DesktopFileSyncEngine(
                     synchronizedBaselines = success.synchronizedBaselines,
                     removedBaselinePaths = success.removedRelativePaths.toSet(),
                 )
+                baselinePaths.removeAll(success.removedRelativePaths.toSet())
+                baselinePaths.addAll(success.synchronizedBaselines.map(FileSyncBaseline::relativePath))
                 completed += 1
                 onProgress(
                     DesktopFileSyncProgressEvent(
@@ -732,6 +736,45 @@ private fun DesktopFileSyncPersistedState.scopedToDesktopWork(
         listOf(pair.copy(baselines = emptyList(), workItems = listOf(work))),
     ),
 )
+
+internal fun requireDesktopFileSyncBaselineCapacity(
+    operation: FileSyncOperation,
+    baselinePaths: Set<String>,
+    maximumEntries: Int = MAX_FILE_SYNC_ENTRIES,
+) {
+    require(maximumEntries > 0 && baselinePaths.size <= maximumEntries)
+    val affectedPaths: Set<String>
+    val synchronizedPaths: Set<String>
+    when (operation) {
+        is FileSyncOperation.Upload,
+        is FileSyncOperation.Download,
+        -> {
+            affectedPaths = setOf(operation.relativePath)
+            synchronizedPaths = affectedPaths
+        }
+        is FileSyncOperation.KeepBoth -> {
+            affectedPaths = setOf(
+                operation.relativePath,
+                operation.localConflictPath,
+                operation.remoteConflictPath,
+            )
+            synchronizedPaths = affectedPaths
+        }
+        is FileSyncOperation.DeleteLocal,
+        is FileSyncOperation.DeleteRemote,
+        -> {
+            affectedPaths = setOf(operation.relativePath)
+            synchronizedPaths = emptySet()
+        }
+        is FileSyncOperation.NeedsDecision,
+        is FileSyncOperation.Skipped,
+        -> error("Non-executable sync work has no baseline result.")
+    }
+    val replacedCount = affectedPaths.count { it in baselinePaths }
+    require(baselinePaths.size - replacedCount + synchronizedPaths.size <= maximumEntries) {
+        "The synchronized result would exceed the folder baseline limit."
+    }
+}
 
 internal fun desktopFileSyncRemoteMutationPath(remoteRootPath: String, relativePath: String): String {
     val relative = relativePath.trim('/')

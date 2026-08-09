@@ -153,6 +153,7 @@ internal class DesktopFileSyncStore(
                 upsertPairRecord(connection, pair)
                 persistBaselines(connection, pairId, before?.baselines.orEmpty(), pair.baselines)
                 persistWork(connection, pairId, before?.workItems.orEmpty(), pair.workItems)
+                putMetadata(connection, baselineCountKey(pairId), pair.baselines.size.toString())
             }
         } finally {
             connection.close()
@@ -169,6 +170,7 @@ internal class DesktopFileSyncStore(
             migrateLegacyState(connection)
             transaction(connection) {
                 delete(connection, "DELETE FROM sync_pairs WHERE id = ?", pairId)
+                delete(connection, "DELETE FROM sync_metadata WHERE key = ?", baselineCountKey(pairId))
                 if (deleteRoot) delete(connection, "DELETE FROM sync_roots WHERE id = ?", rootId)
             }
         } finally {
@@ -197,16 +199,51 @@ internal class DesktopFileSyncStore(
             initializeSchema(connection)
             migrateLegacyState(connection)
             transaction(connection) {
+                val synchronizedPaths = synchronizedBaselines.map(FileSyncBaseline::relativePath).toSet()
+                val resultingBaselineCount = if (synchronizedPaths.isEmpty() && removedBaselinePaths.isEmpty()) {
+                    null
+                } else {
+                    requireBaselineCapacity(connection, pairId, synchronizedPaths, removedBaselinePaths)
+                }
                 upsertPairRecord(connection, pair)
                 persistWorkRecord(connection, pairId, workId, workItem)
                 synchronizedBaselines.forEach { baseline -> upsertBaselineRecord(connection, pairId, baseline) }
                 removedBaselinePaths.forEach { path ->
                     delete(connection, "DELETE FROM sync_baselines WHERE pair_id = ? AND relative_path = ?", pairId, path)
                 }
+                resultingBaselineCount?.let { count ->
+                    putMetadata(connection, baselineCountKey(pairId), count.toString())
+                }
             }
         } finally {
             connection.close()
         }
+    }
+
+    private fun requireBaselineCapacity(
+        connection: SQLiteConnection,
+        pairId: String,
+        synchronizedPaths: Set<String>,
+        removedPaths: Set<String>,
+    ): Int {
+        val affectedPaths = synchronizedPaths + removedPaths
+        val currentCount = metadataValue(connection, baselineCountKey(pairId))?.toIntOrNull()
+            ?: countPairRows(connection, "sync_baselines", pairId, MAX_FILE_SYNC_ENTRIES)
+        require(currentCount in 0..MAX_FILE_SYNC_ENTRIES)
+        val replacedCount = affectedPaths.count { path ->
+            connection.prepare(
+                "SELECT 1 FROM sync_baselines WHERE pair_id = ? AND relative_path = ? LIMIT 1",
+            ).use { statement ->
+                statement.bindText(1, pairId)
+                statement.bindText(2, path)
+                statement.step()
+            }
+        }
+        val resultingCount = currentCount - replacedCount + synchronizedPaths.size
+        require(resultingCount <= MAX_FILE_SYNC_ENTRIES) {
+            "The synchronized result would exceed the folder baseline limit."
+        }
+        return resultingCount
     }
 
     private fun openDatabase(): SQLiteConnection {
@@ -558,7 +595,10 @@ internal class DesktopFileSyncStore(
 
         val oldPairs = before.coordinator.pairs.associateBy(FileSyncPair::id)
         val newPairs = after.coordinator.pairs.associateBy(FileSyncPair::id)
-        (oldPairs.keys - newPairs.keys).forEach { id -> delete(connection, "DELETE FROM sync_pairs WHERE id = ?", id) }
+        (oldPairs.keys - newPairs.keys).forEach { id ->
+            delete(connection, "DELETE FROM sync_pairs WHERE id = ?", id)
+            delete(connection, "DELETE FROM sync_metadata WHERE key = ?", baselineCountKey(id))
+        }
         newPairs.forEach { (pairId, pair) ->
             val oldPair = oldPairs[pairId]
             val pairRecord = pair.copy(baselines = emptyList(), workItems = emptyList())
@@ -568,6 +608,7 @@ internal class DesktopFileSyncStore(
             }
             persistBaselines(connection, pairId, oldPair?.baselines.orEmpty(), pair.baselines)
             persistWork(connection, pairId, oldPair?.workItems.orEmpty(), pair.workItems)
+            putMetadata(connection, baselineCountKey(pairId), pair.baselines.size.toString())
         }
     }
 
@@ -759,6 +800,9 @@ private const val FORMAT_VERSION = 1
 private const val MAX_LEGACY_STATE_BYTES = 17L * 1024L * 1024L
 private const val LEGACY_IMPORT_KEY = "legacy_v1_import"
 private const val SCHEMA_VERSION_KEY = "schema_version"
+private const val BASELINE_COUNT_KEY_PREFIX = "baseline_count:"
 private const val MAX_FILE_SYNC_SKIPPED_REASONS = 20
 private const val PREVIOUS_DATABASE_SCHEMA_VERSION = "2"
 private const val DATABASE_SCHEMA_VERSION = "3"
+
+private fun baselineCountKey(pairId: String): String = BASELINE_COUNT_KEY_PREFIX + pairId

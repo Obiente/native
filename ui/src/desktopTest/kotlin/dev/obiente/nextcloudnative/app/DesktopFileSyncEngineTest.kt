@@ -5,9 +5,39 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFails
 import kotlin.test.assertTrue
 
 class DesktopFileSyncEngineTest {
+    @Test
+    fun `baseline capacity is checked before executing expanding operations`() {
+        val baselines = setOf("existing.jpg", "second.jpg")
+
+        requireDesktopFileSyncBaselineCapacity(
+            FileSyncOperation.Upload("existing.jpg", expectedRemoteEtag = null),
+            baselines,
+            maximumEntries = 2,
+        )
+        assertFails {
+            requireDesktopFileSyncBaselineCapacity(
+                FileSyncOperation.Upload("new.jpg", expectedRemoteEtag = null),
+                baselines,
+                maximumEntries = 2,
+            )
+        }
+        assertFails {
+            requireDesktopFileSyncBaselineCapacity(
+                FileSyncOperation.KeepBoth(
+                    "existing.jpg",
+                    "existing (Workstation).jpg",
+                    "existing (server).jpg",
+                ),
+                baselines,
+                maximumEntries = 3,
+            )
+        }
+    }
+
     @Test
     fun `desktop execution preparation retries a large queue in one state transition`() {
         val pair = FileSyncPair(

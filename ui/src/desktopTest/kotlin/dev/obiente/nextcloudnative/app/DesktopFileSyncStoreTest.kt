@@ -348,6 +348,16 @@ class DesktopFileSyncStoreTest {
             assertTrue(restored.coordinator.pairs.single().workItems.isEmpty())
             assertEquals(success.synchronizedBaselines, restored.coordinator.pairs.single().baselines)
             assertEquals(listOf(root), restored.roots)
+            BundledSQLiteDriver().open(File(directory, "state.db").absolutePath).use { connection ->
+                val baselineCount = connection.prepare(
+                    "SELECT value FROM sync_metadata WHERE key = ?",
+                ).use { statement ->
+                    statement.bindText(1, "baseline_count:${pair.id}")
+                    assertTrue(statement.step())
+                    statement.getText(0)
+                }
+                assertEquals("1", baselineCount)
+            }
         } finally {
             directory.deleteRecursively()
         }
