@@ -58,6 +58,7 @@ enum ExistingRegistrationAction {
     ReplaceCurrent,
     RemoveStaleOwned,
     RetainOwnedRecovery,
+    ReportOwnedPathConflict,
     IgnoreForeign,
     RejectUnsafeCurrent,
 }
@@ -67,6 +68,7 @@ enum ExistingRegistrationAction {
 enum OwnedCurrentRegistrationState {
     Ready,
     Replaceable,
+    RequestedRootConflict,
     UnsafeExistingPath,
 }
 
@@ -83,12 +85,18 @@ fn existing_registration_action(
         (true, true, OwnedCurrentRegistrationState::Replaceable) => {
             ExistingRegistrationAction::ReplaceCurrent
         }
+        (true, true, OwnedCurrentRegistrationState::RequestedRootConflict) => {
+            ExistingRegistrationAction::RejectUnsafeCurrent
+        }
         (true, true, OwnedCurrentRegistrationState::UnsafeExistingPath) => {
             ExistingRegistrationAction::RejectUnsafeCurrent
         }
         (true, false, _) => ExistingRegistrationAction::RejectUnsafeCurrent,
         (false, true, OwnedCurrentRegistrationState::Replaceable) => {
             ExistingRegistrationAction::RemoveStaleOwned
+        }
+        (false, true, OwnedCurrentRegistrationState::RequestedRootConflict) => {
+            ExistingRegistrationAction::ReportOwnedPathConflict
         }
         (false, true, _) => ExistingRegistrationAction::RetainOwnedRecovery,
         (false, false, _) => ExistingRegistrationAction::IgnoreForeign,
@@ -241,9 +249,9 @@ fn sid_string(bytes: &[u8]) -> Option<String> {
 mod platform {
     use super::{
         ExistingRegistrationAction, MAX_RECOVERABLE_ROOTS, OwnedCurrentRegistrationState,
-        PROVIDER_ID, RECOVERABLE_ROOT_ARGUMENT, RegisteredPathState, RegistrationNotFound,
-        UnsafeRegistrationConflict, account_id_from_sync_root_id, decode_identity_hex,
-        existing_registration_action, is_windows_absence_hresult,
+        OwnedPathConflict, PROVIDER_ID, RECOVERABLE_ROOT_ARGUMENT, RegisteredPathState,
+        RegistrationNotFound, UnsafeRegistrationConflict, account_id_from_sync_root_id,
+        decode_identity_hex, existing_registration_action, is_windows_absence_hresult,
         paths_refer_to_same_existing_entry, recoverable_root_matches, registered_path_state,
         sid_string, valid_account_id, valid_display_name,
     };
@@ -321,6 +329,7 @@ mod platform {
     fn non_current_registration_state(
         existing: &StorageProviderSyncRootInfo,
         existing_id: &HSTRING,
+        requested_root: &Path,
         recoverable_roots: &HashMap<String, PathBuf>,
     ) -> OwnedCurrentRegistrationState {
         let existing_path = match existing.Path().and_then(|folder| folder.Path()) {
@@ -334,6 +343,12 @@ mod platform {
         match registered_path_state(&registered_path, &registered_path) {
             Ok(RegisteredPathState::Missing) => OwnedCurrentRegistrationState::Replaceable,
             Ok(RegisteredPathState::SameExisting) => {
+                if matches!(
+                    registered_path_state(&registered_path, requested_root),
+                    Ok(RegisteredPathState::SameExisting)
+                ) {
+                    return OwnedCurrentRegistrationState::RequestedRootConflict;
+                }
                 let existing_id_value = existing_id.to_string();
                 let Some(account_id) = account_id_from_sync_root_id(&existing_id_value) else {
                     return OwnedCurrentRegistrationState::UnsafeExistingPath;
@@ -506,6 +521,7 @@ mod platform {
                     }
                     ExistingRegistrationAction::RemoveStaleOwned
                     | ExistingRegistrationAction::RetainOwnedRecovery
+                    | ExistingRegistrationAction::ReportOwnedPathConflict
                     | ExistingRegistrationAction::IgnoreForeign => unreachable!(),
                 }
             }
@@ -526,7 +542,7 @@ mod platform {
             }
             let provider_owned = existing_provider_id == PROVIDER_GUID;
             let cleanup_state = if provider_owned {
-                non_current_registration_state(&existing, &existing_id, &recoverable_roots)
+                non_current_registration_state(&existing, &existing_id, &root, &recoverable_roots)
             } else {
                 OwnedCurrentRegistrationState::UnsafeExistingPath
             };
@@ -540,6 +556,9 @@ mod platform {
                 ExistingRegistrationAction::KeepCurrent
                 | ExistingRegistrationAction::RetainOwnedRecovery
                 | ExistingRegistrationAction::IgnoreForeign => {}
+                ExistingRegistrationAction::ReportOwnedPathConflict => {
+                    return Err(Box::new(OwnedPathConflict));
+                }
                 ExistingRegistrationAction::RejectUnsafeCurrent => {
                     return Err(Box::new(UnsafeRegistrationConflict));
                 }
@@ -823,6 +842,14 @@ mod tests {
                 OwnedCurrentRegistrationState::UnsafeExistingPath,
             ),
             ExistingRegistrationAction::RetainOwnedRecovery
+        );
+        assert_eq!(
+            existing_registration_action(
+                false,
+                true,
+                OwnedCurrentRegistrationState::RequestedRootConflict,
+            ),
+            ExistingRegistrationAction::ReportOwnedPathConflict
         );
         assert_eq!(
             existing_registration_action(false, false, OwnedCurrentRegistrationState::Ready),
