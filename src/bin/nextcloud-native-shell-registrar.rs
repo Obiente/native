@@ -2,6 +2,10 @@
 
 #[cfg(windows)]
 const PROVIDER_ID: &str = "Obiente.NextcloudNative";
+#[cfg(windows)]
+const RECOVERABLE_ROOT_ARGUMENT: &str = "--recoverable-root";
+#[cfg(windows)]
+const MAX_RECOVERABLE_ROOTS: usize = 16;
 #[cfg(any(windows, test))]
 const ACCOUNT_ID_LENGTH: usize = 64;
 #[cfg(any(windows, test))]
@@ -20,6 +24,109 @@ fn paths_refer_to_same_existing_entry(
     second: &std::path::Path,
 ) -> std::io::Result<bool> {
     Ok(first.canonicalize()? == second.canonicalize()?)
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+enum RegisteredPathState {
+    Missing,
+    SameExisting,
+    DifferentExisting,
+}
+
+#[cfg(any(windows, test))]
+fn registered_path_state(
+    registered: &std::path::Path,
+    requested: &std::path::Path,
+) -> std::io::Result<RegisteredPathState> {
+    if !registered.try_exists()? {
+        return Ok(RegisteredPathState::Missing);
+    }
+    Ok(
+        if paths_refer_to_same_existing_entry(registered, requested)? {
+            RegisteredPathState::SameExisting
+        } else {
+            RegisteredPathState::DifferentExisting
+        },
+    )
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+enum ExistingRegistrationAction {
+    KeepCurrent,
+    ReplaceCurrent,
+    RemoveStaleOwned,
+    RetainOwnedRecovery,
+    ReportOwnedPathConflict,
+    IgnoreForeign,
+    RejectUnsafeCurrent,
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+enum OwnedCurrentRegistrationState {
+    Ready,
+    Replaceable,
+    RequestedRootConflict,
+    UnsafeExistingPath,
+}
+
+#[cfg(any(windows, test))]
+fn existing_registration_action(
+    current_id: bool,
+    provider_owned: bool,
+    current_state: OwnedCurrentRegistrationState,
+) -> ExistingRegistrationAction {
+    match (current_id, provider_owned, current_state) {
+        (true, true, OwnedCurrentRegistrationState::Ready) => {
+            ExistingRegistrationAction::KeepCurrent
+        }
+        (true, true, OwnedCurrentRegistrationState::Replaceable) => {
+            ExistingRegistrationAction::ReplaceCurrent
+        }
+        (true, true, OwnedCurrentRegistrationState::RequestedRootConflict) => {
+            ExistingRegistrationAction::RejectUnsafeCurrent
+        }
+        (true, true, OwnedCurrentRegistrationState::UnsafeExistingPath) => {
+            ExistingRegistrationAction::RejectUnsafeCurrent
+        }
+        (true, false, _) => ExistingRegistrationAction::RejectUnsafeCurrent,
+        (false, true, OwnedCurrentRegistrationState::Replaceable) => {
+            ExistingRegistrationAction::RemoveStaleOwned
+        }
+        (false, true, OwnedCurrentRegistrationState::RequestedRootConflict) => {
+            ExistingRegistrationAction::ReportOwnedPathConflict
+        }
+        (false, true, _) => ExistingRegistrationAction::RetainOwnedRecovery,
+        (false, false, _) => ExistingRegistrationAction::IgnoreForeign,
+    }
+}
+
+#[cfg(any(windows, test))]
+fn account_id_from_sync_root_id(value: &str) -> Option<&str> {
+    let (provider_and_sid, account_id) = value.rsplit_once('!')?;
+    if provider_and_sid.starts_with("Obiente.NextcloudNative!") && valid_account_id(account_id) {
+        Some(account_id)
+    } else {
+        None
+    }
+}
+
+#[cfg(any(windows, test))]
+fn recoverable_root_matches(
+    recoverable_roots: &std::collections::HashMap<String, std::path::PathBuf>,
+    account_id: &str,
+    registered_path: &std::path::Path,
+) -> bool {
+    recoverable_roots
+        .get(account_id)
+        .is_some_and(|recovery_root| {
+            matches!(
+                registered_path_state(registered_path, recovery_root),
+                Ok(RegisteredPathState::SameExisting)
+            )
+        })
 }
 
 #[cfg(windows)]
@@ -141,10 +248,14 @@ fn sid_string(bytes: &[u8]) -> Option<String> {
 #[cfg(windows)]
 mod platform {
     use super::{
-        OwnedPathConflict, PROVIDER_ID, RegistrationNotFound, UnsafeRegistrationConflict,
-        decode_identity_hex, is_windows_absence_hresult, paths_refer_to_same_existing_entry,
+        ExistingRegistrationAction, MAX_RECOVERABLE_ROOTS, OwnedCurrentRegistrationState,
+        OwnedPathConflict, PROVIDER_ID, RECOVERABLE_ROOT_ARGUMENT, RegisteredPathState,
+        RegistrationNotFound, UnsafeRegistrationConflict, account_id_from_sync_root_id,
+        decode_identity_hex, existing_registration_action, is_windows_absence_hresult,
+        paths_refer_to_same_existing_entry, recoverable_root_matches, registered_path_state,
         sid_string, valid_account_id, valid_display_name,
     };
+    use std::collections::HashMap;
     use std::ffi::{OsStr, OsString};
     use std::mem::size_of;
     use std::path::{Path, PathBuf};
@@ -175,6 +286,83 @@ mod platform {
             return Ok(true);
         }
         paths_refer_to_same_existing_entry(&PathBuf::from(path.to_os_string()), requested)
+    }
+
+    fn current_registration_state(
+        existing: &StorageProviderSyncRootInfo,
+        root: &Path,
+        display_name: &HSTRING,
+        icon_resource: &HSTRING,
+        context: &windows::Storage::Streams::IBuffer,
+    ) -> WindowsResult<OwnedCurrentRegistrationState> {
+        let existing_path = match existing.Path().and_then(|folder| folder.Path()) {
+            Ok(path) => path,
+            Err(failure) if is_windows_absence_hresult(failure.code().0) => {
+                return Ok(OwnedCurrentRegistrationState::Replaceable);
+            }
+            Err(failure) => return Err(failure),
+        };
+        match registered_path_state(&PathBuf::from(existing_path.to_os_string()), root) {
+            Ok(RegisteredPathState::Missing) => {
+                return Ok(OwnedCurrentRegistrationState::Replaceable);
+            }
+            Ok(RegisteredPathState::SameExisting) => {}
+            Ok(RegisteredPathState::DifferentExisting) | Err(_) => {
+                return Ok(OwnedCurrentRegistrationState::UnsafeExistingPath);
+            }
+        }
+        let metadata_matches = (|| -> WindowsResult<bool> {
+            Ok(existing.DisplayNameResource()? == *display_name
+                && existing.IconResource()? == *icon_resource
+                && CryptographicBuffer::Compare(&existing.Context()?, context)?)
+        })()
+        .unwrap_or(false);
+        Ok(if metadata_matches {
+            OwnedCurrentRegistrationState::Ready
+        } else {
+            // Re-registering the same directory updates provider metadata without moving or
+            // deleting local files.
+            OwnedCurrentRegistrationState::Replaceable
+        })
+    }
+
+    fn non_current_registration_state(
+        existing: &StorageProviderSyncRootInfo,
+        existing_id: &HSTRING,
+        requested_root: &Path,
+        recoverable_roots: &HashMap<String, PathBuf>,
+    ) -> OwnedCurrentRegistrationState {
+        let existing_path = match existing.Path().and_then(|folder| folder.Path()) {
+            Ok(path) => path,
+            Err(failure) if is_windows_absence_hresult(failure.code().0) => {
+                return OwnedCurrentRegistrationState::Replaceable;
+            }
+            Err(_) => return OwnedCurrentRegistrationState::UnsafeExistingPath,
+        };
+        let registered_path = PathBuf::from(existing_path.to_os_string());
+        match registered_path_state(&registered_path, &registered_path) {
+            Ok(RegisteredPathState::Missing) => OwnedCurrentRegistrationState::Replaceable,
+            Ok(RegisteredPathState::SameExisting) => {
+                if matches!(
+                    registered_path_state(&registered_path, requested_root),
+                    Ok(RegisteredPathState::SameExisting)
+                ) {
+                    return OwnedCurrentRegistrationState::RequestedRootConflict;
+                }
+                let existing_id_value = existing_id.to_string();
+                let Some(account_id) = account_id_from_sync_root_id(&existing_id_value) else {
+                    return OwnedCurrentRegistrationState::UnsafeExistingPath;
+                };
+                if recoverable_root_matches(recoverable_roots, account_id, &registered_path) {
+                    OwnedCurrentRegistrationState::Replaceable
+                } else {
+                    OwnedCurrentRegistrationState::UnsafeExistingPath
+                }
+            }
+            Ok(RegisteredPathState::DifferentExisting) | Err(_) => {
+                OwnedCurrentRegistrationState::UnsafeExistingPath
+            }
+        }
     }
 
     fn unregister_owned_registration(id: &HSTRING) -> windows::core::Result<()> {
@@ -285,6 +473,7 @@ mod platform {
         display_name: String,
         icon: PathBuf,
         identity_hex: String,
+        recoverable_roots: HashMap<String, PathBuf>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if !valid_account_id(&account_id) {
             return Err("invalid account identity".into());
@@ -303,42 +492,81 @@ mod platform {
         let context = CryptographicBuffer::CreateFromByteArray(&identity)?;
 
         let id = sync_root_id(&account_id)?;
+        let mut current_registration_is_ready = false;
         match StorageProviderSyncRootManager::GetSyncRootInformationForId(&id) {
             Ok(existing) => {
-                if existing.ProviderId()? != PROVIDER_GUID {
-                    return Err(Box::new(UnsafeRegistrationConflict));
-                }
-                match existing.Path().and_then(|folder| folder.Path()) {
-                    Ok(existing_path) if registered_path_is_missing(&existing_path)? => {}
-                    Ok(existing_path) if registered_path_matches(&existing_path, &root)? => {
-                        if existing.DisplayNameResource()? == display_name
-                            && existing.IconResource()? == icon_resource
-                            && CryptographicBuffer::Compare(&existing.Context()?, &context)?
-                        {
-                            return Ok(());
-                        }
+                let provider_owned = existing.ProviderId()? == PROVIDER_GUID;
+                let current_state = if provider_owned {
+                    current_registration_state(
+                        &existing,
+                        &root,
+                        &display_name,
+                        &icon_resource,
+                        &context,
+                    )?
+                } else {
+                    OwnedCurrentRegistrationState::UnsafeExistingPath
+                };
+                match existing_registration_action(true, provider_owned, current_state) {
+                    ExistingRegistrationAction::KeepCurrent => {
+                        current_registration_is_ready = true;
                     }
-                    Ok(_) => return Err(Box::new(UnsafeRegistrationConflict)),
-                    Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
-                    Err(failure) => return Err(failure.into()),
+                    ExistingRegistrationAction::ReplaceCurrent => {
+                        // Unregistering changes only Windows provider metadata. The old directory
+                        // and every local file in it remain untouched for manual recovery.
+                        unregister_owned_registration(&id)?;
+                    }
+                    ExistingRegistrationAction::RejectUnsafeCurrent => {
+                        return Err(Box::new(UnsafeRegistrationConflict));
+                    }
+                    ExistingRegistrationAction::RemoveStaleOwned
+                    | ExistingRegistrationAction::RetainOwnedRecovery
+                    | ExistingRegistrationAction::ReportOwnedPathConflict
+                    | ExistingRegistrationAction::IgnoreForeign => unreachable!(),
                 }
-                unregister_owned_registration(&id)?;
             }
             Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
             Err(failure) => return Err(failure.into()),
         }
         for existing in StorageProviderSyncRootManager::GetCurrentSyncRoots()? {
-            if existing.Id()? != id && existing.ProviderId()? == PROVIDER_GUID {
-                match existing.Path().and_then(|folder| folder.Path()) {
-                    Ok(existing_path) if registered_path_is_missing(&existing_path)? => {}
-                    Ok(existing_path) if registered_path_matches(&existing_path, &root)? => {
-                        return Err(Box::new(OwnedPathConflict));
-                    }
-                    Ok(_) => {}
-                    Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
-                    Err(failure) => return Err(failure.into()),
+            let Ok(existing_id) = existing.Id() else {
+                continue;
+            };
+            let Ok(existing_provider_id) = existing.ProviderId() else {
+                continue;
+            };
+            // The exact current ID was handled above with its path recovery checks. Never make a
+            // second, less-informed decision about that registration from the enumeration view.
+            if existing_id == id {
+                continue;
+            }
+            let provider_owned = existing_provider_id == PROVIDER_GUID;
+            let cleanup_state = if provider_owned {
+                non_current_registration_state(&existing, &existing_id, &root, &recoverable_roots)
+            } else {
+                OwnedCurrentRegistrationState::UnsafeExistingPath
+            };
+            match existing_registration_action(false, provider_owned, cleanup_state) {
+                ExistingRegistrationAction::ReplaceCurrent
+                | ExistingRegistrationAction::RemoveStaleOwned => {
+                    // Older versions could leave account registrations behind after an interrupted
+                    // setup or sign-out. Removing the registration never deletes its directory.
+                    unregister_owned_registration(&existing_id)?;
+                }
+                ExistingRegistrationAction::KeepCurrent
+                | ExistingRegistrationAction::RetainOwnedRecovery
+                | ExistingRegistrationAction::IgnoreForeign => {}
+                ExistingRegistrationAction::ReportOwnedPathConflict => {
+                    return Err(Box::new(OwnedPathConflict));
+                }
+                ExistingRegistrationAction::RejectUnsafeCurrent => {
+                    return Err(Box::new(UnsafeRegistrationConflict));
                 }
             }
+        }
+
+        if current_registration_is_ready {
+            return Ok(());
         }
 
         let info = StorageProviderSyncRootInfo::new()?;
@@ -428,10 +656,41 @@ mod platform {
                     .next()
                     .and_then(|value| value.into_string().ok())
                     .ok_or("invalid sync root identity")?;
-                if values.next().is_some() {
-                    return Err("unexpected arguments".into());
+                let mut recoverable_roots = HashMap::new();
+                while let Some(argument) = values.next() {
+                    if argument != OsStr::new(RECOVERABLE_ROOT_ARGUMENT) {
+                        return Err("unexpected arguments".into());
+                    }
+                    let recovery_account_id = values
+                        .next()
+                        .and_then(|value| value.into_string().ok())
+                        .ok_or("invalid recovery account identity")?;
+                    if !valid_account_id(&recovery_account_id) {
+                        return Err("invalid recovery account identity".into());
+                    }
+                    let recovery_root = values
+                        .next()
+                        .map(PathBuf::from)
+                        .filter(|path| path.is_absolute())
+                        .ok_or("invalid recovery root")?;
+                    if recoverable_roots.len() >= MAX_RECOVERABLE_ROOTS {
+                        return Err("too many recovery roots".into());
+                    }
+                    if recoverable_roots
+                        .insert(recovery_account_id, recovery_root)
+                        .is_some()
+                    {
+                        return Err("duplicate recovery account identity".into());
+                    }
                 }
-                register(root, account_id, display_name, icon, identity_hex)
+                register(
+                    root,
+                    account_id,
+                    display_name,
+                    icon,
+                    identity_hex,
+                    recoverable_roots,
+                )
             }
             Some("unregister") => {
                 let root = values
@@ -552,5 +811,119 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&base).expect("remove path-equivalence fixture");
+    }
+
+    #[test]
+    fn removes_only_stale_owned_registrations() {
+        assert_eq!(
+            existing_registration_action(true, true, OwnedCurrentRegistrationState::Ready),
+            ExistingRegistrationAction::KeepCurrent
+        );
+        assert_eq!(
+            existing_registration_action(true, true, OwnedCurrentRegistrationState::Replaceable),
+            ExistingRegistrationAction::ReplaceCurrent
+        );
+        assert_eq!(
+            existing_registration_action(
+                true,
+                true,
+                OwnedCurrentRegistrationState::UnsafeExistingPath,
+            ),
+            ExistingRegistrationAction::RejectUnsafeCurrent
+        );
+        assert_eq!(
+            existing_registration_action(false, true, OwnedCurrentRegistrationState::Replaceable,),
+            ExistingRegistrationAction::RemoveStaleOwned
+        );
+        assert_eq!(
+            existing_registration_action(
+                false,
+                true,
+                OwnedCurrentRegistrationState::UnsafeExistingPath,
+            ),
+            ExistingRegistrationAction::RetainOwnedRecovery
+        );
+        assert_eq!(
+            existing_registration_action(
+                false,
+                true,
+                OwnedCurrentRegistrationState::RequestedRootConflict,
+            ),
+            ExistingRegistrationAction::ReportOwnedPathConflict
+        );
+        assert_eq!(
+            existing_registration_action(false, false, OwnedCurrentRegistrationState::Ready),
+            ExistingRegistrationAction::IgnoreForeign
+        );
+        assert_eq!(
+            existing_registration_action(true, false, OwnedCurrentRegistrationState::Ready),
+            ExistingRegistrationAction::RejectUnsafeCurrent
+        );
+    }
+
+    #[test]
+    fn distinguishes_missing_same_and_different_existing_registration_paths() {
+        let base = std::env::temp_dir().join(format!(
+            "nextcloud-native-registration-path-state-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after Unix epoch")
+                .as_nanos()
+        ));
+        let registered = base.join("registered");
+        let requested = base.join("requested");
+        std::fs::create_dir_all(&registered).expect("create registered path fixture");
+        std::fs::create_dir_all(&requested).expect("create requested path fixture");
+
+        assert_eq!(
+            registered_path_state(&base.join("missing"), &requested)
+                .expect("classify missing registration path"),
+            RegisteredPathState::Missing
+        );
+        assert_eq!(
+            registered_path_state(&registered, &registered)
+                .expect("classify matching registration path"),
+            RegisteredPathState::SameExisting
+        );
+        assert_eq!(
+            registered_path_state(&registered, &requested)
+                .expect("classify different registration path"),
+            RegisteredPathState::DifferentExisting
+        );
+        let account_id = "a5".repeat(32);
+        let mut recoverable_roots = std::collections::HashMap::new();
+        recoverable_roots.insert(account_id.clone(), registered.clone());
+        assert!(recoverable_root_matches(
+            &recoverable_roots,
+            &account_id,
+            &registered,
+        ));
+        assert!(!recoverable_root_matches(
+            &recoverable_roots,
+            &account_id,
+            &requested,
+        ));
+
+        std::fs::remove_dir_all(&base).expect("remove registration path fixture");
+    }
+
+    #[test]
+    fn extracts_only_owned_well_formed_account_ids_from_sync_root_ids() {
+        let account_id = "a5".repeat(32);
+        assert_eq!(
+            account_id_from_sync_root_id(&format!(
+                "Obiente.NextcloudNative!S-1-5-21-1000!{account_id}"
+            )),
+            Some(account_id.as_str())
+        );
+        assert_eq!(
+            account_id_from_sync_root_id(&format!("Other.Provider!S-1-5-21-1000!{account_id}")),
+            None
+        );
+        assert_eq!(
+            account_id_from_sync_root_id("Obiente.NextcloudNative!S-1-5-21-1000!invalid"),
+            None
+        );
     }
 }
