@@ -167,6 +167,7 @@ data class FileSyncPairSummary(
     val readyCount: Int,
     val runningCount: Int,
     val conflicts: List<FileSyncConflictSummary>,
+    val conflictCount: Int = conflicts.size,
     val failedCount: Int,
     val skippedCount: Int,
     val completedCount: Int = 0,
@@ -181,8 +182,12 @@ data class FileSyncPairSummary(
         require(localDisplayName.isSafeFileSyncCenterText(256))
         require(localRootPath == null || localRootPath.isSafeFileSyncCenterText(2_048))
         if (remoteRootPath.isNotEmpty()) requireValidSyncPath(remoteRootPath)
-        require(listOf(readyCount, runningCount, failedCount, skippedCount, completedCount).all { it >= 0 })
-        require(conflicts.size <= 20_000)
+        require(
+            listOf(readyCount, runningCount, conflictCount, failedCount, skippedCount, completedCount)
+                .all { it >= 0 },
+        )
+        require(conflicts.size <= MAX_FILE_SYNC_WORK_ITEMS)
+        require(conflictCount >= conflicts.size && (conflictCount == 0) == conflicts.isEmpty())
         require(conflicts.map(FileSyncConflictSummary::workId).distinct().size == conflicts.size)
         require(lastScanEpochMillis == null || lastScanEpochMillis >= 0L)
         require(scheduleDescription == null || scheduleDescription.isSafeFileSyncCenterText(256))
@@ -203,6 +208,8 @@ data class FileSyncConflictSummary(
         require(choices.isNotEmpty())
     }
 }
+
+internal const val FILE_SYNC_CONFLICT_PAGE_SIZE = 5
 
 data class FileSyncCenterSnapshot(
     val support: FileSyncCenterSupport,
@@ -241,6 +248,17 @@ fun FileSyncPair.toCenterSummary(
     localDisplayName: String,
     localRootPath: String? = null,
     scheduleDescription: String? = null,
+    completedCount: Int = baselines.size,
+    readyCount: Int = workItems.count { it.state == FileSyncExecutionState.Ready },
+    runningCount: Int = workItems.count { it.state == FileSyncExecutionState.Running },
+    conflictCount: Int = workItems.count { it.state == FileSyncExecutionState.AwaitingDecision },
+    failedCount: Int = workItems.count { it.state == FileSyncExecutionState.Failed },
+    skippedCount: Int = workItems.count { it.state == FileSyncExecutionState.Skipped },
+    skippedReasons: List<String> = workItems.mapNotNull { work ->
+        (work.operation as? FileSyncOperation.Skipped)
+            ?.takeIf { work.state == FileSyncExecutionState.Skipped }
+            ?.reason
+    }.distinct().take(20),
     runState: FileSyncPairRunState,
     networkState: FileSyncNetworkState,
 ): FileSyncPairSummary =
@@ -250,8 +268,8 @@ fun FileSyncPair.toCenterSummary(
         localRootPath = localRootPath,
         remoteRootPath = remoteRootPath,
         configuration = configuration,
-        readyCount = workItems.count { it.state == FileSyncExecutionState.Ready },
-        runningCount = workItems.count { it.state == FileSyncExecutionState.Running },
+        readyCount = readyCount,
+        runningCount = runningCount,
         conflicts = workItems.mapNotNull { work ->
             work.decision
                 ?.takeIf { work.state == FileSyncExecutionState.AwaitingDecision }
@@ -264,16 +282,13 @@ fun FileSyncPair.toCenterSummary(
                     )
                 }
         },
-        failedCount = workItems.count { it.state == FileSyncExecutionState.Failed },
-        skippedCount = workItems.count { it.state == FileSyncExecutionState.Skipped },
-        completedCount = baselines.size,
+        conflictCount = conflictCount,
+        failedCount = failedCount,
+        skippedCount = skippedCount,
+        completedCount = completedCount,
         lastScanEpochMillis = lastScanEpochMillis,
         scheduleDescription = scheduleDescription,
-        skippedReasons = workItems.mapNotNull { work ->
-            (work.operation as? FileSyncOperation.Skipped)
-                ?.takeIf { work.state == FileSyncExecutionState.Skipped }
-                ?.reason
-        }.distinct().take(20),
+        skippedReasons = skippedReasons,
         runState = runState,
         networkState = networkState,
     )

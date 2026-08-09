@@ -17,6 +17,31 @@ import kotlin.test.assertTrue
 
 class DesktopVirtualRangeCacheTest {
     @Test
+    fun `hot range reads batch access time persistence`() {
+        val directory = Files.createTempDirectory("virtual-range-access-batch-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(
+                root = directory,
+                accessTimePersistenceIntervalMillis = 30_000L,
+                policy = { nonEvictingTestPolicy() },
+            )
+            cache.storeBlock(ACCOUNT_ID, "Photos/first.raf", "e1", 4L, 0L, "one!".encodeToByteArray(), 1L)
+            cache.storeBlock(ACCOUNT_ID, "Photos/second.raf", "e2", 4L, 0L, "two!".encodeToByteArray(), 1L)
+            val index = directory.resolve(ACCOUNT_ID).resolve("range-index-v1.json")
+
+            assertNotNull(cache.readBlock(ACCOUNT_ID, "Photos/first.raf", "e1", 4L, 0L, 4, 100_000L))
+            val afterFirstRead = index.readText()
+            assertNotNull(cache.readBlock(ACCOUNT_ID, "Photos/second.raf", "e2", 4L, 0L, 4, 100_001L))
+            assertEquals(afterFirstRead, index.readText())
+
+            cache.flushAccessTimes()
+            assertTrue(index.readText().contains("100001"))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `combined automatic cache budget is shared while pinned Windows bytes are excluded`() {
         assertEquals(
             7L,

@@ -788,7 +788,7 @@ private fun FileSyncPairDetails(
             FileSyncHealthLine("Completed", pair.completedCount.toString(), problem = false)
             FileSyncHealthLine(
                 "Needs attention",
-                "${pair.conflicts.size} ${if (pair.conflicts.size == 1) "conflict" else "conflicts"}, " +
+                "${pair.conflictCount} ${if (pair.conflictCount == 1) "conflict" else "conflicts"}, " +
                     "${pair.failedCount} failed",
                 problem = pair.conflicts.isNotEmpty() || pair.failedCount > 0,
             )

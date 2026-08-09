@@ -42,15 +42,24 @@ internal class DesktopFileSyncEngine(
     ): FileSyncCenterSnapshot = lock.withLock {
         store.withExclusiveAccess {
             val accountId = desktopFileCacheAccountId(session)
-            val state = store.load()
+            val account = store.loadAccount(accountId)
+            val state = account.state
             FileSyncCenterSnapshot(
                 support = FileSyncCenterSupport.Available,
                 pairs = state.coordinator.pairs.filter { it.accountId == accountId }.map { pair ->
                     val root = state.roots.firstOrNull { it.id == pair.localRootId }
-                    pair.toCenterSummary(
+                    val work = account.workByPairId.getValue(pair.id)
+                    pair.copy(workItems = work.conflicts).toCenterSummary(
                         localDisplayName = root?.displayName ?: "Selected folder",
                         localRootPath = root?.absolutePath,
                         scheduleDescription = "Automatic sync while Nextcloud Native is running",
+                        completedCount = account.completedCountsByPairId.getValue(pair.id),
+                        readyCount = work.readyCount,
+                        runningCount = work.runningCount,
+                        conflictCount = work.conflictCount,
+                        failedCount = work.failedCount,
+                        skippedCount = work.skippedCount,
+                        skippedReasons = work.skippedReasons,
                         runState = runState,
                         networkState = networkState(pair.configuration),
                     )
@@ -67,32 +76,30 @@ internal class DesktopFileSyncEngine(
         store.withExclusiveAccess {
             require(limit in 1..MAX_TRAY_ACTIVITY_ITEMS)
             val accountId = desktopFileCacheAccountId(session)
-            val state = store.load()
-            state.coordinator.pairs
+            val account = store.loadAccount(accountId, trayLimit = limit)
+            val state = account.state
+            val pairsById = state.coordinator.pairs.associateBy(FileSyncPair::id)
+            account.trayWorkItems
                 .asSequence()
-                .filter { it.accountId == accountId }
-                .flatMap { pair ->
+                .map { scoped ->
+                    val pair = pairsById.getValue(scoped.pairId)
                     val root = state.roots.firstOrNull { it.id == pair.localRootId }
                     val pairLabel = syncPairLabel(root?.displayName ?: "Selected folder", pair.remoteRootPath)
-                    pair.workItems.asSequence()
-                        .filter { it.state != FileSyncExecutionState.Skipped }
-                        .map { work ->
-                            DesktopFileSyncTrayActivity(
-                                stableId = "${pair.id}:${work.id}",
-                                relativePath = work.relativePath,
-                                pairLabel = pairLabel,
-                                phase = when (work.state) {
-                                    FileSyncExecutionState.AwaitingDecision ->
-                                        DesktopFileSyncTrayActivityPhase.Conflict
-                                    FileSyncExecutionState.Failed -> DesktopFileSyncTrayActivityPhase.Failed
-                                    FileSyncExecutionState.Ready -> DesktopFileSyncTrayActivityPhase.Waiting
-                                    FileSyncExecutionState.Running -> work.operation.toTrayActivityPhase()
-                                    FileSyncExecutionState.Skipped -> DesktopFileSyncTrayActivityPhase.Waiting
-                                },
-                                sizeBytes = work.observedLocal?.size ?: work.observedRemote?.size,
-                                detail = work.failureMessage,
-                            )
-                        }
+                    val work = scoped.workItem
+                    DesktopFileSyncTrayActivity(
+                        stableId = "${pair.id}:${work.id}",
+                        relativePath = work.relativePath,
+                        pairLabel = pairLabel,
+                        phase = when (work.state) {
+                            FileSyncExecutionState.AwaitingDecision -> DesktopFileSyncTrayActivityPhase.Conflict
+                            FileSyncExecutionState.Failed -> DesktopFileSyncTrayActivityPhase.Failed
+                            FileSyncExecutionState.Ready -> DesktopFileSyncTrayActivityPhase.Waiting
+                            FileSyncExecutionState.Running -> work.operation.toTrayActivityPhase()
+                            FileSyncExecutionState.Skipped -> DesktopFileSyncTrayActivityPhase.Waiting
+                        },
+                        sizeBytes = work.observedLocal?.size ?: work.observedRemote?.size,
+                        detail = work.failureMessage,
+                    )
                 }
                 .sortedWith(
                     compareBy<DesktopFileSyncTrayActivity> {
@@ -151,16 +158,15 @@ internal class DesktopFileSyncEngine(
                 remoteRootPath = normalizedRemote,
                 configuration = configuration,
             )
-            store.save(
-                current.copy(
-                    coordinator = addFileSyncPair(current.coordinator, pair),
-                    roots = current.roots + DesktopFileSyncRootRecord(
-                        rootId,
-                        canonical.absolutePath,
-                        localRoot.displayName,
-                    ),
+            val added = current.copy(
+                coordinator = addFileSyncPair(current.coordinator, pair),
+                roots = current.roots + DesktopFileSyncRootRecord(
+                    rootId,
+                    canonical.absolutePath,
+                    localRoot.displayName,
                 ),
             )
+            store.savePair(added, pair.id)
             selectedRoots.remove(localRoot.localRootId)
             FileSyncCenterActionResult.Completed("Folder sync pair added. Run it to review the first sync.")
         }
@@ -168,7 +174,7 @@ internal class DesktopFileSyncEngine(
 
     suspend fun removePair(session: NextcloudSession, pairId: String): FileSyncCenterActionResult = lock.withLock {
         store.withExclusiveAccess transaction@ {
-            val current = store.load()
+            val current = store.loadPair(pairId)
             val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
                 ?: return@transaction FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
             if (pair.accountId != desktopFileCacheAccountId(session)) {
@@ -176,14 +182,14 @@ internal class DesktopFileSyncEngine(
                     "This folder sync pair belongs to another account.",
                 )
             }
-            val remaining = removeFileSyncPair(current.coordinator, pairId)
-            store.save(
-                current.copy(
-                    coordinator = remaining,
-                    roots = current.roots.filterNot { root ->
-                        root.id == pair.localRootId && remaining.pairs.none { it.localRootId == root.id }
-                    },
-                ),
+            removeFileSyncPair(current.coordinator, pairId)
+            val overview = store.load()
+            store.deletePair(
+                pairId = pairId,
+                rootId = pair.localRootId,
+                deleteRoot = overview.coordinator.pairs.none {
+                    it.id != pairId && it.localRootId == pair.localRootId
+                },
             )
             FileSyncCenterActionResult.Completed("Folder sync pair removed. No local or server files were deleted.")
         }
@@ -212,7 +218,7 @@ internal class DesktopFileSyncEngine(
         shouldContinue: () -> Boolean = { true },
     ): FileSyncCenterActionResult = lock.withLock {
         store.withExclusiveAccess transaction@ {
-            val current = store.load()
+            val current = store.loadPair(pairId)
             val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
                 ?: return@transaction FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
             if (pair.accountId != desktopFileCacheAccountId(session)) {
@@ -227,7 +233,7 @@ internal class DesktopFileSyncEngine(
                     safeFailureMessage(failure, "That conflict decision is no longer valid. Scan again."),
                 )
             }
-            store.save(current.copy(coordinator = resolved))
+            store.savePair(current.copy(coordinator = resolved), pairId)
             runPairLocked(
                 session,
                 userId,
@@ -248,7 +254,7 @@ internal class DesktopFileSyncEngine(
         resetExhaustedFailures: Boolean,
     ): FileSyncCenterActionResult {
         reclaimDesktopFileSyncStages(stagingRoot)
-        var persisted = store.load()
+        var persisted = store.loadPair(pairId)
         val initialPair = persisted.coordinator.pairs.firstOrNull { it.id == pairId }
             ?: return FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
         if (initialPair.accountId != desktopFileCacheAccountId(session)) {
@@ -281,35 +287,28 @@ internal class DesktopFileSyncEngine(
                 localEntries,
                 remoteEntries,
                 System.currentTimeMillis(),
+                maximumWorkItems = MAX_FILE_SYNC_WORK_ITEMS,
             ),
         )
-        if (resetExhaustedFailures) {
-            persisted = persisted.copy(
-                coordinator = resetExhaustedFileSyncOperations(persisted.coordinator, pairId),
-            )
-        }
-        persisted.coordinator.pairs.first { it.id == pairId }.workItems
-            .filter { it.state == FileSyncExecutionState.Failed && it.attemptCount < MAX_FILE_SYNC_ATTEMPTS }
-            .forEach { work ->
-                persisted = persisted.copy(
-                    coordinator = retryFileSyncOperation(persisted.coordinator, pairId, work.id),
-                )
-            }
-        store.save(persisted)
+        val plannedPair = persisted.coordinator.pairs.single().prepareForDesktopExecution(resetExhaustedFailures)
+        persisted = persisted.copy(coordinator = FileSyncCoordinatorState(listOf(plannedPair)))
+        store.savePair(persisted, pairId)
 
         val pairLabel = syncPairLabel(root.displayName, initialPair.remoteRootPath)
-        val totalOperations = persisted.coordinator.pairs.first { it.id == pairId }.workItems.count {
-            it.state == FileSyncExecutionState.Ready
-        }
+        val executableWork = plannedPair.workItems.filter { it.state == FileSyncExecutionState.Ready }
+        val totalOperations = executableWork.size
+        val conflicts = plannedPair.workItems.count { it.state == FileSyncExecutionState.AwaitingDecision }
+        var failures = plannedPair.workItems.count { it.state == FileSyncExecutionState.Failed }
+        val baselinePaths = plannedPair.baselines.mapTo(mutableSetOf(), FileSyncBaseline::relativePath)
         var completed = 0
-        while (true) {
+        for (plannedWork in executableWork) {
             if (!shouldContinue()) break
-            val claim = claimNextFileSyncOperation(persisted.coordinator, pairId, System.currentTimeMillis())
-            persisted = persisted.copy(coordinator = claim.state)
-            store.save(persisted)
-            val command = claim.command ?: break
-            val runningWork = persisted.coordinator.pairs.first { it.id == pairId }
-                .workItems.first { it.id == command.workId }
+            var execution = persisted.scopedToDesktopWork(plannedPair, plannedWork)
+            val claim = claimNextFileSyncOperation(execution.coordinator, pairId, System.currentTimeMillis())
+            execution = execution.copy(coordinator = claim.state)
+            val command = requireNotNull(claim.command)
+            val runningWork = execution.coordinator.pairs.single().workItems.single()
+            store.saveExecutionTransition(execution, pairId, command.workId, runningWork)
             val sizeBytes = runningWork.observedLocal?.size ?: runningWork.observedRemote?.size
             onProgress(
                 DesktopFileSyncProgressEvent(
@@ -325,16 +324,26 @@ internal class DesktopFileSyncEngine(
                 ),
             )
             try {
-                val success = execute(command, persisted.coordinator, local, remote)
-                persisted = persisted.copy(
+                requireDesktopFileSyncBaselineCapacity(command.operation, baselinePaths)
+                val success = execute(command, runningWork, local, remote)
+                execution = execution.copy(
                     coordinator = completeFileSyncOperation(
-                        persisted.coordinator,
+                        execution.coordinator,
                         pairId,
                         command.workId,
                         success,
                     ),
                 )
-                store.save(persisted)
+                store.saveExecutionTransition(
+                    state = execution,
+                    pairId = pairId,
+                    workId = command.workId,
+                    workItem = null,
+                    synchronizedBaselines = success.synchronizedBaselines,
+                    removedBaselinePaths = success.removedRelativePaths.toSet(),
+                )
+                baselinePaths.removeAll(success.removedRelativePaths.toSet())
+                baselinePaths.addAll(success.synchronizedBaselines.map(FileSyncBaseline::relativePath))
                 completed += 1
                 onProgress(
                     DesktopFileSyncProgressEvent(
@@ -353,15 +362,17 @@ internal class DesktopFileSyncEngine(
                 throw cancellation
             } catch (failure: Throwable) {
                 val safeMessage = safeFailureMessage(failure, "The sync operation failed.")
-                persisted = persisted.copy(
+                execution = execution.copy(
                     coordinator = failFileSyncOperation(
-                        persisted.coordinator,
+                        execution.coordinator,
                         pairId,
                         command.workId,
                         safeMessage,
                     ),
                 )
-                store.save(persisted)
+                val failedWork = execution.coordinator.pairs.single().workItems.single()
+                store.saveExecutionTransition(execution, pairId, command.workId, failedWork)
+                failures += 1
                 onProgress(
                     DesktopFileSyncProgressEvent(
                         pairId = pairId,
@@ -378,9 +389,6 @@ internal class DesktopFileSyncEngine(
                 )
             }
         }
-        val pair = persisted.coordinator.pairs.first { it.id == pairId }
-        val conflicts = pair.workItems.count { it.state == FileSyncExecutionState.AwaitingDecision }
-        val failures = pair.workItems.count { it.state == FileSyncExecutionState.Failed }
         val message = buildString {
             append(completed).append(" sync operation")
             if (completed != 1) append('s')
@@ -397,12 +405,11 @@ internal class DesktopFileSyncEngine(
 
     private fun execute(
         command: FileSyncExecutionCommand,
-        state: FileSyncCoordinatorState,
+        work: FileSyncWorkItem,
         local: DesktopFileSyncLocalTree,
         remote: DesktopFileSyncRemoteTree,
     ): FileSyncExecutionSuccess {
-        val pair = state.pairs.first { it.id == command.pairId }
-        val work = pair.workItems.first { it.id == command.workId }
+        require(work.id == command.workId && work.operation == command.operation)
         return when (val operation = command.operation) {
             is FileSyncOperation.Upload -> {
                 val source = requireNotNull(work.observedLocal)
@@ -698,6 +705,74 @@ internal class DesktopFileSyncEngine(
 
     private companion object {
         const val MAX_SYNC_FILE_BYTES = 8L * 1024L * 1024L * 1024L
+    }
+}
+
+internal fun FileSyncPair.prepareForDesktopExecution(resetExhaustedFailures: Boolean): FileSyncPair =
+    copy(
+        workItems = workItems.map { work ->
+            if (work.state != FileSyncExecutionState.Failed) {
+                work
+            } else if (work.attemptCount < MAX_FILE_SYNC_ATTEMPTS) {
+                work.copy(state = FileSyncExecutionState.Ready, failureMessage = null)
+            } else if (resetExhaustedFailures) {
+                work.copy(
+                    state = FileSyncExecutionState.Ready,
+                    attemptCount = 0,
+                    lastAttemptEpochMillis = null,
+                    failureMessage = null,
+                )
+            } else {
+                work
+            }
+        },
+    )
+
+private fun DesktopFileSyncPersistedState.scopedToDesktopWork(
+    pair: FileSyncPair,
+    work: FileSyncWorkItem,
+): DesktopFileSyncPersistedState = copy(
+    coordinator = FileSyncCoordinatorState(
+        listOf(pair.copy(baselines = emptyList(), workItems = listOf(work))),
+    ),
+)
+
+internal fun requireDesktopFileSyncBaselineCapacity(
+    operation: FileSyncOperation,
+    baselinePaths: Set<String>,
+    maximumEntries: Int = MAX_FILE_SYNC_ENTRIES,
+) {
+    require(maximumEntries > 0 && baselinePaths.size <= maximumEntries)
+    val affectedPaths: Set<String>
+    val synchronizedPaths: Set<String>
+    when (operation) {
+        is FileSyncOperation.Upload,
+        is FileSyncOperation.Download,
+        -> {
+            affectedPaths = setOf(operation.relativePath)
+            synchronizedPaths = affectedPaths
+        }
+        is FileSyncOperation.KeepBoth -> {
+            affectedPaths = setOf(
+                operation.relativePath,
+                operation.localConflictPath,
+                operation.remoteConflictPath,
+            )
+            synchronizedPaths = affectedPaths
+        }
+        is FileSyncOperation.DeleteLocal,
+        is FileSyncOperation.DeleteRemote,
+        -> {
+            affectedPaths = setOf(operation.relativePath)
+            synchronizedPaths = emptySet()
+        }
+        is FileSyncOperation.NeedsDecision,
+        is FileSyncOperation.Skipped,
+        -> error("Non-executable sync work has no baseline result.")
+    }
+    val replacedCount = affectedPaths.count { it in baselinePaths }
+    require(baselinePaths.size - replacedCount + synchronizedPaths.size <= maximumEntries) {
+        "The synchronized result would exceed the folder baseline limit."
     }
 }
 

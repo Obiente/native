@@ -38,6 +38,45 @@ fun decodeFileSyncCoordinatorSnapshot(bytes: ByteArray): FileSyncCoordinatorStat
     )
 }
 
+internal fun encodeFileSyncPairRecord(pair: FileSyncPair): ByteArray {
+    require(pair.baselines.isEmpty() && pair.workItems.isEmpty())
+    return syncCoordinatorJson.encodeToString(pair.toSnapshot()).encodeToByteArray().also { encoded ->
+        require(encoded.size <= MAX_FILE_SYNC_PAIR_RECORD_BYTES) { "The sync pair record is too large." }
+    }
+}
+
+internal fun decodeFileSyncPairRecord(bytes: ByteArray): FileSyncPair {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_SYNC_PAIR_RECORD_BYTES)
+    val text = strictSyncRecordText(bytes)
+    return syncCoordinatorJson.decodeFromString<FileSyncPairSnapshotV1>(text).toDomain().also { pair ->
+        require(pair.baselines.isEmpty() && pair.workItems.isEmpty())
+    }
+}
+
+internal fun encodeFileSyncBaselineRecord(baseline: FileSyncBaseline): ByteArray =
+    syncCoordinatorJson.encodeToString(baseline.toSnapshot()).encodeToByteArray().also { encoded ->
+        require(encoded.size <= MAX_FILE_SYNC_ROW_BYTES) { "The sync baseline record is too large." }
+    }
+
+internal fun decodeFileSyncBaselineRecord(bytes: ByteArray): FileSyncBaseline {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_SYNC_ROW_BYTES)
+    return syncCoordinatorJson.decodeFromString<FileSyncBaselineSnapshotV1>(strictSyncRecordText(bytes)).toDomain()
+}
+
+internal fun encodeFileSyncWorkRecord(work: FileSyncWorkItem): ByteArray =
+    syncCoordinatorJson.encodeToString(work.toSnapshot()).encodeToByteArray().also { encoded ->
+        require(encoded.size <= MAX_FILE_SYNC_ROW_BYTES) { "The sync work record is too large." }
+    }
+
+internal fun decodeFileSyncWorkRecord(bytes: ByteArray): FileSyncWorkItem {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_SYNC_ROW_BYTES)
+    return syncCoordinatorJson.decodeFromString<FileSyncWorkSnapshotV1>(strictSyncRecordText(bytes)).toDomain()
+}
+
+private fun strictSyncRecordText(bytes: ByteArray): String = bytes.decodeToString().also { text ->
+    require(text.encodeToByteArray().contentEquals(bytes)) { "The sync database record is not valid UTF-8." }
+}
+
 @Serializable
 private data class FileSyncCoordinatorSnapshotV1(
     val schemaVersion: Int = FILE_SYNC_SNAPSHOT_VERSION,
@@ -330,3 +369,5 @@ private val syncCoordinatorJson = Json {
 
 private const val FILE_SYNC_SNAPSHOT_VERSION = 1
 private const val MAX_FILE_SYNC_SNAPSHOT_BYTES = 8 * 1024 * 1024
+private const val MAX_FILE_SYNC_PAIR_RECORD_BYTES = 4 * 1024 * 1024
+private const val MAX_FILE_SYNC_ROW_BYTES = 128 * 1024

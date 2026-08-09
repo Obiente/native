@@ -35,6 +35,7 @@ import dev.obiente.nextcloudnative.app.ThemePreference
 import dev.obiente.nextcloudnative.app.applyDesktopNativeWindowFrame
 import dev.obiente.nextcloudnative.app.desktopSupportDiagnosticsDirectory
 import dev.obiente.nextcloudnative.app.desktopUpdateHandoffActive
+import dev.obiente.nextcloudnative.app.handoffLinuxAutostartToUserService
 import dev.obiente.nextcloudnative.app.tooltip
 import dev.obiente.nextcloudnative.app.unregisterWindowsCloudFilesRootForUninstall
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
@@ -66,12 +67,14 @@ fun main(arguments: Array<String>) {
         )
         return
     }
-    val backgroundLaunch = arguments.contains("--background")
+    val autostartLaunch = arguments.contains("--autostart")
+    if (autostartLaunch && handoffLinuxAutostartToUserService()) return
+    val backgroundLaunch = autostartLaunch || arguments.contains("--background")
     val updateHandoffFailed = arguments.contains("--update-handoff-failed")
-    val activationKind = if (updateHandoffFailed) {
-        DesktopActivationKind.UpdateHandoffFailed
-    } else {
-        DesktopActivationKind.ShowWindow
+    val activationKind = when {
+        updateHandoffFailed -> DesktopActivationKind.UpdateHandoffFailed
+        backgroundLaunch -> DesktopActivationKind.Background
+        else -> DesktopActivationKind.ShowWindow
     }
     val singleInstance = when (val start = DesktopSingleInstance.acquire(activationKind = activationKind)) {
         is DesktopSingleInstanceStart.Primary -> start.instance
@@ -206,9 +209,13 @@ fun main(arguments: Array<String>) {
 
     LaunchedEffect(singleInstance) {
         singleInstance.activations.collect { externalActivation ->
-            showMainWindow()
-            if (externalActivation.kind == DesktopActivationKind.UpdateHandoffFailed) {
-                updateFailureSequence.value += 1L
+            when (externalActivation.kind) {
+                DesktopActivationKind.Background -> Unit
+                DesktopActivationKind.ShowWindow -> showMainWindow()
+                DesktopActivationKind.UpdateHandoffFailed -> {
+                    showMainWindow()
+                    updateFailureSequence.value += 1L
+                }
             }
         }
     }

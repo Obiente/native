@@ -12542,7 +12542,7 @@ internal fun DesktopStartOnLoginSettingsCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text("Start on login", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Keep folder sync and virtual files available after signing in to this computer.",
+                    "With your confirmation, keep folder sync, virtual files, and the tray available after you sign in.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
