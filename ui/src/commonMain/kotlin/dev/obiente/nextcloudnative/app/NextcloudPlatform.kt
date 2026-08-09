@@ -463,6 +463,38 @@ interface NextcloudPlatformServices {
     /** Returns a user-facing limitation when the preference could not be applied immediately. */
     fun saveStartOnLoginPreference(enabled: Boolean): String? = null
 
+    /** Summary of bounded, already-sanitized application diagnostics kept in private storage. */
+    suspend fun loadSupportDiagnosticsSummary(): SupportDiagnosticsSummary = SupportDiagnosticsSummary(
+        available = false,
+        eventCount = 0,
+        warningCount = 0,
+        errorCount = 0,
+        oldestEventAtEpochMillis = null,
+        newestEventAtEpochMillis = null,
+        components = emptySet(),
+        storedBytes = 0L,
+        includedFiles = SUPPORT_BUNDLE_INCLUDED_FILES,
+        explanation = "Anonymized support reports are unavailable on this platform.",
+    )
+
+    /** Emits after the visible diagnostic history changes so an open support card stays current. */
+    fun supportDiagnosticsRevisions(): Flow<Long> = flowOf(0L)
+
+    /** Creates a local sanitized report and opens the platform-owned save or share flow. */
+    suspend fun exportSupportDiagnostics(reproductionSteps: String): SupportDiagnosticsExportResult =
+        SupportDiagnosticsExportResult.Unsupported(
+            "Anonymized support reports are unavailable on this platform.",
+        )
+
+    /** Clears only diagnostic history. The private alias key remains stable across reports. */
+    suspend fun clearSupportDiagnostics(): Boolean = false
+
+    /** Records a structured event. Implementations sanitize it before app-private persistence. */
+    fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) = Unit
+
+    /** Registers a private value for exact in-memory removal from later diagnostic messages. */
+    fun registerSupportDiagnosticPrivateValue(value: String?) = Unit
+
     fun loadLastOpenedAppId(): String
 
     fun saveLastOpenedAppId(appId: String)

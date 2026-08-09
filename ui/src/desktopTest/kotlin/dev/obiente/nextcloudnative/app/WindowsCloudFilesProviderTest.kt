@@ -21,6 +21,36 @@ import kotlin.test.assertTrue
 
 class WindowsCloudFilesProviderTest {
     @Test
+    fun failedPlaceholderIndexIncludesTheFirstRejectedUnprocessedEntry() {
+        assertEquals(
+            0,
+            windowsCloudFailedPlaceholderIndex(
+                firstFailedEntryIndex = 0,
+                processedCount = 0,
+                placeholderCount = 2,
+            ),
+        )
+        assertEquals(
+            1,
+            windowsCloudFailedPlaceholderIndex(
+                firstFailedEntryIndex = null,
+                processedCount = 1,
+                placeholderCount = 2,
+            ),
+        )
+    }
+
+    @Test
+    fun placeholderDiagnosticResultSamplesStayBounded() {
+        assertEquals(0, windowsCloudPlaceholderDiagnosticSampleSize(0))
+        assertEquals(4, windowsCloudPlaceholderDiagnosticSampleSize(4))
+        assertEquals(
+            MAX_WINDOWS_CLOUD_PLACEHOLDER_DIAGNOSTIC_RESULTS,
+            windowsCloudPlaceholderDiagnosticSampleSize(100_000),
+        )
+    }
+
+    @Test
     fun `native provider creates a readable directory placeholder on Windows`() {
         if (!isWindowsDesktop()) return
         val root = createTempDirectory("windows-cloud-native-")
@@ -208,7 +238,13 @@ class WindowsCloudFilesProviderTest {
                 )
             }
         }
-        val provider = WindowsCloudFilesProvider(root, backend, api)
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = backend,
+            api = api,
+            recordDiagnostic = diagnostics::add,
+        )
 
         try {
             provider.start()
@@ -216,6 +252,24 @@ class WindowsCloudFilesProviderTest {
             assertEquals(current, api.decodedIdentity(root.resolve("report.txt")))
             assertTrue(api.invalidatedUpdates.isEmpty())
             assertEquals(listOf("", ""), backend.listedPaths.take(2))
+            assertEquals(
+                listOf("collision-detected", "collision-reconciled"),
+                diagnostics.map(SupportDiagnosticEventDraft::outcome),
+            )
+            val reconciled = diagnostics.last()
+            assertEquals(SupportDiagnosticComponent.VirtualFiles, reconciled.component)
+            assertEquals(
+                SupportDiagnosticValuePrivacy.LocalPath,
+                reconciled.fields.single { it.name == "local_directory" }.privacy,
+            )
+            assertEquals(
+                SupportDiagnosticValuePrivacy.RemotePath,
+                reconciled.fields.single { it.name == "remote_path" }.privacy,
+            )
+            assertEquals(
+                SupportDiagnosticValuePrivacy.Identifier,
+                reconciled.fields.single { it.name == "account" }.privacy,
+            )
         } finally {
             provider.removeSyncRoot()
             root.toFile().deleteRecursively()

@@ -699,8 +699,20 @@ internal fun combinedAutomaticCacheExcess(
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
     private val onDesktopUpdateInstallerOpened: (String) -> Unit = {},
+    supportDiagnosticsRoot: File? = null,
+    providedSupportDiagnostics: AsyncJvmSupportDiagnostics? = null,
 ) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
+    private val ownsTemporarySupportDiagnosticsRoot = providedSupportDiagnostics == null && supportDiagnosticsRoot == null
+    private val resolvedSupportDiagnosticsRoot = supportDiagnosticsRoot ?: if (providedSupportDiagnostics == null) {
+        Files.createTempDirectory("nextcloud-native-test-diagnostics").toFile()
+    } else {
+        null
+    }
+    private val supportDiagnostics = providedSupportDiagnostics ?: createDesktopSupportDiagnostics(
+        requireNotNull(resolvedSupportDiagnosticsRoot),
+    )
+    private val supportBundleExporter = DesktopSupportBundleExporter(supportDiagnostics)
     private val secretStore = defaultDesktopSecretStore()
     private val appUpdater = DesktopAppUpdater(
         preferences = preferences.node("app-updates-v1"),
@@ -748,6 +760,11 @@ class DesktopNextcloudServices(
         executeNextcloudApi(session, request)
     }
     private val externalFileHandoff = DesktopExternalFileHandoff()
+
+    init {
+        require(providedSupportDiagnostics == null || supportDiagnosticsRoot == null)
+        supportDiagnostics.registerPrivateValue(System.getProperty("user.home"))
+    }
 
     private fun virtualRangeCache(accountId: String): DesktopVirtualRangeCache {
         val cache = synchronized(virtualRangeCaches) {
@@ -1264,9 +1281,9 @@ class DesktopNextcloudServices(
         return jobs
     }
 
-    private suspend fun reconcileConfiguredVirtualFolders() {
+    private suspend fun reconcileConfiguredVirtualFolders(session: NextcloudSession?) {
         if (!isLinuxDesktop()) return
-        val session = loadSession() ?: return
+        session ?: return
         val accountId = desktopFileCacheAccountId(session)
         val cache = virtualRangeCache(accountId)
         val kept = cache.loadFolderRetention(accountId).rules.filter { rule ->
@@ -1326,10 +1343,16 @@ class DesktopNextcloudServices(
                 while (isActive) {
                     if (!isFileSyncPaused()) {
                         runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
-                            .onFailure(::publishBackgroundFileSyncFailure)
                     }
-                    runCatching { reconcileConfiguredVirtualFolders() }
-                        .onFailure(::publishBackgroundFileSyncFailure)
+                    val virtualFolderSession = loadSession()
+                    runCatching { reconcileConfiguredVirtualFolders(virtualFolderSession) }
+                        .onFailure { failure ->
+                            publishFileSyncRunFailure(
+                                virtualFolderSession?.let(::desktopFileCacheAccountId),
+                                DesktopFileSyncRunSource.Background,
+                                failure,
+                            )
+                        }
                     delay(DESKTOP_FILE_SYNC_INTERVAL_MILLIS)
                 }
             }
@@ -1519,6 +1542,9 @@ class DesktopNextcloudServices(
         val accountId = desktopFileCacheAccountId(session)
         synchronized(virtualFileProviderLock) {
             if (isWindowsDesktop()) {
+                val recordCloudFilesDiagnostic: (SupportDiagnosticEventDraft) -> Unit = { event ->
+                    supportDiagnostics.recordForAccountIdentity(accountId, event)
+                }
                 if (windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId) {
                     return@withContext VirtualFileStorageActionResult.Completed(
                         "Windows Cloud Files are already connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
@@ -1543,7 +1569,8 @@ class DesktopNextcloudServices(
                         val legacyProvider = WindowsCloudFilesProvider(
                             root = legacyRoot,
                             backend = backend,
-                            api = JnaWindowsCloudFilesApi(),
+                            api = JnaWindowsCloudFilesApi(recordDiagnostic = recordCloudFilesDiagnostic),
+                            recordDiagnostic = recordCloudFilesDiagnostic,
                         )
                         try {
                             legacyProvider.start()
@@ -1555,7 +1582,7 @@ class DesktopNextcloudServices(
                             throw failure
                         }
                     } else {
-                        JnaWindowsCloudFilesApi().use { cleanupApi ->
+                        JnaWindowsCloudFilesApi(recordDiagnostic = recordCloudFilesDiagnostic).use { cleanupApi ->
                             unregisterSupersededWindowsCloudFilesRoot(
                                 preferences = preferences,
                                 accountId = accountId,
@@ -1566,13 +1593,20 @@ class DesktopNextcloudServices(
                     }
                 } catch (failure: Throwable) {
                     windowsCloudFilesFailure = failure.message ?: "Unknown Cloud Files migration failure"
+                    recordVirtualFileFailure(
+                        operation = "cloud-files.legacy-cleanup",
+                        accountId = accountId,
+                        root = legacyRoot,
+                        failure = failure,
+                    )
                     throw failure
                 }
-                val api = JnaWindowsCloudFilesApi()
+                val api = JnaWindowsCloudFilesApi(recordDiagnostic = recordCloudFilesDiagnostic)
                 val provider = WindowsCloudFilesProvider(
                     root = root,
                     backend = backend,
                     api = api,
+                    recordDiagnostic = recordCloudFilesDiagnostic,
                 )
                 try {
                     provider.start()
@@ -1588,6 +1622,12 @@ class DesktopNextcloudServices(
                 } catch (failure: Throwable) {
                     runCatching(provider::close)
                     windowsCloudFilesFailure = failure.message ?: "Unknown Cloud Files activation failure"
+                    recordVirtualFileFailure(
+                        operation = "cloud-files.activation",
+                        accountId = accountId,
+                        root = root,
+                        failure = failure,
+                    )
                     throw failure
                 }
                 return@withContext VirtualFileStorageActionResult.Completed(
@@ -1672,6 +1712,12 @@ class DesktopNextcloudServices(
                     runCatching(metadataBackend::close)
                 }
                 linuxVirtualFileFailure = failure.message ?: "Unknown FUSE mount failure"
+                recordVirtualFileFailure(
+                    operation = "fuse.activation",
+                    accountId = accountId,
+                    root = mountPoint.toPath(),
+                    failure = failure,
+                )
                 throw failure
             }
         }
@@ -1922,6 +1968,8 @@ class DesktopNextcloudServices(
             windowsCloudFilesProvider = null
             windowsCloudFilesIdentity = null
         }
+        supportDiagnostics.close()
+        if (ownsTemporarySupportDiagnosticsRoot) requireNotNull(resolvedSupportDiagnosticsRoot).deleteRecursively()
     }
 
     private fun invalidateDesktopFileMetadata(accountId: String, path: String) {
@@ -1968,7 +2016,15 @@ class DesktopNextcloudServices(
         remoteRootPath: String,
         configuration: FileSyncConfiguration,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncEngine.addPair(session, localRoot, remoteRootPath, configuration).also {
+        val accountId = desktopFileCacheAccountId(session)
+        val diagnosticFields = listOf(
+            SupportDiagnosticFieldDraft("local_root", localRoot.localRootId, SupportDiagnosticValuePrivacy.LocalPath),
+            SupportDiagnosticFieldDraft("remote_root", remoteRootPath, SupportDiagnosticValuePrivacy.RemotePath),
+        )
+        diagnoseDesktopSupportFailure(accountId, "sync.pair-add", diagnosticFields) {
+            fileSyncEngine.addPair(session, localRoot, remoteRootPath, configuration)
+        }.also { result ->
+            recordDesktopFileSyncResult(accountId, "sync.pair-add", diagnosticFields, result)
             runCatching {
                 publishFileSyncTraySnapshot(
                     loadDesktopFileSyncCenter(session),
@@ -1983,34 +2039,40 @@ class DesktopNextcloudServices(
         userId: String,
         pairId: String,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncRunLock.withLock {
-            if (isFileSyncPaused()) {
-                return@withLock FileSyncCenterActionResult.Rejected(
-                "Desktop syncing is paused. Resume it from the system tray first.",
-                )
-            }
-            mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
-                phase = DesktopFileSyncTrayPhase.Syncing,
-                message = "Checking folder changes",
-            )
-            try {
-                fileSyncEngine.runPair(
-                    session,
-                    userId,
-                    pairId,
-                    onProgress = ::publishFileSyncProgress,
-                    shouldContinue = { !isFileSyncPaused() },
-                    resetExhaustedFailures = true,
-                )
-            } finally {
-                runCatching {
-                    publishFileSyncTraySnapshot(
-                        loadDesktopFileSyncCenter(session),
-                        fileSyncEngine.loadTrayActivities(session),
+        val accountId = desktopFileCacheAccountId(session)
+        val diagnosticFields = listOf(
+            SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
+        )
+        diagnoseDesktopSupportFailure(accountId, "sync.pair-run", diagnosticFields) {
+            fileSyncRunLock.withLock {
+                if (isFileSyncPaused()) {
+                    return@withLock FileSyncCenterActionResult.Rejected(
+                        "Desktop syncing is paused. Resume it from the system tray first.",
                     )
                 }
+                mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+                    phase = DesktopFileSyncTrayPhase.Syncing,
+                    message = "Checking folder changes",
+                )
+                try {
+                    fileSyncEngine.runPair(
+                        session,
+                        userId,
+                        pairId,
+                        onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                        shouldContinue = { !isFileSyncPaused() },
+                        resetExhaustedFailures = true,
+                    )
+                } finally {
+                    runCatching {
+                        publishFileSyncTraySnapshot(
+                            loadDesktopFileSyncCenter(session),
+                            fileSyncEngine.loadTrayActivities(session),
+                        )
+                    }
+                }
             }
-        }
+        }.also { result -> recordDesktopFileSyncResult(accountId, "sync.pair-run", diagnosticFields, result) }
     }
 
     override suspend fun resolveFileSyncConflict(
@@ -2020,34 +2082,48 @@ class DesktopNextcloudServices(
         workId: Long,
         choice: FileSyncDecisionChoice,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncRunLock.withLock {
-            if (isFileSyncPaused()) {
-                return@withLock FileSyncCenterActionResult.Rejected(
-                "Desktop syncing is paused. Resume it from the system tray first.",
-                )
-            }
-            mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
-                phase = DesktopFileSyncTrayPhase.Syncing,
-                message = "Resolving sync conflict",
-            )
-            try {
-                fileSyncEngine.resolveConflictAndRun(
-                    session,
-                    userId,
-                    pairId,
-                    workId,
-                    choice,
-                    onProgress = ::publishFileSyncProgress,
-                    shouldContinue = { !isFileSyncPaused() },
-                )
-            } finally {
-                runCatching {
-                    publishFileSyncTraySnapshot(
-                        loadDesktopFileSyncCenter(session),
-                        fileSyncEngine.loadTrayActivities(session),
+        val accountId = desktopFileCacheAccountId(session)
+        val diagnosticFields = listOf(
+            SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
+            SupportDiagnosticFieldDraft(
+                "work",
+                workId.toString(),
+                SupportDiagnosticValuePrivacy.Identifier,
+            ),
+            SupportDiagnosticFieldDraft("choice", choice.name.lowercase()),
+        )
+        diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve", diagnosticFields) {
+            fileSyncRunLock.withLock {
+                if (isFileSyncPaused()) {
+                    return@withLock FileSyncCenterActionResult.Rejected(
+                        "Desktop syncing is paused. Resume it from the system tray first.",
                     )
                 }
+                mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+                    phase = DesktopFileSyncTrayPhase.Syncing,
+                    message = "Resolving sync conflict",
+                )
+                try {
+                    fileSyncEngine.resolveConflictAndRun(
+                        session,
+                        userId,
+                        pairId,
+                        workId,
+                        choice,
+                        onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                        shouldContinue = { !isFileSyncPaused() },
+                    )
+                } finally {
+                    runCatching {
+                        publishFileSyncTraySnapshot(
+                            loadDesktopFileSyncCenter(session),
+                            fileSyncEngine.loadTrayActivities(session),
+                        )
+                    }
+                }
             }
+        }.also { result ->
+            recordDesktopFileSyncResult(accountId, "sync.conflict-resolve", diagnosticFields, result)
         }
     }
 
@@ -2056,7 +2132,14 @@ class DesktopNextcloudServices(
         userId: String,
         pairId: String,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncEngine.removePair(session, pairId).also {
+        val accountId = desktopFileCacheAccountId(session)
+        val diagnosticFields = listOf(
+            SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
+        )
+        diagnoseDesktopSupportFailure(accountId, "sync.pair-remove", diagnosticFields) {
+            fileSyncEngine.removePair(session, pairId)
+        }.also { result ->
+            recordDesktopFileSyncResult(accountId, "sync.pair-remove", diagnosticFields, result)
             runCatching {
                 publishFileSyncTraySnapshot(
                     loadDesktopFileSyncCenter(session),
@@ -2105,7 +2188,6 @@ class DesktopNextcloudServices(
         if (!paused) {
             serviceScope.launch {
                 runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Resume) }
-                    .onFailure(::publishBackgroundFileSyncFailure)
             }
         }
     }
@@ -2124,82 +2206,94 @@ class DesktopNextcloudServices(
     private suspend fun syncAllFileSyncPairs(
         source: DesktopFileSyncRunSource,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncRunLock.withLock {
-        if (isFileSyncPaused()) {
-            return@withLock FileSyncCenterActionResult.Rejected("Desktop syncing is paused.")
-        }
-        val session = loadSession()
-            ?: return@withLock FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
-        val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
-            return@withLock FileSyncCenterActionResult.Rejected(
-                failure.message ?: "Could not load the signed-in account.",
-            )
-        }
-        val initial = loadDesktopFileSyncCenter(session)
-        if (initial.pairs.isEmpty()) {
-            publishFileSyncTraySnapshot(initial, emptyList())
-            return@withLock FileSyncCenterActionResult.Completed("No desktop sync folders are configured.")
-        }
-        mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
-            phase = DesktopFileSyncTrayPhase.Syncing,
-            message = if (source == DesktopFileSyncRunSource.Background) {
-                "Checking for changes"
-            } else {
-                "Syncing all folders"
-            },
-            accountLabel = session.loginName,
-        )
+        var diagnosticAccountId: String? = null
         try {
-            var failures = 0
-            var waitingForConditions = 0
-            initial.pairs.forEach { pair ->
-                if (isFileSyncPaused()) return@forEach
-                fun runtimeAllowsPair(): Boolean =
-                    source == DesktopFileSyncRunSource.Tray ||
-                        desktopFileSyncRuntimeConditions().allows(pair.configuration)
-                if (!runtimeAllowsPair()) {
-                    waitingForConditions += 1
-                    return@forEach
+            fileSyncRunLock.withLock {
+                if (isFileSyncPaused()) {
+                    return@withLock FileSyncCenterActionResult.Rejected("Desktop syncing is paused.")
                 }
-                val result = try {
-                    fileSyncEngine.runPair(
-                        session,
-                        userId,
-                        pair.id,
-                        onProgress = ::publishFileSyncProgress,
-                        shouldContinue = { !isFileSyncPaused() && runtimeAllowsPair() },
-                        resetExhaustedFailures = source == DesktopFileSyncRunSource.Tray,
+                val session = loadSession()
+                    ?: return@withLock FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
+                val accountId = desktopFileCacheAccountId(session)
+                diagnosticAccountId = accountId
+                val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
+                    return@withLock FileSyncCenterActionResult.Rejected(
+                        failure.message ?: "Could not load the signed-in account.",
                     )
-                } catch (cancellation: CancellationException) {
-                    throw cancellation
-                } catch (_: Throwable) {
-                    failures += 1
-                    return@forEach
                 }
-                if (result is FileSyncCenterActionResult.Rejected) failures += 1
-                if (source != DesktopFileSyncRunSource.Tray && !runtimeAllowsPair()) {
-                    waitingForConditions += 1
+                val initial = loadDesktopFileSyncCenter(session)
+                if (initial.pairs.isEmpty()) {
+                    publishFileSyncTraySnapshot(initial, emptyList())
+                    return@withLock FileSyncCenterActionResult.Completed("No desktop sync folders are configured.")
                 }
-            }
-            if (failures == 0) {
-                FileSyncCenterActionResult.Completed(
-                    if (waitingForConditions == 0) {
-                        "All desktop sync folders were checked."
+                mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+                    phase = DesktopFileSyncTrayPhase.Syncing,
+                    message = if (source == DesktopFileSyncRunSource.Background) {
+                        "Checking for changes"
                     } else {
-                        "$waitingForConditions desktop sync folder(s) are waiting for their network or power rules."
+                        "Syncing all folders"
                     },
+                    accountLabel = session.loginName,
                 )
-            } else {
-                FileSyncCenterActionResult.Rejected("$failures desktop sync folders need attention.")
+                try {
+                    var failures = 0
+                    var waitingForConditions = 0
+                    initial.pairs.forEach { pair ->
+                        if (isFileSyncPaused()) return@forEach
+                        fun runtimeAllowsPair(): Boolean =
+                            source == DesktopFileSyncRunSource.Tray ||
+                                desktopFileSyncRuntimeConditions().allows(pair.configuration)
+                        if (!runtimeAllowsPair()) {
+                            waitingForConditions += 1
+                            return@forEach
+                        }
+                        val result = try {
+                            fileSyncEngine.runPair(
+                                session,
+                                userId,
+                                pair.id,
+                                onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                                shouldContinue = { !isFileSyncPaused() && runtimeAllowsPair() },
+                                resetExhaustedFailures = source == DesktopFileSyncRunSource.Tray,
+                            )
+                        } catch (cancellation: CancellationException) {
+                            throw cancellation
+                        } catch (_: Throwable) {
+                            failures += 1
+                            return@forEach
+                        }
+                        if (result is FileSyncCenterActionResult.Rejected) failures += 1
+                        if (source != DesktopFileSyncRunSource.Tray && !runtimeAllowsPair()) {
+                            waitingForConditions += 1
+                        }
+                    }
+                    if (failures == 0) {
+                        FileSyncCenterActionResult.Completed(
+                            if (waitingForConditions == 0) {
+                                "All desktop sync folders were checked."
+                            } else {
+                                "$waitingForConditions desktop sync folder(s) are waiting for their network or power rules."
+                            },
+                        )
+                    } else {
+                        FileSyncCenterActionResult.Rejected("$failures desktop sync folders need attention.")
+                    }
+                } finally {
+                    runCatching {
+                        publishFileSyncTraySnapshot(
+                            loadDesktopFileSyncCenter(session),
+                            fileSyncEngine.loadTrayActivities(session),
+                        )
+                    }
+                }
             }
-        } finally {
-            runCatching {
-                publishFileSyncTraySnapshot(
-                    loadDesktopFileSyncCenter(session),
-                    fileSyncEngine.loadTrayActivities(session),
-                )
-            }
-        }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            publishFileSyncRunFailure(diagnosticAccountId, source, failure)
+            FileSyncCenterActionResult.Rejected(
+                failure.message ?: "The desktop sync check failed.",
+            )
         }
     }
 
@@ -2276,7 +2370,35 @@ class DesktopNextcloudServices(
         )
     }
 
-    private fun publishFileSyncProgress(event: DesktopFileSyncProgressEvent) {
+    private fun publishFileSyncProgress(accountId: String, event: DesktopFileSyncProgressEvent) {
+        if (event.stage == DesktopFileSyncProgressStage.Failed) {
+            supportDiagnostics.recordForAccountIdentity(
+                accountId,
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Sync,
+                    operation = "sync.item",
+                    outcome = "failed",
+                    message = event.failureMessage,
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("pair", event.pairId, SupportDiagnosticValuePrivacy.Identifier),
+                        SupportDiagnosticFieldDraft(
+                            "work",
+                            event.workId.toString(),
+                            SupportDiagnosticValuePrivacy.Identifier,
+                        ),
+                        SupportDiagnosticFieldDraft(
+                            "relative_path",
+                            event.relativePath,
+                            SupportDiagnosticValuePrivacy.RemotePath,
+                        ),
+                        SupportDiagnosticFieldDraft("operation_type", event.operation::class.simpleName.orEmpty()),
+                        SupportDiagnosticFieldDraft("completed_operations", event.completedOperations.toString()),
+                        SupportDiagnosticFieldDraft("total_operations", event.totalOperations.toString()),
+                    ),
+                ),
+            )
+        }
         val current = mutableFileSyncTraySnapshot.value
         val phase = when (event.stage) {
             DesktopFileSyncProgressStage.Started -> event.operation.toTrayActivityPhase()
@@ -2315,7 +2437,23 @@ class DesktopNextcloudServices(
         )
     }
 
-    private fun publishBackgroundFileSyncFailure(failure: Throwable) {
+    private fun publishFileSyncRunFailure(
+        accountId: String?,
+        source: DesktopFileSyncRunSource,
+        failure: Throwable,
+    ) {
+        val event = SupportDiagnosticEventDraft(
+            severity = SupportDiagnosticSeverity.Error,
+            component = SupportDiagnosticComponent.Sync,
+            operation = "sync.${source.name.lowercase()}-run",
+            outcome = "failed",
+            exception = failure.toSupportDiagnosticExceptionDraft(),
+        )
+        if (accountId == null) {
+            supportDiagnostics.record(event)
+        } else {
+            supportDiagnostics.recordForAccountIdentity(accountId, event)
+        }
         val current = mutableFileSyncTraySnapshot.value
         val message = failure.message
             ?.takeIf { it.isNotBlank() && it.none(Char::isISOControl) }
@@ -2326,6 +2464,91 @@ class DesktopNextcloudServices(
             failedCount = current.failedCount + 1,
             message = message,
             overallProgress = null,
+        )
+    }
+
+    private fun recordDesktopFileSyncResult(
+        accountId: String,
+        operation: String,
+        fields: List<SupportDiagnosticFieldDraft>,
+        result: FileSyncCenterActionResult,
+    ) {
+        supportDiagnostics.recordForAccountIdentity(
+            accountId,
+            SupportDiagnosticEventDraft(
+                severity = if (result is FileSyncCenterActionResult.Completed) {
+                    SupportDiagnosticSeverity.Info
+                } else {
+                    SupportDiagnosticSeverity.Warning
+                },
+                component = SupportDiagnosticComponent.Sync,
+                operation = operation,
+                outcome = when (result) {
+                    is FileSyncCenterActionResult.Completed -> "completed"
+                    is FileSyncCenterActionResult.Rejected -> "rejected"
+                    is FileSyncCenterActionResult.Unsupported -> "unsupported"
+                },
+                message = when (result) {
+                    is FileSyncCenterActionResult.Completed -> null
+                    is FileSyncCenterActionResult.Rejected -> result.reason
+                    is FileSyncCenterActionResult.Unsupported -> result.reason
+                },
+                fields = fields,
+            ),
+        )
+    }
+
+    private suspend fun <T> diagnoseDesktopSupportFailure(
+        accountId: String,
+        operation: String,
+        fields: List<SupportDiagnosticFieldDraft>,
+        block: suspend () -> T,
+    ): T {
+        val started = System.nanoTime()
+        return try {
+            block()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            supportDiagnostics.recordForAccountIdentity(
+                accountId,
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Sync,
+                    operation = operation,
+                    outcome = "failed",
+                    durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                    fields = fields,
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+            throw failure
+        }
+    }
+
+    private fun recordVirtualFileFailure(
+        operation: String,
+        accountId: String,
+        root: Path,
+        failure: Throwable,
+    ) {
+        supportDiagnostics.recordForAccountIdentity(
+            accountId,
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Error,
+                component = SupportDiagnosticComponent.VirtualFiles,
+                operation = operation,
+                outcome = "failed",
+                fields = listOf(
+                    SupportDiagnosticFieldDraft("account", accountId, SupportDiagnosticValuePrivacy.Identifier),
+                    SupportDiagnosticFieldDraft(
+                        "provider_root",
+                        root.toAbsolutePath().toString(),
+                        SupportDiagnosticValuePrivacy.LocalPath,
+                    ),
+                ),
+                exception = failure.toSupportDiagnosticExceptionDraft(),
+            ),
         )
     }
 
@@ -2428,10 +2651,64 @@ class DesktopNextcloudServices(
         channel: AndroidUpdateChannel,
         automatic: Boolean,
     ): AppUpdateCheckResult = withContext(Dispatchers.IO) {
-        if (automatic && !appUpdater.updatePreferences().automaticChecks) {
-            AppUpdateCheckResult.Unavailable(appUpdater.support())
-        } else {
-            appUpdater.checkForUpdate(channel)
+        val started = System.nanoTime()
+        try {
+            val result = if (automatic && !appUpdater.updatePreferences().automaticChecks) {
+                AppUpdateCheckResult.Unavailable(appUpdater.support())
+            } else {
+                appUpdater.checkForUpdate(channel)
+            }
+            when (result) {
+                is AppUpdateCheckResult.Available -> supportDiagnostics.record(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Info,
+                        component = SupportDiagnosticComponent.Updates,
+                        operation = "updates.check",
+                        outcome = "available",
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft("channel", channel.name.lowercase()),
+                            SupportDiagnosticFieldDraft("automatic", automatic.toString()),
+                            SupportDiagnosticFieldDraft("release", result.release.versionName),
+                        ),
+                    ),
+                )
+                is AppUpdateCheckResult.Failed -> supportDiagnostics.record(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Warning,
+                        component = SupportDiagnosticComponent.Updates,
+                        operation = "updates.check",
+                        outcome = "failed",
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                        message = result.message,
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft("channel", channel.name.lowercase()),
+                            SupportDiagnosticFieldDraft("automatic", automatic.toString()),
+                            SupportDiagnosticFieldDraft("retryable", result.retryable.toString()),
+                        ),
+                    ),
+                )
+                is AppUpdateCheckResult.Current,
+                is AppUpdateCheckResult.Unavailable,
+                -> Unit
+            }
+            result
+        } catch (failure: Throwable) {
+            supportDiagnostics.record(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Updates,
+                    operation = "updates.check",
+                    outcome = "failed",
+                    durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("channel", channel.name.lowercase()),
+                        SupportDiagnosticFieldDraft("automatic", automatic.toString()),
+                    ),
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+            throw failure
         }
     }
 
@@ -2439,9 +2716,91 @@ class DesktopNextcloudServices(
         appUpdater.observeInstallState()
 
     override suspend fun beginAppUpdate(release: AppUpdateRelease): AppUpdateInstallResult =
-        withContext(Dispatchers.IO) { appUpdater.beginUpdate(release) }
+        withContext(Dispatchers.IO) {
+            val started = System.nanoTime()
+            try {
+                val result = appUpdater.beginUpdate(release)
+                supportDiagnostics.record(
+                    SupportDiagnosticEventDraft(
+                        severity = when (result) {
+                            AppUpdateInstallResult.ConfirmationOpened,
+                            AppUpdateInstallResult.Installed,
+                            -> SupportDiagnosticSeverity.Info
+                            is AppUpdateInstallResult.Cancelled,
+                            is AppUpdateInstallResult.PermissionRequired,
+                            is AppUpdateInstallResult.Rejected,
+                            -> SupportDiagnosticSeverity.Warning
+                        },
+                        component = SupportDiagnosticComponent.Updates,
+                        operation = "updates.install",
+                        outcome = when (result) {
+                            AppUpdateInstallResult.ConfirmationOpened -> "confirmation-opened"
+                            AppUpdateInstallResult.Installed -> "installed"
+                            is AppUpdateInstallResult.Cancelled -> "cancelled"
+                            is AppUpdateInstallResult.PermissionRequired -> "permission-required"
+                            is AppUpdateInstallResult.Rejected -> "rejected"
+                        },
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                        message = when (result) {
+                            is AppUpdateInstallResult.PermissionRequired -> result.message
+                            is AppUpdateInstallResult.Rejected -> result.message
+                            else -> null
+                        },
+                        fields = listOf(SupportDiagnosticFieldDraft("release", release.versionName)),
+                    ),
+                )
+                result
+            } catch (failure: Throwable) {
+                supportDiagnostics.record(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.Updates,
+                        operation = "updates.install",
+                        outcome = "failed",
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                        fields = listOf(SupportDiagnosticFieldDraft("release", release.versionName)),
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
+                    ),
+                )
+                throw failure
+            }
+        }
 
     override fun cancelAppUpdate(): Boolean = appUpdater.cancelUpdate()
+
+    override suspend fun loadSupportDiagnosticsSummary(): SupportDiagnosticsSummary =
+        supportDiagnostics.loadSummary()
+
+    override fun supportDiagnosticsRevisions() = supportDiagnostics.revisions()
+
+    override suspend fun exportSupportDiagnostics(
+        reproductionSteps: String,
+    ): SupportDiagnosticsExportResult = supportBundleExporter.export(
+        reproductionSteps = reproductionSteps,
+        featureState = listOf(
+            SupportDiagnosticFieldDraft("distribution", appUpdateSupport().channel.name.lowercase()),
+            SupportDiagnosticFieldDraft("direct_updates", appUpdateSupport().canCheckDirectUpdates.toString()),
+            SupportDiagnosticFieldDraft("start_on_login_supported", supportsStartOnLogin.toString()),
+            SupportDiagnosticFieldDraft("virtual_files_supported", supportsVirtualFileStorage.toString()),
+            SupportDiagnosticFieldDraft(
+                "virtual_files_active",
+                (windowsCloudFilesProvider != null || linuxVirtualFileSystem != null).toString(),
+            ),
+            SupportDiagnosticFieldDraft("bidirectional_sync", supportsBidirectionalFileSync.toString()),
+        ),
+    )
+
+    override suspend fun clearSupportDiagnostics(): Boolean = withContext(Dispatchers.IO) {
+        supportDiagnostics.clear()
+    }
+
+    override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) {
+        supportDiagnostics.record(event)
+    }
+
+    override fun registerSupportDiagnosticPrivateValue(value: String?) {
+        supportDiagnostics.registerPrivateValue(value)
+    }
 
     override fun loadLastOpenedAppId(): String = preferences.get(KEY_LAST_OPENED_APP, "files")
 
@@ -2456,10 +2815,15 @@ class DesktopNextcloudServices(
             ?.decodeToString()
             ?.takeIf(String::isNotBlank)
             ?: return null
-        return NextcloudSession(server, login, password)
+        listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
+        return NextcloudSession(server, login, password).also { session ->
+            supportDiagnostics.setActiveAccountIdentity(desktopFileCacheAccountId(session))
+        }
     }
 
     override fun saveSession(session: NextcloudSession) {
+        listOf(session.serverUrl, session.loginName, session.appPassword)
+            .forEach(supportDiagnostics::registerPrivateValue)
         secretStore.save(
             reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
             username = session.loginName,
@@ -2467,6 +2831,7 @@ class DesktopNextcloudServices(
         )
         preferences.put(KEY_SERVER, session.serverUrl)
         preferences.put(KEY_LOGIN, session.loginName)
+        supportDiagnostics.setActiveAccountIdentity(desktopFileCacheAccountId(session))
         synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
     }
@@ -2515,6 +2880,24 @@ class DesktopNextcloudServices(
                     windowsCloudFilesFailure = null
                 } catch (failure: Throwable) {
                     windowsCloudFilesFailure = failure.message ?: windowsCloudFilesFailureMessage
+                    supportDiagnostics.record(
+                        SupportDiagnosticEventDraft(
+                            severity = SupportDiagnosticSeverity.Error,
+                            component = SupportDiagnosticComponent.VirtualFiles,
+                            operation = "cloud-files.signout-cleanup",
+                            outcome = "failed",
+                            fields = accountId?.let {
+                                listOf(
+                                    SupportDiagnosticFieldDraft(
+                                        "account",
+                                        it,
+                                        SupportDiagnosticValuePrivacy.Identifier,
+                                    ),
+                                )
+                            }.orEmpty(),
+                            exception = failure.toSupportDiagnosticExceptionDraft(),
+                        ),
+                    )
                 } finally {
                     runCatching { provider?.close() }
                     windowsCloudFilesProvider = null
@@ -2540,6 +2923,24 @@ class DesktopNextcloudServices(
                             windowsCloudFilesFailure = windowsCloudFilesFailure ?: (
                                 uninstallFailure.message ?: windowsCloudFilesFailureMessage
                             )
+                            supportDiagnostics.record(
+                                SupportDiagnosticEventDraft(
+                                    severity = SupportDiagnosticSeverity.Error,
+                                    component = SupportDiagnosticComponent.VirtualFiles,
+                                    operation = "cloud-files.signout-cleanup-retry",
+                                    outcome = "failed",
+                                    fields = accountId?.let {
+                                        listOf(
+                                            SupportDiagnosticFieldDraft(
+                                                "account",
+                                                it,
+                                                SupportDiagnosticValuePrivacy.Identifier,
+                                            ),
+                                        )
+                                    }.orEmpty(),
+                                    exception = uninstallFailure.toSupportDiagnosticExceptionDraft(),
+                                ),
+                            )
                         }
                     }
                 }
@@ -2553,9 +2954,20 @@ class DesktopNextcloudServices(
                 if (server != null && login != null) {
                     secretStore.clear(desktopSessionSecretReference(server, login))
                 }
+            }.onFailure { failure ->
+                supportDiagnostics.record(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.Authentication,
+                        operation = "credentials.clear",
+                        outcome = "failed",
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
+                    ),
+                )
             }
             preferences.remove(KEY_SERVER)
             preferences.remove(KEY_LOGIN)
+            supportDiagnostics.setActiveAccountIdentity(null)
             cleared = true
         } finally {
             if (!cleared) {
@@ -4139,6 +4551,7 @@ class DesktopNextcloudServices(
         mutationExecutor: DesktopHttpMutationExecutor? = null,
         onAmbiguousMutationResult: () -> Unit = {},
     ): HttpResponse {
+        val started = System.nanoTime()
         val requestBody = when {
             streamingBody != null -> streamingBody
             rawBody != null -> rawBody.toRequestBody(contentType?.toMediaType())
@@ -4185,15 +4598,74 @@ class DesktopNextcloudServices(
                 response.header("Content-Range"),
             )
         }
-        return if (mutationExecutor == null) {
-            client.newCall(request).execute().use(::consumeResponse)
-        } else {
-            mutationExecutor.execute(
-                request = request,
-                onAmbiguousNetworkResult = onAmbiguousMutationResult,
-                onAcceptedResponse = onAmbiguousMutationResult,
-                consume = ::consumeResponse,
+        return try {
+            val result = if (mutationExecutor == null) {
+                client.newCall(request).execute().use(::consumeResponse)
+            } else {
+                mutationExecutor.execute(
+                    request = request,
+                    onAmbiguousNetworkResult = onAmbiguousMutationResult,
+                    onAcceptedResponse = onAmbiguousMutationResult,
+                    consume = ::consumeResponse,
+                )
+            }
+            if (result.status !in 200..399) {
+                recordDesktopRequestDiagnostic(
+                    session,
+                    SupportDiagnosticEventDraft(
+                        severity = if (result.status >= 500) {
+                            SupportDiagnosticSeverity.Error
+                        } else {
+                            SupportDiagnosticSeverity.Warning
+                        },
+                        component = SupportDiagnosticComponent.Network,
+                        operation = "http.request",
+                        outcome = "rejected",
+                        code = "HTTP:${result.status}",
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft("method", method.lowercase()),
+                            SupportDiagnosticFieldDraft(
+                                "url",
+                                url,
+                                SupportDiagnosticValuePrivacy.Url,
+                            ),
+                            SupportDiagnosticFieldDraft("response_bytes", result.body.size.toString()),
+                            SupportDiagnosticFieldDraft("mutation", (mutationExecutor != null).toString()),
+                        ),
+                    ),
+                )
+            }
+            result
+        } catch (failure: Throwable) {
+            recordDesktopRequestDiagnostic(
+                session,
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Network,
+                    operation = "http.request",
+                    outcome = "failed",
+                    durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("method", method.lowercase()),
+                        SupportDiagnosticFieldDraft("url", url, SupportDiagnosticValuePrivacy.Url),
+                        SupportDiagnosticFieldDraft("mutation", (mutationExecutor != null).toString()),
+                    ),
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
             )
+            throw failure
+        }
+    }
+
+    private fun recordDesktopRequestDiagnostic(
+        session: NextcloudSession?,
+        event: SupportDiagnosticEventDraft,
+    ) {
+        if (session == null) {
+            supportDiagnostics.record(event)
+        } else {
+            supportDiagnostics.recordForAccountIdentity(desktopFileCacheAccountId(session), event)
         }
     }
 

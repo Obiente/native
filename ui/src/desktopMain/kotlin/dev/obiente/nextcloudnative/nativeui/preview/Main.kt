@@ -33,8 +33,12 @@ import dev.obiente.nextcloudnative.app.NextcloudNativeNavigationRequest
 import dev.obiente.nextcloudnative.app.NextcloudNativeRoute
 import dev.obiente.nextcloudnative.app.ThemePreference
 import dev.obiente.nextcloudnative.app.applyDesktopNativeWindowFrame
+import dev.obiente.nextcloudnative.app.createDesktopSupportDiagnostics
+import dev.obiente.nextcloudnative.app.desktopSupportDiagnosticsDirectory
 import dev.obiente.nextcloudnative.app.desktopUpdateHandoffActive
 import dev.obiente.nextcloudnative.app.handoffLinuxAutostartToUserService
+import dev.obiente.nextcloudnative.app.installDesktopBootstrapUncaughtDiagnosticHandler
+import dev.obiente.nextcloudnative.app.installDesktopUncaughtDiagnosticHandler
 import dev.obiente.nextcloudnative.app.tooltip
 import dev.obiente.nextcloudnative.app.unregisterWindowsCloudFilesRootForUninstall
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
@@ -53,6 +57,8 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 fun main(arguments: Array<String>) {
+    val supportDiagnosticsRoot = desktopSupportDiagnosticsDirectory()
+    installDesktopBootstrapUncaughtDiagnosticHandler(supportDiagnosticsRoot)
     if (arguments.contentEquals(arrayOf("--unregister-windows-sync-root"))) {
         unregisterWindowsCloudFilesRootForUninstall()
         return
@@ -88,6 +94,8 @@ fun main(arguments: Array<String>) {
             return
         }
     }
+    val supportDiagnostics = createDesktopSupportDiagnostics(supportDiagnosticsRoot)
+    installDesktopUncaughtDiagnosticHandler(supportDiagnostics)
     singleInstance.use {
     application {
     val themePreference = remember { mutableStateOf(ThemePreference.System) }
@@ -101,7 +109,10 @@ fun main(arguments: Array<String>) {
                     scope.launch { updaterExitRequested.value = true }
                 }
             },
-        ).also { themePreference.value = it.loadThemePreference() }
+            providedSupportDiagnostics = supportDiagnostics,
+        ).also {
+            themePreference.value = it.loadThemePreference()
+        }
     }
     val darkTheme = when (themePreference.value) {
         ThemePreference.System -> isSystemInDarkTheme()

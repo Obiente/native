@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -94,8 +95,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -11861,6 +11864,8 @@ private fun SettingsScreen(
                     platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
                 )
 
+                SettingsWorkspaceSection.Diagnostics -> SupportDiagnosticsSettingsCard(services)
+
                 SettingsWorkspaceSection.HelpAndGuides -> {
                     SettingsActionCard(
                         title = "Guides",
@@ -12208,6 +12213,8 @@ private fun SettingsScreen(
                     services = services,
                     platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
                 )
+                Spacer(Modifier.height(NextcloudSpacing.Medium))
+                SupportDiagnosticsSettingsCard(services)
             }
             item {
                 SectionTitle("Administration")
@@ -12290,6 +12297,249 @@ internal fun logoutCleanupFailureMessage(failure: Throwable): String {
         .takeIf(String::isNotEmpty)
         ?: "Local desktop cleanup did not complete."
     return "Could not finish signing out. $detail You can retry safely."
+}
+
+@Composable
+private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) {
+    val scope = rememberCoroutineScope()
+    var refresh by remember { mutableStateOf(0) }
+    val diagnosticsRevision by remember(services) {
+        services.supportDiagnosticsRevisions()
+    }.collectAsState(0L)
+    var summary by remember(services) {
+        mutableStateOf(
+            SupportDiagnosticsSummary(
+                available = false,
+                eventCount = 0,
+                warningCount = 0,
+                errorCount = 0,
+                oldestEventAtEpochMillis = null,
+                newestEventAtEpochMillis = null,
+                components = emptySet(),
+                storedBytes = 0L,
+                includedFiles = SUPPORT_BUNDLE_INCLUDED_FILES,
+                explanation = "Loading private diagnostic history...",
+            ),
+        )
+    }
+    LaunchedEffect(services, diagnosticsRevision, refresh) {
+        summary = services.loadSupportDiagnosticsSummary()
+    }
+    var reproductionSteps by remember { mutableStateOf("") }
+    var exporting by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var confirmClear by remember { mutableStateOf(false) }
+    var showPreview by rememberSaveable { mutableStateOf(false) }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Clear diagnostic history?") },
+            text = {
+                Text(
+                    "This permanently removes the recorded diagnostic events on this device. " +
+                        "It does not remove reports you already exported.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    onClick = {
+                        confirmClear = false
+                        scope.launch {
+                            status = if (services.clearSupportDiagnostics()) {
+                                refresh += 1
+                                "Diagnostic history cleared."
+                            } else {
+                                "Diagnostic history could not be cleared."
+                            }
+                        }
+                    },
+                ) { Text("Clear history") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = NextcloudTheme.colors.appTile,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
+                    Icon(
+                        NextcloudIcons.Activity,
+                        contentDescription = null,
+                        modifier = Modifier.padding(12.dp).size(26.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Anonymized support report", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Export bounded app events and failure context when you choose. Nothing is uploaded automatically.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (summary.available) {
+                Text(
+                    "${summary.eventCount} events · ${summary.errorCount} errors · " +
+                        "${summary.warningCount} warnings · ${formatVirtualFileBytes(summary.storedBytes)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    summary.components
+                        .sortedBy { component -> component.name }
+                        .joinToString(prefix = "Areas: ", separator = ", ") { it.name }
+                        .takeIf { summary.components.isNotEmpty() }
+                        ?: "No diagnostic events have been recorded yet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text(
+                    summary.explanation ?: "Diagnostic storage is unavailable on this device.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
+            OutlinedTextField(
+                value = reproductionSteps,
+                onValueChange = { reproductionSteps = it.take(MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH) },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = summary.available && !exporting,
+                label = { Text("What happened? (optional)") },
+                placeholder = { Text("Describe what you did, what you expected, and what happened.") },
+                supportingText = {
+                    Text(
+                        "Recognizable credentials, account details, URLs, and paths are anonymized. " +
+                            "Review your description before sharing.",
+                    )
+                },
+                minLines = 3,
+                maxLines = 7,
+            )
+
+            Text(
+                "Includes: ${summary.includedFiles.joinToString()}. " +
+                    "Does not include file contents, request bodies, credentials, cookies, or the private alias key.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (summary.recentEvents.isNotEmpty()) {
+                OutlinedButton(
+                    onClick = {
+                        refresh += 1
+                        showPreview = !showPreview
+                    },
+                ) {
+                    Text(if (showPreview) "Hide event preview" else "Preview recent events")
+                }
+                if (showPreview) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(NextcloudRadii.Small),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                "Latest ${summary.recentEvents.size} sanitized events",
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            summary.recentEvents.asReversed().forEach { event ->
+                                Text(
+                                    buildString {
+                                        append(event.severity.name)
+                                        append(" · ")
+                                        append(event.component.name)
+                                        append(" · ")
+                                        append(event.operation)
+                                        append(" · ")
+                                        append(event.outcome)
+                                        event.code?.let { append(" · ").append(it) }
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                Button(
+                    enabled = summary.available && !exporting,
+                    onClick = {
+                        exporting = true
+                        status = null
+                        refresh += 1
+                        scope.launch {
+                            try {
+                                status = when (val result = services.exportSupportDiagnostics(reproductionSteps)) {
+                                    is SupportDiagnosticsExportResult.Exported ->
+                                        "Report prepared: ${result.destination}"
+                                    SupportDiagnosticsExportResult.Cancelled -> "Report export cancelled."
+                                    is SupportDiagnosticsExportResult.Failed -> result.message
+                                    is SupportDiagnosticsExportResult.Unsupported -> result.reason
+                                }
+                            } catch (cancellation: CancellationException) {
+                                throw cancellation
+                            } catch (_: Throwable) {
+                                status = "The anonymized support report could not be saved."
+                            } finally {
+                                exporting = false
+                                refresh += 1
+                            }
+                        }
+                    },
+                ) {
+                    if (exporting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.size(8.dp))
+                    }
+                    Text(if (exporting) "Preparing..." else "Export report")
+                }
+                if (summary.eventCount > 0) {
+                    OutlinedButton(
+                        enabled = !exporting,
+                        onClick = { confirmClear = true },
+                    ) { Text("Clear history") }
+                }
+            }
+            status?.let { message ->
+                Text(
+                    message,
+                    modifier = Modifier.semantics {
+                        contentDescription = message
+                        liveRegion = LiveRegionMode.Polite
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }
 
 @Composable

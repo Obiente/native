@@ -17,9 +17,29 @@ import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
+internal const val MAX_WINDOWS_CLOUD_PLACEHOLDER_DIAGNOSTIC_RESULTS = 16
+
+internal fun windowsCloudPlaceholderDiagnosticSampleSize(availableCount: Int): Int {
+    require(availableCount >= 0)
+    return minOf(availableCount, MAX_WINDOWS_CLOUD_PLACEHOLDER_DIAGNOSTIC_RESULTS)
+}
+
+internal fun windowsCloudFailedPlaceholderIndex(
+    firstFailedEntryIndex: Int?,
+    processedCount: Int,
+    placeholderCount: Int,
+): Int? {
+    require(processedCount in 0..placeholderCount)
+    require(firstFailedEntryIndex == null || firstFailedEntryIndex in 0 until placeholderCount)
+    return firstFailedEntryIndex
+        ?: processedCount.takeIf { it in 0 until placeholderCount }
+        ?: (processedCount - 1).takeIf { it in 0 until placeholderCount }
+}
+
 /** 64-bit Windows CldApi.dll binding kept behind [WindowsCloudFilesApi] for deterministic tests. */
 internal class JnaWindowsCloudFilesApi(
     private val shellRegistrar: WindowsCloudShellRegistrar = PackagedWindowsCloudShellRegistrar(),
+    private val recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit = {},
 ) : WindowsCloudFilesApi {
     private val cldApi: CldApi
     private val kernelFiles: KernelFileApi
@@ -169,16 +189,79 @@ internal class JnaWindowsCloudFilesApi(
         if (placeholders.isEmpty()) return
         val native = NativePlaceholderArray(placeholders)
         val processed = IntByReference()
-        checkHResult(
-            cldApi.CfCreatePlaceholders(
-                WString(baseDirectory.toAbsolutePath().toString()),
-                native.firstPointer,
-                placeholders.size,
-                CF_CREATE_FLAG_STOP_ON_ERROR,
-                processed,
-            ),
-            "create Windows Cloud Files placeholders",
+        val result = cldApi.CfCreatePlaceholders(
+            WString(baseDirectory.toAbsolutePath().toString()),
+            native.firstPointer,
+            placeholders.size,
+            CF_CREATE_FLAG_STOP_ON_ERROR,
+            processed,
         )
+        if (result < 0) {
+            val processedCount = processed.value.coerceIn(0, placeholders.size)
+            val firstFailedEntryIndex = runCatching { native.firstFailedResultIndex() }.getOrNull()
+            val failedIndex = windowsCloudFailedPlaceholderIndex(
+                firstFailedEntryIndex = firstFailedEntryIndex,
+                processedCount = processedCount,
+                placeholderCount = placeholders.size,
+            )
+            val failed = failedIndex?.let(placeholders::get)
+            val failedState = failed?.let { placeholder ->
+                runCatching { placeholderState(baseDirectory.resolve(placeholder.name)) }
+                    .getOrNull()
+            }
+            runCatching {
+                recordDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.VirtualFiles,
+                        operation = "cloud-files.placeholder-create",
+                        outcome = "failed",
+                        code = "HRESULT:0x${result.toUInt().toString(16)}",
+                        fields = buildList {
+                            add(
+                                SupportDiagnosticFieldDraft(
+                                    "base_directory",
+                                    baseDirectory.toAbsolutePath().toString(),
+                                    SupportDiagnosticValuePrivacy.LocalPath,
+                                ),
+                            )
+                            add(SupportDiagnosticFieldDraft("batch_size", placeholders.size.toString()))
+                            add(SupportDiagnosticFieldDraft("entries_processed", processedCount.toString()))
+                            val diagnosticResultCount = maxOf(processedCount, failedIndex?.plus(1) ?: 0)
+                            runCatching { native.resultSample(diagnosticResultCount) }
+                                .getOrNull()
+                                ?.takeIf(String::isNotEmpty)
+                                ?.let { sample -> add(SupportDiagnosticFieldDraft("entry_results", sample)) }
+                            failedIndex?.let { index ->
+                                add(SupportDiagnosticFieldDraft("failed_index", index.toString()))
+                                runCatching { native.resultAt(index) }.getOrNull()?.let { failedResult ->
+                                    add(
+                                        SupportDiagnosticFieldDraft(
+                                            "failed_entry_result",
+                                            "0x${failedResult.toUInt().toString(16)}",
+                                        ),
+                                    )
+                                }
+                            }
+                            failed?.let { placeholder ->
+                                add(
+                                    SupportDiagnosticFieldDraft(
+                                        "failed_name",
+                                        placeholder.name,
+                                        SupportDiagnosticValuePrivacy.RemotePath,
+                                    ),
+                                )
+                                add(SupportDiagnosticFieldDraft("failed_directory", placeholder.directory.toString()))
+                            }
+                            failedState?.let { state ->
+                                add(SupportDiagnosticFieldDraft("failed_placeholder_state", state.name.lowercase()))
+                            }
+                        },
+                    ),
+                )
+            }
+        }
+        checkHResult(result, "create Windows Cloud Files placeholders")
         check(processed.value == placeholders.size) { "Windows created only some requested placeholders." }
         native.requireSuccessful()
         placeholders.filter { it.directory }.forEach { placeholder ->
@@ -542,10 +625,41 @@ internal class JnaWindowsCloudFilesApi(
         }
         val firstPointer: Pointer? get() = entries.firstOrNull()?.pointer
 
+        fun resultAt(index: Int): Int {
+            val entry = entries[index]
+            entry.read()
+            return entry.result
+        }
+
+        fun firstFailedResultIndex(): Int? {
+            for (index in entries.indices) {
+                if (resultAt(index) < 0) return index
+            }
+            return null
+        }
+
+        fun resultSample(endExclusive: Int): String {
+            val availableCount = endExclusive.coerceIn(0, entries.size)
+            val sampledCount = windowsCloudPlaceholderDiagnosticSampleSize(availableCount)
+            return buildString {
+                for (index in 0 until sampledCount) {
+                    if (isNotEmpty()) append(',')
+                    append(index)
+                    append("=0x")
+                    append(resultAt(index).toUInt().toString(16))
+                }
+                if (availableCount > sampledCount) {
+                    if (isNotEmpty()) append(',')
+                    append("truncated=")
+                    append(availableCount - sampledCount)
+                }
+            }
+        }
+
         fun requireSuccessful() {
-            entries.forEach { entry ->
-                entry.read()
-                check(entry.result >= 0) { "Windows rejected a Cloud Files placeholder (HRESULT 0x${entry.result.toUInt().toString(16)})." }
+            for (index in entries.indices) {
+                val result = resultAt(index)
+                check(result >= 0) { "Windows rejected a Cloud Files placeholder (HRESULT 0x${result.toUInt().toString(16)})." }
             }
         }
     }
