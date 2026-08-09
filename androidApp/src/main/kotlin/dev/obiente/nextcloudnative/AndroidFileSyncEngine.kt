@@ -422,6 +422,8 @@ internal class AndroidFileSyncEngine(context: Context) {
                 localEntries,
                 remoteEntries,
                 System.currentTimeMillis(),
+                maximumWorkItems = ANDROID_FILE_SYNC_MAX_WORK_ITEMS,
+                reservedNonExecutableWorkItems = ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
             ),
         )
         persisted.coordinator.pairs.first { it.id == pairId }.workItems
@@ -720,6 +722,9 @@ internal class AndroidFileSyncEngine(context: Context) {
         val ENGINE_LOCK = Mutex()
     }
 }
+
+internal const val ANDROID_FILE_SYNC_MAX_WORK_ITEMS = 10_000
+internal const val ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE = 1_000
 
 internal fun supportsAndroidFileSyncDirection(
     localRootId: String,

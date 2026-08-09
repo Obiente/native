@@ -210,8 +210,12 @@ fun scanFileSyncPair(
     localEntries: List<LocalSyncEntry>,
     remoteEntries: List<RemoteSyncEntry>,
     nowEpochMillis: Long,
+    maximumWorkItems: Int = MAX_FILE_SYNC_WORK_ITEMS,
+    reservedNonExecutableWorkItems: Int = 0,
 ): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
     require(nowEpochMillis >= 0)
+    require(maximumWorkItems in 1..MAX_FILE_SYNC_WORK_ITEMS)
+    require(reservedNonExecutableWorkItems in 0 until maximumWorkItems)
     require(localEntries.size <= MAX_FILE_SYNC_ENTRIES) { "The local sync snapshot is too large." }
     require(remoteEntries.size <= MAX_FILE_SYNC_ENTRIES) { "The remote sync snapshot is too large." }
     require(pair.workItems.none { it.state == FileSyncExecutionState.Running }) {
@@ -235,17 +239,63 @@ fun scanFileSyncPair(
     val localByPath = scopedLocalEntries.associateBy(LocalSyncEntry::relativePath)
     val remoteByPath = scopedRemoteEntries.associateBy(RemoteSyncEntry::relativePath)
     val baselineByPath = scopedBaselines.associateBy(FileSyncBaseline::relativePath)
+    val existingWorkByPath = pair.workItems.associateBy(FileSyncWorkItem::relativePath)
     val plan = planFileSync(scopedLocalEntries, scopedRemoteEntries, scopedBaselines, pair.configuration)
-    require(plan.operations.size <= MAX_FILE_SYNC_WORK_ITEMS) { "The sync plan contains too much work." }
+    require(plan.operations.size <= MAX_FILE_SYNC_WORK_ITEMS) {
+        "The sync snapshot requires too many operations. Narrow the selected folders."
+    }
+    fun stableExistingWork(operation: FileSyncOperation): FileSyncWorkItem? {
+        val path = operation.relativePath
+        return existingWorkByPath[path]?.takeIf { current ->
+            current.sameGeneration(operation, localByPath[path], remoteByPath[path], baselineByPath[path])
+        }
+    }
+    val operationComparator = fileSyncOperationComparator(pair.configuration, localByPath, remoteByPath)
+    val sortedOperations = plan.operations.sortedWith { left, right ->
+        operationComparator.compare(
+            stableExistingWork(left)?.operation ?: left,
+            stableExistingWork(right)?.operation ?: right,
+        )
+    }
+    val selectedOperations = if (reservedNonExecutableWorkItems == 0) {
+        sortedOperations.take(maximumWorkItems)
+    } else {
+        val maximumExecutableWorkItems = maximumWorkItems - reservedNonExecutableWorkItems
+        val executable = ArrayList<FileSyncOperation>(maximumExecutableWorkItems)
+        val retainedDecisions = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
+        val newDecisions = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
+        val retainedOther = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
+        val newSkipped = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
+        sortedOperations.forEach { operation ->
+            val existing = stableExistingWork(operation)
+            val effectiveOperation = existing?.operation ?: operation
+            val canRunAutomatically = effectiveOperation.isExecutable() &&
+                (existing == null || existing.canRunAutomatically())
+            when {
+                canRunAutomatically && executable.size < maximumExecutableWorkItems ->
+                    executable += operation
+                effectiveOperation is FileSyncOperation.NeedsDecision &&
+                    existing != null && retainedDecisions.size < reservedNonExecutableWorkItems ->
+                    retainedDecisions += operation
+                effectiveOperation is FileSyncOperation.NeedsDecision &&
+                    newDecisions.size < reservedNonExecutableWorkItems ->
+                    newDecisions += operation
+                existing != null && retainedOther.size < reservedNonExecutableWorkItems ->
+                    retainedOther += operation
+                effectiveOperation is FileSyncOperation.Skipped &&
+                    newSkipped.size < reservedNonExecutableWorkItems -> newSkipped += operation
+            }
+        }
+        executable + (retainedDecisions + newDecisions + retainedOther + newSkipped)
+            .take(reservedNonExecutableWorkItems)
+    }
     var nextId = pair.nextWorkId
-    val work = plan.operations.map { operation ->
+    val work = selectedOperations.map { operation ->
         val path = operation.relativePath
         val local = localByPath[path]
         val remote = remoteByPath[path]
         val baseline = baselineByPath[path]
-        pair.workItems.firstOrNull { current ->
-            current.sameGeneration(operation, local, remote, baseline)
-        } ?: FileSyncWorkItem(
+        stableExistingWork(operation) ?: FileSyncWorkItem(
             id = nextId.also {
                 require(it < Long.MAX_VALUE) { "The sync work ID space is exhausted." }
                 nextId += 1
@@ -305,34 +355,46 @@ fun scanFileSyncPair(
                 structuralBaselines +
                 contentVerifiedBaselines
             ).sortedBy(FileSyncBaseline::relativePath),
-        workItems = work.sortedWith(fileSyncExecutionComparator(pair.configuration)),
+        workItems = work,
         nextWorkId = nextId,
         lastScanEpochMillis = nowEpochMillis,
     )
 }
 
-private fun fileSyncExecutionComparator(
+private fun fileSyncOperationComparator(
     configuration: FileSyncConfiguration,
-): Comparator<FileSyncWorkItem> = Comparator { left, right ->
-    val leftDelete = left.operation is FileSyncOperation.DeleteLocal ||
-        left.operation is FileSyncOperation.DeleteRemote
-    val rightDelete = right.operation is FileSyncOperation.DeleteLocal ||
-        right.operation is FileSyncOperation.DeleteRemote
-    val leftDirectory = left.observedLocal?.kind == SyncEntryKind.Directory ||
-        left.observedRemote?.kind == SyncEntryKind.Directory
-    val rightDirectory = right.observedLocal?.kind == SyncEntryKind.Directory ||
-        right.observedRemote?.kind == SyncEntryKind.Directory
-    when {
+    localByPath: Map<String, LocalSyncEntry>,
+    remoteByPath: Map<String, RemoteSyncEntry>,
+): Comparator<FileSyncOperation> = Comparator { left, right ->
+    compareFileSyncOperations(
+        left,
+        localByPath[left.relativePath]?.kind ?: remoteByPath[left.relativePath]?.kind,
+        right,
+        localByPath[right.relativePath]?.kind ?: remoteByPath[right.relativePath]?.kind,
+        configuration,
+    )
+}
+
+private fun compareFileSyncOperations(
+    left: FileSyncOperation,
+    leftKind: SyncEntryKind?,
+    right: FileSyncOperation,
+    rightKind: SyncEntryKind?,
+    configuration: FileSyncConfiguration,
+): Int {
+    val leftDelete = left is FileSyncOperation.DeleteLocal || left is FileSyncOperation.DeleteRemote
+    val rightDelete = right is FileSyncOperation.DeleteLocal || right is FileSyncOperation.DeleteRemote
+    val leftDirectory = leftKind == SyncEntryKind.Directory
+    val rightDirectory = rightKind == SyncEntryKind.Directory
+    return when {
         leftDelete != rightDelete -> if (leftDelete) 1 else -1
         leftDelete && leftDirectory != rightDirectory -> if (leftDirectory) 1 else -1
         leftDelete -> compareValues(
-            right.relativePath.count { it == '/' },
-            left.relativePath.count { it == '/' },
+            right.relativePath.count { it == '/' }, left.relativePath.count { it == '/' },
         ).takeIf { it != 0 } ?: compareValues(left.relativePath, right.relativePath)
         leftDirectory != rightDirectory -> if (leftDirectory) -1 else 1
         leftDirectory -> compareValues(
-            left.relativePath.count { it == '/' },
-            right.relativePath.count { it == '/' },
+            left.relativePath.count { it == '/' }, right.relativePath.count { it == '/' },
         ).takeIf { it != 0 } ?: compareValues(left.relativePath, right.relativePath)
         else -> compareValues(
             configuration.fileSyncPriority(left.relativePath),
@@ -617,6 +679,15 @@ private fun FileSyncOperation.initialExecutionState(): FileSyncExecutionState = 
 private fun FileSyncOperation.isExecutable(): Boolean =
     this !is FileSyncOperation.NeedsDecision && this !is FileSyncOperation.Skipped
 
+private fun FileSyncWorkItem.canRunAutomatically(): Boolean = when (state) {
+    FileSyncExecutionState.Ready -> true
+    FileSyncExecutionState.Failed -> attemptCount < MAX_FILE_SYNC_ATTEMPTS
+    FileSyncExecutionState.AwaitingDecision,
+    FileSyncExecutionState.Running,
+    FileSyncExecutionState.Skipped,
+    -> false
+}
+
 private fun FileSyncOperation.executionFootprint(): Set<String> = when (this) {
     is FileSyncOperation.KeepBoth -> setOf(relativePath, localConflictPath, remoteConflictPath)
     else -> setOf(relativePath)
@@ -741,8 +812,8 @@ private fun requireUniqueCoordinatorPaths(paths: List<String>, source: String) {
 }
 
 internal const val MAX_FILE_SYNC_PAIRS = 64
-internal const val MAX_FILE_SYNC_ENTRIES = 20_000
-internal const val MAX_FILE_SYNC_WORK_ITEMS = 20_000
+internal const val MAX_FILE_SYNC_ENTRIES = 100_000
+internal const val MAX_FILE_SYNC_WORK_ITEMS = MAX_FILE_SYNC_ENTRIES
 internal const val MAX_FILE_SYNC_RESULT_PATHS = 3
 internal const val MAX_FILE_SYNC_ATTEMPTS = 20
 internal const val MAX_FILE_SYNC_ID_LENGTH = 256

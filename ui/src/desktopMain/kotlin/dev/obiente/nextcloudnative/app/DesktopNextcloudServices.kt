@@ -1322,9 +1322,7 @@ class DesktopNextcloudServices(
         synchronized(this) {
             if (backgroundFileSyncJob?.isActive == true) return
             backgroundFileSyncJob = serviceScope.launch {
-                if (loadStartOnLoginPreference()) {
-                    runCatching { startOnLoginController.configure(enabled = true) }
-                }
+                restoreConfirmedStartOnLoginRegistration()
                 while (isActive) {
                     if (!isFileSyncPaused()) {
                         runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
@@ -1911,6 +1909,9 @@ class DesktopNextcloudServices(
         }
         serviceScope.cancel()
         rangeSessions.forEach { source -> runCatching(source::close) }
+        synchronized(virtualRangeCaches) {
+            virtualRangeCaches.values.forEach { cache -> runCatching(cache::flushAccessTimes) }
+        }
         synchronized(virtualFileProviderLock) {
             if (runCatching { linuxVirtualFileSystem?.unmount() }.isSuccess) {
                 linuxVirtualFileSystem = null
@@ -2069,7 +2070,7 @@ class DesktopNextcloudServices(
 
     override val supportsStartOnLogin: Boolean = true
 
-    override fun loadStartOnLoginPreference(): Boolean = preferences.getBoolean(KEY_START_ON_LOGIN, true)
+    override fun loadStartOnLoginPreference(): Boolean = preferences.getBoolean(KEY_START_ON_LOGIN, false)
 
     override fun saveStartOnLoginPreference(enabled: Boolean): String? {
         return runCatching {
@@ -2078,6 +2079,13 @@ class DesktopNextcloudServices(
             result.message.takeUnless { result.configured }
         }.getOrElse { failure ->
             failure.message ?: "Start on login could not be updated."
+        }
+    }
+
+    private fun restoreConfirmedStartOnLoginRegistration() {
+        val confirmedPreference = preferences.get(KEY_START_ON_LOGIN, null)
+        runCatching {
+            startOnLoginController.configure(confirmedPreference?.toBooleanStrictOrNull() == true)
         }
     }
 
@@ -2237,7 +2245,7 @@ class DesktopNextcloudServices(
         center: FileSyncCenterSnapshot,
         durableActivities: List<DesktopFileSyncTrayActivity> = emptyList(),
     ) {
-        val conflicts = center.pairs.sumOf { it.conflicts.size }
+        val conflicts = center.pairs.sumOf(FileSyncPairSummary::conflictCount)
         val failed = center.pairs.sumOf(FileSyncPairSummary::failedCount)
         val paused = isFileSyncPaused()
         val recentCompleted = mutableFileSyncTraySnapshot.value.activities.filter {

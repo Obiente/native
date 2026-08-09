@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import java.io.File
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 
 internal enum class DesktopStartOnLoginPlatform {
@@ -21,15 +22,22 @@ internal data class DesktopStartOnLoginResult(
 internal class DesktopStartOnLoginController(
     osName: String = System.getProperty("os.name").orEmpty(),
     userHome: File = File(System.getProperty("user.home")),
-    private val linuxConfigHome: File = System.getenv("XDG_CONFIG_HOME")
-        ?.takeIf(String::isNotBlank)
-        ?.let(::File)
-        ?: File(userHome, ".config"),
+    private val linuxConfigHome: File = linuxDesktopConfigHome(userHome),
     private val launcherPath: String? = packagedDesktopLauncherPath(),
     private val processRunner: (List<String>) -> Int = { command ->
         ProcessBuilder(command).redirectErrorStream(true).start().also { process ->
             process.inputStream.bufferedReader().use { it.readText() }
         }.waitFor()
+    },
+    private val linuxSystemdAvailable: () -> Boolean = {
+        runCatching {
+            processRunner(listOf("systemctl", "--user", "show-environment")) == 0
+        }.getOrDefault(false)
+    },
+    private val linuxGraphicalSessionManaged: () -> Boolean = {
+        runCatching {
+            processRunner(listOf("systemctl", "--user", "is-active", "graphical-session.target")) == 0
+        }.getOrDefault(false)
     },
 ) {
     private val platform = when {
@@ -62,6 +70,7 @@ internal class DesktopStartOnLoginController(
         val entry = File(linuxConfigHome, "autostart/nextcloud-native.desktop")
         if (!enabled) {
             Files.deleteIfExists(entry.toPath())
+            removeLinuxUserService()
             return DesktopStartOnLoginResult(
                 platform,
                 enabled = false,
@@ -78,34 +87,98 @@ internal class DesktopStartOnLoginController(
             Version=1.0
             Name=Nextcloud Native
             Comment=Keep Nextcloud files and virtual files available
-            Exec=${desktopEntryExecArgument(launcher)} --background
-            Icon=nextcloud-native
+            TryExec=${desktopEntryStringValue(launcher)}
+            Exec=${desktopEntryExecArgument(launcher)} --autostart
+            Icon=dev.obiente.nextcloudnative
             Terminal=false
             StartupNotify=false
             X-GNOME-Autostart-enabled=true
         """.trimIndent() + "\n"
-        val temporary = File.createTempFile("nextcloud-native.", ".desktop", parent)
-        try {
-            temporary.writeText(content)
-            try {
-                Files.move(
-                    temporary.toPath(),
-                    entry.toPath(),
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(temporary.toPath(), entry.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
-        } finally {
-            temporary.delete()
+        publishText(entry, content)
+        val supervised = linuxSystemdAvailable() && linuxGraphicalSessionManaged() && runCatching {
+            configureLinuxUserService(launcher)
+        }.getOrDefault(false)
+        if (supervised) {
+            runCatching { processRunner(listOf("systemctl", "--user", "daemon-reload")) }
         }
         return DesktopStartOnLoginResult(
             platform,
             enabled = true,
             configured = true,
-            message = "Nextcloud Native will start when you sign in.",
+            message = if (supervised) {
+                "Nextcloud Native will start in your desktop session and recover after a crash."
+            } else {
+                "Nextcloud Native will start when you sign in."
+            },
         )
+    }
+
+    private fun configureLinuxUserService(launcher: String): Boolean {
+        val userDirectory = File(linuxConfigHome, "systemd/user")
+        check(userDirectory.isDirectory || userDirectory.mkdirs()) {
+            "The user service folder could not be created."
+        }
+        val service = File(userDirectory, LINUX_USER_SERVICE_NAME)
+        publishText(
+            service,
+            """
+                [Unit]
+                Description=Nextcloud Native desktop sync
+                PartOf=graphical-session.target
+                After=graphical-session.target
+
+                [Service]
+                Type=exec
+                ExecStart=${systemdExecArgument(launcher)} --background
+                Restart=on-failure
+                RestartSec=5s
+                TimeoutStopSec=20s
+
+                [Install]
+                WantedBy=graphical-session.target
+            """.trimIndent() + "\n",
+        )
+        val wantsDirectory = File(userDirectory, "graphical-session.target.wants")
+        check(wantsDirectory.isDirectory || wantsDirectory.mkdirs()) {
+            "The graphical session service folder could not be created."
+        }
+        val link = File(wantsDirectory, LINUX_USER_SERVICE_NAME).toPath()
+        val expectedTarget = Path.of("..", LINUX_USER_SERVICE_NAME)
+        if (!Files.isSymbolicLink(link) || Files.readSymbolicLink(link) != expectedTarget) {
+            Files.deleteIfExists(link)
+            Files.createSymbolicLink(link, expectedTarget)
+        }
+        return true
+    }
+
+    private fun removeLinuxUserService() {
+        val userDirectory = File(linuxConfigHome, "systemd/user")
+        Files.deleteIfExists(File(userDirectory, "graphical-session.target.wants/$LINUX_USER_SERVICE_NAME").toPath())
+        Files.deleteIfExists(File(userDirectory, LINUX_USER_SERVICE_NAME).toPath())
+        if (linuxSystemdAvailable()) {
+            runCatching { processRunner(listOf("systemctl", "--user", "daemon-reload")) }
+        }
+    }
+
+    private fun publishText(destination: File, content: String) {
+        val parent = requireNotNull(destination.parentFile)
+        check(parent.isDirectory || parent.mkdirs()) { "The startup configuration folder could not be created." }
+        val temporary = File.createTempFile("${destination.name}.", ".tmp", parent)
+        try {
+            temporary.writeText(content)
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    destination.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            temporary.delete()
+        }
     }
 
     private fun configureWindows(enabled: Boolean, launcher: String): DesktopStartOnLoginResult {
@@ -148,6 +221,31 @@ internal class DesktopStartOnLoginController(
     }
 }
 
+private const val LINUX_USER_SERVICE_NAME = "nextcloud-native.service"
+
+/** Lets the portable XDG launch request enter the supervised unit when one was configured. */
+internal fun handoffLinuxAutostartToUserService(
+    osName: String = System.getProperty("os.name").orEmpty(),
+    userHome: File = File(System.getProperty("user.home")),
+    linuxConfigHome: File = linuxDesktopConfigHome(userHome),
+    processRunner: (List<String>) -> Int = { command ->
+        ProcessBuilder(command).redirectErrorStream(true).start().also { process ->
+            process.inputStream.bufferedReader().use { it.readText() }
+        }.waitFor()
+    },
+): Boolean {
+    if (!osName.lowercase().contains("linux")) return false
+    if (!File(linuxConfigHome, "systemd/user/$LINUX_USER_SERVICE_NAME").isFile) return false
+    return runCatching {
+        processRunner(listOf("systemctl", "--user", "start", LINUX_USER_SERVICE_NAME)) == 0
+    }.getOrDefault(false)
+}
+
+private fun linuxDesktopConfigHome(userHome: File): File = System.getenv("XDG_CONFIG_HOME")
+    ?.takeIf(String::isNotBlank)
+    ?.let(::File)
+    ?: File(userHome, ".config")
+
 internal fun packagedDesktopLauncherPath(): String? {
     System.getProperty("jpackage.app-path")?.takeIf(String::isNotBlank)?.let { return it }
     val command = ProcessHandle.current().info().command().orElse(null)?.takeIf(String::isNotBlank) ?: return null
@@ -163,6 +261,36 @@ internal fun desktopEntryExecArgument(path: String): String {
         path.forEach { character ->
             when (character) {
                 '\\', '"', '`', '$' -> append('\\').append(character)
+                '%' -> append("%%")
+                else -> append(character)
+            }
+        }
+    }
+    return "\"$escaped\""
+}
+
+internal fun desktopEntryStringValue(value: String): String {
+    require(value.isNotBlank() && '\n' !in value && '\r' !in value)
+    return buildString(value.length + 8) {
+        value.forEach { character ->
+            when (character) {
+                ' ' -> append("\\s")
+                '\t' -> append("\\t")
+                '\\' -> append("\\\\")
+                else -> append(character)
+            }
+        }
+    }
+}
+
+internal fun systemdExecArgument(path: String): String {
+    require(path.isNotBlank() && '\n' !in path && '\r' !in path)
+    val escaped = buildString(path.length + 8) {
+        path.forEach { character ->
+            when (character) {
+                '\\', '"' -> append('\\').append(character)
+                '%' -> append("%%")
+                '$' -> append('$').append('$')
                 else -> append(character)
             }
         }

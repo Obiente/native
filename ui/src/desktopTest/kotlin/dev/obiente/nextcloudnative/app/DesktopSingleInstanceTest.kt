@@ -34,14 +34,25 @@ class DesktopSingleInstanceTest {
             assertIs<DesktopSingleInstanceStart.Forwarded>(recovery)
             val forwarded = DesktopSingleInstance.acquire(runtime, forwardAttempts = 10, forwardDelayMillis = 5)
             assertIs<DesktopSingleInstanceStart.Forwarded>(forwarded)
+            val background = DesktopSingleInstance.acquire(
+                runtime,
+                forwardAttempts = 10,
+                forwardDelayMillis = 5,
+                activationKind = DesktopActivationKind.Background,
+            )
+            assertIs<DesktopSingleInstanceStart.Forwarded>(background)
             val activations = runBlocking {
                 withTimeout(TimeUnit.SECONDS.toMillis(2)) {
-                    primary.instance.activations.take(2).toList()
+                    primary.instance.activations.take(3).toList()
                 }
             }
-            assertEquals(listOf(1L, 2L), activations.map(DesktopActivationRequest::sequence))
+            assertEquals(listOf(1L, 2L, 3L), activations.map(DesktopActivationRequest::sequence))
             assertEquals(
-                listOf(DesktopActivationKind.UpdateHandoffFailed, DesktopActivationKind.ShowWindow),
+                listOf(
+                    DesktopActivationKind.UpdateHandoffFailed,
+                    DesktopActivationKind.ShowWindow,
+                    DesktopActivationKind.Background,
+                ),
                 activations.map(DesktopActivationRequest::kind),
             )
         } finally {

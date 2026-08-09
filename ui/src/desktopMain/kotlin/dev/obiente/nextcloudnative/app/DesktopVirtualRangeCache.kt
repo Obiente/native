@@ -48,16 +48,21 @@ internal class DesktopVirtualRangeCache(
     private val maximumIndexBytes: Long = MAX_INDEX_BYTES,
     private val maximumBlocks: Int = MAX_BLOCKS,
     private val createParentDirectories: Boolean = true,
+    private val accessTimePersistenceIntervalMillis: Long = ACCESS_TIME_PERSISTENCE_INTERVAL_MILLIS,
     private val policy: () -> VirtualFileCachePolicy,
 ) {
     private val activePaths = mutableMapOf<FileOfflineKey, Int>()
     private val activeRevisions = mutableMapOf<ActiveVirtualRangeRevision, Int>()
     private val deferredInvalidationRevisions = mutableSetOf<ActiveVirtualRangeRevision>()
     private val recoveredAccounts = mutableSetOf<String>()
+    private val loadedIndexes = mutableMapOf<String, RangeCacheIndex>()
+    private val dirtyAccessTimeAccounts = mutableSetOf<String>()
+    private val lastAccessTimePersistence = mutableMapOf<String, Long>()
 
     init {
         require(maximumIndexBytes in 1L..MAX_INDEX_BYTES)
         require(maximumBlocks in 1..MAX_BLOCKS)
+        require(accessTimePersistenceIntervalMillis >= 0L)
         val cacheRoot = root.toPath().toAbsolutePath().normalize()
         val parent = requireNotNull(cacheRoot.parent)
         if (createParentDirectories) {
@@ -153,17 +158,37 @@ internal class DesktopVirtualRangeCache(
             removeRecord(accountId, index, record, blob)
             return null
         }
-        runCatching {
-            save(
-                accountId,
-                index.copy(
-                    blocks = index.blocks.map { current ->
-                        if (current == record) current.copy(lastAccessedAtEpochMillis = nowEpochMillis) else current
-                    },
-                ),
-            )
+        val updated = index.copy(
+            blocks = index.blocks.map { current ->
+                if (current == record) current.copy(lastAccessedAtEpochMillis = nowEpochMillis) else current
+            },
+        )
+        loadedIndexes[accountId] = updated
+        dirtyAccessTimeAccounts += accountId
+        val lastPersistence = lastAccessTimePersistence[accountId]
+        if (
+            accessTimePersistenceIntervalMillis == 0L ||
+            lastPersistence == null ||
+            nowEpochMillis >= lastPersistence && nowEpochMillis - lastPersistence >= accessTimePersistenceIntervalMillis
+        ) {
+            runCatching { persistAccessTimes(accountId, updated) }.onSuccess {
+                dirtyAccessTimeAccounts -= accountId
+                lastAccessTimePersistence[accountId] = nowEpochMillis
+            }
         }
         return bytes
+    }
+
+    /** Best-effort persistence for LRU hints; cached bytes remain valid if this write fails. */
+    @Synchronized
+    fun flushAccessTimes() {
+        dirtyAccessTimeAccounts.toList().forEach { accountId ->
+            val index = loadedIndexes[accountId] ?: return@forEach
+            runCatching { persistAccessTimes(accountId, index) }.onSuccess {
+                dirtyAccessTimeAccounts -= accountId
+                lastAccessTimePersistence[accountId] = System.currentTimeMillis()
+            }
+        }
     }
 
     @Synchronized
@@ -1009,11 +1034,14 @@ internal class DesktopVirtualRangeCache(
     )
 
     private fun load(accountId: String): RangeCacheIndex {
+        loadedIndexes[accountId]?.let { return it }
         val file = File(accountDirectory(accountId), INDEX_FILE)
-        if (!file.isFile || file.length() !in 1L..maximumSerializedIndexBytes()) return RangeCacheIndex()
+        if (!file.isFile || file.length() !in 1L..maximumSerializedIndexBytes()) {
+            return RangeCacheIndex().also { loadedIndexes[accountId] = it }
+        }
         return runCatching {
             rangeCacheJson.decodeFromString<RangeCacheIndex>(file.readText()).also { index -> index.requireValid() }
-        }.getOrElse { RangeCacheIndex() }
+        }.getOrElse { RangeCacheIndex() }.also { loadedIndexes[accountId] = it }
     }
 
     private fun loadRetention(accountId: String): VirtualFolderRetentionIndex {
@@ -1070,10 +1098,17 @@ internal class DesktopVirtualRangeCache(
         val bounded = boundedIndex(accountId, index, retention)
         val encoded = encodedIndex(bounded)
         publishBytes(directory, INDEX_FILE, encoded)
+        loadedIndexes[accountId] = bounded
+        dirtyAccessTimeAccounts -= accountId
         val referenced = bounded.blocks.mapTo(hashSetOf(), CachedRangeBlock::blobName)
         directory.listFiles().orEmpty()
             .filter { it.isFile && it.extension == "block" && it.name !in referenced }
             .forEach(File::delete)
+    }
+
+    private fun persistAccessTimes(accountId: String, index: RangeCacheIndex) {
+        val encoded = encodedIndex(index)
+        publishBytes(writableAccountDirectory(accountId), INDEX_FILE, encoded)
     }
 
     private fun saveRetention(accountId: String, index: VirtualFolderRetentionIndex) {
@@ -1571,6 +1606,7 @@ internal class DesktopVirtualRangeCache(
         const val MAX_COMMIT_JOURNAL_BYTES = 2L * 1024L * 1024L
         const val MAX_BLOCKS = 20_000
         const val MAX_BLOCK_BYTES = 4 * 1024 * 1024
+        const val ACCESS_TIME_PERSISTENCE_INTERVAL_MILLIS = 30_000L
         val PROJECTED_BLOCK_HASH = "0".repeat(64)
         val REVISION_STAGE_FILE = Regex(
             "range-revision\\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\..+\\.stage",
