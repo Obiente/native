@@ -647,6 +647,9 @@ internal fun isWindowsCloudFilesRegistrationMissingResult(result: Int): Boolean 
 internal fun isWindowsCloudFilesConnectionAbsentResult(result: Int): Boolean =
     result == 0x80070057.toInt() // HRESULT_FROM_WIN32(ERROR_INVALID_PARAMETER)
 
+internal fun isWindowsCloudFilesPlaceholderAlreadyExistsResult(result: Int): Boolean =
+    result == 0x800700B7.toInt() // HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)
+
 internal class WindowsCloudFilesOperationException(
     operation: String,
     val hResult: Int,

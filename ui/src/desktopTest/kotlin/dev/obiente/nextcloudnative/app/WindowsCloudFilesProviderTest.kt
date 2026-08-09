@@ -157,6 +157,93 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun concurrentCallbackPlaceholderCreationDoesNotFailStartup() {
+        val root = createTempDirectory("windows-cloud-placeholder-race")
+        val identity = WindowsCloudFileIdentity("account-01", "Apps", "revision", 0L, true)
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { baseDirectory, placeholders ->
+                placeholders.forEach { created ->
+                    seed(
+                        baseDirectory.resolve(created.name),
+                        WindowsCloudPlaceholderState.InSync,
+                        WindowsCloudFileIdentityCodec.decode(created.identity),
+                    )
+                }
+                throw WindowsCloudFilesOperationException(
+                    "create Windows Cloud Files placeholders",
+                    0x800700B7.toInt(),
+                )
+            }
+        }
+        val provider = WindowsCloudFilesProvider(root, FakeBackend(ByteArray(0), listOf(identity)), api)
+
+        try {
+            provider.start()
+
+            assertEquals(identity, api.decodedIdentity(root.resolve("Apps")))
+            assertTrue(api.disconnectAttempts.isEmpty())
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun ordinaryLocalEntryCreatedDuringPlaceholderRaceIsPreserved() {
+        val root = createTempDirectory("windows-cloud-local-placeholder-race")
+        val localBytes = "local recovery data".encodeToByteArray()
+        val identity = WindowsCloudFileIdentity(
+            "account-01",
+            "draft.txt",
+            "revision",
+            localBytes.size.toLong(),
+            false,
+        )
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { baseDirectory, placeholders ->
+                baseDirectory.resolve(placeholders.single().name).writeBytes(localBytes)
+                throw WindowsCloudFilesOperationException(
+                    "create Windows Cloud Files placeholders",
+                    0x800700B7.toInt(),
+                )
+            }
+        }
+        val provider = WindowsCloudFilesProvider(root, FakeBackend(localBytes, listOf(identity)), api)
+
+        try {
+            provider.start()
+
+            assertContentEquals(localBytes, root.resolve("draft.txt").toFile().readBytes())
+            assertTrue(api.disconnectAttempts.isEmpty())
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun unrelatedPlaceholderCreationFailureStillStopsStartup() {
+        val root = createTempDirectory("windows-cloud-placeholder-failure")
+        val identity = WindowsCloudFileIdentity("account-01", "Apps", "revision", 0L, true)
+        val failure = WindowsCloudFilesOperationException(
+            "create Windows Cloud Files placeholders",
+            0x80070005.toInt(),
+        )
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { _, _ -> throw failure }
+        }
+        val provider = WindowsCloudFilesProvider(root, FakeBackend(ByteArray(0), listOf(identity)), api)
+
+        try {
+            assertEquals(failure, assertFailsWith<WindowsCloudFilesOperationException> { provider.start() })
+            assertEquals(listOf(1L), api.disconnectAttempts)
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun missingRegistrationDuringConnectIsRepairedAndRetriedOnce() {
         val root = createTempDirectory("windows-cloud-connect-repair")
         val api = FakeApi().apply {
@@ -869,6 +956,7 @@ class WindowsCloudFilesProviderTest {
         val connectFailures = mutableListOf<WindowsCloudFilesOperationException>()
         val disconnectAttempts = mutableListOf<Long>()
         var disconnectFailure: RuntimeException? = null
+        var createPlaceholdersHook: ((Path, List<WindowsCloudPlaceholder>) -> Unit)? = null
         var closed = false
         val lifecycleEvents = mutableListOf<String>()
 
@@ -891,6 +979,10 @@ class WindowsCloudFilesProviderTest {
         }
         override fun createPlaceholders(baseDirectory: Path, placeholders: List<WindowsCloudPlaceholder>) {
             lifecycleEvents += "create"
+            createPlaceholdersHook?.also { hook ->
+                createPlaceholdersHook = null
+                hook(baseDirectory, placeholders)
+            }
         }
         override fun transferData(info: WindowsCloudCallbackInfo, offset: Long, bytes: ByteArray) {
             synchronized(transfers) { transfers += offset to bytes.copyOf() }
