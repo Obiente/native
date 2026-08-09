@@ -192,6 +192,42 @@ class FileSyncCoordinatorTest {
     }
 
     @Test
+    fun `resolved deletion decisions retain child before parent execution order`() {
+        val parent = FileSyncBaseline("Photos", SyncEntryKind.Directory, "local-dir", "remote-dir")
+        val child = baseline("Photos/image.jpg", "local-file", "remote-file")
+        val remoteEntries = listOf(
+            RemoteSyncEntry(parent.relativePath, SyncEntryKind.Directory, "remote-dir"),
+            remote(child.relativePath, "remote-file"),
+        )
+        var coordinator = scanFileSyncPair(
+            state(baselines = listOf(parent, child)),
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = remoteEntries,
+            nowEpochMillis = 10L,
+        )
+        coordinator.pair().workItems.forEach { work ->
+            coordinator = resolveFileSyncDecision(
+                coordinator,
+                PAIR_ID,
+                work.id,
+                FileSyncDecisionChoice.PropagateDeletion,
+            )
+        }
+
+        val rescanned = scanFileSyncPair(
+            coordinator,
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = remoteEntries,
+            nowEpochMillis = 20L,
+        ).pair()
+
+        assertEquals(listOf(child.relativePath, parent.relativePath), rescanned.workItems.map { it.relativePath })
+        assertTrue(rescanned.workItems.all { it.operation is FileSyncOperation.DeleteRemote })
+    }
+
+    @Test
     fun `explicit recovery resets only failures that exhausted automatic retries`() {
         var coordinator = scanFileSyncPair(
             state(),

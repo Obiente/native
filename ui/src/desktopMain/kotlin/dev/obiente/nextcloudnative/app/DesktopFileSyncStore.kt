@@ -38,6 +38,23 @@ internal data class DesktopFileSyncPersistedState(
 internal data class DesktopFileSyncAccountView(
     val state: DesktopFileSyncPersistedState,
     val completedCountsByPairId: Map<String, Int>,
+    val workByPairId: Map<String, DesktopFileSyncWorkOverview>,
+    val trayWorkItems: List<DesktopFileSyncScopedWorkItem>,
+)
+
+internal data class DesktopFileSyncWorkOverview(
+    val readyCount: Int,
+    val runningCount: Int,
+    val conflictCount: Int,
+    val failedCount: Int,
+    val skippedCount: Int,
+    val conflicts: List<FileSyncWorkItem>,
+    val skippedReasons: List<String>,
+)
+
+internal data class DesktopFileSyncScopedWorkItem(
+    val pairId: String,
+    val workItem: FileSyncWorkItem,
 )
 
 internal class DesktopFileSyncStore(
@@ -87,26 +104,32 @@ internal class DesktopFileSyncStore(
     }
 
     @Synchronized
-    fun loadAccount(accountId: String): DesktopFileSyncAccountView {
+    fun loadAccount(accountId: String, trayLimit: Int = 0): DesktopFileSyncAccountView {
         require(accountId.isNotBlank() && accountId.length <= 256)
+        require(trayLimit in 0..MAX_TRAY_ACTIVITY_ITEMS)
         val connection = openDatabase()
         return try {
             initializeSchema(connection)
             migrateLegacyState(connection)
-            val pairs = readPairRecords(connection).filter { it.accountId == accountId }.map { pair ->
-                pair.copy(workItems = readWork(connection, pair.id))
-            }
+            val pairs = readPairRecords(connection).filter { it.accountId == accountId }
             val rootIds = pairs.mapTo(mutableSetOf(), FileSyncPair::localRootId)
             val roots = readRoots(connection).filter { it.id in rootIds }
             val completedCounts = pairs.associate { pair ->
                 pair.id to countPairRows(connection, "sync_baselines", pair.id, MAX_FILE_SYNC_ENTRIES)
             }
+            val work = pairs.associate { pair -> pair.id to readWorkOverview(connection, pair.id) }
             DesktopFileSyncAccountView(
                 state = DesktopFileSyncPersistedState(
-                    coordinator = recoverInterruptedFileSyncWork(FileSyncCoordinatorState(pairs)),
+                    coordinator = FileSyncCoordinatorState(pairs),
                     roots = roots,
                 ),
                 completedCountsByPairId = completedCounts,
+                workByPairId = work,
+                trayWorkItems = if (trayLimit == 0) {
+                    emptyList()
+                } else {
+                    readTrayWork(connection, pairs.map(FileSyncPair::id), trayLimit)
+                },
             )
         } finally {
             connection.close()
@@ -214,17 +237,61 @@ internal class DesktopFileSyncStore(
         )
         connection.execSQL(
             "CREATE TABLE IF NOT EXISTS sync_work (" +
-                "pair_id TEXT NOT NULL, work_id INTEGER NOT NULL, record BLOB NOT NULL, " +
+                "pair_id TEXT NOT NULL, work_id INTEGER NOT NULL, state TEXT NOT NULL, " +
+                "relative_path TEXT NOT NULL, detail TEXT, record BLOB NOT NULL, " +
                 "PRIMARY KEY(pair_id, work_id), " +
                 "FOREIGN KEY(pair_id) REFERENCES sync_pairs(id) ON DELETE CASCADE)",
         )
         val schemaVersion = metadataValue(connection, SCHEMA_VERSION_KEY)
-        if (schemaVersion == null) {
-            putMetadata(connection, SCHEMA_VERSION_KEY, DATABASE_SCHEMA_VERSION)
-        } else {
-            require(schemaVersion == DATABASE_SCHEMA_VERSION) {
+        when (schemaVersion) {
+            null -> putMetadata(connection, SCHEMA_VERSION_KEY, DATABASE_SCHEMA_VERSION)
+            PREVIOUS_DATABASE_SCHEMA_VERSION -> migrateWorkIndexColumns(connection)
+            DATABASE_SCHEMA_VERSION -> Unit
+            else -> require(false) {
                 "The desktop folder sync database version is unsupported."
             }
+        }
+        connection.execSQL(
+            "CREATE INDEX IF NOT EXISTS sync_work_pair_state_path " +
+                "ON sync_work(pair_id, state, relative_path, work_id)",
+        )
+    }
+
+    private fun migrateWorkIndexColumns(connection: SQLiteConnection) {
+        transaction(connection) {
+            connection.execSQL("ALTER TABLE sync_work ADD COLUMN state TEXT")
+            connection.execSQL("ALTER TABLE sync_work ADD COLUMN relative_path TEXT")
+            connection.execSQL("ALTER TABLE sync_work ADD COLUMN detail TEXT")
+            connection.prepare("SELECT pair_id, work_id, record FROM sync_work ORDER BY pair_id, work_id")
+                .use { source ->
+                    connection.prepare(
+                        "UPDATE sync_work SET state = ?, relative_path = ?, detail = ? " +
+                            "WHERE pair_id = ? AND work_id = ?",
+                    ).use { update ->
+                        while (source.step()) {
+                            val pairId = source.getText(0)
+                            val workId = source.getLong(1)
+                            val work = decodeFileSyncWorkRecord(source.getBlob(2))
+                            require(work.id == workId)
+                            update.bindText(1, work.state.name)
+                            update.bindText(2, work.relativePath)
+                            work.indexDetail()?.let { update.bindText(3, it) } ?: update.bindNull(3)
+                            update.bindText(4, pairId)
+                            update.bindLong(5, workId)
+                            check(!update.step())
+                            update.reset()
+                            update.clearBindings()
+                        }
+                    }
+                }
+            val missingIndexValues = connection.prepare(
+                "SELECT COUNT(*) FROM sync_work WHERE state IS NULL OR relative_path IS NULL",
+            ).use { statement ->
+                check(statement.step())
+                statement.getLong(0)
+            }
+            check(missingIndexValues == 0L) { "Could not index the existing desktop folder sync work." }
+            putMetadata(connection, SCHEMA_VERSION_KEY, DATABASE_SCHEMA_VERSION)
         }
     }
 
@@ -339,6 +406,129 @@ internal class DesktopFileSyncStore(
             "The desktop folder sync database contains too much work for one pair."
         }
         return work
+    }
+
+    private fun readWorkOverview(connection: SQLiteConnection, pairId: String): DesktopFileSyncWorkOverview {
+        val counts = mutableMapOf<FileSyncExecutionState, Int>()
+        connection.prepare(
+            "SELECT state, COUNT(*) FROM sync_work WHERE pair_id = ? GROUP BY state",
+        ).use { statement ->
+            statement.bindText(1, pairId)
+            while (statement.step()) {
+                val state = enumValueOf<FileSyncExecutionState>(statement.getText(0))
+                val count = statement.getLong(1)
+                require(count in 1..MAX_FILE_SYNC_WORK_ITEMS.toLong())
+                counts[state] = count.toInt()
+            }
+        }
+        require(counts.values.sum() <= MAX_FILE_SYNC_WORK_ITEMS) {
+            "The desktop folder sync database contains too much work for one pair."
+        }
+        val conflictCount = counts[FileSyncExecutionState.AwaitingDecision] ?: 0
+        val skippedCount = counts[FileSyncExecutionState.Skipped] ?: 0
+        return DesktopFileSyncWorkOverview(
+            readyCount = (counts[FileSyncExecutionState.Ready] ?: 0) +
+                (counts[FileSyncExecutionState.Running] ?: 0),
+            runningCount = 0,
+            conflictCount = conflictCount,
+            failedCount = counts[FileSyncExecutionState.Failed] ?: 0,
+            skippedCount = skippedCount,
+            conflicts = if (conflictCount == 0) {
+                emptyList()
+            } else {
+                readWorkPage(
+                    connection,
+                    pairId,
+                    FileSyncExecutionState.AwaitingDecision,
+                    limit = FILE_SYNC_CONFLICT_PAGE_SIZE,
+                )
+            },
+            skippedReasons = if (skippedCount == 0) emptyList() else readSkippedReasons(connection, pairId),
+        )
+    }
+
+    private fun readWorkPage(
+        connection: SQLiteConnection,
+        pairId: String,
+        state: FileSyncExecutionState,
+        limit: Int,
+    ): List<FileSyncWorkItem> {
+        require(limit in 1..MAX_FILE_SYNC_WORK_ITEMS)
+        return connection.prepare(
+            "SELECT work_id, relative_path, record FROM sync_work " +
+                "WHERE pair_id = ? AND state = ? ORDER BY relative_path, work_id LIMIT $limit",
+        ).use { statement ->
+            statement.bindText(1, pairId)
+            statement.bindText(2, state.name)
+            buildList {
+                while (statement.step()) {
+                    val work = decodeFileSyncWorkRecord(statement.getBlob(2))
+                    require(work.id == statement.getLong(0))
+                    require(work.relativePath == statement.getText(1) && work.state == state)
+                    add(work)
+                }
+            }
+        }
+    }
+
+    private fun readSkippedReasons(connection: SQLiteConnection, pairId: String): List<String> =
+        connection.prepare(
+            "SELECT DISTINCT detail FROM sync_work WHERE pair_id = ? AND state = ? AND detail IS NOT NULL " +
+                "ORDER BY detail LIMIT $MAX_FILE_SYNC_SKIPPED_REASONS",
+        ).use { statement ->
+            statement.bindText(1, pairId)
+            statement.bindText(2, FileSyncExecutionState.Skipped.name)
+            buildList {
+                while (statement.step()) {
+                    val reason = statement.getText(0)
+                    require(
+                        reason.isNotBlank() && reason.length <= MAX_FILE_SYNC_FAILURE_LENGTH &&
+                            reason.none(Char::isISOControl),
+                    )
+                    add(reason)
+                }
+            }
+        }
+
+    private fun readTrayWork(
+        connection: SQLiteConnection,
+        pairIds: List<String>,
+        limit: Int,
+    ): List<DesktopFileSyncScopedWorkItem> {
+        if (pairIds.isEmpty()) return emptyList()
+        require(pairIds.size <= MAX_FILE_SYNC_PAIRS)
+        require(limit in 1..MAX_TRAY_ACTIVITY_ITEMS)
+        val placeholders = List(pairIds.size) { "?" }.joinToString(",")
+        return connection.prepare(
+            "SELECT pair_id, work_id, state, relative_path, record FROM sync_work " +
+                "WHERE pair_id IN ($placeholders) AND state != ? " +
+                "ORDER BY CASE " +
+                "WHEN state IN ('AwaitingDecision', 'Failed') THEN 1 " +
+                "WHEN state IN ('Ready', 'Running') THEN 2 ELSE 3 END, relative_path, work_id LIMIT $limit",
+        ).use { statement ->
+            pairIds.forEachIndexed { index, pairId -> statement.bindText(index + 1, pairId) }
+            statement.bindText(pairIds.size + 1, FileSyncExecutionState.Skipped.name)
+            buildList {
+                while (statement.step()) {
+                    val pairId = statement.getText(0)
+                    val workId = statement.getLong(1)
+                    val indexedState = enumValueOf<FileSyncExecutionState>(statement.getText(2))
+                    val indexedPath = statement.getText(3)
+                    val decoded = decodeFileSyncWorkRecord(statement.getBlob(4))
+                    require(decoded.id == workId && decoded.state == indexedState && decoded.relativePath == indexedPath)
+                    add(
+                        DesktopFileSyncScopedWorkItem(
+                            pairId,
+                            if (decoded.state == FileSyncExecutionState.Running) {
+                                decoded.copy(state = FileSyncExecutionState.Ready)
+                            } else {
+                                decoded
+                            },
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     private fun countPairRows(connection: SQLiteConnection, table: String, pairId: String, maximum: Int): Int {
@@ -472,11 +662,17 @@ internal class DesktopFileSyncStore(
             }
             return
         }
-        connection.prepare("INSERT OR REPLACE INTO sync_work(pair_id, work_id, record) VALUES (?, ?, ?)")
+        connection.prepare(
+            "INSERT OR REPLACE INTO sync_work(" +
+                "pair_id, work_id, state, relative_path, detail, record) VALUES (?, ?, ?, ?, ?, ?)",
+        )
             .use { statement ->
                 statement.bindText(1, pairId)
                 statement.bindLong(2, workId)
-                statement.bindBlob(3, encodeFileSyncWorkRecord(workItem))
+                statement.bindText(3, workItem.state.name)
+                statement.bindText(4, workItem.relativePath)
+                workItem.indexDetail()?.let { statement.bindText(5, it) } ?: statement.bindNull(5)
+                statement.bindBlob(6, encodeFileSyncWorkRecord(workItem))
                 check(!statement.step())
             }
     }
@@ -556,8 +752,13 @@ private val stateJson = Json {
     isLenient = false
 }
 
+private fun FileSyncWorkItem.indexDetail(): String? =
+    (operation as? FileSyncOperation.Skipped)?.reason ?: failureMessage
+
 private const val FORMAT_VERSION = 1
 private const val MAX_LEGACY_STATE_BYTES = 17L * 1024L * 1024L
 private const val LEGACY_IMPORT_KEY = "legacy_v1_import"
 private const val SCHEMA_VERSION_KEY = "schema_version"
-private const val DATABASE_SCHEMA_VERSION = "2"
+private const val MAX_FILE_SYNC_SKIPPED_REASONS = 20
+private const val PREVIOUS_DATABASE_SCHEMA_VERSION = "2"
+private const val DATABASE_SCHEMA_VERSION = "3"

@@ -1379,7 +1379,7 @@ private fun FolderSyncPairCard(
     var menuExpanded by remember(pair.id) { mutableStateOf(false) }
     val menuActions = buildList {
         add(NextcloudCardAction("Sync now", enabled = actionsEnabled, onClick = onRun))
-        pair.conflicts.take(MAX_VISIBLE_PAIR_CONFLICTS).forEach { conflict ->
+        pair.conflicts.take(FILE_SYNC_CONFLICT_PAGE_SIZE).forEach { conflict ->
             conflict.choices.sortedBy(FileSyncDecisionChoice::ordinal).forEach { choice ->
                 add(
                     NextcloudCardAction(
@@ -1435,9 +1435,9 @@ private fun FolderSyncPairCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                "${pair.completedCount} completed | ${pair.conflicts.size} conflicts | ${pair.failedCount} failed",
+                "${pair.completedCount} completed | ${pair.conflictCount} conflicts | ${pair.failedCount} failed",
                 style = MaterialTheme.typography.bodySmall,
-                color = if (pair.conflicts.size + pair.failedCount > 0) {
+                color = if (pair.conflictCount + pair.failedCount > 0) {
                     MaterialTheme.colorScheme.error
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
@@ -1475,7 +1475,7 @@ private fun FolderSyncPairCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            pair.conflicts.take(MAX_VISIBLE_PAIR_CONFLICTS).forEach { conflict ->
+            pair.conflicts.take(FILE_SYNC_CONFLICT_PAGE_SIZE).forEach { conflict ->
                 HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
                 Text(
                     conflict.relativePath,
@@ -1489,9 +1489,9 @@ private fun FolderSyncPairCard(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            if (pair.conflicts.size > MAX_VISIBLE_PAIR_CONFLICTS) {
+            if (pair.conflictCount > pair.conflicts.size) {
                 Text(
-                    "${pair.conflicts.size - MAX_VISIBLE_PAIR_CONFLICTS} more conflicts. " +
+                    "${pair.conflictCount - pair.conflicts.size} more conflicts. " +
                         "Resolve these first, then refresh.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2660,7 +2660,6 @@ internal fun fileOfflineRefreshEnabled(
 ): Boolean = !loading && !mediaDiscoveryLoading && !actionInProgress
 
 private const val ADD_PAIR_BUSY_ID = "__adding_sync_pair__"
-private const val MAX_VISIBLE_PAIR_CONFLICTS = 5
 private const val MAX_VISIBLE_MEDIA_FOLDER_SUGGESTIONS = 6
 private data class PendingFileSyncDecision(
     val pair: FileSyncPairSummary,

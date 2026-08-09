@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import androidx.sqlite.execSQL
 import java.io.File
 import java.nio.file.Files
 import java.util.Base64
@@ -144,6 +145,153 @@ class DesktopFileSyncStoreTest {
             assertTrue(overview.coordinator.pairs.all { it.baselines.isEmpty() && it.workItems.isEmpty() })
             assertEquals(1, store.loadAccount("account").completedCountsByPairId.getValue(secondary.id))
             assertFails { store.loadPair(secondary.id) }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `account summaries and tray decode only their bounded work pages`() {
+        val directory = Files.createTempDirectory("desktop-sync-work-page-").toFile()
+        try {
+            val pair = FileSyncPair(
+                id = "paged-pair",
+                accountId = "account",
+                localRootId = "paged-root",
+                remoteRootPath = "Pictures",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+            )
+            val conflicts = (0 until 6).map { index ->
+                LocalSyncEntry("Attention/conflict-$index.jpg", SyncEntryKind.File, "local-conflict-$index")
+            }
+            val queued = (0 until 20).map { index ->
+                LocalSyncEntry("Queue/file-${index.toString().padStart(2, '0')}.jpg", SyncEntryKind.File, "local-$index")
+            }
+            val coordinator = scanFileSyncPair(
+                FileSyncCoordinatorState(listOf(pair)),
+                pair.id,
+                localEntries = conflicts + queued,
+                remoteEntries = conflicts.mapIndexed { index, entry ->
+                    RemoteSyncEntry(entry.relativePath, SyncEntryKind.File, "remote-conflict-$index")
+                },
+                nowEpochMillis = 10L,
+            )
+            val root = DesktopFileSyncRootRecord(pair.localRootId, directory.absolutePath, "Pictures")
+            val database = File(directory, "state.db")
+            val store = DesktopFileSyncStore(database, legacyStateFile = null)
+            store.savePair(DesktopFileSyncPersistedState(coordinator, listOf(root)), pair.id)
+
+            BundledSQLiteDriver().open(database.absolutePath).use { connection ->
+                connection.prepare(
+                    "UPDATE sync_work SET record = ? WHERE pair_id = ? AND relative_path = ?",
+                ).use { statement ->
+                    statement.bindBlob(1, byteArrayOf(0))
+                    statement.bindText(2, pair.id)
+                    statement.bindText(3, "Queue/file-19.jpg")
+                    assertFalse(statement.step())
+                }
+            }
+
+            val account = store.loadAccount("account", trayLimit = MAX_TRAY_ACTIVITY_ITEMS)
+            val work = account.workByPairId.getValue(pair.id)
+            assertEquals(20, work.readyCount)
+            assertEquals(6, work.conflictCount)
+            assertEquals(FILE_SYNC_CONFLICT_PAGE_SIZE, work.conflicts.size)
+            assertEquals(MAX_TRAY_ACTIVITY_ITEMS, account.trayWorkItems.size)
+            assertFails { store.loadPair(pair.id) }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `version two databases gain bounded work index columns`() {
+        val directory = Files.createTempDirectory("desktop-sync-work-index-migration-").toFile()
+        try {
+            val pair = FileSyncPair(
+                id = "migration-pair",
+                accountId = "account",
+                localRootId = "migration-root",
+                remoteRootPath = "Documents",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+            )
+            val coordinator = scanFileSyncPair(
+                FileSyncCoordinatorState(listOf(pair)),
+                pair.id,
+                localEntries = listOf(LocalSyncEntry("report.pdf", SyncEntryKind.File, "local-report")),
+                remoteEntries = emptyList(),
+                nowEpochMillis = 10L,
+            )
+            val persistedPair = coordinator.pairs.single()
+            val work = persistedPair.workItems.single()
+            val database = File(directory, "state.db")
+            BundledSQLiteDriver().open(database.absolutePath).use { connection ->
+                connection.execSQL("PRAGMA foreign_keys = ON")
+                connection.execSQL("CREATE TABLE sync_metadata (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
+                connection.execSQL(
+                    "CREATE TABLE sync_roots (" +
+                        "id TEXT PRIMARY KEY NOT NULL, absolute_path TEXT NOT NULL, display_name TEXT NOT NULL)",
+                )
+                connection.execSQL("CREATE TABLE sync_pairs (id TEXT PRIMARY KEY NOT NULL, record BLOB NOT NULL)")
+                connection.execSQL(
+                    "CREATE TABLE sync_baselines (" +
+                        "pair_id TEXT NOT NULL, relative_path TEXT NOT NULL, record BLOB NOT NULL, " +
+                        "PRIMARY KEY(pair_id, relative_path), " +
+                        "FOREIGN KEY(pair_id) REFERENCES sync_pairs(id) ON DELETE CASCADE)",
+                )
+                connection.execSQL(
+                    "CREATE TABLE sync_work (" +
+                        "pair_id TEXT NOT NULL, work_id INTEGER NOT NULL, record BLOB NOT NULL, " +
+                        "PRIMARY KEY(pair_id, work_id), " +
+                        "FOREIGN KEY(pair_id) REFERENCES sync_pairs(id) ON DELETE CASCADE)",
+                )
+                connection.prepare("INSERT INTO sync_metadata(key, value) VALUES ('schema_version', '2')")
+                    .use { assertFalse(it.step()) }
+                connection.prepare(
+                    "INSERT INTO sync_roots(id, absolute_path, display_name) VALUES (?, ?, ?)",
+                ).use { statement ->
+                    statement.bindText(1, pair.localRootId)
+                    statement.bindText(2, directory.absolutePath)
+                    statement.bindText(3, "Documents")
+                    assertFalse(statement.step())
+                }
+                connection.prepare("INSERT INTO sync_pairs(id, record) VALUES (?, ?)").use { statement ->
+                    statement.bindText(1, pair.id)
+                    statement.bindBlob(
+                        2,
+                        encodeFileSyncPairRecord(persistedPair.copy(baselines = emptyList(), workItems = emptyList())),
+                    )
+                    assertFalse(statement.step())
+                }
+                connection.prepare("INSERT INTO sync_work(pair_id, work_id, record) VALUES (?, ?, ?)")
+                    .use { statement ->
+                        statement.bindText(1, pair.id)
+                        statement.bindLong(2, work.id)
+                        statement.bindBlob(3, encodeFileSyncWorkRecord(work))
+                        assertFalse(statement.step())
+                    }
+            }
+
+            val store = DesktopFileSyncStore(database, legacyStateFile = null)
+            val account = store.loadAccount("account", trayLimit = 1)
+            assertEquals(1, account.workByPairId.getValue(pair.id).readyCount)
+            assertEquals(work, account.trayWorkItems.single().workItem)
+            assertEquals(work, store.loadPair(pair.id).coordinator.pairs.single().workItems.single())
+            BundledSQLiteDriver().open(database.absolutePath).use { connection ->
+                val version = connection.prepare(
+                    "SELECT value FROM sync_metadata WHERE key = 'schema_version'",
+                ).use { statement ->
+                    assertTrue(statement.step())
+                    statement.getText(0)
+                }
+                val columns = connection.prepare("PRAGMA table_info(sync_work)").use { statement ->
+                    buildSet {
+                        while (statement.step()) add(statement.getText(1))
+                    }
+                }
+                assertEquals("3", version)
+                assertTrue(setOf("state", "relative_path", "detail").all { it in columns })
+            }
         } finally {
             directory.deleteRecursively()
         }

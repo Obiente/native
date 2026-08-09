@@ -48,11 +48,18 @@ internal class DesktopFileSyncEngine(
                 support = FileSyncCenterSupport.Available,
                 pairs = state.coordinator.pairs.filter { it.accountId == accountId }.map { pair ->
                     val root = state.roots.firstOrNull { it.id == pair.localRootId }
-                    pair.toCenterSummary(
+                    val work = account.workByPairId.getValue(pair.id)
+                    pair.copy(workItems = work.conflicts).toCenterSummary(
                         localDisplayName = root?.displayName ?: "Selected folder",
                         localRootPath = root?.absolutePath,
                         scheduleDescription = "Automatic sync while Nextcloud Native is running",
                         completedCount = account.completedCountsByPairId.getValue(pair.id),
+                        readyCount = work.readyCount,
+                        runningCount = work.runningCount,
+                        conflictCount = work.conflictCount,
+                        failedCount = work.failedCount,
+                        skippedCount = work.skippedCount,
+                        skippedReasons = work.skippedReasons,
                         runState = runState,
                         networkState = networkState(pair.configuration),
                     )
@@ -69,32 +76,30 @@ internal class DesktopFileSyncEngine(
         store.withExclusiveAccess {
             require(limit in 1..MAX_TRAY_ACTIVITY_ITEMS)
             val accountId = desktopFileCacheAccountId(session)
-            val state = store.loadAccount(accountId).state
-            state.coordinator.pairs
+            val account = store.loadAccount(accountId, trayLimit = limit)
+            val state = account.state
+            val pairsById = state.coordinator.pairs.associateBy(FileSyncPair::id)
+            account.trayWorkItems
                 .asSequence()
-                .filter { it.accountId == accountId }
-                .flatMap { pair ->
+                .map { scoped ->
+                    val pair = pairsById.getValue(scoped.pairId)
                     val root = state.roots.firstOrNull { it.id == pair.localRootId }
                     val pairLabel = syncPairLabel(root?.displayName ?: "Selected folder", pair.remoteRootPath)
-                    pair.workItems.asSequence()
-                        .filter { it.state != FileSyncExecutionState.Skipped }
-                        .map { work ->
-                            DesktopFileSyncTrayActivity(
-                                stableId = "${pair.id}:${work.id}",
-                                relativePath = work.relativePath,
-                                pairLabel = pairLabel,
-                                phase = when (work.state) {
-                                    FileSyncExecutionState.AwaitingDecision ->
-                                        DesktopFileSyncTrayActivityPhase.Conflict
-                                    FileSyncExecutionState.Failed -> DesktopFileSyncTrayActivityPhase.Failed
-                                    FileSyncExecutionState.Ready -> DesktopFileSyncTrayActivityPhase.Waiting
-                                    FileSyncExecutionState.Running -> work.operation.toTrayActivityPhase()
-                                    FileSyncExecutionState.Skipped -> DesktopFileSyncTrayActivityPhase.Waiting
-                                },
-                                sizeBytes = work.observedLocal?.size ?: work.observedRemote?.size,
-                                detail = work.failureMessage,
-                            )
-                        }
+                    val work = scoped.workItem
+                    DesktopFileSyncTrayActivity(
+                        stableId = "${pair.id}:${work.id}",
+                        relativePath = work.relativePath,
+                        pairLabel = pairLabel,
+                        phase = when (work.state) {
+                            FileSyncExecutionState.AwaitingDecision -> DesktopFileSyncTrayActivityPhase.Conflict
+                            FileSyncExecutionState.Failed -> DesktopFileSyncTrayActivityPhase.Failed
+                            FileSyncExecutionState.Ready -> DesktopFileSyncTrayActivityPhase.Waiting
+                            FileSyncExecutionState.Running -> work.operation.toTrayActivityPhase()
+                            FileSyncExecutionState.Skipped -> DesktopFileSyncTrayActivityPhase.Waiting
+                        },
+                        sizeBytes = work.observedLocal?.size ?: work.observedRemote?.size,
+                        detail = work.failureMessage,
+                    )
                 }
                 .sortedWith(
                     compareBy<DesktopFileSyncTrayActivity> {

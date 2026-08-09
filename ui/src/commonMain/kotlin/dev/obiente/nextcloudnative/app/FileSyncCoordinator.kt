@@ -250,9 +250,13 @@ fun scanFileSyncPair(
             current.sameGeneration(operation, localByPath[path], remoteByPath[path], baselineByPath[path])
         }
     }
-    val sortedOperations = plan.operations.sortedWith(
-        fileSyncOperationComparator(pair.configuration, localByPath, remoteByPath),
-    )
+    val operationComparator = fileSyncOperationComparator(pair.configuration, localByPath, remoteByPath)
+    val sortedOperations = plan.operations.sortedWith { left, right ->
+        operationComparator.compare(
+            stableExistingWork(left)?.operation ?: left,
+            stableExistingWork(right)?.operation ?: right,
+        )
+    }
     val selectedOperations = if (reservedNonExecutableWorkItems == 0) {
         sortedOperations.take(maximumWorkItems)
     } else {

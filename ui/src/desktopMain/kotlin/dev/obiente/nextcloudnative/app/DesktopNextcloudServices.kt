@@ -2245,7 +2245,7 @@ class DesktopNextcloudServices(
         center: FileSyncCenterSnapshot,
         durableActivities: List<DesktopFileSyncTrayActivity> = emptyList(),
     ) {
-        val conflicts = center.pairs.sumOf { it.conflicts.size }
+        val conflicts = center.pairs.sumOf(FileSyncPairSummary::conflictCount)
         val failed = center.pairs.sumOf(FileSyncPairSummary::failedCount)
         val paused = isFileSyncPaused()
         val recentCompleted = mutableFileSyncTraySnapshot.value.activities.filter {
