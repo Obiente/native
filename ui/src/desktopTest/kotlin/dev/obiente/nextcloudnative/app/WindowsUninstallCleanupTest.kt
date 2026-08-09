@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
@@ -10,6 +11,49 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class WindowsUninstallCleanupTest {
+    @Test
+    fun loadsOnlyLiveAccountScopedRecoveryRoots() {
+        val preferences = Preferences.userRoot().node("windows-recovery-root-test-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-recovery-root-home").toFile()
+        val liveAccountId = "a".repeat(64)
+        val missingAccountId = "b".repeat(64)
+        val liveRoot = home.resolve("live").apply { assertTrue(mkdirs()) }
+        try {
+            preferences.put(windowsCloudFilesRootPreferenceKey(liveAccountId), liveRoot.absolutePath)
+            preferences.put(
+                windowsCloudFilesRootPreferenceKey(missingAccountId),
+                home.resolve("missing").absolutePath,
+            )
+            preferences.put("wcfr.future-format", liveRoot.absolutePath)
+
+            assertEquals(
+                mapOf(liveAccountId to liveRoot.toPath()),
+                persistedWindowsCloudFilesRecoveryRoots(preferences),
+            )
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun pagesAcrossAllRecoveryRootsInsteadOfRepeatingTheFirstPage() {
+        val roots = (0 until 18).associate { index ->
+            index.toString(16).padStart(64, '0') to File("C:/recovery/$index").toPath()
+        }
+
+        val first = pageWindowsCloudFilesRecoveryRoots(roots, startAfterAccountId = null)
+        val second = pageWindowsCloudFilesRecoveryRoots(
+            roots,
+            startAfterAccountId = first.keys.last(),
+        )
+
+        assertEquals(16, first.size)
+        assertEquals(16, second.size)
+        assertTrue(roots.keys.drop(16).all(second::containsKey))
+        assertFalse(first.keys == second.keys)
+    }
+
     @Test
     fun cloudFilesCleanupTreatsOnlyMissingRootsAsAlreadyAbsent() {
         assertTrue(isWindowsCloudFilesRootAbsentResult(0xC000CF13.toInt(), rootMissing = false))

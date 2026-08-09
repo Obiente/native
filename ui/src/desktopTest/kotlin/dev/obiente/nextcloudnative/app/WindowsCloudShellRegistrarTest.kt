@@ -53,6 +53,52 @@ class WindowsCloudShellRegistrarTest {
     }
 
     @Test
+    fun passesOnlyDurablyRecordedLiveRecoveryRoots() {
+        val installation = createTempDirectory("nextcloud-shell-recovery-roots").toFile()
+        val launcher = installation.resolve("NextcloudNative.exe").apply { writeText("launcher") }
+        installation.resolve(WINDOWS_SHELL_REGISTRAR_NAME).writeText("helper")
+        installation.resolve(WINDOWS_SHELL_ICON_NAME).writeText("icon")
+        val root = installation.resolve("Current root").toPath().createDirectories()
+        val recoveryRoot = installation.resolve("Previous root").toPath().createDirectories()
+        val currentAccountId = "a5".repeat(32)
+        val recoveryAccountId = "b6".repeat(32)
+        var invocation = emptyList<String>()
+        val registrar = PackagedWindowsCloudShellRegistrar(
+            launcherPath = launcher.absolutePath,
+            recoveryRootsProvider = {
+                mapOf(
+                    recoveryAccountId to recoveryRoot,
+                    currentAccountId to root,
+                    "invalid" to recoveryRoot,
+                )
+            },
+        ) { command, _ ->
+            invocation = command
+            0
+        }
+
+        assertEquals(
+            WindowsShellRegistrationResult.Registered,
+            registrar.register(root, currentAccountId, "Nextcloud Native", byteArrayOf(1)),
+        )
+        assertEquals(
+            listOf(
+                installation.resolve(WINDOWS_SHELL_REGISTRAR_NAME).absolutePath,
+                "register",
+                root.toAbsolutePath().normalize().toString(),
+                currentAccountId,
+                "Nextcloud Native",
+                installation.resolve(WINDOWS_SHELL_ICON_NAME).absolutePath,
+                "01",
+                "--recoverable-root",
+                recoveryAccountId,
+                recoveryRoot.normalize().toString(),
+            ),
+            invocation,
+        )
+    }
+
+    @Test
     fun missingPackagedFilesDoNotAttemptRegistration() {
         val installation = createTempDirectory("nextcloud-shell-missing").toFile()
         val launcher = installation.resolve("NextcloudNative.exe").apply { writeText("launcher") }
