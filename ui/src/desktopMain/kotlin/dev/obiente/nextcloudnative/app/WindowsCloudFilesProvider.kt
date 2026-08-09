@@ -723,11 +723,14 @@ internal class WindowsCloudFilesProvider(
     ) {
         val localPath = localDirectory.resolve(identity.path.substringAfterLast('/'))
         var collision = initialFailure
+        var identityUnavailable = false
         repeat(MAX_PLACEHOLDER_COLLISION_RETRIES) {
             val state = api.placeholderState(localPath)
             if (state != WindowsCloudPlaceholderState.Absent) {
-                reconcileExistingPlaceholder(identity, localPath, state)
-                return
+                if (reconcileCollidedPlaceholder(identity, localPath, state)) return
+                identityUnavailable = true
+                Thread.sleep(PLACEHOLDER_COLLISION_RETRY_DELAY_MILLIS)
+                return@repeat
             }
             if (Files.exists(localPath, LinkOption.NOFOLLOW_LINKS)) {
                 // Preserve an ordinary local entry. Startup recovery will import it with
@@ -743,7 +746,45 @@ internal class WindowsCloudFilesProvider(
                 collision = failure
             }
         }
+        if (identityUnavailable) {
+            throw IllegalStateException(
+                "Could not verify the existing Windows Cloud Files placeholder after a creation collision.",
+                collision,
+            )
+        }
         throw collision
+    }
+
+    private fun reconcileCollidedPlaceholder(
+        listedIdentity: WindowsCloudFileIdentity,
+        localPath: Path,
+        state: WindowsCloudPlaceholderState,
+    ): Boolean {
+        val existing = api.placeholderIdentity(localPath)
+            ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
+            ?: return false
+        check(existing.accountId == backend.accountId && existing.path == listedIdentity.path) {
+            "The Windows Cloud Files directory contains remote entries that resolve to the same Windows path."
+        }
+        if (state == WindowsCloudPlaceholderState.Dirty) {
+            knownIdentities[existing.path] = existing
+            return true
+        }
+        check(state == WindowsCloudPlaceholderState.InSync)
+        val authoritative = if (existing == listedIdentity) {
+            existing
+        } else {
+            resolveAuthoritativePlaceholderIdentity(listedIdentity)
+        }
+        if (existing != authoritative) {
+            api.updatePlaceholder(
+                localPath,
+                placeholder(authoritative),
+                invalidateContent = !authoritative.directory,
+            )
+        }
+        knownIdentities[authoritative.path] = authoritative
+        return true
     }
 
     private fun reconcileExistingPlaceholder(
@@ -755,25 +796,45 @@ internal class WindowsCloudFilesProvider(
             ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
         when (state) {
             WindowsCloudPlaceholderState.InSync -> {
+                check(previous == null || previous.accountId == backend.accountId && previous.path == identity.path) {
+                    "The Windows Cloud Files directory contains remote entries that resolve to the same Windows path."
+                }
+                val authoritative = when {
+                    previous == null || previous == identity -> identity
+                    else -> resolveAuthoritativePlaceholderIdentity(identity)
+                }
                 val changed = previous == null ||
-                    previous.accountId != identity.accountId ||
-                    previous.path != identity.path ||
-                    previous.remoteRevision != identity.remoteRevision ||
-                    previous.size != identity.size ||
-                    previous.directory != identity.directory
+                    previous.remoteRevision != authoritative.remoteRevision ||
+                    previous.size != authoritative.size ||
+                    previous.directory != authoritative.directory ||
+                    previous.lastModifiedEpochMillis != authoritative.lastModifiedEpochMillis
                 api.updatePlaceholder(
                     localPath,
-                    placeholder(identity),
-                    invalidateContent = changed && !identity.directory,
+                    placeholder(authoritative),
+                    invalidateContent = changed && !authoritative.directory,
                 )
-                knownIdentities[identity.path] = identity
+                knownIdentities[authoritative.path] = authoritative
             }
             WindowsCloudPlaceholderState.Dirty -> {
-                if (previous != null && previous.accountId == backend.accountId && previous.path == identity.path) {
-                    knownIdentities[identity.path] = previous
+                check(previous != null && previous.accountId == backend.accountId && previous.path == identity.path) {
+                    "The dirty Windows Cloud Files placeholder does not have a verified identity."
                 }
+                knownIdentities[identity.path] = previous
             }
             WindowsCloudPlaceholderState.Absent -> Unit
+        }
+    }
+
+    private fun resolveAuthoritativePlaceholderIdentity(
+        listedIdentity: WindowsCloudFileIdentity,
+    ): WindowsCloudFileIdentity {
+        val resolved = backend.resolve(listedIdentity.path)
+        return requireNotNull(resolved) {
+            "The remote item disappeared while reconciling a Windows placeholder."
+        }.also { current ->
+            require(current.accountId == backend.accountId && current.path == listedIdentity.path) {
+                "The resolved Windows placeholder identity does not match the requested remote item."
+            }
         }
     }
 
@@ -1173,6 +1234,7 @@ internal class WindowsCloudFilesProvider(
         const val LOCAL_CHANGE_SETTLE_MILLIS = 750L
         const val MAX_PLACEHOLDER_COLLISION_RETRIES = 3
         const val MAX_RECOVERY_IDENTITIES = 20_000
+        const val PLACEHOLDER_COLLISION_RETRY_DELAY_MILLIS = 25L
         const val RECONCILIATION_CHUNK_BYTES = 1024 * 1024
     }
 }
