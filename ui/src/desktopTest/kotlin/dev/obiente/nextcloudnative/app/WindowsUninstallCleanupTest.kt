@@ -43,6 +43,45 @@ class WindowsUninstallCleanupTest {
     }
 
     @Test
+    fun successfulActivationClearsOnlyStaleAccountPreferencesAndKeepsLocalFiles() {
+        val preferences = Preferences.userRoot().node("windows-stale-account-test-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-stale-account-home").toFile()
+        val activeAccountId = "a".repeat(64)
+        val staleAccountId = "b".repeat(64)
+        val staleRoot = desktopWindowsCloudFilesRoot(staleAccountId, home).apply {
+            assertTrue(mkdirs())
+        }
+        val localFile = staleRoot.resolve("kept-local-file.txt").apply { writeText("local data") }
+        val activeRootKey = windowsCloudFilesRootPreferenceKey(activeAccountId)
+        val staleRootKey = windowsCloudFilesRootPreferenceKey(staleAccountId)
+        val activeStateKey = virtualFileProviderPreferenceKey(activeAccountId)
+        val staleStateKey = virtualFileProviderPreferenceKey(staleAccountId)
+        try {
+            preferences.put(activeRootKey, desktopWindowsCloudFilesRoot(activeAccountId, home).absolutePath)
+            preferences.put(staleRootKey, staleRoot.absolutePath)
+            preferences.putBoolean(activeStateKey, true)
+            preferences.putBoolean(staleStateKey, true)
+            preferences.put("wcfr.future-format", "keep")
+
+            clearStaleWindowsCloudFilesPreferences(preferences, activeAccountId)
+
+            assertEquals(
+                desktopWindowsCloudFilesRoot(activeAccountId, home).absolutePath,
+                preferences.get(activeRootKey, null),
+            )
+            assertTrue(preferences.getBoolean(activeStateKey, false))
+            assertEquals(null, preferences.get(staleRootKey, null))
+            assertEquals(null, preferences.get(staleStateKey, null))
+            assertEquals("keep", preferences.get("wcfr.future-format", null))
+            assertTrue(localFile.isFile)
+            assertEquals("local data", localFile.readText())
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
     fun uninstallUnregistersThePersistedAccountsCloudFilesRoot() {
         val preferences = Preferences.userRoot().node("windows-uninstall-test-${UUID.randomUUID()}")
         val home = Files.createTempDirectory("windows-uninstall-home").toFile()

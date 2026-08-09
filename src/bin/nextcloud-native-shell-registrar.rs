@@ -22,6 +22,31 @@ fn paths_refer_to_same_existing_entry(
     Ok(first.canonicalize()? == second.canonicalize()?)
 }
 
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+enum ExistingRegistrationAction {
+    KeepCurrent,
+    ReplaceCurrent,
+    RemoveStaleOwned,
+    IgnoreForeign,
+    RejectForeignCurrent,
+}
+
+#[cfg(any(windows, test))]
+fn existing_registration_action(
+    current_id: bool,
+    provider_owned: bool,
+    current_metadata: bool,
+) -> ExistingRegistrationAction {
+    match (current_id, provider_owned, current_metadata) {
+        (true, true, true) => ExistingRegistrationAction::KeepCurrent,
+        (true, true, false) => ExistingRegistrationAction::ReplaceCurrent,
+        (true, false, _) => ExistingRegistrationAction::RejectForeignCurrent,
+        (false, true, _) => ExistingRegistrationAction::RemoveStaleOwned,
+        (false, false, _) => ExistingRegistrationAction::IgnoreForeign,
+    }
+}
+
 #[cfg(windows)]
 #[derive(Debug)]
 struct OwnedPathConflict;
@@ -141,9 +166,9 @@ fn sid_string(bytes: &[u8]) -> Option<String> {
 #[cfg(windows)]
 mod platform {
     use super::{
-        OwnedPathConflict, PROVIDER_ID, RegistrationNotFound, UnsafeRegistrationConflict,
-        decode_identity_hex, is_windows_absence_hresult, paths_refer_to_same_existing_entry,
-        sid_string, valid_account_id, valid_display_name,
+        ExistingRegistrationAction, PROVIDER_ID, RegistrationNotFound, UnsafeRegistrationConflict,
+        decode_identity_hex, existing_registration_action, is_windows_absence_hresult,
+        paths_refer_to_same_existing_entry, sid_string, valid_account_id, valid_display_name,
     };
     use std::ffi::{OsStr, OsString};
     use std::mem::size_of;
@@ -175,6 +200,29 @@ mod platform {
             return Ok(true);
         }
         paths_refer_to_same_existing_entry(&PathBuf::from(path.to_os_string()), requested)
+    }
+
+    fn current_registration_metadata_matches(
+        existing: &StorageProviderSyncRootInfo,
+        root: &Path,
+        display_name: &HSTRING,
+        icon_resource: &HSTRING,
+        context: &windows::Storage::Streams::IBuffer,
+    ) -> bool {
+        let matches = || -> WindowsResult<bool> {
+            let existing_path = existing.Path()?.Path()?;
+            if registered_path_is_missing(&existing_path).unwrap_or(false)
+                || !registered_path_matches(&existing_path, root).unwrap_or(false)
+            {
+                return Ok(false);
+            }
+            Ok(existing.DisplayNameResource()? == *display_name
+                && existing.IconResource()? == *icon_resource
+                && CryptographicBuffer::Compare(&existing.Context()?, context)?)
+        };
+        // Once the stable ID and provider GUID prove ownership, unreadable or incomplete
+        // properties are stale metadata to replace, not a reason to strand the account.
+        matches().unwrap_or(false)
     }
 
     fn unregister_owned_registration(id: &HSTRING) -> windows::core::Result<()> {
@@ -303,42 +351,65 @@ mod platform {
         let context = CryptographicBuffer::CreateFromByteArray(&identity)?;
 
         let id = sync_root_id(&account_id)?;
+        let mut current_registration_is_ready = false;
         match StorageProviderSyncRootManager::GetSyncRootInformationForId(&id) {
             Ok(existing) => {
-                if existing.ProviderId()? != PROVIDER_GUID {
-                    return Err(Box::new(UnsafeRegistrationConflict));
-                }
-                match existing.Path().and_then(|folder| folder.Path()) {
-                    Ok(existing_path) if registered_path_is_missing(&existing_path)? => {}
-                    Ok(existing_path) if registered_path_matches(&existing_path, &root)? => {
-                        if existing.DisplayNameResource()? == display_name
-                            && existing.IconResource()? == icon_resource
-                            && CryptographicBuffer::Compare(&existing.Context()?, &context)?
-                        {
-                            return Ok(());
-                        }
+                let provider_owned = existing.ProviderId()? == PROVIDER_GUID;
+                let current_metadata = provider_owned
+                    && current_registration_metadata_matches(
+                        &existing,
+                        &root,
+                        &display_name,
+                        &icon_resource,
+                        &context,
+                    );
+                match existing_registration_action(true, provider_owned, current_metadata) {
+                    ExistingRegistrationAction::KeepCurrent => {
+                        current_registration_is_ready = true;
                     }
-                    Ok(_) => return Err(Box::new(UnsafeRegistrationConflict)),
-                    Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
-                    Err(failure) => return Err(failure.into()),
+                    ExistingRegistrationAction::ReplaceCurrent => {
+                        // Unregistering changes only Windows provider metadata. The old directory
+                        // and every local file in it remain untouched for manual recovery.
+                        unregister_owned_registration(&id)?;
+                    }
+                    ExistingRegistrationAction::RejectForeignCurrent => {
+                        return Err(Box::new(UnsafeRegistrationConflict));
+                    }
+                    ExistingRegistrationAction::RemoveStaleOwned
+                    | ExistingRegistrationAction::IgnoreForeign => unreachable!(),
                 }
-                unregister_owned_registration(&id)?;
             }
             Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
             Err(failure) => return Err(failure.into()),
         }
         for existing in StorageProviderSyncRootManager::GetCurrentSyncRoots()? {
-            if existing.Id()? != id && existing.ProviderId()? == PROVIDER_GUID {
-                match existing.Path().and_then(|folder| folder.Path()) {
-                    Ok(existing_path) if registered_path_is_missing(&existing_path)? => {}
-                    Ok(existing_path) if registered_path_matches(&existing_path, &root)? => {
-                        return Err(Box::new(OwnedPathConflict));
-                    }
-                    Ok(_) => {}
-                    Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
-                    Err(failure) => return Err(failure.into()),
+            let Ok(existing_id) = existing.Id() else {
+                continue;
+            };
+            let Ok(existing_provider_id) = existing.ProviderId() else {
+                continue;
+            };
+            match existing_registration_action(
+                existing_id == id,
+                existing_provider_id == PROVIDER_GUID,
+                current_registration_is_ready,
+            ) {
+                ExistingRegistrationAction::ReplaceCurrent
+                | ExistingRegistrationAction::RemoveStaleOwned => {
+                    // Older versions could leave account registrations behind after an interrupted
+                    // setup or sign-out. Removing the registration never deletes its directory.
+                    unregister_owned_registration(&existing_id)?;
+                }
+                ExistingRegistrationAction::KeepCurrent
+                | ExistingRegistrationAction::IgnoreForeign => {}
+                ExistingRegistrationAction::RejectForeignCurrent => {
+                    return Err(Box::new(UnsafeRegistrationConflict));
                 }
             }
+        }
+
+        if current_registration_is_ready {
+            return Ok(());
         }
 
         let info = StorageProviderSyncRootInfo::new()?;
@@ -552,5 +623,29 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&base).expect("remove path-equivalence fixture");
+    }
+
+    #[test]
+    fn removes_only_stale_owned_registrations() {
+        assert_eq!(
+            existing_registration_action(true, true, true),
+            ExistingRegistrationAction::KeepCurrent
+        );
+        assert_eq!(
+            existing_registration_action(true, true, false),
+            ExistingRegistrationAction::ReplaceCurrent
+        );
+        assert_eq!(
+            existing_registration_action(false, true, false),
+            ExistingRegistrationAction::RemoveStaleOwned
+        );
+        assert_eq!(
+            existing_registration_action(false, false, false),
+            ExistingRegistrationAction::IgnoreForeign
+        );
+        assert_eq!(
+            existing_registration_action(true, false, false),
+            ExistingRegistrationAction::RejectForeignCurrent
+        );
     }
 }
