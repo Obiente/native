@@ -24,24 +24,64 @@ fn paths_refer_to_same_existing_entry(
 
 #[cfg(any(windows, test))]
 #[derive(Debug, PartialEq, Eq)]
+enum RegisteredPathState {
+    Missing,
+    SameExisting,
+    DifferentExisting,
+}
+
+#[cfg(any(windows, test))]
+fn registered_path_state(
+    registered: &std::path::Path,
+    requested: &std::path::Path,
+) -> std::io::Result<RegisteredPathState> {
+    if !registered.try_exists()? {
+        return Ok(RegisteredPathState::Missing);
+    }
+    Ok(
+        if paths_refer_to_same_existing_entry(registered, requested)? {
+            RegisteredPathState::SameExisting
+        } else {
+            RegisteredPathState::DifferentExisting
+        },
+    )
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
 enum ExistingRegistrationAction {
     KeepCurrent,
     ReplaceCurrent,
     RemoveStaleOwned,
     IgnoreForeign,
-    RejectForeignCurrent,
+    RejectUnsafeCurrent,
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+enum OwnedCurrentRegistrationState {
+    Ready,
+    Replaceable,
+    UnsafeExistingPath,
 }
 
 #[cfg(any(windows, test))]
 fn existing_registration_action(
     current_id: bool,
     provider_owned: bool,
-    current_metadata: bool,
+    current_state: OwnedCurrentRegistrationState,
 ) -> ExistingRegistrationAction {
-    match (current_id, provider_owned, current_metadata) {
-        (true, true, true) => ExistingRegistrationAction::KeepCurrent,
-        (true, true, false) => ExistingRegistrationAction::ReplaceCurrent,
-        (true, false, _) => ExistingRegistrationAction::RejectForeignCurrent,
+    match (current_id, provider_owned, current_state) {
+        (true, true, OwnedCurrentRegistrationState::Ready) => {
+            ExistingRegistrationAction::KeepCurrent
+        }
+        (true, true, OwnedCurrentRegistrationState::Replaceable) => {
+            ExistingRegistrationAction::ReplaceCurrent
+        }
+        (true, true, OwnedCurrentRegistrationState::UnsafeExistingPath) => {
+            ExistingRegistrationAction::RejectUnsafeCurrent
+        }
+        (true, false, _) => ExistingRegistrationAction::RejectUnsafeCurrent,
         (false, true, _) => ExistingRegistrationAction::RemoveStaleOwned,
         (false, false, _) => ExistingRegistrationAction::IgnoreForeign,
     }
@@ -166,9 +206,11 @@ fn sid_string(bytes: &[u8]) -> Option<String> {
 #[cfg(windows)]
 mod platform {
     use super::{
-        ExistingRegistrationAction, PROVIDER_ID, RegistrationNotFound, UnsafeRegistrationConflict,
-        decode_identity_hex, existing_registration_action, is_windows_absence_hresult,
-        paths_refer_to_same_existing_entry, sid_string, valid_account_id, valid_display_name,
+        ExistingRegistrationAction, OwnedCurrentRegistrationState, PROVIDER_ID,
+        RegisteredPathState, RegistrationNotFound, UnsafeRegistrationConflict, decode_identity_hex,
+        existing_registration_action, is_windows_absence_hresult,
+        paths_refer_to_same_existing_entry, registered_path_state, sid_string, valid_account_id,
+        valid_display_name,
     };
     use std::ffi::{OsStr, OsString};
     use std::mem::size_of;
@@ -202,27 +244,42 @@ mod platform {
         paths_refer_to_same_existing_entry(&PathBuf::from(path.to_os_string()), requested)
     }
 
-    fn current_registration_metadata_matches(
+    fn current_registration_state(
         existing: &StorageProviderSyncRootInfo,
         root: &Path,
         display_name: &HSTRING,
         icon_resource: &HSTRING,
         context: &windows::Storage::Streams::IBuffer,
-    ) -> bool {
-        let matches = || -> WindowsResult<bool> {
-            let existing_path = existing.Path()?.Path()?;
-            if registered_path_is_missing(&existing_path).unwrap_or(false)
-                || !registered_path_matches(&existing_path, root).unwrap_or(false)
-            {
-                return Ok(false);
+    ) -> WindowsResult<OwnedCurrentRegistrationState> {
+        let existing_path = match existing.Path().and_then(|folder| folder.Path()) {
+            Ok(path) => path,
+            Err(failure) if is_windows_absence_hresult(failure.code().0) => {
+                return Ok(OwnedCurrentRegistrationState::Replaceable);
             }
+            Err(failure) => return Err(failure),
+        };
+        match registered_path_state(&PathBuf::from(existing_path.to_os_string()), root) {
+            Ok(RegisteredPathState::Missing) => {
+                return Ok(OwnedCurrentRegistrationState::Replaceable);
+            }
+            Ok(RegisteredPathState::SameExisting) => {}
+            Ok(RegisteredPathState::DifferentExisting) | Err(_) => {
+                return Ok(OwnedCurrentRegistrationState::UnsafeExistingPath);
+            }
+        }
+        let metadata_matches = (|| -> WindowsResult<bool> {
             Ok(existing.DisplayNameResource()? == *display_name
                 && existing.IconResource()? == *icon_resource
                 && CryptographicBuffer::Compare(&existing.Context()?, context)?)
-        };
-        // Once the stable ID and provider GUID prove ownership, unreadable or incomplete
-        // properties are stale metadata to replace, not a reason to strand the account.
-        matches().unwrap_or(false)
+        })()
+        .unwrap_or(false);
+        Ok(if metadata_matches {
+            OwnedCurrentRegistrationState::Ready
+        } else {
+            // Re-registering the same directory updates provider metadata without moving or
+            // deleting local files.
+            OwnedCurrentRegistrationState::Replaceable
+        })
     }
 
     fn unregister_owned_registration(id: &HSTRING) -> windows::core::Result<()> {
@@ -355,15 +412,18 @@ mod platform {
         match StorageProviderSyncRootManager::GetSyncRootInformationForId(&id) {
             Ok(existing) => {
                 let provider_owned = existing.ProviderId()? == PROVIDER_GUID;
-                let current_metadata = provider_owned
-                    && current_registration_metadata_matches(
+                let current_state = if provider_owned {
+                    current_registration_state(
                         &existing,
                         &root,
                         &display_name,
                         &icon_resource,
                         &context,
-                    );
-                match existing_registration_action(true, provider_owned, current_metadata) {
+                    )?
+                } else {
+                    OwnedCurrentRegistrationState::UnsafeExistingPath
+                };
+                match existing_registration_action(true, provider_owned, current_state) {
                     ExistingRegistrationAction::KeepCurrent => {
                         current_registration_is_ready = true;
                     }
@@ -372,7 +432,7 @@ mod platform {
                         // and every local file in it remain untouched for manual recovery.
                         unregister_owned_registration(&id)?;
                     }
-                    ExistingRegistrationAction::RejectForeignCurrent => {
+                    ExistingRegistrationAction::RejectUnsafeCurrent => {
                         return Err(Box::new(UnsafeRegistrationConflict));
                     }
                     ExistingRegistrationAction::RemoveStaleOwned
@@ -389,10 +449,15 @@ mod platform {
             let Ok(existing_provider_id) = existing.ProviderId() else {
                 continue;
             };
+            // The exact current ID was handled above with its path recovery checks. Never make a
+            // second, less-informed decision about that registration from the enumeration view.
+            if existing_id == id {
+                continue;
+            }
             match existing_registration_action(
-                existing_id == id,
+                false,
                 existing_provider_id == PROVIDER_GUID,
-                current_registration_is_ready,
+                OwnedCurrentRegistrationState::Ready,
             ) {
                 ExistingRegistrationAction::ReplaceCurrent
                 | ExistingRegistrationAction::RemoveStaleOwned => {
@@ -402,7 +467,7 @@ mod platform {
                 }
                 ExistingRegistrationAction::KeepCurrent
                 | ExistingRegistrationAction::IgnoreForeign => {}
-                ExistingRegistrationAction::RejectForeignCurrent => {
+                ExistingRegistrationAction::RejectUnsafeCurrent => {
                     return Err(Box::new(UnsafeRegistrationConflict));
                 }
             }
@@ -628,24 +693,66 @@ mod tests {
     #[test]
     fn removes_only_stale_owned_registrations() {
         assert_eq!(
-            existing_registration_action(true, true, true),
+            existing_registration_action(true, true, OwnedCurrentRegistrationState::Ready),
             ExistingRegistrationAction::KeepCurrent
         );
         assert_eq!(
-            existing_registration_action(true, true, false),
+            existing_registration_action(true, true, OwnedCurrentRegistrationState::Replaceable),
             ExistingRegistrationAction::ReplaceCurrent
         );
         assert_eq!(
-            existing_registration_action(false, true, false),
+            existing_registration_action(
+                true,
+                true,
+                OwnedCurrentRegistrationState::UnsafeExistingPath,
+            ),
+            ExistingRegistrationAction::RejectUnsafeCurrent
+        );
+        assert_eq!(
+            existing_registration_action(false, true, OwnedCurrentRegistrationState::Ready),
             ExistingRegistrationAction::RemoveStaleOwned
         );
         assert_eq!(
-            existing_registration_action(false, false, false),
+            existing_registration_action(false, false, OwnedCurrentRegistrationState::Ready),
             ExistingRegistrationAction::IgnoreForeign
         );
         assert_eq!(
-            existing_registration_action(true, false, false),
-            ExistingRegistrationAction::RejectForeignCurrent
+            existing_registration_action(true, false, OwnedCurrentRegistrationState::Ready),
+            ExistingRegistrationAction::RejectUnsafeCurrent
         );
+    }
+
+    #[test]
+    fn distinguishes_missing_same_and_different_existing_registration_paths() {
+        let base = std::env::temp_dir().join(format!(
+            "nextcloud-native-registration-path-state-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after Unix epoch")
+                .as_nanos()
+        ));
+        let registered = base.join("registered");
+        let requested = base.join("requested");
+        std::fs::create_dir_all(&registered).expect("create registered path fixture");
+        std::fs::create_dir_all(&requested).expect("create requested path fixture");
+
+        assert_eq!(
+            registered_path_state(&base.join("missing"), &requested)
+                .expect("classify missing registration path"),
+            RegisteredPathState::Missing
+        );
+        assert_eq!(
+            registered_path_state(&registered, &registered)
+                .expect("classify matching registration path"),
+            RegisteredPathState::SameExisting
+        );
+        assert_eq!(
+            registered_path_state(&registered, &requested)
+                .expect("classify different registration path"),
+            RegisteredPathState::DifferentExisting
+        );
+
+        std::fs::remove_dir_all(&base).expect("remove registration path fixture");
     }
 }

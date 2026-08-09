@@ -159,7 +159,6 @@ private const val VIRTUAL_FOLDER_REFRESH_INTERVAL_MILLIS = 6L * 60L * 60L * 1_00
 private const val VIRTUAL_FOLDER_REFRESH_RETRY_MILLIS = 30L * 60L * 1_000L
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX = "wcfr."
-private const val KEY_VIRTUAL_FILE_PROVIDER_ACTIVE_PREFIX = "vfp-active."
 private const val KEY_VIRTUAL_FILE_ROOT_PREFIX = "vfp-root."
 private const val WINDOWS_CLOUD_FILES_ROOT_SUFFIX = "-v2"
 
@@ -304,28 +303,6 @@ private fun clearWindowsCloudFilesRootPreferences(
     }
 }
 
-internal fun clearStaleWindowsCloudFilesPreferences(
-    preferences: Preferences,
-    activeAccountId: String,
-) {
-    require(activeAccountId.length == 64 && activeAccountId.all { it in '0'..'9' || it in 'a'..'f' })
-    val activeKeys = setOf(
-        windowsCloudFilesRootPreferenceKey(activeAccountId),
-        virtualFileProviderPreferenceKey(activeAccountId),
-    )
-    preferences.keys().forEach { key ->
-        val accountScoped = listOf(
-            KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX,
-            KEY_VIRTUAL_FILE_PROVIDER_ACTIVE_PREFIX,
-        ).any { prefix ->
-            key.startsWith(prefix) && key.removePrefix(prefix).let { accountId ->
-                accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' }
-            }
-        }
-        if (accountScoped && key !in activeKeys) preferences.remove(key)
-    }
-}
-
 internal fun unregisterWindowsCloudFilesRootForUninstall(
     preferences: Preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative"),
     userHome: File = File(System.getProperty("user.home")),
@@ -390,7 +367,7 @@ private fun validatedWindowsCloudFilesRoot(root: File, userHome: File): Path {
 
 internal fun virtualFileProviderPreferenceKey(accountId: String): String {
     require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    return "$KEY_VIRTUAL_FILE_PROVIDER_ACTIVE_PREFIX$accountId".also { key ->
+    return "vfp-active.$accountId".also { key ->
         check(key.length <= Preferences.MAX_KEY_LENGTH)
     }
 }
@@ -1548,9 +1525,6 @@ class DesktopNextcloudServices(
                         windowsCloudFilesRootPreferenceKey(accountId),
                         root.toAbsolutePath().toString(),
                     )
-                    // Preference cleanup is repair bookkeeping. A transient backing-store failure
-                    // must not disconnect a provider that Windows already registered successfully.
-                    runCatching { clearStaleWindowsCloudFilesPreferences(preferences, accountId) }
                     preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
                     preferences.putBoolean(virtualFileProviderPreferenceKey(accountId), true)
                 } catch (failure: Throwable) {

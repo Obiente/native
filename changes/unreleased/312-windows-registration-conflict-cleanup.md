@@ -4,4 +4,4 @@ pull: none
 platforms: windows
 user-facing: yes
 
-Windows filesync setup now removes stale Nextcloud Native registrations left by previous accounts or interrupted setup while preserving their local files, then connects the current account.
+Windows filesync setup now repairs stale Nextcloud Native registrations while preserving local files and retaining ambiguous live roots for recovery.
