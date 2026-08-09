@@ -1,0 +1,250 @@
+package dev.obiente.nextcloudnative.app
+
+import java.io.File
+import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.zip.ZipFile
+import kotlin.io.path.createTempDirectory
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+import org.json.JSONObject
+
+class JvmSupportDiagnosticsTest {
+    @Test
+    fun persistsOnlySanitizedEventsAndLoadsThemAfterRestart() {
+        val root = createTempDirectory("support-diagnostics").toFile()
+        val first = diagnostics(root)
+        first.registerPrivateValue("person@example.test")
+        first.record(failureEvent("D:\\Fixtures\\Person\\Photos\\private.jpg"))
+
+        val persisted = File(root, "events-v1.jsonl").readText()
+        assertFalse("Person" in persisted)
+        assertFalse("private.jpg" in persisted)
+        assertFalse("person@example.test" in persisted)
+        assertTrue("<local-path:" in persisted)
+
+        val restored = diagnostics(root)
+        assertEquals(1, restored.summary().eventCount)
+        assertEquals(1, restored.summary().errorCount)
+    }
+
+    @Test
+    fun malformedHistoryIsDroppedWithoutBlockingNewDiagnostics() {
+        val root = createTempDirectory("support-diagnostics-corrupt").toFile()
+        val original = diagnostics(root)
+        original.record(failureEvent("/srv/fixtures/private.jpg"))
+        File(root, "events-v1.jsonl").writeText("not-json\n")
+
+        val recovered = diagnostics(root)
+        assertEquals(0, recovered.summary().eventCount)
+        recovered.record(failureEvent("/srv/fixtures/second.jpg"))
+        assertEquals(1, recovered.summary().eventCount)
+    }
+
+    @Test
+    fun tornFinalAppendIsDroppedWhileEarlierEventsSurviveRestart() {
+        val root = createTempDirectory("support-diagnostics-torn-append").toFile()
+        val original = diagnostics(root)
+        original.record(failureEvent("/srv/fixtures/retained.jpg"))
+        File(root, "events-v1.jsonl").appendText("{\"schemaVersion\":")
+
+        val recovered = diagnostics(root)
+
+        assertEquals(1, recovered.summary().eventCount)
+        assertTrue(File(root, "events-v1.jsonl").readText().endsWith("\n"))
+    }
+
+    @Test
+    fun oversizedHistoryIsDiscardedBeforeItCanBeLoadedOrExported() {
+        val root = createTempDirectory("support-diagnostics-oversized").toFile()
+        diagnostics(root)
+        File(root, "events-v1.jsonl").writeText("x".repeat((MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES * 2L + 1L).toInt()))
+
+        val recovered = diagnostics(root)
+
+        assertEquals(0, recovered.summary().eventCount)
+        assertEquals(0L, File(root, "events-v1.jsonl").length())
+    }
+
+    @Test
+    fun eventsOlderThanTheRetentionWindowAreRemoved() {
+        val root = createTempDirectory("support-diagnostics-age").toFile()
+        var now = MAX_SUPPORT_DIAGNOSTIC_AGE_MILLIS
+        val diagnostics = diagnostics(root) { now }
+        diagnostics.record(failureEvent("/srv/fixtures/old.jpg"))
+        now += MAX_SUPPORT_DIAGNOSTIC_AGE_MILLIS + 1L
+
+        diagnostics.record(failureEvent("/srv/fixtures/current.jpg"))
+
+        assertEquals(1, diagnostics.summary().eventCount)
+        assertFalse("old.jpg" in File(root, "events-v1.jsonl").readText())
+    }
+
+    @Test
+    fun concurrentWritersProduceACompleteBoundedHistory() {
+        val root = createTempDirectory("support-diagnostics-concurrent").toFile()
+        val diagnostics = diagnostics(root)
+        val workers = Executors.newFixedThreadPool(8)
+        val ready = CountDownLatch(8)
+        val start = CountDownLatch(1)
+        repeat(8) { worker ->
+            workers.execute {
+                ready.countDown()
+                start.await()
+                repeat(20) { index ->
+                    diagnostics.record(
+                        SupportDiagnosticEventDraft(
+                            severity = SupportDiagnosticSeverity.Warning,
+                            component = SupportDiagnosticComponent.Sync,
+                            operation = "sync.retry",
+                            outcome = "scheduled",
+                            attempt = index + 1,
+                            fields = listOf(
+                                SupportDiagnosticFieldDraft(
+                                    name = "pair",
+                                    value = "pair-$worker",
+                                    privacy = SupportDiagnosticValuePrivacy.Identifier,
+                                ),
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
+        assertTrue(ready.await(10L, TimeUnit.SECONDS))
+        start.countDown()
+        workers.shutdown()
+        assertTrue(workers.awaitTermination(30L, TimeUnit.SECONDS))
+
+        assertEquals(160, diagnostics.summary().eventCount)
+        assertEquals(160, diagnostics(root).summary().eventCount)
+        assertTrue(File(root, "events-v1.jsonl").length() <= MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES)
+    }
+
+    @Test
+    fun settingsPreviewIsBoundedAndDoesNotExposeMessagesOrFields() {
+        val root = createTempDirectory("support-diagnostics-preview").toFile()
+        val diagnostics = diagnostics(root)
+        repeat(25) { index ->
+            diagnostics.record(
+                failureEvent("/srv/fixtures/private-$index.jpg").copy(attempt = index + 1),
+            )
+        }
+
+        val preview = diagnostics.summary().recentEvents
+
+        assertEquals(20, preview.size)
+        assertTrue(preview.all { it.operation == "cloud-files.placeholder-create" })
+    }
+
+    @Test
+    fun exportedArchiveContainsOnlyDeclaredAnonymizedFilesAndValidDigests() {
+        val root = createTempDirectory("support-diagnostics-export").toFile()
+        val diagnostics = diagnostics(root)
+        diagnostics.registerPrivateValue("https://cloud.example.test")
+        diagnostics.record(failureEvent("D:\\Fixtures\\Person\\Nextcloud Native\\private.jpg"))
+        val destination = File(root, "support-report.zip")
+
+        diagnostics.writeBundle(
+            destination = destination,
+            reproductionSteps = "Opened https://cloud.example.test as person@example.test",
+            featureState = listOf(
+                SupportDiagnosticFieldDraft("virtual_files", "enabled"),
+                SupportDiagnosticFieldDraft(
+                    "sync_root",
+                    "D:\\Fixtures\\Person\\Nextcloud Native",
+                    SupportDiagnosticValuePrivacy.LocalPath,
+                ),
+            ),
+        )
+
+        assertTrue(destination.isFile)
+        ZipFile(destination).use { zip ->
+            val names = zip.entries().asSequence().map { it.name }.toSet()
+            assertEquals(SUPPORT_BUNDLE_INCLUDED_FILES.toSet(), names)
+            val combined = names.joinToString("\n") { name ->
+                zip.getInputStream(assertNotNull(zip.getEntry(name))).bufferedReader().use { it.readText() }
+            }
+            listOf(
+                "cloud.example.test",
+                "person@example.test",
+                "Person",
+                "private.jpg",
+                File(root, "redaction-key-v1").readText().trim(),
+            ).forEach { privateValue -> assertFalse(privateValue in combined, privateValue) }
+            assertTrue("Reports are never uploaded automatically" in combined)
+            assertTrue("\"eventCount\":1" in combined)
+            assertTrue("<local-path:" in combined)
+            val manifest = JSONObject(
+                zip.getInputStream(assertNotNull(zip.getEntry("manifest.json"))).bufferedReader().use { it.readText() },
+            )
+            val entries = manifest.getJSONArray("entries")
+            assertEquals(3, entries.length())
+            repeat(entries.length()) { index ->
+                val entry = entries.getJSONObject(index)
+                val name = entry.getString("name")
+                val bytes = zip.getInputStream(assertNotNull(zip.getEntry(name))).use { it.readBytes() }
+                assertEquals(bytes.size.toLong(), entry.getLong("bytes"))
+                assertEquals(
+                    MessageDigest.getInstance("SHA-256").digest(bytes).toHex(),
+                    entry.getString("sha256"),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun clearRemovesEventsButKeepsThePrivateRedactionIdentity() {
+        val root = createTempDirectory("support-diagnostics-clear").toFile()
+        val diagnostics = diagnostics(root)
+        diagnostics.record(failureEvent("/srv/fixtures/private.jpg"))
+        val keyBefore = File(root, "redaction-key-v1").readBytes()
+
+        assertTrue(diagnostics.clear())
+
+        assertEquals(0, diagnostics.summary().eventCount)
+        assertEquals(keyBefore.toList(), File(root, "redaction-key-v1").readBytes().toList())
+        assertEquals("", File(root, "events-v1.jsonl").readText())
+    }
+
+    private fun diagnostics(
+        root: File,
+        nowEpochMillis: () -> Long = { 1_000_000L },
+    ): JvmSupportDiagnostics = JvmSupportDiagnostics(
+        root = root.absoluteFile,
+        environment = SupportDiagnosticsEnvironment(
+            appVersion = "nightly-test",
+            packageVersion = "1.0.0",
+            platform = "Windows",
+            operatingSystemVersion = "11",
+            architecture = "amd64",
+        ),
+        nowEpochMillis = nowEpochMillis,
+        randomBytes = { size -> ByteArray(size) { index -> (index + 1).toByte() } },
+    )
+
+    private fun ByteArray.toHex(): String = joinToString("") { byte ->
+        (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+    }
+
+    private fun failureEvent(path: String): SupportDiagnosticEventDraft = SupportDiagnosticEventDraft(
+        severity = SupportDiagnosticSeverity.Error,
+        component = SupportDiagnosticComponent.VirtualFiles,
+        operation = "cloud-files.placeholder-create",
+        outcome = "failed",
+        code = "HRESULT:0x800700b7",
+        message = "Could not create $path for person@example.test",
+        fields = listOf(
+            SupportDiagnosticFieldDraft(
+                name = "path",
+                value = path,
+                privacy = SupportDiagnosticValuePrivacy.LocalPath,
+            ),
+        ),
+    )
+}

@@ -13,6 +13,12 @@ import android.provider.DocumentsProvider
 import android.util.Log
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
+import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
+import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
+import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FileNotFoundException
@@ -233,7 +239,14 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             staging = staging,
             publishCompleteHydration = { complete ->
                 runCatching { virtualFiles.publishHydration(session, file, complete) }
-                    .onFailure { failure -> Log.w(LOG_TAG, "Virtual file cache publish failed", failure) }
+                    .onFailure { failure ->
+                        Log.w(LOG_TAG, "Virtual file cache publish failed", failure)
+                        recordProviderFailure(
+                            operation = "documents.cache-publish",
+                            failure = failure,
+                            remotePath = file.path,
+                        )
+                    }
                     .getOrDefault(false)
             },
             discardIncompleteHydration = virtualFiles::discardHydrationStagingFile,
@@ -519,6 +532,12 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             else "Document commit failed and durable recovery storage is incomplete.",
             failure,
         )
+        recordProviderFailure(
+            operation = "documents.writeback",
+            failure = failure,
+            remotePath = writeback.remotePath,
+            fields = listOf(SupportDiagnosticFieldDraft("recovery_complete", wasRetained.toString())),
+        )
     }
 
     private fun requireDirectory(
@@ -570,7 +589,14 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
 
     private fun notifyDocumentChanged(session: NextcloudSession, path: String) {
         runCatching { virtualFiles.invalidate(session, path) }
-            .onFailure { failure -> Log.w(LOG_TAG, "Could not invalidate virtual file content", failure) }
+            .onFailure { failure ->
+                Log.w(LOG_TAG, "Could not invalidate virtual file content", failure)
+                recordProviderFailure(
+                    operation = "documents.cache-invalidate",
+                    failure = failure,
+                    remotePath = path,
+                )
+            }
         val resolver = context?.contentResolver ?: return
         resolver.notifyChange(
             DocumentsContract.buildDocumentUri(
@@ -674,7 +700,37 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         throw failure
     } catch (failure: Throwable) {
         Log.w(LOG_TAG, message, failure)
+        recordProviderFailure(
+            operation = "documents.provider-call",
+            failure = failure,
+            fields = listOf(SupportDiagnosticFieldDraft("provider_message", message)),
+        )
         throw FileNotFoundException(message).also { it.initCause(failure) }
+    }
+
+    private fun recordProviderFailure(
+        operation: String,
+        failure: Throwable,
+        remotePath: String? = null,
+        fields: List<SupportDiagnosticFieldDraft> = emptyList(),
+    ) {
+        runCatching {
+            services.recordSupportDiagnostic(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.VirtualFiles,
+                    operation = operation,
+                    outcome = "failed",
+                    fields = buildList {
+                        remotePath?.let {
+                            add(SupportDiagnosticFieldDraft("remote_path", it, SupportDiagnosticValuePrivacy.RemotePath))
+                        }
+                        addAll(fields)
+                    },
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+        }
     }
 
     private fun String.toEpochMilliseconds(): Long? = runCatching {

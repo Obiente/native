@@ -21,8 +21,14 @@ import dev.obiente.nextcloudnative.app.MultipartTextField
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
+import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
+import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
+import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -135,6 +141,11 @@ internal class DeckAttachmentUploadWorker(
                 message = "The app restarted while this upload was in progress. Check the card before uploading again.",
             )
             picker.release(initial.request.file)
+            recordUploadDiagnostic(
+                severity = SupportDiagnosticSeverity.Warning,
+                outcome = "process-recovery",
+                jobId = jobId,
+            )
             return@withContext Result.success()
         }
         if (initial.state != DurableUploadState.Queued) return@withContext Result.success()
@@ -148,6 +159,11 @@ internal class DeckAttachmentUploadWorker(
                 message = "The account used for this upload is no longer active.",
             )
             picker.release(initial.request.file)
+            recordUploadDiagnostic(
+                severity = SupportDiagnosticSeverity.Warning,
+                outcome = "account-unavailable",
+                jobId = jobId,
+            )
             return@withContext Result.failure()
         }
         val capabilityReady = runCatching {
@@ -162,6 +178,11 @@ internal class DeckAttachmentUploadWorker(
                 message = "The selected file is no longer available. Select it again to retry.",
             )
             picker.release(initial.request.file)
+            recordUploadDiagnostic(
+                severity = SupportDiagnosticSeverity.Warning,
+                outcome = "source-unavailable",
+                jobId = jobId,
+            )
             return@withContext Result.failure()
         }
         val started = store.transition(
@@ -193,8 +214,23 @@ internal class DeckAttachmentUploadWorker(
                 target = state,
                 message = message,
             )
+            if (state != DurableUploadState.Completed) {
+                recordUploadDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = when (state) {
+                        DurableUploadState.Failed -> "rejected"
+                        DurableUploadState.OutcomeUnknown -> "outcome-unknown"
+                        DurableUploadState.Completed,
+                        DurableUploadState.Queued,
+                        DurableUploadState.Uploading,
+                        -> error("Only failed upload states are diagnosed here.")
+                    },
+                    jobId = jobId,
+                    code = "HTTP:${response.status}",
+                )
+            }
             picker.release(started.request.file)
-        }.onFailure {
+        }.onFailure { failure ->
             // Once the request body starts, a transport exception cannot prove whether the server
             // created the attachment. Never replay it automatically and risk a duplicate.
             store.transition(
@@ -203,9 +239,37 @@ internal class DeckAttachmentUploadWorker(
                 target = DurableUploadState.OutcomeUnknown,
                 message = "The upload result is unknown. Check the card before uploading again.",
             )
+            recordUploadDiagnostic(
+                severity = SupportDiagnosticSeverity.Error,
+                outcome = "outcome-unknown",
+                jobId = jobId,
+                failure = failure,
+            )
             picker.release(started.request.file)
         }
         Result.success()
+    }
+
+    private fun recordUploadDiagnostic(
+        severity: SupportDiagnosticSeverity,
+        outcome: String,
+        jobId: String,
+        code: String? = null,
+        failure: Throwable? = null,
+    ) {
+        AndroidSupportDiagnostics.get(applicationContext).record(
+            SupportDiagnosticEventDraft(
+                severity = severity,
+                component = SupportDiagnosticComponent.Media,
+                operation = "media.durable-upload",
+                outcome = outcome,
+                code = code,
+                fields = listOf(
+                    SupportDiagnosticFieldDraft("job", jobId, SupportDiagnosticValuePrivacy.Identifier),
+                ),
+                exception = failure?.toSupportDiagnosticExceptionDraft(),
+            ),
+        )
     }
 
     internal companion object {

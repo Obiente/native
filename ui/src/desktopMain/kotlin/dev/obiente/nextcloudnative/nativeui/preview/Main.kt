@@ -98,7 +98,10 @@ fun main(arguments: Array<String>) {
                     scope.launch { updaterExitRequested.value = true }
                 }
             },
-        ).also { themePreference.value = it.loadThemePreference() }
+        ).also {
+            it.installUncaughtDiagnosticHandler()
+            themePreference.value = it.loadThemePreference()
+        }
     }
     val darkTheme = when (themePreference.value) {
         ThemePreference.System -> isSystemInDarkTheme()

@@ -342,6 +342,7 @@ internal class WindowsCloudFilesProvider(
         Thread(work, "nextcloud-windows-cloud-files").apply { isDaemon = true }
     },
     private val writebackRetryDelayMillis: (attempt: Int) -> Long = ::windowsWritebackRetryDelayMillis,
+    private val recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit = {},
 ) : AutoCloseable, WindowsCloudFilesCallbacks {
     private val connection = AtomicLongState()
     private val apiClosed = AtomicBoolean(false)
@@ -711,6 +712,14 @@ internal class WindowsCloudFilesProvider(
             identities.forEach { identity -> knownIdentities[identity.path] = identity }
         } catch (failure: WindowsCloudFilesOperationException) {
             if (!isWindowsCloudFilesPlaceholderAlreadyExistsResult(failure.hResult)) throw failure
+            recordPlaceholderDiagnostic(
+                severity = SupportDiagnosticSeverity.Warning,
+                outcome = "collision-detected",
+                code = "HRESULT:0x${failure.hResult.toUInt().toString(16)}",
+                localDirectory = localDirectory,
+                identity = null,
+                fields = listOf(SupportDiagnosticFieldDraft("batch_size", identities.size.toString())),
+            )
             val refreshed = backend.list(relativePath).associateBy { identity -> identity.path }
             identities.forEach { identity ->
                 reconcilePlaceholderCreationCollision(
@@ -742,7 +751,16 @@ internal class WindowsCloudFilesProvider(
                         localPath,
                         state,
                     )
-                ) return
+                ) {
+                    recordPlaceholderDiagnostic(
+                        severity = SupportDiagnosticSeverity.Info,
+                        outcome = "collision-reconciled",
+                        localDirectory = localDirectory,
+                        identity = listedIdentity,
+                        fields = listOf(SupportDiagnosticFieldDraft("placeholder_state", state.name.lowercase())),
+                    )
+                    return
+                }
                 identityUnavailable = true
                 Thread.sleep(PLACEHOLDER_COLLISION_RETRY_DELAY_MILLIS)
                 return@repeat
@@ -750,12 +768,32 @@ internal class WindowsCloudFilesProvider(
             if (Files.exists(localPath, LinkOption.NOFOLLOW_LINKS)) {
                 // Preserve an ordinary local entry. Startup recovery will import it with
                 // create-only remote semantics instead of replacing either copy.
+                recordPlaceholderDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = "local-entry-preserved",
+                    localDirectory = localDirectory,
+                    identity = listedIdentity,
+                )
                 return
             }
-            val creationIdentity = authoritativeIdentity ?: return
+            val creationIdentity = authoritativeIdentity ?: run {
+                recordPlaceholderDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = "remote-entry-missing",
+                    localDirectory = localDirectory,
+                    identity = listedIdentity,
+                )
+                return
+            }
             try {
                 api.createPlaceholders(localDirectory, listOf(placeholder(creationIdentity)))
                 knownIdentities[creationIdentity.path] = creationIdentity
+                recordPlaceholderDiagnostic(
+                    severity = SupportDiagnosticSeverity.Info,
+                    outcome = "created-on-retry",
+                    localDirectory = localDirectory,
+                    identity = creationIdentity,
+                )
                 return
             } catch (failure: WindowsCloudFilesOperationException) {
                 if (!isWindowsCloudFilesPlaceholderAlreadyExistsResult(failure.hResult)) throw failure
@@ -763,12 +801,74 @@ internal class WindowsCloudFilesProvider(
             }
         }
         if (identityUnavailable) {
+            recordPlaceholderDiagnostic(
+                severity = SupportDiagnosticSeverity.Error,
+                outcome = "identity-unavailable",
+                code = "HRESULT:0x${collision.hResult.toUInt().toString(16)}",
+                localDirectory = localDirectory,
+                identity = listedIdentity,
+            )
             throw IllegalStateException(
                 "Could not verify the existing Windows Cloud Files placeholder after a creation collision.",
                 collision,
             )
         }
+        recordPlaceholderDiagnostic(
+            severity = SupportDiagnosticSeverity.Error,
+            outcome = "collision-retry-exhausted",
+            code = "HRESULT:0x${collision.hResult.toUInt().toString(16)}",
+            localDirectory = localDirectory,
+            identity = listedIdentity,
+        )
         throw collision
+    }
+
+    private fun recordPlaceholderDiagnostic(
+        severity: SupportDiagnosticSeverity,
+        outcome: String,
+        localDirectory: Path,
+        identity: WindowsCloudFileIdentity?,
+        code: String? = null,
+        fields: List<SupportDiagnosticFieldDraft> = emptyList(),
+    ) {
+        runCatching {
+            recordDiagnostic(
+                SupportDiagnosticEventDraft(
+                    severity = severity,
+                    component = SupportDiagnosticComponent.VirtualFiles,
+                    operation = "cloud-files.placeholder-collision",
+                    outcome = outcome,
+                    code = code,
+                    fields = buildList {
+                        add(
+                            SupportDiagnosticFieldDraft(
+                                "local_directory",
+                                localDirectory.toAbsolutePath().toString(),
+                                SupportDiagnosticValuePrivacy.LocalPath,
+                            ),
+                        )
+                        identity?.let {
+                            add(
+                                SupportDiagnosticFieldDraft(
+                                    "account",
+                                    it.accountId,
+                                    SupportDiagnosticValuePrivacy.Identifier,
+                                ),
+                            )
+                            add(
+                                SupportDiagnosticFieldDraft(
+                                    "remote_path",
+                                    it.path,
+                                    SupportDiagnosticValuePrivacy.RemotePath,
+                                ),
+                            )
+                            add(SupportDiagnosticFieldDraft("directory", it.directory.toString()))
+                        }
+                        addAll(fields)
+                    },
+                ),
+            )
+        }
     }
 
     private fun reconcileCollidedPlaceholder(

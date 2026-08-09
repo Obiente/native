@@ -96,6 +96,14 @@ import dev.obiente.nextcloudnative.app.TalkMessage
 import dev.obiente.nextcloudnative.app.TalkMessagePage
 import dev.obiente.nextcloudnative.app.TalkRoom
 import dev.obiente.nextcloudnative.app.ThemePreference
+import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
+import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
+import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
+import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
+import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
+import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import dev.obiente.nextcloudnative.app.PlatformCapability
 import dev.obiente.nextcloudnative.app.PlatformCapabilityStatus
 import dev.obiente.nextcloudnative.app.AndroidDirectRelease
@@ -179,6 +187,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -308,6 +317,17 @@ internal class AndroidNextcloudServices(
     private val projectContent = AndroidProjectContentClient(appContext, activity)
     private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext)
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
+    private val supportDiagnostics = AndroidSupportDiagnostics.get(appContext)
+    private val supportBundleExporter = AndroidSupportBundleExporter(
+        context = appContext,
+        activity = activity,
+        diagnostics = supportDiagnostics,
+    )
+
+    init {
+        supportDiagnostics.registerPrivateValue(System.getProperty("user.home"))
+        if (activity != null) installUncaughtDiagnosticHandler()
+    }
 
     override val supportsFileOfflineStorage: Boolean = true
     override val supportsVirtualFileStorage: Boolean = true
@@ -374,6 +394,7 @@ internal class AndroidNextcloudServices(
         channel: AndroidUpdateChannel,
         automatic: Boolean,
     ): AppUpdateCheckResult = withContext(Dispatchers.IO) {
+        val started = System.nanoTime()
         val updatePreferences = projectContent.updatePreferences()
         if (
             automatic &&
@@ -384,24 +405,140 @@ internal class AndroidNextcloudServices(
         ) {
             return@withContext AppUpdateCheckResult.Unavailable(projectContent.support())
         }
-        val result = projectContent.checkForUpdate(channel)
-        if (automatic && result is AppUpdateCheckResult.Available) {
-            AndroidAppUpdateNotifier(appContext).notifyIfNeeded(
-                channel = channel,
-                update = result,
-                enabled = updatePreferences.notifications,
+        try {
+            val result = projectContent.checkForUpdate(channel)
+            if (automatic && result is AppUpdateCheckResult.Available) {
+                AndroidAppUpdateNotifier(appContext).notifyIfNeeded(
+                    channel = channel,
+                    update = result,
+                    enabled = updatePreferences.notifications,
+                )
+            }
+            when (result) {
+                is AppUpdateCheckResult.Available -> recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Info,
+                        component = SupportDiagnosticComponent.Updates,
+                        operation = "updates.check",
+                        outcome = "available",
+                        durationMillis = elapsedMillis(started),
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft("channel", channel.name.lowercase()),
+                            SupportDiagnosticFieldDraft("automatic", automatic.toString()),
+                            SupportDiagnosticFieldDraft("release", result.release.versionName),
+                        ),
+                    ),
+                )
+                is AppUpdateCheckResult.Failed -> recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Warning,
+                        component = SupportDiagnosticComponent.Updates,
+                        operation = "updates.check",
+                        outcome = "failed",
+                        durationMillis = elapsedMillis(started),
+                        message = result.message,
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft("channel", channel.name.lowercase()),
+                            SupportDiagnosticFieldDraft("automatic", automatic.toString()),
+                            SupportDiagnosticFieldDraft("retryable", result.retryable.toString()),
+                        ),
+                    ),
+                )
+                is AppUpdateCheckResult.Current,
+                is AppUpdateCheckResult.Unavailable,
+                -> Unit
+            }
+            result
+        } catch (failure: Throwable) {
+            recordSupportDiagnostic(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Updates,
+                    operation = "updates.check",
+                    outcome = "failed",
+                    durationMillis = elapsedMillis(started),
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("channel", channel.name.lowercase()),
+                        SupportDiagnosticFieldDraft("automatic", automatic.toString()),
+                    ),
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
             )
+            throw failure
         }
-        result
     }
 
     override fun observeAppUpdateInstallState(): Flow<AppUpdateInstallState> =
         projectContent.observeUpdateState()
 
     override suspend fun beginAppUpdate(release: AppUpdateRelease): AppUpdateInstallResult =
-        withContext(Dispatchers.IO) { projectContent.beginUpdate(release) }
+        withContext(Dispatchers.IO) {
+            val started = System.nanoTime()
+            try {
+                val result = projectContent.beginUpdate(release)
+                recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = if (result is AppUpdateInstallResult.Rejected) {
+                            SupportDiagnosticSeverity.Warning
+                        } else {
+                            SupportDiagnosticSeverity.Info
+                        },
+                        component = SupportDiagnosticComponent.Updates,
+                        operation = "updates.install",
+                        outcome = when (result) {
+                            AppUpdateInstallResult.ConfirmationOpened -> "confirmation-opened"
+                            AppUpdateInstallResult.Installed -> "installed"
+                            is AppUpdateInstallResult.Cancelled -> "cancelled"
+                            is AppUpdateInstallResult.PermissionRequired -> "permission-required"
+                            is AppUpdateInstallResult.Rejected -> "rejected"
+                        },
+                        durationMillis = elapsedMillis(started),
+                        fields = listOf(SupportDiagnosticFieldDraft("release", release.versionName)),
+                    ),
+                )
+                result
+            } catch (failure: Throwable) {
+                recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.Updates,
+                        operation = "updates.install",
+                        outcome = "failed",
+                        durationMillis = elapsedMillis(started),
+                        fields = listOf(SupportDiagnosticFieldDraft("release", release.versionName)),
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
+                    ),
+                )
+                throw failure
+            }
+        }
 
     override fun cancelAppUpdate(): Boolean = projectContent.cancelUpdate()
+
+    override fun supportDiagnosticsSummary(): SupportDiagnosticsSummary = supportDiagnostics.summary()
+
+    override suspend fun exportSupportDiagnostics(
+        reproductionSteps: String,
+    ): SupportDiagnosticsExportResult = supportBundleExporter.export(
+        reproductionSteps = reproductionSteps,
+        featureState = listOf(
+            SupportDiagnosticFieldDraft("distribution", appUpdateSupport().channel.name.lowercase()),
+            SupportDiagnosticFieldDraft("direct_updates", appUpdateSupport().canCheckDirectUpdates.toString()),
+            SupportDiagnosticFieldDraft("virtual_files_supported", supportsVirtualFileStorage.toString()),
+            SupportDiagnosticFieldDraft("bidirectional_sync", supportsBidirectionalFileSync.toString()),
+            SupportDiagnosticFieldDraft("network_metered", isAndroidActiveNetworkMetered(appContext).toString()),
+        ),
+    )
+
+    override fun clearSupportDiagnostics(): Boolean = supportDiagnostics.clear()
+
+    override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) {
+        supportDiagnostics.record(event)
+    }
+
+    override fun registerSupportDiagnosticPrivateValue(value: String?) {
+        supportDiagnostics.registerPrivateValue(value)
+    }
 
     override fun loadThemePreference(): ThemePreference = runCatching {
         ThemePreference.valueOf(preferences.getString(KEY_THEME, ThemePreference.System.name).orEmpty())
@@ -430,13 +567,24 @@ internal class AndroidNextcloudServices(
                         loginName = json.getString("loginName"),
                         appPassword = json.getString("appPassword"),
                     )
+                }.onFailure { failure ->
+                    recordSupportDiagnostic(
+                        SupportDiagnosticEventDraft(
+                            severity = SupportDiagnosticSeverity.Error,
+                            component = SupportDiagnosticComponent.Authentication,
+                            operation = "session.load",
+                            outcome = "failed",
+                            exception = failure.toSupportDiagnosticExceptionDraft(),
+                        ),
+                    )
                 }.getOrNull()
             },
             accountIdOf = NextcloudDocumentIds::accountKey,
-        )
+        )?.also(::registerSessionPrivateValues)
     }
 
     override fun saveSession(session: NextcloudSession) {
+        registerSessionPrivateValues(session)
         val previousAccountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
         val replacementAccountId = NextcloudDocumentIds.cacheAccountId(session)
         val json = JSONObject()
@@ -444,7 +592,19 @@ internal class AndroidNextcloudServices(
             .put("loginName", session.loginName)
             .put("appPassword", session.appPassword)
             .toString()
-        val encrypted = sessionCipher.encrypt(json)
+        val encrypted = runCatching { sessionCipher.encrypt(json) }
+            .onFailure { failure ->
+                recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.Authentication,
+                        operation = "session.save",
+                        outcome = "failed",
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
+                    ),
+                )
+            }
+            .getOrThrow()
         val scheduler = AndroidFileSyncScheduler(appContext)
         ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.replaceSession(
             replacementAccountId = NextcloudDocumentIds.accountKey(session),
@@ -484,19 +644,32 @@ internal class AndroidNextcloudServices(
     }
 
     override suspend fun clearSession() {
-        val accountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
-        val scheduler = AndroidFileSyncScheduler(appContext)
-        ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.clearSession(
-            persist = {
-                preferences.edit()
-                    .remove(KEY_SESSION)
-                    .remove(KEY_TEST_READ_ONLY)
-                    .apply()
-            },
-            cancelAll = scheduler::cancelAll,
-        )
-        accountId?.let(nativeMediaPreviewCache::clearAccount)
-        notifyDocumentsRootsChanged()
+        try {
+            val accountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
+            val scheduler = AndroidFileSyncScheduler(appContext)
+            ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.clearSession(
+                persist = {
+                    preferences.edit()
+                        .remove(KEY_SESSION)
+                        .remove(KEY_TEST_READ_ONLY)
+                        .apply()
+                },
+                cancelAll = scheduler::cancelAll,
+            )
+            accountId?.let(nativeMediaPreviewCache::clearAccount)
+            notifyDocumentsRootsChanged()
+        } catch (failure: Throwable) {
+            recordSupportDiagnostic(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Authentication,
+                    operation = "session.clear",
+                    outcome = "failed",
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+            throw failure
+        }
     }
 
     override fun openExternalUrl(url: String) {
@@ -986,7 +1159,13 @@ internal class AndroidNextcloudServices(
         remoteRootPath: String,
         configuration: FileSyncConfiguration,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncEngine.addPair(session, userId, localRoot, remoteRootPath, configuration)
+        val fields = listOf(
+            SupportDiagnosticFieldDraft("local_root", localRoot.localRootId, SupportDiagnosticValuePrivacy.LocalPath),
+            SupportDiagnosticFieldDraft("remote_root", remoteRootPath, SupportDiagnosticValuePrivacy.RemotePath),
+        )
+        diagnoseSupportFailure(SupportDiagnosticComponent.Sync, "sync.pair-add", fields) {
+            fileSyncEngine.addPair(session, userId, localRoot, remoteRootPath, configuration)
+        }.also { result -> recordFileSyncResult("sync.pair-add", fields, result) }
     }
 
     override suspend fun runFileSyncPair(
@@ -994,7 +1173,10 @@ internal class AndroidNextcloudServices(
         userId: String,
         pairId: String,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncEngine.runPair(session, userId, pairId)
+        val fields = listOf(SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier))
+        diagnoseSupportFailure(SupportDiagnosticComponent.Sync, "sync.pair-run", fields) {
+            fileSyncEngine.runPair(session, userId, pairId)
+        }.also { result -> recordFileSyncResult("sync.pair-run", fields, result) }
     }
 
     override suspend fun resolveFileSyncConflict(
@@ -1004,7 +1186,14 @@ internal class AndroidNextcloudServices(
         workId: Long,
         choice: FileSyncDecisionChoice,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncEngine.resolveConflictAndRun(session, userId, pairId, workId, choice)
+        val fields = listOf(
+            SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
+            SupportDiagnosticFieldDraft("work", workId.toString()),
+            SupportDiagnosticFieldDraft("choice", choice.name.lowercase()),
+        )
+        diagnoseSupportFailure(SupportDiagnosticComponent.Sync, "sync.conflict-resolve", fields) {
+            fileSyncEngine.resolveConflictAndRun(session, userId, pairId, workId, choice)
+        }.also { result -> recordFileSyncResult("sync.conflict-resolve", fields, result) }
     }
 
     override suspend fun removeFileSyncPair(
@@ -1012,7 +1201,10 @@ internal class AndroidNextcloudServices(
         userId: String,
         pairId: String,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncEngine.removePair(session, pairId)
+        val fields = listOf(SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier))
+        diagnoseSupportFailure(SupportDiagnosticComponent.Sync, "sync.pair-remove", fields) {
+            fileSyncEngine.removePair(session, pairId)
+        }.also { result -> recordFileSyncResult("sync.pair-remove", fields, result) }
     }
 
     override suspend fun listMedia(
@@ -2420,6 +2612,15 @@ internal class AndroidNextcloudServices(
                 }
             } catch (failure: Throwable) {
                 Log.e(LOG_TAG, "Loading Talk conversations failed", failure)
+                recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.Talk,
+                        operation = "talk.rooms-load",
+                        outcome = "failed",
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
+                    ),
+                )
                 throw failure
             }
         }
@@ -2474,6 +2675,18 @@ internal class AndroidNextcloudServices(
             }
         } catch (failure: Throwable) {
             Log.e(LOG_TAG, "Loading Talk messages failed", failure)
+            recordSupportDiagnostic(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Talk,
+                    operation = "talk.messages-load",
+                    outcome = "failed",
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("room", token, SupportDiagnosticValuePrivacy.Identifier),
+                    ),
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
             throw failure
         }
     }
@@ -2544,6 +2757,7 @@ internal class AndroidNextcloudServices(
         client: OkHttpClient = httpClient,
         streamingBody: RequestBody? = null,
     ): HttpResponse {
+        val started = System.nanoTime()
         check(appContext.isAllowedTestRequest(method, url)) {
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
         }
@@ -2566,32 +2780,169 @@ internal class AndroidNextcloudServices(
             val encoded = Base64.encodeToString(value.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
             builder.header("Authorization", "Basic $encoded")
         }
-        return client.newCall(builder.build()).execute().use { response ->
-            val responseBody = response.body
-            val contentLength = responseBody.contentLength()
-            val readLimit = if (response.isSuccessful) maxResponseBytes else MAX_ERROR_RESPONSE_BYTES
-            check(contentLength <= readLimit || contentLength == -1L) {
-                "The server response is larger than the allowed ${formatByteLimit(readLimit)} limit."
+        return try {
+            val result = client.newCall(builder.build()).execute().use { response ->
+                val responseBody = response.body
+                val contentLength = responseBody.contentLength()
+                val readLimit = if (response.isSuccessful) maxResponseBytes else MAX_ERROR_RESPONSE_BYTES
+                check(contentLength <= readLimit || contentLength == -1L) {
+                    "The server response is larger than the allowed ${formatByteLimit(readLimit)} limit."
+                }
+                HttpResponse(
+                    status = response.code,
+                    body = responseBody.byteStream().readBounded(readLimit),
+                    contentType = responseBody.contentType()?.toString(),
+                    etag = response.header("ETag") ?: response.header("OC-Etag"),
+                    location = if (session == null) {
+                        response.header("Location")
+                    } else {
+                        resolveAndroidNextcloudRedirectLocation(
+                            requestUrl = response.request.url,
+                            serverUrl = session.serverUrl,
+                            location = response.header("Location"),
+                        )
+                    },
+                    chatLastGiven = response.header("X-Chat-Last-Given"),
+                    contentRange = response.header("Content-Range"),
+                )
             }
-            HttpResponse(
-                status = response.code,
-                body = responseBody.byteStream().readBounded(readLimit),
-                contentType = responseBody.contentType()?.toString(),
-                etag = response.header("ETag") ?: response.header("OC-Etag"),
-                location = if (session == null) {
-                    response.header("Location")
-                } else {
-                    resolveAndroidNextcloudRedirectLocation(
-                        requestUrl = response.request.url,
-                        serverUrl = session.serverUrl,
-                        location = response.header("Location"),
-                    )
-                },
-                chatLastGiven = response.header("X-Chat-Last-Given"),
-                contentRange = response.header("Content-Range"),
+            if (result.status !in 200..399) {
+                recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = if (result.status >= 500) {
+                            SupportDiagnosticSeverity.Error
+                        } else {
+                            SupportDiagnosticSeverity.Warning
+                        },
+                        component = SupportDiagnosticComponent.Network,
+                        operation = "network.request",
+                        outcome = "http-error",
+                        code = "HTTP:${result.status}",
+                        durationMillis = elapsedMillis(started),
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft("method", method.uppercase(Locale.ROOT)),
+                            SupportDiagnosticFieldDraft("url", url, SupportDiagnosticValuePrivacy.Url),
+                            SupportDiagnosticFieldDraft("response_bytes", result.body.size.toString()),
+                            SupportDiagnosticFieldDraft(
+                                "mutation",
+                                (!method.isReadOnlyTestRequestMethod()).toString(),
+                            ),
+                        ),
+                    ),
+                )
+            }
+            result
+        } catch (failure: Throwable) {
+            recordSupportDiagnostic(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Network,
+                    operation = "network.request",
+                    outcome = "failed",
+                    durationMillis = elapsedMillis(started),
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("method", method.uppercase(Locale.ROOT)),
+                        SupportDiagnosticFieldDraft("url", url, SupportDiagnosticValuePrivacy.Url),
+                        SupportDiagnosticFieldDraft("mutation", (!method.isReadOnlyTestRequestMethod()).toString()),
+                    ),
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
             )
+            throw failure
         }
     }
+
+    private fun registerSessionPrivateValues(session: NextcloudSession) {
+        supportDiagnostics.registerPrivateValue(session.serverUrl)
+        supportDiagnostics.registerPrivateValue(session.loginName)
+        supportDiagnostics.registerPrivateValue(session.appPassword)
+    }
+
+    private suspend fun <T> diagnoseSupportFailure(
+        component: SupportDiagnosticComponent,
+        operation: String,
+        fields: List<SupportDiagnosticFieldDraft> = emptyList(),
+        block: suspend () -> T,
+    ): T {
+        val started = System.nanoTime()
+        return try {
+            block()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            recordSupportDiagnostic(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = component,
+                    operation = operation,
+                    outcome = "failed",
+                    durationMillis = elapsedMillis(started),
+                    fields = fields,
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+            throw failure
+        }
+    }
+
+    private fun recordFileSyncResult(
+        operation: String,
+        fields: List<SupportDiagnosticFieldDraft>,
+        result: FileSyncCenterActionResult,
+    ) {
+        recordSupportDiagnostic(
+            SupportDiagnosticEventDraft(
+                severity = if (result is FileSyncCenterActionResult.Completed) {
+                    SupportDiagnosticSeverity.Info
+                } else {
+                    SupportDiagnosticSeverity.Warning
+                },
+                component = SupportDiagnosticComponent.Sync,
+                operation = operation,
+                outcome = when (result) {
+                    is FileSyncCenterActionResult.Completed -> "completed"
+                    is FileSyncCenterActionResult.Rejected -> "rejected"
+                    is FileSyncCenterActionResult.Unsupported -> "unsupported"
+                },
+                message = when (result) {
+                    is FileSyncCenterActionResult.Completed -> null
+                    is FileSyncCenterActionResult.Rejected -> result.reason
+                    is FileSyncCenterActionResult.Unsupported -> result.reason
+                },
+                fields = fields,
+            ),
+        )
+    }
+
+    private fun installUncaughtDiagnosticHandler() {
+        if (!UNCAUGHT_DIAGNOSTIC_HANDLER_INSTALLED.compareAndSet(false, true)) return
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        val diagnostics = supportDiagnostics
+        val mainThread = appContext.mainLooper.thread
+        Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
+            diagnostics.record(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.App,
+                    operation = "app.uncaught-exception",
+                    outcome = "failed",
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("main_thread", (thread === mainThread).toString()),
+                    ),
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+            if (previous != null) {
+                previous.uncaughtException(thread, failure)
+            } else {
+                android.os.Process.killProcess(android.os.Process.myPid())
+                kotlin.system.exitProcess(10)
+            }
+        }
+    }
+
+    private fun elapsedMillis(startedNanos: Long): Long =
+        (System.nanoTime() - startedNanos).coerceAtLeast(0L) / 1_000_000L
 
     private fun java.io.InputStream.readBounded(maxBytes: Long): ByteArray {
         val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_CAPACITY.toLong()).toInt())
@@ -2782,6 +3133,7 @@ internal class AndroidNextcloudServices(
     }
 
     private companion object {
+        val UNCAUGHT_DIAGNOSTIC_HANDLER_INSTALLED = AtomicBoolean(false)
         const val KEY_THEME = "theme_preference"
         const val KEY_LAST_OPENED_APP = "last_opened_app"
         const val KEY_SESSION = "encrypted_session"

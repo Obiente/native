@@ -191,7 +191,9 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
-        val androidMain by getting
+        val androidMain by getting {
+            kotlin.srcDir("src/jvmMain/kotlin")
+        }
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
             implementation(libs.androidx.lifecycle.runtime.compose)
@@ -203,7 +205,9 @@ kotlin {
             implementation(libs.videolan.libvlc)
             implementation(libs.okhttp)
         }
-        val desktopMain by getting
+        val desktopMain by getting {
+            kotlin.srcDir("src/jvmMain/kotlin")
+        }
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(project(":contractAcquisition"))

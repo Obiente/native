@@ -11,6 +11,12 @@ import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
+import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
+import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
+import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
+import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -21,11 +27,11 @@ internal class NextcloudFileSyncWorker(
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val pairId = inputData.getString(KEY_PAIR_ID)?.takeIf(String::isNotBlank)
-            ?: return@withContext Result.failure()
+            ?: return@withContext invalidWorkInput("pair_id")
         val accountId = inputData.getString(KEY_ACCOUNT_ID)?.takeIf(String::isNotBlank)
-            ?: return@withContext Result.failure()
+            ?: return@withContext invalidWorkInput("account_id")
         val userId = inputData.getString(KEY_USER_ID)?.takeIf(String::isNotBlank)
-            ?: return@withContext Result.failure()
+            ?: return@withContext invalidWorkInput("user_id")
         val services = AndroidNextcloudServices(applicationContext)
         val session = services.loadSession()
             ?: return@withContext Result.failure()
@@ -43,7 +49,25 @@ internal class NextcloudFileSyncWorker(
         }
         val engine = AndroidFileSyncEngine(applicationContext)
         val result = runCatching { engine.runPair(session, userId, pairId) }
-            .getOrElse { return@withContext Result.retry() }
+            .getOrElse { failure ->
+                services.recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.Sync,
+                        operation = "sync.background-run",
+                        outcome = "failed",
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft(
+                                "pair",
+                                pairId,
+                                SupportDiagnosticValuePrivacy.Identifier,
+                            ),
+                        ),
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
+                    ),
+                )
+                return@withContext Result.retry()
+            }
         val pair = engine.loadCenter(session, userId).pairs.firstOrNull { it.id == pairId }
             ?: return@withContext Result.success()
         pair.conflicts.firstOrNull()?.let { conflict ->
@@ -58,10 +82,40 @@ internal class NextcloudFileSyncWorker(
             )
         }
         if (pair.failedCount > 0 || result is FileSyncCenterActionResult.Rejected) {
+            services.recordSupportDiagnostic(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    component = SupportDiagnosticComponent.Sync,
+                    operation = "sync.background-run",
+                    outcome = "needs-attention",
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
+                        SupportDiagnosticFieldDraft("failed_count", pair.failedCount.toString()),
+                        SupportDiagnosticFieldDraft("conflict_count", pair.conflicts.size.toString()),
+                        SupportDiagnosticFieldDraft(
+                            "result",
+                            if (result is FileSyncCenterActionResult.Rejected) "rejected" else "completed",
+                        ),
+                    ),
+                ),
+            )
             Result.retry()
         } else {
             Result.success()
         }
+    }
+
+    private fun invalidWorkInput(field: String): Result {
+        AndroidSupportDiagnostics.get(applicationContext).record(
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Error,
+                component = SupportDiagnosticComponent.Sync,
+                operation = "sync.background-run",
+                outcome = "invalid-input",
+                fields = listOf(SupportDiagnosticFieldDraft("missing_field", field)),
+            ),
+        )
+        return Result.failure()
     }
 
     private fun createForegroundInfo(pairId: String): ForegroundInfo {

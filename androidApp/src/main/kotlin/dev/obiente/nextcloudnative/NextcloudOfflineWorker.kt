@@ -3,6 +3,12 @@ package dev.obiente.nextcloudnative
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
+import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
+import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
+import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 
@@ -37,11 +43,46 @@ internal class NextcloudOfflineWorker(
                 coroutineJob?.invokeOnCompletion { cancelAction?.invoke() }
             }
         }
-        return when (
-            AndroidFileOfflineRepository(applicationContext).execute(accountId, userId, jobId, cancellation)
-        ) {
-            AndroidOfflineExecutionOutcome.Complete -> Result.success()
-            AndroidOfflineExecutionOutcome.Retry -> Result.retry()
+        val diagnostics = AndroidSupportDiagnostics.get(applicationContext)
+        return try {
+            when (AndroidFileOfflineRepository(applicationContext).execute(accountId, userId, jobId, cancellation)) {
+                AndroidOfflineExecutionOutcome.Complete -> Result.success()
+                AndroidOfflineExecutionOutcome.Retry -> {
+                    diagnostics.record(
+                        SupportDiagnosticEventDraft(
+                            severity = SupportDiagnosticSeverity.Warning,
+                            component = SupportDiagnosticComponent.Storage,
+                            operation = "offline.background-job",
+                            outcome = "retry-scheduled",
+                            fields = listOf(
+                                SupportDiagnosticFieldDraft(
+                                    "account",
+                                    accountId,
+                                    SupportDiagnosticValuePrivacy.Identifier,
+                                ),
+                                SupportDiagnosticFieldDraft("job", jobId.toString()),
+                            ),
+                        ),
+                    )
+                    Result.retry()
+                }
+            }
+        } catch (failure: Throwable) {
+            if (isStopped || coroutineJob?.isCancelled == true) throw failure
+            diagnostics.record(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Storage,
+                    operation = "offline.background-job",
+                    outcome = "failed",
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("account", accountId, SupportDiagnosticValuePrivacy.Identifier),
+                        SupportDiagnosticFieldDraft("job", jobId.toString()),
+                    ),
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+            throw failure
         }
     }
 

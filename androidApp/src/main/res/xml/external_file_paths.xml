@@ -6,4 +6,7 @@
     <cache-path
         name="verified_app_updates"
         path="app-updates/" />
+    <cache-path
+        name="support_bundles"
+        path="support-bundles/" />
 </paths>
