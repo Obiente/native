@@ -276,6 +276,7 @@ internal class SupportDiagnosticSanitizer(
 
     private fun sanitizeText(raw: String, maximumLength: Int): String {
         var value = raw.take(MAX_SUPPORT_DIAGNOSTIC_RAW_TEXT_LENGTH)
+            .normalizeExternalSpacingAndFormatting()
             .replace(SENSITIVE_HEADER_LINE) { match -> "${match.groupValues[1]}=<secret>" }
             .replace(CONTROL_CHARACTERS) { match ->
                 when (match.value) {
@@ -307,6 +308,22 @@ internal class SupportDiagnosticSanitizer(
         value = value.replace(LONG_HEX_VALUE) { match -> privateAlias("id", match.value.lowercase()) }
         value = value.replace(LONG_SECRET_VALUE) { match -> privateAlias("secret", match.value) }
         return value.replace(WHITESPACE, " ").trim().take(maximumLength)
+    }
+
+    private fun String.normalizeExternalSpacingAndFormatting(): String = buildString(length) {
+        this@normalizeExternalSpacingAndFormatting.forEach { character ->
+            append(
+                when (character.category) {
+                    CharCategory.SPACE_SEPARATOR,
+                    CharCategory.FORMAT,
+                    -> ' '
+                    CharCategory.LINE_SEPARATOR,
+                    CharCategory.PARAGRAPH_SEPARATOR,
+                    -> '\n'
+                    else -> character
+                },
+            )
+        }
     }
 
     private fun privateAlias(kind: String, value: String): String =

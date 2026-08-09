@@ -179,6 +179,24 @@ class SupportDiagnosticsTest {
     }
 
     @Test
+    fun normalizesExternalUnicodeSeparatorsBeforeCredentialRedaction() {
+        val credential = listOf("short", "credential").joinToString("-")
+        val separators = listOf(
+            "\u00a0" to "non-breaking space",
+            "\u200b" to "zero-width space",
+            "\u2028" to "line separator",
+            "\u2060" to "word joiner",
+        )
+
+        separators.forEach { (separator, label) ->
+            val sanitized = sanitizer.sanitizeUserDescription("password${separator}=$credential")
+
+            assertFalse(credential in sanitized, label)
+            assertEquals("password=<secret>", sanitized, label)
+        }
+    }
+
+    @Test
     fun redactsUnderscoredCredentialAssignments() {
         val credentials = listOf(
             "access_token" to "short-access-value",
