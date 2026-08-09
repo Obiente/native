@@ -33,7 +33,7 @@ internal enum class WindowsShellUnregistrationResult {
 internal class PackagedWindowsCloudShellRegistrar(
     launcherPath: String? = packagedDesktopLauncherPath(),
     private val recoveryRootsProvider: () -> Map<String, Path> = {
-        runCatching(::persistedWindowsCloudFilesRecoveryRoots).getOrDefault(emptyMap())
+        runCatching(::pagedPersistedWindowsCloudFilesRecoveryRoots).getOrDefault(emptyMap())
     },
     private val processRunner: (List<String>, Long) -> Int? = ::runWindowsShellRegistrar,
 ) : WindowsCloudShellRegistrar {
@@ -80,7 +80,6 @@ internal class PackagedWindowsCloudShellRegistrar(
                     !Files.isSymbolicLink(recoveryRoot)
             }
             .sortedBy(Map.Entry<String, Path>::key)
-            .take(MAX_RECOVERY_ROOTS)
             .forEach { (recoveryAccountId, recoveryRoot) ->
                 command += listOf(
                     RECOVERABLE_ROOT_ARGUMENT,
@@ -121,7 +120,6 @@ internal class PackagedWindowsCloudShellRegistrar(
 
     private companion object {
         const val MAX_SYNC_ROOT_IDENTITY_BYTES = 4_096
-        const val MAX_RECOVERY_ROOTS = 16
         const val MAX_RECOVERY_ROOT_PATH_CHARACTERS = 1_024
         const val REGISTRATION_TIMEOUT_SECONDS = 30L
         const val RECOVERABLE_ROOT_ARGUMENT = "--recoverable-root"

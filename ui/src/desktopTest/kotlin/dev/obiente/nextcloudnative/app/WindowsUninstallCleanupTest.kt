@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
@@ -33,6 +34,24 @@ class WindowsUninstallCleanupTest {
             preferences.removeNode()
             home.deleteRecursively()
         }
+    }
+
+    @Test
+    fun pagesAcrossAllRecoveryRootsInsteadOfRepeatingTheFirstPage() {
+        val roots = (0 until 18).associate { index ->
+            index.toString(16).padStart(64, '0') to File("C:/recovery/$index").toPath()
+        }
+
+        val first = pageWindowsCloudFilesRecoveryRoots(roots, startAfterAccountId = null)
+        val second = pageWindowsCloudFilesRecoveryRoots(
+            roots,
+            startAfterAccountId = first.keys.last(),
+        )
+
+        assertEquals(16, first.size)
+        assertEquals(16, second.size)
+        assertTrue(roots.keys.drop(16).all(second::containsKey))
+        assertFalse(first.keys == second.keys)
     }
 
     @Test

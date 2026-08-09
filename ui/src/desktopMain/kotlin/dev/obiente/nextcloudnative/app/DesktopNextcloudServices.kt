@@ -159,6 +159,8 @@ private const val VIRTUAL_FOLDER_REFRESH_INTERVAL_MILLIS = 6L * 60L * 60L * 1_00
 private const val VIRTUAL_FOLDER_REFRESH_RETRY_MILLIS = 30L * 60L * 1_000L
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX = "wcfr."
+private const val KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR = "windows-cloud-files-recovery-cursor"
+private const val MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOTS_PER_ATTEMPT = 16
 private const val KEY_VIRTUAL_FILE_ROOT_PREFIX = "vfp-root."
 private const val WINDOWS_CLOUD_FILES_ROOT_SUFFIX = "-v2"
 
@@ -298,6 +300,38 @@ internal fun persistedWindowsCloudFilesRecoveryRoots(
         accountId to path
     }
     .toMap()
+
+internal fun pageWindowsCloudFilesRecoveryRoots(
+    roots: Map<String, Path>,
+    startAfterAccountId: String?,
+    limit: Int = MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOTS_PER_ATTEMPT,
+): Map<String, Path> {
+    require(limit > 0)
+    if (roots.isEmpty()) return emptyMap()
+    val ordered = roots.entries.sortedBy(Map.Entry<String, Path>::key)
+    val startIndex = startAfterAccountId
+        ?.let { cursor -> ordered.indexOfFirst { it.key > cursor } }
+        ?.takeIf { it >= 0 }
+        ?: 0
+    return (0 until minOf(limit, ordered.size))
+        .map { offset -> ordered[(startIndex + offset) % ordered.size] }
+        .associate(Map.Entry<String, Path>::toPair)
+}
+
+internal fun pagedPersistedWindowsCloudFilesRecoveryRoots(
+    preferences: Preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative"),
+): Map<String, Path> {
+    val page = pageWindowsCloudFilesRecoveryRoots(
+        roots = persistedWindowsCloudFilesRecoveryRoots(preferences),
+        startAfterAccountId = preferences.get(KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR, null),
+    )
+    if (page.isEmpty()) {
+        preferences.remove(KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR)
+    } else {
+        preferences.put(KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR, page.keys.last())
+    }
+    return page
+}
 
 private fun desktopLegacyWindowsCloudFilesRoot(accountId: String, userHome: File): File =
     File(File(userHome, "Nextcloud Native"), accountId)
