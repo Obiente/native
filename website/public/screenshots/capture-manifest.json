@@ -157,6 +157,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/RecognizedFaceSelection.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/RemoteFolderPicker.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SettingsWorkspace.kt",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportDiagnostics.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SystemTags.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/TalkAttachmentReader.kt",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/TalkMessageCards.kt",
@@ -244,7 +245,7 @@
         "gradle/wrapper/gradle-wrapper.properties": "aef287d114ce3153c3d535697a61928f5034990d570cbb2e93df549e9671483d",
         "settings.gradle.kts": "0acbe4b907815189abfedb2256c8659558e5a7e6995a3681a2bdfb05e335fd1a",
         "tools/marketing-capture-inputs.txt": "3c96e83e1ba2d715b1cda9cedf036fc97b78c3ca63b7fc930325ed536940c1f3",
-        "ui/build.gradle.kts": "8cb33c7710eec8a1a7be1c3a9f814f9e739d6a0fc832c8da401b8cccdfebedca",
+        "ui/build.gradle.kts": "4bba3a46f98c5ae7351813f80b09621a8123393eb37d6e5a7af48490d84a71c3",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivitySemantics.kt": "fa9a949fdfd07c8f5b7388f10dd6cf21454fdbb165390c7ca5f6a27f4de07c85",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityWorkspace.kt": "c072c29b0bdfe13eb3ca26c1cf057459f1611f9e537961b0247ca1ef7de5b245",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AdminAppManagement.kt": "b11fbc2c93ab17a20f123c8bde25a993c612ffb1b1525329a7e341952fefbf7d",
@@ -350,12 +351,12 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudFileListing.kt": "4372cbb72541993c53169f861ebb00efc306670d41b860cc0c3c010b431f43b4",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt": "53cc22fed51fe03ef0aaab6a3f849222b0dbfb04fac9c4e3a73057b85c524290",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewerActions.kt": "48aaed6948d1423113d300cc3ab86d244ab76e8225e24988e9855edf74553944",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "a2524baa9cdb5b903c580b8ba31cc3b28a44192e586673026b29ffa927c35d13",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "e5b6a34aaddadf1a12c8245af7c57e0a0bbbe0874da82bbe0cefef9bba99857f",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt": "944103dba7d35abd17d21cb2bf5818c19b8148abf6b8d37fcdafdab029abe56b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotesCache.kt": "9223dd455c6a1c35a10769616fceb9dfb2d92ef4d43b0a52c2c29e40f1a196cf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPeople.kt": "cff910ea2cc77211ef81779c49ee0c957851f2b4a3ed32b857b12ded1cee643b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPhotoEditor.kt": "3445cee9cb4e039c3992103f1d71ab5cee4fea9751e5f9282160c64b44e84d4c",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt": "9cc02c78934c5ee60e81f8d5236f6937472e003a40eca1b67d3267a80ffb5684",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt": "75c423168fab142510b10be2b4a9afa637e432380c05fcba3f6fad88ddd7dfdf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotesApi.kt": "e0eb6645fdfb786a942af58ada15d5385c477b4f1a1fc5613ecc14a8c0089c4d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotesFolderOperations.kt": "db6a04cfcd3b25b17c996cdc6dba21847d14f5970e06e6c24a3e2c85139dbe1d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/OfficeDocumentWorkflow.kt": "8d8e3362282230175bdda673d76baccf537220f175539404cf67295fe05bb44b",
@@ -389,7 +390,8 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/RecognizedFaceRemovalPicker.kt": "790361162a60502f2db49218bbb524cdeb9a43403281e9a8ae25ef1354275558",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/RecognizedFaceSelection.kt": "a41835093c50db3b4c8414525dafe7542aa71aef295b480f352c7d5afc7abc24",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/RemoteFolderPicker.kt": "43f8f21693a5a120d2f057bf52e78230e1cf486a6d96445d93c1ff2687572b9c",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SettingsWorkspace.kt": "6f9c2c219ba54d1b0472322b53a803c9a705cc8ef1807b73cc2f95390cceb65e",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SettingsWorkspace.kt": "639b4d009f942bc236d70226df54c191684e42b82dec009baf76155066378516",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportDiagnostics.kt": "76019cca7b88a2a6134f829a392dd62dfd7c0ffd50565919a39a9f5d14c2f72e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SystemTags.kt": "452abd9589c627dc7ae9dae03265a3bfdb837809ba0ca82da0698ef73db64332",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/TalkAttachmentReader.kt": "f444161c7c719880f3a44108255ef781148baac083c88148509ad023f27a43e9",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/TalkMessageCards.kt": "baeba1dff08ab4be69cf4b39daad45b6450bfda9464dc8a60de2e1555c73267b",
@@ -450,7 +452,7 @@
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/DeckInteractionPreviewMain.kt": "7167eab9204f86e2f7fe6dee1cfeb4b7ecca5a729f890c5c56f4f995bb03f61c",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/DynamicBoardInteractionPreviewMain.kt": "7402f5b4bf3bbf3cf20761eaa10eca9131fb6e63da2988d0aa6038942d706c53",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/FileSyncTrayVisualQaMain.kt": "acdf44077805b96aae3c9e7a7589b19bd68e34710c3a35d3d8185d556cbf8cae",
-        "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/Main.kt": "5c50b45d099508288636d5926117e0bb28039100b2f8e5d0b0f67823c50f8941",
+        "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/Main.kt": "1ec58f176ae5230d75ca39c94507567fa292a5eda46d1a10c8240ac1429d11e6",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/MarketingCaptureMain.kt": "759783eb557e8f500d623cdd635a67f94c45ebf9197e96ac2d67e4b4691e5fde",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/MarketingCaptureOwnership.kt": "67cf94e6f215167a2384f14086d135532961c7e91cecb69be8f15e4ee6324606",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/NativeTiffMarketingCapture.kt": "6970352c6e42d09b793c55ea296991d756d232f216d8d152aa00319b2ddb8d20",
@@ -1258,7 +1260,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "52fb6e635358266f3f525977c87be75b95d019378ca868613f8aad7622a99cb7"
+            "sha256": "ef173be72520d8b416b7887007c591e5c04eb8061cd4818db769659d5d16377d"
         },
         {
             "scenario": "desktop-startup-settings-light",
@@ -1274,7 +1276,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "5e0cf025e088a8fc9dc72ed318d7c55e4f2f2b9e492c1d4b78b30a69ec996b9a"
+            "sha256": "f18de1efd76e9cd02791e895056edea16e8d23428e3e3289e555b6101df165fe"
         },
         {
             "scenario": "adaptive-dynamic-data",
@@ -2476,7 +2478,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "52fb6e635358266f3f525977c87be75b95d019378ca868613f8aad7622a99cb7"
+            "sha256": "ef173be72520d8b416b7887007c591e5c04eb8061cd4818db769659d5d16377d"
         },
         {
             "scenario": "guide-get-started-settings-light",
@@ -2492,7 +2494,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "5e0cf025e088a8fc9dc72ed318d7c55e4f2f2b9e492c1d4b78b30a69ec996b9a"
+            "sha256": "f18de1efd76e9cd02791e895056edea16e8d23428e3e3289e555b6101df165fe"
         },
         {
             "scenario": "guide-folder-sync-workspace",
