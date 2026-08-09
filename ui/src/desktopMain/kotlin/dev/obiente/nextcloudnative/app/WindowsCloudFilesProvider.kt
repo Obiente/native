@@ -697,10 +697,11 @@ internal class WindowsCloudFilesProvider(
                 else -> reconcileExistingPlaceholder(identity, localPath, state)
             }
         }
-        createMissingPlaceholders(localDirectory, missing)
+        createMissingPlaceholders(relativePath, localDirectory, missing)
     }
 
     private fun createMissingPlaceholders(
+        relativePath: String,
         localDirectory: Path,
         identities: List<WindowsCloudFileIdentity>,
     ) {
@@ -710,24 +711,38 @@ internal class WindowsCloudFilesProvider(
             identities.forEach { identity -> knownIdentities[identity.path] = identity }
         } catch (failure: WindowsCloudFilesOperationException) {
             if (!isWindowsCloudFilesPlaceholderAlreadyExistsResult(failure.hResult)) throw failure
+            val refreshed = backend.list(relativePath).associateBy { identity -> identity.path }
             identities.forEach { identity ->
-                reconcilePlaceholderCreationCollision(localDirectory, identity, failure)
+                reconcilePlaceholderCreationCollision(
+                    localDirectory = localDirectory,
+                    listedIdentity = identity,
+                    authoritativeIdentity = refreshed[identity.path],
+                    initialFailure = failure,
+                )
             }
         }
     }
 
     private fun reconcilePlaceholderCreationCollision(
         localDirectory: Path,
-        identity: WindowsCloudFileIdentity,
+        listedIdentity: WindowsCloudFileIdentity,
+        authoritativeIdentity: WindowsCloudFileIdentity?,
         initialFailure: WindowsCloudFilesOperationException,
     ) {
-        val localPath = localDirectory.resolve(identity.path.substringAfterLast('/'))
+        val localPath = localDirectory.resolve(listedIdentity.path.substringAfterLast('/'))
         var collision = initialFailure
         var identityUnavailable = false
         repeat(MAX_PLACEHOLDER_COLLISION_RETRIES) {
             val state = api.placeholderState(localPath)
             if (state != WindowsCloudPlaceholderState.Absent) {
-                if (reconcileCollidedPlaceholder(identity, localPath, state)) return
+                if (
+                    reconcileCollidedPlaceholder(
+                        listedIdentity,
+                        authoritativeIdentity,
+                        localPath,
+                        state,
+                    )
+                ) return
                 identityUnavailable = true
                 Thread.sleep(PLACEHOLDER_COLLISION_RETRY_DELAY_MILLIS)
                 return@repeat
@@ -737,9 +752,10 @@ internal class WindowsCloudFilesProvider(
                 // create-only remote semantics instead of replacing either copy.
                 return
             }
+            val creationIdentity = authoritativeIdentity ?: return
             try {
-                api.createPlaceholders(localDirectory, listOf(placeholder(identity)))
-                knownIdentities[identity.path] = identity
+                api.createPlaceholders(localDirectory, listOf(placeholder(creationIdentity)))
+                knownIdentities[creationIdentity.path] = creationIdentity
                 return
             } catch (failure: WindowsCloudFilesOperationException) {
                 if (!isWindowsCloudFilesPlaceholderAlreadyExistsResult(failure.hResult)) throw failure
@@ -757,6 +773,7 @@ internal class WindowsCloudFilesProvider(
 
     private fun reconcileCollidedPlaceholder(
         listedIdentity: WindowsCloudFileIdentity,
+        authoritativeIdentity: WindowsCloudFileIdentity?,
         localPath: Path,
         state: WindowsCloudPlaceholderState,
     ): Boolean {
@@ -771,16 +788,21 @@ internal class WindowsCloudFilesProvider(
             return true
         }
         check(state == WindowsCloudPlaceholderState.InSync)
-        val authoritative = if (existing == listedIdentity) {
-            existing
-        } else {
-            resolveAuthoritativePlaceholderIdentity(listedIdentity)
+        val authoritative = requireNotNull(authoritativeIdentity) {
+            "The remote item disappeared while reconciling a Windows placeholder collision."
+        }.also { current ->
+            require(current.accountId == backend.accountId && current.path == listedIdentity.path) {
+                "The resolved Windows placeholder identity does not match the requested remote item."
+            }
         }
-        if (existing != authoritative) {
+        val contentChanged = existing.remoteRevision != authoritative.remoteRevision ||
+            existing.size != authoritative.size ||
+            existing.directory != authoritative.directory
+        if (existing != authoritative || authoritative.directory) {
             api.updatePlaceholder(
                 localPath,
                 placeholder(authoritative),
-                invalidateContent = !authoritative.directory,
+                invalidateContent = contentChanged && !authoritative.directory,
             )
         }
         knownIdentities[authoritative.path] = authoritative
@@ -799,21 +821,16 @@ internal class WindowsCloudFilesProvider(
                 check(previous == null || previous.accountId == backend.accountId && previous.path == identity.path) {
                     "The Windows Cloud Files directory contains remote entries that resolve to the same Windows path."
                 }
-                val authoritative = when {
-                    previous == null || previous == identity -> identity
-                    else -> resolveAuthoritativePlaceholderIdentity(identity)
-                }
-                val changed = previous == null ||
-                    previous.remoteRevision != authoritative.remoteRevision ||
-                    previous.size != authoritative.size ||
-                    previous.directory != authoritative.directory ||
-                    previous.lastModifiedEpochMillis != authoritative.lastModifiedEpochMillis
+                val contentChanged = previous == null ||
+                    previous.remoteRevision != identity.remoteRevision ||
+                    previous.size != identity.size ||
+                    previous.directory != identity.directory
                 api.updatePlaceholder(
                     localPath,
-                    placeholder(authoritative),
-                    invalidateContent = changed && !authoritative.directory,
+                    placeholder(identity),
+                    invalidateContent = contentChanged && !identity.directory,
                 )
-                knownIdentities[authoritative.path] = authoritative
+                knownIdentities[identity.path] = identity
             }
             WindowsCloudPlaceholderState.Dirty -> {
                 check(previous != null && previous.accountId == backend.accountId && previous.path == identity.path) {
@@ -822,19 +839,6 @@ internal class WindowsCloudFilesProvider(
                 knownIdentities[identity.path] = previous
             }
             WindowsCloudPlaceholderState.Absent -> Unit
-        }
-    }
-
-    private fun resolveAuthoritativePlaceholderIdentity(
-        listedIdentity: WindowsCloudFileIdentity,
-    ): WindowsCloudFileIdentity {
-        val resolved = backend.resolve(listedIdentity.path)
-        return requireNotNull(resolved) {
-            "The remote item disappeared while reconciling a Windows placeholder."
-        }.also { current ->
-            require(current.accountId == backend.accountId && current.path == listedIdentity.path) {
-                "The resolved Windows placeholder identity does not match the requested remote item."
-            }
         }
     }
 
@@ -1028,6 +1032,11 @@ internal class WindowsCloudFilesProvider(
                     .joinToString("/") { it.toString() }.windowsCloudPath()
                 if (failClosed) uploadLocalEntry(path, relative)
                 else runCatching { uploadLocalEntry(path, relative) }
+                    .onFailure {
+                        // The ordinary entry is the durable recovery copy. Rebuild its
+                        // visible failure state on every startup until reconciliation succeeds.
+                        failedWritebacks += relative
+                    }
             }
         }
         if (failClosed) recover() else runCatching(recover)
@@ -1144,6 +1153,7 @@ internal class WindowsCloudFilesProvider(
         require(Files.isDirectory(localPath) || Files.isRegularFile(localPath)) {
             "Windows Cloud Files only imports regular files and folders."
         }
+        failedWritebacks -= relativePath
         pendingWritebacks += relativePath
         var completed = false
         try {
