@@ -86,6 +86,8 @@ class JvmSupportDiagnostics(
 
     fun revisions(): StateFlow<Long> = revision.asStateFlow()
 
+    fun isStorageAvailable(): Boolean = synchronized(lock) { storageAvailable }
+
     fun record(draft: SupportDiagnosticEventDraft) = recordWithScope(draft) { activeAccountScope }
 
     fun recordForAccountIdentity(accountIdentity: String?, draft: SupportDiagnosticEventDraft) =

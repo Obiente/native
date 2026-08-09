@@ -5,6 +5,7 @@ import java.io.FileOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -63,10 +64,10 @@ class AsyncJvmSupportDiagnostics(
     }
 
     fun record(event: SupportDiagnosticEventDraft) {
-        val operation = synchronized(lock) {
-            PendingOperation.Record(activeAccountIdentity, event)
+        val drain = synchronized(lock) {
+            submitLocked(PendingOperation.Record(activeAccountIdentity, event))
         }
-        submit(operation)
+        startDrain(drain)
     }
 
     fun recordForAccountIdentity(accountIdentity: String, event: SupportDiagnosticEventDraft) {
@@ -85,7 +86,7 @@ class AsyncJvmSupportDiagnostics(
         }
         if (current != null) {
             operation.apply(current)
-            if (!current.summary().available) persistColdCrashMarker()
+            if (!current.isStorageAvailable()) persistColdCrashMarker()
             publishRevision()
             return
         }
@@ -93,7 +94,7 @@ class AsyncJvmSupportDiagnostics(
             initializationComplete.await(COLD_CRASH_INITIALIZATION_WAIT_MILLIS, TimeUnit.MILLISECONDS)
         }.getOrDefault(false)
         val initializedDelegate = delegate
-        if (!initialized || initializedDelegate == null || !initializedDelegate.summary().available) {
+        if (!initialized || initializedDelegate == null || !initializedDelegate.isStorageAvailable()) {
             persistColdCrashMarker()
         }
     }
@@ -108,16 +109,22 @@ class AsyncJvmSupportDiagnostics(
         } else {
             "${serverUrl.length}:$serverUrl${loginName.length}:$loginName"
         }
-        synchronized(lock) { activeAccountIdentity = identity }
-        submit(PendingOperation.SetActiveAccount(identity))
+        val drain = synchronized(lock) {
+            activeAccountIdentity = identity
+            submitLocked(PendingOperation.SetActiveAccount(identity))
+        }
+        startDrain(drain)
         registerPrivateValue(serverUrl)
         registerPrivateValue(loginName)
     }
 
     fun setActiveAccountIdentity(accountIdentity: String?) {
         val normalized = accountIdentity?.takeIf(String::isNotBlank)
-        synchronized(lock) { activeAccountIdentity = normalized }
-        submit(PendingOperation.SetActiveAccount(normalized))
+        val drain = synchronized(lock) {
+            activeAccountIdentity = normalized
+            submitLocked(PendingOperation.SetActiveAccount(normalized))
+        }
+        startDrain(drain)
     }
 
     fun summary(): SupportDiagnosticsSummary = delegate?.summary() ?: unavailableSummary()
@@ -141,11 +148,15 @@ class AsyncJvmSupportDiagnostics(
 
     fun revisions(): StateFlow<Long> = revision.asStateFlow()
 
-    suspend fun loadSummary(): SupportDiagnosticsSummary = runCatching {
+    suspend fun loadSummary(): SupportDiagnosticsSummary = try {
         withContext(dispatcher) {
             ready.await().also(::drainPendingSnapshot).summary()
         }
-    }.getOrElse { unavailableSummary() }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Throwable) {
+        unavailableSummary()
+    }
 
     suspend fun clear(): Boolean = runCatching {
         withContext(dispatcher) {
@@ -187,7 +198,7 @@ class AsyncJvmSupportDiagnostics(
         queued.forEach { operation -> operation.apply(created) }
         when {
             pendingHadCrash -> {
-                if (created.summary().available) coldCrashMarker.delete()
+                if (created.isStorageAvailable()) coldCrashMarker.delete()
             }
             coldCrashMarker.isFile -> {
                 created.record(
@@ -198,28 +209,32 @@ class AsyncJvmSupportDiagnostics(
                         outcome = "recovered",
                     ),
                 )
-                if (created.summary().available) coldCrashMarker.delete()
+                if (created.isStorageAvailable()) coldCrashMarker.delete()
             }
         }
         scheduleQueuedDrain(created)
     }
 
     private fun submit(operation: PendingOperation) {
-        val drain = synchronized(lock) {
-            if (initializationFailed) return
-            enqueue(operation)
-            delegate?.takeIf {
-                if (drainScheduled) {
-                    false
-                } else {
-                    drainScheduled = true
-                    true
-                }
+        val drain = synchronized(lock) { submitLocked(operation) }
+        startDrain(drain)
+    }
+
+    private fun submitLocked(operation: PendingOperation): JvmSupportDiagnostics? {
+        if (initializationFailed) return null
+        enqueue(operation)
+        return delegate?.takeIf {
+            if (drainScheduled) {
+                false
+            } else {
+                drainScheduled = true
+                true
             }
         }
-        if (drain != null) {
-            scope.launch { drainPendingBatch(drain) }
-        }
+    }
+
+    private fun startDrain(current: JvmSupportDiagnostics?) {
+        if (current != null) scope.launch { drainPendingBatch(current) }
     }
 
     private fun drainPendingBatch(current: JvmSupportDiagnostics) {
