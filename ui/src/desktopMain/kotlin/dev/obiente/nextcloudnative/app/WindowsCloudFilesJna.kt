@@ -18,6 +18,12 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
 internal const val MAX_WINDOWS_CLOUD_PLACEHOLDER_DIAGNOSTIC_RESULTS = 16
+private const val ERROR_FILE_NOT_FOUND = 2
+private const val ERROR_PATH_NOT_FOUND = 3
+private const val ERROR_CLOUD_FILE_METADATA_CORRUPT = 363
+private const val CF_PLACEHOLDER_STATE_PLACEHOLDER = 0x1
+private const val CF_PLACEHOLDER_STATE_IN_SYNC = 0x8
+private const val CF_PLACEHOLDER_STATE_INVALID = -1
 
 internal fun windowsCloudPlaceholderDiagnosticSampleSize(availableCount: Int): Int {
     require(availableCount >= 0)
@@ -34,6 +40,41 @@ internal fun windowsCloudFailedPlaceholderIndex(
     return firstFailedEntryIndex
         ?: processedCount.takeIf { it in 0 until placeholderCount }
         ?: (processedCount - 1).takeIf { it in 0 until placeholderCount }
+}
+
+internal fun windowsCloudPlaceholderInspection(
+    findSucceeded: Boolean,
+    win32Error: Int? = null,
+    fileAttributes: Int? = null,
+    reparseTag: Int? = null,
+    placeholderStateBits: Int? = null,
+): WindowsCloudPlaceholderInspection {
+    if (!findSucceeded) {
+        val error = requireNotNull(win32Error)
+        val state = when (error) {
+            ERROR_FILE_NOT_FOUND,
+            ERROR_PATH_NOT_FOUND,
+            -> WindowsCloudPlaceholderEntryState.Missing
+            ERROR_CLOUD_FILE_METADATA_CORRUPT -> WindowsCloudPlaceholderEntryState.Corrupt
+            else -> WindowsCloudPlaceholderEntryState.Unreadable
+        }
+        return WindowsCloudPlaceholderInspection(state = state, win32Error = error)
+    }
+    require(win32Error == null)
+    val attributes = requireNotNull(fileAttributes)
+    val tag = requireNotNull(reparseTag)
+    val stateBits = requireNotNull(placeholderStateBits)
+    val state = when {
+        stateBits == CF_PLACEHOLDER_STATE_INVALID -> WindowsCloudPlaceholderEntryState.Corrupt
+        stateBits and CF_PLACEHOLDER_STATE_PLACEHOLDER == 0 -> WindowsCloudPlaceholderEntryState.Local
+        stateBits and CF_PLACEHOLDER_STATE_IN_SYNC != 0 -> WindowsCloudPlaceholderEntryState.InSync
+        else -> WindowsCloudPlaceholderEntryState.Dirty
+    }
+    return WindowsCloudPlaceholderInspection(
+        state = state,
+        fileAttributes = attributes,
+        reparseTag = tag,
+    )
 }
 
 /** 64-bit Windows CldApi.dll binding kept behind [WindowsCloudFilesApi] for deterministic tests. */
@@ -343,13 +384,29 @@ internal class JnaWindowsCloudFilesApi(
     }
 
     override fun placeholderState(path: Path): WindowsCloudPlaceholderState {
-        return withFindData(path, WindowsCloudPlaceholderState.Absent) { findData ->
-            val state = cldApi.CfGetPlaceholderStateFromFindData(findData.pointer)
-            when {
-                state and CF_PLACEHOLDER_STATE_PLACEHOLDER == 0 -> WindowsCloudPlaceholderState.Absent
-                state and CF_PLACEHOLDER_STATE_IN_SYNC != 0 -> WindowsCloudPlaceholderState.InSync
-                else -> WindowsCloudPlaceholderState.Dirty
-            }
+        return inspectPlaceholder(path).placeholderState
+    }
+
+    override fun inspectPlaceholder(path: Path): WindowsCloudPlaceholderInspection {
+        val findData = WinBase.WIN32_FIND_DATA()
+        Native.setLastError(0)
+        val handle = Kernel32.INSTANCE.FindFirstFile(path.toAbsolutePath().toString(), findData.pointer)
+        if (WinBase.INVALID_HANDLE_VALUE == handle) {
+            return windowsCloudPlaceholderInspection(
+                findSucceeded = false,
+                win32Error = Native.getLastError(),
+            )
+        }
+        return try {
+            findData.read()
+            windowsCloudPlaceholderInspection(
+                findSucceeded = true,
+                fileAttributes = findData.dwFileAttributes,
+                reparseTag = findData.dwReserved0,
+                placeholderStateBits = cldApi.CfGetPlaceholderStateFromFindData(findData.pointer),
+            )
+        } finally {
+            Kernel32.INSTANCE.FindClose(handle)
         }
     }
 

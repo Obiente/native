@@ -21,6 +21,75 @@ import kotlin.test.assertTrue
 
 class WindowsCloudFilesProviderTest {
     @Test
+    fun nativeInspectionDistinguishesMissingCorruptAndUnreadableEntries() {
+        assertEquals(
+            WindowsCloudPlaceholderEntryState.Missing,
+            windowsCloudPlaceholderInspection(findSucceeded = false, win32Error = 2).state,
+        )
+        assertEquals(
+            WindowsCloudPlaceholderEntryState.Missing,
+            windowsCloudPlaceholderInspection(findSucceeded = false, win32Error = 3).state,
+        )
+        assertEquals(
+            WindowsCloudPlaceholderEntryState.Corrupt,
+            windowsCloudPlaceholderInspection(findSucceeded = false, win32Error = 363).state,
+        )
+        assertEquals(
+            WindowsCloudPlaceholderEntryState.Unreadable,
+            windowsCloudPlaceholderInspection(findSucceeded = false, win32Error = 5).state,
+        )
+        assertEquals(
+            WindowsCloudPlaceholderEntryState.Corrupt,
+            windowsCloudPlaceholderInspection(
+                findSucceeded = true,
+                fileAttributes = 0x410,
+                reparseTag = 0x9000001A.toInt(),
+                placeholderStateBits = -1,
+            ).state,
+        )
+    }
+
+    @Test
+    fun nativeInspectionSeparatesLocalAndValidPlaceholderEntries() {
+        assertEquals(
+            WindowsCloudPlaceholderEntryState.Local,
+            windowsCloudPlaceholderInspection(
+                findSucceeded = true,
+                fileAttributes = 0x20,
+                reparseTag = 0,
+                placeholderStateBits = 0,
+            ).state,
+        )
+        assertEquals(
+            WindowsCloudPlaceholderEntryState.InSync,
+            windowsCloudPlaceholderInspection(
+                findSucceeded = true,
+                fileAttributes = 0x410,
+                reparseTag = 0x9000001A.toInt(),
+                placeholderStateBits = 0x9,
+            ).state,
+        )
+        assertEquals(
+            WindowsCloudPlaceholderEntryState.Dirty,
+            windowsCloudPlaceholderInspection(
+                findSucceeded = true,
+                fileAttributes = 0x410,
+                reparseTag = 0x9000001A.toInt(),
+                placeholderStateBits = 0x11,
+            ).state,
+        )
+    }
+
+    @Test
+    fun recoveryRootNameIsBoundedAndDoesNotReplaceTheOriginalPath() {
+        val root = Path.of("synthetic-volume", "Nextcloud Native", "account-v2")
+        val recovery = windowsCloudFilesRecoveryRoot(root, "12345678-abcd")
+
+        assertEquals(root.toAbsolutePath().normalize().parent, recovery.parent)
+        assertEquals("account-v2.recovery-12345678-abcd", recovery.fileName.toString())
+    }
+
+    @Test
     fun failedPlaceholderIndexIncludesTheFirstRejectedUnprocessedEntry() {
         assertEquals(
             0,
@@ -441,6 +510,110 @@ class WindowsCloudFilesProviderTest {
             assertTrue(api.disconnectAttempts.isEmpty())
         } finally {
             provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptPlaceholderPreservesTheWholeRootAndReconnectsOnce() {
+        val root = createTempDirectory("windows-cloud-corrupt-root")
+        val localBytes = "local-only recovery data".encodeToByteArray()
+        root.resolve("local-note.txt").writeBytes(localBytes)
+        val identity = WindowsCloudFileIdentity("account-01", "Apps", "revision", 0L, true)
+        val corruptPath = root.resolve("Apps")
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { _, _ ->
+                seedInspection(
+                    corruptPath,
+                    WindowsCloudPlaceholderInspection(
+                        state = WindowsCloudPlaceholderEntryState.Corrupt,
+                        win32Error = 363,
+                    ),
+                )
+                throw WindowsCloudFilesOperationException(
+                    "create Windows Cloud Files placeholders",
+                    0x800700B7.toInt(),
+                )
+            }
+        }
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+        val preserved = root.resolveSibling("preserved-corrupt-root")
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0), listOf(identity)),
+            api = api,
+            recordDiagnostic = diagnostics::add,
+            preserveCorruptRoot = { current ->
+                api.seedInspection(
+                    corruptPath,
+                    WindowsCloudPlaceholderInspection(WindowsCloudPlaceholderEntryState.Missing),
+                )
+                Files.move(current, preserved)
+            },
+        )
+
+        try {
+            provider.start()
+
+            assertEquals(preserved, provider.preservedRecoveryRoot)
+            assertContentEquals(localBytes, preserved.resolve("local-note.txt").toFile().readBytes())
+            assertTrue(Files.isDirectory(root))
+            assertEquals(2, api.createdPlaceholderBatches.size)
+            assertEquals(listOf("Apps"), api.createdPlaceholderBatches.last().map(WindowsCloudPlaceholder::name))
+            assertEquals(
+                listOf("register", "connect", "create", "unregister", "register", "connect", "create"),
+                api.lifecycleEvents.take(7),
+            )
+            assertEquals(listOf(1L), api.disconnectAttempts)
+            assertEquals(
+                listOf(
+                    "collision-detected",
+                    "corrupt-entry-detected",
+                    "corrupt-root-preserved",
+                    "corrupt-root-recovered",
+                ),
+                diagnostics.map(SupportDiagnosticEventDraft::outcome),
+            )
+            val preservedField = diagnostics[2].fields.single { it.name == "preserved_root" }
+            assertEquals(SupportDiagnosticValuePrivacy.LocalPath, preservedField.privacy)
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptRootMoveFailureLeavesLocalDataUntouched() {
+        val root = createTempDirectory("windows-cloud-corrupt-root-move-failure")
+        val localBytes = "must remain local".encodeToByteArray()
+        root.resolve("local-note.txt").writeBytes(localBytes)
+        val identity = WindowsCloudFileIdentity("account-01", "Apps", "revision", 0L, true)
+        val api = FakeApi().apply {
+            seedInspection(
+                root.resolve("Apps"),
+                WindowsCloudPlaceholderInspection(
+                    state = WindowsCloudPlaceholderEntryState.Corrupt,
+                    win32Error = 363,
+                ),
+            )
+        }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0), listOf(identity)),
+            api = api,
+            preserveCorruptRoot = { throw IllegalStateException("simulated move refusal") },
+        )
+
+        try {
+            val failure = assertFailsWith<IllegalStateException> { provider.start() }
+
+            assertTrue(failure.message.orEmpty().contains("Could not preserve"))
+            assertContentEquals(localBytes, root.resolve("local-note.txt").toFile().readBytes())
+            assertEquals(listOf("register", "connect", "unregister", "register"), api.lifecycleEvents)
+            assertEquals(listOf(1L), api.disconnectAttempts)
+        } finally {
+            provider.close()
             root.toFile().deleteRecursively()
         }
     }
@@ -1205,6 +1378,7 @@ class WindowsCloudFilesProviderTest {
         private val identityReadLatch = CountDownLatch(expectedIdentityReads)
         private val placeholderFetchLatch = CountDownLatch(expectedPlaceholderFetches)
         private val states = HashMap<Path, WindowsCloudPlaceholderState>()
+        private val inspections = HashMap<Path, WindowsCloudPlaceholderInspection>()
         private val identities = HashMap<Path, ByteArray>()
         val transfers = mutableListOf<Pair<Long, ByteArray>>()
         val createdPlaceholderBatches = mutableListOf<List<WindowsCloudPlaceholder>>()
@@ -1266,6 +1440,8 @@ class WindowsCloudFilesProviderTest {
         }
         override fun placeholderState(path: Path): WindowsCloudPlaceholderState =
             states[path] ?: WindowsCloudPlaceholderState.Absent
+        override fun inspectPlaceholder(path: Path): WindowsCloudPlaceholderInspection =
+            inspections[path] ?: super.inspectPlaceholder(path)
         override fun allocatedBytes(path: Path): Long = if (states[path] == WindowsCloudPlaceholderState.InSync) {
             path.toFile().length()
         } else {
@@ -1316,6 +1492,10 @@ class WindowsCloudFilesProviderTest {
         fun seedState(path: Path, state: WindowsCloudPlaceholderState) {
             states[path] = state
             identities.remove(path)
+        }
+
+        fun seedInspection(path: Path, inspection: WindowsCloudPlaceholderInspection) {
+            inspections[path] = inspection
         }
     }
 }

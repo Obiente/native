@@ -751,6 +751,7 @@ class DesktopNextcloudServices(
     private var windowsCloudFilesProvider: WindowsCloudFilesProvider? = null
     private var windowsCloudFilesIdentity: String? = null
     private var windowsCloudFilesFailure: String? = null
+    private var windowsCloudFilesRecoveryNotice: String? = null
     private val dynamicApiReadCache = DynamicApiResponseCache(
         desktopContractCacheDirectory("responses"),
     )
@@ -1440,6 +1441,7 @@ class DesktopNextcloudServices(
                 }
                 linuxVirtualFileFailure?.let { add("The last Linux mount attempt failed: $it") }
                 windowsCloudFilesFailure?.let { add("The last Windows Cloud Files activation failed: $it") }
+                windowsCloudFilesRecoveryNotice?.let(::add)
                 if (windows) {
                     add("Windows can dehydrate in-sync placeholders automatically when space is needed.")
                 }
@@ -1454,7 +1456,8 @@ class DesktopNextcloudServices(
                 }
             },
             providerState = when {
-                (windowsSummary?.failedWritebackCount ?: 0) > 0 -> VirtualFileProviderState.NeedsAttention
+                (windowsSummary?.failedWritebackCount ?: 0) > 0 || windowsCloudFilesRecoveryNotice != null ->
+                    VirtualFileProviderState.NeedsAttention
                 active -> VirtualFileProviderState.Active
                 rangeCacheResult.isFailure || linuxVirtualFileFailure != null || windowsCloudFilesFailure != null ->
                     VirtualFileProviderState.NeedsAttention
@@ -1613,6 +1616,10 @@ class DesktopNextcloudServices(
                     windowsCloudFilesProvider = provider
                     windowsCloudFilesIdentity = accountId
                     windowsCloudFilesFailure = null
+                    windowsCloudFilesRecoveryNotice = provider.preservedRecoveryRoot?.let { preserved ->
+                        "Windows repaired unreadable Cloud Files metadata. Existing local data was preserved at " +
+                            "${preserved.toAbsolutePath()}."
+                    }
                     preferences.put(
                         windowsCloudFilesRootPreferenceKey(accountId),
                         root.toAbsolutePath().toString(),
@@ -1631,7 +1638,8 @@ class DesktopNextcloudServices(
                     throw failure
                 }
                 return@withContext VirtualFileStorageActionResult.Completed(
-                    "Windows Cloud Files connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
+                    windowsCloudFilesRecoveryNotice
+                        ?: "Windows Cloud Files connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
                 )
             }
             if (linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) {
@@ -1740,6 +1748,7 @@ class DesktopNextcloudServices(
             windowsCloudFilesProvider = null
             windowsCloudFilesIdentity = null
             windowsCloudFilesFailure = null
+            windowsCloudFilesRecoveryNotice = null
             preferences.putBoolean(
                 virtualFileProviderPreferenceKey(desktopFileCacheAccountId(session)),
                 false,
