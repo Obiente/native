@@ -704,6 +704,14 @@ interface NextcloudPlatformServices {
         "A system virtual file provider is not available on this platform.",
     )
 
+    /** Acknowledges a durable provider recovery notice without deleting preserved local files. */
+    suspend fun acknowledgeVirtualFileProviderRecovery(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "A virtual file recovery notice is not available on this platform.",
+    )
+
     /** Opens a native directory chooser for the parent of the visible virtual-file folder. */
     suspend fun chooseVirtualFileProviderParent(initialParentPath: String?): String? = null
 

@@ -1094,6 +1094,7 @@ internal class AndroidNextcloudServices(
                 emptyList()
             },
             providerState = VirtualFileProviderState.Active,
+            providerActive = true,
             providerLocation = "System Files / Nextcloud Native",
             pendingWritebackCount = pendingWritebacks,
         )

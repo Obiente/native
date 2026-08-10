@@ -12,6 +12,116 @@ import kotlin.test.assertTrue
 
 class WindowsUninstallCleanupTest {
     @Test
+    fun preservedRootRecordSurvivesReloadUntilAcknowledged() {
+        val nodeName = "windows-preserved-root-test-${UUID.randomUUID()}"
+        val preferences = Preferences.userRoot().node(nodeName)
+        val accountId = "c".repeat(64)
+        val preservedRoot = Files.createTempDirectory("windows-preserved-root")
+        try {
+            persistWindowsCloudFilesPreservedRoot(preferences, accountId, preservedRoot)
+
+            val reloadedPreferences = Preferences.userRoot().node(nodeName)
+            assertEquals(
+                preservedRoot.toAbsolutePath().normalize(),
+                persistedWindowsCloudFilesPreservedRoot(reloadedPreferences, accountId),
+            )
+
+            acknowledgeWindowsCloudFilesPreservedRoot(reloadedPreferences, accountId)
+
+            assertEquals(null, persistedWindowsCloudFilesPreservedRoot(preferences, accountId))
+            assertTrue(Files.isDirectory(preservedRoot))
+        } finally {
+            preferences.removeNode()
+            preservedRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun temporarilyMissingPreservedRootDoesNotClearItsRecoveryRecord() {
+        val preferences = Preferences.userRoot().node("windows-missing-preserved-root-test-${UUID.randomUUID()}")
+        val accountId = "d".repeat(64)
+        val preservedRoot = Files.createTempDirectory("windows-missing-preserved-root")
+        try {
+            persistWindowsCloudFilesPreservedRoot(preferences, accountId, preservedRoot)
+            preservedRoot.toFile().deleteRecursively()
+
+            assertEquals(
+                preservedRoot.toAbsolutePath().normalize(),
+                persistedWindowsCloudFilesPreservedRoot(preferences, accountId),
+            )
+        } finally {
+            preferences.removeNode()
+            preservedRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aSecondRecoveryCannotReplaceAnUnacknowledgedRecord() {
+        val preferences = Preferences.userRoot().node("windows-second-preserved-root-test-${UUID.randomUUID()}")
+        val accountId = "e".repeat(64)
+        val firstRoot = Files.createTempDirectory("windows-first-preserved-root")
+        val secondRoot = Files.createTempDirectory("windows-second-preserved-root")
+        try {
+            persistWindowsCloudFilesPreservedRoot(preferences, accountId, firstRoot)
+
+            kotlin.test.assertFailsWith<IllegalArgumentException> {
+                persistWindowsCloudFilesPreservedRoot(preferences, accountId, secondRoot)
+            }
+
+            assertEquals(
+                firstRoot.toAbsolutePath().normalize(),
+                persistedWindowsCloudFilesPreservedRoot(preferences, accountId),
+            )
+        } finally {
+            preferences.removeNode()
+            firstRoot.toFile().deleteRecursively()
+            secondRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun recoveryNoticesRemainScopedToTheirAccounts() {
+        val preferences = Preferences.userRoot().node("windows-account-recovery-notice-test-${UUID.randomUUID()}")
+        val firstAccountId = "1".repeat(64)
+        val secondAccountId = "2".repeat(64)
+        val firstRoot = Files.createTempDirectory("windows-first-recovery-notice")
+        val secondRoot = Files.createTempDirectory("windows-second-recovery-notice")
+        try {
+            persistWindowsCloudFilesPreservedRoot(preferences, firstAccountId, firstRoot)
+            persistWindowsCloudFilesPreservedRoot(preferences, secondAccountId, secondRoot)
+
+            val firstNotice = requireNotNull(persistedWindowsCloudFilesRecoveryNotice(preferences, firstAccountId))
+            val secondNotice = requireNotNull(persistedWindowsCloudFilesRecoveryNotice(preferences, secondAccountId))
+            assertTrue(firstNotice.contains(firstRoot.toAbsolutePath().normalize().toString()))
+            assertFalse(firstNotice.contains(secondRoot.toAbsolutePath().normalize().toString()))
+            assertTrue(secondNotice.contains(secondRoot.toAbsolutePath().normalize().toString()))
+            assertFalse(secondNotice.contains(firstRoot.toAbsolutePath().normalize().toString()))
+
+            acknowledgeWindowsCloudFilesPreservedRoot(preferences, firstAccountId)
+
+            assertEquals(null, persistedWindowsCloudFilesRecoveryNotice(preferences, firstAccountId))
+            assertEquals(secondNotice, persistedWindowsCloudFilesRecoveryNotice(preferences, secondAccountId))
+        } finally {
+            preferences.removeNode()
+            firstRoot.toFile().deleteRecursively()
+            secondRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun recoveryNoticeReportsPreservationWithoutClaimingRepair() {
+        val preservedRoot = Files.createTempDirectory("windows-preservation-notice")
+        try {
+            val notice = windowsCloudFilesRecoveryNoticeMessage(preservedRoot)
+
+            assertTrue(notice.contains("preserved existing local data"))
+            assertFalse(notice.contains("repaired", ignoreCase = true))
+        } finally {
+            preservedRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun loadsOnlyLiveAccountScopedRecoveryRoots() {
         val preferences = Preferences.userRoot().node("windows-recovery-root-test-${UUID.randomUUID()}")
         val home = Files.createTempDirectory("windows-recovery-root-home").toFile()

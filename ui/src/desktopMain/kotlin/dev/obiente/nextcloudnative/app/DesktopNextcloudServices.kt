@@ -159,6 +159,7 @@ private const val VIRTUAL_FOLDER_REFRESH_INTERVAL_MILLIS = 6L * 60L * 60L * 1_00
 private const val VIRTUAL_FOLDER_REFRESH_RETRY_MILLIS = 30L * 60L * 1_000L
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX = "wcfr."
+private const val KEY_WINDOWS_CLOUD_FILES_PRESERVED_ROOT_PREFIX = "wcfpr."
 private const val KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR = "windows-cloud-files-recovery-cursor"
 private const val MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOTS_PER_ATTEMPT = 16
 private const val KEY_VIRTUAL_FILE_ROOT_PREFIX = "vfp-root."
@@ -274,6 +275,68 @@ internal fun windowsCloudFilesRootPreferenceKey(accountId: String): String {
         check(key.length <= Preferences.MAX_KEY_LENGTH)
     }
 }
+
+internal fun windowsCloudFilesPreservedRootPreferenceKey(accountId: String): String {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return "$KEY_WINDOWS_CLOUD_FILES_PRESERVED_ROOT_PREFIX$accountId".also { key ->
+        check(key.length <= Preferences.MAX_KEY_LENGTH)
+    }
+}
+
+internal fun persistWindowsCloudFilesPreservedRoot(
+    preferences: Preferences,
+    accountId: String,
+    preservedRoot: Path,
+) {
+    val normalized = preservedRoot.toAbsolutePath().normalize()
+    require(
+        normalized.toString().length <= Preferences.MAX_VALUE_LENGTH &&
+            Files.isDirectory(normalized, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+            !Files.isSymbolicLink(normalized),
+    ) { "The preserved Windows Cloud Files root is not a safe local directory." }
+    val existing = persistedWindowsCloudFilesPreservedRoot(preferences, accountId)
+    require(existing == null || existing == normalized) {
+        "Review and acknowledge the previous preserved Windows Cloud Files folder before retrying recovery."
+    }
+    val key = windowsCloudFilesPreservedRootPreferenceKey(accountId)
+    preferences.put(key, normalized.toString())
+    try {
+        preferences.flush()
+    } catch (failure: Throwable) {
+        preferences.remove(key)
+        runCatching(preferences::flush)
+        throw failure
+    }
+}
+
+internal fun persistedWindowsCloudFilesPreservedRoot(
+    preferences: Preferences,
+    accountId: String,
+): Path? = preferences.get(windowsCloudFilesPreservedRootPreferenceKey(accountId), null)
+    ?.takeIf { value ->
+        value.isNotBlank() && value.length <= Preferences.MAX_VALUE_LENGTH && value.none(Char::isISOControl)
+    }
+    ?.let { value -> runCatching { File(value).toPath().normalize() }.getOrNull() }
+    ?.takeIf(Path::isAbsolute)
+
+internal fun acknowledgeWindowsCloudFilesPreservedRoot(
+    preferences: Preferences,
+    accountId: String,
+) {
+    preferences.remove(windowsCloudFilesPreservedRootPreferenceKey(accountId))
+    preferences.flush()
+}
+
+internal fun windowsCloudFilesRecoveryNoticeMessage(preservedRoot: Path): String = virtualFileLocationActionMessage(
+    prefix = "Windows found unreadable Cloud Files metadata and preserved existing local data at ",
+    targetPath = preservedRoot.toAbsolutePath().normalize().toString(),
+)
+
+internal fun persistedWindowsCloudFilesRecoveryNotice(
+    preferences: Preferences,
+    accountId: String,
+): String? = persistedWindowsCloudFilesPreservedRoot(preferences, accountId)
+    ?.let(::windowsCloudFilesRecoveryNoticeMessage)
 
 internal fun persistedWindowsCloudFilesRecoveryRoots(
     preferences: Preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative"),
@@ -1385,6 +1448,11 @@ class DesktopNextcloudServices(
         ) {
             runCatching { activateVirtualFileProvider(session, userId) }
         }
+        val windowsCloudFilesRecoveryNotice = if (isWindowsDesktop()) {
+            persistedWindowsCloudFilesRecoveryNotice(preferences, accountId)
+        } else {
+            null
+        }
         runCatching { enforceCombinedVirtualFileCachePolicy(accountId, fileReadCache.loadPolicy()) }
         val cache = fileReadCache.virtualFileSummary(accountId)
         val rangeCacheResult = runCatching {
@@ -1454,13 +1522,15 @@ class DesktopNextcloudServices(
                 }
             },
             providerState = when {
-                (windowsSummary?.failedWritebackCount ?: 0) > 0 -> VirtualFileProviderState.NeedsAttention
+                (windowsSummary?.failedWritebackCount ?: 0) > 0 || windowsCloudFilesRecoveryNotice != null ->
+                    VirtualFileProviderState.NeedsAttention
                 active -> VirtualFileProviderState.Active
                 rangeCacheResult.isFailure || linuxVirtualFileFailure != null || windowsCloudFilesFailure != null ->
                     VirtualFileProviderState.NeedsAttention
                 linux || windows -> VirtualFileProviderState.Inactive
                 else -> VirtualFileProviderState.NotApplicable
             },
+            providerActive = active,
             providerLocation = when {
                 linux -> desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath
                 windows -> "Nextcloud Native in File Explorer"
@@ -1472,6 +1542,7 @@ class DesktopNextcloudServices(
                 null
             },
             providerLocationCanChange = linux && !active,
+            providerRecoveryNotice = windowsCloudFilesRecoveryNotice,
             folderRetentionRules = if (linux) {
                 folderRetention.rules
             } else {
@@ -1540,6 +1611,11 @@ class DesktopNextcloudServices(
             )
         }
         val accountId = desktopFileCacheAccountId(session)
+        var windowsCloudFilesRecoveryNotice = if (isWindowsDesktop()) {
+            persistedWindowsCloudFilesRecoveryNotice(preferences, accountId)
+        } else {
+            null
+        }
         synchronized(virtualFileProviderLock) {
             if (isWindowsDesktop()) {
                 val recordCloudFilesDiagnostic: (SupportDiagnosticEventDraft) -> Unit = { event ->
@@ -1571,6 +1647,10 @@ class DesktopNextcloudServices(
                             backend = backend,
                             api = JnaWindowsCloudFilesApi(recordDiagnostic = recordCloudFilesDiagnostic),
                             recordDiagnostic = recordCloudFilesDiagnostic,
+                            recordPreservedCorruptRoot = { preserved ->
+                                persistWindowsCloudFilesPreservedRoot(preferences, accountId, preserved)
+                                windowsCloudFilesRecoveryNotice = windowsCloudFilesRecoveryNoticeMessage(preserved)
+                            },
                         )
                         try {
                             legacyProvider.start()
@@ -1607,9 +1687,14 @@ class DesktopNextcloudServices(
                     backend = backend,
                     api = api,
                     recordDiagnostic = recordCloudFilesDiagnostic,
+                    recordPreservedCorruptRoot = { preserved ->
+                        persistWindowsCloudFilesPreservedRoot(preferences, accountId, preserved)
+                        windowsCloudFilesRecoveryNotice = windowsCloudFilesRecoveryNoticeMessage(preserved)
+                    },
                 )
                 try {
                     provider.start()
+                    provider.recoverAfterStartup()
                     windowsCloudFilesProvider = provider
                     windowsCloudFilesIdentity = accountId
                     windowsCloudFilesFailure = null
@@ -1631,7 +1716,8 @@ class DesktopNextcloudServices(
                     throw failure
                 }
                 return@withContext VirtualFileStorageActionResult.Completed(
-                    "Windows Cloud Files connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
+                    windowsCloudFilesRecoveryNotice
+                        ?: "Windows Cloud Files connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
                 )
             }
             if (linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) {
@@ -1751,6 +1837,22 @@ class DesktopNextcloudServices(
             } else {
                 "Virtual files unmounted. Cached content and remote files were kept."
             },
+        )
+    }
+
+    override suspend fun acknowledgeVirtualFileProviderRecovery(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        if (!isWindowsDesktop()) {
+            return@withContext VirtualFileStorageActionResult.Unsupported(
+                "A Windows Cloud Files recovery notice is not available on this platform.",
+            )
+        }
+        val accountId = desktopFileCacheAccountId(session)
+        acknowledgeWindowsCloudFilesPreservedRoot(preferences, accountId)
+        VirtualFileStorageActionResult.Completed(
+            "Recovery notice dismissed. The preserved local folder and its files were not deleted.",
         )
     }
 

@@ -307,6 +307,23 @@ internal fun FileOfflineCenterScreen(
         }
     }
 
+    fun acknowledgeVirtualFileProviderRecovery() {
+        if (virtualStorageBusy) return
+        virtualStorageBusy = true
+        actionMessage = null
+        scope.launch {
+            runCatching { services.acknowledgeVirtualFileProviderRecovery(session, userId) }
+                .onSuccess { result ->
+                    actionMessage = result.virtualFileStorageMessage()
+                    refreshAttempt += 1
+                }
+                .onFailure { failure ->
+                    actionMessage = failure.message ?: "Could not dismiss the recovery notice."
+                }
+            virtualStorageBusy = false
+        }
+    }
+
     fun saveVirtualFileLocation(location: VirtualFileProviderLocation) {
         if (virtualStorageBusy) return
         virtualStorageBusy = true
@@ -577,6 +594,7 @@ internal fun FileOfflineCenterScreen(
                                 onFreeUp = ::freeUpVirtualStorage,
                                 onActivateProvider = { setVirtualFileProviderActive(true) },
                                 onDeactivateProvider = { setVirtualFileProviderActive(false) },
+                                onAcknowledgeRecovery = ::acknowledgeVirtualFileProviderRecovery,
                                 onChangeLocation = {
                                     virtualLocationError = null
                                     virtualLocationVisible = true
@@ -681,6 +699,7 @@ internal fun FileOfflineCenterScreen(
                                         onFreeUp = ::freeUpVirtualStorage,
                                         onActivateProvider = { setVirtualFileProviderActive(true) },
                                         onDeactivateProvider = { setVirtualFileProviderActive(false) },
+                                        onAcknowledgeRecovery = ::acknowledgeVirtualFileProviderRecovery,
                                         onChangeLocation = {
                                             virtualLocationError = null
                                             virtualLocationVisible = true
@@ -1728,6 +1747,7 @@ internal fun VirtualFileStorageCard(
     onFreeUp: () -> Unit,
     onActivateProvider: () -> Unit,
     onDeactivateProvider: () -> Unit,
+    onAcknowledgeRecovery: () -> Unit,
     onChangeLocation: () -> Unit,
     onChoosePinnedFolder: () -> Unit,
     onReleaseFolder: (String) -> Unit,
@@ -1867,6 +1887,16 @@ internal fun VirtualFileStorageCard(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
+                            snapshot.providerRecoveryNotice?.let { notice ->
+                                Text(
+                                    notice,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                                TextButton(enabled = !busy, onClick = onAcknowledgeRecovery) {
+                                    Text("I've reviewed the preserved folder")
+                                }
+                            }
                             if (snapshot.pendingWritebackCount > 0) {
                                 Text(
                                     "${snapshot.pendingWritebackCount} local edit(s) are retained for recovery.",
@@ -1881,7 +1911,7 @@ internal fun VirtualFileStorageCard(
                             }
                         }
                     }
-                    if (snapshot.providerState == VirtualFileProviderState.Active) {
+                    if (snapshot.providerActive) {
                         OutlinedButton(enabled = !busy, onClick = onDeactivateProvider) {
                             Text("Disconnect from file manager")
                         }

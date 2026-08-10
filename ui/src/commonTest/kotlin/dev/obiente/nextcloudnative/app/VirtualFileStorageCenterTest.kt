@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class VirtualFileStorageCenterTest {
     @Test
@@ -35,6 +36,33 @@ class VirtualFileStorageCenterTest {
                 support = VirtualFileStorageSupport.Unsupported,
                 integration = VirtualFilePlatformIntegration.AndroidDocumentsProvider,
             )
+        }
+    }
+
+    @Test
+    fun `provider connectivity remains independent from recovery attention`() {
+        val snapshot = VirtualFileStorageSnapshot(
+            support = VirtualFileStorageSupport.Available,
+            integration = VirtualFilePlatformIntegration.WindowsCloudFiles,
+            policy = VirtualFileCachePolicy(),
+            cachedBytes = 0L,
+            reclaimableBytes = 0L,
+            pinnedBytes = 0L,
+            hydratedFileCount = 0,
+            pinnedFileCount = 0,
+            availableFreeBytes = null,
+            storageCapacityBytes = null,
+            providerState = VirtualFileProviderState.NeedsAttention,
+            providerActive = true,
+            providerRecoveryNotice = "Existing local data was preserved for review.",
+        )
+
+        assertTrue(snapshot.providerActive)
+        assertFailsWith<IllegalArgumentException> {
+            snapshot.copy(providerState = VirtualFileProviderState.Inactive)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            snapshot.copy(providerState = VirtualFileProviderState.Active, providerActive = false)
         }
     }
 }

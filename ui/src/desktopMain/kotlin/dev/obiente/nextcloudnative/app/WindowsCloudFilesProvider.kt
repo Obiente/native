@@ -5,12 +5,14 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardWatchEventKinds
 import java.nio.file.WatchService
 import java.security.MessageDigest
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
@@ -19,8 +21,11 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+
+private const val MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOT_ATTEMPTS = 16
 
 internal data class WindowsCloudFileIdentity(
     val accountId: String,
@@ -201,6 +206,80 @@ internal enum class WindowsCloudPlaceholderState {
     Dirty,
 }
 
+internal enum class WindowsCloudPlaceholderEntryState {
+    Missing,
+    Local,
+    InSync,
+    Dirty,
+    Corrupt,
+    Unreadable,
+}
+
+internal data class WindowsCloudPlaceholderInspection(
+    val state: WindowsCloudPlaceholderEntryState,
+    val win32Error: Int? = null,
+    val fileAttributes: Int? = null,
+    val reparseTag: Int? = null,
+) {
+    val placeholderState: WindowsCloudPlaceholderState
+        get() = when (state) {
+            WindowsCloudPlaceholderEntryState.InSync -> WindowsCloudPlaceholderState.InSync
+            WindowsCloudPlaceholderEntryState.Dirty -> WindowsCloudPlaceholderState.Dirty
+            else -> WindowsCloudPlaceholderState.Absent
+        }
+}
+
+internal sealed class WindowsCloudFilesStartupRecoveryException(
+    message: String,
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)
+
+internal class WindowsCloudFilesCorruptEntryException(
+    val inspection: WindowsCloudPlaceholderInspection,
+    cause: Throwable? = null,
+) : WindowsCloudFilesStartupRecoveryException(
+    "Windows Cloud Files found an unreadable placeholder that requires non-destructive root recovery.",
+    cause,
+)
+
+internal class WindowsCloudFilesUnreadableEntryException(
+    val inspection: WindowsCloudPlaceholderInspection,
+) : WindowsCloudFilesStartupRecoveryException(
+    "Windows could not inspect an existing Cloud Files entry safely" +
+        inspection.win32Error?.let { " (Win32 error $it)." }.orEmpty(),
+)
+
+internal fun windowsCloudFilesRecoveryRoot(root: Path, recoveryId: String): Path {
+    require(recoveryId.length in 8..32 && recoveryId.all { it.isLetterOrDigit() || it == '-' })
+    val absoluteRoot = root.toAbsolutePath().normalize()
+    return requireNotNull(absoluteRoot.parent).resolve("${absoluteRoot.fileName}.recovery-$recoveryId")
+}
+
+internal fun preserveWindowsCloudFilesCorruptRoot(root: Path): Path {
+    val absoluteRoot = root.toAbsolutePath().normalize()
+    repeat(MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOT_ATTEMPTS) {
+        val recoveryId = UUID.randomUUID().toString().substringBeforeLast('-')
+        val recoveryRoot = windowsCloudFilesRecoveryRoot(absoluteRoot, recoveryId)
+        try {
+            return Files.move(absoluteRoot, recoveryRoot)
+        } catch (_: FileAlreadyExistsException) {
+            // A recovery root is never overwritten. Generate another private local suffix.
+        }
+    }
+    error("Could not reserve a unique folder for the preserved Windows Cloud Files root.")
+}
+
+private fun windowsErrorDiagnosticCode(error: Int): String = "WIN32:0x${error.toUInt().toString(16)}"
+
+private fun WindowsCloudPlaceholderInspection.diagnosticFields(): List<SupportDiagnosticFieldDraft> = buildList {
+    add(SupportDiagnosticFieldDraft("inspection_state", state.name.lowercase()))
+    win32Error?.let { add(SupportDiagnosticFieldDraft("win32_error", it.toString())) }
+    fileAttributes?.let {
+        add(SupportDiagnosticFieldDraft("file_attributes", "0x${it.toUInt().toString(16)}"))
+    }
+    reparseTag?.let { add(SupportDiagnosticFieldDraft("reparse_tag", "0x${it.toUInt().toString(16)}")) }
+}
+
 internal interface WindowsCloudFilesApi : AutoCloseable {
     fun registerSyncRoot(root: Path, displayName: String, syncRootIdentity: ByteArray)
     fun unregisterSyncRoot(root: Path)
@@ -214,6 +293,22 @@ internal interface WindowsCloudFilesApi : AutoCloseable {
     fun acknowledgeDelete(info: WindowsCloudCallbackInfo, accepted: Boolean)
     fun acknowledgeRename(info: WindowsCloudCallbackInfo, accepted: Boolean)
     fun placeholderState(path: Path): WindowsCloudPlaceholderState
+    fun inspectPlaceholder(path: Path): WindowsCloudPlaceholderInspection {
+        val state = placeholderState(path)
+        return when (state) {
+            WindowsCloudPlaceholderState.InSync ->
+                WindowsCloudPlaceholderInspection(WindowsCloudPlaceholderEntryState.InSync)
+            WindowsCloudPlaceholderState.Dirty ->
+                WindowsCloudPlaceholderInspection(WindowsCloudPlaceholderEntryState.Dirty)
+            WindowsCloudPlaceholderState.Absent -> WindowsCloudPlaceholderInspection(
+                if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                    WindowsCloudPlaceholderEntryState.Local
+                } else {
+                    WindowsCloudPlaceholderEntryState.Missing
+                },
+            )
+        }
+    }
     fun allocatedBytes(path: Path): Long
     fun lastAccessedAtEpochMillis(path: Path): Long
     fun isPinned(path: Path): Boolean
@@ -343,6 +438,8 @@ internal class WindowsCloudFilesProvider(
     },
     private val writebackRetryDelayMillis: (attempt: Int) -> Long = ::windowsWritebackRetryDelayMillis,
     private val recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit = {},
+    private val preserveCorruptRoot: (Path) -> Path = ::preserveWindowsCloudFilesCorruptRoot,
+    private val recordPreservedCorruptRoot: (Path) -> Unit = {},
 ) : AutoCloseable, WindowsCloudFilesCallbacks {
     private val connection = AtomicLongState()
     private val apiClosed = AtomicBoolean(false)
@@ -354,11 +451,16 @@ internal class WindowsCloudFilesProvider(
     private val failedWritebacks = ConcurrentHashMap.newKeySet<String>()
     private val writebackAttempts = ConcurrentHashMap<String, Int>()
     private val namespaceMutationLock = Any()
+    private val callbacksPaused = AtomicBoolean(false)
+    private val destructiveCallbackOperations = AtomicInteger()
     private val localChangeScheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { work ->
         Thread(work, "nextcloud-windows-local-changes").apply { isDaemon = true }
     }
     private val pendingLocalChanges = ConcurrentHashMap<Path, ScheduledFuture<*>>()
     private val initialRecoveryFinished = CountDownLatch(1)
+    @Volatile private var initialRecoveryFailure: WindowsCloudFilesStartupRecoveryException? = null
+    @Volatile var preservedRecoveryRoot: Path? = null
+        private set
     @Volatile private var watchService: WatchService? = null
     @Volatile private var watcherThread: Thread? = null
 
@@ -370,22 +472,122 @@ internal class WindowsCloudFilesProvider(
         api.registerSyncRoot(root, backend.displayName, encodedRootIdentity)
         connection.set(connectWithRegistrationRecovery(encodedRootIdentity))
         try {
-            populateDirectory("", root)
+            try {
+                populateDirectory("", root)
+            } catch (corruption: WindowsCloudFilesCorruptEntryException) {
+                recoverCorruptRoot(encodedRootIdentity, corruption)
+            }
             startLocalWatcher()
             executor.execute {
                 try {
                     recoverLocalChanges()
+                } catch (failure: WindowsCloudFilesStartupRecoveryException) {
+                    initialRecoveryFailure = failure
                 } finally {
                     initialRecoveryFinished.countDown()
                 }
             }
         } catch (failure: Throwable) {
+            callbacksPaused.set(true)
             val key = connection.get()
             if (key != 0L && runCatching { api.disconnect(key) }.isSuccess) {
                 connection.compareAndSet(key, 0L)
             }
             throw failure
         }
+    }
+
+    private fun recoverCorruptRoot(
+        syncRootIdentity: ByteArray,
+        corruption: WindowsCloudFilesCorruptEntryException,
+        quiescenceTimeoutSeconds: Long = DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS,
+    ) {
+        require(quiescenceTimeoutSeconds > 0L)
+        val restartWatcher = watchService != null
+        if (restartWatcher) stopLocalWatcher()
+        synchronized(namespaceMutationLock) {
+            callbacksPaused.set(true)
+        }
+        val key = connection.get()
+        if (key != 0L) {
+            api.disconnect(key)
+            check(connection.compareAndSet(key, 0L)) {
+                "The Windows Cloud Files connection changed during corrupt-root recovery."
+            }
+        }
+        awaitPathOperationQuiescence(
+            System.nanoTime() + TimeUnit.SECONDS.toNanos(quiescenceTimeoutSeconds),
+        )
+        api.unregisterSyncRoot(root)
+        val preserved = try {
+            preserveCorruptRoot(root)
+        } catch (failure: Throwable) {
+            runCatching {
+                prepareRootDirectory()
+                api.registerSyncRoot(root, backend.displayName, syncRootIdentity)
+            }.exceptionOrNull()?.let(failure::addSuppressed)
+            failure.addSuppressed(corruption)
+            throw IllegalStateException(
+                "Could not preserve the unreadable Windows Cloud Files root for automatic recovery.",
+                failure,
+            )
+        }
+        try {
+            recordPreservedCorruptRoot(preserved)
+        } catch (persistenceFailure: Throwable) {
+            runCatching {
+                Files.move(preserved, root)
+                prepareRootDirectory()
+                api.registerSyncRoot(root, backend.displayName, syncRootIdentity)
+            }.exceptionOrNull()?.let(persistenceFailure::addSuppressed)
+            persistenceFailure.addSuppressed(corruption)
+            throw IllegalStateException(
+                "Could not durably record the preserved Windows Cloud Files root.",
+                persistenceFailure,
+            )
+        }
+        preservedRecoveryRoot = preserved
+        knownIdentities.clear()
+        pendingWritebacks.clear()
+        failedWritebacks.clear()
+        writebackAttempts.clear()
+        recordPlaceholderDiagnostic(
+            severity = SupportDiagnosticSeverity.Warning,
+            operation = "cloud-files.corrupt-root-recovery",
+            outcome = "corrupt-root-preserved",
+            localDirectory = root,
+            identity = null,
+            fields = corruption.inspection.diagnosticFields() + SupportDiagnosticFieldDraft(
+                "preserved_root",
+                preserved.toString(),
+                SupportDiagnosticValuePrivacy.LocalPath,
+            ),
+        )
+        try {
+            prepareRootDirectory()
+            api.registerSyncRoot(root, backend.displayName, syncRootIdentity)
+            connection.set(api.connect(root, this))
+            callbacksPaused.set(false)
+            populateDirectory("", root)
+            if (restartWatcher) startLocalWatcher()
+        } catch (retryFailure: Throwable) {
+            retryFailure.addSuppressed(corruption)
+            throw retryFailure
+        }
+        recordPlaceholderDiagnostic(
+            severity = SupportDiagnosticSeverity.Info,
+            operation = "cloud-files.corrupt-root-recovery",
+            outcome = "corrupt-root-recovered",
+            localDirectory = root,
+            identity = null,
+            fields = listOf(
+                SupportDiagnosticFieldDraft(
+                    "preserved_root",
+                    preserved.toString(),
+                    SupportDiagnosticValuePrivacy.LocalPath,
+                ),
+            ),
+        )
     }
 
     private fun connectWithRegistrationRecovery(syncRootIdentity: ByteArray): Long =
@@ -412,13 +614,77 @@ internal class WindowsCloudFilesProvider(
     /** Repairs the legacy namespace and flushes recoverable local writes before changing root generations. */
     fun recoverBeforeRootMigration(timeoutSeconds: Long = 120L) {
         require(timeoutSeconds > 0L)
-        repairRemotePlaceholderTree()
-        recoverLocalPlaceholders(failClosed = true)
-        recoverUnmanagedLocalEntries(failClosed = true)
+        var deferredCorruption: WindowsCloudFilesCorruptEntryException? = null
+        try {
+            repairRemotePlaceholderTree()
+        } catch (corruption: WindowsCloudFilesCorruptEntryException) {
+            deferredCorruption = corruption
+        }
+        if (deferredCorruption == null) {
+            try {
+                recoverLocalPlaceholders(failClosed = true)
+                recoverUnmanagedLocalEntries(failClosed = true)
+            } catch (corruption: WindowsCloudFilesCorruptEntryException) {
+                deferredCorruption = corruption
+            }
+        }
         check(initialRecoveryFinished.await(timeoutSeconds, TimeUnit.SECONDS)) {
             "Timed out while checking the legacy Windows Cloud Files root for local edits."
         }
+        when (val failure = initialRecoveryFailure) {
+            is WindowsCloudFilesCorruptEntryException -> deferredCorruption = deferredCorruption ?: failure
+            null -> Unit
+            else -> throw failure
+        }
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+        awaitWritebackRecovery(deadline)
+        deferredCorruption?.let { corruption ->
+            val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
+            recoverCorruptRoot(
+                WindowsCloudFileIdentityCodec.encode(rootIdentity),
+                corruption,
+                quiescenceTimeoutSeconds = timeoutSeconds,
+            )
+            repairRemotePlaceholderTree()
+        }
+    }
+
+    /** Completes the initial local scan and repairs corruption before this provider is published as active. */
+    fun recoverAfterStartup(timeoutSeconds: Long = 120L) {
+        require(timeoutSeconds > 0L)
+        check(initialRecoveryFinished.await(timeoutSeconds, TimeUnit.SECONDS)) {
+            "Timed out while checking the Windows Cloud Files root for local metadata corruption."
+        }
+        when (val failure = initialRecoveryFailure) {
+            is WindowsCloudFilesCorruptEntryException -> {
+                val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
+                recoverCorruptRoot(
+                    WindowsCloudFileIdentityCodec.encode(rootIdentity),
+                    failure,
+                    quiescenceTimeoutSeconds = timeoutSeconds,
+                )
+                initialRecoveryFailure = null
+            }
+            null -> Unit
+            else -> throw failure
+        }
+    }
+
+    private fun awaitPathOperationQuiescence(deadline: Long) {
+        while (
+            (destructiveCallbackOperations.get() > 0 || pathOperations.isNotEmpty() ||
+                synchronized(queuedPathOperations) { queuedPathOperations.isNotEmpty() }) &&
+            System.nanoTime() < deadline
+        ) {
+            Thread.sleep(25L)
+        }
+        check(
+            destructiveCallbackOperations.get() == 0 && pathOperations.isEmpty() &&
+                synchronized(queuedPathOperations) { queuedPathOperations.isEmpty() },
+        ) { "Timed out while quiescing callbacks and local edits before Windows Cloud Files recovery." }
+    }
+
+    private fun awaitWritebackRecovery(deadline: Long) {
         while (
             (pendingWritebacks.isNotEmpty() || pathOperations.isNotEmpty() ||
                 synchronized(queuedPathOperations) { queuedPathOperations.isNotEmpty() }) &&
@@ -436,6 +702,7 @@ internal class WindowsCloudFilesProvider(
     }
 
     override fun fetchData(info: WindowsCloudCallbackInfo, requiredOffset: Long, requiredLength: Long) {
+        if (callbacksPaused.get()) return
         val cancellation = AtomicBoolean(false)
         cancelledRequests[info.requestKey] = cancellation
         executor.execute {
@@ -469,6 +736,7 @@ internal class WindowsCloudFilesProvider(
     }
 
     override fun fetchPlaceholders(info: WindowsCloudCallbackInfo, pattern: String?) {
+        if (callbacksPaused.get()) return
         val cancellation = AtomicBoolean(false)
         cancelledRequests[info.requestKey] = cancellation
         executor.execute {
@@ -494,12 +762,13 @@ internal class WindowsCloudFilesProvider(
     }
 
     override fun closed(info: WindowsCloudCallbackInfo, deleted: Boolean) {
-        if (deleted || info.fileIdentity == null) return
+        if (callbacksPaused.get() || deleted || info.fileIdentity == null) return
         val identity = runCatching { requireIdentity(info, expectDirectory = null) }.getOrNull() ?: return
         if (identity.directory) return
         val localPath = root.resolve(identity.path.replace('/', File.separatorChar)).normalize()
         if (!localPath.startsWith(root) || !Files.exists(localPath)) return
         synchronized(namespaceMutationLock) {
+            if (callbacksPaused.get()) return
             if (api.placeholderState(localPath) != WindowsCloudPlaceholderState.Dirty) return
             pendingWritebacks += identity.path
             submitPathOperation(identity.path) {
@@ -517,7 +786,9 @@ internal class WindowsCloudFilesProvider(
     }
 
     override fun deleteRequested(info: WindowsCloudCallbackInfo) {
-        executor.execute {
+        submitDestructiveCallback(
+            onRejected = { api.acknowledgeDelete(info, false) },
+        ) {
             val accepted = runCatching {
                 val identity = requireIdentity(info, expectDirectory = null)
                 backend.delete(identity)
@@ -528,7 +799,9 @@ internal class WindowsCloudFilesProvider(
     }
 
     override fun renameRequested(info: WindowsCloudCallbackInfo, targetPath: String) {
-        executor.execute {
+        submitDestructiveCallback(
+            onRejected = { api.acknowledgeRename(info, false) },
+        ) {
             val accepted = synchronized(namespaceMutationLock) {
                 runCatching {
                     val identity = requireIdentity(info, expectDirectory = null)
@@ -548,8 +821,40 @@ internal class WindowsCloudFilesProvider(
         }
     }
 
+    private fun submitDestructiveCallback(
+        onRejected: () -> Unit,
+        operation: () -> Unit,
+    ) {
+        val accepted = synchronized(namespaceMutationLock) {
+            if (callbacksPaused.get()) {
+                false
+            } else {
+                destructiveCallbackOperations.incrementAndGet()
+                true
+            }
+        }
+        if (!accepted) {
+            onRejected()
+            return
+        }
+        try {
+            executor.execute {
+                try {
+                    operation()
+                } finally {
+                    check(destructiveCallbackOperations.decrementAndGet() >= 0)
+                }
+            }
+        } catch (failure: Throwable) {
+            check(destructiveCallbackOperations.decrementAndGet() >= 0)
+            onRejected()
+            throw failure
+        }
+    }
+
     /** Handles local files or complete directory trees that do not have Cloud Files identities yet. */
     fun localEntryChanged(path: Path) {
+        if (callbacksPaused.get()) return
         val normalized = path.toAbsolutePath().normalize()
         if (!normalized.startsWith(root.toAbsolutePath().normalize()) || normalized == root) return
         if (!Files.exists(normalized) || api.placeholderState(normalized) != WindowsCloudPlaceholderState.Absent) return
@@ -663,6 +968,7 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun stopRuntime() {
+        callbacksPaused.set(true)
         val key = connection.get()
         if (key != 0L) {
             api.disconnect(key)
@@ -670,15 +976,19 @@ internal class WindowsCloudFilesProvider(
         }
         cancelledRequests.values.forEach { it.set(true) }
         cancelledRequests.clear()
+        stopLocalWatcher()
+        queuedPathOperations.clear()
+        localChangeScheduler.shutdownNow()
+        executor.shutdownNow()
+    }
+
+    private fun stopLocalWatcher() {
         runCatching { watchService?.close() }
         watcherThread?.interrupt()
         watcherThread = null
         watchService = null
         pendingLocalChanges.values.forEach { it.cancel(false) }
         pendingLocalChanges.clear()
-        queuedPathOperations.clear()
-        localChangeScheduler.shutdownNow()
-        executor.shutdownNow()
     }
 
     private fun closeApi() {
@@ -690,12 +1000,29 @@ internal class WindowsCloudFilesProvider(
         val missing = ArrayList<WindowsCloudFileIdentity>()
         identities.forEach { identity ->
             val localPath = localDirectory.resolve(identity.path.substringAfterLast('/'))
-            val state = api.placeholderState(localPath)
-            when (state) {
-                WindowsCloudPlaceholderState.Absent -> {
-                    if (!Files.exists(localPath, LinkOption.NOFOLLOW_LINKS)) missing += identity
+            val inspection = api.inspectPlaceholder(localPath)
+            when (inspection.state) {
+                WindowsCloudPlaceholderEntryState.Missing -> missing += identity
+                WindowsCloudPlaceholderEntryState.Local -> Unit
+                WindowsCloudPlaceholderEntryState.InSync,
+                WindowsCloudPlaceholderEntryState.Dirty,
+                -> reconcileExistingPlaceholder(identity, localPath, inspection.placeholderState)
+                WindowsCloudPlaceholderEntryState.Corrupt -> throw corruptPlaceholder(identity, localDirectory, inspection)
+                WindowsCloudPlaceholderEntryState.Unreadable -> {
+                    recordPlaceholderDiagnostic(
+                        severity = SupportDiagnosticSeverity.Error,
+                        operation = "cloud-files.placeholder-inspection",
+                        outcome = "inspection-failed",
+                        code = inspection.win32Error?.let(::windowsErrorDiagnosticCode),
+                        localDirectory = localDirectory,
+                        identity = identity,
+                        fields = inspection.diagnosticFields(),
+                    )
+                    throw IllegalStateException(
+                        "Windows could not inspect an existing Cloud Files entry safely" +
+                            inspection.win32Error?.let { " (Win32 error $it)." }.orEmpty(),
+                    )
                 }
-                else -> reconcileExistingPlaceholder(identity, localPath, state)
             }
         }
         createMissingPlaceholders(relativePath, localDirectory, missing)
@@ -742,8 +1069,31 @@ internal class WindowsCloudFilesProvider(
         var collision = initialFailure
         var identityUnavailable = false
         repeat(MAX_PLACEHOLDER_COLLISION_RETRIES) {
-            val state = api.placeholderState(localPath)
-            if (state != WindowsCloudPlaceholderState.Absent) {
+            val inspection = api.inspectPlaceholder(localPath)
+            if (inspection.state == WindowsCloudPlaceholderEntryState.Corrupt) {
+                throw corruptPlaceholder(listedIdentity, localDirectory, inspection, collision)
+            }
+            if (inspection.state == WindowsCloudPlaceholderEntryState.Unreadable) {
+                recordPlaceholderDiagnostic(
+                    severity = SupportDiagnosticSeverity.Error,
+                    operation = "cloud-files.placeholder-inspection",
+                    outcome = "inspection-failed",
+                    code = inspection.win32Error?.let(::windowsErrorDiagnosticCode),
+                    localDirectory = localDirectory,
+                    identity = listedIdentity,
+                    fields = inspection.diagnosticFields(),
+                )
+                throw IllegalStateException(
+                    "Windows could not inspect a collided Cloud Files entry safely" +
+                        inspection.win32Error?.let { " (Win32 error $it)." }.orEmpty(),
+                    collision,
+                )
+            }
+            val state = inspection.placeholderState
+            if (
+                inspection.state == WindowsCloudPlaceholderEntryState.InSync ||
+                inspection.state == WindowsCloudPlaceholderEntryState.Dirty
+            ) {
                 if (
                     reconcileCollidedPlaceholder(
                         listedIdentity,
@@ -765,7 +1115,7 @@ internal class WindowsCloudFilesProvider(
                 Thread.sleep(PLACEHOLDER_COLLISION_RETRY_DELAY_MILLIS)
                 return@repeat
             }
-            if (Files.exists(localPath, LinkOption.NOFOLLOW_LINKS)) {
+            if (inspection.state == WindowsCloudPlaceholderEntryState.Local) {
                 // Preserve an ordinary local entry. Startup recovery will import it with
                 // create-only remote semantics instead of replacing either copy.
                 recordPlaceholderDiagnostic(
@@ -825,6 +1175,7 @@ internal class WindowsCloudFilesProvider(
 
     private fun recordPlaceholderDiagnostic(
         severity: SupportDiagnosticSeverity,
+        operation: String = "cloud-files.placeholder-collision",
         outcome: String,
         localDirectory: Path,
         identity: WindowsCloudFileIdentity?,
@@ -836,7 +1187,7 @@ internal class WindowsCloudFilesProvider(
                 SupportDiagnosticEventDraft(
                     severity = severity,
                     component = SupportDiagnosticComponent.VirtualFiles,
-                    operation = "cloud-files.placeholder-collision",
+                    operation = operation,
                     outcome = outcome,
                     code = code,
                     fields = buildList {
@@ -869,6 +1220,24 @@ internal class WindowsCloudFilesProvider(
                 ),
             )
         }
+    }
+
+    private fun corruptPlaceholder(
+        identity: WindowsCloudFileIdentity?,
+        localDirectory: Path,
+        inspection: WindowsCloudPlaceholderInspection,
+        cause: Throwable? = null,
+    ): WindowsCloudFilesCorruptEntryException {
+        recordPlaceholderDiagnostic(
+            severity = SupportDiagnosticSeverity.Error,
+            operation = "cloud-files.placeholder-inspection",
+            outcome = "corrupt-entry-detected",
+            code = inspection.win32Error?.let(::windowsErrorDiagnosticCode),
+            localDirectory = localDirectory,
+            identity = identity,
+            fields = inspection.diagnosticFields(),
+        )
+        return WindowsCloudFilesCorruptEntryException(inspection, cause)
     }
 
     private fun reconcileCollidedPlaceholder(
@@ -988,9 +1357,11 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun submitPathOperation(path: String, block: () -> Unit) {
+        if (callbacksPaused.get()) return
         failedWritebacks -= path
         writebackAttempts.remove(path)
         val shouldSchedule = synchronized(queuedPathOperations) {
+            if (callbacksPaused.get()) return
             queuedPathOperations[path] = block
             pathOperations.add(path)
         }
@@ -1136,7 +1507,9 @@ internal class WindowsCloudFilesProvider(
         val recover = {
             val unmanaged = Files.walk(root).use { paths ->
                 paths.filter { path -> path != root && Files.exists(path) }
-                    .filter { path -> api.placeholderState(path) == WindowsCloudPlaceholderState.Absent }
+                    .filter { path ->
+                        inspectPlaceholderForRecovery(path).state == WindowsCloudPlaceholderEntryState.Local
+                    }
                     .sorted(compareBy<Path> { it.nameCount })
                     .toList()
             }
@@ -1152,7 +1525,17 @@ internal class WindowsCloudFilesProvider(
                     }
             }
         }
-        if (failClosed) recover() else runCatching(recover)
+        if (failClosed) {
+            recover()
+        } else {
+            try {
+                recover()
+            } catch (failure: WindowsCloudFilesStartupRecoveryException) {
+                throw failure
+            } catch (_: Throwable) {
+                // Ordinary startup recovery is retried on the next launch.
+            }
+        }
     }
 
     private fun repairRemotePlaceholderTree() {
@@ -1177,8 +1560,12 @@ internal class WindowsCloudFilesProvider(
         val recover = {
             Files.walk(root).use { paths ->
                 paths.filter { path -> path != root && !Files.isSymbolicLink(path) }.forEach { local ->
-                    val state = api.placeholderState(local)
-                    if (state == WindowsCloudPlaceholderState.Absent) return@forEach
+                    val inspection = inspectPlaceholderForRecovery(local)
+                    val state = inspection.placeholderState
+                    if (
+                        inspection.state == WindowsCloudPlaceholderEntryState.Missing ||
+                        inspection.state == WindowsCloudPlaceholderEntryState.Local
+                    ) return@forEach
                     val directory = Files.isDirectory(local, LinkOption.NOFOLLOW_LINKS)
                     if (!directory && !Files.isRegularFile(local, LinkOption.NOFOLLOW_LINKS)) return@forEach
                     val original = api.placeholderIdentity(local)
@@ -1209,7 +1596,42 @@ internal class WindowsCloudFilesProvider(
                 }
             }
         }
-        if (failClosed) recover() else runCatching(recover)
+        if (failClosed) {
+            recover()
+        } else {
+            try {
+                recover()
+            } catch (failure: WindowsCloudFilesStartupRecoveryException) {
+                throw failure
+            } catch (_: Throwable) {
+                // Ordinary startup recovery is retried on the next launch.
+            }
+        }
+    }
+
+    private fun inspectPlaceholderForRecovery(path: Path): WindowsCloudPlaceholderInspection {
+        val inspection = api.inspectPlaceholder(path)
+        when (inspection.state) {
+            WindowsCloudPlaceholderEntryState.Corrupt -> throw corruptPlaceholder(
+                identity = null,
+                localDirectory = path.parent ?: root,
+                inspection = inspection,
+            )
+            WindowsCloudPlaceholderEntryState.Unreadable -> {
+                recordPlaceholderDiagnostic(
+                    severity = SupportDiagnosticSeverity.Error,
+                    operation = "cloud-files.placeholder-inspection",
+                    outcome = "inspection-failed",
+                    code = inspection.win32Error?.let(::windowsErrorDiagnosticCode),
+                    localDirectory = path.parent ?: root,
+                    identity = null,
+                    fields = inspection.diagnosticFields(),
+                )
+                throw WindowsCloudFilesUnreadableEntryException(inspection)
+            }
+            else -> Unit
+        }
+        return inspection
     }
 
     private fun rebindMovedDescendants(
@@ -1432,6 +1854,7 @@ private fun String.windowsCloudPath(): String {
 
 private const val WINDOWS_CLOUD_ALIGNMENT = 4 * 1024L
 private const val MAX_WINDOWS_WRITEBACK_ATTEMPTS = 5
+private const val DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS = 120L
 
 private fun windowsWritebackRetryDelayMillis(attempt: Int): Long {
     require(attempt in 1 until MAX_WINDOWS_WRITEBACK_ATTEMPTS)
