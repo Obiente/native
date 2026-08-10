@@ -4,4 +4,4 @@ pull: none
 platforms: windows
 user-facing: yes
 
-Windows filesync now preserves the existing root and rebuilds File Explorer integration when placeholder races or corrupt Cloud Files metadata would otherwise block activation, without deleting local data.
+Windows filesync now recovers when Explorer creates the same placeholder concurrently, while preserving ordinary local entries for safe recovery.
