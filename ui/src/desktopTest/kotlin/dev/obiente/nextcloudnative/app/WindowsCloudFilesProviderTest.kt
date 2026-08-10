@@ -43,11 +43,21 @@ class WindowsCloudFilesProviderTest {
             WindowsCloudPlaceholderEntryState.Corrupt,
             windowsCloudPlaceholderInspection(
                 findSucceeded = true,
+                win32Error = 363,
                 fileAttributes = 0x410,
                 reparseTag = 0x9000001A.toInt(),
                 placeholderStateBits = -1,
             ).state,
         )
+        val unreadableState = windowsCloudPlaceholderInspection(
+            findSucceeded = true,
+            win32Error = 5,
+            fileAttributes = 0x410,
+            reparseTag = 0x9000001A.toInt(),
+            placeholderStateBits = -1,
+        )
+        assertEquals(WindowsCloudPlaceholderEntryState.Unreadable, unreadableState.state)
+        assertEquals(5, unreadableState.win32Error)
     }
 
     @Test
@@ -579,6 +589,81 @@ class WindowsCloudFilesProviderTest {
             assertEquals(SupportDiagnosticValuePrivacy.LocalPath, preservedField.privacy)
         } finally {
             provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptRootWaitsForQueuedWritebackBeforeMovingLocalData() {
+        val root = createTempDirectory("windows-cloud-corrupt-root-writeback")
+        val localBytes = "local edit queued before corruption recovery".encodeToByteArray()
+        val localFile = root.resolve("draft.txt")
+        localFile.writeBytes(localBytes)
+        val draft = WindowsCloudFileIdentity(
+            "account-01",
+            "draft.txt",
+            "draft-revision",
+            localBytes.size.toLong(),
+            false,
+        )
+        val directory = WindowsCloudFileIdentity("account-01", "Apps", "directory-revision", 0L, true)
+        val corruptPath = root.resolve("Apps")
+        val backend = FakeBackend(
+            source = ByteArray(0),
+            listed = listOf(draft, directory),
+            expectedUploads = 1,
+            blockFirstUpload = true,
+        )
+        val api = FakeApi()
+        val preserved = root.resolveSibling("preserved-after-writeback")
+        lateinit var provider: WindowsCloudFilesProvider
+        api.createPlaceholdersHook = { _, _ ->
+            api.seed(localFile, WindowsCloudPlaceholderState.Dirty, draft)
+            provider.closed(callbackInfo(root, draft).copy(normalizedPath = localFile.toString()), deleted = false)
+            api.seedInspection(
+                corruptPath,
+                WindowsCloudPlaceholderInspection(
+                    state = WindowsCloudPlaceholderEntryState.Corrupt,
+                    win32Error = 363,
+                ),
+            )
+            throw WindowsCloudFilesOperationException(
+                "create Windows Cloud Files placeholders",
+                0x800700B7.toInt(),
+            )
+        }
+        provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = backend,
+            api = api,
+            preserveCorruptRoot = { current ->
+                api.clearInspection(corruptPath)
+                Files.move(current, preserved)
+            },
+        )
+        val startFailure = AtomicReference<Throwable?>()
+        val startThread = Thread {
+            runCatching(provider::start).exceptionOrNull()?.let(startFailure::set)
+        }
+
+        try {
+            startThread.start()
+            assertTrue(backend.awaitFirstUploadStarted())
+            assertFalse(Files.exists(preserved))
+            assertContentEquals(localBytes, localFile.toFile().readBytes())
+
+            backend.releaseFirstUpload()
+            startThread.join(5_000L)
+
+            assertFalse(startThread.isAlive)
+            assertEquals(null, startFailure.get())
+            assertContentEquals(localBytes, preserved.resolve("draft.txt").toFile().readBytes())
+            assertEquals(listOf(localBytes.toList()), backend.uploadedBytes.map(ByteArray::toList))
+        } finally {
+            backend.releaseFirstUpload()
+            startThread.join(5_000L)
+            provider.close()
             root.toFile().deleteRecursively()
             preserved.toFile().deleteRecursively()
         }

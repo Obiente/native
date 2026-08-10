@@ -60,18 +60,26 @@ internal fun windowsCloudPlaceholderInspection(
         }
         return WindowsCloudPlaceholderInspection(state = state, win32Error = error)
     }
-    require(win32Error == null)
     val attributes = requireNotNull(fileAttributes)
     val tag = requireNotNull(reparseTag)
     val stateBits = requireNotNull(placeholderStateBits)
+    val stateError = if (stateBits == CF_PLACEHOLDER_STATE_INVALID) {
+        requireNotNull(win32Error)
+    } else {
+        require(win32Error == null)
+        null
+    }
     val state = when {
-        stateBits == CF_PLACEHOLDER_STATE_INVALID -> WindowsCloudPlaceholderEntryState.Corrupt
+        stateBits == CF_PLACEHOLDER_STATE_INVALID && stateError == ERROR_CLOUD_FILE_METADATA_CORRUPT ->
+            WindowsCloudPlaceholderEntryState.Corrupt
+        stateBits == CF_PLACEHOLDER_STATE_INVALID -> WindowsCloudPlaceholderEntryState.Unreadable
         stateBits and CF_PLACEHOLDER_STATE_PLACEHOLDER == 0 -> WindowsCloudPlaceholderEntryState.Local
         stateBits and CF_PLACEHOLDER_STATE_IN_SYNC != 0 -> WindowsCloudPlaceholderEntryState.InSync
         else -> WindowsCloudPlaceholderEntryState.Dirty
     }
     return WindowsCloudPlaceholderInspection(
         state = state,
+        win32Error = stateError,
         fileAttributes = attributes,
         reparseTag = tag,
     )
@@ -399,11 +407,19 @@ internal class JnaWindowsCloudFilesApi(
         }
         return try {
             findData.read()
+            Native.setLastError(0)
+            val placeholderStateBits = cldApi.CfGetPlaceholderStateFromFindData(findData.pointer)
+            val placeholderStateError = if (placeholderStateBits == CF_PLACEHOLDER_STATE_INVALID) {
+                Native.getLastError()
+            } else {
+                null
+            }
             windowsCloudPlaceholderInspection(
                 findSucceeded = true,
+                win32Error = placeholderStateError,
                 fileAttributes = findData.dwFileAttributes,
                 reparseTag = findData.dwReserved0,
-                placeholderStateBits = cldApi.CfGetPlaceholderStateFromFindData(findData.pointer),
+                placeholderStateBits = placeholderStateBits,
             )
         } finally {
             Kernel32.INSTANCE.FindClose(handle)
