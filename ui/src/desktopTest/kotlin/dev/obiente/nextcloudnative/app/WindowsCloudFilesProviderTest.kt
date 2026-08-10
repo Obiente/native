@@ -670,6 +670,71 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun corruptRootWaitsForQueuedDeleteBeforeRebuildingRemoteState() {
+        val root = createTempDirectory("windows-cloud-corrupt-root-delete")
+        val localBytes = "local data retained while delete completes".encodeToByteArray()
+        root.resolve("local-note.txt").writeBytes(localBytes)
+        val obsolete = WindowsCloudFileIdentity("account-01", "obsolete.txt", "obsolete-revision", 4L, false)
+        val directory = WindowsCloudFileIdentity("account-01", "Apps", "directory-revision", 0L, true)
+        val corruptPath = root.resolve("Apps")
+        val backend = FakeBackend(
+            source = ByteArray(0),
+            listed = listOf(obsolete, directory),
+            blockFirstDelete = true,
+        )
+        val api = FakeApi()
+        val preserved = root.resolveSibling("preserved-after-delete")
+        lateinit var provider: WindowsCloudFilesProvider
+        api.createPlaceholdersHook = { _, _ ->
+            provider.deleteRequested(callbackInfo(root, obsolete))
+            api.seedInspection(
+                corruptPath,
+                WindowsCloudPlaceholderInspection(
+                    state = WindowsCloudPlaceholderEntryState.Corrupt,
+                    win32Error = 363,
+                ),
+            )
+            throw WindowsCloudFilesOperationException(
+                "create Windows Cloud Files placeholders",
+                0x800700B7.toInt(),
+            )
+        }
+        provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = backend,
+            api = api,
+            preserveCorruptRoot = { current ->
+                api.clearInspection(corruptPath)
+                Files.move(current, preserved)
+            },
+        )
+        val startFailure = AtomicReference<Throwable?>()
+        val startThread = Thread {
+            runCatching(provider::start).exceptionOrNull()?.let(startFailure::set)
+        }
+
+        try {
+            startThread.start()
+            assertTrue(backend.awaitFirstDeleteStarted())
+            assertFalse(Files.exists(preserved))
+
+            backend.releaseFirstDelete()
+            startThread.join(5_000L)
+
+            assertFalse(startThread.isAlive)
+            assertEquals(null, startFailure.get())
+            assertContentEquals(localBytes, preserved.resolve("local-note.txt").toFile().readBytes())
+            assertFalse(backend.listedPathsAfterDelete().contains("obsolete.txt"))
+        } finally {
+            backend.releaseFirstDelete()
+            startThread.join(5_000L)
+            provider.close()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun preservedRootIsRecordedBeforeARebuildFailureEscapes() {
         val root = createTempDirectory("windows-cloud-corrupt-root-rebuild-failure")
         val localBytes = "local-only recovery data".encodeToByteArray()
@@ -1579,12 +1644,15 @@ class WindowsCloudFilesProviderTest {
         private val blockFirstUpload: Boolean = false,
         private val failAfterUpload: Boolean = false,
         @Volatile var uploadFailuresRemaining: Int = 0,
+        private val blockFirstDelete: Boolean = false,
     ) : WindowsCloudFilesBackend {
         override val accountId: String = "account-01"
         override val displayName: String = "Nextcloud Native - account@example.test"
         private val uploadLatch = CountDownLatch(expectedUploads)
         private val firstUploadStarted = CountDownLatch(if (blockFirstUpload) 1 else 0)
         private val firstUploadRelease = CountDownLatch(if (blockFirstUpload) 1 else 0)
+        private val firstDeleteStarted = CountDownLatch(if (blockFirstDelete) 1 else 0)
+        private val firstDeleteRelease = CountDownLatch(if (blockFirstDelete) 1 else 0)
         var lastUploadedPath: String? = null
         var lastExpectedRemoteRevision: String? = null
         val uploadedBytes = mutableListOf<ByteArray>()
@@ -1662,13 +1730,26 @@ class WindowsCloudFilesProviderTest {
             }
         }
 
-        override fun delete(identity: WindowsCloudFileIdentity) = Unit
+        override fun delete(identity: WindowsCloudFileIdentity) {
+            if (blockFirstDelete) {
+                firstDeleteStarted.countDown()
+                check(firstDeleteRelease.await(5, TimeUnit.SECONDS))
+            }
+            synchronized(this) {
+                operations += "delete:${identity.path}"
+                remoteIdentities.remove(identity.path)
+                remoteContents.remove(identity.path)
+            }
+        }
         override fun move(identity: WindowsCloudFileIdentity, destinationPath: String): WindowsCloudFileIdentity =
             identity.copy(path = destinationPath)
 
         fun awaitUploads(): Boolean = uploadLatch.await(5, TimeUnit.SECONDS)
         fun awaitFirstUploadStarted(): Boolean = firstUploadStarted.await(5, TimeUnit.SECONDS)
         fun releaseFirstUpload() = firstUploadRelease.countDown()
+        fun awaitFirstDeleteStarted(): Boolean = firstDeleteStarted.await(5, TimeUnit.SECONDS)
+        fun releaseFirstDelete() = firstDeleteRelease.countDown()
+        fun listedPathsAfterDelete(): Set<String> = synchronized(this) { remoteIdentities.keys.toSet() }
 
         fun seedRemote(identity: WindowsCloudFileIdentity) = synchronized(this) {
             remoteIdentities[identity.path] = identity

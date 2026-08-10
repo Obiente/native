@@ -21,6 +21,7 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 
@@ -451,6 +452,7 @@ internal class WindowsCloudFilesProvider(
     private val writebackAttempts = ConcurrentHashMap<String, Int>()
     private val namespaceMutationLock = Any()
     private val callbacksPaused = AtomicBoolean(false)
+    private val destructiveCallbackOperations = AtomicInteger()
     private val localChangeScheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { work ->
         Thread(work, "nextcloud-windows-local-changes").apply { isDaemon = true }
     }
@@ -670,14 +672,16 @@ internal class WindowsCloudFilesProvider(
 
     private fun awaitPathOperationQuiescence(deadline: Long) {
         while (
-            (pathOperations.isNotEmpty() || synchronized(queuedPathOperations) { queuedPathOperations.isNotEmpty() }) &&
+            (destructiveCallbackOperations.get() > 0 || pathOperations.isNotEmpty() ||
+                synchronized(queuedPathOperations) { queuedPathOperations.isNotEmpty() }) &&
             System.nanoTime() < deadline
         ) {
             Thread.sleep(25L)
         }
         check(
-            pathOperations.isEmpty() && synchronized(queuedPathOperations) { queuedPathOperations.isEmpty() },
-        ) { "Timed out while quiescing local edits before Windows Cloud Files recovery." }
+            destructiveCallbackOperations.get() == 0 && pathOperations.isEmpty() &&
+                synchronized(queuedPathOperations) { queuedPathOperations.isEmpty() },
+        ) { "Timed out while quiescing callbacks and local edits before Windows Cloud Files recovery." }
     }
 
     private fun awaitWritebackRecovery(deadline: Long) {
@@ -782,8 +786,9 @@ internal class WindowsCloudFilesProvider(
     }
 
     override fun deleteRequested(info: WindowsCloudCallbackInfo) {
-        if (callbacksPaused.get()) return
-        executor.execute {
+        submitDestructiveCallback(
+            onRejected = { api.acknowledgeDelete(info, false) },
+        ) {
             val accepted = runCatching {
                 val identity = requireIdentity(info, expectDirectory = null)
                 backend.delete(identity)
@@ -794,8 +799,9 @@ internal class WindowsCloudFilesProvider(
     }
 
     override fun renameRequested(info: WindowsCloudCallbackInfo, targetPath: String) {
-        if (callbacksPaused.get()) return
-        executor.execute {
+        submitDestructiveCallback(
+            onRejected = { api.acknowledgeRename(info, false) },
+        ) {
             val accepted = synchronized(namespaceMutationLock) {
                 runCatching {
                     val identity = requireIdentity(info, expectDirectory = null)
@@ -812,6 +818,37 @@ internal class WindowsCloudFilesProvider(
                 }.isSuccess
             }
             api.acknowledgeRename(info, accepted)
+        }
+    }
+
+    private fun submitDestructiveCallback(
+        onRejected: () -> Unit,
+        operation: () -> Unit,
+    ) {
+        val accepted = synchronized(namespaceMutationLock) {
+            if (callbacksPaused.get()) {
+                false
+            } else {
+                destructiveCallbackOperations.incrementAndGet()
+                true
+            }
+        }
+        if (!accepted) {
+            onRejected()
+            return
+        }
+        try {
+            executor.execute {
+                try {
+                    operation()
+                } finally {
+                    check(destructiveCallbackOperations.decrementAndGet() >= 0)
+                }
+            }
+        } catch (failure: Throwable) {
+            check(destructiveCallbackOperations.decrementAndGet() >= 0)
+            onRejected()
+            throw failure
         }
     }
 
