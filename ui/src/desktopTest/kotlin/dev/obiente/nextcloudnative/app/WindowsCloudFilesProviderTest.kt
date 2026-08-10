@@ -658,9 +658,10 @@ class WindowsCloudFilesProviderTest {
         }
         val preserved = root.resolveSibling("preserved-nested-corrupt-root")
         val recorded = mutableListOf<Path>()
+        val backend = FakeBackend(ByteArray(0), listOf(directory, photo))
         val provider = WindowsCloudFilesProvider(
             root = root,
-            backend = FakeBackend(ByteArray(0), listOf(directory, photo)),
+            backend = backend,
             api = api,
             preserveCorruptRoot = { current ->
                 api.clearInspection(localPhoto)
@@ -677,6 +678,8 @@ class WindowsCloudFilesProviderTest {
             assertEquals(preserved, provider.preservedRecoveryRoot)
             assertContentEquals(localBytes, preserved.resolve("Photos/edited.jpg").toFile().readBytes())
             assertEquals(listOf(1L), api.disconnectAttempts)
+            assertTrue(backend.uploadedBytes.isEmpty())
+            assertEquals(0, provider.summary().failedWritebackCount)
         } finally {
             provider.close()
             root.toFile().deleteRecursively()
