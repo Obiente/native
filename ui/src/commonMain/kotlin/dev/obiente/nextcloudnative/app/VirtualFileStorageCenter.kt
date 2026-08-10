@@ -35,6 +35,7 @@ data class VirtualFileStorageSnapshot(
     val storageCapacityBytes: Long?,
     val limitations: List<String> = emptyList(),
     val providerState: VirtualFileProviderState = VirtualFileProviderState.NotApplicable,
+    val providerActive: Boolean = false,
     val providerLocation: String? = null,
     val providerLocationConfiguration: VirtualFileProviderLocation? = null,
     val providerLocationCanChange: Boolean = false,
@@ -59,6 +60,12 @@ data class VirtualFileStorageSnapshot(
         require(support != VirtualFileStorageSupport.Unsupported || cachedBytes == 0L)
         require(limitations.size <= MAX_VIRTUAL_FILE_LIMITATIONS)
         require(limitations.all { it.isNotBlank() && it.length <= MAX_VIRTUAL_FILE_LIMITATION_LENGTH })
+        require(
+            !providerActive ||
+                providerState == VirtualFileProviderState.Active ||
+                providerState == VirtualFileProviderState.NeedsAttention,
+        )
+        require(providerState != VirtualFileProviderState.Active || providerActive)
         require(providerLocation == null || providerLocation.isNotBlank())
         require(
             providerRecoveryNotice == null ||

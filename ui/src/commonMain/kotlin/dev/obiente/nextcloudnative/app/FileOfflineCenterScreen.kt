@@ -1911,7 +1911,7 @@ internal fun VirtualFileStorageCard(
                             }
                         }
                     }
-                    if (snapshot.providerState == VirtualFileProviderState.Active) {
+                    if (snapshot.providerActive) {
                         OutlinedButton(enabled = !busy, onClick = onDeactivateProvider) {
                             Text("Disconnect from file manager")
                         }

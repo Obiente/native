@@ -1526,6 +1526,7 @@ class DesktopNextcloudServices(
                 linux || windows -> VirtualFileProviderState.Inactive
                 else -> VirtualFileProviderState.NotApplicable
             },
+            providerActive = active,
             providerLocation = when {
                 linux -> desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath
                 windows -> "Nextcloud Native in File Explorer"

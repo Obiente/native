@@ -1949,6 +1949,7 @@ private fun marketingVirtualFileStorageSnapshot(
     storageCapacityBytes = 512L * 1024L * 1024L * 1024L,
     limitations = emptyList(),
     providerState = VirtualFileProviderState.Active,
+    providerActive = true,
     providerLocation = when (integration) {
         VirtualFilePlatformIntegration.AndroidDocumentsProvider -> "System Files / Nextcloud Native"
         VirtualFilePlatformIntegration.WindowsCloudFiles -> "Nextcloud Native in File Explorer"
