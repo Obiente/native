@@ -80,6 +80,48 @@ class WindowsUninstallCleanupTest {
     }
 
     @Test
+    fun recoveryNoticesRemainScopedToTheirAccounts() {
+        val preferences = Preferences.userRoot().node("windows-account-recovery-notice-test-${UUID.randomUUID()}")
+        val firstAccountId = "1".repeat(64)
+        val secondAccountId = "2".repeat(64)
+        val firstRoot = Files.createTempDirectory("windows-first-recovery-notice")
+        val secondRoot = Files.createTempDirectory("windows-second-recovery-notice")
+        try {
+            persistWindowsCloudFilesPreservedRoot(preferences, firstAccountId, firstRoot)
+            persistWindowsCloudFilesPreservedRoot(preferences, secondAccountId, secondRoot)
+
+            val firstNotice = requireNotNull(persistedWindowsCloudFilesRecoveryNotice(preferences, firstAccountId))
+            val secondNotice = requireNotNull(persistedWindowsCloudFilesRecoveryNotice(preferences, secondAccountId))
+            assertTrue(firstNotice.contains(firstRoot.toAbsolutePath().normalize().toString()))
+            assertFalse(firstNotice.contains(secondRoot.toAbsolutePath().normalize().toString()))
+            assertTrue(secondNotice.contains(secondRoot.toAbsolutePath().normalize().toString()))
+            assertFalse(secondNotice.contains(firstRoot.toAbsolutePath().normalize().toString()))
+
+            acknowledgeWindowsCloudFilesPreservedRoot(preferences, firstAccountId)
+
+            assertEquals(null, persistedWindowsCloudFilesRecoveryNotice(preferences, firstAccountId))
+            assertEquals(secondNotice, persistedWindowsCloudFilesRecoveryNotice(preferences, secondAccountId))
+        } finally {
+            preferences.removeNode()
+            firstRoot.toFile().deleteRecursively()
+            secondRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun recoveryNoticeReportsPreservationWithoutClaimingRepair() {
+        val preservedRoot = Files.createTempDirectory("windows-preservation-notice")
+        try {
+            val notice = windowsCloudFilesRecoveryNoticeMessage(preservedRoot)
+
+            assertTrue(notice.contains("preserved existing local data"))
+            assertFalse(notice.contains("repaired", ignoreCase = true))
+        } finally {
+            preservedRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun loadsOnlyLiveAccountScopedRecoveryRoots() {
         val preferences = Preferences.userRoot().node("windows-recovery-root-test-${UUID.randomUUID()}")
         val home = Files.createTempDirectory("windows-recovery-root-home").toFile()
