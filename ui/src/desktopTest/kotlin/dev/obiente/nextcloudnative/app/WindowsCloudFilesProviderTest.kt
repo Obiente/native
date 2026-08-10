@@ -10,6 +10,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.io.path.createDirectory
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.writeBytes
 import kotlin.test.Test
@@ -578,6 +579,106 @@ class WindowsCloudFilesProviderTest {
             assertEquals(SupportDiagnosticValuePrivacy.LocalPath, preservedField.privacy)
         } finally {
             provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun preservedRootIsRecordedBeforeARebuildFailureEscapes() {
+        val root = createTempDirectory("windows-cloud-corrupt-root-rebuild-failure")
+        val localBytes = "local-only recovery data".encodeToByteArray()
+        root.resolve("local-note.txt").writeBytes(localBytes)
+        val identity = WindowsCloudFileIdentity("account-01", "Apps", "revision", 0L, true)
+        val corruptPath = root.resolve("Apps")
+        val api = FakeApi().apply {
+            seedInspection(
+                corruptPath,
+                WindowsCloudPlaceholderInspection(
+                    state = WindowsCloudPlaceholderEntryState.Corrupt,
+                    win32Error = 363,
+                ),
+            )
+        }
+        val preserved = root.resolveSibling("preserved-before-rebuild-failure")
+        val recorded = mutableListOf<Path>()
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0), listOf(identity)),
+            api = api,
+            preserveCorruptRoot = { current ->
+                api.clearInspection(corruptPath)
+                api.connectFailures += WindowsCloudFilesOperationException(
+                    "connect Windows Cloud Files root",
+                    0x80070005.toInt(),
+                )
+                Files.move(current, preserved)
+            },
+            recordPreservedCorruptRoot = recorded::add,
+        )
+
+        try {
+            assertFailsWith<WindowsCloudFilesOperationException> { provider.start() }
+
+            assertEquals(listOf(preserved), recorded)
+            assertEquals(preserved, provider.preservedRecoveryRoot)
+            assertContentEquals(localBytes, preserved.resolve("local-note.txt").toFile().readBytes())
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun nestedCorruptPlaceholderIsPreservedDuringLegacyMigration() {
+        val root = createTempDirectory("windows-cloud-nested-corrupt-root")
+        val album = root.resolve("Photos").createDirectory()
+        val localBytes = "local-only photo edit".encodeToByteArray()
+        val localPhoto = album.resolve("edited.jpg")
+        localPhoto.writeBytes(localBytes)
+        val directory = WindowsCloudFileIdentity("account-01", "Photos", "directory-revision", 0L, true)
+        val photo = WindowsCloudFileIdentity(
+            "account-01",
+            "Photos/edited.jpg",
+            "photo-revision",
+            localBytes.size.toLong(),
+            false,
+        )
+        val api = FakeApi().apply {
+            seed(album, WindowsCloudPlaceholderState.InSync, directory)
+            seed(localPhoto, WindowsCloudPlaceholderState.InSync, photo)
+            seedInspection(
+                localPhoto,
+                WindowsCloudPlaceholderInspection(
+                    state = WindowsCloudPlaceholderEntryState.Corrupt,
+                    win32Error = 363,
+                ),
+            )
+        }
+        val preserved = root.resolveSibling("preserved-nested-corrupt-root")
+        val recorded = mutableListOf<Path>()
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0), listOf(directory, photo)),
+            api = api,
+            preserveCorruptRoot = { current ->
+                api.clearInspection(localPhoto)
+                Files.move(current, preserved)
+            },
+            recordPreservedCorruptRoot = recorded::add,
+        )
+
+        try {
+            provider.start()
+            provider.recoverBeforeRootMigration(timeoutSeconds = 5L)
+
+            assertEquals(listOf(preserved), recorded)
+            assertEquals(preserved, provider.preservedRecoveryRoot)
+            assertContentEquals(localBytes, preserved.resolve("Photos/edited.jpg").toFile().readBytes())
+            assertEquals(listOf(1L), api.disconnectAttempts)
+        } finally {
+            provider.close()
             root.toFile().deleteRecursively()
             preserved.toFile().deleteRecursively()
         }
@@ -1496,6 +1597,10 @@ class WindowsCloudFilesProviderTest {
 
         fun seedInspection(path: Path, inspection: WindowsCloudPlaceholderInspection) {
             inspections[path] = inspection
+        }
+
+        fun clearInspection(path: Path) {
+            inspections.remove(path)
         }
     }
 }

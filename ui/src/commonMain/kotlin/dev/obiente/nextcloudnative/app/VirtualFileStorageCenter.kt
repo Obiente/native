@@ -38,6 +38,7 @@ data class VirtualFileStorageSnapshot(
     val providerLocation: String? = null,
     val providerLocationConfiguration: VirtualFileProviderLocation? = null,
     val providerLocationCanChange: Boolean = false,
+    val providerRecoveryNotice: String? = null,
     val folderRetentionRules: List<VirtualFolderRetentionRule> = emptyList(),
     val folderHydrationStatuses: List<VirtualFolderHydrationStatus> = emptyList(),
     val pendingWritebackCount: Int = 0,
@@ -59,6 +60,11 @@ data class VirtualFileStorageSnapshot(
         require(limitations.size <= MAX_VIRTUAL_FILE_LIMITATIONS)
         require(limitations.all { it.isNotBlank() && it.length <= MAX_VIRTUAL_FILE_LIMITATION_LENGTH })
         require(providerLocation == null || providerLocation.isNotBlank())
+        require(
+            providerRecoveryNotice == null ||
+                providerRecoveryNotice.isNotBlank() &&
+                providerRecoveryNotice.length <= MAX_VIRTUAL_FILE_ACTION_MESSAGE_LENGTH
+        )
         require(providerLocationConfiguration == null || support == VirtualFileStorageSupport.Available)
         require(!providerLocationCanChange || providerLocationConfiguration != null)
         VirtualFolderRetentionState(folderRetentionRules)

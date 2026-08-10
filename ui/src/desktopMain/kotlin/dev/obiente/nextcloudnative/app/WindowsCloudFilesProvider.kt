@@ -426,6 +426,7 @@ internal class WindowsCloudFilesProvider(
     private val writebackRetryDelayMillis: (attempt: Int) -> Long = ::windowsWritebackRetryDelayMillis,
     private val recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit = {},
     private val preserveCorruptRoot: (Path) -> Path = ::preserveWindowsCloudFilesCorruptRoot,
+    private val recordPreservedCorruptRoot: (Path) -> Unit = {},
 ) : AutoCloseable, WindowsCloudFilesCallbacks {
     private val connection = AtomicLongState()
     private val apiClosed = AtomicBoolean(false)
@@ -481,6 +482,8 @@ internal class WindowsCloudFilesProvider(
         syncRootIdentity: ByteArray,
         corruption: WindowsCloudFilesCorruptEntryException,
     ) {
+        val restartWatcher = watchService != null
+        if (restartWatcher) stopLocalWatcher()
         val key = connection.get()
         if (key != 0L) {
             api.disconnect(key)
@@ -502,6 +505,20 @@ internal class WindowsCloudFilesProvider(
                 failure,
             )
         }
+        try {
+            recordPreservedCorruptRoot(preserved)
+        } catch (persistenceFailure: Throwable) {
+            runCatching {
+                Files.move(preserved, root)
+                prepareRootDirectory()
+                api.registerSyncRoot(root, backend.displayName, syncRootIdentity)
+            }.exceptionOrNull()?.let(persistenceFailure::addSuppressed)
+            persistenceFailure.addSuppressed(corruption)
+            throw IllegalStateException(
+                "Could not durably record the preserved Windows Cloud Files root.",
+                persistenceFailure,
+            )
+        }
         preservedRecoveryRoot = preserved
         recordPlaceholderDiagnostic(
             severity = SupportDiagnosticSeverity.Warning,
@@ -520,6 +537,7 @@ internal class WindowsCloudFilesProvider(
             api.registerSyncRoot(root, backend.displayName, syncRootIdentity)
             connection.set(api.connect(root, this))
             populateDirectory("", root)
+            if (restartWatcher) startLocalWatcher()
         } catch (retryFailure: Throwable) {
             retryFailure.addSuppressed(corruption)
             throw retryFailure
@@ -564,13 +582,29 @@ internal class WindowsCloudFilesProvider(
     /** Repairs the legacy namespace and flushes recoverable local writes before changing root generations. */
     fun recoverBeforeRootMigration(timeoutSeconds: Long = 120L) {
         require(timeoutSeconds > 0L)
-        repairRemotePlaceholderTree()
-        recoverLocalPlaceholders(failClosed = true)
-        recoverUnmanagedLocalEntries(failClosed = true)
+        var deferredCorruption: WindowsCloudFilesCorruptEntryException? = null
+        try {
+            repairRemotePlaceholderTree()
+        } catch (corruption: WindowsCloudFilesCorruptEntryException) {
+            deferredCorruption = corruption
+        }
+        if (deferredCorruption == null) {
+            recoverLocalPlaceholders(failClosed = true)
+            recoverUnmanagedLocalEntries(failClosed = true)
+        }
         check(initialRecoveryFinished.await(timeoutSeconds, TimeUnit.SECONDS)) {
             "Timed out while checking the legacy Windows Cloud Files root for local edits."
         }
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+        awaitWritebackRecovery(deadline)
+        deferredCorruption?.let { corruption ->
+            val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
+            recoverCorruptRoot(WindowsCloudFileIdentityCodec.encode(rootIdentity), corruption)
+            repairRemotePlaceholderTree()
+        }
+    }
+
+    private fun awaitWritebackRecovery(deadline: Long) {
         while (
             (pendingWritebacks.isNotEmpty() || pathOperations.isNotEmpty() ||
                 synchronized(queuedPathOperations) { queuedPathOperations.isNotEmpty() }) &&
@@ -822,15 +856,19 @@ internal class WindowsCloudFilesProvider(
         }
         cancelledRequests.values.forEach { it.set(true) }
         cancelledRequests.clear()
+        stopLocalWatcher()
+        queuedPathOperations.clear()
+        localChangeScheduler.shutdownNow()
+        executor.shutdownNow()
+    }
+
+    private fun stopLocalWatcher() {
         runCatching { watchService?.close() }
         watcherThread?.interrupt()
         watcherThread = null
         watchService = null
         pendingLocalChanges.values.forEach { it.cancel(false) }
         pendingLocalChanges.clear()
-        queuedPathOperations.clear()
-        localChangeScheduler.shutdownNow()
-        executor.shutdownNow()
     }
 
     private fun closeApi() {
