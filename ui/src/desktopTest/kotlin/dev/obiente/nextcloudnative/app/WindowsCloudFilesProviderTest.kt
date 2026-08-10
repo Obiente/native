@@ -688,6 +688,62 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun nestedCorruptPlaceholderIsPreservedBeforeNormalStartupCompletes() {
+        val root = createTempDirectory("windows-cloud-current-nested-corrupt-root")
+        val album = root.resolve("Photos").createDirectory()
+        val localBytes = "current local-only photo edit".encodeToByteArray()
+        val localPhoto = album.resolve("edited.jpg")
+        localPhoto.writeBytes(localBytes)
+        val directory = WindowsCloudFileIdentity("account-01", "Photos", "directory-revision", 0L, true)
+        val photo = WindowsCloudFileIdentity(
+            "account-01",
+            "Photos/edited.jpg",
+            "photo-revision",
+            localBytes.size.toLong(),
+            false,
+        )
+        val api = FakeApi().apply {
+            seed(album, WindowsCloudPlaceholderState.InSync, directory)
+            seed(localPhoto, WindowsCloudPlaceholderState.InSync, photo)
+            seedInspection(
+                localPhoto,
+                WindowsCloudPlaceholderInspection(
+                    state = WindowsCloudPlaceholderEntryState.Corrupt,
+                    win32Error = 363,
+                ),
+            )
+        }
+        val preserved = root.resolveSibling("preserved-current-nested-corrupt-root")
+        val recorded = mutableListOf<Path>()
+        val backend = FakeBackend(ByteArray(0), listOf(directory, photo))
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = backend,
+            api = api,
+            preserveCorruptRoot = { current ->
+                api.clearInspection(localPhoto)
+                Files.move(current, preserved)
+            },
+            recordPreservedCorruptRoot = recorded::add,
+        )
+
+        try {
+            provider.start()
+            provider.recoverAfterStartup(timeoutSeconds = 5L)
+
+            assertEquals(listOf(preserved), recorded)
+            assertEquals(preserved, provider.preservedRecoveryRoot)
+            assertContentEquals(localBytes, preserved.resolve("Photos/edited.jpg").toFile().readBytes())
+            assertTrue(backend.uploadedBytes.isEmpty())
+            assertEquals(0, provider.summary().failedWritebackCount)
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun corruptRootMoveFailureLeavesLocalDataUntouched() {
         val root = createTempDirectory("windows-cloud-corrupt-root-move-failure")
         val localBytes = "must remain local".encodeToByteArray()

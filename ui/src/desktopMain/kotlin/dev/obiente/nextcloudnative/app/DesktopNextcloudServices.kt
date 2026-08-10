@@ -1691,6 +1691,7 @@ class DesktopNextcloudServices(
                 )
                 try {
                     provider.start()
+                    provider.recoverAfterStartup()
                     windowsCloudFilesProvider = provider
                     windowsCloudFilesIdentity = accountId
                     windowsCloudFilesFailure = null

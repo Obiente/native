@@ -523,6 +523,10 @@ internal class WindowsCloudFilesProvider(
             )
         }
         preservedRecoveryRoot = preserved
+        knownIdentities.clear()
+        pendingWritebacks.clear()
+        failedWritebacks.clear()
+        writebackAttempts.clear()
         recordPlaceholderDiagnostic(
             severity = SupportDiagnosticSeverity.Warning,
             operation = "cloud-files.corrupt-root-recovery",
@@ -610,6 +614,32 @@ internal class WindowsCloudFilesProvider(
             recoverCorruptRoot(WindowsCloudFileIdentityCodec.encode(rootIdentity), corruption)
             repairRemotePlaceholderTree()
         }
+    }
+
+    /** Completes the initial local scan and repairs corruption before this provider is published as active. */
+    fun recoverAfterStartup(timeoutSeconds: Long = 120L) {
+        require(timeoutSeconds > 0L)
+        check(initialRecoveryFinished.await(timeoutSeconds, TimeUnit.SECONDS)) {
+            "Timed out while checking the Windows Cloud Files root for local metadata corruption."
+        }
+        val corruption = initialRecoveryCorruption ?: return
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+        awaitPathOperationQuiescence(deadline)
+        val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
+        recoverCorruptRoot(WindowsCloudFileIdentityCodec.encode(rootIdentity), corruption)
+        initialRecoveryCorruption = null
+    }
+
+    private fun awaitPathOperationQuiescence(deadline: Long) {
+        while (
+            (pathOperations.isNotEmpty() || synchronized(queuedPathOperations) { queuedPathOperations.isNotEmpty() }) &&
+            System.nanoTime() < deadline
+        ) {
+            Thread.sleep(25L)
+        }
+        check(
+            pathOperations.isEmpty() && synchronized(queuedPathOperations) { queuedPathOperations.isEmpty() },
+        ) { "Timed out while quiescing local edits before Windows Cloud Files recovery." }
     }
 
     private fun awaitWritebackRecovery(deadline: Long) {
