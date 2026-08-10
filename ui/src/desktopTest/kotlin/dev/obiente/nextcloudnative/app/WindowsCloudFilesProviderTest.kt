@@ -744,6 +744,75 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun unreadablePlaceholderStopsNormalStartupActivation() {
+        val root = createTempDirectory("windows-cloud-unreadable-startup-root")
+        val localFile = root.resolve("unreadable.txt")
+        localFile.writeBytes("local data".encodeToByteArray())
+        val api = FakeApi().apply {
+            seedInspection(
+                localFile,
+                WindowsCloudPlaceholderInspection(
+                    state = WindowsCloudPlaceholderEntryState.Unreadable,
+                    win32Error = 5,
+                ),
+            )
+        }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0), emptyList()),
+            api = api,
+        )
+
+        try {
+            provider.start()
+
+            val failure = assertFailsWith<WindowsCloudFilesUnreadableEntryException> {
+                provider.recoverAfterStartup(timeoutSeconds = 5L)
+            }
+            assertEquals(5, failure.inspection.win32Error)
+            assertContentEquals("local data".encodeToByteArray(), localFile.toFile().readBytes())
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun unreadableUnmanagedEntryStopsNormalStartupActivation() {
+        val root = createTempDirectory("windows-cloud-unreadable-unmanaged-root")
+        val localFile = root.resolve("unmanaged.txt")
+        localFile.writeBytes("unmanaged local data".encodeToByteArray())
+        val api = FakeApi().apply {
+            queueInspections(
+                localFile,
+                WindowsCloudPlaceholderInspection(WindowsCloudPlaceholderEntryState.Local),
+                WindowsCloudPlaceholderInspection(
+                    state = WindowsCloudPlaceholderEntryState.Unreadable,
+                    win32Error = 5,
+                ),
+            )
+        }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0), emptyList()),
+            api = api,
+        )
+
+        try {
+            provider.start()
+
+            val failure = assertFailsWith<WindowsCloudFilesUnreadableEntryException> {
+                provider.recoverAfterStartup(timeoutSeconds = 5L)
+            }
+            assertEquals(5, failure.inspection.win32Error)
+            assertContentEquals("unmanaged local data".encodeToByteArray(), localFile.toFile().readBytes())
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun corruptRootMoveFailureLeavesLocalDataUntouched() {
         val root = createTempDirectory("windows-cloud-corrupt-root-move-failure")
         val localBytes = "must remain local".encodeToByteArray()
@@ -1539,6 +1608,7 @@ class WindowsCloudFilesProviderTest {
         private val placeholderFetchLatch = CountDownLatch(expectedPlaceholderFetches)
         private val states = HashMap<Path, WindowsCloudPlaceholderState>()
         private val inspections = HashMap<Path, WindowsCloudPlaceholderInspection>()
+        private val inspectionScripts = HashMap<Path, ArrayDeque<WindowsCloudPlaceholderInspection>>()
         private val identities = HashMap<Path, ByteArray>()
         val transfers = mutableListOf<Pair<Long, ByteArray>>()
         val createdPlaceholderBatches = mutableListOf<List<WindowsCloudPlaceholder>>()
@@ -1600,8 +1670,12 @@ class WindowsCloudFilesProviderTest {
         }
         override fun placeholderState(path: Path): WindowsCloudPlaceholderState =
             states[path] ?: WindowsCloudPlaceholderState.Absent
-        override fun inspectPlaceholder(path: Path): WindowsCloudPlaceholderInspection =
-            inspections[path] ?: super.inspectPlaceholder(path)
+        override fun inspectPlaceholder(path: Path): WindowsCloudPlaceholderInspection {
+            inspectionScripts[path]?.let { script ->
+                if (script.isNotEmpty()) return script.removeFirst()
+            }
+            return inspections[path] ?: super.inspectPlaceholder(path)
+        }
         override fun allocatedBytes(path: Path): Long = if (states[path] == WindowsCloudPlaceholderState.InSync) {
             path.toFile().length()
         } else {
@@ -1656,6 +1730,10 @@ class WindowsCloudFilesProviderTest {
 
         fun seedInspection(path: Path, inspection: WindowsCloudPlaceholderInspection) {
             inspections[path] = inspection
+        }
+
+        fun queueInspections(path: Path, vararg queued: WindowsCloudPlaceholderInspection) {
+            inspectionScripts[path] = ArrayDeque(queued.asList())
         }
 
         fun clearInspection(path: Path) {

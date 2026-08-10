@@ -1438,11 +1438,6 @@ class DesktopNextcloudServices(
         userId: String,
     ): VirtualFileStorageSnapshot = withContext(Dispatchers.IO) {
         val accountId = desktopFileCacheAccountId(session)
-        val windowsCloudFilesRecoveryNotice = if (isWindowsDesktop()) {
-            persistedWindowsCloudFilesRecoveryNotice(preferences, accountId)
-        } else {
-            null
-        }
         val providerPreferenceKey = virtualFileProviderPreferenceKey(accountId)
         if (
             (isLinuxDesktop() || isWindowsDesktop()) &&
@@ -1452,6 +1447,11 @@ class DesktopNextcloudServices(
             }
         ) {
             runCatching { activateVirtualFileProvider(session, userId) }
+        }
+        val windowsCloudFilesRecoveryNotice = if (isWindowsDesktop()) {
+            persistedWindowsCloudFilesRecoveryNotice(preferences, accountId)
+        } else {
+            null
         }
         runCatching { enforceCombinedVirtualFileCachePolicy(accountId, fileReadCache.loadPolicy()) }
         val cache = fileReadCache.virtualFileSummary(accountId)
