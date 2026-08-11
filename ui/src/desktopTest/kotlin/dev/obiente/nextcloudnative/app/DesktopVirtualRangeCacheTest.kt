@@ -1057,6 +1057,36 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `uncertain index rollback preserves new and previous blobs`() {
+        val primary = Files.createTempDirectory("virtual-range-index-uncertain-").toFile()
+        try {
+            DesktopVirtualRangeCache(primary) { nonEvictingTestPolicy() }
+                .storeBlock(ACCOUNT_ID, "Photos/old.raf", "e1", 4L, 0L, "old!".encodeToByteArray())
+            val accountDirectory = primary.resolve(ACCOUNT_ID)
+            val failing = DesktopVirtualRangeCache(
+                primary,
+                beforeLegacyIndexPublication = { error("simulated legacy publication failure") },
+                beforeLegacyIndexRollback = { error("simulated rollback failure") },
+            ) { nonEvictingTestPolicy() }
+
+            val failure = assertFailsWith<IllegalStateException> {
+                failing.storeBlock(ACCOUNT_ID, "Photos/new.raf", "e2", 4L, 0L, "new!".encodeToByteArray())
+            }
+
+            assertTrue(failure.message.orEmpty().contains("Newly written data was preserved"))
+            assertEquals(2, accountDirectory.listFiles().orEmpty().count { it.extension == "block" })
+            assertEquals(4L, failing.summary(ACCOUNT_ID).cachedBytes)
+            val restarted = DesktopVirtualRangeCache(primary) { nonEvictingTestPolicy() }
+            assertContentEquals(
+                "old!".encodeToByteArray(),
+                restarted.readBlock(ACCOUNT_ID, "Photos/old.raf", "e1", 4L, 0L, 4),
+            )
+        } finally {
+            primary.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `combined cache pressure relieves the primary tier without deleting overflow`() {
         val primary = Files.createTempDirectory("virtual-range-combined-primary-").toFile()
         val overflow = Files.createTempDirectory("virtual-range-combined-overflow-").toFile()
@@ -1176,6 +1206,8 @@ class DesktopVirtualRangeCacheTest {
 
             assertNull(cache.readBlock(ACCOUNT_ID, "Photos/offline.raf", "e1", 4L, 0L, 4))
             assertEquals(4L, cache.summary(ACCOUNT_ID).overflowCachedBytes)
+            assertEquals(0L, cache.summary(ACCOUNT_ID).overflowReclaimableBytes)
+            assertEquals(0L, cache.summary(ACCOUNT_ID).reclaimableBytes)
 
             overflow.deleteRecursively()
             Files.move(disconnected.toPath(), overflow.toPath())
@@ -1328,6 +1360,42 @@ class DesktopVirtualRangeCacheTest {
             }
 
             assertTrue(overflowWasSyncedBeforeIndex)
+        } finally {
+            primary.deleteRecursively()
+            overflow.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `overflow recovery preserves blocks committed before journal cleanup`() {
+        val primary = Files.createTempDirectory("virtual-range-journal-primary-").toFile()
+        val overflow = Files.createTempDirectory("virtual-range-journal-overflow-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(
+                primary,
+                overflowRoot = overflow,
+                initializeOverflowMarker = true,
+            ) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+            cache.beginRevisionStaging(ACCOUNT_ID, "Photos/offline.raf", "e1", 4L).use { staging ->
+                staging.store(0L, "data".encodeToByteArray())
+                assertTrue(staging.commitIfComplete())
+            }
+            val overflowAccount = overflow.resolve(ACCOUNT_ID)
+            val block = overflowAccount.listFiles().orEmpty().single { it.extension == "block" }
+            val stageId = "00000000-0000-0000-0000-000000000003"
+            overflowAccount.resolve("range-revision.$stageId.commit").writeText("${block.name}\n")
+            overflowAccount.resolve("range-revision.$stageId.lock").writeText("")
+
+            val restarted = DesktopVirtualRangeCache(primary, overflowRoot = overflow) { nonEvictingTestPolicy() }
+
+            assertEquals(4L, restarted.summary(ACCOUNT_ID).overflowPinnedBytes)
+            assertTrue(block.isFile)
+            assertContentEquals(
+                "data".encodeToByteArray(),
+                restarted.readBlock(ACCOUNT_ID, "Photos/offline.raf", "e1", 4L, 0L, 4),
+            )
+            assertFalse(overflowAccount.resolve("range-revision.$stageId.commit").exists())
         } finally {
             primary.deleteRecursively()
             overflow.deleteRecursively()

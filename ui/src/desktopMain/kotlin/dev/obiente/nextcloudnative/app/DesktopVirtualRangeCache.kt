@@ -54,6 +54,18 @@ private data class ActiveVirtualRangeRevision(
     val fileSize: Long,
 )
 
+private class UncertainRangeIndexPublicationException(
+    cause: Throwable,
+    rollbackFailure: Throwable,
+) : IllegalStateException(
+    "Cache metadata could not be committed or rolled back safely. Newly written data was preserved.",
+    cause,
+) {
+    init {
+        addSuppressed(rollbackFailure)
+    }
+}
+
 /** Persistent exact-revision block cache used by the Linux virtual filesystem. */
 internal class DesktopVirtualRangeCache(
     private val root: File,
@@ -69,6 +81,7 @@ internal class DesktopVirtualRangeCache(
     private val accessTimePersistenceIntervalMillis: Long = ACCESS_TIME_PERSISTENCE_INTERVAL_MILLIS,
     private val beforeBlockValidation: (File) -> Unit = {},
     private val beforeLegacyIndexPublication: () -> Unit = {},
+    private val beforeLegacyIndexRollback: () -> Unit = {},
     private val afterDirectoryMetadataSync: (File) -> Unit = {},
     private val afterDurableIndexPublication: () -> Unit = {},
     private val policy: () -> VirtualFileCachePolicy,
@@ -285,7 +298,9 @@ internal class DesktopVirtualRangeCache(
             publishBytes(directory, blobName, bytes)
             save(accountId, next)
         } catch (failure: Throwable) {
-            if (!alreadyReferenced) File(directory, blobName).delete()
+            if (failure !is UncertainRangeIndexPublicationException && !alreadyReferenced) {
+                File(directory, blobName).delete()
+            }
             throw failure
         }
         applyEviction(accountId, 0L, nowEpochMillis)
@@ -1084,8 +1099,13 @@ internal class DesktopVirtualRangeCache(
             availableFreeBytes = root.usableSpace.coerceAtLeast(0L),
             nowEpochMillis = System.currentTimeMillis(),
         )
+        val overflowAvailable = overflowRoot?.let(::isOverflowRootAvailable) == true
         val overflowPlan = planVirtualFileEviction(
-            entries = overflowEntries.filter { entry -> entry.retention == VirtualFileRetention.Automatic },
+            entries = if (overflowAvailable) {
+                overflowEntries.filter { entry -> entry.retention == VirtualFileRetention.Automatic }
+            } else {
+                emptyList()
+            },
             policy = overflowPolicy(),
             availableFreeBytes = overflowRoot?.takeIf(::isOverflowRootAvailable)?.usableSpace?.coerceAtLeast(0L) ?: 0L,
             nowEpochMillis = System.currentTimeMillis(),
@@ -1109,7 +1129,7 @@ internal class DesktopVirtualRangeCache(
                 .sumOf(VirtualFileCacheEntry::sizeBytes),
             overflowAvailableFreeBytes = overflowRoot?.takeIf(::isOverflowRootAvailable)
                 ?.usableSpace?.coerceAtLeast(0L),
-            overflowAvailable = overflowRoot?.let(::isOverflowRootAvailable) == true,
+            overflowAvailable = overflowAvailable,
             tierAttention = tierAttention,
         )
     }
@@ -1648,12 +1668,14 @@ internal class DesktopVirtualRangeCache(
         } catch (failure: Throwable) {
             val rollback = runCatching {
                 restorePublishedFile(directory, TIERED_INDEX_FILE, previousTiered)
+                syncDirectoryMetadata(directory)
+                beforeLegacyIndexRollback()
                 restorePublishedFile(directory, LEGACY_INDEX_FILE, previousLegacy)
                 syncDirectoryMetadata(directory)
             }
-            if (rollback.isFailure) {
+            rollback.exceptionOrNull()?.let { rollbackFailure ->
                 tierAttention = "Cache metadata recovery needs attention. Newly written data was preserved."
-                return
+                throw UncertainRangeIndexPublicationException(failure, rollbackFailure)
             }
             throw failure
         }
@@ -1887,8 +1909,10 @@ internal class DesktopVirtualRangeCache(
             save(accountId, next, retention)
             if (journal.delete()) syncDirectoryMetadata(journal.parentFile)
         } catch (failure: Throwable) {
-            moved.filterNot { file -> file.name in currentBlobs }.forEach(File::delete)
-            if (journal.delete()) runCatching { syncDirectoryMetadata(journal.parentFile) }
+            if (failure !is UncertainRangeIndexPublicationException) {
+                moved.filterNot { file -> file.name in currentBlobs }.forEach(File::delete)
+                if (journal.delete()) runCatching { syncDirectoryMetadata(journal.parentFile) }
+            }
             throw failure
         } finally {
             staged.forEach { stagedBlock -> stagedBlock.temporary.delete() }
@@ -1983,7 +2007,7 @@ internal class DesktopVirtualRangeCache(
             tierAttention = null
             return next
         } catch (failure: Throwable) {
-            published.forEach(File::delete)
+            if (failure !is UncertainRangeIndexPublicationException) published.forEach(File::delete)
             tierAttention = failure.message
                 ?.takeIf { it.isNotBlank() && it.none(Char::isISOControl) }
                 ?.take(512)
@@ -2079,11 +2103,16 @@ internal class DesktopVirtualRangeCache(
         return directory
     }
 
-    private fun recoverStaleRevisionStages(directory: File) {
+    private fun recoverStaleRevisionStages(
+        directory: File,
+        externallyReferencedBlocks: Set<String> = emptySet(),
+    ) {
         val referencedBlocks = loadRangeIndexFromDirectory(directory)
             ?.blocks
             ?.mapTo(hashSetOf(), CachedRangeBlock::blobName)
             .orEmpty()
+            .toMutableSet()
+            .apply { addAll(externallyReferencedBlocks) }
         Files.newDirectoryStream(directory.toPath(), "range-revision.*.commit").use { journals ->
             journals.forEach { journal ->
                 if (!Files.isRegularFile(journal, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return@forEach
@@ -2238,7 +2267,10 @@ internal class DesktopVirtualRangeCache(
         if (!isOverflowAvailable()) return
         recoveredOverflowAccounts += accountId
         val directory = overflowAccountDirectory(accountId, writable = false) ?: return
-        recoverStaleRevisionStages(directory)
+        val referencedOverflowBlocks = loadedIndexes[accountId]?.blocks.orEmpty().asSequence()
+            .filter { block -> block.storageTier == CachedRangeStorageTier.Overflow }
+            .mapTo(hashSetOf(), CachedRangeBlock::blobName)
+        recoverStaleRevisionStages(directory, referencedOverflowBlocks)
     }
 
     private fun recoverPromotedRevision(directory: File, stageId: String, referencedBlocks: Set<String>) {

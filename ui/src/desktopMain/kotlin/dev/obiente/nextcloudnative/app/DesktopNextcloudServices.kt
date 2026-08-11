@@ -1459,24 +1459,26 @@ class DesktopNextcloudServices(
         accountId: String,
         path: String,
     ) {
-        runCatching { invalidateDesktopFileMetadata(accountId, path) }
-        val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
-        val roots = runCatching {
-            cache.retainedFoldersAffectedByListingChanges(accountId, listOf(path))
-        }
-            .getOrDefault(emptyList())
-        synchronized(virtualFolderMutationLock) {
-            advanceAffectedVirtualFolderGenerations(
-                virtualFolderMutationGenerationsByJob,
-                virtualFolderCompletedGenerations,
-                accountId,
-                roots,
-            )
-        }
-        runCatching { cache.invalidate(accountId, path) }
-        runCatching { cache.queueRetainedFoldersForRefresh(accountId, path) }
-        roots.forEach { root ->
-            runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+        synchronized(virtualFileProviderLock) {
+            runCatching { invalidateDesktopFileMetadata(accountId, path) }
+            val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
+            val roots = runCatching {
+                cache.retainedFoldersAffectedByListingChanges(accountId, listOf(path))
+            }
+                .getOrDefault(emptyList())
+            synchronized(virtualFolderMutationLock) {
+                advanceAffectedVirtualFolderGenerations(
+                    virtualFolderMutationGenerationsByJob,
+                    virtualFolderCompletedGenerations,
+                    accountId,
+                    roots,
+                )
+            }
+            runCatching { cache.invalidate(accountId, path) }
+            runCatching { cache.queueRetainedFoldersForRefresh(accountId, path) }
+            roots.forEach { root ->
+                runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+            }
         }
     }
 
@@ -1486,19 +1488,21 @@ class DesktopNextcloudServices(
         accountId: String,
         changedPaths: Set<String>,
     ) {
-        val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
-        val roots = runCatching { cache.queueRetainedFoldersForListingRefresh(accountId, changedPaths) }
-            .getOrDefault(emptyList())
-        synchronized(virtualFolderMutationLock) {
-            advanceAffectedVirtualFolderGenerations(
-                virtualFolderMutationGenerationsByJob,
-                virtualFolderCompletedGenerations,
-                accountId,
-                roots,
-            )
-        }
-        roots.forEach { root ->
-            runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+        synchronized(virtualFileProviderLock) {
+            val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
+            val roots = runCatching { cache.queueRetainedFoldersForListingRefresh(accountId, changedPaths) }
+                .getOrDefault(emptyList())
+            synchronized(virtualFolderMutationLock) {
+                advanceAffectedVirtualFolderGenerations(
+                    virtualFolderMutationGenerationsByJob,
+                    virtualFolderCompletedGenerations,
+                    accountId,
+                    roots,
+                )
+            }
+            roots.forEach { root ->
+                runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+            }
         }
     }
 
