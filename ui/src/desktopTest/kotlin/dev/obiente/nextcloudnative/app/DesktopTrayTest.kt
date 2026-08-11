@@ -58,7 +58,12 @@ class DesktopTrayTest {
     @Test
     fun statusNotifierItemPublishesIdentityAndActivatesTheCustomPanel() {
         var activated = false
-        val item = LinuxStatusNotifierItem("All files are synced") { activated = true }
+        var titleChanges = 0
+        val item = LinuxStatusNotifierItem(
+            initialTooltip = "All files are synced",
+            onActivated = { activated = true },
+            onTitleChanged = { titleChanges += 1 },
+        )
 
         assertEquals(
             "dev.obiente.nextcloudnative",
@@ -74,8 +79,16 @@ class DesktopTrayTest {
         )
         assertFalse(activated)
 
+        item.updateTooltip("Sync needs attention")
+        item.updateTooltip("Sync needs attention")
+
         item.Activate(0, 0)
 
         assertEquals(true, activated)
+        assertEquals(1, titleChanges)
+        assertEquals(
+            "Sync needs attention",
+            item.Get<String>("org.kde.StatusNotifierItem", "Title"),
+        )
     }
 }

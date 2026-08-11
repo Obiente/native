@@ -98,6 +98,30 @@ class DesktopStartOnLoginTest {
     }
 
     @Test
+    fun explicitQuitStopsTheConfiguredUserServiceWithoutWaitingForItself() {
+        val root = createTempDirectory("nextcloud-native-startup-explicit-quit").toFile()
+        File(root, ".config/systemd/user").mkdirs()
+        File(root, ".config/systemd/user/nextcloud-native.service").writeText("configured")
+        var command: List<String>? = null
+
+        assertTrue(
+            stopLinuxUserServiceForExplicitQuit(
+                osName = "Linux",
+                userHome = root,
+                linuxConfigHome = File(root, ".config"),
+                processRunner = {
+                    command = it
+                    0
+                },
+            ),
+        )
+        assertEquals(
+            listOf("systemctl", "--user", "--no-block", "stop", "nextcloud-native.service"),
+            command,
+        )
+    }
+
+    @Test
     fun windowsRegistrationUsesTheCurrentUserRunKey() {
         val root = createTempDirectory("nextcloud-native-startup-windows").toFile()
         val launcher = File(root, "NextcloudNative.exe").apply { writeText("launcher") }

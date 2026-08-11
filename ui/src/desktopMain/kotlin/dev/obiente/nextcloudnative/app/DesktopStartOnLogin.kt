@@ -264,6 +264,29 @@ internal fun handoffLinuxForegroundLaunchToUserService(
     return started && runCatching(activationForwarder).getOrDefault(false)
 }
 
+/**
+ * Cancels a configured supervised instance before an explicit application quit releases the
+ * single-instance lock. `--no-block` is required when the caller is itself owned by the unit.
+ */
+internal fun stopLinuxUserServiceForExplicitQuit(
+    osName: String = System.getProperty("os.name").orEmpty(),
+    userHome: File = File(System.getProperty("user.home")),
+    linuxConfigHome: File = linuxDesktopConfigHome(userHome),
+    processRunner: (List<String>) -> Int = { command ->
+        ProcessBuilder(command).redirectErrorStream(true).start().also { process ->
+            process.inputStream.bufferedReader().use { it.readText() }
+        }.waitFor()
+    },
+): Boolean {
+    if (!osName.lowercase().contains("linux")) return false
+    if (!File(linuxConfigHome, "systemd/user/$LINUX_USER_SERVICE_NAME").isFile) return false
+    return runCatching {
+        processRunner(
+            listOf("systemctl", "--user", "--no-block", "stop", LINUX_USER_SERVICE_NAME),
+        ) == 0
+    }.getOrDefault(false)
+}
+
 private fun linuxDesktopConfigHome(userHome: File): File = System.getenv("XDG_CONFIG_HOME")
     ?.takeIf(String::isNotBlank)
     ?.let(::File)

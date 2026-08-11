@@ -561,7 +561,20 @@ internal class DesktopFileReadCache(
         val hydratedOrdinaryPaths = listings.mapTo(hashSetOf(), CachedListingV1::path)
         val ordinaryReferences = listings.flatMap { listing ->
             reusableListingShards(directory, listing)?.let { return@flatMap it }
-            val chunks = listing.files.metadataChunks()
+            val chunks = listing.files.metadataChunks(
+                emptyPayloadBytes = cacheJson.encodeToString(
+                    CachedListingShardV1(
+                        path = listing.path,
+                        fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
+                        partIndex = MAX_METADATA_SHARDS_PER_LISTING - 1,
+                        partCount = MAX_METADATA_SHARDS_PER_LISTING,
+                        files = emptyList(),
+                    ),
+                ).encodeToByteArray().size.toLong(),
+                encodedEntryBytes = { file ->
+                    cacheJson.encodeToString(file).encodeToByteArray().size.toLong()
+                },
+            )
             chunks.mapIndexed { partIndex, files ->
                 val payload = CachedListingShardV1(
                     path = listing.path,
@@ -586,7 +599,21 @@ internal class DesktopFileReadCache(
         val hydratedVirtualPaths = virtualListings.mapTo(hashSetOf(), CachedVirtualListingV1::path)
         val virtualReferences = virtualListings.flatMap { listing ->
             reusableVirtualListingShards(directory, listing)?.let { return@flatMap it }
-            val chunks = listing.nodes.metadataChunks()
+            val chunks = listing.nodes.metadataChunks(
+                emptyPayloadBytes = cacheJson.encodeToString(
+                    CachedVirtualListingShardV1(
+                        path = listing.path,
+                        fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
+                        partIndex = MAX_METADATA_SHARDS_PER_LISTING - 1,
+                        partCount = MAX_METADATA_SHARDS_PER_LISTING,
+                        nodes = emptyList(),
+                        freshAtEpochMillis = listing.freshAtEpochMillis,
+                    ),
+                ).encodeToByteArray().size.toLong(),
+                encodedEntryBytes = { node ->
+                    cacheJson.encodeToString(node).encodeToByteArray().size.toLong()
+                },
+            )
             chunks.mapIndexed { partIndex, nodes ->
                 val payload = CachedVirtualListingShardV1(
                     path = listing.path,
@@ -826,8 +853,48 @@ internal class DesktopFileReadCache(
         )
     }
 
-    private fun <T> List<T>.metadataChunks(): List<List<T>> =
-        if (isEmpty()) listOf(emptyList()) else chunked(MAX_METADATA_SHARD_ENTRIES)
+    /**
+     * Keeps both the record-count and encoded-byte limits before any shard reaches disk.
+     *
+     * [emptyPayloadBytes] is encoded with the largest permitted part numbers, so the final
+     * payload envelope can only be the same size or smaller. JSON encodes the empty array as two
+     * bytes; replacing it with independently encoded entries plus commas gives the exact array
+     * contribution without repeatedly serializing a growing chunk.
+     */
+    private fun <T> List<T>.metadataChunks(
+        emptyPayloadBytes: Long,
+        encodedEntryBytes: (T) -> Long,
+    ): List<List<T>> {
+        require(emptyPayloadBytes in 2L..MAX_METADATA_SHARD_BYTES)
+        if (isEmpty()) return listOf(emptyList())
+        val payloadEnvelopeBytes = emptyPayloadBytes - EMPTY_JSON_ARRAY_BYTES
+        val chunks = mutableListOf<List<T>>()
+        var current = mutableListOf<T>()
+        var currentEntriesBytes = 0L
+        for (entry in this) {
+            val entryBytes = encodedEntryBytes(entry)
+            val separatorBytes = if (current.isEmpty()) 0L else JSON_ARRAY_SEPARATOR_BYTES
+            val candidateBytes = payloadEnvelopeBytes + currentEntriesBytes + separatorBytes + entryBytes
+            if (
+                current.isNotEmpty() &&
+                (current.size >= MAX_METADATA_SHARD_ENTRIES || candidateBytes > MAX_METADATA_SHARD_BYTES)
+            ) {
+                chunks += current
+                current = mutableListOf()
+                currentEntriesBytes = 0L
+            }
+            val nextSeparatorBytes = if (current.isEmpty()) 0L else JSON_ARRAY_SEPARATOR_BYTES
+            require(payloadEnvelopeBytes + currentEntriesBytes + nextSeparatorBytes + entryBytes <=
+                MAX_METADATA_SHARD_BYTES) {
+                "One Files metadata record is too large to persist safely."
+            }
+            current += entry
+            currentEntriesBytes += nextSeparatorBytes + entryBytes
+        }
+        chunks += current
+        require(chunks.size <= MAX_METADATA_SHARDS_PER_LISTING)
+        return chunks
+    }
 
     private fun publishMetadataShard(directory: File, encoded: ByteArray): Pair<String, String> {
         require(encoded.size.toLong() <= MAX_METADATA_SHARD_BYTES) { "A Files metadata shard is too large." }
@@ -1146,11 +1213,15 @@ internal class DesktopFileReadCache(
         const val MAX_FILES_PER_LISTING = 50_000
         const val MAX_TOTAL_METADATA_ENTRIES = 250_000
         const val MAX_METADATA_SHARD_ENTRIES = 256
+        // v1 indexes written before denser shards used 64 entries per part. Decode against that
+        // historical lower bound while the byte-aware writer can still use up to 256 entries.
+        const val MIN_SUPPORTED_METADATA_SHARD_ENTRIES = 64
         const val MAX_METADATA_SHARDS_PER_LISTING =
-            (MAX_FILES_PER_LISTING + MAX_METADATA_SHARD_ENTRIES - 1) / MAX_METADATA_SHARD_ENTRIES
+            (MAX_FILES_PER_LISTING + MIN_SUPPORTED_METADATA_SHARD_ENTRIES - 1) /
+                MIN_SUPPORTED_METADATA_SHARD_ENTRIES
         const val MAX_METADATA_SHARDS =
-            (MAX_TOTAL_METADATA_ENTRIES + MAX_METADATA_SHARD_ENTRIES - 1) / MAX_METADATA_SHARD_ENTRIES +
-                MAX_LISTINGS * 2
+            (MAX_TOTAL_METADATA_ENTRIES + MIN_SUPPORTED_METADATA_SHARD_ENTRIES - 1) /
+                MIN_SUPPORTED_METADATA_SHARD_ENTRIES + MAX_LISTINGS * 2
         const val MAX_METADATA_SHARD_BYTES = 4L * 1024L * 1024L
         const val MAX_HYDRATED_METADATA_BYTES = 32L * 1024L * 1024L
         const val METADATA_SHARD_EXTENSION = "metadata"
@@ -1171,6 +1242,8 @@ internal class DesktopFileReadCache(
         const val KEY_MINIMUM_FREE_BYTES = "minimum-free-bytes"
         const val KEY_UNUSED_FILE_AGE = "unused-file-age"
         const val UNLIMITED_SENTINEL = -1L
+        const val EMPTY_JSON_ARRAY_BYTES = 2L
+        const val JSON_ARRAY_SEPARATOR_BYTES = 1L
     }
 }
 

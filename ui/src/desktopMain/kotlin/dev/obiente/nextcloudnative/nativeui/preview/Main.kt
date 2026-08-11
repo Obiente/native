@@ -27,6 +27,7 @@ import dev.obiente.nextcloudnative.app.DesktopActivationKind
 import dev.obiente.nextcloudnative.app.DesktopSingleInstance
 import dev.obiente.nextcloudnative.app.DesktopSingleInstanceStart
 import dev.obiente.nextcloudnative.app.DesktopTrayRegistration
+import dev.obiente.nextcloudnative.app.DesktopTrayActionFeedback
 import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayPhase
 import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayPopup
 import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
@@ -43,6 +44,7 @@ import dev.obiente.nextcloudnative.app.handoffLinuxForegroundLaunchToUserService
 import dev.obiente.nextcloudnative.app.installDesktopBootstrapUncaughtDiagnosticHandler
 import dev.obiente.nextcloudnative.app.installDesktopUncaughtDiagnosticHandler
 import dev.obiente.nextcloudnative.app.registerDesktopTray
+import dev.obiente.nextcloudnative.app.stopLinuxUserServiceForExplicitQuit
 import dev.obiente.nextcloudnative.app.tooltip
 import dev.obiente.nextcloudnative.app.unregisterWindowsCloudFilesRootForUninstall
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
@@ -137,6 +139,7 @@ fun main(arguments: Array<String>) {
     val trayRegistrationResolved = remember { mutableStateOf(false) }
     val windowVisible = remember { mutableStateOf(!backgroundLaunch) }
     val trayPopupVisible = remember { mutableStateOf(false) }
+    val trayActionFeedback = remember { mutableStateOf<DesktopTrayActionFeedback?>(null) }
     val trayPopupWindow = remember { mutableStateOf<java.awt.Window?>(null) }
     val desktopTrayRegistration = remember { mutableStateOf<DesktopTrayRegistration?>(null) }
     val mainWindow = remember { mutableStateOf<java.awt.Window?>(null) }
@@ -207,6 +210,11 @@ fun main(arguments: Array<String>) {
         navigationSequence.value += 1L
         navigationRequest.value = NextcloudNativeNavigationRequest(navigationSequence.value, route)
         showMainWindow()
+    }
+
+    fun quitDesktopApp() {
+        stopLinuxUserServiceForExplicitQuit()
+        exitApplication()
     }
 
     LaunchedEffect(singleInstance) {
@@ -287,6 +295,11 @@ fun main(arguments: Array<String>) {
                     onSyncNow = {
                         scope.launch {
                             val result = services.syncAllFileSyncPairsFromTray()
+                            trayActionFeedback.value = DesktopTrayActionFeedback(
+                                message = result.trayMessage(),
+                                error = result is FileSyncCenterActionResult.Rejected ||
+                                    result is FileSyncCenterActionResult.Unsupported,
+                            )
                             desktopTrayRegistration.value?.showMessage(
                                 "Folder sync",
                                 result.trayMessage(),
@@ -299,7 +312,8 @@ fun main(arguments: Array<String>) {
                             traySnapshot.phase != DesktopFileSyncTrayPhase.Paused,
                         )
                     },
-                    onQuit = ::exitApplication,
+                    onQuit = ::quitDesktopApp,
+                    actionFeedback = trayActionFeedback.value,
                 )
             }
         }
@@ -307,10 +321,10 @@ fun main(arguments: Array<String>) {
 
     Window(
         onCloseRequest = {
-            if (trayAvailable.value && keepRunningInBackground.value) {
+            if (shouldKeepDesktopProcessRunningOnWindowClose(keepRunningInBackground.value)) {
                 windowVisible.value = false
             } else {
-                exitApplication()
+                quitDesktopApp()
             }
         },
         visible = windowVisible.value,
@@ -356,6 +370,10 @@ internal fun shouldClearDesktopNavigationRequest(
 
 internal fun nextDesktopFocusRequestSequence(current: Long): Long =
     if (current == Long.MAX_VALUE) 0L else current + 1L
+
+internal fun shouldKeepDesktopProcessRunningOnWindowClose(
+    keepRunningInBackground: Boolean,
+): Boolean = keepRunningInBackground
 
 private fun FileSyncCenterActionResult.trayMessage(): String = when (this) {
     is FileSyncCenterActionResult.Completed -> message

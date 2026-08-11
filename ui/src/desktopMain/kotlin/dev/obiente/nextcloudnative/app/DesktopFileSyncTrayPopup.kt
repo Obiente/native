@@ -44,6 +44,11 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+data class DesktopTrayActionFeedback(
+    val message: String,
+    val error: Boolean,
+)
+
 @Composable
 fun DesktopFileSyncTrayPopup(
     snapshot: DesktopFileSyncTraySnapshot,
@@ -53,6 +58,7 @@ fun DesktopFileSyncTrayPopup(
     onSyncNow: () -> Unit,
     onTogglePaused: () -> Unit,
     onQuit: () -> Unit,
+    actionFeedback: DesktopTrayActionFeedback? = null,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -79,6 +85,7 @@ fun DesktopFileSyncTrayPopup(
                 onTogglePaused = onTogglePaused,
                 onOpenSyncCenter = onOpenSyncCenter,
             )
+            actionFeedback?.let { feedback -> TrayActionFeedback(feedback) }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             TrayActivityList(snapshot = snapshot, onOpenApp = onOpenApp, modifier = Modifier.weight(1f))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -91,6 +98,32 @@ fun DesktopFileSyncTrayPopup(
                 TextButton(onClick = onQuit) { Text("Quit") }
             }
         }
+    }
+}
+
+@Composable
+private fun TrayActionFeedback(feedback: DesktopTrayActionFeedback) {
+    val containerColor = if (feedback.error) {
+        MaterialTheme.colorScheme.errorContainer
+    } else {
+        MaterialTheme.colorScheme.secondaryContainer
+    }
+    val contentColor = if (feedback.error) {
+        MaterialTheme.colorScheme.onErrorContainer
+    } else {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = containerColor,
+        contentColor = contentColor,
+    ) {
+        Text(
+            text = feedback.message,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 

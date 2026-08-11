@@ -9,6 +9,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 
 class DesktopFileReadCacheTest {
     @Test
@@ -253,6 +259,70 @@ class DesktopFileReadCacheTest {
             runCatching { preferences.removeNode() }
             root.deleteRecursively()
         }
+    }
+
+    @Test
+    fun `legacy v1 shard counts do not discard unrelated cached content`() = withCache { root, cache ->
+        val accountId = desktopFileCacheAccountId(session())
+        cache.storeListing(accountId, "Library", listOf(file("Library/photo.jpg", "library-etag")), 10L)
+        assertTrue(
+            cache.storeContent(
+                accountId,
+                "safe.bin",
+                NextcloudFileContent(byteArrayOf(7), "application/octet-stream", "safe-etag"),
+                20L,
+            ),
+        )
+        val index = root.resolve(accountId).resolve("index-v1.json")
+        val document = Json.parseToJsonElement(index.readText()).jsonObject
+        val template = document.getValue("listingShards").jsonArray.single().jsonObject
+        val legacyReferences = JsonArray(
+            List(197) { partIndex ->
+                JsonObject(
+                    template.toMutableMap().apply {
+                        put("partIndex", JsonPrimitive(partIndex))
+                        put("partCount", JsonPrimitive(197))
+                    },
+                )
+            },
+        )
+        index.writeText(
+            JsonObject(
+                document.toMutableMap().apply { put("listingShards", legacyReferences) },
+            ).toString(),
+        )
+
+        val restored = DesktopFileReadCache(root, preferences = testPreferences(root))
+
+        assertContentEquals(byteArrayOf(7), restored.cachedContent(accountId, "safe.bin", 10)?.bytes)
+    }
+
+    @Test
+    fun `metadata shards stay byte bounded for maximum escaped records`() = withCache { root, cache ->
+        val accountId = desktopFileCacheAccountId(session())
+        val files = List(256) { index ->
+            file("Library/photo-$index.jpg", "etag-$index").copy(
+                name = "\"".repeat(1_024),
+                mimeType = "\"".repeat(512),
+                lastModified = "\"".repeat(128),
+                etag = "\"".repeat(4_096),
+                permissions = "\"".repeat(256),
+                ownerId = "\"".repeat(1_024),
+                ownerDisplayName = "\"".repeat(1_024),
+                checksums = List(16) { "\"".repeat(512) },
+            )
+        }
+
+        cache.storeListing(accountId, "Library", files, nowEpochMillis = 123_456L)
+        val shards = root.resolve(accountId).listFiles().orEmpty().filter { it.extension == "metadata" }
+
+        assertTrue(shards.size > 1)
+        assertTrue(shards.all { shard -> shard.length() <= 4L * 1024L * 1024L })
+        assertEquals(
+            files,
+            DesktopFileReadCache(root, preferences = testPreferences(root))
+                .cachedListing(accountId, "Library"),
+        )
     }
 
     @Test

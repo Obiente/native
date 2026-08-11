@@ -11,6 +11,7 @@ import org.freedesktop.dbus.connections.impl.DBusConnection
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
 import org.freedesktop.dbus.interfaces.DBusInterface
 import org.freedesktop.dbus.interfaces.Properties
+import org.freedesktop.dbus.messages.DBusSignal
 import org.freedesktop.dbus.types.Variant
 
 internal interface DesktopTrayRegistration : AutoCloseable {
@@ -91,6 +92,8 @@ internal interface StatusNotifierWatcher : DBusInterface {
 @DBusProperty(name = "IconName", type = String::class)
 @DBusProperty(name = "ItemIsMenu", type = Boolean::class)
 internal interface StatusNotifierItem : DBusInterface {
+    class NewTitle(path: String) : DBusSignal(path)
+
     @Suppress("FunctionName")
     fun Activate(x: Int, y: Int)
 
@@ -107,9 +110,16 @@ internal interface StatusNotifierItem : DBusInterface {
 internal class LinuxStatusNotifierItem(
     initialTooltip: String,
     private val onActivated: () -> Unit,
+    private val onTitleChanged: () -> Unit = {},
 ) : StatusNotifierItem, Properties {
     @Volatile
-    var tooltip: String = initialTooltip
+    private var tooltip: String = initialTooltip
+
+    fun updateTooltip(updatedTooltip: String) {
+        if (updatedTooltip == tooltip) return
+        tooltip = updatedTooltip
+        onTitleChanged()
+    }
 
     override fun getObjectPath(): String = STATUS_NOTIFIER_ITEM_PATH
 
@@ -154,7 +164,7 @@ private class LinuxStatusNotifierTray private constructor(
     private val item: LinuxStatusNotifierItem,
 ) : DesktopTrayRegistration {
     override fun updateTooltip(tooltip: String) {
-        item.tooltip = tooltip
+        item.updateTooltip(tooltip)
     }
 
     override fun showMessage(title: String, message: String, error: Boolean) = Unit
@@ -169,7 +179,13 @@ private class LinuxStatusNotifierTray private constructor(
             runCatching {
                 val connection = DBusConnectionBuilder.forSessionBus().withShared(false).build()
                 val serviceName = "org.freedesktop.StatusNotifierItem-${ProcessHandle.current().pid()}-1"
-                val item = LinuxStatusNotifierItem(tooltip, onActivated)
+                val item = LinuxStatusNotifierItem(
+                    initialTooltip = tooltip,
+                    onActivated = onActivated,
+                    onTitleChanged = {
+                        connection.sendMessage(StatusNotifierItem.NewTitle(STATUS_NOTIFIER_ITEM_PATH))
+                    },
+                )
                 try {
                     connection.requestBusName(serviceName)
                     connection.exportObject(item)
