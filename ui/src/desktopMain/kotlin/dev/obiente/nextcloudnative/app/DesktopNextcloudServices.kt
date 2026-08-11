@@ -852,6 +852,7 @@ class DesktopNextcloudServices(
     @Volatile
     private var sessionClearing = false
     private val virtualFileProviderLock = Any()
+    private val virtualFileCacheTierMutations = mutableSetOf<String>()
     private var linuxVirtualFileSystem: LinuxNextcloudVirtualFileSystem? = null
     private var linuxVirtualMetadataBackend: CachingLinuxVirtualFileBackend? = null
     private var linuxVirtualFileMountIdentity: String? = null
@@ -902,6 +903,7 @@ class DesktopNextcloudServices(
         cache: DesktopVirtualRangeCache,
     ) {
         if (sessionClearing) return
+        if (synchronized(virtualFileProviderLock) { accountId in virtualFileCacheTierMutations }) return
         val jobKey = "$accountId\u0000$relativePath"
         synchronized(virtualFolderHydrationJobs) {
             if (sessionClearing) return
@@ -1288,9 +1290,15 @@ class DesktopNextcloudServices(
                     }
                 }
         }
-        val accepted = synchronized(virtualFolderHydrationJobs) {
-            if (sessionClearing || virtualFolderHydrationJobs[jobKey].occupiesVirtualFolderHydrationSlot()) false
-            else true.also { virtualFolderHydrationJobs[jobKey] = job }
+        val accepted = synchronized(virtualFileProviderLock) {
+            synchronized(virtualFolderHydrationJobs) {
+                if (
+                    sessionClearing ||
+                    accountId in virtualFileCacheTierMutations ||
+                    virtualFolderHydrationJobs[jobKey].occupiesVirtualFolderHydrationSlot()
+                ) false
+                else true.also { virtualFolderHydrationJobs[jobKey] = job }
+            }
         }
         if (accepted) job.start() else job.cancel()
     }
@@ -2013,15 +2021,19 @@ class DesktopNextcloudServices(
             val currentConfiguration = desktopVirtualFileCacheTiers(preferences, accountId)
             val currentCache = virtualRangeCache(accountId)
             val normalizedOverflow = overflow?.toString()
-            if (normalizedOverflow != currentConfiguration.overflowPath) {
-                runCatching { currentCache.consolidateOverflow(accountId) }.getOrElse { failure ->
-                    return@withContext VirtualFileStorageActionResult.Rejected(
-                        failure.message ?: "Could not preserve the current overflow cache.",
-                    )
-                }
-            }
             val primaryChanges = primary.toString() != currentConfiguration.primaryPath
-            if (primaryChanges) {
+            val overflowChanges = normalizedOverflow != currentConfiguration.overflowPath
+            if (!primaryChanges && !overflowChanges) {
+                return@withContext VirtualFileStorageActionResult.Completed(
+                    "The virtual-file cache already uses these locations.",
+                )
+            }
+            if (!virtualFileCacheTierMutations.add(accountId)) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "A virtual-file cache location change is already in progress.",
+                )
+            }
+            try {
                 val hydrationActive = synchronized(virtualFolderHydrationJobs) {
                     virtualFolderHydrationJobs.any { (key, job) ->
                         key.startsWith("$accountId\u0000") && job.occupiesVirtualFolderHydrationSlot()
@@ -2029,46 +2041,59 @@ class DesktopNextcloudServices(
                 }
                 if (hydrationActive) {
                     return@withContext VirtualFileStorageActionResult.Rejected(
-                        "Wait for kept-folder downloads to finish before moving the primary cache.",
+                        "Wait for kept-folder downloads to finish before changing cache drives.",
                     )
                 }
-            }
-            val targetCache = runCatching {
-                DesktopVirtualRangeCache(
-                    root = primary.toFile(),
-                    overflowRoot = overflow?.toFile(),
-                    policy = fileReadCache::loadPolicy,
-                    createParentDirectories = false,
-                    initializeOverflowMarker = overflow != null,
-                )
-            }.getOrElse { failure ->
-                return@withContext VirtualFileStorageActionResult.Rejected(
-                    failure.message ?: "Could not prepare the selected cache folders.",
-                )
-            }
-            if (primaryChanges) {
-                runCatching { currentCache.copyPrimaryAccountTo(accountId, targetCache) }.getOrElse { failure ->
+                if (overflowChanges) {
+                    runCatching { currentCache.consolidateOverflow(accountId) }.getOrElse { failure ->
+                        return@withContext VirtualFileStorageActionResult.Rejected(
+                            failure.message ?: "Could not preserve the current overflow cache.",
+                        )
+                    }
+                }
+                val targetCache = runCatching {
+                    DesktopVirtualRangeCache(
+                        root = primary.toFile(),
+                        overflowRoot = overflow?.toFile(),
+                        policy = fileReadCache::loadPolicy,
+                        createParentDirectories = false,
+                        initializeOverflowMarker = overflow != null,
+                    )
+                }.getOrElse { failure ->
                     return@withContext VirtualFileStorageActionResult.Rejected(
-                        failure.message ?: "Could not move the primary cache safely.",
+                        failure.message ?: "Could not prepare the selected cache folders.",
                     )
                 }
-            }
-            preferences.put(
-                virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX, accountId),
-                primary.toString(),
-            )
-            val overflowKey = virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX, accountId)
-            if (overflow == null) preferences.remove(overflowKey) else preferences.put(overflowKey, overflow.toString())
-            preferences.flush()
-            synchronized(virtualRangeCaches) { virtualRangeCaches.remove(accountId) }
-            if (primaryChanges) runCatching { currentCache.removeCopiedPrimaryAccount(accountId) }
-            VirtualFileStorageActionResult.Completed(
+                if (primaryChanges) {
+                    runCatching { currentCache.copyPrimaryAccountTo(accountId, targetCache) }.getOrElse { failure ->
+                        return@withContext VirtualFileStorageActionResult.Rejected(
+                            failure.message ?: "Could not move the primary cache safely.",
+                        )
+                    }
+                }
+                preferences.put(
+                    virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX, accountId),
+                    primary.toString(),
+                )
+                val overflowKey = virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX, accountId)
                 if (overflow == null) {
-                    "Primary virtual-file cache saved. Overflow storage is off."
+                    preferences.remove(overflowKey)
                 } else {
-                    "Primary and overflow virtual-file cache locations saved."
-                },
-            )
+                    preferences.put(overflowKey, overflow.toString())
+                }
+                preferences.flush()
+                synchronized(virtualRangeCaches) { virtualRangeCaches.remove(accountId) }
+                if (primaryChanges) runCatching { currentCache.removeCopiedPrimaryAccount(accountId) }
+                VirtualFileStorageActionResult.Completed(
+                    if (overflow == null) {
+                        "Primary virtual-file cache saved. Overflow storage is off."
+                    } else {
+                        "Primary and overflow virtual-file cache locations saved."
+                    },
+                )
+            } finally {
+                virtualFileCacheTierMutations.remove(accountId)
+            }
         }
     }
 

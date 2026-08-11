@@ -60,6 +60,8 @@ internal class DesktopVirtualRangeCache(
     private val createParentDirectories: Boolean = true,
     private val initializeOverflowMarker: Boolean = false,
     private val accessTimePersistenceIntervalMillis: Long = ACCESS_TIME_PERSISTENCE_INTERVAL_MILLIS,
+    private val beforeBlockValidation: (File) -> Unit = {},
+    private val afterDurableIndexPublication: () -> Unit = {},
     private val policy: () -> VirtualFileCachePolicy,
 ) {
     private val activePaths = mutableMapOf<FileOfflineKey, Int>()
@@ -152,7 +154,9 @@ internal class DesktopVirtualRangeCache(
         } ?: return null
         if (record.storageTier == CachedRangeStorageTier.Overflow && !isOverflowAvailable()) return null
         val blob = blobFile(accountId, record)
+        beforeBlockValidation(blob)
         if (!blob.isFile || blob.length() != length.toLong()) {
+            if (record.storageTier == CachedRangeStorageTier.Overflow && !isOverflowAvailable()) return null
             removeRecord(accountId, index, record, blob)
             return null
         }
@@ -1046,7 +1050,9 @@ internal class DesktopVirtualRangeCache(
         }
         val published = mutableListOf<File>()
         try {
-            sourceFiles.sortedWith(compareBy<File> { it.name == INDEX_FILE }.thenBy(File::getName)).forEach { source ->
+            sourceFiles.sortedWith(
+                compareBy<File> { it.name in setOf(LEGACY_INDEX_FILE, TIERED_INDEX_FILE) }.thenBy(File::getName),
+            ).forEach { source ->
                 val target = File(destinationDirectory, source.name)
                 destination.publishFile(source, target, sha256Hex(source))
                 published += target
@@ -1293,13 +1299,8 @@ internal class DesktopVirtualRangeCache(
 
     private fun load(accountId: String): RangeCacheIndex {
         loadedIndexes[accountId]?.let { return it }
-        val file = File(accountDirectory(accountId), INDEX_FILE)
-        if (!file.isFile || file.length() !in 1L..maximumSerializedIndexBytes()) {
-            return RangeCacheIndex().also { loadedIndexes[accountId] = it }
-        }
-        return runCatching {
-            rangeCacheJson.decodeFromString<RangeCacheIndex>(file.readText()).also { index -> index.requireValid() }
-        }.getOrElse { RangeCacheIndex() }.also { loadedIndexes[accountId] = it }
+        return (loadRangeIndexFromDirectory(accountDirectory(accountId)) ?: RangeCacheIndex())
+            .also { loadedIndexes[accountId] = it }
     }
 
     private fun loadRetention(accountId: String): VirtualFolderRetentionIndex {
@@ -1354,8 +1355,7 @@ internal class DesktopVirtualRangeCache(
     ) {
         val directory = writableAccountDirectory(accountId)
         val bounded = boundedIndex(accountId, index, retention)
-        val encoded = encodedIndex(bounded)
-        publishBytes(directory, INDEX_FILE, encoded)
+        publishRangeIndexes(directory, bounded)
         loadedIndexes[accountId] = bounded
         dirtyAccessTimeAccounts -= accountId
         val primaryReferenced = bounded.blocks.asSequence()
@@ -1375,8 +1375,7 @@ internal class DesktopVirtualRangeCache(
     }
 
     private fun persistAccessTimes(accountId: String, index: RangeCacheIndex) {
-        val encoded = encodedIndex(index)
-        publishBytes(writableAccountDirectory(accountId), INDEX_FILE, encoded)
+        publishRangeIndexes(writableAccountDirectory(accountId), index)
     }
 
     private fun saveRetention(accountId: String, index: VirtualFolderRetentionIndex) {
@@ -1431,9 +1430,57 @@ internal class DesktopVirtualRangeCache(
             require(encoded.size.toLong() <= limit) { "The desktop virtual range index is too large." }
         }
 
+    private fun RangeCacheIndex.toLegacy(): LegacyRangeCacheIndex = LegacyRangeCacheIndex(
+        blocks = blocks.filter { it.storageTier == CachedRangeStorageTier.Primary }.map { block ->
+            LegacyCachedRangeBlock(
+                path = block.path,
+                remoteRevision = block.remoteRevision,
+                fileSize = block.fileSize,
+                offset = block.offset,
+                length = block.length,
+                blobName = block.blobName,
+                sha256 = block.sha256,
+                cachedAtEpochMillis = block.cachedAtEpochMillis,
+                lastAccessedAtEpochMillis = block.lastAccessedAtEpochMillis,
+                pendingPublication = block.pendingPublication,
+            )
+        },
+        folderRules = folderRules,
+    )
+
+    private fun LegacyCachedRangeBlock.toTiered(): CachedRangeBlock = CachedRangeBlock(
+        path = path,
+        remoteRevision = remoteRevision,
+        fileSize = fileSize,
+        offset = offset,
+        length = length,
+        blobName = blobName,
+        sha256 = sha256,
+        cachedAtEpochMillis = cachedAtEpochMillis,
+        lastAccessedAtEpochMillis = lastAccessedAtEpochMillis,
+        pendingPublication = pendingPublication,
+    )
+
+    private fun CachedRangeBlock.identity(): String =
+        "$path\u0000$remoteRevision\u0000$fileSize\u0000$offset"
+
+    private fun publishRangeIndexes(directory: File, index: RangeCacheIndex) {
+        publishBytes(directory, TIERED_INDEX_FILE, encodedIndex(index))
+        syncDirectoryMetadata(directory)
+        val legacy = index.toLegacy()
+        val encodedLegacy = rangeCacheJson.encodeToString(legacy).encodeToByteArray()
+        require(encodedLegacy.size.toLong() <= maximumSerializedIndexBytes()) {
+            "The legacy desktop virtual range index is too large."
+        }
+        publishBytes(directory, LEGACY_INDEX_FILE, encodedLegacy)
+        syncDirectoryMetadata(directory)
+        afterDurableIndexPublication()
+    }
+
     private fun maximumSerializedIndexBytes(): Long = maximumIndexBytes * 2L
 
     private fun removeRecord(accountId: String, index: RangeCacheIndex, record: CachedRangeBlock, blob: File) {
+        if (record.storageTier == CachedRangeStorageTier.Overflow && !isOverflowAvailable()) return
         blob.delete()
         save(accountId, index.copy(blocks = index.blocks.filterNot { it == record }))
     }
@@ -1889,11 +1936,44 @@ internal class DesktopVirtualRangeCache(
     }
 
     private fun loadRangeIndexFromDirectory(directory: File): RangeCacheIndex? {
-        val file = File(directory, INDEX_FILE)
-        if (!file.isFile || file.length() !in 1L..maximumSerializedIndexBytes()) return null
-        return runCatching {
-            rangeCacheJson.decodeFromString<RangeCacheIndex>(file.readText()).also { index -> index.requireValid() }
-        }.getOrNull()
+        val tiered = File(directory, TIERED_INDEX_FILE).takeIf {
+            it.isFile && it.length() in 1L..maximumSerializedIndexBytes()
+        }?.let { file ->
+            runCatching {
+                rangeCacheJson.decodeFromString<RangeCacheIndex>(file.readText()).also { index -> index.requireValid() }
+            }.getOrNull()
+        }
+        val legacy = File(directory, LEGACY_INDEX_FILE).takeIf {
+            it.isFile && it.length() in 1L..maximumSerializedIndexBytes()
+        }?.let { file ->
+            runCatching {
+                rangeCacheJson.decodeFromString<LegacyRangeCacheIndex>(file.readText()).also { index ->
+                    index.requireValid()
+                }
+            }.getOrNull()
+        }
+        if (tiered == null) {
+            return legacy?.let { index ->
+                RangeCacheIndex(
+                    blocks = index.blocks.map { block -> block.toTiered() },
+                    folderRules = index.folderRules,
+                ).also { migrated -> migrated.requireValid() }
+            }
+        }
+        if (legacy == null) return tiered
+        val legacyBlocks = legacy.blocks.map { block -> block.toTiered() }
+        val legacyIdentities = legacyBlocks.mapTo(hashSetOf()) { block -> block.identity() }
+        val merged = tiered.copy(
+            blocks = tiered.blocks.filterNot { block -> block.identity() in legacyIdentities } + legacyBlocks,
+            folderRules = if (tiered.folderRules.isEmpty()) legacy.folderRules else tiered.folderRules,
+        )
+        return runCatching { merged.also { index -> index.requireValid() } }
+            .getOrElse {
+                RangeCacheIndex(
+                    blocks = legacyBlocks,
+                    folderRules = legacy.folderRules,
+                ).also { fallback -> fallback.requireValid() }
+            }
     }
 
     private fun loadRetainedMetadataIndexFromDirectory(directory: File): RetainedMetadataIndex? {
@@ -1988,13 +2068,20 @@ internal class DesktopVirtualRangeCache(
 
     private fun RangeCacheIndex.requireValid() {
         val (pending, published) = blocks.partition(CachedRangeBlock::pendingPublication)
-        require(version == 1 && pending.size <= maximumBlocks && published.size <= maximumBlocks)
+        require(version == 2 && pending.size <= maximumBlocks && published.size <= maximumBlocks)
         require(
             blocks.map { block ->
                 "${block.path}\u0000${block.remoteRevision}\u0000${block.fileSize}\u0000${block.offset}"
             }.distinct().size == blocks.size,
         )
         blocks.forEach(CachedRangeBlock::requireValid)
+        folderRules.toDomain()
+    }
+
+    private fun LegacyRangeCacheIndex.requireValid() {
+        require(version == 1 && blocks.size <= maximumBlocks * 2)
+        require(blocks.map { block -> block.toTiered().identity() }.distinct().size == blocks.size)
+        blocks.forEach { block -> block.toTiered().requireValid() }
         folderRules.toDomain()
     }
 
@@ -2013,7 +2100,8 @@ internal class DesktopVirtualRangeCache(
     }
 
     private companion object {
-        const val INDEX_FILE = "range-index-v1.json"
+        const val LEGACY_INDEX_FILE = "range-index-v1.json"
+        const val TIERED_INDEX_FILE = "range-index-v2.json"
         const val RETENTION_INDEX_FILE = "folder-retention-v1.json"
         const val RETAINED_METADATA_INDEX_FILE = "retained-metadata-v1.json"
         const val MAX_INDEX_BYTES = 16L * 1024L * 1024L
@@ -2039,7 +2127,7 @@ internal class DesktopVirtualRangeCache(
         val BLOCK_FILE = Regex("[0-9a-f]{64}\\.block")
         val LISTING_FILE = Regex("[0-9a-f]{64}\\.listing")
         val PUBLISHED_TEMP_FILE = Regex(
-            "(?:[0-9a-f]{64}\\.(?:block|listing)|range-index-v1\\.json|folder-retention-v1\\.json|" +
+            "(?:[0-9a-f]{64}\\.(?:block|listing)|range-index-v[12]\\.json|folder-retention-v1\\.json|" +
                 "retained-metadata-v1\\.json)\\.[^.]+\\.tmp",
         )
     }
@@ -2058,9 +2146,30 @@ internal fun defaultDesktopVirtualRangeCache(
 
 @Serializable
 private data class RangeCacheIndex(
-    val version: Int = 1,
+    val version: Int = 2,
     val blocks: List<CachedRangeBlock> = emptyList(),
     val folderRules: List<CachedVirtualFolderRule> = emptyList(),
+)
+
+@Serializable
+private data class LegacyRangeCacheIndex(
+    val version: Int = 1,
+    val blocks: List<LegacyCachedRangeBlock> = emptyList(),
+    val folderRules: List<CachedVirtualFolderRule> = emptyList(),
+)
+
+@Serializable
+private data class LegacyCachedRangeBlock(
+    val path: String,
+    val remoteRevision: String,
+    val fileSize: Long,
+    val offset: Long,
+    val length: Int,
+    val blobName: String,
+    val sha256: String,
+    val cachedAtEpochMillis: Long,
+    val lastAccessedAtEpochMillis: Long,
+    val pendingPublication: Boolean = false,
 )
 
 @Serializable
