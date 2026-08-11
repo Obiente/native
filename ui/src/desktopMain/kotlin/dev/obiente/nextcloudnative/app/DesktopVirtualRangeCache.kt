@@ -2282,8 +2282,9 @@ internal class DesktopVirtualRangeCache(
     }
 
     private fun syncDirectoryMetadata(directory: File) {
-        if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) return
-        FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel -> channel.force(true) }
+        if (!System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+            FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel -> channel.force(true) }
+        }
         afterDirectoryMetadataSync(directory)
     }
 
