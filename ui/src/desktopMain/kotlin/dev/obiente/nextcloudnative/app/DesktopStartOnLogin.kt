@@ -39,6 +39,9 @@ internal class DesktopStartOnLoginController(
             processRunner(listOf("systemctl", "--user", "is-active", "graphical-session.target")) == 0
         }.getOrDefault(false)
     },
+    private val currentProcessIsLinuxUserService: () -> Boolean = {
+        isCurrentProcessOwnedByLinuxUserService()
+    },
 ) {
     private val platform = when {
         osName.lowercase().contains("linux") -> DesktopStartOnLoginPlatform.Linux
@@ -155,7 +158,7 @@ internal class DesktopStartOnLoginController(
         val userDirectory = File(linuxConfigHome, "systemd/user")
         val service = File(userDirectory, LINUX_USER_SERVICE_NAME)
         val systemdAvailable = linuxSystemdAvailable()
-        if (service.isFile && systemdAvailable) {
+        if (service.isFile && systemdAvailable && !currentProcessIsLinuxUserService()) {
             check(
                 runCatching {
                     processRunner(
@@ -230,6 +233,14 @@ internal class DesktopStartOnLoginController(
         const val WINDOWS_RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
         const val WINDOWS_VALUE_NAME = "NextcloudNative"
     }
+}
+
+internal fun isCurrentProcessOwnedByLinuxUserService(
+    systemdExecPid: String? = System.getenv("SYSTEMD_EXEC_PID"),
+    currentPid: Long = ProcessHandle.current().pid(),
+    cgroup: String = runCatching { File("/proc/self/cgroup").readText() }.getOrDefault(""),
+): Boolean = systemdExecPid?.toLongOrNull() == currentPid || cgroup.lineSequence().any { membership ->
+    membership.substringAfterLast(':').split('/').any { component -> component == LINUX_USER_SERVICE_NAME }
 }
 
 private const val LINUX_USER_SERVICE_NAME = "nextcloud-native.service"

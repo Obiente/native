@@ -33,6 +33,7 @@ class DesktopStartOnLoginTest {
             },
             linuxSystemdAvailable = { true },
             linuxGraphicalSessionManaged = { true },
+            currentProcessIsLinuxUserService = { false },
         )
 
         assertTrue(controller.configure(enabled = true).configured)
@@ -99,6 +100,7 @@ class DesktopStartOnLoginTest {
             processRunner = { command -> if (command.contains("stop")) 1 else 0 },
             linuxSystemdAvailable = { true },
             linuxGraphicalSessionManaged = { true },
+            currentProcessIsLinuxUserService = { false },
         )
         assertTrue(controller.configure(enabled = true).configured)
 
@@ -114,6 +116,49 @@ class DesktopStartOnLoginTest {
                 ).toPath(),
             ),
         )
+    }
+
+    @Test
+    fun disablingLinuxAutostartDoesNotStopTheSupervisedPrimaryProcess() {
+        val root = createTempDirectory("nextcloud-native-startup-supervised-primary").toFile()
+        val launcher = File(root, "NextcloudNative").apply { writeText("launcher") }
+        val commands = mutableListOf<List<String>>()
+        val controller = DesktopStartOnLoginController(
+            osName = "Linux",
+            userHome = root,
+            linuxConfigHome = File(root, ".config"),
+            launcherPath = launcher.absolutePath,
+            processRunner = { command ->
+                commands += command
+                0
+            },
+            linuxSystemdAvailable = { true },
+            linuxGraphicalSessionManaged = { true },
+            currentProcessIsLinuxUserService = { true },
+        )
+        assertTrue(controller.configure(enabled = true).configured)
+
+        commands.clear()
+        assertTrue(controller.configure(enabled = false).configured)
+
+        assertEquals(listOf(listOf("systemctl", "--user", "daemon-reload")), commands)
+        assertFalse(File(root, ".config/autostart/nextcloud-native.desktop").exists())
+        assertFalse(File(root, ".config/systemd/user/nextcloud-native.service").exists())
+    }
+
+    @Test
+    fun systemdIdentityRecognizesDirectAndCgroupOwnedServiceProcesses() {
+        assertTrue(isCurrentProcessOwnedByLinuxUserService("2048", currentPid = 2_048L, cgroup = ""))
+        assertTrue(
+            isCurrentProcessOwnedByLinuxUserService(
+                systemdExecPid = null,
+                currentPid = 2_048L,
+                cgroup = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/nextcloud-native.service\n",
+            ),
+        )
+        assertFalse(isCurrentProcessOwnedByLinuxUserService("2047", currentPid = 2_048L, cgroup = "0::/"))
+        assertFalse(isCurrentProcessOwnedByLinuxUserService("not-a-pid", currentPid = 2_048L, cgroup = ""))
+        assertFalse(isCurrentProcessOwnedByLinuxUserService(null, currentPid = 2_048L, cgroup = ""))
     }
 
     @Test

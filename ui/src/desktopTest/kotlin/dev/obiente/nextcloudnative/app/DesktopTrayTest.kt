@@ -98,4 +98,21 @@ class DesktopTrayTest {
         assertFalse(shouldReregisterStatusNotifier("org.kde.StatusNotifierWatcher", ""))
         assertFalse(shouldReregisterStatusNotifier("org.example.OtherService", ":1.42"))
     }
+
+    @Test
+    fun statusNotifierWaitsForAWatcherWhenInitialRegistrationFails() {
+        var attempts = 0
+        val registration = StatusNotifierWatcherRegistration {
+            attempts += 1
+            check(attempts > 1) { "The watcher is not available yet." }
+        }
+
+        assertFalse(registration.registerNow())
+        registration.ownerChanged("org.example.OtherService", ":1.41")
+        assertEquals(1, attempts)
+
+        registration.ownerChanged("org.kde.StatusNotifierWatcher", ":1.42")
+
+        assertEquals(2, attempts)
+    }
 }

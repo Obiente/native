@@ -199,25 +199,19 @@ private class LinuxStatusNotifierTray private constructor(
                             StatusNotifierWatcher::class.java,
                         ).RegisterStatusNotifierItem(serviceName)
                     }
+                    val watcherRegistration = StatusNotifierWatcherRegistration(registerWithWatcher)
                     val watcherOwnerSubscription = connection.addSigHandler(
                         DBus.NameOwnerChanged::class.java,
                     ) { change ->
-                        if (shouldReregisterStatusNotifier(change.name, change.newOwner)) {
-                            runCatching(registerWithWatcher)
-                        }
+                        watcherRegistration.ownerChanged(change.name, change.newOwner)
                     }
-                    try {
-                        registerWithWatcher()
-                        LinuxStatusNotifierTray(
-                            connection,
-                            serviceName,
-                            item,
-                            watcherOwnerSubscription,
-                        )
-                    } catch (failure: Throwable) {
-                        runCatching { watcherOwnerSubscription.close() }
-                        throw failure
-                    }
+                    watcherRegistration.registerNow()
+                    LinuxStatusNotifierTray(
+                        connection,
+                        serviceName,
+                        item,
+                        watcherOwnerSubscription,
+                    )
                 } catch (failure: Throwable) {
                     runCatching { connection.close() }
                     throw failure
@@ -228,6 +222,16 @@ private class LinuxStatusNotifierTray private constructor(
                         "${failure::class.simpleName}: ${failure.message.orEmpty()}",
                 )
             }.getOrNull()
+    }
+}
+
+internal class StatusNotifierWatcherRegistration(
+    private val registerWithWatcher: () -> Unit,
+) {
+    fun registerNow(): Boolean = runCatching(registerWithWatcher).isSuccess
+
+    fun ownerChanged(name: String, newOwner: String) {
+        if (shouldReregisterStatusNotifier(name, newOwner)) registerNow()
     }
 }
 
