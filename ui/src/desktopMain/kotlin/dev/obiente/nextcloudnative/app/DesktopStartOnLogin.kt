@@ -69,8 +69,8 @@ internal class DesktopStartOnLoginController(
     private fun configureLinux(enabled: Boolean, launcher: String): DesktopStartOnLoginResult {
         val entry = File(linuxConfigHome, "autostart/nextcloud-native.desktop")
         if (!enabled) {
-            Files.deleteIfExists(entry.toPath())
             removeLinuxUserService()
+            Files.deleteIfExists(entry.toPath())
             return DesktopStartOnLoginResult(
                 platform,
                 enabled = false,
@@ -153,9 +153,20 @@ internal class DesktopStartOnLoginController(
 
     private fun removeLinuxUserService() {
         val userDirectory = File(linuxConfigHome, "systemd/user")
+        val service = File(userDirectory, LINUX_USER_SERVICE_NAME)
+        val systemdAvailable = linuxSystemdAvailable()
+        if (service.isFile && systemdAvailable) {
+            check(
+                runCatching {
+                    processRunner(
+                        listOf("systemctl", "--user", "--no-block", "stop", LINUX_USER_SERVICE_NAME),
+                    ) == 0
+                }.getOrDefault(false),
+            ) { "The Nextcloud Native background service could not be stopped." }
+        }
         Files.deleteIfExists(File(userDirectory, "graphical-session.target.wants/$LINUX_USER_SERVICE_NAME").toPath())
-        Files.deleteIfExists(File(userDirectory, LINUX_USER_SERVICE_NAME).toPath())
-        if (linuxSystemdAvailable()) {
+        Files.deleteIfExists(service.toPath())
+        if (systemdAvailable) {
             runCatching { processRunner(listOf("systemctl", "--user", "daemon-reload")) }
         }
     }
@@ -279,7 +290,6 @@ internal fun stopLinuxUserServiceForExplicitQuit(
     },
 ): Boolean {
     if (!osName.lowercase().contains("linux")) return false
-    if (!File(linuxConfigHome, "systemd/user/$LINUX_USER_SERVICE_NAME").isFile) return false
     return runCatching {
         processRunner(
             listOf("systemctl", "--user", "--no-block", "stop", LINUX_USER_SERVICE_NAME),
