@@ -183,14 +183,15 @@ class AsyncJvmSupportDiagnostics(
             }
         }
         if (!shouldClose) return
-        runCatching {
+        try {
             executor.submit {
                 delegate?.let(::drainPendingSnapshot)
-            }.get(CLOSE_WAIT_SECONDS, TimeUnit.SECONDS)
+            }.get()
+        } finally {
+            executor.shutdown()
+            runCatching { executor.awaitTermination(CLOSE_TERMINATION_WAIT_SECONDS, TimeUnit.SECONDS) }
+            dispatcher.close()
         }
-        executor.shutdown()
-        runCatching { executor.awaitTermination(CLOSE_WAIT_SECONDS, TimeUnit.SECONDS) }
-        dispatcher.close()
     }
 
     private fun finishInitialization(created: JvmSupportDiagnostics) {
@@ -210,7 +211,7 @@ class AsyncJvmSupportDiagnostics(
             operations
         }
         val pendingHadCrash = queued.any(PendingOperation::isUncaughtException)
-        queued.forEach { operation -> operation.apply(created) }
+        queued.applyTo(created)
         when {
             pendingHadCrash -> {
                 if (created.isStorageAvailable()) coldCrashMarker.delete()
@@ -261,7 +262,7 @@ class AsyncJvmSupportDiagnostics(
             }
         }
         if (batch.isNotEmpty()) {
-            batch.forEach { operation -> operation.apply(current) }
+            batch.applyTo(current)
             publishRevision()
         }
         scheduleQueuedDrain(current)
@@ -272,8 +273,14 @@ class AsyncJvmSupportDiagnostics(
             pending.toList().also { pending.clear() }
         }
         if (snapshot.isNotEmpty()) {
-            snapshot.forEach { operation -> operation.apply(current) }
+            snapshot.applyTo(current)
             publishRevision()
+        }
+    }
+
+    private fun List<PendingOperation>.applyTo(current: JvmSupportDiagnostics) {
+        current.applyBatch {
+            this@applyTo.forEach { operation -> operation.apply(this) }
         }
     }
 
@@ -342,7 +349,7 @@ class AsyncJvmSupportDiagnostics(
         const val MAX_PENDING_OPERATIONS = 512
         const val MAX_DRAIN_BATCH_SIZE = 32
         const val COLD_CRASH_INITIALIZATION_WAIT_MILLIS = 2_000L
-        const val CLOSE_WAIT_SECONDS = 2L
+        const val CLOSE_TERMINATION_WAIT_SECONDS = 2L
     }
 }
 

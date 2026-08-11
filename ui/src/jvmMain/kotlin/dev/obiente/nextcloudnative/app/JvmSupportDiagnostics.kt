@@ -43,6 +43,8 @@ class JvmSupportDiagnostics(
     private var discardedHistoryBytes = 0L
     private var activeAccountScope: String? = null
     private var storageAvailable = false
+    private var batchPersistenceDeferred = false
+    private var batchPersistencePending = false
 
     init {
         val initialized = runCatching {
@@ -96,6 +98,25 @@ class JvmSupportDiagnostics(
             accountIdentity?.takeIf(String::isNotBlank)?.let(::accountScope)
         }
 
+    internal fun applyBatch(block: JvmSupportDiagnostics.() -> Unit) = synchronized(lock) {
+        check(!batchPersistenceDeferred) { "Nested diagnostic batches are unsupported." }
+        batchPersistenceDeferred = true
+        try {
+            block()
+        } finally {
+            batchPersistenceDeferred = false
+            if (batchPersistencePending) {
+                batchPersistencePending = false
+                if (storageAvailable) {
+                    runCatching(::persistHistory).onFailure {
+                        storageAvailable = false
+                        publishRevision()
+                    }
+                }
+            }
+        }
+    }
+
     private fun recordWithScope(
         draft: SupportDiagnosticEventDraft,
         scope: () -> String?,
@@ -113,17 +134,21 @@ class JvmSupportDiagnostics(
                 events.addLast(event)
                 storedEventBytes += encodedLine.size.toLong() + 1L
                 discardedHistoryBytes += pruneEvents(event.occurredAtEpochMillis)
-                if (
-                    historyFile.isFile &&
-                    !shouldCompactSupportDiagnosticHistory(
-                        discardedBytes = discardedHistoryBytes,
-                        physicalBytes = historyFile.length(),
-                        appendedBytes = encodedLine.size.toLong() + 1L,
-                    )
-                ) {
-                    appendHistoryLine(encodedLine)
+                if (batchPersistenceDeferred) {
+                    batchPersistencePending = true
                 } else {
-                    persistHistory()
+                    if (
+                        historyFile.isFile &&
+                        !shouldCompactSupportDiagnosticHistory(
+                            discardedBytes = discardedHistoryBytes,
+                            physicalBytes = historyFile.length(),
+                            appendedBytes = encodedLine.size.toLong() + 1L,
+                        )
+                    ) {
+                        appendHistoryLine(encodedLine)
+                    } else {
+                        persistHistory()
+                    }
                 }
                 publishRevision()
             }.onFailure {
