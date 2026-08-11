@@ -43,6 +43,9 @@ data class VirtualFileStorageSnapshot(
     val folderRetentionRules: List<VirtualFolderRetentionRule> = emptyList(),
     val folderHydrationStatuses: List<VirtualFolderHydrationStatus> = emptyList(),
     val pendingWritebackCount: Int = 0,
+    val cacheTiers: VirtualFileCacheTierConfiguration? = null,
+    val primaryCache: VirtualFileCacheTierSnapshot? = null,
+    val overflowCache: VirtualFileCacheTierSnapshot? = null,
 ) {
     init {
         require(cachedBytes >= 0L)
@@ -84,8 +87,45 @@ data class VirtualFileStorageSnapshot(
             },
         )
         require(pendingWritebackCount >= 0)
+        require(cacheTiers == null || primaryCache != null)
+        require(overflowCache == null || cacheTiers?.overflowPath != null)
     }
 }
+
+/** Physical cache locations behind the stable virtual-files namespace. */
+data class VirtualFileCacheTierConfiguration(
+    val primaryPath: String,
+    val overflowPath: String? = null,
+) {
+    init {
+        require(primaryPath.isValidVirtualFileCachePath())
+        require(overflowPath == null || overflowPath.isValidVirtualFileCachePath())
+        require(overflowPath == null || overflowPath != primaryPath) {
+            "The primary and overflow cache locations must be different."
+        }
+    }
+}
+
+data class VirtualFileCacheTierSnapshot(
+    val path: String,
+    val cachedBytes: Long,
+    val reclaimableBytes: Long,
+    val pinnedBytes: Long,
+    val availableFreeBytes: Long?,
+    val available: Boolean,
+) {
+    init {
+        require(path.isValidVirtualFileCachePath())
+        require(cachedBytes >= 0L)
+        require(reclaimableBytes in 0L..cachedBytes)
+        require(pinnedBytes in 0L..cachedBytes)
+        require(availableFreeBytes == null || availableFreeBytes >= 0L)
+        require(available || availableFreeBytes == null)
+    }
+}
+
+fun String.isValidVirtualFileCachePath(): Boolean =
+    isNotBlank() && length <= MAX_VIRTUAL_FILE_LOCATION_LENGTH && none(Char::isISOControl)
 
 /** User-controlled location for the visible virtual filesystem namespace. */
 data class VirtualFileProviderLocation(

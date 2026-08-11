@@ -1919,6 +1919,7 @@ internal fun MarketingVirtualFileStorageDesktopScenario() {
                     onDeactivateProvider = {},
                     onAcknowledgeRecovery = {},
                     onChangeLocation = {},
+                    onChangeCacheTiers = {},
                     onChoosePinnedFolder = {},
                     onReleaseFolder = {},
                     onRetryFolder = {},

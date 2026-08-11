@@ -76,6 +76,41 @@ class DesktopVirtualFileProviderLocationTest {
     }
 
     @Test
+    fun cacheTierValidationAcceptsAnExistingLocalFolderAndRejectsAMissingParent() {
+        val temporary = Files.createTempDirectory("virtual-cache-tier-").toFile()
+        val cache = temporary.resolve("fast-cache").apply { mkdirs() }
+        try {
+            assertEquals(cache.toPath(), validateDesktopVirtualFileCacheTierPath(cache.absolutePath))
+            assertFailsWith<IllegalArgumentException> {
+                validateDesktopVirtualFileCacheTierPath(temporary.resolve("missing/cache").absolutePath)
+            }
+            assertEquals(false, temporary.resolve("missing").exists())
+        } finally {
+            temporary.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aMissingOverflowRootIsReportedWithoutBeingRecreated() {
+        val temporary = Files.createTempDirectory("virtual-cache-overflow-missing-").toFile()
+        val primary = temporary.resolve("primary").apply { mkdirs() }
+        val missingOverflow = temporary.resolve("detached-overflow")
+        try {
+            val cache = DesktopVirtualRangeCache(
+                root = primary,
+                overflowRoot = missingOverflow,
+                policy = { VirtualFileCachePolicy(automaticCleanup = false) },
+                createParentDirectories = false,
+            )
+
+            assertEquals(false, cache.summary("0".repeat(64)).overflowAvailable)
+            assertEquals(false, missingOverflow.exists())
+        } finally {
+            temporary.deleteRecursively()
+        }
+    }
+
+    @Test
     fun internalCacheDirectoryCannotBeUsedAsTheVisibleFolder() {
         assertEquals(false, ".nextcloud-native-cache".isValidVirtualFileProviderFolderName())
         assertEquals(false, ".NEXTCLOUD-NATIVE-CACHE".isValidVirtualFileProviderFolderName())

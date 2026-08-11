@@ -715,6 +715,18 @@ interface NextcloudPlatformServices {
     /** Opens a native directory chooser for the parent of the visible virtual-file folder. */
     suspend fun chooseVirtualFileProviderParent(initialParentPath: String?): String? = null
 
+    /** Opens a native directory chooser for a physical virtual-file cache tier. */
+    suspend fun chooseVirtualFileCacheLocation(initialPath: String?): String? = null
+
+    /** Moves cache storage without changing the visible virtual-files namespace. */
+    suspend fun saveVirtualFileCacheTiers(
+        session: NextcloudSession,
+        userId: String,
+        configuration: VirtualFileCacheTierConfiguration,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "Tiered virtual-file storage is not available on this platform.",
+    )
+
     /** Persists a validated provider location. Active providers must be migrated explicitly. */
     suspend fun saveVirtualFileProviderLocation(
         session: NextcloudSession,

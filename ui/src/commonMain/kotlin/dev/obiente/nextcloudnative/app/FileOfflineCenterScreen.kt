@@ -144,6 +144,8 @@ internal fun FileOfflineCenterScreen(
     } ?: FileOfflineWorkspaceSection.FolderSync
     var virtualLocationVisible by remember(session, userId) { mutableStateOf(false) }
     var virtualLocationError by remember(session, userId) { mutableStateOf<String?>(null) }
+    var virtualCacheTiersVisible by remember(session, userId) { mutableStateOf(false) }
+    var virtualCacheTiersError by remember(session, userId) { mutableStateOf<String?>(null) }
     var virtualFolderPickerVisible by remember(session, userId) { mutableStateOf(false) }
     var virtualFolderPickerError by remember(session, userId) { mutableStateOf<String?>(null) }
     var releaseVirtualFolderPath by remember(session, userId) { mutableStateOf<String?>(null) }
@@ -345,6 +347,32 @@ internal fun FileOfflineCenterScreen(
                     val message = failure.message ?: "Could not change the virtual file location."
                     actionMessage = message
                     virtualLocationError = message
+                }
+            virtualStorageBusy = false
+        }
+    }
+
+    fun saveVirtualFileCacheTiers(configuration: VirtualFileCacheTierConfiguration) {
+        if (virtualStorageBusy) return
+        virtualStorageBusy = true
+        actionMessage = null
+        virtualCacheTiersError = null
+        scope.launch {
+            runCatching { services.saveVirtualFileCacheTiers(session, userId, configuration) }
+                .onSuccess { result ->
+                    val message = result.virtualFileStorageMessage()
+                    actionMessage = message
+                    if (result is VirtualFileStorageActionResult.Completed) {
+                        virtualCacheTiersVisible = false
+                        refreshAttempt += 1
+                    } else {
+                        virtualCacheTiersError = message
+                    }
+                }
+                .onFailure { failure ->
+                    val message = failure.message ?: "Could not change virtual-file cache drives."
+                    actionMessage = message
+                    virtualCacheTiersError = message
                 }
             virtualStorageBusy = false
         }
@@ -599,6 +627,10 @@ internal fun FileOfflineCenterScreen(
                                     virtualLocationError = null
                                     virtualLocationVisible = true
                                 },
+                                onChangeCacheTiers = {
+                                    virtualCacheTiersError = null
+                                    virtualCacheTiersVisible = true
+                                },
                                 onChoosePinnedFolder = {
                                     virtualFolderPickerError = null
                                     virtualFolderPickerVisible = true
@@ -703,6 +735,10 @@ internal fun FileOfflineCenterScreen(
                                         onChangeLocation = {
                                             virtualLocationError = null
                                             virtualLocationVisible = true
+                                        },
+                                        onChangeCacheTiers = {
+                                            virtualCacheTiersError = null
+                                            virtualCacheTiersVisible = true
                                         },
                                         onChoosePinnedFolder = {
                                             virtualFolderPickerError = null
@@ -878,6 +914,24 @@ internal fun FileOfflineCenterScreen(
                     }
                 },
                 onSave = ::saveVirtualFileLocation,
+            )
+        }
+    }
+
+    if (virtualCacheTiersVisible) {
+        virtualStorage?.cacheTiers?.let { current ->
+            VirtualFileCacheTiersDialog(
+                services = services,
+                initial = current,
+                busy = virtualStorageBusy,
+                error = virtualCacheTiersError,
+                onDismiss = {
+                    if (!virtualStorageBusy) {
+                        virtualCacheTiersVisible = false
+                        virtualCacheTiersError = null
+                    }
+                },
+                onSave = ::saveVirtualFileCacheTiers,
             )
         }
     }
@@ -1749,6 +1803,7 @@ internal fun VirtualFileStorageCard(
     onDeactivateProvider: () -> Unit,
     onAcknowledgeRecovery: () -> Unit,
     onChangeLocation: () -> Unit,
+    onChangeCacheTiers: () -> Unit,
     onChoosePinnedFolder: () -> Unit,
     onReleaseFolder: (String) -> Unit,
     onRetryFolder: (String) -> Unit,
@@ -1848,7 +1903,13 @@ internal fun VirtualFileStorageCard(
                             append(formatVirtualFileBytes(snapshot.policy.minimumFreeSpaceBytes))
                             append(" free")
                             snapshot.policy.unusedFileAgeMillis?.let { age ->
-                                append(" and removes unused cached files after ")
+                                append(
+                                    if (snapshot.cacheTiers?.overflowPath != null) {
+                                        " and moves unused cached files to overflow after "
+                                    } else {
+                                        " and removes unused cached files after "
+                                    },
+                                )
                                 append(formatVirtualFileAge(age))
                             }
                             append(". Pins and active work are always kept.")
@@ -1859,6 +1920,24 @@ internal fun VirtualFileStorageCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                snapshot.cacheTiers?.let {
+                    VirtualFileCacheTierRow("Fast cache", snapshot.primaryCache)
+                    if (it.overflowPath != null) {
+                        VirtualFileCacheTierRow("Overflow", snapshot.overflowCache)
+                    } else {
+                        Text(
+                            "Overflow storage is off. Cold automatic content is removed when the fast cache needs space.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    OutlinedButton(
+                        enabled = !busy && !snapshot.providerActive,
+                        onClick = onChangeCacheTiers,
+                    ) {
+                        Text("Change cache drives")
+                    }
+                }
                 if (snapshot.providerState != VirtualFileProviderState.NotApplicable) {
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -2133,6 +2212,156 @@ private fun VirtualFileProviderLocationDialog(
 }
 
 @Composable
+private fun VirtualFileCacheTiersDialog(
+    services: NextcloudPlatformServices,
+    initial: VirtualFileCacheTierConfiguration,
+    busy: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSave: (VirtualFileCacheTierConfiguration) -> Unit,
+) {
+    var primaryPath by remember(initial) { mutableStateOf(initial.primaryPath) }
+    var overflowEnabled by remember(initial) { mutableStateOf(initial.overflowPath != null) }
+    var overflowPath by remember(initial) { mutableStateOf(initial.overflowPath.orEmpty()) }
+    var choosingTier by remember { mutableStateOf<String?>(null) }
+    var chooserError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    fun choose(tier: String, initialPath: String, update: (String) -> Unit) {
+        choosingTier = tier
+        chooserError = null
+        scope.launch {
+            runCatching { services.chooseVirtualFileCacheLocation(initialPath) }
+                .onSuccess { selected -> if (selected != null) update(selected) }
+                .onFailure { chooserError = it.message ?: "Could not open the folder chooser." }
+            choosingTier = null
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Cache drives") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+                Text(
+                    "Recently opened files use the fast cache. An optional overflow drive keeps cold cached and offline content without changing where virtual files appear.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedTextField(
+                    value = primaryPath,
+                    onValueChange = {},
+                    readOnly = true,
+                    singleLine = true,
+                    label = { Text("Fast cache folder") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedButton(
+                    enabled = !busy && choosingTier == null,
+                    onClick = { choose("primary", primaryPath) { primaryPath = it } },
+                ) { Text(if (choosingTier == "primary") "Choosing..." else "Choose fast cache") }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Use overflow storage", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Good for a larger HDD or secondary SSD.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = overflowEnabled,
+                        enabled = !busy && choosingTier == null,
+                        onCheckedChange = { overflowEnabled = it },
+                    )
+                }
+                if (overflowEnabled) {
+                    OutlinedTextField(
+                        value = overflowPath,
+                        onValueChange = {},
+                        readOnly = true,
+                        singleLine = true,
+                        label = { Text("Overflow cache folder") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedButton(
+                        enabled = !busy && choosingTier == null,
+                        onClick = { choose("overflow", overflowPath) { overflowPath = it } },
+                    ) { Text(if (choosingTier == "overflow") "Choosing..." else "Choose overflow cache") }
+                }
+                Text(
+                    "Disconnect file-manager integration before changing cache drives. Removing overflow first preserves its content on the fast cache.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                chooserError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !busy && choosingTier == null && primaryPath.isValidVirtualFileCachePath() &&
+                    (!overflowEnabled || overflowPath.isValidVirtualFileCachePath()),
+                onClick = {
+                    runCatching {
+                        VirtualFileCacheTierConfiguration(
+                            primaryPath = primaryPath,
+                            overflowPath = overflowPath.takeIf { overflowEnabled },
+                        )
+                    }.onSuccess(onSave).onFailure { chooserError = it.message ?: "Choose separate cache folders." }
+                },
+            ) { Text("Save cache drives") }
+        },
+        dismissButton = {
+            TextButton(enabled = !busy && choosingTier == null, onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun VirtualFileCacheTierRow(label: String, tier: VirtualFileCacheTierSnapshot?) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(NextcloudRadii.Small),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(label, style = MaterialTheme.typography.labelLarge)
+                Text(
+                    if (tier?.available == true) formatVirtualFileBytes(tier.cachedBytes) else "Unavailable",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (tier?.available == true) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                )
+            }
+            tier?.let {
+                Text(
+                    it.path,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "Pinned ${formatVirtualFileBytes(it.pinnedBytes)} - Free ${it.availableFreeBytes?.let(::formatVirtualFileBytes) ?: "unknown"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun VirtualFileStorageMetric(
     label: String,
     value: String,
@@ -2234,14 +2463,42 @@ internal fun VirtualFileStoragePolicyEditor(
         }
         item {
             VirtualFilePolicyChoice(
-                title = "Cache limit",
-                subtitle = "Automatic content can use up to this much space.",
+                title = if (snapshot.cacheTiers != null) "Fast cache limit" else "Cache limit",
+                subtitle = "Automatic hot content can use up to this much space.",
                 options = VIRTUAL_CACHE_SIZE_OPTIONS,
                 selected = policy.maximumCacheBytes,
                 enabled = !busy,
                 label = { value -> value?.let(::formatVirtualFileBytes) ?: "No limit" },
                 onSelected = { selected -> onPolicyChanged(policy.copy(maximumCacheBytes = selected)) },
             )
+        }
+        if (snapshot.cacheTiers?.overflowPath != null) {
+            item {
+                VirtualFilePolicyChoice(
+                    title = "Overflow cache limit",
+                    subtitle = "Cold automatic content beyond this limit is removed oldest first.",
+                    options = VIRTUAL_CACHE_SIZE_OPTIONS,
+                    selected = policy.overflowMaximumCacheBytes,
+                    enabled = !busy,
+                    label = { value -> value?.let(::formatVirtualFileBytes) ?: "No limit" },
+                    onSelected = { selected ->
+                        onPolicyChanged(policy.copy(overflowMaximumCacheBytes = selected))
+                    },
+                )
+            }
+            item {
+                VirtualFilePolicyChoice(
+                    title = "Overflow free reserve",
+                    subtitle = "Remove cold automatic content before overflow storage drops below this reserve.",
+                    options = VIRTUAL_FREE_SPACE_OPTIONS,
+                    selected = policy.overflowMinimumFreeSpaceBytes,
+                    enabled = !busy,
+                    label = ::formatVirtualFileBytes,
+                    onSelected = { selected ->
+                        onPolicyChanged(policy.copy(overflowMinimumFreeSpaceBytes = selected))
+                    },
+                )
+            }
         }
         item {
             VirtualFilePolicyChoice(

@@ -22,6 +22,15 @@ internal data class DesktopVirtualRangeCacheSummary(
     val fileCount: Int,
     val pinnedFileCount: Int,
     val availableFreeBytes: Long,
+    val primaryCachedBytes: Long = cachedBytes,
+    val primaryReclaimableBytes: Long = reclaimableBytes,
+    val primaryPinnedBytes: Long = pinnedBytes,
+    val overflowCachedBytes: Long = 0L,
+    val overflowReclaimableBytes: Long = 0L,
+    val overflowPinnedBytes: Long = 0L,
+    val overflowAvailableFreeBytes: Long? = null,
+    val overflowAvailable: Boolean = false,
+    val tierAttention: String? = null,
 )
 
 internal data class VirtualRangeRevision(
@@ -45,9 +54,11 @@ private data class ActiveVirtualRangeRevision(
 /** Persistent exact-revision block cache used by the Linux virtual filesystem. */
 internal class DesktopVirtualRangeCache(
     private val root: File,
+    private val overflowRoot: File? = null,
     private val maximumIndexBytes: Long = MAX_INDEX_BYTES,
     private val maximumBlocks: Int = MAX_BLOCKS,
     private val createParentDirectories: Boolean = true,
+    private val initializeOverflowMarker: Boolean = false,
     private val accessTimePersistenceIntervalMillis: Long = ACCESS_TIME_PERSISTENCE_INTERVAL_MILLIS,
     private val policy: () -> VirtualFileCachePolicy,
 ) {
@@ -58,32 +69,23 @@ internal class DesktopVirtualRangeCache(
     private val loadedIndexes = mutableMapOf<String, RangeCacheIndex>()
     private val dirtyAccessTimeAccounts = mutableSetOf<String>()
     private val lastAccessTimePersistence = mutableMapOf<String, Long>()
+    private var tierAttention: String? = null
 
     init {
         require(maximumIndexBytes in 1L..MAX_INDEX_BYTES)
         require(maximumBlocks in 1..MAX_BLOCKS)
         require(accessTimePersistenceIntervalMillis >= 0L)
-        val cacheRoot = root.toPath().toAbsolutePath().normalize()
-        val parent = requireNotNull(cacheRoot.parent)
-        if (createParentDirectories) {
-            Files.createDirectories(parent)
-        } else {
-            require(
-                Files.isDirectory(parent, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
-                    !Files.isSymbolicLink(parent),
-            ) { "The selected virtual-file storage drive is unavailable." }
-        }
-        if (Files.notExists(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-            try {
-                Files.createDirectory(cacheRoot)
-            } catch (_: java.nio.file.FileAlreadyExistsException) {
-                // Another app process may have created the same account cache concurrently.
+        prepareCacheRoot(root, createParentDirectories, required = true)
+        overflowRoot?.let { configuredOverflow ->
+            require(configuredOverflow.toPath().toAbsolutePath().normalize() != root.toPath().toAbsolutePath().normalize()) {
+                "The primary and overflow cache locations must be different."
+            }
+            prepareCacheRoot(configuredOverflow, createParentDirectories = false, required = false)
+            if (initializeOverflowMarker && isCacheRootDirectory(configuredOverflow)) {
+                publishBytes(configuredOverflow, OVERFLOW_MARKER_FILE, OVERFLOW_MARKER_CONTENT)
+                syncDirectoryMetadata(configuredOverflow)
             }
         }
-        require(
-            Files.isDirectory(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
-                !Files.isSymbolicLink(cacheRoot),
-        ) { "The desktop virtual range cache must be a regular local directory." }
     }
 
     @Synchronized
@@ -148,7 +150,8 @@ internal class DesktopVirtualRangeCache(
                 block.offset == offset &&
                 block.length == length
         } ?: return null
-        val blob = File(accountDirectory(accountId), record.blobName)
+        if (record.storageTier == CachedRangeStorageTier.Overflow && !isOverflowAvailable()) return null
+        val blob = blobFile(accountId, record)
         if (!blob.isFile || blob.length() != length.toLong()) {
             removeRecord(accountId, index, record, blob)
             return null
@@ -158,11 +161,14 @@ internal class DesktopVirtualRangeCache(
             removeRecord(accountId, index, record, blob)
             return null
         }
-        val updated = index.copy(
+        var updated = index.copy(
             blocks = index.blocks.map { current ->
                 if (current == record) current.copy(lastAccessedAtEpochMillis = nowEpochMillis) else current
             },
         )
+        if (record.storageTier == CachedRangeStorageTier.Overflow) {
+            updated = promoteBlock(accountId, updated, record, blob)
+        }
         loadedIndexes[accountId] = updated
         dirtyAccessTimeAccounts += accountId
         val lastPersistence = lastAccessTimePersistence[accountId]
@@ -175,6 +181,9 @@ internal class DesktopVirtualRangeCache(
                 dirtyAccessTimeAccounts -= accountId
                 lastAccessTimePersistence[accountId] = nowEpochMillis
             }
+        }
+        if (record.storageTier == CachedRangeStorageTier.Overflow) {
+            runCatching { applyEviction(accountId, requestedBytes = 0L, nowEpochMillis = nowEpochMillis) }
         }
         return bytes
     }
@@ -276,7 +285,7 @@ internal class DesktopVirtualRangeCache(
                 true
             }
         }
-        removed.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }
+        removed.forEach { block -> blobFile(accountId, block).delete() }
         if (removed.isNotEmpty()) save(accountId, current.copy(blocks = current.blocks.filterNot { it in removed }))
     }
 
@@ -339,10 +348,13 @@ internal class DesktopVirtualRangeCache(
         val invalidRecords = hashSetOf<CachedRangeBlock>()
         expected.forEach { revision ->
             val records = recordsByRevision[revision].orEmpty().sortedBy(CachedRangeBlock::offset)
+            if (records.any { it.storageTier == CachedRangeStorageTier.Overflow } && !isOverflowAvailable()) {
+                return@forEach
+            }
             var expectedOffset = 0L
             val valid = records.isNotEmpty() && records.all { block ->
                 if (block.offset != expectedOffset) return@all false
-                val blob = File(accountDirectory(accountId), block.blobName)
+                val blob = blobFile(accountId, block)
                 if (
                     !blob.isFile ||
                     blob.length() != block.length.toLong() ||
@@ -360,7 +372,7 @@ internal class DesktopVirtualRangeCache(
             }
         }
         if (invalidRecords.isNotEmpty()) {
-            invalidRecords.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }
+            invalidRecords.forEach { block -> blobFile(accountId, block).delete() }
             save(accountId, index.copy(blocks = index.blocks.filterNot(invalidRecords::contains)))
         }
         return complete
@@ -950,7 +962,7 @@ internal class DesktopVirtualRangeCache(
         removeDehydratedRetainedListings(accountId, normalized)
         if (removablePaths.isEmpty()) return 0L
         val removed = current.blocks.filter { block -> block.path in removablePaths }
-        removed.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }
+        removed.forEach { block -> blobFile(accountId, block).delete() }
         save(accountId, current.copy(blocks = current.blocks.filterNot { block -> block.path in removablePaths }))
         return removed.fold(0L) { total, block ->
             if (Long.MAX_VALUE - total < block.length) Long.MAX_VALUE else total + block.length
@@ -959,59 +971,297 @@ internal class DesktopVirtualRangeCache(
 
     @Synchronized
     fun summary(accountId: String): DesktopVirtualRangeCacheSummary {
-        val entries = load(accountId).toDomain(accountId)
-        val plan = planVirtualFileEviction(
-            entries = entries.filter { entry -> entry.retention == VirtualFileRetention.Automatic },
+        val index = load(accountId)
+        val entries = index.toDomain(accountId)
+        val primaryEntries = index.toDomain(accountId, CachedRangeStorageTier.Primary)
+        val overflowEntries = index.toDomain(accountId, CachedRangeStorageTier.Overflow)
+        val primaryPlan = planVirtualFileEviction(
+            entries = primaryEntries.filter { entry -> entry.retention == VirtualFileRetention.Automatic },
             policy = policy(),
             availableFreeBytes = root.usableSpace.coerceAtLeast(0L),
             nowEpochMillis = System.currentTimeMillis(),
         )
+        val overflowPlan = planVirtualFileEviction(
+            entries = overflowEntries.filter { entry -> entry.retention == VirtualFileRetention.Automatic },
+            policy = overflowPolicy(),
+            availableFreeBytes = overflowRoot?.takeIf(::isOverflowRootAvailable)?.usableSpace?.coerceAtLeast(0L) ?: 0L,
+            nowEpochMillis = System.currentTimeMillis(),
+        )
         return DesktopVirtualRangeCacheSummary(
             cachedBytes = entries.sumOf(VirtualFileCacheEntry::sizeBytes),
-            reclaimableBytes = plan.reclaimableBytes,
+            reclaimableBytes = primaryPlan.reclaimableBytes + overflowPlan.reclaimableBytes,
             pinnedBytes = entries
                 .filter { entry -> entry.retention == VirtualFileRetention.Pinned }
                 .sumOf(VirtualFileCacheEntry::sizeBytes),
             fileCount = entries.size,
             pinnedFileCount = entries.count { entry -> entry.retention == VirtualFileRetention.Pinned },
             availableFreeBytes = root.usableSpace.coerceAtLeast(0L),
+            primaryCachedBytes = primaryEntries.sumOf(VirtualFileCacheEntry::sizeBytes),
+            primaryReclaimableBytes = primaryPlan.reclaimableBytes,
+            primaryPinnedBytes = primaryEntries.filter { it.retention == VirtualFileRetention.Pinned }
+                .sumOf(VirtualFileCacheEntry::sizeBytes),
+            overflowCachedBytes = overflowEntries.sumOf(VirtualFileCacheEntry::sizeBytes),
+            overflowReclaimableBytes = overflowPlan.reclaimableBytes,
+            overflowPinnedBytes = overflowEntries.filter { it.retention == VirtualFileRetention.Pinned }
+                .sumOf(VirtualFileCacheEntry::sizeBytes),
+            overflowAvailableFreeBytes = overflowRoot?.takeIf(::isOverflowRootAvailable)
+                ?.usableSpace?.coerceAtLeast(0L),
+            overflowAvailable = overflowRoot?.let(::isOverflowRootAvailable) == true,
+            tierAttention = tierAttention,
         )
     }
 
     fun availableFreeBytes(): Long = root.usableSpace.coerceAtLeast(0L)
 
     @Synchronized
+    fun consolidateOverflow(accountId: String) {
+        val current = load(accountId)
+        val overflowBlocks = current.blocks.filter { it.storageTier == CachedRangeStorageTier.Overflow }
+        if (overflowBlocks.isEmpty()) return
+        check(isOverflowAvailable()) { "Reconnect the overflow cache drive before changing its location." }
+        val requiredBytes = overflowBlocks.sumOf { it.length.toLong() }
+        val usableBeyondReserve = (root.usableSpace.coerceAtLeast(0L) - policy().minimumFreeSpaceBytes)
+            .coerceAtLeast(0L)
+        check(usableBeyondReserve >= requiredBytes) {
+            "The primary cache does not have enough free space to preserve overflow content."
+        }
+        moveBlocks(accountId, current, overflowBlocks, CachedRangeStorageTier.Primary)
+    }
+
+    @Synchronized
+    fun copyPrimaryAccountTo(accountId: String, destination: DesktopVirtualRangeCache) {
+        check(activePaths.keys.none { it.accountId == accountId } && activeRevisions.keys.none { it.file.accountId == accountId }) {
+            "Close files from this account before moving the primary cache."
+        }
+        flushAccessTimes()
+        val sourceDirectory = accountDirectory(accountId)
+        if (!sourceDirectory.isDirectory) return
+        val sourceFiles = sourceDirectory.listFiles().orEmpty()
+        require(sourceFiles.all { file -> file.isFile && !Files.isSymbolicLink(file.toPath()) }) {
+            "The primary cache contains an active or invalid migration artifact."
+        }
+        val destinationDirectory = destination.writableAccountDirectory(accountId)
+        require(destinationDirectory.listFiles().orEmpty().isEmpty()) {
+            "The selected primary cache already contains data for this account."
+        }
+        val published = mutableListOf<File>()
+        try {
+            sourceFiles.sortedWith(compareBy<File> { it.name == INDEX_FILE }.thenBy(File::getName)).forEach { source ->
+                val target = File(destinationDirectory, source.name)
+                destination.publishFile(source, target, sha256Hex(source))
+                published += target
+            }
+            destination.loadedIndexes.remove(accountId)
+            check(destination.load(accountId) == load(accountId)) {
+                "The primary cache index changed while it was being moved."
+            }
+            check(destination.loadFolderRetention(accountId) == loadFolderRetention(accountId)) {
+                "The offline-folder rules changed while the primary cache was being moved."
+            }
+        } catch (failure: Throwable) {
+            published.forEach(File::delete)
+            destinationDirectory.delete()
+            throw failure
+        }
+    }
+
+    @Synchronized
+    fun removeCopiedPrimaryAccount(accountId: String) {
+        check(activePaths.keys.none { it.accountId == accountId } && activeRevisions.keys.none { it.file.accountId == accountId })
+        val directory = accountDirectory(accountId)
+        if (!directory.isDirectory || Files.isSymbolicLink(directory.toPath())) return
+        directory.listFiles().orEmpty()
+            .filter { it.isFile && !Files.isSymbolicLink(it.toPath()) }
+            .forEach(File::delete)
+        directory.delete()
+        loadedIndexes.remove(accountId)
+        recoveredAccounts.remove(accountId)
+    }
+
+    @Synchronized
     fun freeUp(accountId: String, requestedBytes: Long): VirtualFileEvictionPlan =
         applyEviction(accountId, requestedBytes, System.currentTimeMillis())
 
-    private fun applyEviction(accountId: String, requestedBytes: Long, nowEpochMillis: Long): VirtualFileEvictionPlan {
+    @Synchronized
+    fun relievePrimaryPressure(accountId: String, requestedBytes: Long): Long {
+        require(requestedBytes >= 0L)
+        if (requestedBytes == 0L) return 0L
         val current = load(accountId)
-        val automaticEntries = current.toDomain(accountId).filter { entry ->
+        val primaryAutomatic = current.toDomain(accountId, CachedRangeStorageTier.Primary).filter { entry ->
             entry.retention == VirtualFileRetention.Automatic
         }
         val plan = planVirtualFileEviction(
-            entries = automaticEntries,
-            policy = policy(),
+            entries = primaryAutomatic,
+            policy = policy().copy(automaticCleanup = false),
             availableFreeBytes = root.usableSpace.coerceAtLeast(0L),
+            nowEpochMillis = System.currentTimeMillis(),
+            requestedBytesToFree = requestedBytes,
+        )
+        var next = current
+        var relieved = 0L
+        plan.evictions.forEach { eviction ->
+            val matching = next.blocks.filter {
+                it.path == eviction.key.relativePath && it.storageTier == CachedRangeStorageTier.Primary
+            }
+            if (matching.isEmpty() || activePaths.getOrDefault(eviction.key, 0) != 0) return@forEach
+            if (matching.localRevision() != eviction.expectedLocalRevision) return@forEach
+            val updated = if (isOverflowAvailable()) {
+                runCatching { moveBlocks(accountId, next, matching, CachedRangeStorageTier.Overflow) }.getOrNull()
+                    ?: return@forEach
+            } else {
+                matching.forEach { block -> blobFile(accountId, block).delete() }
+                next.copy(blocks = next.blocks.filterNot { it in matching })
+            }
+            next = updated
+            relieved += matching.sumOf { it.length.toLong() }
+        }
+        if (next != current) save(accountId, next)
+        return relieved
+    }
+
+    private fun applyEviction(accountId: String, requestedBytes: Long, nowEpochMillis: Long): VirtualFileEvictionPlan {
+        val current = load(accountId)
+        val overflowAvailable = isOverflowAvailable()
+        val overflowEntries = if (overflowAvailable) {
+            current.toDomain(accountId, CachedRangeStorageTier.Overflow).filter { entry ->
+                entry.retention == VirtualFileRetention.Automatic
+            }
+        } else {
+            emptyList()
+        }
+        val overflowPlan = planVirtualFileEviction(
+            entries = overflowEntries,
+            policy = overflowPolicy(),
+            availableFreeBytes = overflowRoot?.takeIf(::isOverflowRootAvailable)?.usableSpace?.coerceAtLeast(0L) ?: 0L,
             nowEpochMillis = nowEpochMillis,
             requestedBytesToFree = requestedBytes,
         )
-        val removedPaths = plan.evictions.mapNotNullTo(mutableSetOf()) { eviction ->
-            val matching = current.blocks.filter { it.path == eviction.key.relativePath }
-            if (matching.isEmpty() || activePaths.getOrDefault(eviction.key, 0) != 0) return@mapNotNullTo null
-            if (matching.localRevision() != eviction.expectedLocalRevision) return@mapNotNullTo null
-            matching.forEach { block -> File(accountDirectory(accountId), block.blobName).delete() }
-            eviction.key.relativePath
+        var next = current
+        var actuallyFreed = removePlannedBlocks(accountId, next, overflowPlan).also { result -> next = result.first }.second
+        val remainingRequested = (requestedBytes - actuallyFreed).coerceAtLeast(0L)
+        val allPrimaryEntries = next.toDomain(accountId, CachedRangeStorageTier.Primary)
+        val primaryEntries = allPrimaryEntries.filter { entry ->
+            entry.retention == VirtualFileRetention.Automatic
         }
-        if (removedPaths.isNotEmpty()) {
-            save(accountId, current.copy(blocks = current.blocks.filterNot { it.path in removedPaths }))
+        val primaryRequiredBytes = if (overflowAvailable && requestedBytes == 0L && policy().automaticCleanup) {
+            val totalPrimaryBytes = allPrimaryEntries.sumOf(VirtualFileCacheEntry::sizeBytes)
+            maxOf(
+                policy().maximumCacheBytes?.let { (totalPrimaryBytes - it).coerceAtLeast(0L) } ?: 0L,
+                (policy().minimumFreeSpaceBytes - root.usableSpace.coerceAtLeast(0L)).coerceAtLeast(0L),
+            )
+        } else {
+            0L
         }
-        return plan
+        val primaryPlan = planVirtualFileEviction(
+            entries = primaryEntries,
+            policy = policy(),
+            availableFreeBytes = root.usableSpace.coerceAtLeast(0L),
+            nowEpochMillis = nowEpochMillis,
+            requestedBytesToFree = maxOf(remainingRequested, primaryRequiredBytes),
+        )
+        primaryPlan.evictions.forEach { eviction ->
+            val matching = next.blocks.filter {
+                it.path == eviction.key.relativePath && it.storageTier == CachedRangeStorageTier.Primary
+            }
+            if (matching.isEmpty() || activePaths.getOrDefault(eviction.key, 0) != 0) return@forEach
+            if (matching.localRevision() != eviction.expectedLocalRevision) return@forEach
+            val shouldDelete = requestedBytes > 0L || !isOverflowAvailable()
+            if (shouldDelete) {
+                matching.forEach { block -> blobFile(accountId, block).delete() }
+                next = next.copy(blocks = next.blocks.filterNot { it in matching })
+                actuallyFreed += matching.sumOf { it.length.toLong() }
+            } else {
+                next = runCatching {
+                    moveBlocks(accountId, next, matching, CachedRangeStorageTier.Overflow)
+                }.getOrDefault(next)
+            }
+        }
+        if (requestedBytes == 0L && overflowAvailable) {
+            val remainingPrimaryEntries = next.toDomain(accountId, CachedRangeStorageTier.Primary)
+            val remainingPressure = if (policy().automaticCleanup) {
+                maxOf(
+                    policy().maximumCacheBytes?.let { maximum ->
+                        (remainingPrimaryEntries.sumOf(VirtualFileCacheEntry::sizeBytes) - maximum).coerceAtLeast(0L)
+                    } ?: 0L,
+                    (policy().minimumFreeSpaceBytes - root.usableSpace.coerceAtLeast(0L)).coerceAtLeast(0L),
+                )
+            } else {
+                0L
+            }
+            val unusedCutoff = if (policy().automaticCleanup) {
+                policy().unusedFileAgeMillis?.let { (nowEpochMillis - it).coerceAtLeast(0L) }
+            } else {
+                null
+            }
+            var selectedBytes = 0L
+            val pinnedToDemote = remainingPrimaryEntries.asSequence()
+                .filter { it.retention == VirtualFileRetention.Pinned && it.activeLeaseCount == 0 }
+                .sortedBy(VirtualFileCacheEntry::lastAccessedAtEpochMillis)
+                .filter { entry ->
+                    val cold = unusedCutoff != null && entry.lastAccessedAtEpochMillis <= unusedCutoff
+                    val neededForPressure = selectedBytes < remainingPressure
+                    if (cold || neededForPressure) {
+                        selectedBytes += entry.sizeBytes
+                        true
+                    } else {
+                        false
+                    }
+                }
+                .map(VirtualFileCacheEntry::key)
+                .toSet()
+            val pinnedBlocks = next.blocks.filter { block ->
+                block.storageTier == CachedRangeStorageTier.Primary &&
+                    FileOfflineKey(accountId, block.path) in pinnedToDemote
+            }
+            if (pinnedBlocks.isNotEmpty()) {
+                next = runCatching {
+                    moveBlocks(accountId, next, pinnedBlocks, CachedRangeStorageTier.Overflow)
+                }.getOrDefault(next)
+            }
+        }
+        if (next != current) {
+            save(accountId, next)
+        }
+        val allEntries = current.toDomain(accountId).filter { it.retention == VirtualFileRetention.Automatic }
+        val allEvictions = (overflowPlan.evictions + primaryPlan.evictions).distinctBy(VirtualFileEviction::key)
+        return VirtualFileEvictionPlan(
+            evictions = allEvictions,
+            cachedBytes = allEntries.sumOf(VirtualFileCacheEntry::sizeBytes),
+            reclaimableBytes = allEntries.filter(VirtualFileCacheEntry::isEvictable)
+                .sumOf(VirtualFileCacheEntry::sizeBytes),
+            plannedFreedBytes = actuallyFreed,
+            requiredFreedBytes = requestedBytes,
+            unmetRequiredBytes = (requestedBytes - actuallyFreed).coerceAtLeast(0L),
+        )
     }
 
-    private fun RangeCacheIndex.toDomain(accountId: String): List<VirtualFileCacheEntry> {
+    private fun removePlannedBlocks(
+        accountId: String,
+        index: RangeCacheIndex,
+        plan: VirtualFileEvictionPlan,
+    ): Pair<RangeCacheIndex, Long> {
+        var next = index
+        var freed = 0L
+        plan.evictions.forEach { eviction ->
+            val matching = next.blocks.filter {
+                it.path == eviction.key.relativePath && it.storageTier == CachedRangeStorageTier.Overflow
+            }
+            if (matching.isEmpty() || activePaths.getOrDefault(eviction.key, 0) != 0) return@forEach
+            if (matching.localRevision() != eviction.expectedLocalRevision) return@forEach
+            matching.forEach { block -> blobFile(accountId, block).delete() }
+            next = next.copy(blocks = next.blocks.filterNot { it in matching })
+            freed += matching.sumOf { it.length.toLong() }
+        }
+        return next to freed
+    }
+
+    private fun RangeCacheIndex.toDomain(
+        accountId: String,
+        tier: CachedRangeStorageTier? = null,
+    ): List<VirtualFileCacheEntry> {
         val retention = loadFolderRetention(accountId)
-        return blocks.groupBy(CachedRangeBlock::path).map { (path, fileBlocks) ->
+        return blocks.asSequence().filter { tier == null || it.storageTier == tier }
+            .groupBy(CachedRangeBlock::path).map { (path, fileBlocks) ->
             VirtualFileCacheEntry(
                 key = FileOfflineKey(accountId, path),
                 remoteRevision = fileBlocks.first().remoteRevision,
@@ -1025,6 +1275,14 @@ internal class DesktopVirtualRangeCache(
                 activeLeaseCount = activePaths.getOrDefault(FileOfflineKey(accountId, path), 0),
             )
         }
+    }
+
+    private fun overflowPolicy(): VirtualFileCachePolicy = policy().let { configured ->
+        configured.copy(
+            maximumCacheBytes = configured.overflowMaximumCacheBytes,
+            minimumFreeSpaceBytes = configured.overflowMinimumFreeSpaceBytes,
+            unusedFileAgeMillis = null,
+        )
     }
 
     private fun List<CachedRangeBlock>.localRevision(): String = "sha256:" + sha256Hex(
@@ -1100,10 +1358,20 @@ internal class DesktopVirtualRangeCache(
         publishBytes(directory, INDEX_FILE, encoded)
         loadedIndexes[accountId] = bounded
         dirtyAccessTimeAccounts -= accountId
-        val referenced = bounded.blocks.mapTo(hashSetOf(), CachedRangeBlock::blobName)
+        val primaryReferenced = bounded.blocks.asSequence()
+            .filter { it.storageTier == CachedRangeStorageTier.Primary }
+            .mapTo(hashSetOf(), CachedRangeBlock::blobName)
         directory.listFiles().orEmpty()
-            .filter { it.isFile && it.extension == "block" && it.name !in referenced }
+            .filter { it.isFile && it.extension == "block" && it.name !in primaryReferenced }
             .forEach(File::delete)
+        overflowAccountDirectory(accountId, writable = false)?.let { overflowDirectory ->
+            val overflowReferenced = bounded.blocks.asSequence()
+                .filter { it.storageTier == CachedRangeStorageTier.Overflow }
+                .mapTo(hashSetOf(), CachedRangeBlock::blobName)
+            overflowDirectory.listFiles().orEmpty()
+                .filter { it.isFile && it.extension == "block" && it.name !in overflowReferenced }
+                .forEach(File::delete)
+        }
     }
 
     private fun persistAccessTimes(accountId: String, index: RangeCacheIndex) {
@@ -1177,7 +1445,7 @@ internal class DesktopVirtualRangeCache(
                 block.remoteRevision == revision.remoteRevision &&
                 block.fileSize == revision.fileSize
         }
-        removed.forEach { block -> File(accountDirectory(revision.file.accountId), block.blobName).delete() }
+        removed.forEach { block -> blobFile(revision.file.accountId, block).delete() }
         if (removed.isNotEmpty()) {
             save(
                 revision.file.accountId,
@@ -1384,6 +1652,155 @@ internal class DesktopVirtualRangeCache(
                 recoverOrphanedCacheArtifacts(directory)
             }
         }
+    }
+
+    private fun blobFile(accountId: String, block: CachedRangeBlock): File = when (block.storageTier) {
+        CachedRangeStorageTier.Primary -> File(accountDirectory(accountId), block.blobName)
+        CachedRangeStorageTier.Overflow -> File(
+            overflowAccountDirectory(accountId, writable = false) ?: File(requireNotNull(overflowRoot), accountId),
+            block.blobName,
+        )
+    }
+
+    private fun overflowAccountDirectory(accountId: String, writable: Boolean): File? {
+        val configuredRoot = overflowRoot ?: return null
+        if (!isOverflowRootAvailable(configuredRoot)) return null
+        val directory = File(configuredRoot, accountId)
+        require(!Files.isSymbolicLink(directory.toPath())) {
+            "The overflow cache account directory cannot be a symbolic link."
+        }
+        if (writable && Files.notExists(directory.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                Files.createDirectory(directory.toPath())
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                // Another app process may have created the account directory.
+            }
+        }
+        return directory.takeIf {
+            Files.isDirectory(it.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(it.toPath())
+        }
+    }
+
+    private fun isOverflowAvailable(): Boolean = overflowRoot?.let(::isOverflowRootAvailable) == true
+
+    private fun promoteBlock(
+        accountId: String,
+        index: RangeCacheIndex,
+        record: CachedRangeBlock,
+        source: File,
+    ): RangeCacheIndex = runCatching {
+        moveBlocks(accountId, index, listOf(record), CachedRangeStorageTier.Primary).also {
+            source.delete()
+        }
+    }.getOrDefault(index)
+
+    private fun moveBlocks(
+        accountId: String,
+        index: RangeCacheIndex,
+        blocks: List<CachedRangeBlock>,
+        destinationTier: CachedRangeStorageTier,
+    ): RangeCacheIndex {
+        if (blocks.isEmpty() || blocks.all { it.storageTier == destinationTier }) return index
+        val destinationDirectory = when (destinationTier) {
+            CachedRangeStorageTier.Primary -> writableAccountDirectory(accountId)
+            CachedRangeStorageTier.Overflow -> overflowAccountDirectory(accountId, writable = true)
+                ?: error("Reconnect the overflow cache drive before moving cached files.")
+        }
+        val published = mutableListOf<File>()
+        try {
+            blocks.forEach { block ->
+                val source = blobFile(accountId, block)
+                check(source.isFile && source.length() == block.length.toLong()) {
+                    "A cached file block disappeared while moving storage tiers."
+                }
+                val destination = File(destinationDirectory, block.blobName)
+                publishFile(source, destination, block.sha256)
+                published += destination
+            }
+            val movedBlobNames = blocks.mapTo(hashSetOf(), CachedRangeBlock::blobName)
+            val next = index.copy(
+                blocks = index.blocks.map { block ->
+                    if (block.blobName in movedBlobNames) block.copy(storageTier = destinationTier) else block
+                },
+            )
+            save(accountId, next)
+            blocks.forEach { block -> blobFile(accountId, block).delete() }
+            tierAttention = null
+            return next
+        } catch (failure: Throwable) {
+            published.forEach(File::delete)
+            tierAttention = failure.message
+                ?.takeIf { it.isNotBlank() && it.none(Char::isISOControl) }
+                ?.take(512)
+                ?: "Could not move cached content between storage tiers."
+            throw failure
+        }
+    }
+
+    private fun publishFile(source: File, destination: File, expectedSha256: String) {
+        val temporary = File.createTempFile("${destination.name}.", ".tmp", destination.parentFile)
+        try {
+            source.inputStream().buffered().use { input ->
+                FileOutputStream(temporary).use { output ->
+                    input.copyTo(output)
+                    output.fd.sync()
+                }
+            }
+            check(temporary.length() == source.length() && sha256Hex(temporary) == expectedSha256) {
+                "A cached file block failed verification while moving storage tiers."
+            }
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    destination.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+            syncDirectoryMetadata(destination.parentFile)
+        } finally {
+            temporary.delete()
+        }
+    }
+
+    private fun prepareCacheRoot(cacheRootFile: File, createParentDirectories: Boolean, required: Boolean) {
+        val cacheRoot = cacheRootFile.toPath().toAbsolutePath().normalize()
+        val parent = requireNotNull(cacheRoot.parent)
+        if (!required && Files.notExists(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return
+        if (createParentDirectories) {
+            Files.createDirectories(parent)
+        } else if (!Files.isDirectory(parent, java.nio.file.LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(parent)) {
+            require(!required) { "The selected virtual-file storage drive is unavailable." }
+            return
+        }
+        if (Files.notExists(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                Files.createDirectory(cacheRoot)
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                // Another app process may have created the same cache root.
+            }
+        }
+        require(
+            Files.isDirectory(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(cacheRoot),
+        ) { "The desktop virtual range cache must be a regular local directory." }
+    }
+
+    private fun isCacheRootDirectory(cacheRootFile: File): Boolean {
+        val path = cacheRootFile.toPath().toAbsolutePath().normalize()
+        return Files.isDirectory(path, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(path)
+    }
+
+    private fun isOverflowRootAvailable(cacheRootFile: File): Boolean {
+        if (!isCacheRootDirectory(cacheRootFile)) return false
+        val marker = File(cacheRootFile, OVERFLOW_MARKER_FILE)
+        return Files.isRegularFile(marker.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+            !Files.isSymbolicLink(marker.toPath()) &&
+            marker.length() == OVERFLOW_MARKER_CONTENT.size.toLong() &&
+            runCatching { marker.readBytes().contentEquals(OVERFLOW_MARKER_CONTENT) }.getOrDefault(false)
     }
 
     private fun writableAccountDirectory(accountId: String): File {
@@ -1607,6 +2024,8 @@ internal class DesktopVirtualRangeCache(
         const val MAX_BLOCKS = 20_000
         const val MAX_BLOCK_BYTES = 4 * 1024 * 1024
         const val ACCESS_TIME_PERSISTENCE_INTERVAL_MILLIS = 30_000L
+        const val OVERFLOW_MARKER_FILE = ".nextcloud-native-overflow-v1"
+        val OVERFLOW_MARKER_CONTENT = "nextcloud-native-overflow-v1\n".encodeToByteArray()
         val PROJECTED_BLOCK_HASH = "0".repeat(64)
         val REVISION_STAGE_FILE = Regex(
             "range-revision\\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\..+\\.stage",
@@ -1781,6 +2200,12 @@ private fun List<CachedVirtualFolderRule>.toDomain(): VirtualFolderRetentionStat
     VirtualFolderRetentionState(map { rule -> VirtualFolderRetentionRule(rule.relativePath, rule.retention) })
 
 @Serializable
+private enum class CachedRangeStorageTier {
+    Primary,
+    Overflow,
+}
+
+@Serializable
 private data class CachedRangeBlock(
     val path: String,
     val remoteRevision: String,
@@ -1792,6 +2217,7 @@ private data class CachedRangeBlock(
     val cachedAtEpochMillis: Long,
     val lastAccessedAtEpochMillis: Long,
     val pendingPublication: Boolean = false,
+    val storageTier: CachedRangeStorageTier = CachedRangeStorageTier.Primary,
 ) {
     fun requireValid() {
         FileOfflineKey("account", path)
