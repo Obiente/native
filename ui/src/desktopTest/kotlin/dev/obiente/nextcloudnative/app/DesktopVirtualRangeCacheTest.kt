@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermission
 import kotlinx.coroutines.CoroutineStart
@@ -850,6 +851,39 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `pinned primary bytes do not consume the automatic hot tier budget`() {
+        val primary = Files.createTempDirectory("virtual-range-pinned-primary-budget-").toFile()
+        val overflow = Files.createTempDirectory("virtual-range-pinned-overflow-budget-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(primary, overflowRoot = overflow, initializeOverflowMarker = true) {
+                VirtualFileCachePolicy(
+                    maximumCacheBytes = 4L,
+                    minimumFreeSpaceBytes = 0L,
+                    overflowMinimumFreeSpaceBytes = 0L,
+                    unusedFileAgeMillis = null,
+                )
+            }
+            cache.storeBlock(ACCOUNT_ID, "Photos/automatic.raf", "e1", 4L, 0L, "auto".encodeToByteArray())
+            cache.setFolderRetention(ACCOUNT_ID, "Photos/Album", VirtualFolderRetention.KeepOnDevice)
+            cache.storeBlock(ACCOUNT_ID, "Photos/Album/pinned.raf", "e2", 4L, 0L, "keep".encodeToByteArray())
+
+            assertEquals(8L, cache.summary(ACCOUNT_ID).primaryCachedBytes)
+            assertEquals(0L, cache.summary(ACCOUNT_ID).overflowCachedBytes)
+            assertContentEquals(
+                "auto".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/automatic.raf", "e1", 4L, 0L, 4),
+            )
+            assertContentEquals(
+                "keep".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/Album/pinned.raf", "e2", 4L, 0L, 4),
+            )
+        } finally {
+            primary.deleteRecursively()
+            overflow.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `primary pressure demotes cold automatic blocks to overflow and access promotes them`() {
         val primary = Files.createTempDirectory("virtual-range-primary-").toFile()
         val overflow = Files.createTempDirectory("virtual-range-overflow-").toFile()
@@ -878,6 +912,40 @@ class DesktopVirtualRangeCacheTest {
                 "hot!".encodeToByteArray(),
                 cache.readBlock(ACCOUNT_ID, "Photos/hot.raf", "e2", 4L, 0L, 4, 4L),
             )
+        } finally {
+            primary.deleteRecursively()
+            overflow.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `final file release reapplies the primary hot tier budget`() {
+        val primary = Files.createTempDirectory("virtual-range-release-primary-").toFile()
+        val overflow = Files.createTempDirectory("virtual-range-release-overflow-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(primary, overflowRoot = overflow, initializeOverflowMarker = true) {
+                VirtualFileCachePolicy(
+                    maximumCacheBytes = 4L,
+                    minimumFreeSpaceBytes = 0L,
+                    overflowMinimumFreeSpaceBytes = 0L,
+                    unusedFileAgeMillis = null,
+                )
+            }
+            cache.storeBlock(ACCOUNT_ID, "Photos/large.raf", "e1", 12L, 0L, "one!".encodeToByteArray(), 1L)
+            cache.storeBlock(ACCOUNT_ID, "Photos/large.raf", "e1", 12L, 4L, "two!".encodeToByteArray(), 2L)
+            cache.storeBlock(ACCOUNT_ID, "Photos/large.raf", "e1", 12L, 8L, "tri!".encodeToByteArray(), 3L)
+            assertEquals(4L, cache.summary(ACCOUNT_ID).primaryCachedBytes)
+
+            cache.acquire(ACCOUNT_ID, "Photos/large.raf", "e1", 12L)
+            assertNotNull(cache.readBlock(ACCOUNT_ID, "Photos/large.raf", "e1", 12L, 0L, 4, 4L))
+            assertNotNull(cache.readBlock(ACCOUNT_ID, "Photos/large.raf", "e1", 12L, 4L, 4, 5L))
+            assertNotNull(cache.readBlock(ACCOUNT_ID, "Photos/large.raf", "e1", 12L, 8L, 4, 6L))
+            assertEquals(12L, cache.summary(ACCOUNT_ID).primaryCachedBytes)
+
+            cache.release(ACCOUNT_ID, "Photos/large.raf", "e1", 12L)
+
+            assertEquals(0L, cache.summary(ACCOUNT_ID).primaryCachedBytes)
+            assertEquals(12L, cache.summary(ACCOUNT_ID).overflowCachedBytes)
         } finally {
             primary.deleteRecursively()
             overflow.deleteRecursively()
@@ -1119,12 +1187,12 @@ class DesktopVirtualRangeCacheTest {
                     maximumCacheBytes = 4L,
                     minimumFreeSpaceBytes = 0L,
                     overflowMinimumFreeSpaceBytes = 0L,
-                    unusedFileAgeMillis = null,
+                    unusedFileAgeMillis = 1L,
                 )
             }
             cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
             cache.storeBlock(ACCOUNT_ID, "Photos/first.raf", "e1", 4L, 0L, "one!".encodeToByteArray(), 1L)
-            cache.storeBlock(ACCOUNT_ID, "Photos/second.raf", "e2", 4L, 0L, "two!".encodeToByteArray(), 2L)
+            cache.storeBlock(ACCOUNT_ID, "Photos/second.raf", "e2", 4L, 0L, "two!".encodeToByteArray(), 3L)
 
             val summary = cache.summary(ACCOUNT_ID)
             assertEquals(8L, summary.pinnedBytes)
@@ -1403,6 +1471,47 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `overflow recovery removes unindexed tier copies but preserves active journal blocks`() {
+        val primary = Files.createTempDirectory("virtual-range-orphan-overflow-primary-").toFile()
+        val overflow = Files.createTempDirectory("virtual-range-orphan-overflow-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(
+                primary,
+                overflowRoot = overflow,
+                initializeOverflowMarker = true,
+            ) { nonEvictingTestPolicy() }
+            cache.storeBlock(ACCOUNT_ID, "Photos/indexed.raf", "e1", 4L, 0L, "data".encodeToByteArray())
+            assertEquals(4L, cache.relievePrimaryPressure(ACCOUNT_ID, 4L))
+            val overflowAccount = overflow.resolve(ACCOUNT_ID)
+            val indexed = overflowAccount.listFiles().orEmpty().single { it.extension == "block" }
+            val orphan = overflowAccount.resolve("e".repeat(64) + ".block").apply { writeText("orphan") }
+            val activeBlock = overflowAccount.resolve("f".repeat(64) + ".block").apply { writeText("active") }
+            val stageId = "00000000-0000-0000-0000-000000000004"
+            val journal = overflowAccount.resolve("range-revision.$stageId.commit").apply {
+                writeText("${activeBlock.name}\n")
+            }
+            val leaseFile = overflowAccount.resolve("range-revision.$stageId.lock")
+
+            RandomAccessFile(leaseFile, "rw").channel.use { channel ->
+                channel.lock().use {
+                    val restarted = DesktopVirtualRangeCache(primary, overflowRoot = overflow) {
+                        nonEvictingTestPolicy()
+                    }
+                    assertEquals(4L, restarted.summary(ACCOUNT_ID).overflowCachedBytes)
+                }
+            }
+
+            assertTrue(indexed.isFile)
+            assertFalse(orphan.exists())
+            assertTrue(activeBlock.isFile)
+            assertTrue(journal.isFile)
+        } finally {
+            primary.deleteRecursively()
+            overflow.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `missing overflow suspends retained hydration without discarding its status`() {
         val primary = Files.createTempDirectory("virtual-range-hydration-primary-").toFile()
         val overflow = Files.createTempDirectory("virtual-range-hydration-overflow-").toFile()
@@ -1457,7 +1566,10 @@ class DesktopVirtualRangeCacheTest {
                 )
             }
             cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
-            cache.storeBlock(ACCOUNT_ID, "Photos/offline.raf", "e1", 4L, 0L, "data".encodeToByteArray())
+            cache.beginRevisionStaging(ACCOUNT_ID, "Photos/offline.raf", "e1", 4L).use { staging ->
+                staging.store(0L, "data".encodeToByteArray())
+                assertTrue(staging.commitIfComplete())
+            }
             assertEquals(4L, cache.summary(ACCOUNT_ID).overflowPinnedBytes)
 
             cache.consolidateOverflow(ACCOUNT_ID)

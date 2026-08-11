@@ -178,6 +178,11 @@ internal class DesktopVirtualRangeCache(
                     removeExactRevision(deferred)
                 }
         }
+        if (remaining <= 0 && isOverflowAvailable()) {
+            runCatching {
+                applyEviction(accountId, requestedBytes = 0L, nowEpochMillis = System.currentTimeMillis())
+            }
+        }
     }
 
     @Synchronized
@@ -1304,9 +1309,9 @@ internal class DesktopVirtualRangeCache(
             entry.retention == VirtualFileRetention.Automatic
         }
         val primaryRequiredBytes = if (overflowAvailable && requestedBytes == 0L && policy().automaticCleanup) {
-            val totalPrimaryBytes = allPrimaryEntries.sumOf(VirtualFileCacheEntry::sizeBytes)
+            val automaticPrimaryBytes = primaryEntries.sumOf(VirtualFileCacheEntry::sizeBytes)
             maxOf(
-                policy().maximumCacheBytes?.let { (totalPrimaryBytes - it).coerceAtLeast(0L) } ?: 0L,
+                policy().maximumCacheBytes?.let { (automaticPrimaryBytes - it).coerceAtLeast(0L) } ?: 0L,
                 (policy().minimumFreeSpaceBytes - root.usableSpace.coerceAtLeast(0L)).coerceAtLeast(0L),
             )
         } else {
@@ -1338,13 +1343,8 @@ internal class DesktopVirtualRangeCache(
         }
         if (requestedBytes == 0L && overflowAvailable) {
             val remainingPrimaryEntries = next.toDomain(accountId, CachedRangeStorageTier.Primary)
-            val remainingPressure = if (policy().automaticCleanup) {
-                maxOf(
-                    policy().maximumCacheBytes?.let { maximum ->
-                        (remainingPrimaryEntries.sumOf(VirtualFileCacheEntry::sizeBytes) - maximum).coerceAtLeast(0L)
-                    } ?: 0L,
-                    (policy().minimumFreeSpaceBytes - root.usableSpace.coerceAtLeast(0L)).coerceAtLeast(0L),
-                )
+            val remainingFreeSpacePressure = if (policy().automaticCleanup) {
+                (policy().minimumFreeSpaceBytes - root.usableSpace.coerceAtLeast(0L)).coerceAtLeast(0L)
             } else {
                 0L
             }
@@ -1359,7 +1359,7 @@ internal class DesktopVirtualRangeCache(
                 .sortedBy(VirtualFileCacheEntry::lastAccessedAtEpochMillis)
                 .filter { entry ->
                     val cold = unusedCutoff != null && entry.lastAccessedAtEpochMillis <= unusedCutoff
-                    val neededForPressure = selectedBytes < remainingPressure
+                    val neededForPressure = selectedBytes < remainingFreeSpacePressure
                     if (cold || neededForPressure) {
                         selectedBytes += entry.sizeBytes
                         true
@@ -2271,6 +2271,27 @@ internal class DesktopVirtualRangeCache(
             .filter { block -> block.storageTier == CachedRangeStorageTier.Overflow }
             .mapTo(hashSetOf(), CachedRangeBlock::blobName)
         recoverStaleRevisionStages(directory, referencedOverflowBlocks)
+        recoverOrphanedOverflowBlocks(directory, referencedOverflowBlocks)
+    }
+
+    private fun recoverOrphanedOverflowBlocks(directory: File, referencedBlocks: Set<String>) {
+        val protectedBlocks = referencedBlocks.toMutableSet()
+        directory.listFiles().orEmpty().asSequence()
+            .filter { file -> file.isFile && REVISION_COMMIT_FILE.matches(file.name) }
+            .filter { file -> file.length() in 1L..MAX_COMMIT_JOURNAL_BYTES }
+            .mapNotNull { journal ->
+                runCatching {
+                    journal.readLines().also { names ->
+                        require(names.isNotEmpty() && names.size <= maximumBlocks && names.distinct().size == names.size)
+                        require(names.all(BLOCK_FILE::matches))
+                    }
+                }.getOrNull()
+            }
+            .flatten()
+            .forEach(protectedBlocks::add)
+        directory.listFiles().orEmpty().asSequence()
+            .filter { file -> file.isFile && BLOCK_FILE.matches(file.name) && file.name !in protectedBlocks }
+            .forEach(File::delete)
     }
 
     private fun recoverPromotedRevision(directory: File, stageId: String, referencedBlocks: Set<String>) {
