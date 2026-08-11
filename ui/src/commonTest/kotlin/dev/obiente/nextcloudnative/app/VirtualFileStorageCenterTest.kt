@@ -104,4 +104,41 @@ class VirtualFileStorageCenterTest {
             )
         }
     }
+
+    @Test
+    fun `fast cache progress uses managed primary automatic bytes`() {
+        val primary = VirtualFileCacheTierSnapshot(
+            path = "/cache/fast",
+            cachedBytes = 10L,
+            reclaimableBytes = 3L,
+            pinnedBytes = 7L,
+            managedAutomaticBytes = 13L,
+            availableFreeBytes = 100L,
+            available = true,
+        )
+        val snapshot = VirtualFileStorageSnapshot(
+            support = VirtualFileStorageSupport.Available,
+            integration = VirtualFilePlatformIntegration.LinuxFilesystemMount,
+            policy = VirtualFileCachePolicy(maximumCacheBytes = 20L),
+            cachedBytes = 110L,
+            reclaimableBytes = 103L,
+            pinnedBytes = 7L,
+            hydratedFileCount = 2,
+            pinnedFileCount = 1,
+            availableFreeBytes = 100L,
+            storageCapacityBytes = null,
+            cacheTiers = VirtualFileCacheTierConfiguration("/cache/fast", "/cache/overflow"),
+            primaryCache = primary,
+            overflowCache = VirtualFileCacheTierSnapshot(
+                path = "/cache/overflow",
+                cachedBytes = 100L,
+                reclaimableBytes = 100L,
+                pinnedBytes = 0L,
+                availableFreeBytes = 200L,
+                available = true,
+            ),
+        )
+
+        assertEquals(13L, managedAutomaticCacheBytesForProgress(snapshot))
+    }
 }

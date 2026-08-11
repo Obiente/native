@@ -1867,9 +1867,10 @@ internal fun VirtualFileStorageCard(
             if (snapshot != null) {
                 val maximum = snapshot.policy.maximumCacheBytes
                 if (maximum != null) {
+                    val automaticBytes = managedAutomaticCacheBytesForProgress(snapshot)
                     LinearProgressIndicator(
                         progress = {
-                            (snapshot.cachedBytes.toDouble() / maximum.toDouble())
+                            (automaticBytes.toDouble() / maximum.toDouble())
                                 .coerceIn(0.0, 1.0)
                                 .toFloat()
                         },
@@ -2125,6 +2126,10 @@ internal fun VirtualFileStorageCard(
         }
     }
 }
+
+internal fun managedAutomaticCacheBytesForProgress(snapshot: VirtualFileStorageSnapshot): Long =
+    snapshot.primaryCache?.managedAutomaticBytes
+        ?: (snapshot.cachedBytes - snapshot.pinnedBytes).coerceAtLeast(0L)
 
 @Composable
 private fun VirtualFileProviderLocationDialog(

@@ -111,6 +111,7 @@ data class VirtualFileCacheTierSnapshot(
     val cachedBytes: Long,
     val reclaimableBytes: Long,
     val pinnedBytes: Long,
+    val managedAutomaticBytes: Long = cachedBytes - pinnedBytes,
     val availableFreeBytes: Long?,
     val available: Boolean,
 ) {
@@ -119,6 +120,7 @@ data class VirtualFileCacheTierSnapshot(
         require(cachedBytes >= 0L)
         require(reclaimableBytes in 0L..cachedBytes)
         require(pinnedBytes in 0L..cachedBytes)
+        require(managedAutomaticBytes >= 0L)
         require(availableFreeBytes == null || availableFreeBytes >= 0L)
         require(available || availableFreeBytes == null)
     }

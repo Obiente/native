@@ -4,6 +4,8 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class DesktopVirtualFileProviderLocationTest {
     @Test
@@ -87,6 +89,30 @@ class DesktopVirtualFileProviderLocationTest {
             assertEquals(false, temporary.resolve("missing").exists())
         } finally {
             temporary.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun cacheTierValidationDetectsDirectoriesAliasedThroughAnAncestorSymlink() {
+        val temporary = Files.createTempDirectory("virtual-cache-tier-alias-")
+        try {
+            val physical = Files.createDirectories(temporary.resolve("physical/nested/cache"))
+            val alias = temporary.resolve("alias")
+            Files.createSymbolicLink(alias, temporary.resolve("physical"))
+            val aliased = alias.resolve("nested/cache")
+
+            val primary = validateDesktopVirtualFileCacheTierPath(physical.toString())
+            val overflow = validateDesktopVirtualFileCacheTierPath(aliased.toString())
+
+            assertTrue(desktopVirtualFileCacheTierPathsOverlap(primary, overflow))
+            assertFalse(
+                desktopVirtualFileCacheTierPathsOverlap(
+                    primary,
+                    Files.createDirectories(temporary.resolve("separate/cache")),
+                ),
+            )
+        } finally {
+            temporary.toFile().deleteRecursively()
         }
     }
 

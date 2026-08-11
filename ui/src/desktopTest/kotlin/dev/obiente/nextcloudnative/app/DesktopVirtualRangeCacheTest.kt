@@ -885,6 +885,33 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `overflow limits are reapplied after primary demotion`() {
+        val primary = Files.createTempDirectory("virtual-range-replan-primary-").toFile()
+        val overflow = Files.createTempDirectory("virtual-range-replan-overflow-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(primary, overflowRoot = overflow, initializeOverflowMarker = true) {
+                VirtualFileCachePolicy(
+                    maximumCacheBytes = 4L,
+                    minimumFreeSpaceBytes = 0L,
+                    overflowMaximumCacheBytes = 4L,
+                    overflowMinimumFreeSpaceBytes = 0L,
+                    unusedFileAgeMillis = null,
+                )
+            }
+            cache.storeBlock(ACCOUNT_ID, "Photos/first.raf", "e1", 4L, 0L, "one!".encodeToByteArray(), 1L)
+            cache.storeBlock(ACCOUNT_ID, "Photos/second.raf", "e2", 4L, 0L, "two!".encodeToByteArray(), 2L)
+            cache.storeBlock(ACCOUNT_ID, "Photos/third.raf", "e3", 4L, 0L, "tri!".encodeToByteArray(), 3L)
+
+            assertEquals(4L, cache.summary(ACCOUNT_ID).primaryCachedBytes)
+            assertEquals(4L, cache.summary(ACCOUNT_ID).overflowCachedBytes)
+            assertNull(cache.readBlock(ACCOUNT_ID, "Photos/first.raf", "e1", 4L, 0L, 4))
+        } finally {
+            primary.deleteRecursively()
+            overflow.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `tier-aware index keeps a rollback-safe primary-only v1 index`() {
         val primary = Files.createTempDirectory("virtual-range-compatible-primary-").toFile()
         val overflow = Files.createTempDirectory("virtual-range-compatible-overflow-").toFile()
@@ -1104,6 +1131,115 @@ class DesktopVirtualRangeCacheTest {
     }
 
     @Test
+    fun `overflow disconnect during complete revision validation preserves its records`() {
+        val primary = Files.createTempDirectory("virtual-range-validation-primary-").toFile()
+        val overflow = Files.createTempDirectory("virtual-range-validation-overflow-").toFile()
+        val disconnected = overflow.resolveSibling("${overflow.name}-disconnected")
+        var disconnectOnValidation = false
+        try {
+            val cache = DesktopVirtualRangeCache(
+                primary,
+                overflowRoot = overflow,
+                initializeOverflowMarker = true,
+                beforeBlockValidation = {
+                    if (disconnectOnValidation) {
+                        disconnectOnValidation = false
+                        Files.move(overflow.toPath(), disconnected.toPath())
+                        overflow.mkdirs()
+                    }
+                },
+            ) { nonEvictingTestPolicy() }
+            cache.storeBlock(ACCOUNT_ID, "Photos/offline.raf", "e1", 4L, 0L, "data".encodeToByteArray())
+            cache.relievePrimaryPressure(ACCOUNT_ID, 4L)
+            val revision = VirtualRangeRevision("Photos/offline.raf", "e1", 4L)
+            disconnectOnValidation = true
+
+            assertTrue(cache.completeRevisions(ACCOUNT_ID, listOf(revision)).isEmpty())
+            assertEquals(4L, cache.summary(ACCOUNT_ID).overflowCachedBytes)
+
+            overflow.deleteRecursively()
+            Files.move(disconnected.toPath(), overflow.toPath())
+            assertEquals(setOf(revision), cache.completeRevisions(ACCOUNT_ID, listOf(revision)))
+        } finally {
+            primary.deleteRecursively()
+            overflow.deleteRecursively()
+            disconnected.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a different initialized drive cannot impersonate the configured overflow root`() {
+        val primary = Files.createTempDirectory("virtual-range-bound-primary-").toFile()
+        val otherPrimary = Files.createTempDirectory("virtual-range-other-primary-").toFile()
+        val overflow = Files.createTempDirectory("virtual-range-bound-overflow-").toFile()
+        val otherOverflow = Files.createTempDirectory("virtual-range-other-overflow-").toFile()
+        val disconnected = overflow.resolveSibling("${overflow.name}-disconnected")
+        try {
+            val cache = DesktopVirtualRangeCache(
+                primary,
+                overflowRoot = overflow,
+                initializeOverflowMarker = true,
+            ) { nonEvictingTestPolicy() }
+            DesktopVirtualRangeCache(
+                otherPrimary,
+                overflowRoot = otherOverflow,
+                initializeOverflowMarker = true,
+            ) { nonEvictingTestPolicy() }
+            cache.storeBlock(ACCOUNT_ID, "Photos/offline.raf", "e1", 4L, 0L, "data".encodeToByteArray())
+            cache.relievePrimaryPressure(ACCOUNT_ID, 4L)
+
+            Files.move(overflow.toPath(), disconnected.toPath())
+            Files.move(otherOverflow.toPath(), overflow.toPath())
+
+            assertFalse(cache.summary(ACCOUNT_ID).overflowAvailable)
+            assertNull(cache.readBlock(ACCOUNT_ID, "Photos/offline.raf", "e1", 4L, 0L, 4))
+            assertEquals(4L, cache.summary(ACCOUNT_ID).overflowCachedBytes)
+
+            Files.move(overflow.toPath(), otherOverflow.toPath())
+            Files.move(disconnected.toPath(), overflow.toPath())
+            assertContentEquals(
+                "data".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/offline.raf", "e1", 4L, 0L, 4),
+            )
+        } finally {
+            primary.deleteRecursively()
+            otherPrimary.deleteRecursively()
+            overflow.deleteRecursively()
+            otherOverflow.deleteRecursively()
+            disconnected.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `retained revision staging can commit directly to overflow`() {
+        val primary = Files.createTempDirectory("virtual-range-retained-primary-").toFile()
+        val overflow = Files.createTempDirectory("virtual-range-retained-overflow-").toFile()
+        try {
+            val cache = DesktopVirtualRangeCache(
+                primary,
+                overflowRoot = overflow,
+                initializeOverflowMarker = true,
+            ) { nonEvictingTestPolicy() }
+            cache.setFolderRetention(ACCOUNT_ID, "Photos", VirtualFolderRetention.KeepOnDevice)
+
+            cache.beginRevisionStaging(ACCOUNT_ID, "Photos/offline.raf", "e1", 4L).use { staging ->
+                staging.store(0L, "data".encodeToByteArray())
+                assertTrue(staging.commitIfComplete())
+            }
+
+            assertEquals(0L, cache.summary(ACCOUNT_ID).primaryCachedBytes)
+            assertEquals(4L, cache.summary(ACCOUNT_ID).overflowPinnedBytes)
+            assertContentEquals(
+                "data".encodeToByteArray(),
+                cache.readBlock(ACCOUNT_ID, "Photos/offline.raf", "e1", 4L, 0L, 4),
+            )
+        } finally {
+            primary.deleteRecursively()
+            overflow.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `removing overflow consolidates every retained block on primary`() {
         val primary = Files.createTempDirectory("virtual-range-consolidate-primary-").toFile()
         val overflow = Files.createTempDirectory("virtual-range-consolidate-overflow-").toFile()
@@ -1144,6 +1280,7 @@ class DesktopVirtualRangeCacheTest {
             source.storeBlock(ACCOUNT_ID, "Photos/offline.raf", "e1", 4L, 0L, "data".encodeToByteArray())
             val destination = DesktopVirtualRangeCache(destinationRoot) { nonEvictingTestPolicy() }
 
+            source.copyPrimaryAccountTo(ACCOUNT_ID, destination)
             source.copyPrimaryAccountTo(ACCOUNT_ID, destination)
 
             assertEquals(source.summary(ACCOUNT_ID).cachedBytes, destination.summary(ACCOUNT_ID).cachedBytes)
