@@ -9,6 +9,7 @@ import org.freedesktop.dbus.annotations.DBusInterfaceName
 import org.freedesktop.dbus.annotations.DBusProperty
 import org.freedesktop.dbus.connections.impl.DBusConnection
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
+import org.freedesktop.dbus.interfaces.DBus
 import org.freedesktop.dbus.interfaces.DBusInterface
 import org.freedesktop.dbus.interfaces.Properties
 import org.freedesktop.dbus.messages.DBusSignal
@@ -162,6 +163,7 @@ private class LinuxStatusNotifierTray private constructor(
     private val connection: DBusConnection,
     private val serviceName: String,
     private val item: LinuxStatusNotifierItem,
+    private val watcherOwnerSubscription: AutoCloseable,
 ) : DesktopTrayRegistration {
     override fun updateTooltip(tooltip: String) {
         item.updateTooltip(tooltip)
@@ -170,6 +172,7 @@ private class LinuxStatusNotifierTray private constructor(
     override fun showMessage(title: String, message: String, error: Boolean) = Unit
 
     override fun close() {
+        runCatching { watcherOwnerSubscription.close() }
         runCatching { connection.releaseBusName(serviceName) }
         runCatching { connection.close() }
     }
@@ -189,13 +192,32 @@ private class LinuxStatusNotifierTray private constructor(
                 try {
                     connection.requestBusName(serviceName)
                     connection.exportObject(item)
-                    val watcher = connection.getRemoteObject(
-                        STATUS_NOTIFIER_WATCHER_SERVICE,
-                        STATUS_NOTIFIER_WATCHER_PATH,
-                        StatusNotifierWatcher::class.java,
-                    )
-                    watcher.RegisterStatusNotifierItem(serviceName)
-                    LinuxStatusNotifierTray(connection, serviceName, item)
+                    val registerWithWatcher = {
+                        connection.getRemoteObject(
+                            STATUS_NOTIFIER_WATCHER_SERVICE,
+                            STATUS_NOTIFIER_WATCHER_PATH,
+                            StatusNotifierWatcher::class.java,
+                        ).RegisterStatusNotifierItem(serviceName)
+                    }
+                    val watcherOwnerSubscription = connection.addSigHandler(
+                        DBus.NameOwnerChanged::class.java,
+                    ) { change ->
+                        if (shouldReregisterStatusNotifier(change.name, change.newOwner)) {
+                            runCatching(registerWithWatcher)
+                        }
+                    }
+                    try {
+                        registerWithWatcher()
+                        LinuxStatusNotifierTray(
+                            connection,
+                            serviceName,
+                            item,
+                            watcherOwnerSubscription,
+                        )
+                    } catch (failure: Throwable) {
+                        runCatching { watcherOwnerSubscription.close() }
+                        throw failure
+                    }
                 } catch (failure: Throwable) {
                     runCatching { connection.close() }
                     throw failure
@@ -208,6 +230,9 @@ private class LinuxStatusNotifierTray private constructor(
             }.getOrNull()
     }
 }
+
+internal fun shouldReregisterStatusNotifier(name: String, newOwner: String): Boolean =
+    name == STATUS_NOTIFIER_WATCHER_SERVICE && newOwner.isNotBlank()
 
 private const val STATUS_NOTIFIER_WATCHER_SERVICE = "org.kde.StatusNotifierWatcher"
 private const val STATUS_NOTIFIER_WATCHER_PATH = "/StatusNotifierWatcher"

@@ -1495,6 +1495,70 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `partial retained navigation without a fallback is immediately stale`() {
+        val directory = Files.createTempDirectory("retained-navigation-stale-").toFile()
+        try {
+            val accountId = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            val cache = DesktopVirtualRangeCache(directory) {
+                VirtualFileCachePolicy(automaticCleanup = false, minimumFreeSpaceBytes = 0L)
+            }
+            cache.setFolderRetention(accountId, "Photos/Retained", VirtualFolderRetention.KeepOnDevice)
+            val retainedNodes = List(600) { index ->
+                LinuxVirtualFileNode(
+                    path = "Photos/item-$index",
+                    name = "item-$index",
+                    directory = true,
+                    size = 0L,
+                    remoteRevision = "etag-$index",
+                )
+            }
+            cache.publishRetainedListings(
+                accountId,
+                "Photos/Retained",
+                mapOf(
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        nodes = retainedNodes,
+                        fetchedAtEpochMillis = 20L,
+                        freshAtEpochMillis = 10_000L,
+                        complete = false,
+                    ),
+                    "Photos/Retained" to LinuxVirtualDirectorySnapshot(
+                        nodes = emptyList(),
+                        fetchedAtEpochMillis = 20L,
+                    ),
+                ),
+            )
+
+            val retainedStore = RetainedLinuxVirtualMetadataStore(
+                cache,
+                accountId,
+                MemoryLinuxVirtualMetadataStore(),
+            )
+            val restored = assertNotNull(retainedStore.load("Photos"))
+
+            assertFalse(restored.complete)
+            assertEquals(600, restored.nodes.size)
+            assertEquals(0L, restored.fetchedAtEpochMillis)
+            assertEquals(0L, restored.freshAtEpochMillis)
+
+            val delegate = MutableFixtureBackend()
+            val cached = CachingLinuxVirtualFileBackend(
+                delegate = delegate,
+                store = retainedStore,
+                nowEpochMillis = { 10_000L },
+            )
+            try {
+                assertEquals(600, cached.list("Photos").size)
+                assertTrue(waitUntil { delegate.listCallCount("Photos") == 1 })
+            } finally {
+                cached.close()
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `newer fallback keeps missing retained navigation reachable without replacing live nodes`() {
         val directory = Files.createTempDirectory("retained-navigation-recovery-").toFile()
         try {

@@ -163,7 +163,7 @@ internal class RetainedLinuxVirtualMetadataStore(
         val retained = rangeCache.loadRetainedListing(accountId, path) ?: return fallback.load(path)
         if (retained.complete) return retained
         val completeFallback = fallback.load(path)?.takeIf(LinuxVirtualDirectorySnapshot::complete)
-            ?: return retained.copy(fetchedAtEpochMillis = 0L)
+            ?: return retained.copy(fetchedAtEpochMillis = 0L, freshAtEpochMillis = 0L)
         return mergeRetainedNavigationListing(completeFallback, retained)
     }
 
@@ -334,7 +334,7 @@ internal class CachingLinuxVirtualFileBackend(
 
     private fun maybeRefresh(path: String, snapshot: LinuxVirtualDirectorySnapshot) {
         if (refreshes.containsKey(path)) return
-        if (!snapshot.isFresh(nowEpochMillis(), snapshot.adaptiveFreshnessMillis())) {
+        if (!snapshot.complete || !snapshot.isFresh(nowEpochMillis(), snapshot.adaptiveFreshnessMillis())) {
             refreshAsync(path)
         }
     }

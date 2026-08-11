@@ -91,4 +91,11 @@ class DesktopTrayTest {
             item.Get<String>("org.kde.StatusNotifierItem", "Title"),
         )
     }
+
+    @Test
+    fun statusNotifierReregistersOnlyWhenTheWatcherGetsANewOwner() {
+        assertTrue(shouldReregisterStatusNotifier("org.kde.StatusNotifierWatcher", ":1.42"))
+        assertFalse(shouldReregisterStatusNotifier("org.kde.StatusNotifierWatcher", ""))
+        assertFalse(shouldReregisterStatusNotifier("org.example.OtherService", ":1.42"))
+    }
 }

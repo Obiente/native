@@ -1213,15 +1213,10 @@ internal class DesktopFileReadCache(
         const val MAX_FILES_PER_LISTING = 50_000
         const val MAX_TOTAL_METADATA_ENTRIES = 250_000
         const val MAX_METADATA_SHARD_ENTRIES = 256
-        // v1 indexes written before denser shards used 64 entries per part. Decode against that
-        // historical lower bound while the byte-aware writer can still use up to 256 entries.
-        const val MIN_SUPPORTED_METADATA_SHARD_ENTRIES = 64
-        const val MAX_METADATA_SHARDS_PER_LISTING =
-            (MAX_FILES_PER_LISTING + MIN_SUPPORTED_METADATA_SHARD_ENTRIES - 1) /
-                MIN_SUPPORTED_METADATA_SHARD_ENTRIES
-        const val MAX_METADATA_SHARDS =
-            (MAX_TOTAL_METADATA_ENTRIES + MIN_SUPPORTED_METADATA_SHARD_ENTRIES - 1) /
-                MIN_SUPPORTED_METADATA_SHARD_ENTRIES + MAX_LISTINGS * 2
+        // A valid maximum-size record may occupy its own byte-bounded shard. The entry and index
+        // byte budgets remain the authoritative bounds; do not assume a minimum record density.
+        const val MAX_METADATA_SHARDS_PER_LISTING = MAX_FILES_PER_LISTING
+        const val MAX_METADATA_SHARDS = MAX_TOTAL_METADATA_ENTRIES + MAX_LISTINGS * 2
         const val MAX_METADATA_SHARD_BYTES = 4L * 1024L * 1024L
         const val MAX_HYDRATED_METADATA_BYTES = 32L * 1024L * 1024L
         const val METADATA_SHARD_EXTENSION = "metadata"
