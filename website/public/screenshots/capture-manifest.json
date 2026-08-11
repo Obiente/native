@@ -288,7 +288,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileIdentityResolution.kt": "f8658c54cf14dec5b60037a27770ea3c2eb06b509bd28d3b9c97c228adfae83a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileIntegrationPlanning.kt": "1421be5a0db7c7d36ad72434e435952d5017ae25db080f2d7eeddc1aea368a1b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenter.kt": "0c599b169d7857f6aaac23fd8ac6d87715fadba0ebe3f032b02acc6837fdbac7",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt": "a84987e165f8eea7ada8e08dac0c478970641583e6bb5abdfea3727fc227756f",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt": "4761f17217859e06b399b7a8859c9f9cfd7ec5a256f0519e819e505e86a38fe9",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineQueue.kt": "f592e2dcf3fde4467f88e30b570f9612126a7d6a63070c2a17819572ceb68e19",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineQueueSnapshot.kt": "1fb930db8f65e0e410af6eaacde0c4f3d071f4115c39f78a4f49a9532b9f7961",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOperations.kt": "1282adb909c54d559d812689ca9f937cda3a1256c1400fd0d0f91ba3a1ace1d6",
@@ -401,7 +401,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/UnifiedSearch.kt": "0d9222d2765cc2a417c8563c00c44f9ddd104591d011ac5e30dad0aa4a546d81",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/UnifiedSearchScreen.kt": "ba15240f2eccdb5d3583cf9406b160badca3b7cba68ec0bb8cf13cb798c4beec",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/VirtualFileCache.kt": "bca13f57d0abd64d5a9d4d6f2bb90e45048df02a45b73a3050196331a9d7333d",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/VirtualFileStorageCenter.kt": "31761593a54fca57b14b39cc37291d79b312f9396f58ba2e39cd92e84e513553",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/VirtualFileStorageCenter.kt": "f7b954b38fa2077206210344035938a8a01cb73935acf06c0e3cdd5d1f857a5c",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/VirtualFolderRetention.kt": "598fa756e16d25552d783db55c144008d87289521821fc962544fdb29db496f0",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShell.kt": "189e6e38e16c683f06c65a787dffadb014898a83942c7ea6d66e39aef16af721",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/DesktopShellLayout.kt": "c40cd3fcd8da0312b82d846953034d22c69f9ddfc5af837e1ba8bb2939b0b772",
@@ -1230,7 +1230,7 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "0bc9c2d4c8d919ea230f300192c351863df1b6d3d2a965f5304d665935764716"
+            "sha256": "f2608ff87fe37a74c7f36d7586ad701da9be072490ebe90601855b070ac8e8a5"
         },
         {
             "scenario": "virtual-file-storage-desktop-light",
@@ -1246,7 +1246,7 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "76bc087d036e23b5a5f611afc7262ecc336dca51df12e6f64e617b8ee71253c6"
+            "sha256": "dd9baa1b12c0f55b32760c8bc6aafed991a7696a76b99d1d23beb6db7800840c"
         },
         {
             "scenario": "desktop-startup-settings",
@@ -2640,7 +2640,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "0bc9c2d4c8d919ea230f300192c351863df1b6d3d2a965f5304d665935764716"
+            "sha256": "f2608ff87fe37a74c7f36d7586ad701da9be072490ebe90601855b070ac8e8a5"
         },
         {
             "scenario": "guide-offline-files-storage-light",
@@ -2656,7 +2656,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "76bc087d036e23b5a5f611afc7262ecc336dca51df12e6f64e617b8ee71253c6"
+            "sha256": "dd9baa1b12c0f55b32760c8bc6aafed991a7696a76b99d1d23beb6db7800840c"
         },
         {
             "scenario": "guide-offline-files-transfers",
