@@ -15,7 +15,7 @@ import kotlinx.serialization.json.Json
 
 internal const val MAX_VIRTUAL_FOLDER_RETAINED_LISTINGS = 20_000
 
-internal fun String.isValidDesktopVirtualOverflowIdentity(): Boolean =
+internal fun String.isValidDesktopVirtualCacheRootIdentity(): Boolean =
     length == 36 && runCatching { UUID.fromString(this).toString() == this }.getOrDefault(false)
 
 internal data class DesktopVirtualRangeCacheSummary(
@@ -61,10 +61,15 @@ internal class DesktopVirtualRangeCache(
     private val maximumIndexBytes: Long = MAX_INDEX_BYTES,
     private val maximumBlocks: Int = MAX_BLOCKS,
     private val createParentDirectories: Boolean = true,
+    private val initializePrimaryMarker: Boolean = false,
     private val initializeOverflowMarker: Boolean = false,
+    expectedPrimaryIdentity: String? = null,
+    private val requirePrimaryIdentity: Boolean = expectedPrimaryIdentity != null,
     expectedOverflowIdentity: String? = null,
     private val accessTimePersistenceIntervalMillis: Long = ACCESS_TIME_PERSISTENCE_INTERVAL_MILLIS,
     private val beforeBlockValidation: (File) -> Unit = {},
+    private val beforeLegacyIndexPublication: () -> Unit = {},
+    private val afterDirectoryMetadataSync: (File) -> Unit = {},
     private val afterDurableIndexPublication: () -> Unit = {},
     private val policy: () -> VirtualFileCachePolicy,
 ) {
@@ -77,14 +82,29 @@ internal class DesktopVirtualRangeCache(
     private val dirtyAccessTimeAccounts = mutableSetOf<String>()
     private val lastAccessTimePersistence = mutableMapOf<String, Long>()
     private var tierAttention: String? = null
+    private var expectedPrimaryRootIdentity = expectedPrimaryIdentity
     private var expectedOverflowRootIdentity = expectedOverflowIdentity
 
     init {
         require(maximumIndexBytes in 1L..MAX_INDEX_BYTES)
         require(maximumBlocks in 1..MAX_BLOCKS)
         require(accessTimePersistenceIntervalMillis >= 0L)
-        require(expectedOverflowIdentity == null || expectedOverflowIdentity.isValidDesktopVirtualOverflowIdentity())
-        prepareCacheRoot(root, createParentDirectories, required = true)
+        require(expectedPrimaryIdentity == null || expectedPrimaryIdentity.isValidDesktopVirtualCacheRootIdentity())
+        require(expectedOverflowIdentity == null || expectedOverflowIdentity.isValidDesktopVirtualCacheRootIdentity())
+        if (initializePrimaryMarker) {
+            prepareCacheRoot(root, createParentDirectories, required = true)
+            val initializedIdentity = initializePrimaryRootIdentity(root)
+            require(expectedPrimaryRootIdentity == null || expectedPrimaryRootIdentity == initializedIdentity) {
+                "The selected primary cache drive does not match its configured identity."
+            }
+            expectedPrimaryRootIdentity = initializedIdentity
+        } else if (requirePrimaryIdentity) {
+            require(
+                expectedPrimaryRootIdentity != null && isPrimaryRootAvailable(root),
+            ) { "Reconnect the selected primary cache drive before using it." }
+        } else {
+            prepareCacheRoot(root, createParentDirectories, required = true)
+        }
         overflowRoot?.let { configuredOverflow ->
             require(configuredOverflow.toPath().toAbsolutePath().normalize() != root.toPath().toAbsolutePath().normalize()) {
                 "The primary and overflow cache locations must be different."
@@ -99,6 +119,8 @@ internal class DesktopVirtualRangeCache(
             }
         }
     }
+
+    fun primaryIdentity(): String? = expectedPrimaryRootIdentity
 
     fun overflowIdentity(): String? = expectedOverflowRootIdentity
 
@@ -419,8 +441,21 @@ internal class DesktopVirtualRangeCache(
             Files.isDirectory(parent, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
                 !Files.isSymbolicLink(parent) &&
                 Files.isDirectory(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
-                !Files.isSymbolicLink(cacheRoot),
+                !Files.isSymbolicLink(cacheRoot) &&
+                (!requirePrimaryIdentity || isPrimaryRootAvailable(root)),
         ) { "Reconnect the selected virtual-file storage drive before changing its location." }
+    }
+
+    @Synchronized
+    fun hasUnavailableRetainedOverflowRecords(accountId: String, retainedRoot: String? = null): Boolean {
+        if (isOverflowAvailable()) return false
+        val normalizedRoot = retainedRoot?.let { FileOfflineKey(accountId, it).relativePath }
+        val retention = loadFolderRetention(accountId)
+        return load(accountId).blocks.any { block ->
+            block.storageTier == CachedRangeStorageTier.Overflow &&
+                retention.retentionFor(block.path) == VirtualFolderRetention.KeepOnDevice &&
+                (normalizedRoot == null || block.path == normalizedRoot || block.path.startsWith("$normalizedRoot/"))
+        }
     }
 
     @Synchronized
@@ -1204,6 +1239,23 @@ internal class DesktopVirtualRangeCache(
             relieved += matching.sumOf { it.length.toLong() }
         }
         if (next != current) save(accountId, next)
+        if (isOverflowAvailable()) {
+            val afterDemotion = load(accountId)
+            val overflowPlan = planVirtualFileEviction(
+                entries = afterDemotion.toDomain(accountId, CachedRangeStorageTier.Overflow).filter { entry ->
+                    entry.retention == VirtualFileRetention.Automatic
+                },
+                policy = overflowPolicy(),
+                availableFreeBytes = overflowRoot?.takeIf(::isOverflowRootAvailable)
+                    ?.usableSpace?.coerceAtLeast(0L) ?: 0L,
+                nowEpochMillis = System.currentTimeMillis(),
+                requestedBytesToFree = 0L,
+            )
+            if (overflowPlan.evictions.isNotEmpty()) {
+                val bounded = removePlannedBlocks(accountId, afterDemotion, overflowPlan).first
+                if (bounded != afterDemotion) save(accountId, bounded)
+            }
+        }
         return relieved
     }
 
@@ -1579,16 +1631,52 @@ internal class DesktopVirtualRangeCache(
         "$path\u0000$remoteRevision\u0000$fileSize\u0000$offset"
 
     private fun publishRangeIndexes(directory: File, index: RangeCacheIndex) {
-        publishBytes(directory, TIERED_INDEX_FILE, encodedIndex(index))
-        syncDirectoryMetadata(directory)
+        val encodedTiered = encodedIndex(index)
         val legacy = index.toLegacy()
         val encodedLegacy = rangeCacheJson.encodeToString(legacy).encodeToByteArray()
         require(encodedLegacy.size.toLong() <= maximumSerializedIndexBytes()) {
             "The legacy desktop virtual range index is too large."
         }
-        publishBytes(directory, LEGACY_INDEX_FILE, encodedLegacy)
-        syncDirectoryMetadata(directory)
+        val previousTiered = snapshotPublishedFile(directory, TIERED_INDEX_FILE)
+        val previousLegacy = snapshotPublishedFile(directory, LEGACY_INDEX_FILE)
+        try {
+            publishBytes(directory, TIERED_INDEX_FILE, encodedTiered)
+            syncDirectoryMetadata(directory)
+            beforeLegacyIndexPublication()
+            publishBytes(directory, LEGACY_INDEX_FILE, encodedLegacy)
+            syncDirectoryMetadata(directory)
+        } catch (failure: Throwable) {
+            val rollback = runCatching {
+                restorePublishedFile(directory, TIERED_INDEX_FILE, previousTiered)
+                restorePublishedFile(directory, LEGACY_INDEX_FILE, previousLegacy)
+                syncDirectoryMetadata(directory)
+            }
+            if (rollback.isFailure) {
+                tierAttention = "Cache metadata recovery needs attention. Newly written data was preserved."
+                return
+            }
+            throw failure
+        }
         afterDurableIndexPublication()
+    }
+
+    private fun snapshotPublishedFile(directory: File, name: String): ByteArray? {
+        val file = File(directory, name)
+        if (!Files.isRegularFile(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+            Files.isSymbolicLink(file.toPath())
+        ) return null
+        require(file.length() in 0L..maximumSerializedIndexBytes()) {
+            "The existing desktop virtual range index is too large."
+        }
+        return file.readBytes()
+    }
+
+    private fun restorePublishedFile(directory: File, name: String, previous: ByteArray?) {
+        if (previous == null) {
+            Files.deleteIfExists(File(directory, name).toPath())
+        } else {
+            publishBytes(directory, name, previous)
+        }
     }
 
     private fun maximumSerializedIndexBytes(): Long = maximumIndexBytes * 2L
@@ -1765,7 +1853,11 @@ internal class DesktopVirtualRangeCache(
         encodedIndex(bounded)
         val currentBlobs = current.blocks.mapTo(hashSetOf(), CachedRangeBlock::blobName)
         val moved = mutableListOf<File>()
-        val journal = File(accountDirectory(accountId), "range-revision.$stageId.commit")
+        val stagingDirectory = staged.first().temporary.parentFile
+        check(staged.all { stagedBlock -> stagedBlock.temporary.parentFile == stagingDirectory }) {
+            "A retained revision cannot span multiple cache tiers."
+        }
+        val journal = File(stagingDirectory, "range-revision.$stageId.commit")
         publishBytes(
             journal.parentFile,
             journal.name,
@@ -1791,13 +1883,12 @@ internal class DesktopVirtualRangeCache(
                 }
                 moved += destination
             }
-            syncDirectoryMetadata(journal.parentFile)
+            moved.map(File::getParentFile).distinctBy(File::getAbsolutePath).forEach(::syncDirectoryMetadata)
             save(accountId, next, retention)
-            syncDirectoryMetadata(journal.parentFile)
-            journal.delete()
+            if (journal.delete()) syncDirectoryMetadata(journal.parentFile)
         } catch (failure: Throwable) {
             moved.filterNot { file -> file.name in currentBlobs }.forEach(File::delete)
-            journal.delete()
+            if (journal.delete()) runCatching { syncDirectoryMetadata(journal.parentFile) }
             throw failure
         } finally {
             staged.forEach { stagedBlock -> stagedBlock.temporary.delete() }
@@ -1963,6 +2054,12 @@ internal class DesktopVirtualRangeCache(
             expectedOverflowRootIdentity = adopted
         } ?: return false
         return readOverflowRootIdentity(cacheRootFile) == expected
+    }
+
+    private fun isPrimaryRootAvailable(cacheRootFile: File): Boolean {
+        if (!isCacheRootDirectory(cacheRootFile)) return false
+        val expected = expectedPrimaryRootIdentity ?: return false
+        return readPrimaryRootIdentity(cacheRootFile) == expected
     }
 
     private fun writableAccountDirectory(accountId: String): File {
@@ -2187,6 +2284,7 @@ internal class DesktopVirtualRangeCache(
     private fun syncDirectoryMetadata(directory: File) {
         if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) return
         FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel -> channel.force(true) }
+        afterDirectoryMetadataSync(directory)
     }
 
     private fun RangeCacheIndex.requireValid() {
@@ -2223,6 +2321,23 @@ internal class DesktopVirtualRangeCache(
     }
 
     companion object {
+        internal fun adoptPrimaryRootIdentity(root: File): String? {
+            readPrimaryRootIdentity(root)?.let { return it }
+            if (!isRecognizablePrimaryRoot(root)) return null
+            return initializePrimaryRootIdentity(root)
+        }
+
+        internal fun initializePrimaryRootIdentity(root: File): String {
+            require(
+                Files.isDirectory(root.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                    !Files.isSymbolicLink(root.toPath()),
+            ) { "Reconnect the selected primary cache drive before using it." }
+            readPrimaryRootIdentity(root)?.let { return it }
+            val identity = UUID.randomUUID().toString()
+            publishMarker(root, PRIMARY_IDENTITY_MARKER_FILE, primaryIdentityMarkerContent(identity))
+            return identity
+        }
+
         internal fun adoptOverflowRootIdentity(root: File): String? {
             readOverflowRootIdentity(root)?.let { return it }
             if (!isLegacyOverflowRoot(root)) return null
@@ -2253,7 +2368,32 @@ internal class DesktopVirtualRangeCache(
             val content = runCatching { marker.readText() }.getOrNull() ?: return null
             val lines = content.lines()
             if (lines.size != 3 || lines[0] != OVERFLOW_IDENTITY_MARKER_HEADER || lines[2].isNotEmpty()) return null
-            return lines[1].takeIf(String::isValidDesktopVirtualOverflowIdentity)
+            return lines[1].takeIf(String::isValidDesktopVirtualCacheRootIdentity)
+        }
+
+        private fun readPrimaryRootIdentity(root: File): String? {
+            val marker = File(root, PRIMARY_IDENTITY_MARKER_FILE)
+            if (
+                !Files.isRegularFile(marker.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+                Files.isSymbolicLink(marker.toPath()) ||
+                marker.length() !in 1L..256L
+            ) return null
+            val content = runCatching { marker.readText() }.getOrNull() ?: return null
+            val lines = content.lines()
+            if (lines.size != 3 || lines[0] != PRIMARY_IDENTITY_MARKER_HEADER || lines[2].isNotEmpty()) return null
+            return lines[1].takeIf(String::isValidDesktopVirtualCacheRootIdentity)
+        }
+
+        private fun isRecognizablePrimaryRoot(root: File): Boolean {
+            if (!Files.isDirectory(root.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+                Files.isSymbolicLink(root.toPath())
+            ) return false
+            return root.listFiles().orEmpty().any { child ->
+                child.isDirectory && !Files.isSymbolicLink(child.toPath()) &&
+                    child.name.length == 64 && child.name.all { character ->
+                        character in '0'..'9' || character in 'a'..'f'
+                    }
+            }
         }
 
         private fun isLegacyOverflowRoot(root: File): Boolean {
@@ -2266,6 +2406,9 @@ internal class DesktopVirtualRangeCache(
 
         private fun overflowIdentityMarkerContent(identity: String): ByteArray =
             "$OVERFLOW_IDENTITY_MARKER_HEADER\n$identity\n".encodeToByteArray()
+
+        private fun primaryIdentityMarkerContent(identity: String): ByteArray =
+            "$PRIMARY_IDENTITY_MARKER_HEADER\n$identity\n".encodeToByteArray()
 
         private fun publishMarker(root: File, name: String, content: ByteArray) {
             val temporary = File.createTempFile("$name.", ".tmp", root)
@@ -2304,6 +2447,8 @@ internal class DesktopVirtualRangeCache(
         const val MAX_BLOCKS = 20_000
         const val MAX_BLOCK_BYTES = 4 * 1024 * 1024
         const val ACCESS_TIME_PERSISTENCE_INTERVAL_MILLIS = 30_000L
+        const val PRIMARY_IDENTITY_MARKER_FILE = ".nextcloud-native-primary-v1"
+        const val PRIMARY_IDENTITY_MARKER_HEADER = "nextcloud-native-primary-v1"
         const val OVERFLOW_MARKER_FILE = ".nextcloud-native-overflow-v1"
         const val OVERFLOW_IDENTITY_MARKER_FILE = ".nextcloud-native-overflow-v2"
         const val OVERFLOW_IDENTITY_MARKER_HEADER = "nextcloud-native-overflow-v2"
