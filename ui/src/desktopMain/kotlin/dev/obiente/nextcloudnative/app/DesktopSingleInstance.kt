@@ -100,6 +100,57 @@ internal class DesktopSingleInstance private constructor(
     }
 
     internal companion object {
+        fun forwardToExisting(
+            activationKind: DesktopActivationKind,
+            runtimeDirectory: File = defaultDesktopRuntimeDirectory(),
+            forwardAttempts: Int = DEFAULT_FORWARD_ATTEMPTS,
+            forwardDelayMillis: Long = DEFAULT_FORWARD_DELAY_MILLIS,
+        ): Boolean {
+            require(forwardAttempts > 0 && forwardDelayMillis >= 0L)
+            val directory = runtimeDirectory.toPath().toAbsolutePath().normalize()
+            return forwardActivation(
+                directory.resolve(INSTANCE_ENDPOINT_NAME).toFile(),
+                activationKind,
+                forwardAttempts,
+                forwardDelayMillis,
+            )
+        }
+
+        fun waitForPrimary(
+            runtimeDirectory: File = defaultDesktopRuntimeDirectory(),
+            retryDelayMillis: Long = DEFAULT_SERVICE_LOCK_RETRY_MILLIS,
+        ): DesktopSingleInstanceStart.Primary? {
+            require(retryDelayMillis > 0L)
+            val directory = runtimeDirectory.toPath().toAbsolutePath().normalize()
+            return runCatching {
+                Files.createDirectories(directory)
+                check(!Files.isSymbolicLink(directory)) { "The desktop runtime folder cannot be a symlink." }
+                val lockPath = directory.resolve(INSTANCE_LOCK_NAME)
+                check(!Files.isSymbolicLink(lockPath)) { "The desktop process lock cannot be a symlink." }
+                while (!Thread.currentThread().isInterrupted) {
+                    val channel = FileChannel.open(
+                        lockPath,
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.WRITE,
+                    )
+                    val lock = try {
+                        channel.tryLock()
+                    } catch (_: OverlappingFileLockException) {
+                        null
+                    } catch (failure: Throwable) {
+                        channel.close()
+                        throw failure
+                    }
+                    if (lock != null) {
+                        return@runCatching createPrimary(directory.toFile(), channel, lock)
+                    }
+                    channel.close()
+                    Thread.sleep(retryDelayMillis)
+                }
+                null
+            }.getOrNull()
+        }
+
         fun acquire(
             runtimeDirectory: File = defaultDesktopRuntimeDirectory(),
             forwardAttempts: Int = DEFAULT_FORWARD_ATTEMPTS,
@@ -159,7 +210,7 @@ internal class DesktopSingleInstance private constructor(
             runtimeDirectory: File,
             lockChannel: FileChannel,
             lock: FileLock,
-        ): DesktopSingleInstanceStart {
+        ): DesktopSingleInstanceStart.Primary {
             var server: ServerSocket? = null
             try {
                 val activeServer = ServerSocket(0, 4, InetAddress.getLoopbackAddress())
@@ -280,6 +331,7 @@ private const val INSTANCE_LOCK_NAME = "nextcloud-native.lock"
 private const val INSTANCE_ENDPOINT_NAME = "nextcloud-native.endpoint"
 private const val DEFAULT_FORWARD_ATTEMPTS = 40
 private const val DEFAULT_FORWARD_DELAY_MILLIS = 50L
+private const val DEFAULT_SERVICE_LOCK_RETRY_MILLIS = 1_000L
 private const val ACTIVATION_TIMEOUT_MILLIS = 1_000
 private const val MAX_ENDPOINT_BYTES = 256
 private const val MAX_ACTIVATION_KIND_BYTES = 64

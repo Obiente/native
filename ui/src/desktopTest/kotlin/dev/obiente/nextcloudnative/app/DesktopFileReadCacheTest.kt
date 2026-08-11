@@ -9,6 +9,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 
 class DesktopFileReadCacheTest {
     @Test
@@ -210,6 +216,10 @@ class DesktopFileReadCacheTest {
         }
 
         cache.storeListing(accountId, "Library", files, nowEpochMillis = 123_456)
+        assertEquals(
+            24,
+            root.resolve(accountId).listFiles().orEmpty().count { it.extension == "metadata" },
+        )
         val restored = DesktopFileReadCache(root, preferences = testPreferences(root))
         val listing = restored.cachedListingSnapshot(accountId, "Library")
 
@@ -224,7 +234,7 @@ class DesktopFileReadCacheTest {
         val maximumIndexBytes = 64L * 1024L
         try {
             val accountId = "a".repeat(64)
-            val files = List(200) { index ->
+            val files = List(300) { index ->
                 val name = "${index.toString().padStart(3, '0')}-${"x".repeat(900)}.jpg"
                 file("Library/$name", "\"etag-${"y".repeat(500)}-$index\"")
             }
@@ -245,6 +255,107 @@ class DesktopFileReadCacheTest {
             ).cachedListingSnapshot(accountId, "Library")
             assertEquals(files, restored?.files)
             assertEquals(123_456L, restored?.fetchedAtEpochMillis)
+        } finally {
+            runCatching { preferences.removeNode() }
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `legacy v1 shard counts do not discard unrelated cached content`() = withCache { root, cache ->
+        val accountId = desktopFileCacheAccountId(session())
+        cache.storeListing(accountId, "Library", listOf(file("Library/photo.jpg", "library-etag")), 10L)
+        assertTrue(
+            cache.storeContent(
+                accountId,
+                "safe.bin",
+                NextcloudFileContent(byteArrayOf(7), "application/octet-stream", "safe-etag"),
+                20L,
+            ),
+        )
+        val index = root.resolve(accountId).resolve("index-v1.json")
+        val document = Json.parseToJsonElement(index.readText()).jsonObject
+        val template = document.getValue("listingShards").jsonArray.single().jsonObject
+        val legacyReferences = JsonArray(
+            List(197) { partIndex ->
+                JsonObject(
+                    template.toMutableMap().apply {
+                        put("partIndex", JsonPrimitive(partIndex))
+                        put("partCount", JsonPrimitive(197))
+                    },
+                )
+            },
+        )
+        index.writeText(
+            JsonObject(
+                document.toMutableMap().apply { put("listingShards", legacyReferences) },
+            ).toString(),
+        )
+
+        val restored = DesktopFileReadCache(root, preferences = testPreferences(root))
+
+        assertContentEquals(byteArrayOf(7), restored.cachedContent(accountId, "safe.bin", 10)?.bytes)
+    }
+
+    @Test
+    fun `metadata shards stay byte bounded for maximum escaped records`() = withCache { root, cache ->
+        val accountId = desktopFileCacheAccountId(session())
+        val files = List(256) { index ->
+            file("Library/photo-$index.jpg", "etag-$index").copy(
+                name = "\"".repeat(1_024),
+                mimeType = "\"".repeat(512),
+                lastModified = "\"".repeat(128),
+                etag = "\"".repeat(4_096),
+                permissions = "\"".repeat(256),
+                ownerId = "\"".repeat(1_024),
+                ownerDisplayName = "\"".repeat(1_024),
+                checksums = List(16) { "\"".repeat(512) },
+            )
+        }
+
+        cache.storeListing(accountId, "Library", files, nowEpochMillis = 123_456L)
+        val shards = root.resolve(accountId).listFiles().orEmpty().filter { it.extension == "metadata" }
+
+        assertTrue(shards.size > 1)
+        assertTrue(shards.all { shard -> shard.length() <= 4L * 1024L * 1024L })
+        assertEquals(
+            files,
+            DesktopFileReadCache(root, preferences = testPreferences(root))
+                .cachedListing(accountId, "Library"),
+        )
+    }
+
+    @Test
+    fun `long path shard references are evicted as a complete listing before the index overflows`() {
+        val root = Files.createTempDirectory("ncn-files-cache-index-budget-").toFile()
+        val preferences = testPreferences(root)
+        val maximumIndexBytes = 16L * 1024L
+        try {
+            val accountId = "b".repeat(64)
+            val cache = DesktopFileReadCache(
+                root = root,
+                preferences = preferences,
+                maximumIndexBytes = maximumIndexBytes,
+            )
+            val stable = listOf(file("Notes/stable.txt", "stable-etag"))
+            cache.storeListing(accountId, "Notes", stable, nowEpochMillis = 10L)
+            val longPath = "Camera/" + "x".repeat(8_160)
+            val largeListing = List(257) { index ->
+                file("Camera/frame-${index.toString().padStart(3, '0')}.raf", "etag-$index")
+            }
+
+            cache.storeListing(accountId, longPath, largeListing, nowEpochMillis = 20L)
+
+            val accountDirectory = root.resolve(accountId)
+            assertTrue(accountDirectory.resolve("index-v1.json").length() <= maximumIndexBytes)
+            assertNull(cache.cachedListing(accountId, longPath))
+            val restarted = DesktopFileReadCache(
+                root = root,
+                preferences = preferences,
+                maximumIndexBytes = maximumIndexBytes,
+            )
+            assertEquals(stable, restarted.cachedListing(accountId, "Notes"))
+            assertNull(restarted.cachedListing(accountId, longPath))
         } finally {
             runCatching { preferences.removeNode() }
             root.deleteRecursively()
@@ -293,7 +404,7 @@ class DesktopFileReadCacheTest {
     @Test
     fun `startup preserves over-budget metadata references for demand loading`() = withCache { root, cache ->
         val accountId = desktopFileCacheAccountId(session())
-        val largeListing = List(65) { index -> file("First/$index.jpg", "first-$index") }
+        val largeListing = List(257) { index -> file("First/$index.jpg", "first-$index") }
         cache.storeListing(accountId, "First", largeListing, 10L)
         cache.storeListing(accountId, "Second", listOf(file("Second/two.jpg", "second")), 20L)
         val shardBytes = root.resolve(accountId).listFiles().orEmpty()

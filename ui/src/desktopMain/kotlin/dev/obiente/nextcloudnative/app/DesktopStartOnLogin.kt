@@ -39,6 +39,9 @@ internal class DesktopStartOnLoginController(
             processRunner(listOf("systemctl", "--user", "is-active", "graphical-session.target")) == 0
         }.getOrDefault(false)
     },
+    private val currentProcessIsLinuxUserService: () -> Boolean = {
+        isCurrentProcessOwnedByLinuxUserService()
+    },
 ) {
     private val platform = when {
         osName.lowercase().contains("linux") -> DesktopStartOnLoginPlatform.Linux
@@ -69,8 +72,8 @@ internal class DesktopStartOnLoginController(
     private fun configureLinux(enabled: Boolean, launcher: String): DesktopStartOnLoginResult {
         val entry = File(linuxConfigHome, "autostart/nextcloud-native.desktop")
         if (!enabled) {
-            Files.deleteIfExists(entry.toPath())
             removeLinuxUserService()
+            Files.deleteIfExists(entry.toPath())
             return DesktopStartOnLoginResult(
                 platform,
                 enabled = false,
@@ -129,7 +132,7 @@ internal class DesktopStartOnLoginController(
 
                 [Service]
                 Type=exec
-                ExecStart=${systemdExecArgument(launcher)} --background
+                ExecStart=${systemdExecArgument(launcher)} --background --service
                 Restart=on-failure
                 RestartSec=5s
                 TimeoutStopSec=20s
@@ -153,9 +156,20 @@ internal class DesktopStartOnLoginController(
 
     private fun removeLinuxUserService() {
         val userDirectory = File(linuxConfigHome, "systemd/user")
+        val service = File(userDirectory, LINUX_USER_SERVICE_NAME)
+        val systemdAvailable = linuxSystemdAvailable()
+        if (service.isFile && systemdAvailable && !currentProcessIsLinuxUserService()) {
+            check(
+                runCatching {
+                    processRunner(
+                        listOf("systemctl", "--user", "--no-block", "stop", LINUX_USER_SERVICE_NAME),
+                    ) == 0
+                }.getOrDefault(false),
+            ) { "The Nextcloud Native background service could not be stopped." }
+        }
         Files.deleteIfExists(File(userDirectory, "graphical-session.target.wants/$LINUX_USER_SERVICE_NAME").toPath())
-        Files.deleteIfExists(File(userDirectory, LINUX_USER_SERVICE_NAME).toPath())
-        if (linuxSystemdAvailable()) {
+        Files.deleteIfExists(service.toPath())
+        if (systemdAvailable) {
             runCatching { processRunner(listOf("systemctl", "--user", "daemon-reload")) }
         }
     }
@@ -221,6 +235,14 @@ internal class DesktopStartOnLoginController(
     }
 }
 
+internal fun isCurrentProcessOwnedByLinuxUserService(
+    systemdExecPid: String? = System.getenv("SYSTEMD_EXEC_PID"),
+    currentPid: Long = ProcessHandle.current().pid(),
+    cgroup: String = runCatching { File("/proc/self/cgroup").readText() }.getOrDefault(""),
+): Boolean = systemdExecPid?.toLongOrNull() == currentPid || cgroup.lineSequence().any { membership ->
+    membership.substringAfterLast(':').split('/').any { component -> component == LINUX_USER_SERVICE_NAME }
+}
+
 private const val LINUX_USER_SERVICE_NAME = "nextcloud-native.service"
 
 /** Lets the portable XDG launch request enter the supervised unit when one was configured. */
@@ -238,6 +260,51 @@ internal fun handoffLinuxAutostartToUserService(
     if (!File(linuxConfigHome, "systemd/user/$LINUX_USER_SERVICE_NAME").isFile) return false
     return runCatching {
         processRunner(listOf("systemctl", "--user", "start", LINUX_USER_SERVICE_NAME)) == 0
+    }.getOrDefault(false)
+}
+
+/**
+ * Gives an ordinary launcher invocation to the configured user service, then asks that supervised
+ * process to show its window. The caller continues normally when either step fails.
+ */
+internal fun handoffLinuxForegroundLaunchToUserService(
+    osName: String = System.getProperty("os.name").orEmpty(),
+    userHome: File = File(System.getProperty("user.home")),
+    linuxConfigHome: File = linuxDesktopConfigHome(userHome),
+    processRunner: (List<String>) -> Int = { command ->
+        ProcessBuilder(command).redirectErrorStream(true).start().also { process ->
+            process.inputStream.bufferedReader().use { it.readText() }
+        }.waitFor()
+    },
+    activationForwarder: () -> Boolean,
+): Boolean {
+    if (!osName.lowercase().contains("linux")) return false
+    if (!File(linuxConfigHome, "systemd/user/$LINUX_USER_SERVICE_NAME").isFile) return false
+    val started = runCatching {
+        processRunner(listOf("systemctl", "--user", "start", LINUX_USER_SERVICE_NAME)) == 0
+    }.getOrDefault(false)
+    return started && runCatching(activationForwarder).getOrDefault(false)
+}
+
+/**
+ * Cancels a configured supervised instance before an explicit application quit releases the
+ * single-instance lock. `--no-block` is required when the caller is itself owned by the unit.
+ */
+internal fun stopLinuxUserServiceForExplicitQuit(
+    osName: String = System.getProperty("os.name").orEmpty(),
+    userHome: File = File(System.getProperty("user.home")),
+    linuxConfigHome: File = linuxDesktopConfigHome(userHome),
+    processRunner: (List<String>) -> Int = { command ->
+        ProcessBuilder(command).redirectErrorStream(true).start().also { process ->
+            process.inputStream.bufferedReader().use { it.readText() }
+        }.waitFor()
+    },
+): Boolean {
+    if (!osName.lowercase().contains("linux")) return false
+    return runCatching {
+        processRunner(
+            listOf("systemctl", "--user", "--no-block", "stop", LINUX_USER_SERVICE_NAME),
+        ) == 0
     }.getOrDefault(false)
 }
 

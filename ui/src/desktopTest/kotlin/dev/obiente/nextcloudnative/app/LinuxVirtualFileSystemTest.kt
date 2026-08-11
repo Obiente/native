@@ -30,6 +30,24 @@ import ru.serce.jnrfuse.struct.FileStat
 import ru.serce.jnrfuse.struct.FuseFileInfo
 
 class LinuxVirtualFileSystemTest {
+    @Test
+    fun largeDirectoryMetadataUsesAnAdaptiveFreshnessWindow() {
+        assertEquals(5_000L, linuxVirtualMetadataFreshnessMillis(128, 5_000L))
+        assertEquals(30_000L, linuxVirtualMetadataFreshnessMillis(2_000, 5_000L))
+        assertEquals(300_000L, linuxVirtualMetadataFreshnessMillis(9_520, 5_000L))
+        assertEquals(900_000L, linuxVirtualMetadataFreshnessMillis(20_000, 5_000L))
+        assertEquals(Long.MAX_VALUE, linuxVirtualMetadataFreshnessMillis(20_000, Long.MAX_VALUE))
+    }
+
+    @Test
+    fun virtualInodesAreStableAndPathSpecific() {
+        val first = stableLinuxVirtualInode("Photos/Camera/frame-0001.raf")
+
+        assertTrue(first > 1L)
+        assertEquals(first, stableLinuxVirtualInode("Photos/Camera/frame-0001.raf"))
+        assertFalse(first == stableLinuxVirtualInode("Photos/Camera/frame-0002.raf"))
+    }
+
     @Before
     fun requireLinux() {
         assumeTrue(
@@ -95,6 +113,21 @@ class LinuxVirtualFileSystemTest {
         assertTrue(FileStat.S_ISREG(stat.st_mode.intValue()))
         assertEquals(0, opened)
         assertEquals(-ErrorCodes.EINVAL(), fileSystem.getattr("/Photos/../secret", stat))
+    }
+
+    @Test
+    fun `metadata ownership is fixed to the process that creates the mount`() {
+        val fileSystem = LinuxNextcloudVirtualFileSystem(
+            backend = fixtureBackend("content".encodeToByteArray()) { {} },
+            mountOwnerUid = 2_001L,
+            mountOwnerGid = 2_002L,
+        )
+        val stat = FileStat(Runtime.getSystemRuntime())
+
+        assertEquals(0, fileSystem.getattr("/Photos/example.raf", stat))
+
+        assertEquals(2_001L, stat.st_uid.longValue())
+        assertEquals(2_002L, stat.st_gid.longValue())
     }
 
     @Test
@@ -1471,6 +1504,70 @@ class LinuxVirtualFileSystemTest {
             assertTrue(restored.complete)
             assertEquals(setOf("Photos", "Documents"), restored.nodes.mapTo(hashSetOf(), LinuxVirtualFileNode::name))
             assertEquals("photos-new", restored.nodesByPath.getValue("Photos").remoteRevision)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `partial retained navigation without a fallback is immediately stale`() {
+        val directory = Files.createTempDirectory("retained-navigation-stale-").toFile()
+        try {
+            val accountId = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            val cache = DesktopVirtualRangeCache(directory) {
+                VirtualFileCachePolicy(automaticCleanup = false, minimumFreeSpaceBytes = 0L)
+            }
+            cache.setFolderRetention(accountId, "Photos/Retained", VirtualFolderRetention.KeepOnDevice)
+            val retainedNodes = List(600) { index ->
+                LinuxVirtualFileNode(
+                    path = "Photos/item-$index",
+                    name = "item-$index",
+                    directory = true,
+                    size = 0L,
+                    remoteRevision = "etag-$index",
+                )
+            }
+            cache.publishRetainedListings(
+                accountId,
+                "Photos/Retained",
+                mapOf(
+                    "Photos" to LinuxVirtualDirectorySnapshot(
+                        nodes = retainedNodes,
+                        fetchedAtEpochMillis = 20L,
+                        freshAtEpochMillis = 10_000L,
+                        complete = false,
+                    ),
+                    "Photos/Retained" to LinuxVirtualDirectorySnapshot(
+                        nodes = emptyList(),
+                        fetchedAtEpochMillis = 20L,
+                    ),
+                ),
+            )
+
+            val retainedStore = RetainedLinuxVirtualMetadataStore(
+                cache,
+                accountId,
+                MemoryLinuxVirtualMetadataStore(),
+            )
+            val restored = assertNotNull(retainedStore.load("Photos"))
+
+            assertFalse(restored.complete)
+            assertEquals(600, restored.nodes.size)
+            assertEquals(0L, restored.fetchedAtEpochMillis)
+            assertEquals(0L, restored.freshAtEpochMillis)
+
+            val delegate = MutableFixtureBackend()
+            val cached = CachingLinuxVirtualFileBackend(
+                delegate = delegate,
+                store = retainedStore,
+                nowEpochMillis = { 10_000L },
+            )
+            try {
+                assertEquals(600, cached.list("Photos").size)
+                assertTrue(waitUntil { delegate.listCallCount("Photos") == 1 })
+            } finally {
+                cached.close()
+            }
         } finally {
             directory.deleteRecursively()
         }
