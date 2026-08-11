@@ -326,6 +326,43 @@ class DesktopFileReadCacheTest {
     }
 
     @Test
+    fun `long path shard references are evicted as a complete listing before the index overflows`() {
+        val root = Files.createTempDirectory("ncn-files-cache-index-budget-").toFile()
+        val preferences = testPreferences(root)
+        val maximumIndexBytes = 16L * 1024L
+        try {
+            val accountId = "b".repeat(64)
+            val cache = DesktopFileReadCache(
+                root = root,
+                preferences = preferences,
+                maximumIndexBytes = maximumIndexBytes,
+            )
+            val stable = listOf(file("Notes/stable.txt", "stable-etag"))
+            cache.storeListing(accountId, "Notes", stable, nowEpochMillis = 10L)
+            val longPath = "Camera/" + "x".repeat(8_160)
+            val largeListing = List(257) { index ->
+                file("Camera/frame-${index.toString().padStart(3, '0')}.raf", "etag-$index")
+            }
+
+            cache.storeListing(accountId, longPath, largeListing, nowEpochMillis = 20L)
+
+            val accountDirectory = root.resolve(accountId)
+            assertTrue(accountDirectory.resolve("index-v1.json").length() <= maximumIndexBytes)
+            assertNull(cache.cachedListing(accountId, longPath))
+            val restarted = DesktopFileReadCache(
+                root = root,
+                preferences = preferences,
+                maximumIndexBytes = maximumIndexBytes,
+            )
+            assertEquals(stable, restarted.cachedListing(accountId, "Notes"))
+            assertNull(restarted.cachedListing(accountId, longPath))
+        } finally {
+            runCatching { preferences.removeNode() }
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `one corrupt metadata shard does not discard unrelated listings`() = withCache { root, cache ->
         val accountId = desktopFileCacheAccountId(session())
         cache.storeListing(accountId, "Photos", listOf(file("Photos/photo.jpg", "photos")), 10L)

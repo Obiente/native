@@ -645,6 +645,81 @@ internal class DesktopFileReadCache(
         ).also { persisted -> persisted.requireValid() }
     }
 
+    /**
+     * Retains complete metadata listings while their references fit the independently bounded
+     * account index. Reference paths are repeated in every shard, so entry-count bounds alone do
+     * not constrain the serialized index when a large listing has a long path.
+     */
+    private fun CacheIndexV1.fitMetadataReferencesToIndexBudget(): CacheIndexV1 {
+        val withoutMetadata = copy(
+            listingShards = emptyList(),
+            virtualListingShards = emptyList(),
+        )
+        val baseBytes = cacheJson.encodeToString(withoutMetadata).encodeToByteArray().size.toLong()
+        require(baseBytes <= maximumIndexBytes) { "The Files cache index is too large." }
+        var remainingBytes = maximumIndexBytes - baseBytes
+        val retainedOrdinary = mutableListOf<CachedListingShardReferenceV1>()
+        val retainedVirtual = mutableListOf<CachedVirtualListingShardReferenceV1>()
+        val groups = buildList {
+            listingShards.groupBy(CachedListingShardReferenceV1::path).forEach { (_, references) ->
+                add(
+                    MetadataShardIndexGroup(
+                        fetchedAtEpochMillis = references.maxOf(CachedListingShardReferenceV1::fetchedAtEpochMillis),
+                        ordinary = references.requireCompleteShardSet(),
+                    ),
+                )
+            }
+            virtualListingShards.groupBy(CachedVirtualListingShardReferenceV1::path).forEach { (_, references) ->
+                add(
+                    MetadataShardIndexGroup(
+                        fetchedAtEpochMillis =
+                            references.maxOf(CachedVirtualListingShardReferenceV1::fetchedAtEpochMillis),
+                        virtual = references.requireCompleteVirtualShardSet(),
+                    ),
+                )
+            }
+        }.sortedByDescending(MetadataShardIndexGroup::fetchedAtEpochMillis)
+        groups.forEach { group ->
+            val encodedBytes = when {
+                group.ordinary.isNotEmpty() -> group.ordinary.encodedArrayAdditionBytes(
+                    remainingBytes = remainingBytes,
+                    arrayAlreadyHasEntries = retainedOrdinary.isNotEmpty(),
+                    encode = { reference -> cacheJson.encodeToString(reference) },
+                )
+                else -> group.virtual.encodedArrayAdditionBytes(
+                    remainingBytes = remainingBytes,
+                    arrayAlreadyHasEntries = retainedVirtual.isNotEmpty(),
+                    encode = { reference -> cacheJson.encodeToString(reference) },
+                )
+            } ?: return@forEach
+            remainingBytes -= encodedBytes
+            retainedOrdinary += group.ordinary
+            retainedVirtual += group.virtual
+        }
+        return withoutMetadata.copy(
+            listingShards = retainedOrdinary,
+            virtualListingShards = retainedVirtual,
+        ).also { bounded ->
+            bounded.requireValid()
+            require(cacheJson.encodeToString(bounded).encodeToByteArray().size.toLong() <= maximumIndexBytes)
+        }
+    }
+
+    private fun <T> List<T>.encodedArrayAdditionBytes(
+        remainingBytes: Long,
+        arrayAlreadyHasEntries: Boolean,
+        encode: (T) -> String,
+    ): Long? {
+        var total = 0L
+        forEachIndexed { index, entry ->
+            val separatorBytes = if (arrayAlreadyHasEntries || index > 0) JSON_ARRAY_SEPARATOR_BYTES else 0L
+            val entryBytes = encode(entry).encodeToByteArray().size.toLong()
+            if (separatorBytes + entryBytes > remainingBytes - total) return null
+            total += separatorBytes + entryBytes
+        }
+        return total
+    }
+
     private fun CacheIndexV1.reusableListingShards(
         directory: File,
         listing: CachedListingV1,
@@ -975,11 +1050,24 @@ internal class DesktopFileReadCache(
             check(isDirectory || mkdirs()) { "Could not create the desktop Files cache." }
         }
         val bounded = index.bounded()
-        val persisted = bounded.persistMetadataShards(directory)
+        val persisted = bounded.persistMetadataShards(directory).fitMetadataReferencesToIndexBudget()
         val encoded = cacheJson.encodeToString(persisted).encodeToByteArray()
         require(encoded.size.toLong() <= maximumIndexBytes) { "The Files cache index is too large." }
         publishBytes(directory, INDEX_FILE_NAME, encoded)
-        rememberLoadedIndex(accountId, bounded)
+        val persistedOrdinaryPaths = persisted.listingShards.mapTo(hashSetOf(), CachedListingShardReferenceV1::path)
+        val persistedVirtualPaths =
+            persisted.virtualListingShards.mapTo(hashSetOf(), CachedVirtualListingShardReferenceV1::path)
+        rememberLoadedIndex(
+            accountId,
+            bounded.copy(
+                listings = bounded.listings.filter { listing -> listing.path in persistedOrdinaryPaths },
+                virtualListings = bounded.virtualListings.filter { listing -> listing.path in persistedVirtualPaths },
+                listingShards = bounded.listingShards.filter { reference -> reference.path in persistedOrdinaryPaths },
+                virtualListingShards = bounded.virtualListingShards.filter { reference ->
+                    reference.path in persistedVirtualPaths
+                },
+            ),
+        )
         val referenced = bounded.content.mapTo(hashSetOf(), CachedContentV1::blobName)
         directory.listFiles().orEmpty()
             .filter { file -> file.isFile && file.extension == "blob" && file.name !in referenced }
@@ -1239,6 +1327,16 @@ internal class DesktopFileReadCache(
         const val UNLIMITED_SENTINEL = -1L
         const val EMPTY_JSON_ARRAY_BYTES = 2L
         const val JSON_ARRAY_SEPARATOR_BYTES = 1L
+    }
+}
+
+private data class MetadataShardIndexGroup(
+    val fetchedAtEpochMillis: Long,
+    val ordinary: List<CachedListingShardReferenceV1> = emptyList(),
+    val virtual: List<CachedVirtualListingShardReferenceV1> = emptyList(),
+) {
+    init {
+        require(ordinary.isEmpty() != virtual.isEmpty())
     }
 }
 

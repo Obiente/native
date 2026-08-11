@@ -116,6 +116,21 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `metadata ownership is fixed to the process that creates the mount`() {
+        val fileSystem = LinuxNextcloudVirtualFileSystem(
+            backend = fixtureBackend("content".encodeToByteArray()) { {} },
+            mountOwnerUid = 2_001L,
+            mountOwnerGid = 2_002L,
+        )
+        val stat = FileStat(Runtime.getSystemRuntime())
+
+        assertEquals(0, fileSystem.getattr("/Photos/example.raf", stat))
+
+        assertEquals(2_001L, stat.st_uid.longValue())
+        assertEquals(2_002L, stat.st_gid.longValue())
+    }
+
+    @Test
     fun `created files stage random writes and become remote on flush`() {
         val backend = MutableFixtureBackend()
         val fileSystem = LinuxNextcloudVirtualFileSystem(backend)

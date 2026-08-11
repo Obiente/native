@@ -9,6 +9,7 @@ import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicLong
 import jnr.ffi.Pointer
 import jnr.ffi.Platform
+import jnr.posix.POSIXFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import ru.serce.jnrfuse.ErrorCodes
@@ -1095,6 +1096,8 @@ internal class LinuxNextcloudVirtualFileSystem(
     private val maximumOpenDirectoryEntries: Int = DEFAULT_MAX_OPEN_DIRECTORY_ENTRIES,
     private val beforeDirectoryHandleRemoval: () -> Unit = {},
     private val unmountOperation: (LinuxNextcloudVirtualFileSystem) -> Unit = { fileSystem -> fileSystem.umount() },
+    private val mountOwnerUid: Long = linuxEffectiveProcessUid(),
+    private val mountOwnerGid: Long = linuxEffectiveProcessGid(),
 ) : FuseStubFS() {
     private val nextHandle = AtomicLong(1L)
     private val readHandles = ConcurrentHashMap<Long, LinuxVirtualFileReadHandle>()
@@ -1107,13 +1110,10 @@ internal class LinuxNextcloudVirtualFileSystem(
     private var openDirectoryEntries = 0L
     private val pendingCreatedFiles = ConcurrentHashMap<String, LinuxSharedWriteHandle>()
     private val namespaceLock = Any()
-    @Volatile
-    private var mountedUid: Long? = null
-    @Volatile
-    private var mountedGid: Long? = null
-
     init {
         require(maximumOpenDirectoryEntries > 0)
+        require(mountOwnerUid in 0L..MAX_UNSIGNED_UNIX_ID)
+        require(mountOwnerGid in 0L..MAX_UNSIGNED_UNIX_ID)
     }
 
     override fun getattr(path: String, stat: FileStat): Int = fuseResult {
@@ -1469,10 +1469,8 @@ internal class LinuxNextcloudVirtualFileSystem(
         )
         stat.st_nlink.set(if (node.directory) 2 else 1)
         stat.st_size.set(node.size)
-        val uid = mountedUid ?: context.uid.get().also { mountedUid = it }
-        val gid = mountedGid ?: context.gid.get().also { mountedGid = it }
-        stat.st_uid.set(uid)
-        stat.st_gid.set(gid)
+        stat.st_uid.set(mountOwnerUid)
+        stat.st_gid.set(mountOwnerGid)
     }
 
     private fun registerWriteHandle(shared: LinuxSharedWriteHandle, writable: Boolean): Long {
@@ -1603,6 +1601,12 @@ internal class LinuxNextcloudVirtualFileSystem(
         const val MAX_CONCURRENT_DIRECTORY_SNAPSHOT_CREATIONS = 4
     }
 }
+
+private fun linuxEffectiveProcessUid(): Long = Integer.toUnsignedLong(POSIXFactory.getPOSIX().geteuid())
+
+private fun linuxEffectiveProcessGid(): Long = Integer.toUnsignedLong(POSIXFactory.getPOSIX().getegid())
+
+private const val MAX_UNSIGNED_UNIX_ID = 0xffff_ffffL
 
 /** Stable across refreshes and app restarts so file managers can reconcile large directory models. */
 internal fun stableLinuxVirtualInode(path: String): Long {
