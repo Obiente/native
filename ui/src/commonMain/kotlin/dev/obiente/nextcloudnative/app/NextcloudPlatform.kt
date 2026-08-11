@@ -495,6 +495,14 @@ interface NextcloudPlatformServices {
     /** Registers a private value for exact in-memory removal from later diagnostic messages. */
     fun registerSupportDiagnosticPrivateValue(value: String?) = Unit
 
+    /** Desktop-only close behavior; unsupported platforms keep this setting hidden. */
+    val supportsKeepRunningInBackground: Boolean
+        get() = false
+
+    fun loadKeepRunningInBackgroundPreference(): Boolean = false
+
+    fun saveKeepRunningInBackgroundPreference(enabled: Boolean) = Unit
+
     fun loadLastOpenedAppId(): String
 
     fun saveLastOpenedAppId(appId: String)

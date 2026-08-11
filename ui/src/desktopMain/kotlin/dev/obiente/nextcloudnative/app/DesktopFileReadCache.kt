@@ -574,7 +574,20 @@ internal class DesktopFileReadCache(
         val hydratedOrdinaryPaths = listings.mapTo(hashSetOf(), CachedListingV1::path)
         val ordinaryReferences = listings.flatMap { listing ->
             reusableListingShards(directory, listing)?.let { return@flatMap it }
-            val chunks = listing.files.metadataChunks()
+            val chunks = listing.files.metadataChunks(
+                emptyPayloadBytes = cacheJson.encodeToString(
+                    CachedListingShardV1(
+                        path = listing.path,
+                        fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
+                        partIndex = MAX_METADATA_SHARDS_PER_LISTING - 1,
+                        partCount = MAX_METADATA_SHARDS_PER_LISTING,
+                        files = emptyList(),
+                    ),
+                ).encodeToByteArray().size.toLong(),
+                encodedEntryBytes = { file ->
+                    cacheJson.encodeToString(file).encodeToByteArray().size.toLong()
+                },
+            )
             chunks.mapIndexed { partIndex, files ->
                 val payload = CachedListingShardV1(
                     path = listing.path,
@@ -599,7 +612,21 @@ internal class DesktopFileReadCache(
         val hydratedVirtualPaths = virtualListings.mapTo(hashSetOf(), CachedVirtualListingV1::path)
         val virtualReferences = virtualListings.flatMap { listing ->
             reusableVirtualListingShards(directory, listing)?.let { return@flatMap it }
-            val chunks = listing.nodes.metadataChunks()
+            val chunks = listing.nodes.metadataChunks(
+                emptyPayloadBytes = cacheJson.encodeToString(
+                    CachedVirtualListingShardV1(
+                        path = listing.path,
+                        fetchedAtEpochMillis = listing.fetchedAtEpochMillis,
+                        partIndex = MAX_METADATA_SHARDS_PER_LISTING - 1,
+                        partCount = MAX_METADATA_SHARDS_PER_LISTING,
+                        nodes = emptyList(),
+                        freshAtEpochMillis = listing.freshAtEpochMillis,
+                    ),
+                ).encodeToByteArray().size.toLong(),
+                encodedEntryBytes = { node ->
+                    cacheJson.encodeToString(node).encodeToByteArray().size.toLong()
+                },
+            )
             chunks.mapIndexed { partIndex, nodes ->
                 val payload = CachedVirtualListingShardV1(
                     path = listing.path,
@@ -629,6 +656,81 @@ internal class DesktopFileReadCache(
             listingShards = ordinaryReferences,
             virtualListingShards = virtualReferences,
         ).also { persisted -> persisted.requireValid() }
+    }
+
+    /**
+     * Retains complete metadata listings while their references fit the independently bounded
+     * account index. Reference paths are repeated in every shard, so entry-count bounds alone do
+     * not constrain the serialized index when a large listing has a long path.
+     */
+    private fun CacheIndexV1.fitMetadataReferencesToIndexBudget(): CacheIndexV1 {
+        val withoutMetadata = copy(
+            listingShards = emptyList(),
+            virtualListingShards = emptyList(),
+        )
+        val baseBytes = cacheJson.encodeToString(withoutMetadata).encodeToByteArray().size.toLong()
+        require(baseBytes <= maximumIndexBytes) { "The Files cache index is too large." }
+        var remainingBytes = maximumIndexBytes - baseBytes
+        val retainedOrdinary = mutableListOf<CachedListingShardReferenceV1>()
+        val retainedVirtual = mutableListOf<CachedVirtualListingShardReferenceV1>()
+        val groups = buildList {
+            listingShards.groupBy(CachedListingShardReferenceV1::path).forEach { (_, references) ->
+                add(
+                    MetadataShardIndexGroup(
+                        fetchedAtEpochMillis = references.maxOf(CachedListingShardReferenceV1::fetchedAtEpochMillis),
+                        ordinary = references.requireCompleteShardSet(),
+                    ),
+                )
+            }
+            virtualListingShards.groupBy(CachedVirtualListingShardReferenceV1::path).forEach { (_, references) ->
+                add(
+                    MetadataShardIndexGroup(
+                        fetchedAtEpochMillis =
+                            references.maxOf(CachedVirtualListingShardReferenceV1::fetchedAtEpochMillis),
+                        virtual = references.requireCompleteVirtualShardSet(),
+                    ),
+                )
+            }
+        }.sortedByDescending(MetadataShardIndexGroup::fetchedAtEpochMillis)
+        groups.forEach { group ->
+            val encodedBytes = when {
+                group.ordinary.isNotEmpty() -> group.ordinary.encodedArrayAdditionBytes(
+                    remainingBytes = remainingBytes,
+                    arrayAlreadyHasEntries = retainedOrdinary.isNotEmpty(),
+                    encode = { reference -> cacheJson.encodeToString(reference) },
+                )
+                else -> group.virtual.encodedArrayAdditionBytes(
+                    remainingBytes = remainingBytes,
+                    arrayAlreadyHasEntries = retainedVirtual.isNotEmpty(),
+                    encode = { reference -> cacheJson.encodeToString(reference) },
+                )
+            } ?: return@forEach
+            remainingBytes -= encodedBytes
+            retainedOrdinary += group.ordinary
+            retainedVirtual += group.virtual
+        }
+        return withoutMetadata.copy(
+            listingShards = retainedOrdinary,
+            virtualListingShards = retainedVirtual,
+        ).also { bounded ->
+            bounded.requireValid()
+            require(cacheJson.encodeToString(bounded).encodeToByteArray().size.toLong() <= maximumIndexBytes)
+        }
+    }
+
+    private fun <T> List<T>.encodedArrayAdditionBytes(
+        remainingBytes: Long,
+        arrayAlreadyHasEntries: Boolean,
+        encode: (T) -> String,
+    ): Long? {
+        var total = 0L
+        forEachIndexed { index, entry ->
+            val separatorBytes = if (arrayAlreadyHasEntries || index > 0) JSON_ARRAY_SEPARATOR_BYTES else 0L
+            val entryBytes = encode(entry).encodeToByteArray().size.toLong()
+            if (separatorBytes + entryBytes > remainingBytes - total) return null
+            total += separatorBytes + entryBytes
+        }
+        return total
     }
 
     private fun CacheIndexV1.reusableListingShards(
@@ -839,8 +941,48 @@ internal class DesktopFileReadCache(
         )
     }
 
-    private fun <T> List<T>.metadataChunks(): List<List<T>> =
-        if (isEmpty()) listOf(emptyList()) else chunked(MAX_METADATA_SHARD_ENTRIES)
+    /**
+     * Keeps both the record-count and encoded-byte limits before any shard reaches disk.
+     *
+     * [emptyPayloadBytes] is encoded with the largest permitted part numbers, so the final
+     * payload envelope can only be the same size or smaller. JSON encodes the empty array as two
+     * bytes; replacing it with independently encoded entries plus commas gives the exact array
+     * contribution without repeatedly serializing a growing chunk.
+     */
+    private fun <T> List<T>.metadataChunks(
+        emptyPayloadBytes: Long,
+        encodedEntryBytes: (T) -> Long,
+    ): List<List<T>> {
+        require(emptyPayloadBytes in 2L..MAX_METADATA_SHARD_BYTES)
+        if (isEmpty()) return listOf(emptyList())
+        val payloadEnvelopeBytes = emptyPayloadBytes - EMPTY_JSON_ARRAY_BYTES
+        val chunks = mutableListOf<List<T>>()
+        var current = mutableListOf<T>()
+        var currentEntriesBytes = 0L
+        for (entry in this) {
+            val entryBytes = encodedEntryBytes(entry)
+            val separatorBytes = if (current.isEmpty()) 0L else JSON_ARRAY_SEPARATOR_BYTES
+            val candidateBytes = payloadEnvelopeBytes + currentEntriesBytes + separatorBytes + entryBytes
+            if (
+                current.isNotEmpty() &&
+                (current.size >= MAX_METADATA_SHARD_ENTRIES || candidateBytes > MAX_METADATA_SHARD_BYTES)
+            ) {
+                chunks += current
+                current = mutableListOf()
+                currentEntriesBytes = 0L
+            }
+            val nextSeparatorBytes = if (current.isEmpty()) 0L else JSON_ARRAY_SEPARATOR_BYTES
+            require(payloadEnvelopeBytes + currentEntriesBytes + nextSeparatorBytes + entryBytes <=
+                MAX_METADATA_SHARD_BYTES) {
+                "One Files metadata record is too large to persist safely."
+            }
+            current += entry
+            currentEntriesBytes += nextSeparatorBytes + entryBytes
+        }
+        chunks += current
+        require(chunks.size <= MAX_METADATA_SHARDS_PER_LISTING)
+        return chunks
+    }
 
     private fun publishMetadataShard(directory: File, encoded: ByteArray): Pair<String, String> {
         require(encoded.size.toLong() <= MAX_METADATA_SHARD_BYTES) { "A Files metadata shard is too large." }
@@ -921,11 +1063,24 @@ internal class DesktopFileReadCache(
             check(isDirectory || mkdirs()) { "Could not create the desktop Files cache." }
         }
         val bounded = index.bounded()
-        val persisted = bounded.persistMetadataShards(directory)
+        val persisted = bounded.persistMetadataShards(directory).fitMetadataReferencesToIndexBudget()
         val encoded = cacheJson.encodeToString(persisted).encodeToByteArray()
         require(encoded.size.toLong() <= maximumIndexBytes) { "The Files cache index is too large." }
         publishBytes(directory, INDEX_FILE_NAME, encoded)
-        rememberLoadedIndex(accountId, bounded)
+        val persistedOrdinaryPaths = persisted.listingShards.mapTo(hashSetOf(), CachedListingShardReferenceV1::path)
+        val persistedVirtualPaths =
+            persisted.virtualListingShards.mapTo(hashSetOf(), CachedVirtualListingShardReferenceV1::path)
+        rememberLoadedIndex(
+            accountId,
+            bounded.copy(
+                listings = bounded.listings.filter { listing -> listing.path in persistedOrdinaryPaths },
+                virtualListings = bounded.virtualListings.filter { listing -> listing.path in persistedVirtualPaths },
+                listingShards = bounded.listingShards.filter { reference -> reference.path in persistedOrdinaryPaths },
+                virtualListingShards = bounded.virtualListingShards.filter { reference ->
+                    reference.path in persistedVirtualPaths
+                },
+            ),
+        )
         val referenced = bounded.content.mapTo(hashSetOf(), CachedContentV1::blobName)
         directory.listFiles().orEmpty()
             .filter { file -> file.isFile && file.extension == "blob" && file.name !in referenced }
@@ -1158,12 +1313,11 @@ internal class DesktopFileReadCache(
         const val MAX_LISTINGS = 256
         const val MAX_FILES_PER_LISTING = 50_000
         const val MAX_TOTAL_METADATA_ENTRIES = 250_000
-        const val MAX_METADATA_SHARD_ENTRIES = 64
-        const val MAX_METADATA_SHARDS_PER_LISTING =
-            (MAX_FILES_PER_LISTING + MAX_METADATA_SHARD_ENTRIES - 1) / MAX_METADATA_SHARD_ENTRIES
-        const val MAX_METADATA_SHARDS =
-            (MAX_TOTAL_METADATA_ENTRIES + MAX_METADATA_SHARD_ENTRIES - 1) / MAX_METADATA_SHARD_ENTRIES +
-                MAX_LISTINGS * 2
+        const val MAX_METADATA_SHARD_ENTRIES = 256
+        // A valid maximum-size record may occupy its own byte-bounded shard. The entry and index
+        // byte budgets remain the authoritative bounds; do not assume a minimum record density.
+        const val MAX_METADATA_SHARDS_PER_LISTING = MAX_FILES_PER_LISTING
+        const val MAX_METADATA_SHARDS = MAX_TOTAL_METADATA_ENTRIES + MAX_LISTINGS * 2
         const val MAX_METADATA_SHARD_BYTES = 4L * 1024L * 1024L
         const val MAX_HYDRATED_METADATA_BYTES = 32L * 1024L * 1024L
         const val METADATA_SHARD_EXTENSION = "metadata"
@@ -1186,6 +1340,18 @@ internal class DesktopFileReadCache(
         const val KEY_OVERFLOW_MINIMUM_FREE_BYTES = "overflow-minimum-free-bytes"
         const val KEY_UNUSED_FILE_AGE = "unused-file-age"
         const val UNLIMITED_SENTINEL = -1L
+        const val EMPTY_JSON_ARRAY_BYTES = 2L
+        const val JSON_ARRAY_SEPARATOR_BYTES = 1L
+    }
+}
+
+private data class MetadataShardIndexGroup(
+    val fetchedAtEpochMillis: Long,
+    val ordinary: List<CachedListingShardReferenceV1> = emptyList(),
+    val virtual: List<CachedVirtualListingShardReferenceV1> = emptyList(),
+) {
+    init {
+        require(ordinary.isEmpty() != virtual.isEmpty())
     }
 }
 
@@ -1220,8 +1386,15 @@ private fun sha256Hex(value: ByteArray): String = MessageDigest.getInstance("SHA
     .digest(value)
     .toHex()
 
-private fun ByteArray.toHex(): String =
-    joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+private fun ByteArray.toHex(): String = buildString(size * 2) {
+    for (byte in this@toHex) {
+        val value = byte.toInt() and 0xff
+        append(HEX_DIGITS[value ushr 4])
+        append(HEX_DIGITS[value and 0x0f])
+    }
+}
+
+private const val HEX_DIGITS = "0123456789abcdef"
 
 private fun String.isSha256Hex(): Boolean =
     length == 64 && all { it in '0'..'9' || it in 'a'..'f' }

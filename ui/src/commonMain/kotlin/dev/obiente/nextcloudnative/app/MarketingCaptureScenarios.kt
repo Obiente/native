@@ -485,7 +485,7 @@ enum class MarketingCaptureScenario(
     ),
     DesktopStartupSettings(
         "desktop-startup-settings", "desktop-startup-settings.png", NextcloudPresentation.Desktop,
-        "File sync", "Desktop settings", "Start on login enabled",
+        "File sync", "Desktop settings", "Background sync and start on login enabled",
         MarketingCapturePurpose.StateCoverage, "desktop", "wide",
         width = 1_440, height = 900, density = 1f,
     ),

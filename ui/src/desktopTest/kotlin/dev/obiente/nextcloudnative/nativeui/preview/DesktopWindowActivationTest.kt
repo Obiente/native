@@ -43,4 +43,10 @@ class DesktopWindowActivationTest {
         assertEquals(8L, nextDesktopFocusRequestSequence(7L))
         assertEquals(0L, nextDesktopFocusRequestSequence(Long.MAX_VALUE))
     }
+
+    @Test
+    fun `background preference does not depend on tray availability`() {
+        assertEquals(true, shouldKeepDesktopProcessRunningOnWindowClose(true))
+        assertEquals(false, shouldKeepDesktopProcessRunningOnWindowClose(false))
+    }
 }
