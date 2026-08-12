@@ -380,7 +380,7 @@ interface NextcloudPlatformServices {
         explanation = "In-app update checks are unavailable on this platform.",
     )
 
-    fun loadAppUpdateChannel(): AndroidUpdateChannel = AndroidUpdateChannel.Alpha
+    fun loadAppUpdateChannel(): AndroidUpdateChannel = enforcedAppUpdateChannel
 
     /**
      * Persists an available direct update channel.

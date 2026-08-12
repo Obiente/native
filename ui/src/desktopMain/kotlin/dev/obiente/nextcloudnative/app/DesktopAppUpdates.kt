@@ -408,8 +408,14 @@ internal class DesktopAppUpdater(
         return true
     }
 
-    private fun storedUpdateChannel(): AndroidUpdateChannel =
-        parseAndroidUpdateChannel(preferences.get(KEY_UPDATE_CHANNEL, null))
+    private fun storedUpdateChannel(): AndroidUpdateChannel {
+        val storedValue = preferences.get(KEY_UPDATE_CHANNEL, null)
+        val channel = parseAndroidUpdateChannel(storedValue)
+        if (storedValue != channel.storageValue) {
+            preferences.put(KEY_UPDATE_CHANNEL, channel.storageValue)
+        }
+        return channel
+    }
 
     private companion object {
         const val KEY_UPDATE_CHANNEL = "app-update-channel"

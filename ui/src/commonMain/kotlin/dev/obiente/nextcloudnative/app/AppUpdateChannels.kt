@@ -20,6 +20,7 @@ fun canSelectAppUpdateChannel(
     support: AppUpdateSupport,
     requested: AndroidUpdateChannel,
 ): Boolean =
+    !appUpdateChannelSelectionLocked &&
     support.channel in setOf(
         AppDistributionChannel.DirectApk,
         AppDistributionChannel.DirectDesktopPackage,
@@ -47,19 +48,35 @@ fun appUpdateChannelPresentation(
         AppDistributionChannel.DirectApk,
         AppDistributionChannel.DirectDesktopPackage,
     )
-    val selectorEnabled = selectorVisible && support.canCheckDirectUpdates
+    val selectorEnabled = selectorVisible &&
+        support.canCheckDirectUpdates &&
+        !appUpdateChannelSelectionLocked
+    val effectiveSelectedChannel = if (appUpdateChannelSelectionLocked) {
+        enforcedAppUpdateChannel
+    } else {
+        selectedChannel
+    }
+    val presentedChannels = if (appUpdateChannelSelectionLocked) {
+        listOf(enforcedAppUpdateChannel)
+    } else {
+        AndroidUpdateChannel.entries
+    }
     return AppUpdateChannelPresentation(
         selectorVisible = selectorVisible,
         selectorEnabled = selectorEnabled,
-        selectedChannel = selectedChannel,
-        options = AndroidUpdateChannel.entries.map { channel ->
+        selectedChannel = effectiveSelectedChannel,
+        options = presentedChannels.map { channel ->
             AppUpdateChannelOptionPresentation(
                 channel = channel,
                 label = channel.label(),
                 description = channel.description(support.channel),
-                selected = channel == selectedChannel,
+                selected = channel == effectiveSelectedChannel,
                 enabled = selectorEnabled && channel.available,
-                availabilityLabel = if (channel.available) null else "Coming later",
+                availabilityLabel = when {
+                    appUpdateChannelSelectionLocked -> "Locked for now"
+                    channel.available -> null
+                    else -> "Coming later"
+                },
             )
         },
     )
