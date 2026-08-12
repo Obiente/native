@@ -6100,6 +6100,7 @@ private fun ActivityScreen(
                     loadPreview = { preview ->
                         services.loadPreview(session, preview.fileId, width = 160, height = 160)
                     },
+                    previewCacheScope = previewCacheDigest(session),
                     onOpenSettings = { settings ->
                         services.openExternalUrl(activitySettingsUrl(session.serverUrl, settings))
                     },
@@ -6126,6 +6127,7 @@ private fun ActivityScreen(
                 loadPreview = { preview ->
                     services.loadPreview(session, preview.fileId, width = 160, height = 160)
                 },
+                previewCacheScope = previewCacheDigest(session),
                 onOpenSettings = { settings ->
                     services.openExternalUrl(activitySettingsUrl(session.serverUrl, settings))
                 },

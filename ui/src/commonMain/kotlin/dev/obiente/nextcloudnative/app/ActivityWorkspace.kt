@@ -148,6 +148,7 @@ internal fun ActivityDesktopWorkspace(
     actionFor: (NextcloudActivity) -> ActivityOpenAction?,
     onOpenAction: (ActivityOpenAction) -> Unit,
     loadPreview: suspend (NextcloudActivityPreview) -> ByteArray?,
+    previewCacheScope: String = "synthetic",
     onOpenSettings: (ActivitySettingsDestination) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -202,6 +203,7 @@ internal fun ActivityDesktopWorkspace(
                         actionFor = actionFor,
                         onOpenAction = onOpenAction,
                         loadPreview = loadPreview,
+                        previewCacheScope = previewCacheScope,
                     )
                 }
                 if (showCompanion) {
@@ -238,6 +240,7 @@ internal fun ActivityMobileWorkspace(
     actionFor: (NextcloudActivity) -> ActivityOpenAction?,
     onOpenAction: (ActivityOpenAction) -> Unit,
     loadPreview: suspend (NextcloudActivityPreview) -> ByteArray?,
+    previewCacheScope: String = "synthetic",
     onOpenSettings: (ActivitySettingsDestination) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -399,6 +402,7 @@ internal fun ActivityMobileWorkspace(
                             action = actionFor(entry.activity),
                             onOpenAction = onOpenAction,
                             loadPreview = loadPreview,
+                            previewCacheScope = previewCacheScope,
                         )
                         is DesktopActivityEntry.AutomationBundle -> ActivityMobileAutomationBundle(entry)
                     }
@@ -511,6 +515,7 @@ private fun ActivityMobileRow(
     action: ActivityOpenAction?,
     onOpenAction: (ActivityOpenAction) -> Unit,
     loadPreview: suspend (NextcloudActivityPreview) -> ByteArray?,
+    previewCacheScope: String,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -523,7 +528,7 @@ private fun ActivityMobileRow(
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             verticalAlignment = Alignment.Top,
         ) {
-            ActivityPreviewOrIcon(activity = activity, loadPreview = loadPreview, size = 40)
+            ActivityPreviewOrIcon(activity, loadPreview, previewCacheScope, 40)
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(activity.subject, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 activity.message?.let { message ->
@@ -938,6 +943,7 @@ private fun ActivityDesktopTimeline(
     actionFor: (NextcloudActivity) -> ActivityOpenAction?,
     onOpenAction: (ActivityOpenAction) -> Unit,
     loadPreview: suspend (NextcloudActivityPreview) -> ByteArray?,
+    previewCacheScope: String,
 ) {
     val listState = rememberLazyListState()
     val lastVisibleItemIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
@@ -1016,6 +1022,7 @@ private fun ActivityDesktopTimeline(
                             action = actionFor(entry.activity),
                             onOpenAction = onOpenAction,
                             loadPreview = loadPreview,
+                            previewCacheScope = previewCacheScope,
                         )
                         is DesktopActivityEntry.AutomationBundle -> ActivityAutomationBundleRow(entry)
                     }
@@ -1046,6 +1053,7 @@ private fun ActivityDesktopRow(
     action: ActivityOpenAction?,
     onOpenAction: (ActivityOpenAction) -> Unit,
     loadPreview: suspend (NextcloudActivityPreview) -> ByteArray?,
+    previewCacheScope: String,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1058,7 +1066,7 @@ private fun ActivityDesktopRow(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        ActivityPreviewOrIcon(activity = activity, loadPreview = loadPreview, size = 37)
+        ActivityPreviewOrIcon(activity, loadPreview, previewCacheScope, 37)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(activity.subject, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             activity.message?.let { message ->
@@ -1158,13 +1166,21 @@ private fun ActivityAutomationBundleRow(entry: DesktopActivityEntry.AutomationBu
 private fun ActivityPreviewOrIcon(
     activity: NextcloudActivity,
     loadPreview: suspend (NextcloudActivityPreview) -> ByteArray?,
+    previewCacheScope: String,
     size: Int,
 ) {
     val preview = activity.preview
-    var image by remember(preview?.fileId) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
-    LaunchedEffect(preview?.fileId) {
+    var image by remember(previewCacheScope, preview?.fileId) {
+        mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
+    }
+    LaunchedEffect(previewCacheScope, preview?.fileId) {
+        image = null
         image = preview?.let { candidate ->
-            runCatching { loadPreview(candidate)?.let(::decodePlatformImage) }.getOrNull()
+            runCatching {
+                loadPreview(candidate)?.let { encoded ->
+                    decodePlatformImage(encoded, EncodedImageOrientationPolicy.PixelsAlreadyUpright)
+                }
+            }.getOrNull()
         }
     }
     val ready = image

@@ -575,19 +575,24 @@ internal fun MobileGroupwareCalendarWorkspace(
                 Icon(NextcloudIcons.ChevronRight, contentDescription = "Next ${view.mobileNavigationPeriod()}")
             }
         }
-        Row(
+        LazyRow(
             modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CalendarWorkspaceView.entries.forEach { candidate ->
+            items(CalendarWorkspaceView.entries, key = CalendarWorkspaceView::name) { candidate ->
                 FilterChip(
                     selected = view == candidate,
                     onClick = { onViewChanged(candidate) },
                     label = { Text(candidate.name) },
                 )
             }
-            Box(modifier = Modifier.weight(1f))
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             IconButton(onClick = { searchVisible = !searchVisible }) {
                 Icon(NextcloudIcons.Search, contentDescription = "Search events")
             }
