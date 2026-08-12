@@ -696,9 +696,10 @@ internal class WindowsCloudFilesProvider(
                 DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS,
             )
             corruptRootRecoveryGeneration.incrementAndGet()
-            if (initialRecoveryFailure is WindowsCloudFilesCorruptEntryException) {
-                initialRecoveryFailure = null
-            }
+            // The completed initial scan describes the preserved root generation. Once the
+            // replacement root has been populated and scanned successfully, none of its
+            // failures can safely be applied to the new generation.
+            initialRecoveryFailure = null
         } catch (failure: Throwable) {
             if (failure is InterruptedException) Thread.currentThread().interrupt()
             if (failure.suppressed.none { it === recovery.corruption }) {
@@ -776,32 +777,34 @@ internal class WindowsCloudFilesProvider(
     /** Repairs the legacy namespace and flushes recoverable local writes before changing root generations. */
     fun recoverBeforeRootMigration(timeoutSeconds: Long = 120L) {
         require(timeoutSeconds > 0L)
-        runtimeRecoveryFailure.get()?.let { throw it }
         var deferredCorruption: WindowsCloudFilesCorruptEntryException? = null
-        try {
-            repairRemotePlaceholderTree()
-        } catch (corruption: WindowsCloudFilesCorruptEntryException) {
-            deferredCorruption = corruption
-        }
-        if (deferredCorruption == null) {
+        synchronized(corruptRootStableAccessLock) {
+            runtimeRecoveryFailure.get()?.let { throw it }
             try {
-                recoverLocalPlaceholders(failClosed = true)
-                recoverUnmanagedLocalEntries(failClosed = true)
+                repairRemotePlaceholderTree()
             } catch (corruption: WindowsCloudFilesCorruptEntryException) {
                 deferredCorruption = corruption
             }
+            if (deferredCorruption == null) {
+                try {
+                    recoverLocalPlaceholders(failClosed = true)
+                    recoverUnmanagedLocalEntries(failClosed = true)
+                } catch (corruption: WindowsCloudFilesCorruptEntryException) {
+                    deferredCorruption = corruption
+                }
+            }
+            check(initialRecoveryFinished.await(timeoutSeconds, TimeUnit.SECONDS)) {
+                "Timed out while checking the legacy Windows Cloud Files root for local edits."
+            }
+            runtimeRecoveryFailure.get()?.let { throw it }
+            when (val failure = initialRecoveryFailure) {
+                is WindowsCloudFilesCorruptEntryException -> deferredCorruption = deferredCorruption ?: failure
+                null -> Unit
+                else -> throw failure
+            }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+            awaitWritebackRecovery(deadline)
         }
-        check(initialRecoveryFinished.await(timeoutSeconds, TimeUnit.SECONDS)) {
-            "Timed out while checking the legacy Windows Cloud Files root for local edits."
-        }
-        runtimeRecoveryFailure.get()?.let { throw it }
-        when (val failure = initialRecoveryFailure) {
-            is WindowsCloudFilesCorruptEntryException -> deferredCorruption = deferredCorruption ?: failure
-            null -> Unit
-            else -> throw failure
-        }
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
-        awaitWritebackRecovery(deadline)
         deferredCorruption?.let { corruption ->
             val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
             recoverCorruptRoot(
@@ -809,7 +812,10 @@ internal class WindowsCloudFilesProvider(
                 corruption,
                 quiescenceTimeoutSeconds = timeoutSeconds,
             )
-            repairRemotePlaceholderTree()
+            initialRecoveryFailure = null
+            synchronized(corruptRootStableAccessLock) {
+                repairRemotePlaceholderTree()
+            }
         }
     }
 

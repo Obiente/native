@@ -1912,14 +1912,14 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
-    fun `successful delayed recovery invalidates stale startup corruption`() {
-        val root = createTempDirectory("windows-cloud-stale-startup-corruption-")
+    fun `successful delayed recovery invalidates stale unreadable startup failure`() {
+        val root = createTempDirectory("windows-cloud-stale-startup-unreadable-")
         val local = root.resolve("Photos").createDirectory()
         val identity = fixtureIdentity(size = 0L).copy(path = "Photos", directory = true)
         val inSync = WindowsCloudPlaceholderInspection(WindowsCloudPlaceholderEntryState.InSync)
-        val corrupt = WindowsCloudPlaceholderInspection(
-            WindowsCloudPlaceholderEntryState.Corrupt,
-            win32Error = WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT,
+        val unreadable = WindowsCloudPlaceholderInspection(
+            WindowsCloudPlaceholderEntryState.Unreadable,
+            win32Error = 5,
         )
         val ordinaryFailure = WindowsCloudFilesOperationException(
             "update a Windows Cloud Files placeholder",
@@ -1931,10 +1931,10 @@ class WindowsCloudFilesProviderTest {
         )
         val diagnostics = CopyOnWriteArrayList<SupportDiagnosticEventDraft>()
         val preserveCount = AtomicInteger()
-        val preserved = root.resolveSibling("preserved-stale-startup-corruption")
+        val preserved = root.resolveSibling("preserved-stale-startup-unreadable")
         val api = FakeApi(expectedPlaceholderUpdates = 2).apply {
             seed(local, WindowsCloudPlaceholderState.InSync, identity)
-            queueInspections(local, inSync, corrupt, inSync)
+            queueInspections(local, inSync, unreadable, inSync)
             scriptUpdatePlaceholderFailures(local, ordinaryFailure, corruptFailure)
         }
         val provider = WindowsCloudFilesProvider(
@@ -1964,6 +1964,87 @@ class WindowsCloudFilesProviderTest {
             assertEquals(1, preserveCount.get())
             assertEquals(preserved, provider.preservedRecoveryRoot)
         } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `legacy migration keeps stable root access ahead of delayed corruption recovery`() {
+        val root = createTempDirectory("windows-cloud-migration-delayed-corruption-")
+        val local = root.resolve("Photos").createDirectory()
+        val identity = fixtureIdentity(size = 0L).copy(path = "Photos", directory = true)
+        val ordinaryFailure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x80070179.toInt(),
+        )
+        val corruptFailure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x8007016B.toInt(),
+        )
+        val migrationEntered = CountDownLatch(1)
+        val releaseMigration = CountDownLatch(1)
+        val migrationFinished = CountDownLatch(1)
+        val preservationStarted = CountDownLatch(1)
+        val diagnostics = CopyOnWriteArrayList<SupportDiagnosticEventDraft>()
+        val preserved = root.resolveSibling("preserved-migration-delayed-corruption")
+        val backend = FakeBackend(ByteArray(0), listed = listOf(identity))
+        val api = FakeApi(expectedPlaceholderUpdates = 2).apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, identity)
+            scriptUpdatePlaceholderFailures(local, ordinaryFailure, corruptFailure)
+        }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = backend,
+            api = api,
+            directoryRefreshRetryDelayMillis = { 500L },
+            recordDiagnostic = diagnostics::add,
+            preserveCorruptRoot = { current ->
+                preservationStarted.countDown()
+                api.seedState(local, WindowsCloudPlaceholderState.Absent)
+                Files.move(current, preserved)
+            },
+        )
+        val migrationFailure = AtomicReference<Throwable?>()
+        val migration = Thread {
+            runCatching { provider.recoverBeforeRootMigration(timeoutSeconds = 5L) }
+                .onFailure(migrationFailure::set)
+            migrationFinished.countDown()
+        }
+
+        try {
+            provider.start()
+            provider.recoverAfterStartup(timeoutSeconds = 5L)
+            backend.beforeList = {
+                migrationEntered.countDown()
+                check(releaseMigration.await(5, TimeUnit.SECONDS))
+            }
+            migration.start()
+            assertTrue(migrationEntered.await(5, TimeUnit.SECONDS))
+
+            val recoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (!provider.isCorruptRootRecoveryInProgress() && System.nanoTime() < recoveryDeadline) {
+                Thread.yield()
+            }
+            assertTrue(provider.isCorruptRootRecoveryInProgress())
+            assertFalse(preservationStarted.await(100, TimeUnit.MILLISECONDS))
+
+            releaseMigration.countDown()
+            assertTrue(migrationFinished.await(5, TimeUnit.SECONDS))
+            migrationFailure.get()?.let { throw it }
+            assertTrue(preservationStarted.await(5, TimeUnit.SECONDS))
+            while (
+                diagnostics.none { it.outcome == "corrupt-root-recovered" } &&
+                System.nanoTime() < recoveryDeadline
+            ) {
+                Thread.yield()
+            }
+            assertTrue(diagnostics.any { it.outcome == "corrupt-root-recovered" })
+            assertEquals(preserved, provider.preservedRecoveryRoot)
+        } finally {
+            releaseMigration.countDown()
+            migration.join(TimeUnit.SECONDS.toMillis(5))
             provider.close()
             root.toFile().deleteRecursively()
             preserved.toFile().deleteRecursively()
@@ -2538,6 +2619,7 @@ class WindowsCloudFilesProviderTest {
         val operations = mutableListOf<String>()
         val listedPaths = CopyOnWriteArrayList<String>()
         val resolvedPaths = CopyOnWriteArrayList<String>()
+        @Volatile var beforeList: ((String) -> Unit)? = null
         private val remoteIdentities = listed.associateBy { identity -> identity.path }.toMutableMap()
         private val remoteContents = mutableMapOf<String, ByteArray>()
         private val scriptedLists = ArrayDeque<List<WindowsCloudFileIdentity>>()
@@ -2547,6 +2629,10 @@ class WindowsCloudFilesProviderTest {
             remoteIdentities[path]
         }
         override fun list(path: String): List<WindowsCloudFileIdentity> = synchronized(this) {
+            beforeList?.also { hook ->
+                beforeList = null
+                hook(path)
+            }
             listedPaths += path
             if (scriptedLists.isNotEmpty()) return@synchronized scriptedLists.removeFirst()
             listed.mapNotNull { identity -> remoteIdentities[identity.path] }
