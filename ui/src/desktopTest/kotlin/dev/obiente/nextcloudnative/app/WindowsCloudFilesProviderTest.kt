@@ -1430,6 +1430,218 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun `startup does not rewrite an unchanged file placeholder`() {
+        val root = createTempDirectory("windows-cloud-unchanged-file-")
+        val local = root.resolve("example.raf")
+        local.writeBytes("cached bytes".encodeToByteArray())
+        val identity = fixtureIdentity(size = local.toFile().length()).copy(path = "example.raf")
+        val backend = FakeBackend("cached bytes".encodeToByteArray(), listed = listOf(identity))
+        val api = FakeApi().apply { seed(local, WindowsCloudPlaceholderState.InSync, identity) }
+        val provider = WindowsCloudFilesProvider(root, backend, api)
+
+        provider.start()
+
+        assertTrue(api.updatedPaths.isEmpty())
+        assertEquals(identity, api.decodedIdentity(local))
+        provider.close()
+    }
+
+    @Test
+    fun `startup keeps an unchanged directory active when its optional refresh is rejected`() {
+        val root = createTempDirectory("windows-cloud-unchanged-directory-")
+        val local = root.resolve("Photos")
+        local.toFile().mkdirs()
+        val identity = fixtureIdentity(size = 0L).copy(path = "Photos", directory = true)
+        val failure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x80070179.toInt(),
+        )
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+        val backend = FakeBackend(ByteArray(0), listed = listOf(identity))
+        val api = FakeApi().apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, identity)
+            updatePlaceholderFailure = failure
+        }
+        val provider = WindowsCloudFilesProvider(root, backend, api, recordDiagnostic = diagnostics::add)
+
+        provider.start()
+
+        assertEquals(listOf(local), api.updatedPaths)
+        assertEquals("unchanged-refresh-skipped", diagnostics.single().outcome)
+        assertEquals("HRESULT:0x80070179", diagnostics.single().code)
+        assertEquals(identity, api.decodedIdentity(local))
+        provider.close()
+    }
+
+    @Test
+    fun `startup retries a rejected unchanged directory refresh`() {
+        val root = createTempDirectory("windows-cloud-unchanged-directory-retry-")
+        val local = root.resolve("Photos")
+        local.toFile().mkdirs()
+        val identity = fixtureIdentity(size = 0L).copy(path = "Photos", directory = true)
+        val failure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x80070179.toInt(),
+        )
+        val diagnostics = CopyOnWriteArrayList<SupportDiagnosticEventDraft>()
+        val backend = FakeBackend(ByteArray(0), listed = listOf(identity))
+        val api = FakeApi(expectedPlaceholderUpdates = 2).apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, identity)
+            updatePlaceholderFailure = failure
+            updatePlaceholderFailuresRemaining = 1
+        }
+        val provider = WindowsCloudFilesProvider(
+            root,
+            backend,
+            api,
+            directoryRefreshRetryDelayMillis = { 0L },
+            recordDiagnostic = diagnostics::add,
+        )
+
+        provider.start()
+
+        assertTrue(api.awaitPlaceholderUpdates())
+        val recoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (diagnostics.none { it.outcome == "unchanged-refresh-recovered" } && System.nanoTime() < recoveryDeadline) {
+            Thread.yield()
+        }
+        assertEquals(2, api.updatedPaths.size)
+        assertTrue(diagnostics.any { it.outcome == "unchanged-refresh-skipped" })
+        assertTrue(diagnostics.any { it.outcome == "unchanged-refresh-recovered" })
+        assertEquals(identity, api.decodedIdentity(local))
+        provider.close()
+    }
+
+    @Test
+    fun `startup reports an unchanged directory as stale after bounded refresh retries`() {
+        val root = createTempDirectory("windows-cloud-unchanged-directory-stale-")
+        val local = root.resolve("Photos")
+        local.toFile().mkdirs()
+        val identity = fixtureIdentity(size = 0L).copy(path = "Photos", directory = true)
+        val failure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x80070179.toInt(),
+        )
+        val diagnostics = CopyOnWriteArrayList<SupportDiagnosticEventDraft>()
+        val backend = FakeBackend(ByteArray(0), listed = listOf(identity))
+        val api = FakeApi(expectedPlaceholderUpdates = 5).apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, identity)
+            updatePlaceholderFailure = failure
+        }
+        val provider = WindowsCloudFilesProvider(
+            root,
+            backend,
+            api,
+            directoryRefreshRetryDelayMillis = { 0L },
+            recordDiagnostic = diagnostics::add,
+        )
+
+        provider.start()
+
+        assertTrue(api.awaitPlaceholderUpdates())
+        val staleDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (diagnostics.none { it.outcome == "unchanged-refresh-stale" } && System.nanoTime() < staleDeadline) {
+            Thread.yield()
+        }
+        assertEquals(5, api.updatedPaths.size)
+        assertEquals("unchanged-refresh-stale", diagnostics.last().outcome)
+        assertEquals(
+            "4",
+            diagnostics.last().fields.single { it.name == "attempt" }.value,
+        )
+        provider.close()
+    }
+
+    @Test
+    fun `startup abandons a delayed directory refresh when the path identity changed`() {
+        val root = createTempDirectory("windows-cloud-unchanged-directory-replaced-")
+        val local = root.resolve("Photos")
+        local.toFile().mkdirs()
+        val original = fixtureIdentity(size = 0L).copy(path = "Photos", directory = true)
+        val replacement = original.copy(remoteRevision = "replacement-revision")
+        val failure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x80070179.toInt(),
+        )
+        val diagnostics = CopyOnWriteArrayList<SupportDiagnosticEventDraft>()
+        val backend = FakeBackend(ByteArray(0), listed = listOf(original))
+        val api = FakeApi(expectedPlaceholderUpdates = 1).apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, original)
+            updatePlaceholderFailure = failure
+            updatePlaceholderFailuresRemaining = 1
+            onUpdatePlaceholderFailure = {
+                seed(local, WindowsCloudPlaceholderState.InSync, replacement)
+            }
+        }
+        val provider = WindowsCloudFilesProvider(
+            root,
+            backend,
+            api,
+            directoryRefreshRetryDelayMillis = { 0L },
+            recordDiagnostic = diagnostics::add,
+        )
+
+        provider.start()
+
+        assertTrue(api.awaitPlaceholderUpdates())
+        val abandonedDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (diagnostics.none { it.outcome == "unchanged-refresh-abandoned" } && System.nanoTime() < abandonedDeadline) {
+            Thread.yield()
+        }
+        assertEquals(1, api.updatedPaths.size)
+        assertEquals(replacement, api.decodedIdentity(local))
+        val abandoned = diagnostics.single { it.outcome == "unchanged-refresh-abandoned" }
+        assertEquals("false", abandoned.fields.single { it.name == "identity_matches" }.value)
+        provider.close()
+    }
+
+    @Test
+    fun `startup fails closed and records the HRESULT when a changed placeholder update is rejected`() {
+        val root = createTempDirectory("windows-cloud-changed-update-failure-")
+        val local = root.resolve("example.raf")
+        local.writeBytes("cached bytes".encodeToByteArray())
+        val previous = fixtureIdentity(size = local.toFile().length()).copy(path = "example.raf")
+        val current = previous.copy(remoteRevision = "new-remote-revision")
+        val failure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x80070179.toInt(),
+        )
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+        val backend = FakeBackend("new bytes".encodeToByteArray(), listed = listOf(current))
+        val api = FakeApi().apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, previous)
+            updatePlaceholderFailure = failure
+        }
+        val provider = WindowsCloudFilesProvider(root, backend, api, recordDiagnostic = diagnostics::add)
+
+        try {
+            assertEquals(
+                failure,
+                assertFailsWith<WindowsCloudFilesOperationException> { provider.start() },
+            )
+            assertEquals("failed", diagnostics.single().outcome)
+            assertEquals("HRESULT:0x80070179", diagnostics.single().code)
+            assertEquals(
+                "true",
+                diagnostics.single().fields.single { it.name == "content_changed" }.value,
+            )
+        } finally {
+            provider.close()
+        }
+    }
+
+    @Test
+    fun `Windows Cloud Files diagnostic code follows a bounded cause chain`() {
+        val failure = IllegalStateException(
+            "activation failed",
+            WindowsCloudFilesOperationException("update a placeholder", 0x80070179.toInt()),
+        )
+
+        assertEquals("HRESULT:0x80070179", windowsCloudFilesDiagnosticCode(failure))
+        assertEquals(null, windowsCloudFilesDiagnosticCode(IllegalStateException("unrelated")))
+    }
+
+    @Test
     fun `recovery uploads against the dirty placeholder revision`() {
         val root = createTempDirectory("windows-cloud-recovery-")
         val local = root.resolve("edit.txt")
@@ -1638,7 +1850,7 @@ class WindowsCloudFilesProviderTest {
         backend.uploadFailuresRemaining = 0
         provider.closed(info, deleted = false)
 
-        assertTrue(api.awaitConversions())
+        assertTrue(api.awaitConversions(TimeUnit.SECONDS.toMillis(15)))
         val recoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         while (provider.summary().pendingWritebackCount != 0 && System.nanoTime() < recoveryDeadline) {
             Thread.yield()
@@ -1813,12 +2025,14 @@ class WindowsCloudFilesProviderTest {
         expectedRenames: Int = 0,
         expectedIdentityReads: Int = 0,
         expectedPlaceholderFetches: Int = 0,
+        expectedPlaceholderUpdates: Int = 0,
     ) : WindowsCloudFilesApi {
         private val transferLatch = CountDownLatch(expectedTransfers)
         private val conversionLatch = CountDownLatch(expectedConversions)
         private val renameLatch = CountDownLatch(expectedRenames)
         private val identityReadLatch = CountDownLatch(expectedIdentityReads)
         private val placeholderFetchLatch = CountDownLatch(expectedPlaceholderFetches)
+        private val placeholderUpdateLatch = CountDownLatch(expectedPlaceholderUpdates)
         private val states = HashMap<Path, WindowsCloudPlaceholderState>()
         private val inspections = HashMap<Path, WindowsCloudPlaceholderInspection>()
         private val inspectionScripts = HashMap<Path, ArrayDeque<WindowsCloudPlaceholderInspection>>()
@@ -1835,6 +2049,9 @@ class WindowsCloudFilesProviderTest {
         val disconnectAttempts = mutableListOf<Long>()
         var disconnectFailure: RuntimeException? = null
         var createPlaceholdersHook: ((Path, List<WindowsCloudPlaceholder>) -> Unit)? = null
+        var updatePlaceholderFailure: WindowsCloudFilesOperationException? = null
+        var updatePlaceholderFailuresRemaining: Int = Int.MAX_VALUE
+        var onUpdatePlaceholderFailure: (() -> Unit)? = null
         var closed = false
         val lifecycleEvents = mutableListOf<String>()
 
@@ -1906,9 +2123,20 @@ class WindowsCloudFilesProviderTest {
             preserveSyncState: Boolean,
         ) {
             updatedPaths.add(path)
-            if (!preserveSyncState) states[path] = WindowsCloudPlaceholderState.InSync
-            identities[path] = placeholder.identity.copyOf()
-            if (invalidateContent) invalidatedUpdates.add(path)
+            try {
+                updatePlaceholderFailure?.let { failure ->
+                    if (updatePlaceholderFailuresRemaining > 0) {
+                        updatePlaceholderFailuresRemaining -= 1
+                        onUpdatePlaceholderFailure?.invoke()
+                        throw failure
+                    }
+                }
+                if (!preserveSyncState) states[path] = WindowsCloudPlaceholderState.InSync
+                identities[path] = placeholder.identity.copyOf()
+                if (invalidateContent) invalidatedUpdates.add(path)
+            } finally {
+                placeholderUpdateLatch.countDown()
+            }
         }
         override fun convertToPlaceholder(path: Path, placeholder: WindowsCloudPlaceholder) {
             states[path] = WindowsCloudPlaceholderState.Dirty
@@ -1923,11 +2151,14 @@ class WindowsCloudFilesProviderTest {
         }
 
         fun awaitTransfers(): Boolean = transferLatch.await(5, TimeUnit.SECONDS)
-        fun awaitConversions(): Boolean = conversionLatch.await(5, TimeUnit.SECONDS)
+        fun awaitConversions(timeoutMillis: Long = TimeUnit.SECONDS.toMillis(5)): Boolean =
+            conversionLatch.await(timeoutMillis, TimeUnit.MILLISECONDS)
         fun awaitRenames(): Boolean = renameLatch.await(5, TimeUnit.SECONDS)
         fun awaitIdentityReads(): Boolean = identityReadLatch.await(5, TimeUnit.SECONDS)
         fun awaitPlaceholderFetches(timeoutMillis: Long = TimeUnit.SECONDS.toMillis(5)): Boolean =
             placeholderFetchLatch.await(timeoutMillis, TimeUnit.MILLISECONDS)
+        fun awaitPlaceholderUpdates(timeoutMillis: Long = TimeUnit.SECONDS.toMillis(5)): Boolean =
+            placeholderUpdateLatch.await(timeoutMillis, TimeUnit.MILLISECONDS)
 
         fun decodedIdentity(path: Path): WindowsCloudFileIdentity? =
             placeholderIdentity(path)?.let(WindowsCloudFileIdentityCodec::decode)

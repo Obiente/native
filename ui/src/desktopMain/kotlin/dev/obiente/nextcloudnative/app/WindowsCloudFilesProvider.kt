@@ -437,6 +437,8 @@ internal class WindowsCloudFilesProvider(
         Thread(work, "nextcloud-windows-cloud-files").apply { isDaemon = true }
     },
     private val writebackRetryDelayMillis: (attempt: Int) -> Long = ::windowsWritebackRetryDelayMillis,
+    private val directoryRefreshRetryDelayMillis: (attempt: Int) -> Long =
+        ::windowsDirectoryRefreshRetryDelayMillis,
     private val recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit = {},
     private val preserveCorruptRoot: (Path) -> Path = ::preserveWindowsCloudFilesCorruptRoot,
     private val recordPreservedCorruptRoot: (Path) -> Unit = {},
@@ -810,11 +812,13 @@ internal class WindowsCloudFilesProvider(
         submitDestructiveCallback(
             onRejected = { api.acknowledgeDelete(info, false) },
         ) {
-            val accepted = runCatching {
-                val identity = requireIdentity(info, expectDirectory = null)
-                backend.delete(identity)
-                knownIdentities.remove(identity.path)
-            }.isSuccess
+            val accepted = synchronized(namespaceMutationLock) {
+                runCatching {
+                    val identity = requireIdentity(info, expectDirectory = null)
+                    backend.delete(identity)
+                    knownIdentities.remove(identity.path)
+                }.isSuccess
+            }
             api.acknowledgeDelete(info, accepted)
         }
     }
@@ -1298,14 +1302,13 @@ internal class WindowsCloudFilesProvider(
                 ?: return false
             if (rechecked != existing) return false
         }
-        val contentChanged = existing.remoteRevision != authoritative.remoteRevision ||
-            existing.size != authoritative.size ||
-            existing.directory != authoritative.directory
+        val contentChanged = placeholderContentChanged(existing, authoritative)
         if (existing != authoritative || authoritative.directory) {
-            api.updatePlaceholder(
+            updateExistingPlaceholder(
                 localPath,
-                placeholder(authoritative),
-                invalidateContent = contentChanged && !authoritative.directory,
+                previous = existing,
+                current = authoritative,
+                contentChanged = contentChanged,
             )
         }
         knownIdentities[authoritative.path] = authoritative
@@ -1324,15 +1327,15 @@ internal class WindowsCloudFilesProvider(
                 check(previous == null || previous.accountId == backend.accountId && previous.path == identity.path) {
                     "The Windows Cloud Files directory contains remote entries that resolve to the same Windows path."
                 }
-                val contentChanged = previous == null ||
-                    previous.remoteRevision != identity.remoteRevision ||
-                    previous.size != identity.size ||
-                    previous.directory != identity.directory
-                api.updatePlaceholder(
-                    localPath,
-                    placeholder(identity),
-                    invalidateContent = contentChanged && !identity.directory,
-                )
+                val contentChanged = previous == null || placeholderContentChanged(previous, identity)
+                if (previous != identity || identity.directory) {
+                    updateExistingPlaceholder(
+                        localPath,
+                        previous = previous,
+                        current = identity,
+                        contentChanged = contentChanged,
+                    )
+                }
                 knownIdentities[identity.path] = identity
             }
             WindowsCloudPlaceholderState.Dirty -> {
@@ -1344,6 +1347,137 @@ internal class WindowsCloudFilesProvider(
             WindowsCloudPlaceholderState.Absent -> Unit
         }
     }
+
+    private fun updateExistingPlaceholder(
+        localPath: Path,
+        previous: WindowsCloudFileIdentity?,
+        current: WindowsCloudFileIdentity,
+        contentChanged: Boolean,
+    ) {
+        try {
+            api.updatePlaceholder(
+                localPath,
+                placeholder(current),
+                invalidateContent = contentChanged && !current.directory,
+            )
+        } catch (failure: WindowsCloudFilesOperationException) {
+            val unchangedDirectoryRefresh = previous == current && current.directory
+            recordPlaceholderDiagnostic(
+                severity = if (unchangedDirectoryRefresh) {
+                    SupportDiagnosticSeverity.Warning
+                } else {
+                    SupportDiagnosticSeverity.Error
+                },
+                operation = "cloud-files.placeholder-update",
+                outcome = if (unchangedDirectoryRefresh) "unchanged-refresh-skipped" else "failed",
+                code = "HRESULT:0x${failure.hResult.toUInt().toString(16)}",
+                localDirectory = localPath.parent ?: root,
+                identity = current,
+                fields = listOf(
+                    SupportDiagnosticFieldDraft("content_changed", contentChanged.toString()),
+                    SupportDiagnosticFieldDraft("identity_changed", (previous != current).toString()),
+                ),
+            )
+            if (!unchangedDirectoryRefresh) throw failure
+            scheduleUnchangedDirectoryRefresh(localPath, current, attempt = 1)
+        }
+    }
+
+    private fun scheduleUnchangedDirectoryRefresh(
+        localPath: Path,
+        identity: WindowsCloudFileIdentity,
+        attempt: Int,
+    ) {
+        if (callbacksPaused.get()) return
+        val delayMillis = directoryRefreshRetryDelayMillis(attempt).coerceAtLeast(0L)
+        runCatching {
+            localChangeScheduler.schedule(
+                {
+                    if (callbacksPaused.get()) return@schedule
+                    runCatching {
+                        executor.execute {
+                            if (callbacksPaused.get()) return@execute
+                            retryUnchangedDirectoryRefresh(localPath, identity, attempt)
+                        }
+                    }
+                },
+                delayMillis,
+                TimeUnit.MILLISECONDS,
+            )
+        }
+    }
+
+    private fun retryUnchangedDirectoryRefresh(
+        localPath: Path,
+        identity: WindowsCloudFileIdentity,
+        attempt: Int,
+    ) {
+        synchronized(namespaceMutationLock) {
+            if (callbacksPaused.get()) return
+            val inspection = api.inspectPlaceholder(localPath)
+            val currentIdentity = if (
+                inspection.state == WindowsCloudPlaceholderEntryState.InSync &&
+                inspection.placeholderState == WindowsCloudPlaceholderState.InSync
+            ) {
+                api.placeholderIdentity(localPath)
+                    ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
+            } else {
+                null
+            }
+            if (currentIdentity != identity) {
+                recordPlaceholderDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    operation = "cloud-files.placeholder-update",
+                    outcome = "unchanged-refresh-abandoned",
+                    localDirectory = localPath.parent ?: root,
+                    identity = identity,
+                    fields = inspection.diagnosticFields() + listOf(
+                        SupportDiagnosticFieldDraft("attempt", attempt.toString()),
+                        SupportDiagnosticFieldDraft("identity_matches", (currentIdentity == identity).toString()),
+                    ),
+                )
+                return
+            }
+            retryVerifiedUnchangedDirectoryRefresh(localPath, identity, attempt)
+        }
+    }
+
+    private fun retryVerifiedUnchangedDirectoryRefresh(
+        localPath: Path,
+        identity: WindowsCloudFileIdentity,
+        attempt: Int,
+    ) {
+        try {
+            api.updatePlaceholder(localPath, placeholder(identity), invalidateContent = false)
+            recordPlaceholderDiagnostic(
+                severity = SupportDiagnosticSeverity.Info,
+                operation = "cloud-files.placeholder-update",
+                outcome = "unchanged-refresh-recovered",
+                localDirectory = localPath.parent ?: root,
+                identity = identity,
+                fields = listOf(SupportDiagnosticFieldDraft("attempt", attempt.toString())),
+            )
+        } catch (failure: WindowsCloudFilesOperationException) {
+            val exhausted = attempt >= MAX_WINDOWS_DIRECTORY_REFRESH_ATTEMPTS
+            recordPlaceholderDiagnostic(
+                severity = SupportDiagnosticSeverity.Warning,
+                operation = "cloud-files.placeholder-update",
+                outcome = if (exhausted) "unchanged-refresh-stale" else "unchanged-refresh-retry-failed",
+                code = "HRESULT:0x${failure.hResult.toUInt().toString(16)}",
+                localDirectory = localPath.parent ?: root,
+                identity = identity,
+                fields = listOf(SupportDiagnosticFieldDraft("attempt", attempt.toString())),
+            )
+            if (!exhausted) scheduleUnchangedDirectoryRefresh(localPath, identity, attempt + 1)
+        }
+    }
+
+    private fun placeholderContentChanged(
+        previous: WindowsCloudFileIdentity,
+        current: WindowsCloudFileIdentity,
+    ): Boolean = previous.remoteRevision != current.remoteRevision ||
+        previous.size != current.size ||
+        previous.directory != current.directory
 
     private fun requireIdentity(
         info: WindowsCloudCallbackInfo,
@@ -1875,12 +2009,18 @@ private fun String.windowsCloudPath(): String {
 
 private const val WINDOWS_CLOUD_ALIGNMENT = 4 * 1024L
 private const val MAX_WINDOWS_WRITEBACK_ATTEMPTS = 5
+private const val MAX_WINDOWS_DIRECTORY_REFRESH_ATTEMPTS = 4
 private const val DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS = 120L
 private const val DEFAULT_INITIAL_POPULATION_TIMEOUT_SECONDS = 120L
 
 private fun windowsWritebackRetryDelayMillis(attempt: Int): Long {
     require(attempt in 1 until MAX_WINDOWS_WRITEBACK_ATTEMPTS)
     return (250L shl (attempt - 1)).coerceAtMost(30_000L)
+}
+
+private fun windowsDirectoryRefreshRetryDelayMillis(attempt: Int): Long {
+    require(attempt in 1..MAX_WINDOWS_DIRECTORY_REFRESH_ATTEMPTS)
+    return (1_000L shl (attempt - 1)).coerceAtMost(30_000L)
 }
 
 private fun Path.registerForWindowsCloudChanges(watcher: WatchService) {
