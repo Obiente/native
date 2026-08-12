@@ -915,14 +915,12 @@ internal fun combinedAutomaticCacheExcess(
     return (total - maximumBytes).coerceAtLeast(0L)
 }
 
-internal fun detachVirtualFileProviderForReplacement(
+internal fun closeVirtualFileProviderForReplacement(
     provider: AutoCloseable?,
     detach: () -> Unit,
-    onCleanupFailure: (Throwable) -> Unit,
-) {
-    detach()
-    runCatching { provider?.close() }.onFailure(onCleanupFailure)
-}
+): Throwable? = runCatching { provider?.close() }
+    .onSuccess { detach() }
+    .exceptionOrNull()
 
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
@@ -1874,21 +1872,22 @@ class DesktopNextcloudServices(
                     )
                 }
                 val replacedProvider = windowsCloudFilesProvider
-                detachVirtualFileProviderForReplacement(
+                closeVirtualFileProviderForReplacement(
                     provider = replacedProvider,
                     detach = {
                         windowsCloudFilesProvider = null
                         windowsCloudFilesIdentity = null
                     },
-                    onCleanupFailure = { failure ->
-                        recordVirtualFileFailure(
-                            operation = "cloud-files.failed-provider-cleanup",
-                            accountId = accountId,
-                            root = desktopWindowsCloudFilesRoot(accountId).toPath(),
-                            failure = failure,
-                        )
-                    },
-                )
+                )?.let { failure ->
+                    windowsCloudFilesFailure = failure.message ?: "Unknown Cloud Files cleanup failure"
+                    recordVirtualFileFailure(
+                        operation = "cloud-files.failed-provider-cleanup",
+                        accountId = accountId,
+                        root = desktopWindowsCloudFilesRoot(accountId).toPath(),
+                        failure = failure,
+                    )
+                    throw failure
+                }
                 val root = desktopWindowsCloudFilesRoot(accountId).toPath()
                 val userHome = File(System.getProperty("user.home"))
                 val backend = DesktopNextcloudWindowsCloudFilesBackend(

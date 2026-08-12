@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import java.util.prefs.Preferences
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -22,18 +23,29 @@ class DesktopVirtualFileProviderPreferencesTest {
     }
 
     @Test
-    fun `failed provider cleanup cannot prevent replacement detachment`() {
+    fun `failed provider cleanup retains the provider and blocks replacement`() {
         val cleanupFailure = IllegalStateException("simulated disconnect failure")
         var detached = false
-        var recordedFailure: Throwable? = null
 
-        detachVirtualFileProviderForReplacement(
+        val returnedFailure = closeVirtualFileProviderForReplacement(
             provider = AutoCloseable { throw cleanupFailure },
             detach = { detached = true },
-            onCleanupFailure = { recordedFailure = it },
+        )
+
+        assertFalse(detached)
+        assertSame(cleanupFailure, returnedFailure)
+    }
+
+    @Test
+    fun `successful provider cleanup permits replacement detachment`() {
+        var detached = false
+
+        val returnedFailure = closeVirtualFileProviderForReplacement(
+            provider = AutoCloseable {},
+            detach = { detached = true },
         )
 
         assertTrue(detached)
-        assertSame(cleanupFailure, recordedFailure)
+        assertEquals(null, returnedFailure)
     }
 }

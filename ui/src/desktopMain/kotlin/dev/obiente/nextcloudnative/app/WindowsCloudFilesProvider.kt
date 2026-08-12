@@ -505,7 +505,7 @@ internal class WindowsCloudFilesProvider(
             }
             initialPopulationSucceeded = true
             initialPopulationFinished.countDown()
-            startLocalWatcher()
+            if (watchService == null) startLocalWatcher()
             executor.execute {
                 try {
                     recoverLocalChanges()
@@ -520,6 +520,7 @@ internal class WindowsCloudFilesProvider(
             callbacksPaused.set(true)
             initialPopulationFinished.countDown()
             runtimeStarted.countDown()
+            stopLocalWatcher()
             val key = connection.get()
             if (key != 0L && runCatching { api.disconnect(key) }.isSuccess) {
                 connection.compareAndSet(key, 0L)
@@ -584,8 +585,7 @@ internal class WindowsCloudFilesProvider(
         quiescenceTimeoutSeconds: Long,
     ) {
         require(quiescenceTimeoutSeconds > 0L)
-        val restartWatcher = watchService != null
-        if (restartWatcher) stopLocalWatcher()
+        if (watchService != null) stopLocalWatcher()
         synchronized(namespaceMutationLock) {
             callbacksPaused.set(true)
         }
@@ -649,7 +649,7 @@ internal class WindowsCloudFilesProvider(
             api.registerSyncRoot(root, backend.displayName, syncRootIdentity)
             connection.set(api.connect(root, this))
             populateDirectory("", root)
-            if (restartWatcher && !runtimeStopping.get()) startLocalWatcher()
+            if (!runtimeStopping.get()) startLocalWatcher()
             recoverUnmanagedLocalEntries(failClosed = true)
             resumeCallbacksAndReplayLocalChanges()
         } catch (retryFailure: Throwable) {

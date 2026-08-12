@@ -644,6 +644,56 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun `initial corruption recovery watches files created after the rebuilt scan`() {
+        val root = createTempDirectory("windows-cloud-initial-recovery-watcher-")
+        val identity = WindowsCloudFileIdentity("account-01", "Apps", "revision", 0L, true)
+        val corruptPath = root.resolve("Apps")
+        val localBytes = "created after rebuilt startup scan".encodeToByteArray()
+        val localFile = root.resolve("late-note.txt")
+        val backend = FakeBackend(ByteArray(0), listOf(identity), expectedUploads = 1)
+        val preserved = root.resolveSibling("preserved-initial-recovery-watcher")
+        val api = FakeApi().apply {
+            createPlaceholdersHook = { _, _ ->
+                seedInspection(
+                    corruptPath,
+                    WindowsCloudPlaceholderInspection(
+                        state = WindowsCloudPlaceholderEntryState.Corrupt,
+                        win32Error = 363,
+                    ),
+                )
+                throw WindowsCloudFilesOperationException(
+                    "create Windows Cloud Files placeholders",
+                    0x800700B7.toInt(),
+                )
+            }
+        }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = backend,
+            api = api,
+            recordDiagnostic = { event ->
+                if (event.outcome == "corrupt-root-recovered") localFile.writeBytes(localBytes)
+            },
+            preserveCorruptRoot = { current ->
+                api.clearInspection(corruptPath)
+                Files.move(current, preserved)
+            },
+        )
+
+        try {
+            provider.start()
+
+            assertTrue(backend.awaitUploads())
+            assertEquals("late-note.txt", backend.lastUploadedPath)
+            assertEquals(listOf(localBytes.toList()), backend.uploadedBytes.map(ByteArray::toList))
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun corruptRootWaitsForQueuedWritebackBeforeMovingLocalData() {
         val root = createTempDirectory("windows-cloud-corrupt-root-writeback")
         val localBytes = "local edit queued before corruption recovery".encodeToByteArray()
