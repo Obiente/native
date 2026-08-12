@@ -258,7 +258,8 @@ class DynamicAppDescriptorCompilerTest {
         assertEquals("lists", list.resourceId)
         assertEquals(list.resourceId, create.resourceId)
         assertEquals(ActionIntent.create, create.intent)
-        assertEquals(listOf("houseId"), create.binding.pathParameters.map { it.name })
+        assertEquals("/ocs/v2.php/apps/example/api/houses/{id}/lists", create.binding.path)
+        assertEquals(listOf("id"), create.binding.pathParameters.map { it.name })
         assertEquals("lists", descriptor.forms.single { it.actionId == create.id }.resourceId)
         assertTrue(descriptor.validationErrors().isEmpty())
     }
@@ -984,6 +985,7 @@ class DynamicAppDescriptorCompilerTest {
         val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
         val house = descriptor.actions.single { action -> action.id == "house-index" }
         val lists = descriptor.actions.single { action -> action.id == "list-index" }
+        val createList = descriptor.actions.single { action -> action.id == "list-create" }
         val listResource = descriptor.resources.single { resource -> resource.id == lists.resourceId }
 
         assertEquals(house.resourceId, descriptor.actions.single { it.id == "house-show" }.resourceId)
@@ -995,6 +997,8 @@ class DynamicAppDescriptorCompilerTest {
             },
             "links=${descriptor.links}",
         )
+        assertEquals("/apps/example/api/houses/{id}/lists", createList.binding.path)
+        assertEquals(listOf("id"), createList.binding.pathParameters.map(HttpParameter::name))
         assertTrue(descriptor.validationErrors().isEmpty())
     }
 
