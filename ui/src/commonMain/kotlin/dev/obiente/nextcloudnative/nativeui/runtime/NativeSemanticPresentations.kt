@@ -194,7 +194,10 @@ internal data class NativeFinancePresentation(
     val category: String?,
     val paymentMethod: String?,
     val note: String?,
+    val direction: NativeFinanceDirection,
 )
+
+internal enum class NativeFinanceDirection { Credit, Debit, Unspecified }
 
 internal data class NativeFinanceMemberStatistic(
     val name: String,
@@ -487,9 +490,19 @@ internal fun nativeFinancePresentation(
         "paymentmode", "paymentmethod", "categoryid", "owers",
     )
     if (!hasFinanceResourceSemantics && !hasTransactionRecordShape) return null
-    val amount = values.number(
+    val rawAmount = values.number(
         "amount", "value", "total", "cost", "price", "expense", "income", "balance",
     ) ?: return null
+    val direction = when (values.string("type", "transactiontype", "direction")?.lowercase()) {
+        "credit", "income", "deposit" -> NativeFinanceDirection.Credit
+        "debit", "expense", "withdrawal", "payment" -> NativeFinanceDirection.Debit
+        else -> NativeFinanceDirection.Unspecified
+    }
+    val amount = when (direction) {
+        NativeFinanceDirection.Credit -> kotlin.math.abs(rawAmount)
+        NativeFinanceDirection.Debit -> -kotlin.math.abs(rawAmount)
+        NativeFinanceDirection.Unspecified -> rawAmount
+    }
     val title = values.string(
         "what", "title", "name", "description", "label", "subject", "merchant",
     ) ?: "Transaction"
@@ -501,7 +514,11 @@ internal fun nativeFinancePresentation(
     return NativeFinancePresentation(
         title = title,
         amount = amount,
-        currency = values.string("currency", "currencycode", "currencyname", "unit"),
+        currency = values.string("currency", "currencycode", "currencyname", "unit")
+            ?: resource.fields.firstOrNull { field ->
+                field.id.semanticKey() in setOf("amount", "value", "total") &&
+                    field.kind == FieldKind.currency
+            }?.format,
         date = values.formattedTimestamp()?.compactSemanticDateTime(),
         participant = payer,
         splitParticipants = participants.map(NativeSemanticReference::label).distinct(),
@@ -511,6 +528,7 @@ internal fun nativeFinancePresentation(
         )?.takeIf { it.length > 1 },
         note = values.string("comment", "note", "notes", "memo")
             ?.takeUnless { it.equals(title, ignoreCase = true) },
+        direction = direction,
     )
 }
 
@@ -526,7 +544,11 @@ internal fun nativeFinanceCollectionPresentations(
 internal fun formatNativeFinanceAmount(amount: Double, currency: String?): String {
     val rounded = kotlin.math.round(amount * 100.0) / 100.0
     val stableAmount = if (kotlin.math.abs(amount) < 0.0051) 0.0 else rounded
-    val normalized = if (stableAmount == stableAmount.toLong().toDouble()) {
+    val normalized = if (!currency.isNullOrBlank()) {
+        val absoluteCents = kotlin.math.round(kotlin.math.abs(stableAmount) * 100.0).toLong()
+        val sign = if (stableAmount < 0.0) "-" else ""
+        "$sign${absoluteCents / 100}.${(absoluteCents % 100).toString().padStart(2, '0')}"
+    } else if (stableAmount == stableAmount.toLong().toDouble()) {
         stableAmount.toLong().toString()
     } else {
         stableAmount.toString().trimEnd('0').trimEnd('.')

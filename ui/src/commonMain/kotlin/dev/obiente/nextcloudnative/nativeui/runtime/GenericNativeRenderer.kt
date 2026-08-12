@@ -49,6 +49,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -61,6 +62,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -140,6 +142,8 @@ import kotlin.math.roundToInt
 fun interface NativeFileFieldPicker {
     fun requestFile(field: FieldSpec, onSelected: (String) -> Unit)
 }
+
+internal val LocalNativeFinanceCurrency = compositionLocalOf<String?> { null }
 
 fun interface NativeImageLoader {
     suspend fun load(relativePath: String): ImageBitmap?
@@ -3555,7 +3559,14 @@ private fun GenericRecordCollection(
         nativeFinanceCollectionPresentations(resource, records)
     }
     if (finance != null) {
-        GenericFinanceCollection(resource, finance, onSelectRecord)
+        GenericFinanceCollection(
+            resource = resource,
+            rows = finance,
+            onSelectRecord = onSelectRecord,
+            onLoadMore = onLoadMore,
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+        )
         return
     }
     val insights = remember(resource, records) { nativeDatasetInsights(resource, records) }
@@ -3783,21 +3794,111 @@ private fun GenericFinanceCollection(
     resource: ResourceSpec,
     rows: List<Pair<NativeRecord, NativeFinancePresentation?>>,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
 ) {
-    val records = remember(rows) { rows.map { (record, _) -> record } }
-    val insights = remember(resource, records) { nativeDatasetInsights(resource, records) }
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val compactViewport = !datasetInsightsDefaultExpanded(maxWidth.value, maxHeight.value)
-        Column(modifier = Modifier.fillMaxSize()) {
-            insights?.let {
-                DatasetInsightsDisclosure(
-                    insights = it,
-                    compact = compactViewport,
-                    initiallyExpanded = !compactViewport,
-                    stateKey = "finance:${resource.id}",
-                )
+    val contextualCurrency = LocalNativeFinanceCurrency.current
+    var filter by rememberSaveable(resource.id) { mutableStateOf(NativeFinanceLedgerFilter.All) }
+    var categoryFilter by rememberSaveable(resource.id) { mutableStateOf<String?>(null) }
+    var accountFilter by rememberSaveable(resource.id) { mutableStateOf<String?>(null) }
+    var filtersExpanded by rememberSaveable(resource.id) { mutableStateOf(false) }
+    val presentations = remember(rows) { rows.mapNotNull { (_, transaction) -> transaction } }
+    val categories = remember(presentations) {
+        presentations.mapNotNull(NativeFinancePresentation::category).distinct().sorted().take(12)
+    }
+    val accounts = remember(presentations) {
+        presentations.mapNotNull(NativeFinancePresentation::paymentMethod).distinct().sorted().take(12)
+    }
+    val presentedRows = remember(rows, filter, categoryFilter, accountFilter) {
+        rows.filter { (_, transaction) ->
+            val directionMatches = when (filter) {
+                NativeFinanceLedgerFilter.All -> true
+                NativeFinanceLedgerFilter.Income -> transaction?.direction == NativeFinanceDirection.Credit
+                NativeFinanceLedgerFilter.Expenses -> transaction?.direction == NativeFinanceDirection.Debit
             }
+            directionMatches &&
+                (categoryFilter == null || transaction?.category == categoryFilter) &&
+                (accountFilter == null || transaction?.paymentMethod == accountFilter)
+        }
+    }
+    val currency = remember(presentations, contextualCurrency) {
+        presentations.mapNotNull(NativeFinancePresentation::currency).distinct().singleOrNull()
+            ?: contextualCurrency
+    }
+    val netFlow = remember(presentations) { presentations.sumOf(NativeFinancePresentation::amount) }
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceContainerLowest,
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "${presentations.size} loaded",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "Loaded net ${formatNativeFinanceAmount(netFlow, currency)}",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (netFlow < 0) MaterialTheme.colorScheme.error else Color(0xFF3F8F50),
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        NativeFinanceLedgerFilter.entries.forEach { option ->
+                            FilterChip(
+                                selected = filter == option,
+                                onClick = { filter = option },
+                                label = { Text(option.label) },
+                            )
+                        }
+                        if (categories.size > 1 || accounts.size > 1) {
+                            TextButton(onClick = { filtersExpanded = !filtersExpanded }) {
+                                val activeCount = listOfNotNull(categoryFilter, accountFilter).size
+                                Text(if (activeCount == 0) "Filters" else "Filters ($activeCount)")
+                            }
+                        }
+                    }
+                    if (filtersExpanded && (categories.size > 1 || accounts.size > 1)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        ) {
+                            categories.forEach { category ->
+                                FilterChip(
+                                    selected = categoryFilter == category,
+                                    onClick = { categoryFilter = category.takeUnless { it == categoryFilter } },
+                                    label = { Text(category, maxLines = 1) },
+                                )
+                            }
+                            accounts.forEach { account ->
+                                FilterChip(
+                                    selected = accountFilter == account,
+                                    onClick = { accountFilter = account.takeUnless { it == accountFilter } },
+                                    label = { Text(account, maxLines = 1) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            val listState = rememberLazyListState()
+            NativeCollectionAutoPager(listState, presentedRows.size, onLoadMore, loadingMore, loadMoreError)
             LazyColumn(
+                state = listState,
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(
                     start = NextcloudSpacing.Large,
@@ -3807,7 +3908,7 @@ private fun GenericFinanceCollection(
                 ),
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             ) {
-                items(rows, key = { (record, _) -> record.id }) { (record, transaction) ->
+                items(presentedRows, key = { (record, _) -> record.id }) { (record, transaction) ->
                     if (transaction == null) {
                         GenericCollectionCard(resource, record, onSelectRecord)
                         return@items
@@ -3816,13 +3917,13 @@ private fun GenericFinanceCollection(
                         ?.let { callback -> Modifier.clickable { callback(record) } }
                         ?: Modifier
                     Card(
-                        modifier = interaction.fillMaxWidth().heightIn(min = 148.dp),
+                        modifier = interaction.fillMaxWidth().heightIn(min = 92.dp),
                         colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
                         shape = RoundedCornerShape(NextcloudRadii.Card),
                     ) {
                         Column(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -3838,14 +3939,14 @@ private fun GenericFinanceCollection(
                                 Text(
                                     transaction.title,
                                     modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.titleLarge,
+                                    style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold,
-                                    maxLines = 2,
+                                    maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    formatNativeFinanceAmount(transaction.amount, transaction.currency),
-                                    style = MaterialTheme.typography.titleLarge,
+                                    formatNativeFinanceLedgerAmount(transaction, transaction.currency ?: currency),
+                                    style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = if (transaction.amount < 0) {
                                         MaterialTheme.colorScheme.error
@@ -3866,26 +3967,54 @@ private fun GenericFinanceCollection(
                                     }
                                 }
                             }
-                            val footer = listOfNotNull(
-                                transaction.category,
-                                transaction.paymentMethod,
-                                transaction.date,
-                            ).distinct().joinToString(" · ")
-                            if (footer.isNotBlank()) {
-                                Text(
-                                    footer,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                            val context = listOfNotNull(transaction.category, transaction.paymentMethod)
+                                .distinct().joinToString(" · ")
+                            if (context.isNotBlank() || transaction.date != null) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                ) {
+                                    Text(
+                                        context,
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    transaction.date?.let { date ->
+                                        Text(
+                                            date,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                NativeCollectionPagingFooter(loadingMore, loadMoreError, onLoadMore)
             }
         }
     }
+}
+
+private enum class NativeFinanceLedgerFilter(val label: String) {
+    All("All"),
+    Income("Income"),
+    Expenses("Expenses"),
+}
+
+private fun formatNativeFinanceLedgerAmount(
+    transaction: NativeFinancePresentation,
+    currency: String?,
+): String {
+    val formatted = formatNativeFinanceAmount(transaction.amount, currency)
+    return if (transaction.direction == NativeFinanceDirection.Credit && transaction.amount > 0.0) {
+        "+$formatted"
+    } else formatted
 }
 
 @Composable
@@ -3919,6 +4048,17 @@ private fun GenericFinanceDetailHeader(
     resource: ResourceSpec,
     transaction: NativeFinancePresentation,
 ) {
+    val contextualCurrency = LocalNativeFinanceCurrency.current
+    val desktop = LocalNextcloudWorkspaceCapabilities.current.isDesktop
+    val amount = formatNativeFinanceLedgerAmount(
+        transaction,
+        transaction.currency ?: contextualCurrency,
+    )
+    val amountColor = if (transaction.amount < 0) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
@@ -3928,35 +4068,66 @@ private fun GenericFinanceDetailHeader(
             modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                GenericResourceIcon(resource, large = true)
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        transaction.title,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    transaction.date?.let { date ->
+            if (desktop) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    GenericResourceIcon(resource, large = true)
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            date,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            transaction.title,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
+                        transaction.date?.let { date ->
+                            Text(
+                                date,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Text(
+                        amount,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = amountColor,
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    GenericResourceIcon(resource, large = true)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            transaction.title,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        transaction.date?.let { date ->
+                            Text(
+                                date,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
                 Text(
-                    formatNativeFinanceAmount(transaction.amount, transaction.currency),
+                    amount,
+                    modifier = Modifier.align(Alignment.End),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
-                    color = if (transaction.amount < 0) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
+                    color = amountColor,
                 )
             }
             transaction.participant?.let { payer ->

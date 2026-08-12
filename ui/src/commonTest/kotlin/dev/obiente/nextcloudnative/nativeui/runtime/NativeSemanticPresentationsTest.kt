@@ -317,7 +317,30 @@ class NativeSemanticPresentationsTest {
         assertEquals("Card", presentation.paymentMethod)
         assertEquals("2026-07-23 18:30", presentation.date)
         assertEquals("Dinner ingredients", presentation.note)
-        assertEquals("EUR 42.5", formatNativeFinanceAmount(presentation.amount, presentation.currency))
+        assertEquals("EUR 42.50", formatNativeFinanceAmount(presentation.amount, presentation.currency))
+        assertEquals("EUR -3.10", formatNativeFinanceAmount(-3.1, "EUR"))
+    }
+
+    @Test
+    fun `transaction direction supplies the sign when the server amount is absolute`() {
+        val transactions = resource("transactions", "Transactions", "description", "amount", "type")
+        val debit = requireNotNull(
+            nativeFinancePresentation(
+                transactions,
+                NativeRecord("1", mapOf("description" to "Groceries", "amount" to "38.40", "type" to "debit")),
+            ),
+        )
+        val credit = requireNotNull(
+            nativeFinancePresentation(
+                transactions,
+                NativeRecord("2", mapOf("description" to "Refund", "amount" to "12", "type" to "credit")),
+            ),
+        )
+
+        assertEquals(-38.4, debit.amount)
+        assertEquals(NativeFinanceDirection.Debit, debit.direction)
+        assertEquals(12.0, credit.amount)
+        assertEquals(NativeFinanceDirection.Credit, credit.direction)
     }
 
     @Test

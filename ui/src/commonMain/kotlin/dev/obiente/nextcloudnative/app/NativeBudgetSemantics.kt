@@ -117,6 +117,14 @@ internal fun NativeAppSchema.withNativeBudgetDashboard(): NativeAppSchema {
             view.sourceActionId.isNotBlank()
     } ?: return this
     return copy(
+        actions = actions.map { action ->
+            if (
+                action.resourceId.normalizedBudgetResourceId() == "transactions" &&
+                action.intent == dev.obiente.nextcloudnative.nativeui.model.ActionIntent.create
+            ) {
+                action.copy(label = "Add transaction")
+            } else action
+        },
         views = listOf(
             ViewSpec(
                 id = NATIVE_BUDGET_DASHBOARD_VIEW_ID,
