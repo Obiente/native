@@ -8,7 +8,7 @@ device: Mobile
 platforms: Android
 durationMinutes: 8
 difficulty: Getting started
-lastUpdated: 2026-08-09
+lastUpdated: 2026-08-12
 captureScenarios: guide-android-getting-started-home, guide-android-getting-started-files, guide-android-getting-started-calendar
 prerequisites: Android 8.0 or newer, Your Nextcloud server address and sign-in details, A current signed APK from the GitHub Releases page
 ---
@@ -43,3 +43,5 @@ Nextcloud Native also appears in Android's system Files app while the account is
 Open **Settings** and review **Device features**. Grant only permissions needed for the workflow you choose. Notifications, files and media, or media-library access can remain unavailable until a feature requests them. If Android reports a permission as blocked, use the Settings action to review it in the operating system.
 
 Return to the app list and open a workspace such as Calendar, Photos, Talk, or Notes. Support varies by installed server app and version: some surfaces are complete, while adaptive or read-heavy views may expose fewer actions. The app should explain unsupported behavior rather than opening the server's web interface. Use Android system Back to leave nested content and return to the previous workspace state.
+
+If you need to report a failure, open **Settings**, then **Diagnostics**. You can add reproduction steps and explicitly share a bounded, anonymized support report. The report stays local until you choose to share it; review it before sending it anywhere.

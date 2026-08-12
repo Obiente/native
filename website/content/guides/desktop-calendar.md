@@ -8,7 +8,7 @@ device: Desktop
 platforms: Linux, Windows
 durationMinutes: 8
 difficulty: Everyday
-lastUpdated: 2026-08-09
+lastUpdated: 2026-08-12
 captureScenarios: guide-desktop-calendar-month, guide-desktop-calendar-sources, guide-desktop-calendar-edit
 prerequisites: A connected Linux or Windows account, Calendar installed on Nextcloud, At least one CalDAV calendar
 ---

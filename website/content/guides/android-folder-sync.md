@@ -8,7 +8,7 @@ device: Mobile
 platforms: Android
 durationMinutes: 10
 difficulty: Advanced
-lastUpdated: 2026-08-09
+lastUpdated: 2026-08-12
 captureScenarios: guide-android-folder-sync-locations, guide-android-folder-sync-rules, guide-android-folder-sync-status
 prerequisites: A connected Android account, A device folder you can safely test, Enough local and server storage for the first scan
 ---

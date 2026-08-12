@@ -8,7 +8,7 @@ device: Desktop
 platforms: Linux
 durationMinutes: 10
 difficulty: Advanced
-lastUpdated: 2026-08-09
+lastUpdated: 2026-08-12
 captureScenarios: guide-linux-folder-sync-workspace, guide-linux-folder-sync-locations, guide-linux-folder-sync-rules
 prerequisites: A connected Linux account, A local directory you can safely test, Enough local and Nextcloud storage for the first scan
 ---
@@ -24,7 +24,9 @@ Linux folder sync keeps a normal local directory connected to one Nextcloud dire
 
 Open **Folder sync** from the sidebar. Existing pairs show their local and Nextcloud roots, direction, queued work, and last run. Select a pair to inspect its configuration and attention states. The desktop service checks configured pairs about every two minutes while the process is active, and **Sync now** remains available for an immediate requested run.
 
-Start-on-login is enabled by default and can be changed in Settings. If it is disabled, background checks do not begin until you launch Nextcloud Native. A stale last-run time, paused state, offline network, or visible failure needs attention even when the local files still look normal.
+Closing the main window keeps sync active in the tray by default. Use **Show sync activity** to inspect work, **Open Nextcloud Native** to restore the window, or **Quit** to stop the app and release its services cleanly. You can disable **Keep running when the window closes** in Settings if closing the window should quit instead.
+
+Start-on-login is separate and is disabled until you enable it. Without it, background checks do not begin until you launch Nextcloud Native after signing in to the computer. A stale last-run time, paused state, offline network, or visible failure needs attention even when the local files still look normal.
 
 ## 2. Map a local directory to the intended Nextcloud folder
 

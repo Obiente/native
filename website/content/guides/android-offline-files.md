@@ -8,7 +8,7 @@ device: Mobile
 platforms: Android
 durationMinutes: 8
 difficulty: Everyday
-lastUpdated: 2026-08-09
+lastUpdated: 2026-08-12
 captureScenarios: guide-android-offline-files-browse, guide-android-offline-files-storage, guide-android-offline-files-transfers
 prerequisites: A connected Android account, Files already stored in Nextcloud, Enough free device storage for the originals you select
 ---

@@ -8,7 +8,7 @@ device: Desktop
 platforms: Windows
 durationMinutes: 9
 difficulty: Advanced
-lastUpdated: 2026-08-09
+lastUpdated: 2026-08-12
 captureScenarios: guide-windows-cloud-files-settings, guide-windows-cloud-files-storage, guide-windows-cloud-files-recovery
 prerequisites: A connected Windows x86-64 alpha installation, A disposable test folder in Nextcloud, Enough local storage to hydrate the files you open
 ---
@@ -24,7 +24,7 @@ On Windows, Nextcloud Native integrates with the Cloud Files API so remote conte
 
 Open **Settings**, choose **Sync & storage**, then open **Virtual files**. Activate the system provider if it is not already active. When registration succeeds, the location is reported as **Nextcloud Native in File Explorer**. The root is account-scoped, and signing out disconnects the provider for that account.
 
-If activation fails, keep the failure message and retry only after checking that the app is the current installed version. Do not manually delete a registered sync root or copy provider metadata between accounts. Recovery code handles stale registrations and legacy roots so that a new provider does not silently reuse the wrong identity.
+If activation fails, keep the failure message and retry only after checking that the app is the current installed version. Do not manually delete a registered sync root or copy provider metadata between accounts. Recovery handles stale registrations, legacy roots, and damaged Cloud Files metadata while preserving the existing local root and its data.
 
 ## 2. Open placeholders, keep content local, or free eligible space
 
@@ -42,4 +42,4 @@ Windows can dehydrate in-sync placeholders when space is needed. **Free up space
 
 When a desktop application edits a hydrated file, Nextcloud Native stages the local generation and writes it back with the expected remote identity. If Nextcloud changed first, the provider retains the local edit and marks a conflict instead of overwriting the server version. Failed writebacks use bounded retries and remain visible when manual attention is required.
 
-Do not repeatedly rename, move, or reopen an item while its result is unknown. Keep the app installed and signed in so recovery can reconcile pending work. Before uninstalling or removing an account, confirm that no pending or failed writebacks remain. The Windows MSI is currently unsigned, but disabling SmartScreen or Defender is never part of Cloud Files troubleshooting.
+Do not repeatedly rename, move, or reopen an item while its result is unknown. Keep the app installed and signed in so recovery can reconcile pending work. Current recovery serializes competing File Explorer population requests and protects placeholder updates from concurrent access; retry from the visible failure instead of deleting the sync root. Before uninstalling or removing an account, confirm that no pending or failed writebacks remain. The Windows MSI is currently unsigned, but disabling SmartScreen or Defender is never part of Cloud Files troubleshooting.

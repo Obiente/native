@@ -8,7 +8,7 @@ device: Desktop
 platforms: Linux, Windows
 durationMinutes: 9
 difficulty: Getting started
-lastUpdated: 2026-08-09
+lastUpdated: 2026-08-12
 captureScenarios: guide-desktop-getting-started-home, guide-desktop-getting-started-apps, guide-desktop-getting-started-settings
 prerequisites: A supported x86-64 Linux or Windows computer, Your Nextcloud server address and sign-in details, The package and release notes for the current alpha
 ---
@@ -42,4 +42,6 @@ Desktop layouts may use multiple panes, selection, context menus, and denser con
 
 Open **Settings** to choose the theme, review the connected server, configure start-on-login, inspect update options, and enter **Sync & storage**. Linux supports normal folder pairs and a filesystem mount. Windows provides Cloud Files placeholders in File Explorer. These integrations share safety rules but are not interchangeable, so follow the Linux folder-sync or Windows Cloud Files guide for exact behavior.
 
-Start-on-login is enabled by default in the current desktop implementation and can be changed in Settings. Background folder-pair checks run while the desktop app process is active; start-on-login helps resume that lifecycle after signing into the computer. Before relying on any pair, review its direction, deletion policy, conflicts, and latest successful run.
+**Keep running when the window closes** is enabled by default. Closing the window therefore keeps sync and virtual files active in the tray; use **Open Nextcloud Native** to restore the window, **Show sync activity** to inspect work, or **Quit** to stop the app cleanly. Start-on-login is a separate setting and is disabled until you enable it. Background folder-pair checks run while the desktop process is active.
+
+Before relying on any pair, review its direction, deletion policy, conflicts, and latest successful run. If you need to report a failure, open **Settings**, then **Diagnostics** to add reproduction steps and export a bounded, anonymized report. Nothing is uploaded automatically, so review the saved report before sharing it.

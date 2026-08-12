@@ -8,7 +8,7 @@ device: Mobile
 platforms: Android
 durationMinutes: 9
 difficulty: Everyday
-lastUpdated: 2026-08-09
+lastUpdated: 2026-08-12
 captureScenarios: guide-android-photo-backup-folders, guide-android-photo-backup-queue, guide-android-photo-backup-library
 prerequisites: Android photo and video permission, Enough Nextcloud storage for selected media, An independent backup for irreplaceable originals
 ---

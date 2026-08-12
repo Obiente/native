@@ -8,7 +8,7 @@ device: Mobile
 platforms: Android
 durationMinutes: 8
 difficulty: Everyday
-lastUpdated: 2026-08-09
+lastUpdated: 2026-08-12
 captureScenarios: guide-android-calendar-month, guide-android-calendar-agenda, guide-android-calendar-edit
 prerequisites: Calendar installed on the connected Nextcloud server, At least one CalDAV calendar, Write permission for creating or changing events
 ---

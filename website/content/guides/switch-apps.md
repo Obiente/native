@@ -8,7 +8,7 @@ device: Desktop
 platforms: Linux, Windows
 durationMinutes: 5
 difficulty: Getting started
-lastUpdated: 2026-08-09
+lastUpdated: 2026-08-12
 captureScenarios: guide-desktop-switch-apps-catalog, guide-desktop-switch-apps-sidebar, guide-desktop-switch-apps-nested
 prerequisites: A connected Linux or Windows account with more than one installed Nextcloud app
 ---
