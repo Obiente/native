@@ -1177,6 +1177,7 @@ internal fun FileSyncSetupSurface(
     onAdd: () -> Unit,
     modifier: Modifier = Modifier,
     initialStep: FileSyncSetupStep = FileSyncSetupStep.Locations,
+    initialAdvancedSettingsVisible: Boolean = false,
     syntheticScopeSummary: String? = null,
 ) {
     var stepName by rememberSaveable(localRoot.localRootId, initialStep.name) {
@@ -1217,6 +1218,7 @@ internal fun FileSyncSetupSurface(
                                 onChooseDestination = onChooseDestination,
                                 onChooseSelectedPaths = onChooseSelectedPaths,
                                 onConfigurationChanged = onConfigurationChanged,
+                                initialAdvancedSettingsVisible = initialAdvancedSettingsVisible,
                                 syntheticScopeSummary = syntheticScopeSummary,
                                 modifier = Modifier.weight(1f),
                             )
@@ -1238,6 +1240,7 @@ internal fun FileSyncSetupSurface(
                             onChooseDestination = onChooseDestination,
                             onChooseSelectedPaths = onChooseSelectedPaths,
                             onConfigurationChanged = onConfigurationChanged,
+                            initialAdvancedSettingsVisible = initialAdvancedSettingsVisible,
                             syntheticScopeSummary = syntheticScopeSummary,
                             modifier = Modifier.weight(1f),
                         )
@@ -1360,6 +1363,7 @@ private fun FileSyncStepContent(
     onChooseDestination: () -> Unit,
     onChooseSelectedPaths: () -> Unit,
     onConfigurationChanged: (FileSyncConfiguration) -> Unit,
+    initialAdvancedSettingsVisible: Boolean,
     syntheticScopeSummary: String?,
     modifier: Modifier = Modifier,
 ) {
@@ -1394,6 +1398,7 @@ private fun FileSyncStepContent(
                 remotePath = remotePath,
                 configuration = configuration,
                 onConfigurationChanged = onConfigurationChanged,
+                initialAdvancedSettingsVisible = initialAdvancedSettingsVisible,
                 syntheticScopeSummary = syntheticScopeSummary,
             )
         }
@@ -1521,9 +1526,12 @@ private fun FileSyncReviewStep(
     remotePath: String,
     configuration: FileSyncConfiguration,
     onConfigurationChanged: (FileSyncConfiguration) -> Unit,
+    initialAdvancedSettingsVisible: Boolean,
     syntheticScopeSummary: String?,
 ) {
-    var advancedVisible by rememberSaveable { mutableStateOf(false) }
+    var advancedVisible by rememberSaveable(initialAdvancedSettingsVisible) {
+        mutableStateOf(initialAdvancedSettingsVisible)
+    }
     FileSyncStepIntro("Review and start safely", "The first scan creates a plan. Conflicts and deletions still require your chosen policy.")
     FileSyncReviewRow("This device", localRoot.displayName)
     FileSyncReviewRow("Nextcloud", if (remotePath.isBlank()) "Files root" else "/$remotePath")

@@ -9,6 +9,23 @@ Project updates live in `content/news/`. Each Markdown file has strict
 frontmatter and becomes a prerendered article, search result, sitemap entry,
 structured-data article, and RSS item.
 
+## Platform guides
+
+Task guides live in `content/guides/` and are published under a platform path,
+for example `/guides/android/offline-files/` or
+`/guides/windows/cloud-files/`. Every guide declares one primary platform and
+one device class. Shared desktop guides may list both Linux and Windows, but a
+guide must split when installation, credential storage, filesystem behavior,
+permissions, scheduling, or recovery differs between operating systems.
+
+Guide claims must describe the current implementation, not a roadmap target.
+Each step names a deterministic `guide-*` capture scenario rendered from the
+real Compose UI with synthetic data. The Android, desktop, Linux, and Windows
+hub pages are prerendered, canonical, included in the sitemap, and link to the
+matching guides. macOS and iOS remain availability statements until supported
+authenticated products exist; do not manufacture setup instructions for an
+artifact that cannot complete the workflow.
+
 ## Local development
 
 ```bash

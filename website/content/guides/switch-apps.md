@@ -1,19 +1,21 @@
 ---
 title: Move between Nextcloud apps without losing your place
 slug: switch-apps
-description: Find installed apps, pin everyday tools, and switch between nested workspaces while each app remembers its own route and interface state.
+description: Use the Linux and Windows app catalog, pinned and recent desktop shortcuts, and per-app navigation memory while respecting native support boundaries.
 category: Workspace
-platforms: Desktop
+platform: Desktop
+device: Desktop
+platforms: Linux, Windows
 durationMinutes: 5
 difficulty: Getting started
-lastUpdated: 2026-08-03
-captureScenarios: guide-switch-apps-catalog, guide-switch-apps-sidebar, guide-switch-apps-nested
-prerequisites: A connected account with more than one installed Nextcloud app
+lastUpdated: 2026-08-12
+captureScenarios: guide-desktop-switch-apps-catalog, guide-desktop-switch-apps-sidebar, guide-desktop-switch-apps-nested
+prerequisites: A connected Linux or Windows account with more than one installed Nextcloud app
 ---
 
 # Move between Nextcloud apps without losing your place
 
-Nextcloud Native is designed as one workspace for the complete account. The desktop sidebar stays useful inside apps, and each app remembers its own route and saveable interface state so comparing work across tools does not require starting over.
+Nextcloud Native is designed as one workspace for the apps it can currently discover and render from a connected account. On Linux and Windows, the desktop sidebar stays useful inside apps, and each app remembers supported route and saveable interface state so comparing work across tools does not require starting over. macOS authenticated use is not supported yet.
 
 ## 1. Discover the complete app catalog
 
@@ -29,9 +31,9 @@ Open a tool to add it to recent work. Everyday apps such as Files, Photos, Talk,
 @capture-alt: Photos folder workspace nested inside Nextcloud Native with Photos selected and Files, Talk, Calendar, and recent Deck shortcuts still visible
 @capture-caption: The global sidebar remains available inside Photos, so another app can open directly without discarding the current folder state.
 
-Open a folder, conversation, board, or calendar view, then choose another pinned or recent app in the sidebar. The selected app changes in place while the account, sync status, and global destinations remain visible. Keyboard users can use the documented workspace shortcuts for Overview, Folder sync, Activity, Apps, and Settings.
+Open a folder, conversation, board, or calendar view, then choose another pinned or recent app in the sidebar. The selected app changes in place while the account, sync status, and global destinations remain visible. The current implementation does not define a complete global keyboard-shortcut set, so use the sidebar or normal focus navigation instead of relying on undocumented key combinations.
 
-Return to the first app. Its last serialized route and saveable UI state are restored independently, including nested folders, selected records, scroll position, and supported input state. Account-scoped memory prevents routes from one Nextcloud account appearing in another.
+Return to the first app. The app restores the last bounded route it knows how to serialize, including supported nested resource identity. Screen-local details such as every scroll offset or transient input are not a blanket guarantee. Navigation memory is keyed with the active account so a saved route from one account is not reused as another account's resource context.
 
 ## 3. Work inside a discovered native app
 

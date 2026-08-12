@@ -6,6 +6,13 @@ import kotlin.test.assertFalse
 
 class CalendarWorkspacePresentationTest {
     @Test
+    fun `recurrence rules are presented as user facing schedules`() {
+        assertEquals("Weekly on Monday", calendarRecurrenceDescription("FREQ=WEEKLY;BYDAY=MO"))
+        assertEquals("Every 2 weeks on Monday, Wednesday", calendarRecurrenceDescription("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE"))
+        assertEquals("Custom recurrence", calendarRecurrenceDescription("FREQ=YEARLY"))
+    }
+
+    @Test
     fun `calendar selection and search filter the same event model`() {
         val personal = calendar("personal", "Personal")
         val team = calendar("team", "Team")

@@ -252,11 +252,14 @@ const guides = await Promise.all(
     const firstStep = steps[0];
     return {
       file,
-      path: `/guides/${parsed.metadata.slug}/`,
+      path: `/guides/${parsed.metadata.platformSlug}/${parsed.metadata.slug}/`,
       title: parsed.metadata.title,
       shortTitle: parsed.metadata.title,
       description: parsed.metadata.description,
       category: parsed.metadata.category,
+      platform: parsed.metadata.platform,
+      platformSlug: parsed.metadata.platformSlug,
+      device: parsed.metadata.device,
       platforms: parsed.metadata.platforms,
       durationMinutes: parsed.metadata.durationMinutes,
       difficulty: parsed.metadata.difficulty,

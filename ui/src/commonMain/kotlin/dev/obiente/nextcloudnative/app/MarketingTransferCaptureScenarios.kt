@@ -155,6 +155,36 @@ internal fun marketingMediaTransferFixture(
         ),
     )
 
+    MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary -> MarketingMediaTransferFixture(
+        state = marketingTransferState(
+            section = MediaTransferSection.Completed,
+            summary = marketingTransferSummary,
+            records = listOf(
+                marketingTransferRecord(
+                    state = MediaBackupTransferState.Succeeded,
+                    index = 11,
+                    displayName = "Camera-20260812-0915.jpg",
+                    size = 7_340_032,
+                    attempts = 1,
+                ),
+                marketingTransferRecord(
+                    state = MediaBackupTransferState.Succeeded,
+                    index = 12,
+                    displayName = "Camera-20260812-0902.mp4",
+                    size = 82_621_440,
+                    attempts = 1,
+                ),
+                marketingTransferRecord(
+                    state = MediaBackupTransferState.Succeeded,
+                    index = 13,
+                    displayName = "Camera-20260811-1840.jpg",
+                    size = 5_735_296,
+                    attempts = 1,
+                ),
+            ),
+        ),
+    )
+
     else -> error("${scenario.id} is not a media transfer capture scenario.")
 }
 
