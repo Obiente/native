@@ -24,6 +24,8 @@ private const val ERROR_CLOUD_FILE_METADATA_CORRUPT = 363
 private const val CF_PLACEHOLDER_STATE_PLACEHOLDER = 0x1
 private const val CF_PLACEHOLDER_STATE_IN_SYNC = 0x8
 private const val CF_PLACEHOLDER_STATE_INVALID = -1
+private const val CF_OPEN_FILE_FLAG_EXCLUSIVE = 0x1
+private const val CF_OPEN_FILE_FLAG_WRITE_ACCESS = 0x2
 
 internal fun windowsCloudPlaceholderDiagnosticSampleSize(availableCount: Int): Int {
     require(availableCount >= 0)
@@ -41,6 +43,10 @@ internal fun windowsCloudFailedPlaceholderIndex(
         ?: processedCount.takeIf { it in 0 until placeholderCount }
         ?: (processedCount - 1).takeIf { it in 0 until placeholderCount }
 }
+
+internal fun windowsCloudOpenFileFlags(write: Boolean, exclusive: Boolean): Int =
+    (if (write) CF_OPEN_FILE_FLAG_WRITE_ACCESS else 0) or
+        (if (exclusive) CF_OPEN_FILE_FLAG_EXCLUSIVE else 0)
 
 internal fun windowsCloudPlaceholderInspection(
     findSucceeded: Boolean,
@@ -475,7 +481,7 @@ internal class JnaWindowsCloudFilesApi(
         preserveSyncState: Boolean,
     ) {
         require(!invalidateContent || !preserveSyncState)
-        withFileHandle(path, write = true, exclusive = invalidateContent) { handle ->
+        withCloudFileHandle(path, write = true, exclusive = invalidateContent) { handle ->
             val metadata = placeholder.windowsMetadata(fallbackEpochMillis = null)
             val identity = placeholder.identity.nativeMemory()
             val flags = if (preserveSyncState) {
@@ -652,6 +658,29 @@ internal class JnaWindowsCloudFilesApi(
             block(handle)
         } finally {
             Kernel32.INSTANCE.CloseHandle(handle)
+        }
+    }
+
+    /**
+     * Cloud Files updates use a protected handle so Explorer can break the oplock cleanly instead
+     * of racing a background CreateFile call with a transient sharing violation.
+     */
+    private inline fun <T> withCloudFileHandle(
+        path: Path,
+        write: Boolean,
+        exclusive: Boolean = false,
+        block: (WinNT.HANDLE) -> T,
+    ): T {
+        val handle = WinNT.HANDLEByReference()
+        val flags = windowsCloudOpenFileFlags(write, exclusive)
+        checkHResult(
+            cldApi.CfOpenFileWithOplock(WString(path.toAbsolutePath().toString()), flags, handle),
+            "open a Windows Cloud Files placeholder for update",
+        )
+        return try {
+            block(handle.value)
+        } finally {
+            cldApi.CfCloseHandle(handle.value)
         }
     }
 
@@ -850,6 +879,8 @@ internal interface CldApi : StdCallLibrary {
     fun CfCreatePlaceholders(path: WString, placeholders: Pointer?, count: Int, flags: Int, processed: IntByReference): Int
     fun CfExecute(operationInfo: Pointer, operationParameters: Pointer): Int
     fun CfGetPlaceholderStateFromFindData(findData: Pointer): Int
+    fun CfOpenFileWithOplock(path: WString, flags: Int, protectedHandle: WinNT.HANDLEByReference): Int
+    fun CfCloseHandle(protectedHandle: WinNT.HANDLE)
     fun CfGetPlaceholderInfo(
         handle: WinNT.HANDLE,
         infoClass: Int,
