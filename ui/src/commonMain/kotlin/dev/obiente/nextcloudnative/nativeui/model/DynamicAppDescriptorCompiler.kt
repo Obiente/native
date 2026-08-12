@@ -847,7 +847,7 @@ private class KotlinCompilerState(
         val (boundPath, pathParameters) = normalizeCollectionParentIdentifier(
             defaultBoundPath,
             defaultPathParameters,
-            collection && method == HttpMethod.GET,
+            collection,
         )
         val body = declaredBody
         (body?.schema as? JsonObject)?.let { bodySchema ->
