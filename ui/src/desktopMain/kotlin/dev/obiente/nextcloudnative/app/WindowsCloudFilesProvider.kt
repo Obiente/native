@@ -812,11 +812,13 @@ internal class WindowsCloudFilesProvider(
         submitDestructiveCallback(
             onRejected = { api.acknowledgeDelete(info, false) },
         ) {
-            val accepted = runCatching {
-                val identity = requireIdentity(info, expectDirectory = null)
-                backend.delete(identity)
-                knownIdentities.remove(identity.path)
-            }.isSuccess
+            val accepted = synchronized(namespaceMutationLock) {
+                runCatching {
+                    val identity = requireIdentity(info, expectDirectory = null)
+                    backend.delete(identity)
+                    knownIdentities.remove(identity.path)
+                }.isSuccess
+            }
             api.acknowledgeDelete(info, accepted)
         }
     }
@@ -1406,6 +1408,41 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun retryUnchangedDirectoryRefresh(
+        localPath: Path,
+        identity: WindowsCloudFileIdentity,
+        attempt: Int,
+    ) {
+        synchronized(namespaceMutationLock) {
+            if (callbacksPaused.get()) return
+            val inspection = api.inspectPlaceholder(localPath)
+            val currentIdentity = if (
+                inspection.state == WindowsCloudPlaceholderEntryState.InSync &&
+                inspection.placeholderState == WindowsCloudPlaceholderState.InSync
+            ) {
+                api.placeholderIdentity(localPath)
+                    ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
+            } else {
+                null
+            }
+            if (currentIdentity != identity) {
+                recordPlaceholderDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    operation = "cloud-files.placeholder-update",
+                    outcome = "unchanged-refresh-abandoned",
+                    localDirectory = localPath.parent ?: root,
+                    identity = identity,
+                    fields = inspection.diagnosticFields() + listOf(
+                        SupportDiagnosticFieldDraft("attempt", attempt.toString()),
+                        SupportDiagnosticFieldDraft("identity_matches", (currentIdentity == identity).toString()),
+                    ),
+                )
+                return
+            }
+            retryVerifiedUnchangedDirectoryRefresh(localPath, identity, attempt)
+        }
+    }
+
+    private fun retryVerifiedUnchangedDirectoryRefresh(
         localPath: Path,
         identity: WindowsCloudFileIdentity,
         attempt: Int,

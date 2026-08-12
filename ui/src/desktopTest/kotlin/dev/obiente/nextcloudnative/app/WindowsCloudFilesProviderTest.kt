@@ -1553,6 +1553,49 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun `startup abandons a delayed directory refresh when the path identity changed`() {
+        val root = createTempDirectory("windows-cloud-unchanged-directory-replaced-")
+        val local = root.resolve("Photos")
+        local.toFile().mkdirs()
+        val original = fixtureIdentity(size = 0L).copy(path = "Photos", directory = true)
+        val replacement = original.copy(remoteRevision = "replacement-revision")
+        val failure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x80070179.toInt(),
+        )
+        val diagnostics = CopyOnWriteArrayList<SupportDiagnosticEventDraft>()
+        val backend = FakeBackend(ByteArray(0), listed = listOf(original))
+        val api = FakeApi(expectedPlaceholderUpdates = 1).apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, original)
+            updatePlaceholderFailure = failure
+            updatePlaceholderFailuresRemaining = 1
+            onUpdatePlaceholderFailure = {
+                seed(local, WindowsCloudPlaceholderState.InSync, replacement)
+            }
+        }
+        val provider = WindowsCloudFilesProvider(
+            root,
+            backend,
+            api,
+            directoryRefreshRetryDelayMillis = { 0L },
+            recordDiagnostic = diagnostics::add,
+        )
+
+        provider.start()
+
+        assertTrue(api.awaitPlaceholderUpdates())
+        val abandonedDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (diagnostics.none { it.outcome == "unchanged-refresh-abandoned" } && System.nanoTime() < abandonedDeadline) {
+            Thread.yield()
+        }
+        assertEquals(1, api.updatedPaths.size)
+        assertEquals(replacement, api.decodedIdentity(local))
+        val abandoned = diagnostics.single { it.outcome == "unchanged-refresh-abandoned" }
+        assertEquals("false", abandoned.fields.single { it.name == "identity_matches" }.value)
+        provider.close()
+    }
+
+    @Test
     fun `startup fails closed and records the HRESULT when a changed placeholder update is rejected`() {
         val root = createTempDirectory("windows-cloud-changed-update-failure-")
         val local = root.resolve("example.raf")
@@ -1807,7 +1850,7 @@ class WindowsCloudFilesProviderTest {
         backend.uploadFailuresRemaining = 0
         provider.closed(info, deleted = false)
 
-        assertTrue(api.awaitConversions())
+        assertTrue(api.awaitConversions(TimeUnit.SECONDS.toMillis(15)))
         val recoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         while (provider.summary().pendingWritebackCount != 0 && System.nanoTime() < recoveryDeadline) {
             Thread.yield()
@@ -2008,6 +2051,7 @@ class WindowsCloudFilesProviderTest {
         var createPlaceholdersHook: ((Path, List<WindowsCloudPlaceholder>) -> Unit)? = null
         var updatePlaceholderFailure: WindowsCloudFilesOperationException? = null
         var updatePlaceholderFailuresRemaining: Int = Int.MAX_VALUE
+        var onUpdatePlaceholderFailure: (() -> Unit)? = null
         var closed = false
         val lifecycleEvents = mutableListOf<String>()
 
@@ -2083,6 +2127,7 @@ class WindowsCloudFilesProviderTest {
                 updatePlaceholderFailure?.let { failure ->
                     if (updatePlaceholderFailuresRemaining > 0) {
                         updatePlaceholderFailuresRemaining -= 1
+                        onUpdatePlaceholderFailure?.invoke()
                         throw failure
                     }
                 }
@@ -2106,7 +2151,8 @@ class WindowsCloudFilesProviderTest {
         }
 
         fun awaitTransfers(): Boolean = transferLatch.await(5, TimeUnit.SECONDS)
-        fun awaitConversions(): Boolean = conversionLatch.await(5, TimeUnit.SECONDS)
+        fun awaitConversions(timeoutMillis: Long = TimeUnit.SECONDS.toMillis(5)): Boolean =
+            conversionLatch.await(timeoutMillis, TimeUnit.MILLISECONDS)
         fun awaitRenames(): Boolean = renameLatch.await(5, TimeUnit.SECONDS)
         fun awaitIdentityReads(): Boolean = identityReadLatch.await(5, TimeUnit.SECONDS)
         fun awaitPlaceholderFetches(timeoutMillis: Long = TimeUnit.SECONDS.toMillis(5)): Boolean =
