@@ -35,7 +35,7 @@ fun buildFileSearchDavRequest(
             <d:select><d:prop>
               <d:displayname/><d:getcontenttype/><d:getlastmodified/><d:getcontentlength/><d:getetag/>
               <d:resourcetype/><oc:fileid/><oc:size/><oc:permissions/><oc:favorite/>
-              <oc:owner-id/><oc:owner-display-name/><oc:comments-unread/><nc:has-preview/>
+              <oc:owner-id/><oc:owner-display-name/><nc:has-preview/>
             </d:prop></d:select>
             <d:from><d:scope><d:href>$scope</d:href><d:depth>infinity</d:depth></d:scope></d:from>
             <d:where><d:or>
