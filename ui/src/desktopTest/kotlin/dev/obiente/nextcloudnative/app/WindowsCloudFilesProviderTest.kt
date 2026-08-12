@@ -1633,6 +1633,134 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun `delayed directory refresh preserves the root when retry inspection reveals corruption`() {
+        val root = createTempDirectory("windows-cloud-retry-inspection-corrupt-root-")
+        val local = root.resolve("Photos").createDirectory()
+        val identity = fixtureIdentity(size = 0L).copy(path = "Photos", directory = true)
+        val ordinaryFailure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x80070179.toInt(),
+        )
+        val inSync = WindowsCloudPlaceholderInspection(WindowsCloudPlaceholderEntryState.InSync)
+        val corrupt = WindowsCloudPlaceholderInspection(
+            WindowsCloudPlaceholderEntryState.Corrupt,
+            win32Error = WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT,
+        )
+        val diagnostics = CopyOnWriteArrayList<SupportDiagnosticEventDraft>()
+        val preserved = root.resolveSibling("preserved-retry-inspection-corrupt-root")
+        val api = FakeApi(expectedPlaceholderUpdates = 1).apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, identity)
+            queueInspections(local, inSync, corrupt)
+            scriptUpdatePlaceholderFailures(local, ordinaryFailure)
+        }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0), listed = listOf(identity)),
+            api = api,
+            directoryRefreshRetryDelayMillis = { 0L },
+            recordDiagnostic = diagnostics::add,
+            preserveCorruptRoot = { current ->
+                api.seedState(local, WindowsCloudPlaceholderState.Absent)
+                Files.move(current, preserved)
+            },
+        )
+
+        try {
+            provider.start()
+            assertTrue(api.awaitPlaceholderUpdates())
+            val recoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (
+                diagnostics.none { it.outcome == "corrupt-root-recovered" } &&
+                System.nanoTime() < recoveryDeadline
+            ) {
+                Thread.yield()
+            }
+            assertTrue(diagnostics.any { it.outcome == "corrupt-entry-detected" })
+            assertTrue(diagnostics.any { it.outcome == "corrupt-root-recovered" })
+            assertEquals(preserved, provider.preservedRecoveryRoot)
+            assertEquals(1, api.updatedPaths.size)
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `corrupt placeholder update after writeback rebuilds without replaying the upload`() {
+        val root = createTempDirectory("windows-cloud-writeback-update-corrupt-")
+        val localBytes = "locally edited once".encodeToByteArray()
+        val local = root.resolve("edit.txt")
+        local.writeBytes(localBytes)
+        val identity = WindowsCloudFileIdentity(
+            "account-01",
+            "edit.txt",
+            "\"etag-01\"",
+            localBytes.size.toLong(),
+            false,
+        )
+        val corruptFailure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x8007016B.toInt(),
+        )
+        val diagnostics = CopyOnWriteArrayList<SupportDiagnosticEventDraft>()
+        val preserved = root.resolveSibling("preserved-writeback-update-corrupt")
+        val backend = FakeBackend(
+            source = "remote".encodeToByteArray(),
+            listed = listOf(identity),
+            expectedUploads = 1,
+        )
+        val api = FakeApi(expectedPlaceholderUpdates = 1).apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, identity)
+        }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = backend,
+            api = api,
+            recordDiagnostic = diagnostics::add,
+            preserveCorruptRoot = { current ->
+                api.updatePlaceholderFailure = null
+                api.seedState(local, WindowsCloudPlaceholderState.Absent)
+                Files.move(current, preserved)
+            },
+        )
+
+        try {
+            provider.start()
+            provider.recoverAfterStartup(timeoutSeconds = 5L)
+            api.seed(local, WindowsCloudPlaceholderState.Dirty, identity)
+            api.updatePlaceholderFailure = corruptFailure
+            provider.closed(
+                callbackInfo(root, identity).copy(normalizedPath = local.toString()),
+                deleted = false,
+            )
+
+            assertTrue(backend.awaitUploads())
+            assertTrue(api.awaitPlaceholderUpdates())
+            val recoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (
+                diagnostics.none { it.outcome == "corrupt-root-recovered" } &&
+                System.nanoTime() < recoveryDeadline
+            ) {
+                Thread.yield()
+            }
+            assertTrue(diagnostics.any { event ->
+                event.outcome == "corrupt-metadata-detected" &&
+                    event.fields.any { it.name == "remote_mutation_completed" && it.value == "true" }
+            })
+            assertTrue(diagnostics.any { it.outcome == "corrupt-root-recovered" })
+            assertEquals(listOf<String?>("\"etag-01\""), backend.uploadExpectedRevisions)
+            assertEquals(1, backend.uploadedBytes.size)
+            assertContentEquals(localBytes, preserved.resolve("edit.txt").toFile().readBytes())
+            assertEquals(preserved, provider.preservedRecoveryRoot)
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `concurrent corrupt directory retries preserve the root only once`() {
         val root = createTempDirectory("windows-cloud-concurrent-corrupt-root-")
         root.resolve("local-note.txt").writeBytes("keep me".encodeToByteArray())

@@ -962,8 +962,9 @@ internal class WindowsCloudFilesProvider(
                     ?: identity
                 val uploaded = backend.upload(identity.path, localPath.toFile(), current.remoteRevision)
                 knownIdentities[uploaded.path] = uploaded
-                api.updatePlaceholder(localPath, placeholder(uploaded))
-                api.markInSync(localPath)
+                if (updatePlaceholderAfterRemoteMutation(localPath, uploaded)) {
+                    api.markInSync(localPath)
+                }
             }
         }
     }
@@ -998,8 +999,15 @@ internal class WindowsCloudFilesProvider(
                     val moved = backend.move(identity, destination)
                     knownIdentities.remove(identity.path)
                     knownIdentities[moved.path] = moved
-                    api.updatePlaceholder(destinationPath, placeholder(moved), preserveSyncState = true)
-                    if (identity.directory) rebindMovedDescendants(identity, moved, destinationPath)
+                    if (
+                        updatePlaceholderAfterRemoteMutation(
+                            destinationPath,
+                            moved,
+                            preserveSyncState = true,
+                        ) && identity.directory
+                    ) {
+                        rebindMovedDescendants(identity, moved, destinationPath)
+                    }
                 }.isSuccess
             }
             api.acknowledgeRename(info, accepted)
@@ -1624,6 +1632,12 @@ internal class WindowsCloudFilesProvider(
             if (callbacksPaused.get()) return
             val recoveryGeneration = corruptRootRecoveryGeneration.get()
             val inspection = api.inspectPlaceholder(localPath)
+            if (inspection.state == WindowsCloudPlaceholderEntryState.Corrupt) {
+                return@synchronized WindowsCloudFilesDelayedCorruptRootRecovery(
+                    corruptPlaceholder(identity, localPath.parent ?: root, inspection),
+                    recoveryGeneration,
+                )
+            }
             val currentIdentity = if (
                 inspection.state == WindowsCloudPlaceholderEntryState.InSync &&
                 inspection.placeholderState == WindowsCloudPlaceholderState.InSync
@@ -1711,6 +1725,44 @@ internal class WindowsCloudFilesProvider(
         ),
         cause = failure,
     )
+
+    /**
+     * Commits a remote mutation to its existing placeholder. A corrupt CFAPI update cannot
+     * undo the already-completed server mutation, so finish the path operation and rebuild the
+     * root from the authoritative backend instead of replaying that mutation on retry.
+     */
+    private fun updatePlaceholderAfterRemoteMutation(
+        localPath: Path,
+        identity: WindowsCloudFileIdentity,
+        preserveSyncState: Boolean = false,
+    ): Boolean {
+        try {
+            api.updatePlaceholder(
+                localPath,
+                placeholder(identity),
+                preserveSyncState = preserveSyncState,
+            )
+            return true
+        } catch (failure: WindowsCloudFilesOperationException) {
+            if (!isWindowsCloudFilesPlaceholderMetadataCorruptResult(failure.hResult)) throw failure
+            recordPlaceholderDiagnostic(
+                severity = SupportDiagnosticSeverity.Error,
+                operation = "cloud-files.placeholder-update",
+                outcome = "corrupt-metadata-detected",
+                code = "HRESULT:0x${failure.hResult.toUInt().toString(16)}",
+                localDirectory = localPath.parent ?: root,
+                identity = identity,
+                fields = listOf(SupportDiagnosticFieldDraft("remote_mutation_completed", "true")),
+            )
+            scheduleCorruptRootRecoveryAfterStartup(
+                WindowsCloudFilesDelayedCorruptRootRecovery(
+                    corruptPlaceholderUpdate(localPath, identity, failure),
+                    corruptRootRecoveryGeneration.get(),
+                ),
+            )
+            return false
+        }
+    }
 
     private fun placeholderContentChanged(
         previous: WindowsCloudFileIdentity,
@@ -1985,8 +2037,9 @@ internal class WindowsCloudFilesProvider(
                         ) { "The dirty Windows placeholder identity is not safe to recover." }
                         val uploaded = backend.upload(current.path, local.toFile(), current.remoteRevision)
                         knownIdentities[uploaded.path] = uploaded
-                        api.updatePlaceholder(local, placeholder(uploaded))
-                        api.markInSync(local)
+                        if (updatePlaceholderAfterRemoteMutation(local, uploaded)) {
+                            api.markInSync(local)
+                        }
                     }
                 }
             }
@@ -2036,25 +2089,31 @@ internal class WindowsCloudFilesProvider(
     ) {
         if (!Files.isDirectory(localDirectory) || Files.isSymbolicLink(localDirectory)) return
         Files.walk(localDirectory).use { paths ->
-            paths.filter { path -> path != localDirectory && !Files.isSymbolicLink(path) }
-                .forEach { descendant ->
-                    val suffix = localDirectory.relativize(descendant).joinToString("/") { it.toString() }.windowsCloudPath()
-                    val expectedOriginalPath = "${originalDirectory.path}/$suffix"
-                    val previous = api.placeholderIdentity(descendant)
-                        ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
-                        ?.takeIf { identity ->
-                            identity.accountId == backend.accountId && identity.path == expectedOriginalPath
-                        }
-                        ?: return@forEach
-                    val rebound = previous.copy(path = "${movedDirectory.path}/$suffix")
-                    knownIdentities.remove(previous.path)
-                    knownIdentities[rebound.path] = rebound
-                    api.updatePlaceholder(
+            val descendants = paths.iterator()
+            while (descendants.hasNext()) {
+                val descendant = descendants.next()
+                if (descendant == localDirectory || Files.isSymbolicLink(descendant)) continue
+                val suffix = localDirectory.relativize(descendant).joinToString("/") { it.toString() }.windowsCloudPath()
+                val expectedOriginalPath = "${originalDirectory.path}/$suffix"
+                val previous = api.placeholderIdentity(descendant)
+                    ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
+                    ?.takeIf { identity ->
+                        identity.accountId == backend.accountId && identity.path == expectedOriginalPath
+                    }
+                    ?: continue
+                val rebound = previous.copy(path = "${movedDirectory.path}/$suffix")
+                knownIdentities.remove(previous.path)
+                knownIdentities[rebound.path] = rebound
+                if (
+                    !updatePlaceholderAfterRemoteMutation(
                         descendant,
-                        placeholder(rebound),
+                        rebound,
                         preserveSyncState = true,
                     )
+                ) {
+                    break
                 }
+            }
         }
     }
 
