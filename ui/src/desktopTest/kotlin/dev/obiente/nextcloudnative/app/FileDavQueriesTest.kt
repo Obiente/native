@@ -1,7 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class FileDavQueriesTest {
@@ -22,6 +24,17 @@ class FileDavQueriesTest {
         assertTrue("<d:displayname/>" in predicate)
         assertTrue("<d:getcontenttype/>" in predicate)
         assertFalse("<oc:owner-display-name/>" in predicate)
+        val selected = request.substringAfter("<d:select>").substringBefore("</d:select>")
+        assertFalse("<oc:comments-unread/>" in selected)
+    }
+
+    @Test
+    fun searchHttpFailureIdentifiesTheRejectedOperation() {
+        val failure = NextcloudFileSearchHttpException(400)
+
+        assertEquals(400, failure.status)
+        assertEquals("File search failed (HTTP 400).", failure.message)
+        assertFailsWith<IllegalArgumentException> { NextcloudFileSearchHttpException(207) }
     }
 
     @Test
