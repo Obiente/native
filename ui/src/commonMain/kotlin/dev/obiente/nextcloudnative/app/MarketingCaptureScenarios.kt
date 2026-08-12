@@ -842,7 +842,7 @@ internal fun MarketingCaptureScenario.guideCaptureSourceScenarioOrNull(): Market
         MarketingCaptureScenario.GuideDesktopGettingStartedSettings -> MarketingCaptureScenario.DesktopStartupSettings
         MarketingCaptureScenario.GuideAndroidOfflineFilesBrowse -> MarketingCaptureScenario.HomepageFilesMobileDark
         MarketingCaptureScenario.GuideAndroidOfflineFilesStorage -> MarketingCaptureScenario.VirtualFileStorageMobile
-        MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers -> MarketingCaptureScenario.TransferMobileFailed
+        MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers -> null
         MarketingCaptureScenario.GuideAndroidFolderSyncLocations,
         MarketingCaptureScenario.GuideAndroidFolderSyncRules,
         -> null
@@ -850,12 +850,12 @@ internal fun MarketingCaptureScenario.guideCaptureSourceScenarioOrNull(): Market
         MarketingCaptureScenario.GuideLinuxFolderSyncWorkspace -> MarketingCaptureScenario.FileSyncStatusDesktop
         MarketingCaptureScenario.GuideLinuxFolderSyncLocations -> null
         MarketingCaptureScenario.GuideLinuxFolderSyncRules -> null
-        MarketingCaptureScenario.GuideWindowsCloudFilesSettings -> MarketingCaptureScenario.DesktopStartupSettings
+        MarketingCaptureScenario.GuideWindowsCloudFilesSettings -> null
         MarketingCaptureScenario.GuideWindowsCloudFilesStorage -> MarketingCaptureScenario.WindowsCloudFilesStorageDesktop
         MarketingCaptureScenario.GuideWindowsCloudFilesRecovery -> MarketingCaptureScenario.WindowsCloudFilesRecoveryDesktop
         MarketingCaptureScenario.GuideAndroidPhotoBackupFolders -> MarketingCaptureScenario.MediaBackup
         MarketingCaptureScenario.GuideAndroidPhotoBackupQueue -> MarketingCaptureScenario.TransferMobilePending
-        MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary -> MarketingCaptureScenario.PhotoFolderBrowserMobile
+        MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary -> null
         MarketingCaptureScenario.GuideAndroidCalendarMonth -> MarketingCaptureScenario.CalendarMonthMobile
         MarketingCaptureScenario.GuideAndroidCalendarAgenda -> MarketingCaptureScenario.CalendarWorkspaceMobileDark
         MarketingCaptureScenario.GuideAndroidCalendarEdit -> null
@@ -1822,8 +1822,10 @@ internal fun MarketingVirtualFileStorageMobileScenario() {
 @Composable
 internal fun MarketingVirtualFileStorageDesktopScenario(scenario: MarketingCaptureScenario) {
     val windows = scenario == MarketingCaptureScenario.WindowsCloudFilesStorageDesktop ||
-        scenario == MarketingCaptureScenario.WindowsCloudFilesRecoveryDesktop
+        scenario == MarketingCaptureScenario.WindowsCloudFilesRecoveryDesktop ||
+        scenario == MarketingCaptureScenario.GuideWindowsCloudFilesSettings
     val recovery = scenario == MarketingCaptureScenario.WindowsCloudFilesRecoveryDesktop
+    val activation = scenario == MarketingCaptureScenario.GuideWindowsCloudFilesSettings
     NextcloudDesktopShell(
         selected = NextcloudDestination.FolderSync,
         onSelected = {},
@@ -1881,6 +1883,7 @@ internal fun MarketingVirtualFileStorageDesktopScenario(scenario: MarketingCaptu
                             emptyList()
                         },
                         pendingWritebackCount = if (recovery) 1 else 0,
+                        providerActive = !activation,
                     ),
                     loading = false,
                     busy = false,
@@ -1905,6 +1908,7 @@ private fun marketingVirtualFileStorageSnapshot(
     integration: VirtualFilePlatformIntegration,
     limitations: List<String> = emptyList(),
     pendingWritebackCount: Int? = null,
+    providerActive: Boolean = true,
 ): VirtualFileStorageSnapshot = VirtualFileStorageSnapshot(
     support = support,
     integration = integration,
@@ -1922,8 +1926,8 @@ private fun marketingVirtualFileStorageSnapshot(
     availableFreeBytes = 68_719_476_736L,
     storageCapacityBytes = 512L * 1024L * 1024L * 1024L,
     limitations = limitations,
-    providerState = VirtualFileProviderState.Active,
-    providerActive = true,
+    providerState = if (providerActive) VirtualFileProviderState.Active else VirtualFileProviderState.Inactive,
+    providerActive = providerActive,
     providerLocation = when (integration) {
         VirtualFilePlatformIntegration.AndroidDocumentsProvider -> "System Files / Nextcloud Native"
         VirtualFilePlatformIntegration.WindowsCloudFiles -> "Nextcloud Native in File Explorer"

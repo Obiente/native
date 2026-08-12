@@ -1162,6 +1162,12 @@ fun NextcloudNativeMarketingCapture(
                         )
                     MarketingCaptureScenario.GuideAndroidCalendarEdit ->
                         MarketingCalendarRecurringEventDetailCapture()
+                    MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers ->
+                        MarketingOfflineFileTransferScenario()
+                    MarketingCaptureScenario.GuideWindowsCloudFilesSettings ->
+                        MarketingVirtualFileStorageDesktopScenario(scenario)
+                    MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary ->
+                        MarketingMediaTransferScenario(scenario)
                     MarketingCaptureScenario.FileSyncSelectionDesktop,
                     MarketingCaptureScenario.FileSyncSelectionMobile,
                     ->
@@ -1207,15 +1213,12 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.GuideDesktopGettingStartedSettings,
                     MarketingCaptureScenario.GuideAndroidOfflineFilesBrowse,
                     MarketingCaptureScenario.GuideAndroidOfflineFilesStorage,
-                    MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers,
                     MarketingCaptureScenario.GuideAndroidFolderSyncStatus,
                     MarketingCaptureScenario.GuideLinuxFolderSyncWorkspace,
-                    MarketingCaptureScenario.GuideWindowsCloudFilesSettings,
                     MarketingCaptureScenario.GuideWindowsCloudFilesStorage,
                     MarketingCaptureScenario.GuideWindowsCloudFilesRecovery,
                     MarketingCaptureScenario.GuideAndroidPhotoBackupFolders,
                     MarketingCaptureScenario.GuideAndroidPhotoBackupQueue,
-                    MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary,
                     MarketingCaptureScenario.GuideAndroidCalendarMonth,
                     MarketingCaptureScenario.GuideAndroidCalendarAgenda,
                     MarketingCaptureScenario.GuideDesktopCalendarMonth,

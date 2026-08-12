@@ -19,6 +19,9 @@ class MarketingGuideCaptureScenarioTest {
             MarketingCaptureScenario.GuideLinuxFolderSyncLocations,
             MarketingCaptureScenario.GuideLinuxFolderSyncRules,
             MarketingCaptureScenario.GuideAndroidCalendarEdit,
+            MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers,
+            MarketingCaptureScenario.GuideWindowsCloudFilesSettings,
+            MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary,
         )
         guideScenarios.forEach { scenario ->
             if (scenario in directlyRenderedGuides) {
