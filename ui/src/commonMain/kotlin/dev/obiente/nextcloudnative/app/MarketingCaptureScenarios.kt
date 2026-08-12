@@ -622,6 +622,24 @@ enum class MarketingCaptureScenario(
         MarketingCapturePurpose.StateCoverage,
         "desktop", "wide", width = 1_440, height = 900, density = 1f,
     ),
+    TablesColumnsDesktop(
+        "tables-columns-desktop", "tables-columns-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Typed table columns", "Synthetic data on the upstream Tables columns route",
+        MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    TablesViewsDesktop(
+        "tables-views-desktop", "tables-views-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Saved views", "Synthetic data on the upstream Tables views route",
+        MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    TablesSharesDesktop(
+        "tables-shares-desktop", "tables-shares-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Table sharing and permissions", "Synthetic data on the upstream Tables shares route",
+        MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
     AdaptiveAppMobile(
         "tables-row-form-mobile", "tables-row-form-mobile.png", NextcloudPresentation.Adaptive,
         "Tables", "Add inventory row", "Synthetic Tables data",
@@ -655,6 +673,24 @@ enum class MarketingCaptureScenario(
         width = 1_024,
         height = 2_216,
         density = 2.625f,
+    ),
+    TablesColumnsMobile(
+        "tables-columns-mobile", "tables-columns-mobile.png", NextcloudPresentation.Adaptive,
+        "Tables", "Typed table columns", "Synthetic data on the upstream Tables columns route",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", width = 1_024, height = 2_216, density = 2.625f,
+    ),
+    TablesViewsMobile(
+        "tables-views-mobile", "tables-views-mobile.png", NextcloudPresentation.Adaptive,
+        "Tables", "Saved views", "Synthetic data on the upstream Tables views route",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", width = 1_024, height = 2_216, density = 2.625f,
+    ),
+    TablesSharesMobile(
+        "tables-shares-mobile", "tables-shares-mobile.png", NextcloudPresentation.Adaptive,
+        "Tables", "Table sharing and permissions", "Synthetic data on the upstream Tables shares route",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", width = 1_024, height = 2_216, density = 2.625f,
     ),
     MailWorkspaceDesktop(
         "mail-workspace-desktop", "mail-workspace-desktop.png", NextcloudPresentation.Desktop,
@@ -2168,9 +2204,15 @@ internal fun MarketingAdaptiveAppScenario(scenario: MarketingCaptureScenario) {
             scenario == MarketingCaptureScenario.AdaptiveApp ||
             scenario == MarketingCaptureScenario.TablesRowsDesktop ||
             scenario == MarketingCaptureScenario.TablesRowFormDesktop ||
+            scenario == MarketingCaptureScenario.TablesColumnsDesktop ||
+            scenario == MarketingCaptureScenario.TablesViewsDesktop ||
+            scenario == MarketingCaptureScenario.TablesSharesDesktop ||
             scenario == MarketingCaptureScenario.AdaptiveAppMobile ||
             scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile ||
-            scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
+            scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile ||
+            scenario == MarketingCaptureScenario.TablesColumnsMobile ||
+            scenario == MarketingCaptureScenario.TablesViewsMobile ||
+            scenario == MarketingCaptureScenario.TablesSharesMobile,
     ) {
         "${scenario.id} is not an adaptive data capture."
     }

@@ -25,6 +25,12 @@ class MarketingDynamicUiCaptureScenarioTest {
                 MarketingCaptureScenario.AdaptiveAppCollectionMobile,
             MarketingCaptureScenario.TablesRowFormDesktop to
                 MarketingCaptureScenario.AdaptiveAppMobile,
+            MarketingCaptureScenario.TablesColumnsDesktop to
+                MarketingCaptureScenario.TablesColumnsMobile,
+            MarketingCaptureScenario.TablesViewsDesktop to
+                MarketingCaptureScenario.TablesViewsMobile,
+            MarketingCaptureScenario.TablesSharesDesktop to
+                MarketingCaptureScenario.TablesSharesMobile,
         )
 
         pairs.forEach { (desktop, phone) ->
@@ -32,7 +38,7 @@ class MarketingDynamicUiCaptureScenarioTest {
             assertEquals(NextcloudPresentation.Adaptive, phone.presentation)
             assertEquals(desktop.surface, phone.surface)
             assertEquals(desktop.state, phone.state)
-            assertEquals("Synthetic Tables data", desktop.state)
+            assertTrue(desktop.state.startsWith("Synthetic"))
             assertEquals(1_440 to 900, desktop.width to desktop.height)
             assertEquals(1_024 to 2_216, phone.width to phone.height)
         }
@@ -79,6 +85,7 @@ class MarketingDynamicUiCaptureScenarioTest {
             nativeRecordActions(
                 schema = marketingDynamicUiSchema,
                 resource = resource,
+                navigationContext = marketingDynamicDatasetContext.bindingValues,
             ).create,
         )
 
@@ -157,5 +164,41 @@ class MarketingDynamicUiCaptureScenarioTest {
         assertTrue(marketingDynamicUiSchema.actions.all { action ->
             "://" !in action.binding.path
         })
+    }
+
+    @Test
+    fun `fixture uses the accepted upstream Tables routes with synthetic response data`() {
+        val actions = marketingDynamicUiSchema.actions.associateBy { action -> action.id }
+
+        assertEquals(
+            "/index.php/apps/tables/api/1/tables/{id}/rows",
+            actions.getValue("rows.list").binding.path,
+        )
+        assertEquals(
+            "/index.php/apps/tables/api/1/tables/{id}/columns",
+            actions.getValue("api1-index-table-columns").binding.path,
+        )
+        assertEquals(
+            "/index.php/apps/tables/api/1/tables/{id}/views",
+            actions.getValue("api1-index-views").binding.path,
+        )
+        assertEquals(
+            "/index.php/apps/tables/api/1/tables/{id}/shares",
+            actions.getValue("api1-index-table-shares").binding.path,
+        )
+        assertEquals(
+            "/index.php/apps/tables/api/1/shares/{shareId}",
+            actions.getValue("api1-get-share").binding.path,
+        )
+        assertEquals(
+            "/index.php/apps/tables/api/1/tables/{id}/rows",
+            actions.getValue("rows.create").binding.path,
+        )
+        assertTrue(actions.values.all { action -> "/synthetic/" !in action.binding.path })
+        assertTrue(actions.values.all { action ->
+            action.binding.requiredPathParameterNames in listOf(listOf("id"), listOf("shareId"))
+        })
+        assertEquals("42", marketingDynamicDatasetContext.bindingValues.getValue("id"))
+        assertEquals("1", marketingDynamicDatasetContext.bindingValues.getValue("shareId"))
     }
 }
