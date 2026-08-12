@@ -22,6 +22,13 @@ import kotlin.test.assertTrue
 
 class WindowsCloudFilesProviderTest {
     @Test
+    fun cloudFileUpdateHandlesRequestOnlyRequiredAccess() {
+        assertEquals(0, windowsCloudOpenFileFlags(write = false, exclusive = false))
+        assertEquals(2, windowsCloudOpenFileFlags(write = true, exclusive = false))
+        assertEquals(3, windowsCloudOpenFileFlags(write = true, exclusive = true))
+    }
+
+    @Test
     fun nativeInspectionDistinguishesMissingCorruptAndUnreadableEntries() {
         assertEquals(
             WindowsCloudPlaceholderEntryState.Missing,
