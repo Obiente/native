@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
+import java.awt.MenuItem
+import java.awt.PopupMenu
 import java.awt.SystemTray
 import java.awt.TrayIcon
 import java.awt.event.MouseAdapter
@@ -45,7 +47,7 @@ internal fun registerDesktopTray(
     if (osName.contains("linux", ignoreCase = true)) {
         LinuxStatusNotifierTray.register(tooltip, onAction)?.let { return it }
     }
-    return AwtDesktopTray.register(tooltip) { onAction(DesktopTrayAction.ShowActivity) }
+    return AwtDesktopTray.register(tooltip, onAction)
 }
 
 private class AwtDesktopTray private constructor(
@@ -70,21 +72,29 @@ private class AwtDesktopTray private constructor(
     }
 
     companion object {
-        fun register(tooltip: String, onActivated: () -> Unit): DesktopTrayRegistration? {
+        fun register(
+            tooltip: String,
+            onAction: (DesktopTrayAction) -> Unit,
+        ): DesktopTrayRegistration? {
             if (!SystemTray.isSupported()) return null
             return runCatching {
                 val resource = requireNotNull(
                     Thread.currentThread().contextClassLoader.getResource("nextcloud-native.png"),
                 )
-                val icon = TrayIcon(ImageIO.read(resource), tooltip).apply { isImageAutoSize = true }
+                val popup = PopupMenu().apply {
+                    MENU_ITEMS.forEach { (id, label) ->
+                        add(MenuItem(label).apply {
+                            addActionListener { menuAction(id)?.let(onAction) }
+                        })
+                    }
+                }
+                val icon = TrayIcon(ImageIO.read(resource), tooltip, popup).apply {
+                    isImageAutoSize = true
+                }
                 val listener = object : MouseAdapter() {
                     override fun mouseReleased(event: MouseEvent) {
-                        if (
-                            event.button == MouseEvent.BUTTON1 ||
-                            event.button == MouseEvent.BUTTON3 ||
-                            event.isPopupTrigger
-                        ) {
-                            onActivated()
+                        if (event.button == MouseEvent.BUTTON1 && !event.isPopupTrigger) {
+                            onAction(DesktopTrayAction.ShowActivity)
                         }
                     }
                 }
@@ -441,7 +451,7 @@ private class LinuxTrayContextMenu(
             closeNow()
             val window = JWindow().apply {
                 isAlwaysOnTop = true
-                setLocation(x.coerceAtLeast(0), y.coerceAtLeast(0))
+                setLocation(x, y)
                 setSize(1, 1)
                 isVisible = true
             }

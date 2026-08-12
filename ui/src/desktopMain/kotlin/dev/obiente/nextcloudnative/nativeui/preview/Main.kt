@@ -170,7 +170,7 @@ fun main(arguments: Array<String>) {
     }
 
     fun toggleTrayPopup() {
-        SwingUtilities.invokeLater {
+        runOnAwtEventThread {
             val visible = trayPopupWindow.value?.isVisible != true
             trayPopupVisible.value = visible
             trayPopupWindow.value?.let { popup ->
@@ -385,6 +385,14 @@ internal fun nextDesktopFocusRequestSequence(current: Long): Long =
 internal fun shouldKeepDesktopProcessRunningOnWindowClose(
     keepRunningInBackground: Boolean,
 ): Boolean = keepRunningInBackground
+
+internal fun runOnAwtEventThread(action: () -> Unit) {
+    if (SwingUtilities.isEventDispatchThread()) {
+        action()
+    } else {
+        SwingUtilities.invokeLater(action)
+    }
+}
 
 private fun FileSyncCenterActionResult.trayMessage(): String = when (this) {
     is FileSyncCenterActionResult.Completed -> message
