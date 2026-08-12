@@ -32,6 +32,50 @@ class ActivityWorkspaceTest {
         assertFalse(activity(3, "files", "file_created", "Mara created Roadmap.md").needsDesktopAttention())
     }
 
+    @Test
+    fun activityPagingPrefetchesNearTheEndWithoutRetryLoops() {
+        assertTrue(
+            shouldAutoLoadActivityPage(
+                hasMore = true,
+                loadingMore = false,
+                refreshing = false,
+                error = null,
+                totalItemCount = 30,
+                lastVisibleItemIndex = 26,
+            ),
+        )
+        assertFalse(
+            shouldAutoLoadActivityPage(
+                hasMore = true,
+                loadingMore = true,
+                refreshing = false,
+                error = null,
+                totalItemCount = 30,
+                lastVisibleItemIndex = 29,
+            ),
+        )
+        assertFalse(
+            shouldAutoLoadActivityPage(
+                hasMore = true,
+                loadingMore = false,
+                refreshing = false,
+                error = "Could not load more activity.",
+                totalItemCount = 30,
+                lastVisibleItemIndex = 29,
+            ),
+        )
+        assertFalse(
+            shouldAutoLoadActivityPage(
+                hasMore = false,
+                loadingMore = false,
+                refreshing = false,
+                error = null,
+                totalItemCount = 30,
+                lastVisibleItemIndex = 29,
+            ),
+        )
+    }
+
     private fun activity(id: Long, app: String, type: String, subject: String) = NextcloudActivity(
         id = id,
         app = app,

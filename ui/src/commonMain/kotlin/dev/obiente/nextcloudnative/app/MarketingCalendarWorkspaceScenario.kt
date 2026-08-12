@@ -1,25 +1,15 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.runtime.Composable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import dev.obiente.nextcloudnative.app.design.NextcloudBottomNavigation
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopWorkspaceKind
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
-import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
-import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 
 @Composable
 internal fun MarketingCalendarWorkspaceScenario(
@@ -64,46 +54,25 @@ internal fun MarketingCalendarWorkspaceScenario(
     } else {
         Column(Modifier.fillMaxSize()) {
             ScreenHeader("Calendar", "Your schedule · August 2026", onBack = {})
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = {}) {
-                    Icon(NextcloudIcons.Back, contentDescription = "Previous month")
-                }
-                IconButton(onClick = {}) {
-                    Icon(NextcloudIcons.ChevronRight, contentDescription = "Next month")
-                }
-                val month = scenario == MarketingCaptureScenario.CalendarMonthMobile
-                FilterChip(selected = month, onClick = {}, label = { Text("Month") })
-                FilterChip(selected = !month, onClick = {}, label = { Text("Agenda") })
-                TextButton(onClick = {}, modifier = Modifier.weight(1f)) { Text("Today") }
-                IconButton(onClick = {}) {
-                    Icon(NextcloudIcons.Refresh, contentDescription = "Refresh calendars")
-                }
-                IconButton(onClick = {}) {
-                    Icon(NextcloudIcons.Add, contentDescription = "Create event")
-                }
-            }
-            if (scenario == MarketingCaptureScenario.CalendarMonthMobile) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Personal  •  Product team  •  Community",
-                        modifier = Modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
-                    )
-                    MonthCalendar(
-                        month = CalendarMonth(2026, 8),
-                        selectedDate = "20260804",
-                        events = events,
-                        onSelectDate = {},
-                        onSelectEvent = {},
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            } else {
-                CalendarAgenda(events, onSelectEvent = {}, modifier = Modifier.weight(1f))
-            }
+            MobileGroupwareCalendarWorkspace(
+                month = CalendarMonth(2026, 8),
+                selectedDate = "20260804",
+                view = CalendarWorkspaceView.Month,
+                calendars = calendars,
+                events = events,
+                hiddenCalendarHrefs = emptySet(),
+                query = "",
+                onPrevious = {},
+                onNext = {},
+                onToday = {},
+                onViewChanged = {},
+                onQueryChanged = {},
+                onCalendarVisibilityChanged = { _, _ -> },
+                onSelectDate = {},
+                onSelectEvent = {},
+                modifier = Modifier.weight(1f),
+            )
+            NextcloudBottomNavigation(selected = NextcloudDestination.Apps, onSelected = {})
         }
     }
     if (editor) MarketingCalendarEventEditorCapture()

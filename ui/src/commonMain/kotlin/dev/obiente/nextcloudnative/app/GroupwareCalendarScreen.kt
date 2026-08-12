@@ -1,8 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -314,54 +316,29 @@ fun NativeGroupwareCalendarScreen(
                     },
                 )
             } else {
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconButton(onClick = { navigateCalendar(-1) }) {
-                            Icon(NextcloudIcons.Back, contentDescription = "Previous month")
+                MobileGroupwareCalendarWorkspace(
+                    month = displayed.month,
+                    selectedDate = selectedDate,
+                    view = view,
+                    calendars = displayed.calendars,
+                    events = displayed.events,
+                    hiddenCalendarHrefs = hiddenCalendarHrefs.toSet(),
+                    query = query,
+                    onPrevious = { navigateCalendar(-1) },
+                    onNext = { navigateCalendar(1) },
+                    onToday = ::selectToday,
+                    onViewChanged = { selected -> viewName = selected.name },
+                    onQueryChanged = { query = it },
+                    onCalendarVisibilityChanged = { href, visible ->
+                        hiddenCalendarHrefs = if (visible) {
+                            hiddenCalendarHrefs - href
+                        } else {
+                            (hiddenCalendarHrefs + href).distinct()
                         }
-                        FilterChip(
-                            selected = view == CalendarWorkspaceView.Month,
-                            onClick = { viewName = CalendarWorkspaceView.Month.name },
-                            label = { Text("Month") },
-                        )
-                        FilterChip(
-                            selected = view == CalendarWorkspaceView.Agenda,
-                            onClick = { viewName = CalendarWorkspaceView.Agenda.name },
-                            label = { Text("Agenda") },
-                        )
-                        Box(modifier = Modifier.weight(1f))
-                        TextButton(onClick = ::selectToday) { Text("Today") }
-                        IconButton(onClick = { navigateCalendar(1) }) {
-                            Icon(NextcloudIcons.ChevronRight, contentDescription = "Next month")
-                        }
-                    }
-                    val visibleEvents = displayed.events.filter { event ->
-                        event.calendarHref !in hiddenCalendarHrefs
-                    }
-                    if (view == CalendarWorkspaceView.Month) {
-                        MonthCalendar(
-                            month = displayed.month,
-                            selectedDate = selectedDate,
-                            events = visibleEvents,
-                            onSelectDate = { selectedDate = it },
-                            onSelectEvent = { editing = it },
-                            modifier = Modifier.weight(1f),
-                        )
-                    } else {
-                        CalendarAgenda(
-                            visibleEvents,
-                            onSelectEvent = { editing = it },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
+                    },
+                    onSelectDate = { selectedDate = it },
+                    onSelectEvent = { editing = it },
+                )
             }
             if (initialLoading || refreshing) {
                 LinearProgressIndicator(
@@ -548,6 +525,140 @@ fun NativeGroupwareCalendarScreen(
     }
 }
 
+@Composable
+internal fun MobileGroupwareCalendarWorkspace(
+    month: CalendarMonth,
+    selectedDate: String,
+    view: CalendarWorkspaceView,
+    calendars: List<GroupwareCalendar>,
+    events: List<GroupwareCalendarEvent>,
+    hiddenCalendarHrefs: Set<String>,
+    query: String,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onToday: () -> Unit,
+    onViewChanged: (CalendarWorkspaceView) -> Unit,
+    onQueryChanged: (String) -> Unit,
+    onCalendarVisibilityChanged: (String, Boolean) -> Unit,
+    onSelectDate: (String) -> Unit,
+    onSelectEvent: (GroupwareCalendarEvent) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var searchVisible by rememberSaveable { mutableStateOf(false) }
+    var sourcesVisible by rememberSaveable { mutableStateOf(false) }
+    val presentation = remember(events, calendars, hiddenCalendarHrefs, query, selectedDate) {
+        buildCalendarWorkspacePresentation(events, calendars, hiddenCalendarHrefs, query, selectedDate)
+    }
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onPrevious) {
+                Icon(NextcloudIcons.Back, contentDescription = "Previous ${view.mobileNavigationPeriod()}")
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    if (view == CalendarWorkspaceView.Week) presentation.weekDates.mobileWeekTitle() else month.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "${presentation.visibleEvents.size} visible events",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = onToday) { Text("Today") }
+            IconButton(onClick = onNext) {
+                Icon(NextcloudIcons.ChevronRight, contentDescription = "Next ${view.mobileNavigationPeriod()}")
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CalendarWorkspaceView.entries.forEach { candidate ->
+                FilterChip(
+                    selected = view == candidate,
+                    onClick = { onViewChanged(candidate) },
+                    label = { Text(candidate.name) },
+                )
+            }
+            Box(modifier = Modifier.weight(1f))
+            IconButton(onClick = { searchVisible = !searchVisible }) {
+                Icon(NextcloudIcons.Search, contentDescription = "Search events")
+            }
+            IconButton(onClick = { sourcesVisible = !sourcesVisible }) {
+                Icon(NextcloudIcons.Filter, contentDescription = "Choose visible calendars")
+            }
+        }
+        if (searchVisible || query.isNotEmpty()) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChanged,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
+                singleLine = true,
+                leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
+                placeholder = { Text("Search events") },
+            )
+        }
+        if (sourcesVisible) {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = NextcloudSpacing.Medium),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                items(calendars, key = GroupwareCalendar::href) { calendar ->
+                    val visible = calendar.href !in hiddenCalendarHrefs
+                    FilterChip(
+                        selected = visible,
+                        onClick = { onCalendarVisibilityChanged(calendar.href, !visible) },
+                        label = {
+                            Text("${calendar.displayName} ${presentation.eventCountByCalendar[calendar.href] ?: 0}")
+                        },
+                    )
+                }
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        when (view) {
+            CalendarWorkspaceView.Month -> MonthCalendar(
+                month = month,
+                selectedDate = selectedDate,
+                events = presentation.visibleEvents,
+                onSelectDate = onSelectDate,
+                onSelectEvent = onSelectEvent,
+                modifier = Modifier.weight(1f),
+            )
+            CalendarWorkspaceView.Week -> CalendarAgenda(
+                events = presentation.visibleEvents.filter { event -> event.start.take(8) in presentation.weekDates },
+                onSelectEvent = onSelectEvent,
+                modifier = Modifier.weight(1f),
+            )
+            CalendarWorkspaceView.Agenda -> CalendarAgenda(
+                events = presentation.visibleEvents,
+                onSelectEvent = onSelectEvent,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+private fun CalendarWorkspaceView.mobileNavigationPeriod(): String =
+    if (this == CalendarWorkspaceView.Week) "week" else "month"
+
+private fun List<String>.mobileWeekTitle(): String {
+    val first = firstOrNull()?.parseCompactCalendarDate() ?: return "Week"
+    val last = lastOrNull()?.parseCompactCalendarDate() ?: return "Week"
+    return if (first.month == last.month) {
+        "${first.day}-${last.day} ${MONTH_NAMES[first.month - 1]}"
+    } else {
+        "${first.day} ${MONTH_NAMES[first.month - 1]} - ${last.day} ${MONTH_NAMES[last.month - 1]}"
+    }
+}
+
 internal fun calendarReadyMatchesRequest(
     readyMonth: CalendarMonth,
     readyWindow: GroupwareDavTimeWindow,
@@ -579,9 +690,17 @@ internal fun MonthCalendar(
 ) {
     val byDay = remember(events) { events.groupBy { it.start.take(8) } }
     val leading = dayOfWeekMondayFirst(month.year, month.month, 1)
+    val cells = remember(month) {
+        (List<Int?>(leading) { null } + (1..month.days()).map<Int, Int?> { it })
+            .let { days -> days + List(42 - days.size) { null } }
+            .chunked(7)
+    }
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
+        contentPadding = PaddingValues(
+            horizontal = NextcloudSpacing.Medium,
+            vertical = NextcloudSpacing.Small,
+        ),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
         item {
@@ -592,55 +711,70 @@ internal fun MonthCalendar(
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
                 }
             }
         }
-        val cells = List(leading) { null } + (1..month.days()).map { it }
-        items(cells.chunked(7)) { week ->
+        items(cells, key = { week -> week.joinToString(",") }) { week ->
             Row(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 66.dp),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                (week + List(7 - week.size) { null }).forEach { day ->
+                week.forEach { day ->
                     if (day == null) {
-                        Box(modifier = Modifier.weight(1f))
+                        Box(modifier = Modifier.weight(1f).aspectRatio(1f))
                     } else {
                         val date = "${month.isoPrefix}${day.toString().padStart(2, '0')}"
                         val dayEvents = byDay[date].orEmpty()
                         val selected = date == selectedDate
-                        Column(
+                        Box(
                             modifier = Modifier
                                 .weight(1f)
+                                .aspectRatio(1f)
                                 .background(
                                     if (selected) MaterialTheme.colorScheme.primaryContainer
-                                    else Color.Transparent,
-                                    RoundedCornerShape(NextcloudRadii.Small),
+                                    else MaterialTheme.colorScheme.surfaceContainerLow,
+                                    RoundedCornerShape(NextcloudRadii.Medium),
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant,
+                                    shape = RoundedCornerShape(NextcloudRadii.Medium),
                                 )
                                 .clickable { onSelectDate(date) }
-                                .padding(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                                .padding(5.dp),
                         ) {
                             Text(
                                 day.toString(),
                                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                style = MaterialTheme.typography.labelLarge,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                                else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.align(Alignment.TopStart),
                             )
-                            dayEvents.take(2).forEach { event ->
-                                Text(
-                                    event.title,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(MaterialTheme.colorScheme.secondaryContainer, CircleShape)
-                                        .clickable { onSelectEvent(event) }
-                                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            if (dayEvents.size > 2) {
-                                Text("+${dayEvents.size - 2}", style = MaterialTheme.typography.labelSmall)
+                            if (dayEvents.isNotEmpty()) {
+                                Row(
+                                    modifier = Modifier.align(Alignment.BottomCenter),
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    dayEvents.take(3).forEach { event ->
+                                        Box(
+                                            modifier = Modifier
+                                                .size(5.dp)
+                                                .background(mobileCalendarEventColor(event), CircleShape),
+                                        )
+                                    }
+                                    if (dayEvents.size > 3) {
+                                        Text(
+                                            "+${dayEvents.size - 3}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -666,6 +800,16 @@ internal fun MonthCalendar(
             }
         }
     }
+}
+
+@Composable
+private fun mobileCalendarEventColor(event: GroupwareCalendarEvent): Color {
+    val colors = listOf(
+        MaterialTheme.colorScheme.primary,
+        MaterialTheme.colorScheme.tertiary,
+        MaterialTheme.colorScheme.secondary,
+    )
+    return colors[event.calendarHref.hashCode().ushr(1) % colors.size]
 }
 
 @Composable

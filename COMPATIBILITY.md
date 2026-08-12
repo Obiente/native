@@ -21,6 +21,50 @@ All agent-run live tests are read-only. No Talk message, file save, Notes save,
 delete, app-management action or administrator action is issued during automated
 testing.
 
+## Whole-app parity contract
+
+Compatibility is not complete when an app merely opens. For every installed app, the native
+experience must expose every feature that the exact installed version advertises through a
+verified contract. The server contract remains authoritative; this table defines the semantic
+workspace in which those features belong.
+
+| Installed app | Upstream workspace model | Feature groups that must remain reachable |
+| --- | --- | --- |
+| Activity | Filtered chronological feed | Filters, actors, object previews, timestamps, pagination and safe deep links |
+| Budget | Financial dashboard and ledger | Accounts, categories, transactions, totals, periods, charts and contract-backed editing |
+| Calendar | Calendar navigator, time grid and agenda | Calendar visibility, month/week/agenda, search, event create/edit, recurrence, attendees, reminders and attachments |
+| Chores | Household task workspace | Lists, assignees, recurrence, points, completion and history |
+| Contacts | Address books, people list and contact inspector | Address books, groups, search, contact details, photos and contract-backed editing |
+| Cookbook | Category navigator, recipe gallery and recipe reader | Categories, search, recipe images, ingredients, instructions, nutrition, yield and timers |
+| Cospend | Project navigator, ledger and bill form | Projects, members, bills, balances, settlement, currencies, categories and reimbursement state |
+| Deck | Board navigator and Kanban lanes | Boards, stacks, cards, ordering, labels, assignees, due dates, attachments, archive and activity |
+| Files | Folder tree and file browser | List/grid, search, preview, upload, sharing, versions, favorites, offline state and sync |
+| Mail | Account/folder/message workspace and composer | Accounts, folders, messages, threads, search, compose, drafts, recipients and attachments |
+| Memories | Timeline and media collections | Date groups, albums, people, places, maps, favorites, RAW previews and selection actions |
+| Music | Library navigator, queue and player | Artists, albums, tracks, playlists, genres, search, queue and playback controls |
+| Office | Document browser and collaborative editor | New/open, format-specific editing, save state, locking, collaboration and version-safe handoff |
+| Pantry | Contract-derived collection hierarchy | Every verified collection, relationship, detail, form, action and summary exposed by the installed version |
+| Photos | Timeline and album gallery | Timeline, albums, favorites, shared media, tags, locations, selection and sharing |
+| Search | Provider filters and result groups | All advertised providers, paging, previews and native deep links |
+| Tables | Table/context navigator, typed grid and row form | Tables, contexts, templates, views, columns, rows, sorting, filters, inline editing, forms and sharing |
+| Talk | Conversation list, chat thread and call workspace | Rooms, messages, replies, reactions, attachments, participants, calls, screen sharing and call controls |
+| Tasks | List navigator and task inspector | Lists, smart filters, task editing, completion, priority, recurrence, due dates and subtasks |
+
+The same semantic feature owns its state and actions on every platform. Layout adapts without
+forking the workflow:
+
+- Compact widths use one pane, touch-sized actions, system back, sheets and progressive detail.
+- Medium widths use a navigation rail or list-detail layout when both regions remain usable.
+- Expanded desktop widths use persistent navigation, multi-pane context, dense grids, keyboard
+  shortcuts, pointer selection and inspectors.
+- Every feature must cover loading, cached refresh, empty, offline, permission-denied,
+  unsupported, stale-contract and partial-failure states.
+- Every reachable action needs a meaningful accessibility name, logical focus order, scalable
+  text, non-color status cues, keyboard access on desktop and touch access on mobile.
+- A feature without verified mutation provenance stays visibly read-only. App-specific adapters
+  are required for behavior such as Talk calls and Office collaborative editing that cannot be
+  represented safely by reusable schema semantics alone.
+
 | Installed app | Primary native family | Important secondary capabilities |
 | --- | --- | --- |
 | Dashboard | Dashboard | Widgets, activity and shortcuts |

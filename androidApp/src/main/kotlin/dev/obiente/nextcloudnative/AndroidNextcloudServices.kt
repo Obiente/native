@@ -142,6 +142,10 @@ import dev.obiente.nextcloudnative.app.requireMatchingFileVersion
 import dev.obiente.nextcloudnative.app.requireSafeFileRangeEtag
 import dev.obiente.nextcloudnative.app.discoverRecognizeBridge
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
+import dev.obiente.nextcloudnative.app.DynamicDescriptorDiscovery
+import dev.obiente.nextcloudnative.app.MAX_PERSISTED_DYNAMIC_DISCOVERY_BYTES
+import dev.obiente.nextcloudnative.app.decodePersistedDynamicDiscovery
+import dev.obiente.nextcloudnative.app.encodePersistedDynamicDiscovery
 import dev.obiente.nextcloudnative.app.dynamicReadCacheIdentity
 import dev.obiente.nextcloudnative.app.collectMediaSearchDavPages
 import dev.obiente.nextcloudnative.app.collectMediaTimelineDavPage
@@ -177,6 +181,7 @@ import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
 import java.io.File
 import java.io.ByteArrayOutputStream
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.net.URI
@@ -293,6 +298,7 @@ internal class AndroidNextcloudServices(
         catalogCache = FileAppStoreCatalogCache(File(appContext.filesDir, "contracts/catalogs")),
         verifiedContractCache = FileVerifiedContractCache(File(appContext.filesDir, "contracts/verified")),
     )
+    private val dynamicDiscoveryCacheDirectory = File(appContext.filesDir, "contracts/discoveries-v1")
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
     private val virtualFileCache = AndroidVirtualFileCache(appContext)
@@ -563,6 +569,49 @@ internal class AndroidNextcloudServices(
         preferences.edit().putString(KEY_LAST_OPENED_APP, appId).apply()
     }
 
+    override suspend fun loadCachedDynamicAppDiscovery(
+        session: NextcloudSession,
+        appId: String,
+    ): DynamicDescriptorDiscovery? = withContext(Dispatchers.IO) {
+        val target = dynamicDiscoveryCacheFile(session, appId) ?: return@withContext null
+        if (!target.isFile || target.length() !in 1..MAX_PERSISTED_DYNAMIC_DISCOVERY_BYTES.toLong()) {
+            return@withContext null
+        }
+        runCatching { target.readText() }
+            .getOrNull()
+            ?.let { encoded -> decodePersistedDynamicDiscovery(encoded, appId) }
+    }
+
+    override suspend fun saveCachedDynamicAppDiscovery(
+        session: NextcloudSession,
+        discovery: DynamicDescriptorDiscovery,
+    ) = withContext(Dispatchers.IO) {
+        val encoded = encodePersistedDynamicDiscovery(discovery) ?: return@withContext
+        val target = dynamicDiscoveryCacheFile(session, discovery.descriptor.app.id) ?: return@withContext
+        check(dynamicDiscoveryCacheDirectory.mkdirs() || dynamicDiscoveryCacheDirectory.isDirectory) {
+            "Could not create the dynamic contract cache."
+        }
+        val temporary = File(dynamicDiscoveryCacheDirectory, "${target.name}.part")
+        FileOutputStream(temporary).use { output ->
+            output.write(encoded.encodeToByteArray())
+            output.fd.sync()
+        }
+        check(temporary.renameTo(target) || runCatching {
+            temporary.copyTo(target, overwrite = true)
+            temporary.delete()
+        }.isSuccess) {
+            "Could not publish the dynamic contract cache."
+        }
+    }
+
+    private fun dynamicDiscoveryCacheFile(session: NextcloudSession, appId: String): File? {
+        if (!appId.matches(Regex("[a-z0-9_]{1,128}"))) return null
+        return File(
+            dynamicDiscoveryCacheDirectory,
+            "${NextcloudDocumentIds.cacheAccountId(session)}-$appId.json",
+        )
+    }
+
     override fun loadSession(): NextcloudSession? {
         return ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.restorePersistedSession(
             load = {
@@ -761,7 +810,7 @@ internal class AndroidNextcloudServices(
 
     private fun notifyDocumentsRootsChanged() {
         appContext.contentResolver.notifyChange(
-            DocumentsContract.buildRootsUri(NEXTCLOUD_DOCUMENTS_AUTHORITY),
+            DocumentsContract.buildRootsUri(nextcloudDocumentsAuthority(appContext.packageName)),
             null,
         )
     }
@@ -769,14 +818,14 @@ internal class AndroidNextcloudServices(
     private fun notifyDocumentsDocumentChanged(session: NextcloudSession, path: String) {
         appContext.contentResolver.notifyChange(
             DocumentsContract.buildDocumentUri(
-                NEXTCLOUD_DOCUMENTS_AUTHORITY,
+                nextcloudDocumentsAuthority(appContext.packageName),
                 NextcloudDocumentIds.documentId(session, path),
             ),
             null,
         )
         appContext.contentResolver.notifyChange(
             DocumentsContract.buildChildDocumentsUri(
-                NEXTCLOUD_DOCUMENTS_AUTHORITY,
+                nextcloudDocumentsAuthority(appContext.packageName),
                 NextcloudDocumentIds.documentId(session, NextcloudDocumentIds.parentPath(path)),
             ),
             null,

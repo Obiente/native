@@ -5101,19 +5101,115 @@ private fun GenericInsightCollection(
     onSelectRecord: ((NativeRecord) -> Unit)?,
 ) {
     val insights = remember(resource, records) { nativeDatasetInsights(resource, records) }
+    val categoricalSummary = remember(resource, records) {
+        nativeCategoricalSummary(resource, records)
+    }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val compactViewport = !datasetInsightsDefaultExpanded(maxWidth.value, maxHeight.value)
         Column(modifier = Modifier.fillMaxSize()) {
-            insights?.let {
+            if (insights != null) {
                 DatasetInsightsDisclosure(
-                    insights = it,
+                    insights = insights,
                     compact = compactViewport,
-                    initiallyExpanded = !compactViewport,
+                    initiallyExpanded = true,
                     stateKey = "insights:${resource.id}",
+                )
+            } else if (categoricalSummary != null) {
+                CategoricalSummaryDisclosure(
+                    summary = categoricalSummary,
+                    initiallyExpanded = true,
+                    stateKey = "summary:${resource.id}:${categoricalSummary.dimension.id}",
                 )
             }
             GenericRecordList(resource, records, onSelectRecord, Modifier.weight(1f))
         }
+    }
+}
+
+@Composable
+private fun CategoricalSummaryDisclosure(
+    summary: NativeCategoricalSummary,
+    initiallyExpanded: Boolean,
+    stateKey: String,
+) {
+    var expanded by rememberSaveable(stateKey) { mutableStateOf(initiallyExpanded) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(
+                start = NextcloudSpacing.Large,
+                top = NextcloudSpacing.Small,
+                end = NextcloudSpacing.Small,
+                bottom = NextcloudSpacing.XSmall,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    summary.dimension.label,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "${summary.recordCount} items",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "Hide" else "Show")
+            }
+        }
+        if (expanded) {
+            GenericCategoricalSummary(summary)
+        } else {
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = NextcloudSpacing.Large),
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun GenericCategoricalSummary(summary: NativeCategoricalSummary) {
+    val maximum = summary.points.maxOfOrNull(NativeChartPoint::value)?.takeIf { it > 0.0 } ?: 1.0
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(
+            start = NextcloudSpacing.Large,
+            top = NextcloudSpacing.Small,
+            end = NextcloudSpacing.Large,
+            bottom = NextcloudSpacing.Medium,
+        ),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+    ) {
+        summary.points.forEach { point ->
+            val count = point.value.roundToInt()
+            val percentage = ((point.value / summary.recordCount) * 100.0).roundToInt()
+            Column(
+                modifier = Modifier.semantics {
+                    contentDescription = "${point.label}, $count of ${summary.recordCount}, $percentage percent"
+                },
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(point.label, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "$count ($percentage%)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                LinearProgressIndicator(
+                    progress = { (point.value / maximum).toFloat() },
+                    modifier = Modifier.fillMaxWidth().height(8.dp),
+                )
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
@@ -5181,19 +5277,45 @@ private fun GenericDatasetInsights(insights: NativeDatasetInsights, compact: Boo
         ),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            DatasetMetricCard(
-                label = "Total ${insights.measure.label.lowercase()}",
-                value = formatNativeMetric(insights.measure, insights.total),
-            )
-            DatasetMetricCard(
-                label = "Average",
-                value = formatNativeMetric(insights.measure, insights.average),
-            )
-            DatasetMetricCard(label = "Items", value = insights.recordCount.toString())
+        if (compact) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Column {
+                    Text(
+                        "Total ${insights.measure.label.lowercase()}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        formatNativeMetric(insights.measure, insights.total),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Text(
+                    "${insights.recordCount} items",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                DatasetMetricCard(
+                    label = "Total ${insights.measure.label.lowercase()}",
+                    value = formatNativeMetric(insights.measure, insights.total),
+                )
+                DatasetMetricCard(
+                    label = "Average",
+                    value = formatNativeMetric(insights.measure, insights.average),
+                )
+                DatasetMetricCard(label = "Items", value = insights.recordCount.toString())
+            }
         }
         val displayedPoints = if (compact) insights.points.take(3) else insights.points
         if (displayedPoints.isNotEmpty()) {

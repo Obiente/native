@@ -37,7 +37,7 @@ Return to the first app. The app restores the last bounded route it knows how to
 
 ## 3. Work inside a discovered native app
 
-@capture-alt: Native community workspace with a selected nested collection, reusable navigation, searchable work items, create action, and a responsive overview inspector
+@capture-alt: Native Tables workspace with inventory insights, typed rows, reusable app navigation, and a responsive overview
 @capture-caption: A verified dynamic app opens on a useful collection rather than a web page or raw API response, while retaining normal native navigation.
 
 Open an installed app that uses a verified dynamic contract. Nextcloud Native chooses a useful entry point such as a mailbox, table, board, recipe library, or record collection. Parent and child context stay connected, so actions receive the correct resource identity instead of asking you to type internal IDs.
