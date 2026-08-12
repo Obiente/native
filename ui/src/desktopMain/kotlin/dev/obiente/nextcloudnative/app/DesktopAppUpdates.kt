@@ -39,6 +39,13 @@ internal data class DesktopUpdateTarget(
     val architecture: String,
 )
 
+internal fun canUseDirectDesktopUpdates(
+    buildIdentity: DesktopUpdateBuildIdentity,
+    target: DesktopUpdateTarget?,
+): Boolean = target != null &&
+    buildIdentity.versionCode > 0 &&
+    buildIdentity.directPackageUpdates
+
 internal enum class DesktopPackageInstallerOutcome {
     InstallerHandoffStarted,
     InstallationCompleted,
@@ -157,10 +164,7 @@ internal class DesktopAppUpdater(
     @Volatile private var cancellationRequested = false
 
     fun support(): AppUpdateSupport {
-        val canUpdate = buildIdentity.releaseBuild &&
-            buildIdentity.directPackageUpdates &&
-            target != null &&
-            buildIdentity.versionCode > 0
+        val canUpdate = canUseDirectDesktopUpdates(buildIdentity, target)
         return AppUpdateSupport(
             channel = if (canUpdate) {
                 AppDistributionChannel.DirectDesktopPackage
@@ -170,12 +174,19 @@ internal class DesktopAppUpdater(
             currentVersionName = buildIdentity.versionName,
             currentVersionCode = buildIdentity.versionCode,
             canCheckDirectUpdates = canUpdate,
-            explanation = if (canUpdate) {
-                "This native package checks the selected release channel, matches downloads to its advertised " +
-                    "checksum, and uses your system installer."
-            } else {
-                "Development, distribution-managed, and unsupported desktop packages are updated through " +
-                    "their distribution workflow."
+            explanation = when {
+                canUpdate && !buildIdentity.releaseBuild ->
+                    "This development build can update to a newer release from the selected channel. Downloads " +
+                        "are matched to their advertised checksum before using your system installer."
+                canUpdate ->
+                    "This native package checks the selected release channel, matches downloads to its advertised " +
+                        "checksum, and uses your system installer."
+                !buildIdentity.releaseBuild ->
+                    "This development build cannot check for updates directly. Install a newer development build " +
+                        "or release through the same download or package workflow that provided this build."
+                else ->
+                    "Distribution-managed and unsupported desktop packages are updated through their distribution " +
+                        "workflow."
             },
         )
     }

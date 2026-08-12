@@ -214,10 +214,12 @@ jobs:
         run: |
           set -euo pipefail
           gradle_tasks=()
+          gradle_options=()
           if [[ "${RUN_CONTRACT}" == "true" ]]; then
             gradle_tasks+=(":contractAcquisition:test")
           fi
           if [[ "${RUN_DESKTOP}" == "true" ]]; then
+            gradle_options+=("-PncDirectDesktopPackageUpdates=true")
             gradle_tasks+=(":ui:desktopTest" ":ui:createDistributable")
           fi
           if [[ "${RUN_ANDROID}" == "true" ]]; then
@@ -228,7 +230,7 @@ jobs:
             )
           fi
           printf 'Selected Gradle tasks: %s\n' "${gradle_tasks[*]}"
-          ./gradlew --no-daemon "${gradle_tasks[@]}"
+          ./gradlew --no-daemon "${gradle_options[@]}" "${gradle_tasks[@]}"
 
       - name: Upload Linux desktop app
         if: >-
@@ -335,7 +337,9 @@ jobs:
           steps.changes.outputs.windows == 'true'
         shell: pwsh
         run: |
-          .\gradlew.bat --no-daemon :ui:desktopTest :ui:packageMsi
+          .\gradlew.bat --no-daemon `
+            -PncDirectDesktopPackageUpdates=true `
+            :ui:desktopTest :ui:packageMsi
 
       - name: Verify Windows MSI metadata
         if: >-

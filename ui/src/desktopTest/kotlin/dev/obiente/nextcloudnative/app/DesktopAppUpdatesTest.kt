@@ -291,7 +291,7 @@ class DesktopAppUpdatesTest {
     }
 
     @Test
-    fun onlyPackagedReleaseBuildsOfferDirectNativePackageUpdates() {
+    fun developmentAndEligibleReleaseBuildsOfferDirectNativePackageUpdates() {
         val node = Preferences.userRoot().node("desktop-update-test-${UUID.randomUUID()}")
         val directory = Files.createTempDirectory("desktop-update-support-test").toFile()
         try {
@@ -310,7 +310,27 @@ class DesktopAppUpdatesTest {
             )
             val development = DesktopAppUpdater(
                 preferences = node,
-                buildIdentity = DesktopUpdateBuildIdentity("development", 0, "0.1.0", false, false),
+                buildIdentity = DesktopUpdateBuildIdentity(
+                    "development",
+                    10_000_001,
+                    "0.1.0",
+                    releaseBuild = false,
+                    directPackageUpdates = true,
+                ),
+                target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
+                updateDirectory = directory,
+                openInstaller = { DesktopPackageInstallerOutcome.InstallerHandoffStarted },
+            )
+            val optedOutDevelopment = DesktopAppUpdater(
+                preferences = node,
+                buildIdentity = DesktopUpdateBuildIdentity("development", 10_000_001, "0.1.0", false, false),
+                target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
+                updateDirectory = directory,
+                openInstaller = { DesktopPackageInstallerOutcome.InstallerHandoffStarted },
+            )
+            val unversionedDevelopment = DesktopAppUpdater(
+                preferences = node,
+                buildIdentity = DesktopUpdateBuildIdentity("development", 0, "0.1.0", false, true),
                 target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
                 updateDirectory = directory,
                 openInstaller = { DesktopPackageInstallerOutcome.InstallerHandoffStarted },
@@ -320,8 +340,16 @@ class DesktopAppUpdatesTest {
             assertTrue(release.support().canCheckDirectUpdates)
             assertTrue(release.support().explanation.contains("checksum"))
             assertFalse(release.support().explanation.contains("signed", ignoreCase = true))
-            assertEquals(AppDistributionChannel.Development, development.support().channel)
-            assertFalse(development.support().canCheckDirectUpdates)
+            assertEquals(AppDistributionChannel.DirectDesktopPackage, development.support().channel)
+            assertTrue(development.support().canCheckDirectUpdates)
+            assertTrue(development.support().explanation.contains("development build"))
+            assertEquals(AppDistributionChannel.Development, optedOutDevelopment.support().channel)
+            assertFalse(optedOutDevelopment.support().canCheckDirectUpdates)
+            assertTrue(optedOutDevelopment.support().explanation.contains("development build"))
+            assertTrue(optedOutDevelopment.support().explanation.contains("cannot check for updates directly"))
+            assertEquals(AppDistributionChannel.Development, unversionedDevelopment.support().channel)
+            assertFalse(unversionedDevelopment.support().canCheckDirectUpdates)
+            assertTrue(unversionedDevelopment.support().explanation.contains("development build"))
             val distributionManaged = DesktopAppUpdater(
                 preferences = node,
                 buildIdentity = DesktopUpdateBuildIdentity(
@@ -337,7 +365,9 @@ class DesktopAppUpdatesTest {
             )
             assertEquals(AppDistributionChannel.Development, distributionManaged.support().channel)
             assertFalse(distributionManaged.support().canCheckDirectUpdates)
-            assertTrue(distributionManaged.support().explanation.contains("distribution-managed"))
+            assertTrue(
+                distributionManaged.support().explanation.contains("distribution-managed", ignoreCase = true),
+            )
             assertEquals(6L * 60L * 60L * 1_000L, DESKTOP_APP_UPDATE_CHECK_INTERVAL_MILLIS)
             val windowsRelease = DesktopAppUpdater(
                 preferences = node,
