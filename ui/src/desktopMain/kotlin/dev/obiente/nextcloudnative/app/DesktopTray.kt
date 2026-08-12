@@ -7,13 +7,24 @@ import java.awt.event.MouseEvent
 import javax.imageio.ImageIO
 import org.freedesktop.dbus.annotations.DBusInterfaceName
 import org.freedesktop.dbus.annotations.DBusProperty
+import org.freedesktop.dbus.annotations.Position
 import org.freedesktop.dbus.connections.impl.DBusConnection
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
+import org.freedesktop.dbus.DBusPath
+import org.freedesktop.dbus.Struct
+import org.freedesktop.dbus.Tuple
 import org.freedesktop.dbus.interfaces.DBus
 import org.freedesktop.dbus.interfaces.DBusInterface
 import org.freedesktop.dbus.interfaces.Properties
 import org.freedesktop.dbus.messages.DBusSignal
 import org.freedesktop.dbus.types.Variant
+import org.freedesktop.dbus.types.UInt32
+
+internal enum class DesktopTrayAction {
+    ShowActivity,
+    OpenApp,
+    Quit,
+}
 
 internal interface DesktopTrayRegistration : AutoCloseable {
     fun updateTooltip(tooltip: String)
@@ -22,13 +33,13 @@ internal interface DesktopTrayRegistration : AutoCloseable {
 
 internal fun registerDesktopTray(
     tooltip: String,
-    onActivated: () -> Unit,
+    onAction: (DesktopTrayAction) -> Unit,
     osName: String = System.getProperty("os.name").orEmpty(),
 ): DesktopTrayRegistration? {
     if (osName.contains("linux", ignoreCase = true)) {
-        LinuxStatusNotifierTray.register(tooltip, onActivated)?.let { return it }
+        LinuxStatusNotifierTray.register(tooltip, onAction)?.let { return it }
     }
-    return AwtDesktopTray.register(tooltip, onActivated)
+    return AwtDesktopTray.register(tooltip) { onAction(DesktopTrayAction.ShowActivity) }
 }
 
 private class AwtDesktopTray private constructor(
@@ -92,6 +103,7 @@ internal interface StatusNotifierWatcher : DBusInterface {
 @DBusProperty(name = "Status", type = String::class)
 @DBusProperty(name = "IconName", type = String::class)
 @DBusProperty(name = "ItemIsMenu", type = Boolean::class)
+@DBusProperty(name = "Menu", type = DBusPath::class)
 internal interface StatusNotifierItem : DBusInterface {
     class NewTitle(path: String) : DBusSignal(path)
 
@@ -110,7 +122,7 @@ internal interface StatusNotifierItem : DBusInterface {
 
 internal class LinuxStatusNotifierItem(
     initialTooltip: String,
-    private val onActivated: () -> Unit,
+    private val onAction: (DesktopTrayAction) -> Unit,
     private val onTitleChanged: () -> Unit = {},
 ) : StatusNotifierItem, Properties {
     @Volatile
@@ -125,12 +137,12 @@ internal class LinuxStatusNotifierItem(
     override fun getObjectPath(): String = STATUS_NOTIFIER_ITEM_PATH
 
     override fun Activate(x: Int, y: Int) {
-        onActivated()
+        onAction(DesktopTrayAction.ShowActivity)
     }
 
-    override fun SecondaryActivate(x: Int, y: Int) = onActivated()
+    override fun SecondaryActivate(x: Int, y: Int) = onAction(DesktopTrayAction.ShowActivity)
 
-    override fun ContextMenu(x: Int, y: Int) = onActivated()
+    override fun ContextMenu(x: Int, y: Int) = onAction(DesktopTrayAction.ShowActivity)
 
     override fun Scroll(delta: Int, orientation: String) = Unit
 
@@ -155,7 +167,181 @@ internal class LinuxStatusNotifierItem(
             "Status" to Variant("Active"),
             "IconName" to Variant("dev.obiente.nextcloudnative"),
             "ItemIsMenu" to Variant(false),
+            "Menu" to Variant(DBusPath(STATUS_NOTIFIER_MENU_PATH)),
         )
+    }
+}
+
+@DBusInterfaceName(DBUS_MENU_INTERFACE)
+@DBusProperty(name = "Version", type = UInt32::class)
+@DBusProperty(name = "TextDirection", type = String::class)
+@DBusProperty(name = "Status", type = String::class)
+@DBusProperty(name = "IconThemePath", type = List::class)
+internal interface DBusMenu : DBusInterface {
+    @Suppress("FunctionName")
+    fun GetLayout(
+        parentId: Int,
+        recursionDepth: Int,
+        propertyNames: List<String>,
+    ): DBusMenuLayoutResult<UInt32, DBusMenuLayout>
+
+    @Suppress("FunctionName")
+    fun GetGroupProperties(ids: List<Int>, propertyNames: List<String>): List<DBusMenuItemProperties>
+
+    @Suppress("FunctionName")
+    fun GetProperty(id: Int, name: String): Variant<*>
+
+    @Suppress("FunctionName")
+    fun Event(id: Int, eventId: String, data: Variant<*>, timestamp: UInt32)
+
+    @Suppress("FunctionName")
+    fun EventGroup(events: List<DBusMenuEvent>): List<Int>
+
+    @Suppress("FunctionName")
+    fun AboutToShow(id: Int): Boolean
+
+    @Suppress("FunctionName")
+    fun AboutToShowGroup(ids: List<Int>): DBusMenuAboutToShowResult<List<Int>, List<Int>>
+}
+
+internal class DBusMenuLayout(
+    @field:Position(0) @JvmField val id: Int,
+    @field:Position(1) @JvmField val properties: Map<String, Variant<*>>,
+    @field:Position(2) @JvmField val children: List<Variant<DBusMenuLayout>>,
+) : Struct()
+
+internal class DBusMenuLayoutResult<A, B>(
+    @field:Position(0) @JvmField val revision: A,
+    @field:Position(1) @JvmField val layout: B,
+) : Tuple()
+
+internal class DBusMenuItemProperties(
+    @field:Position(0) @JvmField val id: Int,
+    @field:Position(1) @JvmField val properties: Map<String, Variant<*>>,
+) : Struct()
+
+internal class DBusMenuEvent(
+    @field:Position(0) @JvmField val id: Int,
+    @field:Position(1) @JvmField val eventId: String,
+    @field:Position(2) @JvmField val data: Variant<*>,
+    @field:Position(3) @JvmField val timestamp: UInt32,
+) : Struct()
+
+internal class DBusMenuAboutToShowResult<A, B>(
+    @field:Position(0) @JvmField val updatesNeeded: A,
+    @field:Position(1) @JvmField val idErrors: B,
+) : Tuple()
+
+internal class LinuxDBusMenu(
+    private val onAction: (DesktopTrayAction) -> Unit,
+) : DBusMenu, Properties {
+    override fun getObjectPath(): String = STATUS_NOTIFIER_MENU_PATH
+
+    override fun GetLayout(
+        parentId: Int,
+        recursionDepth: Int,
+        propertyNames: List<String>,
+    ): DBusMenuLayoutResult<UInt32, DBusMenuLayout> = DBusMenuLayoutResult(
+        UInt32(1),
+        menuLayout(parentId, recursionDepth, propertyNames),
+    )
+
+    override fun GetGroupProperties(
+        ids: List<Int>,
+        propertyNames: List<String>,
+    ): List<DBusMenuItemProperties> = ids.mapNotNull { id ->
+        menuItemProperties(id, propertyNames)?.let { DBusMenuItemProperties(id, it) }
+    }
+
+    override fun GetProperty(id: Int, name: String): Variant<*> =
+        requireNotNull(menuItemProperties(id, listOf(name))?.get(name)) {
+            "Unknown D-Bus menu property: $id/$name"
+        }
+
+    override fun Event(id: Int, eventId: String, data: Variant<*>, timestamp: UInt32) {
+        if (eventId != "clicked") return
+        when (id) {
+            MENU_SHOW_ACTIVITY_ID -> onAction(DesktopTrayAction.ShowActivity)
+            MENU_OPEN_APP_ID -> onAction(DesktopTrayAction.OpenApp)
+            MENU_QUIT_ID -> onAction(DesktopTrayAction.Quit)
+        }
+    }
+
+    override fun EventGroup(events: List<DBusMenuEvent>): List<Int> {
+        events.forEach { event -> Event(event.id, event.eventId, event.data, event.timestamp) }
+        return events.mapNotNull { event -> event.id.takeUnless(::isKnownMenuId) }
+    }
+
+    override fun AboutToShow(id: Int): Boolean = false
+
+    override fun AboutToShowGroup(
+        ids: List<Int>,
+    ): DBusMenuAboutToShowResult<List<Int>, List<Int>> = DBusMenuAboutToShowResult(
+        updatesNeeded = emptyList(),
+        idErrors = ids.filterNot(::isKnownMenuId),
+    )
+
+    @Suppress("UNCHECKED_CAST")
+    override fun <A : Any?> Get(interfaceName: String, propertyName: String): A =
+        requireNotNull(menuProperties(interfaceName)[propertyName]) {
+            "Unknown D-Bus menu property: $propertyName"
+        }.value as A
+
+    override fun <A : Any?> Set(interfaceName: String, propertyName: String, value: A) {
+        error("D-Bus menu properties are read-only.")
+    }
+
+    override fun GetAll(interfaceName: String): Map<String, Variant<*>> = menuProperties(interfaceName)
+
+    private fun menuProperties(interfaceName: String): Map<String, Variant<*>> {
+        if (interfaceName != DBUS_MENU_INTERFACE) return emptyMap()
+        return linkedMapOf(
+            "Version" to Variant(UInt32(3)),
+            "TextDirection" to Variant("ltr"),
+            "Status" to Variant("normal"),
+            "IconThemePath" to Variant(emptyList<String>(), "as"),
+        )
+    }
+
+    private fun menuLayout(
+        parentId: Int,
+        recursionDepth: Int,
+        propertyNames: List<String>,
+    ): DBusMenuLayout {
+        if (parentId != MENU_ROOT_ID) {
+            val properties = requireNotNull(menuItemProperties(parentId, propertyNames))
+            return DBusMenuLayout(parentId, properties, emptyList())
+        }
+        val children = if (recursionDepth == 0) {
+            emptyList()
+        } else {
+            MENU_ITEMS.map { (id, _) ->
+                Variant(DBusMenuLayout(id, menuItemProperties(id, propertyNames).orEmpty(), emptyList()))
+            }
+        }
+        return DBusMenuLayout(
+            MENU_ROOT_ID,
+            filterMenuProperties(mapOf("children-display" to Variant("submenu")), propertyNames),
+            children,
+        )
+    }
+
+    private fun menuItemProperties(id: Int, propertyNames: List<String>): Map<String, Variant<*>>? =
+        MENU_ITEMS.firstOrNull { it.first == id }?.let { (_, label) ->
+            filterMenuProperties(mapOf("label" to Variant(label)), propertyNames)
+        }
+
+    private fun filterMenuProperties(
+        properties: Map<String, Variant<*>>,
+        requested: List<String>,
+    ): Map<String, Variant<*>> = if (requested.isEmpty()) {
+        properties
+    } else {
+        properties.filterKeys(requested::contains)
+    }
+
+    private fun isKnownMenuId(id: Int): Boolean = id == MENU_ROOT_ID || MENU_ITEMS.any {
+        it.first == id
     }
 }
 
@@ -178,20 +364,25 @@ private class LinuxStatusNotifierTray private constructor(
     }
 
     companion object {
-        fun register(tooltip: String, onActivated: () -> Unit): DesktopTrayRegistration? =
+        fun register(
+            tooltip: String,
+            onAction: (DesktopTrayAction) -> Unit,
+        ): DesktopTrayRegistration? =
             runCatching {
                 val connection = DBusConnectionBuilder.forSessionBus().withShared(false).build()
                 val serviceName = "org.freedesktop.StatusNotifierItem-${ProcessHandle.current().pid()}-1"
                 val item = LinuxStatusNotifierItem(
                     initialTooltip = tooltip,
-                    onActivated = onActivated,
+                    onAction = onAction,
                     onTitleChanged = {
                         connection.sendMessage(StatusNotifierItem.NewTitle(STATUS_NOTIFIER_ITEM_PATH))
                     },
                 )
+                val menu = LinuxDBusMenu(onAction)
                 try {
                     connection.requestBusName(serviceName)
                     connection.exportObject(item)
+                    connection.exportObject(menu)
                     val registerWithWatcher = {
                         connection.getRemoteObject(
                             STATUS_NOTIFIER_WATCHER_SERVICE,
@@ -243,3 +434,14 @@ private const val STATUS_NOTIFIER_WATCHER_PATH = "/StatusNotifierWatcher"
 private const val STATUS_NOTIFIER_WATCHER_INTERFACE = "org.kde.StatusNotifierWatcher"
 private const val STATUS_NOTIFIER_ITEM_INTERFACE = "org.kde.StatusNotifierItem"
 private const val STATUS_NOTIFIER_ITEM_PATH = "/StatusNotifierItem"
+private const val STATUS_NOTIFIER_MENU_PATH = "/Menu"
+private const val DBUS_MENU_INTERFACE = "com.canonical.dbusmenu"
+private const val MENU_ROOT_ID = 0
+private const val MENU_SHOW_ACTIVITY_ID = 1
+private const val MENU_OPEN_APP_ID = 2
+private const val MENU_QUIT_ID = 3
+private val MENU_ITEMS = listOf(
+    MENU_SHOW_ACTIVITY_ID to "Show sync activity",
+    MENU_OPEN_APP_ID to "Open Nextcloud Native",
+    MENU_QUIT_ID to "Quit",
+)

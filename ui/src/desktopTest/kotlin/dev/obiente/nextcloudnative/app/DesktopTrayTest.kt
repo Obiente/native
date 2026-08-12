@@ -7,6 +7,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import org.freedesktop.dbus.types.UInt32
+import org.freedesktop.dbus.types.Variant
 import org.junit.Assume.assumeTrue
 
 class DesktopTrayTest {
@@ -29,25 +31,57 @@ class DesktopTrayTest {
         val activated = CountDownLatch(1)
         val registration = registerDesktopTray(
             "Nextcloud Native - all files are synced",
-            activated::countDown,
+            { action ->
+                if (action == DesktopTrayAction.ShowActivity) activated.countDown()
+            },
         )
 
         assertNotNull(registration)
         try {
             val serviceName = "org.freedesktop.StatusNotifierItem-${ProcessHandle.current().pid()}-1"
-            val activation = ProcessBuilder(
+            val menuPath = ProcessBuilder(
+                "busctl",
+                "--user",
+                "get-property",
+                serviceName,
+                "/StatusNotifierItem",
+                "org.kde.StatusNotifierItem",
+                "Menu",
+            ).redirectErrorStream(true).start().let { process ->
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                assertEquals(0, process.waitFor(), output)
+                output
+            }
+            assertTrue(menuPath.contains("/Menu"), menuPath)
+
+            val layout = ProcessBuilder(
                 "busctl",
                 "--user",
                 "call",
                 serviceName,
-                "/StatusNotifierItem",
-                "org.kde.StatusNotifierItem",
-                "Activate",
-                "ii",
+                "/Menu",
+                "com.canonical.dbusmenu",
+                "GetLayout",
+                "iias",
                 "0",
+                "--",
+                "-1",
                 "0",
-            ).redirectErrorStream(true).start()
-            activation.inputStream.bufferedReader().use { it.readText() }
+            ).redirectErrorStream(true).start().let { process ->
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                assertEquals(0, process.waitFor(), output)
+                output
+            }
+            assertTrue(layout.contains("Show sync activity"), layout)
+            assertTrue(layout.contains("Open Nextcloud Native"), layout)
+            assertTrue(layout.contains("Quit"), layout)
+
+            val activation = ProcessBuilder(
+                "busctl", "--user", "call", serviceName, "/Menu",
+                "com.canonical.dbusmenu", "Event", "isvu", "1", "clicked", "i", "0", "0",
+            ).redirectErrorStream(true).start().also { process ->
+                process.inputStream.bufferedReader().use { it.readText() }
+            }
             assertEquals(0, activation.waitFor())
             assertTrue(activated.await(2L, TimeUnit.SECONDS))
         } finally {
@@ -61,7 +95,7 @@ class DesktopTrayTest {
         var titleChanges = 0
         val item = LinuxStatusNotifierItem(
             initialTooltip = "All files are synced",
-            onActivated = { activated = true },
+            onAction = { action -> activated = action == DesktopTrayAction.ShowActivity },
             onTitleChanged = { titleChanges += 1 },
         )
 
@@ -97,6 +131,35 @@ class DesktopTrayTest {
         assertTrue(shouldReregisterStatusNotifier("org.kde.StatusNotifierWatcher", ":1.42"))
         assertFalse(shouldReregisterStatusNotifier("org.kde.StatusNotifierWatcher", ""))
         assertFalse(shouldReregisterStatusNotifier("org.example.OtherService", ":1.42"))
+    }
+
+    @Test
+    fun linuxTrayMenuPublishesActionsAndDispatchesClicks() {
+        val actions = mutableListOf<DesktopTrayAction>()
+        val menu = LinuxDBusMenu(actions::add)
+
+        val layout = menu.GetLayout(0, -1, emptyList()).layout
+
+        assertEquals("submenu", layout.properties.getValue("children-display").value)
+        assertEquals(
+            listOf("Show sync activity", "Open Nextcloud Native", "Quit"),
+            layout.children.map { child ->
+                child.value.properties.getValue("label").value
+            },
+        )
+
+        menu.Event(1, "clicked", Variant(0), UInt32(0))
+        menu.Event(2, "clicked", Variant(0), UInt32(0))
+        menu.Event(3, "clicked", Variant(0), UInt32(0))
+
+        assertEquals(
+            listOf(
+                DesktopTrayAction.ShowActivity,
+                DesktopTrayAction.OpenApp,
+                DesktopTrayAction.Quit,
+            ),
+            actions,
+        )
     }
 
     @Test

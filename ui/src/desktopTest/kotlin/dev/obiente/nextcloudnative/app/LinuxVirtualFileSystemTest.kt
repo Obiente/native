@@ -6,6 +6,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Before
 import java.nio.ByteBuffer
 import java.nio.file.Files
+import java.nio.file.Path
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -30,6 +31,21 @@ import ru.serce.jnrfuse.struct.FileStat
 import ru.serce.jnrfuse.struct.FuseFileInfo
 
 class LinuxVirtualFileSystemTest {
+    @Test
+    fun `own fuse connection is resolved from its exact escaped mount point`() {
+        val mountInfo = """
+            624 73 0:94 / /mnt/Other rw - fuse.rclone remote: rw
+            712 73 0:115 / /mnt/Nextcloud\040Native rw - fuse nextcloud-native rw
+            713 73 0:116 / /mnt/Nextcloud\040Native rw - fuse.jnrfuse another-app rw
+        """.trimIndent()
+
+        assertEquals(
+            115,
+            linuxFuseConnectionIdForMount(Path.of("/mnt/Nextcloud Native"), mountInfo),
+        )
+        assertNull(linuxFuseConnectionIdForMount(Path.of("/mnt/Missing"), mountInfo))
+    }
+
     @Test
     fun largeDirectoryMetadataUsesAnAdaptiveFreshnessWindow() {
         assertEquals(5_000L, linuxVirtualMetadataFreshnessMillis(128, 5_000L))

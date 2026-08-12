@@ -2469,16 +2469,19 @@ class DesktopNextcloudServices(
         synchronized(virtualRangeCaches) {
             virtualRangeCaches.values.forEach { cache -> runCatching(cache::flushAccessTimes) }
         }
-        synchronized(virtualFileProviderLock) {
-            if (runCatching { linuxVirtualFileSystem?.unmount() }.isSuccess) {
+        val providersToClose = synchronized(virtualFileProviderLock) {
+            (linuxVirtualFileSystem to windowsCloudFilesProvider).also {
                 linuxVirtualFileSystem = null
                 linuxVirtualMetadataBackend = null
                 linuxVirtualFileMountIdentity = null
+                windowsCloudFilesProvider = null
+                windowsCloudFilesIdentity = null
             }
-            runCatching { windowsCloudFilesProvider?.close() }
-            windowsCloudFilesProvider = null
-            windowsCloudFilesIdentity = null
         }
+        // A retained-metadata persistence callback can briefly enter virtualFileProviderLock.
+        // Closing its backend while holding the same lock reverses that order and deadlocks.
+        runCatching { providersToClose.first?.unmount() }
+        runCatching { providersToClose.second?.close() }
         supportDiagnostics.close()
         if (ownsTemporarySupportDiagnosticsRoot) requireNotNull(resolvedSupportDiagnosticsRoot).deleteRecursively()
     }

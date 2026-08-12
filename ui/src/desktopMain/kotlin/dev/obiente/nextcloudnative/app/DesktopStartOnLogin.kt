@@ -287,13 +287,17 @@ internal fun handoffLinuxForegroundLaunchToUserService(
 }
 
 /**
- * Cancels a configured supervised instance before an explicit application quit releases the
- * single-instance lock. `--no-block` is required when the caller is itself owned by the unit.
+ * Stops a separate supervised instance before an explicit application quit releases the
+ * single-instance lock. A process already owned by the unit must exit cleanly by itself so
+ * systemd cannot interrupt Compose and FUSE teardown with SIGTERM.
  */
 internal fun stopLinuxUserServiceForExplicitQuit(
     osName: String = System.getProperty("os.name").orEmpty(),
     userHome: File = File(System.getProperty("user.home")),
     linuxConfigHome: File = linuxDesktopConfigHome(userHome),
+    currentProcessIsLinuxUserService: () -> Boolean = {
+        isCurrentProcessOwnedByLinuxUserService()
+    },
     processRunner: (List<String>) -> Int = { command ->
         ProcessBuilder(command).redirectErrorStream(true).start().also { process ->
             process.inputStream.bufferedReader().use { it.readText() }
@@ -301,6 +305,7 @@ internal fun stopLinuxUserServiceForExplicitQuit(
     },
 ): Boolean {
     if (!osName.lowercase().contains("linux")) return false
+    if (currentProcessIsLinuxUserService()) return true
     return runCatching {
         processRunner(
             listOf("systemctl", "--user", "--no-block", "stop", LINUX_USER_SERVICE_NAME),
