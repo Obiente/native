@@ -871,6 +871,20 @@ internal class WindowsCloudFilesOperationException(
     val hResult: Int,
 ) : IllegalStateException("Could not $operation (HRESULT 0x${hResult.toUInt().toString(16)}).")
 
+internal fun windowsCloudFilesDiagnosticCode(failure: Throwable): String? {
+    var current: Throwable? = failure
+    repeat(MAX_WINDOWS_CLOUD_FILES_DIAGNOSTIC_CAUSE_DEPTH) {
+        val candidate = current ?: return null
+        if (candidate is WindowsCloudFilesOperationException) {
+            return "HRESULT:0x${candidate.hResult.toUInt().toString(16)}"
+        }
+        current = candidate.cause
+    }
+    return null
+}
+
+private const val MAX_WINDOWS_CLOUD_FILES_DIAGNOSTIC_CAUSE_DEPTH = 6
+
 internal interface CldApi : StdCallLibrary {
     fun CfRegisterSyncRoot(path: WString, registration: CfSyncRegistration, policies: CfSyncPolicies, flags: Int): Int
     fun CfUnregisterSyncRoot(path: WString): Int

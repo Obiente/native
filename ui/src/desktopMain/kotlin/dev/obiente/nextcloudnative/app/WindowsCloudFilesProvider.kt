@@ -1298,14 +1298,13 @@ internal class WindowsCloudFilesProvider(
                 ?: return false
             if (rechecked != existing) return false
         }
-        val contentChanged = existing.remoteRevision != authoritative.remoteRevision ||
-            existing.size != authoritative.size ||
-            existing.directory != authoritative.directory
+        val contentChanged = placeholderContentChanged(existing, authoritative)
         if (existing != authoritative || authoritative.directory) {
-            api.updatePlaceholder(
+            updateExistingPlaceholder(
                 localPath,
-                placeholder(authoritative),
-                invalidateContent = contentChanged && !authoritative.directory,
+                previous = existing,
+                current = authoritative,
+                contentChanged = contentChanged,
             )
         }
         knownIdentities[authoritative.path] = authoritative
@@ -1324,15 +1323,15 @@ internal class WindowsCloudFilesProvider(
                 check(previous == null || previous.accountId == backend.accountId && previous.path == identity.path) {
                     "The Windows Cloud Files directory contains remote entries that resolve to the same Windows path."
                 }
-                val contentChanged = previous == null ||
-                    previous.remoteRevision != identity.remoteRevision ||
-                    previous.size != identity.size ||
-                    previous.directory != identity.directory
-                api.updatePlaceholder(
-                    localPath,
-                    placeholder(identity),
-                    invalidateContent = contentChanged && !identity.directory,
-                )
+                val contentChanged = previous == null || placeholderContentChanged(previous, identity)
+                if (previous != identity || identity.directory) {
+                    updateExistingPlaceholder(
+                        localPath,
+                        previous = previous,
+                        current = identity,
+                        contentChanged = contentChanged,
+                    )
+                }
                 knownIdentities[identity.path] = identity
             }
             WindowsCloudPlaceholderState.Dirty -> {
@@ -1344,6 +1343,47 @@ internal class WindowsCloudFilesProvider(
             WindowsCloudPlaceholderState.Absent -> Unit
         }
     }
+
+    private fun updateExistingPlaceholder(
+        localPath: Path,
+        previous: WindowsCloudFileIdentity?,
+        current: WindowsCloudFileIdentity,
+        contentChanged: Boolean,
+    ) {
+        try {
+            api.updatePlaceholder(
+                localPath,
+                placeholder(current),
+                invalidateContent = contentChanged && !current.directory,
+            )
+        } catch (failure: WindowsCloudFilesOperationException) {
+            val unchangedDirectoryRefresh = previous == current && current.directory
+            recordPlaceholderDiagnostic(
+                severity = if (unchangedDirectoryRefresh) {
+                    SupportDiagnosticSeverity.Warning
+                } else {
+                    SupportDiagnosticSeverity.Error
+                },
+                operation = "cloud-files.placeholder-update",
+                outcome = if (unchangedDirectoryRefresh) "unchanged-refresh-skipped" else "failed",
+                code = "HRESULT:0x${failure.hResult.toUInt().toString(16)}",
+                localDirectory = localPath.parent ?: root,
+                identity = current,
+                fields = listOf(
+                    SupportDiagnosticFieldDraft("content_changed", contentChanged.toString()),
+                    SupportDiagnosticFieldDraft("identity_changed", (previous != current).toString()),
+                ),
+            )
+            if (!unchangedDirectoryRefresh) throw failure
+        }
+    }
+
+    private fun placeholderContentChanged(
+        previous: WindowsCloudFileIdentity,
+        current: WindowsCloudFileIdentity,
+    ): Boolean = previous.remoteRevision != current.remoteRevision ||
+        previous.size != current.size ||
+        previous.directory != current.directory
 
     private fun requireIdentity(
         info: WindowsCloudCallbackInfo,

@@ -3063,6 +3063,7 @@ class DesktopNextcloudServices(
                 component = SupportDiagnosticComponent.VirtualFiles,
                 operation = operation,
                 outcome = "failed",
+                code = windowsCloudFilesDiagnosticCode(failure),
                 fields = listOf(
                     SupportDiagnosticFieldDraft("account", accountId, SupportDiagnosticValuePrivacy.Identifier),
                     SupportDiagnosticFieldDraft(
