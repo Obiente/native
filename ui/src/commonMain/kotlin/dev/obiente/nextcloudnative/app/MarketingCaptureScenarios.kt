@@ -809,7 +809,7 @@ enum class MarketingCaptureScenario(
     GuideAndroidOfflineFilesBrowse("guide-android-offline-files-browse", "guide-android-offline-files-browse.png", NextcloudPresentation.Adaptive, "Guides", "Android offline files", "Files and availability", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 2_400, density = 2.625f),
     GuideAndroidOfflineFilesStorage("guide-android-offline-files-storage", "guide-android-offline-files-storage.png", NextcloudPresentation.Adaptive, "Guides", "Android offline files", "System Files storage", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 2_200, density = 2.625f),
     GuideAndroidOfflineFilesTransfers("guide-android-offline-files-transfers", "guide-android-offline-files-transfers.png", NextcloudPresentation.Adaptive, "Guides", "Android offline files", "Pending and failed work", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f),
-    GuideAndroidFolderSyncLocations("guide-android-folder-sync-locations", "guide-android-folder-sync-locations.png", NextcloudPresentation.Adaptive, "Guides", "Android folder sync", "Device and Nextcloud mapping", MarketingCapturePurpose.Showcase, "android", "phone-compact", width = 1_080, height = 1_000, density = 2.625f),
+    GuideAndroidFolderSyncLocations("guide-android-folder-sync-locations", "guide-android-folder-sync-locations.png", NextcloudPresentation.Adaptive, "Guides", "Android folder sync", "Device and Nextcloud mapping", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f),
     GuideAndroidFolderSyncRules("guide-android-folder-sync-rules", "guide-android-folder-sync-rules.png", NextcloudPresentation.Adaptive, "Guides", "Android folder sync", "Direction and safety rules", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 2_200, density = 2.625f),
     GuideAndroidFolderSyncStatus("guide-android-folder-sync-status", "guide-android-folder-sync-status.png", NextcloudPresentation.Adaptive, "Guides", "Android folder sync", "Schedule, conflict, and health", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 2_200, density = 2.625f),
     GuideLinuxFolderSyncWorkspace("guide-linux-folder-sync-workspace", "guide-linux-folder-sync-workspace.png", NextcloudPresentation.Desktop, "Guides", "Linux folder sync", "Active pair workspace", MarketingCapturePurpose.Showcase, "linux", "wide", width = 1_721, height = 914, density = 1f),
@@ -843,12 +843,13 @@ internal fun MarketingCaptureScenario.guideCaptureSourceScenarioOrNull(): Market
         MarketingCaptureScenario.GuideAndroidOfflineFilesBrowse -> MarketingCaptureScenario.HomepageFilesMobileDark
         MarketingCaptureScenario.GuideAndroidOfflineFilesStorage -> MarketingCaptureScenario.VirtualFileStorageMobile
         MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers -> MarketingCaptureScenario.TransferMobileFailed
-        MarketingCaptureScenario.GuideAndroidFolderSyncLocations -> MarketingCaptureScenario.ObsidianSync
-        MarketingCaptureScenario.GuideAndroidFolderSyncRules -> MarketingCaptureScenario.FileSyncRulesMobile
+        MarketingCaptureScenario.GuideAndroidFolderSyncLocations,
+        MarketingCaptureScenario.GuideAndroidFolderSyncRules,
+        -> null
         MarketingCaptureScenario.GuideAndroidFolderSyncStatus -> MarketingCaptureScenario.FileSyncStatusMobile
         MarketingCaptureScenario.GuideLinuxFolderSyncWorkspace -> MarketingCaptureScenario.FileSyncStatusDesktop
         MarketingCaptureScenario.GuideLinuxFolderSyncLocations -> null
-        MarketingCaptureScenario.GuideLinuxFolderSyncRules -> MarketingCaptureScenario.FileSyncSetupDesktop
+        MarketingCaptureScenario.GuideLinuxFolderSyncRules -> null
         MarketingCaptureScenario.GuideWindowsCloudFilesSettings -> MarketingCaptureScenario.DesktopStartupSettings
         MarketingCaptureScenario.GuideWindowsCloudFilesStorage -> MarketingCaptureScenario.WindowsCloudFilesStorageDesktop
         MarketingCaptureScenario.GuideWindowsCloudFilesRecovery -> MarketingCaptureScenario.WindowsCloudFilesRecoveryDesktop
@@ -857,7 +858,7 @@ internal fun MarketingCaptureScenario.guideCaptureSourceScenarioOrNull(): Market
         MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary -> MarketingCaptureScenario.PhotoFolderBrowserMobile
         MarketingCaptureScenario.GuideAndroidCalendarMonth -> MarketingCaptureScenario.CalendarMonthMobile
         MarketingCaptureScenario.GuideAndroidCalendarAgenda -> MarketingCaptureScenario.CalendarWorkspaceMobileDark
-        MarketingCaptureScenario.GuideAndroidCalendarEdit -> MarketingCaptureScenario.CalendarEventEditorMobile
+        MarketingCaptureScenario.GuideAndroidCalendarEdit -> null
         MarketingCaptureScenario.GuideDesktopCalendarMonth,
         MarketingCaptureScenario.GuideDesktopCalendarSources,
         -> MarketingCaptureScenario.CalendarWorkspaceDesktopDark
@@ -1349,7 +1350,10 @@ internal fun MarketingMediaBackupScenario() {
 }
 
 @Composable
-internal fun MarketingFileSyncRulesScenario() {
+internal fun MarketingFileSyncRulesScenario(
+    initialStep: FileSyncSetupStep = FileSyncSetupStep.Rules,
+    initialAdvancedSettingsVisible: Boolean = false,
+) {
     var configuration by remember {
         mutableStateOf(
             FileSyncConfiguration(
@@ -1382,7 +1386,8 @@ internal fun MarketingFileSyncRulesScenario() {
         onConfigurationChanged = { configuration = it },
         onAdd = {},
         modifier = Modifier.fillMaxSize(),
-        initialStep = FileSyncSetupStep.Rules,
+        initialStep = initialStep,
+        initialAdvancedSettingsVisible = initialAdvancedSettingsVisible,
         syntheticScopeSummary = "18,742 files - 123.4 GB - 2,511 RAW",
     )
 }
@@ -1609,6 +1614,7 @@ private fun marketingActivity(
 @Composable
 internal fun MarketingFileSyncSetupDesktopScenario(
     initialStep: FileSyncSetupStep = FileSyncSetupStep.Rules,
+    initialAdvancedSettingsVisible: Boolean = false,
 ) {
     var configuration by remember {
         mutableStateOf(
@@ -1644,6 +1650,7 @@ internal fun MarketingFileSyncSetupDesktopScenario(
             onAdd = {},
             modifier = Modifier.fillMaxWidth().widthIn(max = 920.dp).heightIn(max = 760.dp),
             initialStep = initialStep,
+            initialAdvancedSettingsVisible = initialAdvancedSettingsVisible,
             syntheticScopeSummary = "18,742 files - 123.4 GB - 2,511 RAW",
         )
     }

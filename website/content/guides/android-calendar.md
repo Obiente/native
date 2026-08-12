@@ -37,7 +37,7 @@ Save once and wait for the CalDAV result. A successful response triggers a fresh
 
 ## 3. Edit or delete only an authoritative event or series
 
-@capture-alt: Nextcloud Native Android event detail and editor showing calendar, date, time, recurrence, Edit series, Delete series, Save, and conflict-safe state
+@capture-alt: Nextcloud Native Android event detail showing date, time, recurrence, Edit series, Delete series, and the authoritative recurring event context
 @capture-caption: Android exposes edit and delete only for writable events with an ETag, and recurring occurrences direct changes to the authoritative series.
 
 Open an event. Editing is available only when its calendar is writable, its current ETag is known, and the row is not a generated recurrence occurrence. A generated occurrence is read-only to protect the series. Open the authoritative series to use **Edit series** or **Delete series**; deleting a repeating event permanently removes the complete series.

@@ -13,8 +13,15 @@ class MarketingGuideCaptureScenarioTest {
 
         assertEquals(30, guideScenarios.size)
         assertEquals(guideScenarios.size * MarketingCaptureTheme.entries.size, guideVariants.size)
+        val directlyRenderedGuides = setOf(
+            MarketingCaptureScenario.GuideAndroidFolderSyncLocations,
+            MarketingCaptureScenario.GuideAndroidFolderSyncRules,
+            MarketingCaptureScenario.GuideLinuxFolderSyncLocations,
+            MarketingCaptureScenario.GuideLinuxFolderSyncRules,
+            MarketingCaptureScenario.GuideAndroidCalendarEdit,
+        )
         guideScenarios.forEach { scenario ->
-            if (scenario == MarketingCaptureScenario.GuideLinuxFolderSyncLocations) {
+            if (scenario in directlyRenderedGuides) {
                 assertEquals(null, scenario.guideCaptureSourceScenarioOrNull())
             } else {
                 assertNotNull(scenario.guideCaptureSourceScenarioOrNull())

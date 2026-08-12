@@ -28,8 +28,8 @@ Review both locations carefully. Do not select a folder already managed by anoth
 
 ## 2. Set direction, deletion, conflicts, and background constraints
 
-@capture-alt: Nextcloud Native Android folder-sync rules screen with direction, selected content, ignore patterns, conflict handling, network policy, and battery requirements
-@capture-caption: Android sync policy is explicit before work starts, including the choices that can copy or delete data on either side.
+@capture-alt: Nextcloud Native Android folder-sync review showing both roots, two-way direction, selected-content summary, and the expanded conflict policy at the start of the scrollable safety settings
+@capture-caption: Android exposes sync policy before work starts; scroll through the expanded safety settings to review deletion, network, and power choices as well as conflicts.
 
 Choose **Two-way** only when local and remote edits should both propagate. **Device to Nextcloud** never writes remote changes back to the selected Android folder; **Nextcloud to device** never uploads local edits. Choose **Ask before changing either copy** or **Keep both copies** while learning the workflow. Review the deletion policy separately because a propagated deletion is not the same as a content conflict.
 

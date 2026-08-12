@@ -299,13 +299,13 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCenter.kt": "a842634502cafc946dc38ecbf1bf6ab61dd2f674493b58302851ae4269f26f8b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinator.kt": "122fc4ed0ff1ab82d778dd28aff883040827be0bab083aa0a0cfcb14cf2c5300",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinatorSnapshot.kt": "5eeb2256bdafb3d94d8317091b7e473b67b6abc6a8c2c0096f1d266fcd8f2f99",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt": "c3cba31d85bfca822de25f38a3980b3f54acb5682e439fb37a7703f39cb069a4",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt": "0ba52694e8d50583b631ef44ff709d6eb378c010d51a5b52cfce972aacdba079",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPlanning.kt": "2aac41272bba43287c033cc06bfd394f1c003e09c11655e34e71d74b34dfde51",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistory.kt": "fc5d0165cc47bf4e54fd92bf860a0b262c3c5213e0a1e35e16e99db0126657c1",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistorySection.kt": "321ecbc2e388ec3e9befa2f7486f5357e02a9e333f7643b901626d15a2674750",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FilesWorkspace.kt": "e6854c18811f03674555d32184e2e1a7aea5ea7b421fecd614780869c26c81b7",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GenericNativeFallback.kt": "768f8704a9999b45d06e39c61529bd9af370315ff1f33d7eb4f8b463aaaedbbf",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt": "d5b3a262af5612578c859ba825601b8477d005ad33dc3c7a81d887c500b070ce",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt": "b5bd2e6004bd89ee03b67d8717c731ae26a17a589e33fcba4ee2c98ba0fe07c3",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsScreen.kt": "9c8a681ec205fec05eadec0a49e7fc2e76eae6d9a2b8e3add5bd8060730b092b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt": "269c032877536751fe5e8be8bdcd83b0ee0e13a3e04ad82fc3633a649b62fd13",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/HomeWorkspaceLayout.kt": "95c8b7c8e01244df96999cfb5afb48191fd78369eaf748d2c0b73ca9b8aa45db",
@@ -316,7 +316,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LocalFileUpload.kt": "7cbabc9eaea160376f3e7ba31cd4b47421741b4ac60363046988fb27b98023a8",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt": "74ed912eef556a53b7eb0008946aa5b4425cb69456bea75368d309a39052a331",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCalendarWorkspaceScenario.kt": "c958d18fb29aabb5160e6e06cca4066ddee0a4733b7a40faa5e5691e1d25eb59",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "3e5f140fca87ccb1799e8e23ae8f005884edef1b06a4b6da4cda0175e840d331",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "c757646865ec550c62c5e4f3758dbee3976f67fc45c40f07fb0d6edcf8631e4e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt": "75ab130cd489712673b9402a8e2da7b9edab84b4bb3f3f5c8dacb8a03bd86390",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt": "d0d144beece62dec0b26f9bc245693386b98752384294b9d90080d54c25d139e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingLivePhotoCaptureScenarios.kt": "20a74e6b425a56b0ba6d32f28b89c5722f2f9569f1dceeaa621f2f226bec9101",
@@ -352,7 +352,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudFileListing.kt": "4372cbb72541993c53169f861ebb00efc306670d41b860cc0c3c010b431f43b4",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt": "53cc22fed51fe03ef0aaab6a3f849222b0dbfb04fac9c4e3a73057b85c524290",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewerActions.kt": "48aaed6948d1423113d300cc3ab86d244ab76e8225e24988e9855edf74553944",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "80e03c55f045eaf42f347c04db982d420c4cd1ee2de73cdd6b906c1557389995",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "25c3b74cb6fbf6317d877a207fa1bbad82939519675dbc4cd727b0d618b9e111",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt": "944103dba7d35abd17d21cb2bf5818c19b8148abf6b8d37fcdafdab029abe56b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotesCache.kt": "9223dd455c6a1c35a10769616fceb9dfb2d92ef4d43b0a52c2c29e40f1a196cf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPeople.kt": "cff910ea2cc77211ef81779c49ee0c957851f2b4a3ed32b857b12ded1cee643b",
@@ -2856,15 +2856,15 @@
             "file": "guide-android-folder-sync-locations.png",
             "theme": "dark",
             "width": 1080,
-            "height": 1000,
+            "height": 1800,
             "density": 2.625,
             "feature": "Guides",
             "surface": "Android folder sync",
             "state": "Device and Nextcloud mapping",
             "purpose": "showcase",
             "platform": "android",
-            "viewport": "phone-compact",
-            "sha256": "1f4ba5a078aa76f76d6cc0e1f2036fedffa7bf27f1b623a12edcfc2e2dd555d0"
+            "viewport": "phone-portrait",
+            "sha256": "36424db7834146030a5708df2f1569a60d409b9f304a39f15d69b9cb730cd34f"
         },
         {
             "scenario": "guide-android-folder-sync-locations-light",
@@ -2872,15 +2872,15 @@
             "file": "guide-android-folder-sync-locations-light.png",
             "theme": "light",
             "width": 1080,
-            "height": 1000,
+            "height": 1800,
             "density": 2.625,
             "feature": "Guides",
             "surface": "Android folder sync",
             "state": "Device and Nextcloud mapping",
             "purpose": "showcase",
             "platform": "android",
-            "viewport": "phone-compact",
-            "sha256": "17c359f5b7a7cabb41a82f1007f4f8bb9d847f4701da024146bb758ddaff9763"
+            "viewport": "phone-portrait",
+            "sha256": "9bac3df92787681be6f338b313188c5f6f9c9cb8a1874663f34353cf7b56f120"
         },
         {
             "scenario": "guide-android-folder-sync-rules",
@@ -2896,7 +2896,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "cdaeebb040a176f9355e05fc78cbd7ec094a9cb3e33acfdd37a50b9b454f54df"
+            "sha256": "2e0e20ca8470a23f08db2dd2de891f02bc7f4495068ae0704ec9814efe16022e"
         },
         {
             "scenario": "guide-android-folder-sync-rules-light",
@@ -2912,7 +2912,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "81e0f65515f939a8a6470af45b371723d611a27d3bddc1d8f6bf9c69db24b752"
+            "sha256": "bfcfd366f4e7dd9411d3d017a26b1374ba19c979b83bdb882631de95bc840fb6"
         },
         {
             "scenario": "guide-android-folder-sync-status",
@@ -3024,7 +3024,7 @@
             "purpose": "showcase",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "e87550eb59e37ea3272d2111efd063fcfa21ba953856d41e3ce48043e45fb931"
+            "sha256": "acd92e96fbd8109cbd8fe68ba2b1e58849d7b19498064b54b2bc34440fc78e74"
         },
         {
             "scenario": "guide-linux-folder-sync-rules-light",
@@ -3040,7 +3040,7 @@
             "purpose": "showcase",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "89f4151eff13821622fb2b9ae45a242a815f01240dfd50b8e17aeec9a54565ce"
+            "sha256": "fd0655b638e46c34bede3101d04df3396c7b9a549861e16a4c23c054f1aed71d"
         },
         {
             "scenario": "guide-windows-cloud-files-settings",
@@ -3312,7 +3312,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "7e998873ea8513fc271bc7e2b77a8ab04c0a8678ae8525e99d77e6ea6c2575b6"
+            "sha256": "18f208868a88d12164e1478008a868530308f0749835053eaf0dfda1bf116fd5"
         },
         {
             "scenario": "guide-android-calendar-edit-light",
@@ -3328,7 +3328,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "5602af3590b1afd86f3c1ad649778f51e299baa976bd01aaaf99dcd895c88e2d"
+            "sha256": "42e7d3f78643f759096c4a85d9dc818fa5b94435fc1c2e3731adb541d9bf3366"
         },
         {
             "scenario": "guide-desktop-calendar-month",

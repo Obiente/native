@@ -39,8 +39,8 @@ Choose **Two-way**, **Device to Nextcloud**, or **Nextcloud to device** accordin
 
 ## 3. Configure safe rules and resolve the first scan
 
-@capture-alt: Nextcloud Native Linux folder-sync rules screen with scope presets, ignore patterns, priority rules, conflict policy, deletion policy, and a file-count preview
-@capture-caption: Linux pair rules show the expected scope and destructive policy before the first synchronization is allowed to proceed.
+@capture-alt: Nextcloud Native Linux folder-sync review showing both roots, two-way direction, file-count preview, and the expanded conflict policy at the start of the scrollable safety settings
+@capture-caption: Linux pair review shows scope and opens the safety settings before the first synchronization; scroll to review deletion, network, and power choices as well as conflicts.
 
 Start with **Ask before changing either copy** or **Keep both copies** for conflicts. Treat deletion policy separately: propagating a deletion can remove the counterpart even when there is no content conflict. Add ignores for generated output, lock files, or temporary application data, and review the estimated file count and size before continuing.
 

@@ -833,6 +833,31 @@ internal fun MarketingCalendarEventEditorCapture() {
 }
 
 @Composable
+internal fun MarketingCalendarRecurringEventDetailCapture() {
+    EventDetailDialog(
+        event = GroupwareCalendarEvent(
+            href = "/remote.php/dav/calendars/synthetic/product/product-stand-up.ics",
+            etag = "\"synthetic-product-stand-up\"",
+            calendarHref = "/remote.php/dav/calendars/synthetic/product/",
+            uid = "product-stand-up",
+            title = "Product stand-up",
+            start = "20260803T083000Z",
+            end = "20260803T090000Z",
+            allDay = false,
+            location = "Product room - Talk",
+            description = "Review current work and blockers.",
+            recurrenceRule = "FREQ=WEEKLY;BYDAY=MO",
+            rawCalendar = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:product-stand-up\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        ),
+        canEdit = true,
+        onDismiss = {},
+        onEdit = {},
+        onDelete = {},
+        error = null,
+    )
+}
+
+@Composable
 private fun EventEditorDialog(
     event: GroupwareCalendarEvent?,
     initialDate: String,

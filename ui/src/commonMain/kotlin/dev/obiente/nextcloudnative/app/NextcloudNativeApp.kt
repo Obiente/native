@@ -1148,6 +1148,20 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.FileSyncSetupDesktop -> MarketingFileSyncSetupDesktopScenario()
                     MarketingCaptureScenario.GuideLinuxFolderSyncLocations ->
                         MarketingFileSyncSetupDesktopScenario(initialStep = FileSyncSetupStep.Locations)
+                    MarketingCaptureScenario.GuideLinuxFolderSyncRules ->
+                        MarketingFileSyncSetupDesktopScenario(
+                            initialStep = FileSyncSetupStep.Review,
+                            initialAdvancedSettingsVisible = true,
+                        )
+                    MarketingCaptureScenario.GuideAndroidFolderSyncLocations ->
+                        MarketingFileSyncRulesScenario(initialStep = FileSyncSetupStep.Locations)
+                    MarketingCaptureScenario.GuideAndroidFolderSyncRules ->
+                        MarketingFileSyncRulesScenario(
+                            initialStep = FileSyncSetupStep.Review,
+                            initialAdvancedSettingsVisible = true,
+                        )
+                    MarketingCaptureScenario.GuideAndroidCalendarEdit ->
+                        MarketingCalendarRecurringEventDetailCapture()
                     MarketingCaptureScenario.FileSyncSelectionDesktop,
                     MarketingCaptureScenario.FileSyncSelectionMobile,
                     ->
@@ -1194,11 +1208,8 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.GuideAndroidOfflineFilesBrowse,
                     MarketingCaptureScenario.GuideAndroidOfflineFilesStorage,
                     MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers,
-                    MarketingCaptureScenario.GuideAndroidFolderSyncLocations,
-                    MarketingCaptureScenario.GuideAndroidFolderSyncRules,
                     MarketingCaptureScenario.GuideAndroidFolderSyncStatus,
                     MarketingCaptureScenario.GuideLinuxFolderSyncWorkspace,
-                    MarketingCaptureScenario.GuideLinuxFolderSyncRules,
                     MarketingCaptureScenario.GuideWindowsCloudFilesSettings,
                     MarketingCaptureScenario.GuideWindowsCloudFilesStorage,
                     MarketingCaptureScenario.GuideWindowsCloudFilesRecovery,
@@ -1207,7 +1218,6 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary,
                     MarketingCaptureScenario.GuideAndroidCalendarMonth,
                     MarketingCaptureScenario.GuideAndroidCalendarAgenda,
-                    MarketingCaptureScenario.GuideAndroidCalendarEdit,
                     MarketingCaptureScenario.GuideDesktopCalendarMonth,
                     MarketingCaptureScenario.GuideDesktopCalendarSources,
                     MarketingCaptureScenario.GuideDesktopCalendarEdit,
