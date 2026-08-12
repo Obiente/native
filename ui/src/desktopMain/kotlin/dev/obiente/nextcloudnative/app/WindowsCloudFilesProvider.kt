@@ -437,6 +437,8 @@ internal class WindowsCloudFilesProvider(
         Thread(work, "nextcloud-windows-cloud-files").apply { isDaemon = true }
     },
     private val writebackRetryDelayMillis: (attempt: Int) -> Long = ::windowsWritebackRetryDelayMillis,
+    private val directoryRefreshRetryDelayMillis: (attempt: Int) -> Long =
+        ::windowsDirectoryRefreshRetryDelayMillis,
     private val recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit = {},
     private val preserveCorruptRoot: (Path) -> Path = ::preserveWindowsCloudFilesCorruptRoot,
     private val recordPreservedCorruptRoot: (Path) -> Unit = {},
@@ -1375,6 +1377,61 @@ internal class WindowsCloudFilesProvider(
                 ),
             )
             if (!unchangedDirectoryRefresh) throw failure
+            scheduleUnchangedDirectoryRefresh(localPath, current, attempt = 1)
+        }
+    }
+
+    private fun scheduleUnchangedDirectoryRefresh(
+        localPath: Path,
+        identity: WindowsCloudFileIdentity,
+        attempt: Int,
+    ) {
+        if (callbacksPaused.get()) return
+        val delayMillis = directoryRefreshRetryDelayMillis(attempt).coerceAtLeast(0L)
+        runCatching {
+            localChangeScheduler.schedule(
+                {
+                    if (callbacksPaused.get()) return@schedule
+                    runCatching {
+                        executor.execute {
+                            if (callbacksPaused.get()) return@execute
+                            retryUnchangedDirectoryRefresh(localPath, identity, attempt)
+                        }
+                    }
+                },
+                delayMillis,
+                TimeUnit.MILLISECONDS,
+            )
+        }
+    }
+
+    private fun retryUnchangedDirectoryRefresh(
+        localPath: Path,
+        identity: WindowsCloudFileIdentity,
+        attempt: Int,
+    ) {
+        try {
+            api.updatePlaceholder(localPath, placeholder(identity), invalidateContent = false)
+            recordPlaceholderDiagnostic(
+                severity = SupportDiagnosticSeverity.Info,
+                operation = "cloud-files.placeholder-update",
+                outcome = "unchanged-refresh-recovered",
+                localDirectory = localPath.parent ?: root,
+                identity = identity,
+                fields = listOf(SupportDiagnosticFieldDraft("attempt", attempt.toString())),
+            )
+        } catch (failure: WindowsCloudFilesOperationException) {
+            val exhausted = attempt >= MAX_WINDOWS_DIRECTORY_REFRESH_ATTEMPTS
+            recordPlaceholderDiagnostic(
+                severity = SupportDiagnosticSeverity.Warning,
+                operation = "cloud-files.placeholder-update",
+                outcome = if (exhausted) "unchanged-refresh-stale" else "unchanged-refresh-retry-failed",
+                code = "HRESULT:0x${failure.hResult.toUInt().toString(16)}",
+                localDirectory = localPath.parent ?: root,
+                identity = identity,
+                fields = listOf(SupportDiagnosticFieldDraft("attempt", attempt.toString())),
+            )
+            if (!exhausted) scheduleUnchangedDirectoryRefresh(localPath, identity, attempt + 1)
         }
     }
 
@@ -1915,12 +1972,18 @@ private fun String.windowsCloudPath(): String {
 
 private const val WINDOWS_CLOUD_ALIGNMENT = 4 * 1024L
 private const val MAX_WINDOWS_WRITEBACK_ATTEMPTS = 5
+private const val MAX_WINDOWS_DIRECTORY_REFRESH_ATTEMPTS = 4
 private const val DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS = 120L
 private const val DEFAULT_INITIAL_POPULATION_TIMEOUT_SECONDS = 120L
 
 private fun windowsWritebackRetryDelayMillis(attempt: Int): Long {
     require(attempt in 1 until MAX_WINDOWS_WRITEBACK_ATTEMPTS)
     return (250L shl (attempt - 1)).coerceAtMost(30_000L)
+}
+
+private fun windowsDirectoryRefreshRetryDelayMillis(attempt: Int): Long {
+    require(attempt in 1..MAX_WINDOWS_DIRECTORY_REFRESH_ATTEMPTS)
+    return (1_000L shl (attempt - 1)).coerceAtMost(30_000L)
 }
 
 private fun Path.registerForWindowsCloudChanges(watcher: WatchService) {
