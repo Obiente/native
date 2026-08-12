@@ -322,9 +322,9 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt": "74ed912eef556a53b7eb0008946aa5b4425cb69456bea75368d309a39052a331",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingBudgetCaptureScenario.kt": "e28c89ee88d466abab6a8412d87d0ae2c0c5812a2b7b4104851f8d0ae0f640fc",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCalendarWorkspaceScenario.kt": "e901934af65cfba3f2849567ff257894847c56691781924422bab99b4a529a24",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "684c6ff3c076f2cb51d60a669a014c14c2d285bcda6217df321fea254755315d",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "44d698022b6d23951e7c15459534ea0f32d634905894b8c2b98e1757e5b50388",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt": "75ab130cd489712673b9402a8e2da7b9edab84b4bb3f3f5c8dacb8a03bd86390",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt": "d5bcc115852dc985c3bdea16146610ce6461be64d9a279d04b6861fb5cb0c73b",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt": "5c98c07c65751c9648d43cdd61b0f788e0b72eba2b9f3a442750bccdcad5f4cc",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingLivePhotoCaptureScenarios.kt": "20a74e6b425a56b0ba6d32f28b89c5722f2f9569f1dceeaa621f2f226bec9101",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingMusicWorkspaceCaptureScenarios.kt": "0b0d389bad369beae37b9044c372abd4c0dbb5049a958fb2ba46bed56e7cda16",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingPhotoFolderCaptureScenarios.kt": "ddd84d1422d0198e948f38e994b886a70b5f6862d9d0eba4d5acbdf1517f3361",
@@ -360,7 +360,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudFileListing.kt": "1f3de4f31d44d3ead139686d3fbcfbd27ccb520a9dab06ccc1d3e582ee25fb71",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt": "53cc22fed51fe03ef0aaab6a3f849222b0dbfb04fac9c4e3a73057b85c524290",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewerActions.kt": "48aaed6948d1423113d300cc3ab86d244ab76e8225e24988e9855edf74553944",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "c4a1f9d2779a0b15f0bab65769fda7a9dabea2f62581bfc2512d82bda83ed367",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "4f4d80133168e2516faa476495040f783563c6fb1c4d3d0ca54a3d5673363786",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt": "944103dba7d35abd17d21cb2bf5818c19b8148abf6b8d37fcdafdab029abe56b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotesCache.kt": "9223dd455c6a1c35a10769616fceb9dfb2d92ef4d43b0a52c2c29e40f1a196cf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPeople.kt": "cff910ea2cc77211ef81779c49ee0c957851f2b4a3ed32b857b12ded1cee643b",
@@ -425,7 +425,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudTokens.kt": "e40c061f25d8804a463ed4c1da8b14ad6310f95f801c26c2f86545a848209108",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudWorkspaceBreakpoints.kt": "17d16358fd61bd22eb6acd8d39dbde489010db2f9cefabcd8618e66d29d2e326",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptor.kt": "32ac1c805db161c8d9493cd371036c180d083192d4b896dfdd4e34102257cf00",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptorCompiler.kt": "6c5f4c001fa3062f47819cc7b0f1b5993c9a209d16279bd4fe2a8765a77743f1",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptorCompiler.kt": "e4093d866ec883398e426c13aa396773a629a76737c33a48c2dfbead556891d3",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicDescriptorMapper.kt": "f5499a87eddb820907a6adb8e228949956c6263f36585a578fc77c1405d2a13d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicDescriptorValidation.kt": "a69cbab2040ddf4616a9e69f85278ff854f980a6559ca7ed104568480b9cf0e1",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicFormFormats.kt": "2750cbb63979cd1adf4264d5cb75d63d67980321f280e6c10ec64db35dcdfc0e",
@@ -1814,7 +1814,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "f53448e0315dcea41786cdbaeffff02aa5bd1b9a616c3f4fc35debb85a42e800"
+            "sha256": "579a22dc1ba7447d034767ba5a237faf41d32862958d06a74507bbf4d5705b3e"
         },
         {
             "scenario": "tables-insights-desktop-light",
@@ -1830,7 +1830,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "1613844396750355e2ca71e63e7181e56c01dd6bd473f3719ba9ed8a1690ccf2"
+            "sha256": "47a48ffb10dab15279a0dbcf73db298ec60381e1c3dc822369db1b35faf65cc7"
         },
         {
             "scenario": "tables-rows-desktop",
@@ -1846,7 +1846,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "0b16ed867eca4a4449d598e7413cb67b7f6dcbdcc04aa3a915b0aa71c376c5ac"
+            "sha256": "e2274634baf5b183cb41883bb342d73bbaafadc35ce13b79cae8e724f560680f"
         },
         {
             "scenario": "tables-rows-desktop-light",
@@ -1862,7 +1862,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "ce47509d927dd53f68c7801062cbf7710b447a0421bf18c417acfdbaad9d3394"
+            "sha256": "463ef99794ee44cd893e62042531ed3124e91bad793e685f9cbd475ec5abd300"
         },
         {
             "scenario": "tables-row-form-desktop",
@@ -1878,7 +1878,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "37deb86a40382649d4cced6addfe5028fc671801758810909acf82413a5f5f63"
+            "sha256": "e4eda066268bfd4f675c52118df6b14f0f38f5b9bb08eeeb2b9fcb08871e2c77"
         },
         {
             "scenario": "tables-row-form-desktop-light",
@@ -1894,7 +1894,103 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "bbf172b2ba3178d64657bcc07737a6a7daf9dc2ed6f585d8c2f7dec95ffd0231"
+            "sha256": "77c8420131ef5d2f25f7228e845ebcb6dae9ed7c801c0e723c25efa38781f7ef"
+        },
+        {
+            "scenario": "tables-columns-desktop",
+            "baseScenario": "tables-columns-desktop",
+            "file": "tables-columns-desktop.png",
+            "theme": "dark",
+            "width": 1440,
+            "height": 900,
+            "density": 1.0,
+            "feature": "Tables",
+            "surface": "Typed table columns",
+            "state": "Synthetic data on the upstream Tables columns route",
+            "purpose": "state-coverage",
+            "platform": "desktop",
+            "viewport": "wide",
+            "sha256": "f6ec119129497e20775159e0e6851cd08d5994dc1f67c5bf4e63335b3ef672d5"
+        },
+        {
+            "scenario": "tables-columns-desktop-light",
+            "baseScenario": "tables-columns-desktop",
+            "file": "tables-columns-desktop-light.png",
+            "theme": "light",
+            "width": 1440,
+            "height": 900,
+            "density": 1.0,
+            "feature": "Tables",
+            "surface": "Typed table columns",
+            "state": "Synthetic data on the upstream Tables columns route",
+            "purpose": "state-coverage",
+            "platform": "desktop",
+            "viewport": "wide",
+            "sha256": "948a92e1813e4be801e1c2c2d9720c9e480b170cdf4dbf5ca374409951368c43"
+        },
+        {
+            "scenario": "tables-views-desktop",
+            "baseScenario": "tables-views-desktop",
+            "file": "tables-views-desktop.png",
+            "theme": "dark",
+            "width": 1440,
+            "height": 900,
+            "density": 1.0,
+            "feature": "Tables",
+            "surface": "Saved views",
+            "state": "Synthetic data on the upstream Tables views route",
+            "purpose": "state-coverage",
+            "platform": "desktop",
+            "viewport": "wide",
+            "sha256": "4b6a4f9551ee149082e74c0bf0d57079acd1c2477a7b8217617cbf89f15a55e3"
+        },
+        {
+            "scenario": "tables-views-desktop-light",
+            "baseScenario": "tables-views-desktop",
+            "file": "tables-views-desktop-light.png",
+            "theme": "light",
+            "width": 1440,
+            "height": 900,
+            "density": 1.0,
+            "feature": "Tables",
+            "surface": "Saved views",
+            "state": "Synthetic data on the upstream Tables views route",
+            "purpose": "state-coverage",
+            "platform": "desktop",
+            "viewport": "wide",
+            "sha256": "cbd81c5053d4fe907ea4b525083bef51826aed026b2c59afc748cff32c1e3f8d"
+        },
+        {
+            "scenario": "tables-shares-desktop",
+            "baseScenario": "tables-shares-desktop",
+            "file": "tables-shares-desktop.png",
+            "theme": "dark",
+            "width": 1440,
+            "height": 900,
+            "density": 1.0,
+            "feature": "Tables",
+            "surface": "Table sharing and permissions",
+            "state": "Synthetic data on the upstream Tables shares route",
+            "purpose": "state-coverage",
+            "platform": "desktop",
+            "viewport": "wide",
+            "sha256": "17f18a58b785977eda4a79e2fff7cf4d976551592a45eb3e12d39a6fd827008a"
+        },
+        {
+            "scenario": "tables-shares-desktop-light",
+            "baseScenario": "tables-shares-desktop",
+            "file": "tables-shares-desktop-light.png",
+            "theme": "light",
+            "width": 1440,
+            "height": 900,
+            "density": 1.0,
+            "feature": "Tables",
+            "surface": "Table sharing and permissions",
+            "state": "Synthetic data on the upstream Tables shares route",
+            "purpose": "state-coverage",
+            "platform": "desktop",
+            "viewport": "wide",
+            "sha256": "2147ebdf87af23243317cb03eaebf288c34cb150ae205827415d0e0a881065d8"
         },
         {
             "scenario": "tables-row-form-mobile",
@@ -1910,7 +2006,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "c17a2e1e190cd9def3716dd122a248cff3d6dd88c2ffa157ca0e569cc71d5930"
+            "sha256": "be1e775edbda019235a31806d48e2ca98939ed2d4b31ffd3a59917cc7473a3a9"
         },
         {
             "scenario": "tables-row-form-mobile-light",
@@ -1926,7 +2022,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "350556516d4c723ff2efcfffea671bbafcafe2e019ea66643a6130fd25d60ee4"
+            "sha256": "c6f7312388e13c48d8fbc2c83c8954f6081d8c3a4f502bd2d74dd1b6764334c5"
         },
         {
             "scenario": "tables-rows-mobile",
@@ -1942,7 +2038,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "dee2e63dd653fb09f952e70542900222288db18f529d17a3cb68ae137a6e227c"
+            "sha256": "46405f9542e4e667c9d0263202807bf578f6f9e136c26f9edc458311258e1b9b"
         },
         {
             "scenario": "tables-rows-mobile-light",
@@ -1958,7 +2054,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "484b33d4aa35e7dfcb98095017e724d021c6b23afcc971f21b8188a0b7412e95"
+            "sha256": "8d3c96d8a11e4165054beb06306fdf74d727e888bd313f9efd42f84479c13368"
         },
         {
             "scenario": "tables-overview-mobile",
@@ -1974,7 +2070,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "7e0860b5794e9d7d772d9a485bb54c77a9efcd148268245a6bfb7918ba34b064"
+            "sha256": "fc9f21d23c470a9447e8316043d5955d094c5ebe235bdf310c87fd48a16f58ef"
         },
         {
             "scenario": "tables-overview-mobile-light",
@@ -1990,7 +2086,103 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "e947fe4e3089ef58e5fb74dd251015cf3ecfb51e710f14f980da642157dd29c9"
+            "sha256": "f2536a8422188b6a18a0f204aadd096fe2696e6ad703490faff78598f7ae7543"
+        },
+        {
+            "scenario": "tables-columns-mobile",
+            "baseScenario": "tables-columns-mobile",
+            "file": "tables-columns-mobile.png",
+            "theme": "dark",
+            "width": 1024,
+            "height": 2216,
+            "density": 2.625,
+            "feature": "Tables",
+            "surface": "Typed table columns",
+            "state": "Synthetic data on the upstream Tables columns route",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "cbe92a2fb87bca219a889b3ad8f448881101192f290f1791c7c60a08baa8d5b9"
+        },
+        {
+            "scenario": "tables-columns-mobile-light",
+            "baseScenario": "tables-columns-mobile",
+            "file": "tables-columns-mobile-light.png",
+            "theme": "light",
+            "width": 1024,
+            "height": 2216,
+            "density": 2.625,
+            "feature": "Tables",
+            "surface": "Typed table columns",
+            "state": "Synthetic data on the upstream Tables columns route",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "6215c14d76ff23a1057a77b4430d65bb9c4313f1abdf2011b083f8bacc5b1827"
+        },
+        {
+            "scenario": "tables-views-mobile",
+            "baseScenario": "tables-views-mobile",
+            "file": "tables-views-mobile.png",
+            "theme": "dark",
+            "width": 1024,
+            "height": 2216,
+            "density": 2.625,
+            "feature": "Tables",
+            "surface": "Saved views",
+            "state": "Synthetic data on the upstream Tables views route",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "f9597fe48279438fe553fbabf5833bd3c5316de7ffc6eb8a24a02eb68534938c"
+        },
+        {
+            "scenario": "tables-views-mobile-light",
+            "baseScenario": "tables-views-mobile",
+            "file": "tables-views-mobile-light.png",
+            "theme": "light",
+            "width": 1024,
+            "height": 2216,
+            "density": 2.625,
+            "feature": "Tables",
+            "surface": "Saved views",
+            "state": "Synthetic data on the upstream Tables views route",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "5135d206b92516cf84f44d81e10ed67d582b6d358240e0b7b55759c99e94b945"
+        },
+        {
+            "scenario": "tables-shares-mobile",
+            "baseScenario": "tables-shares-mobile",
+            "file": "tables-shares-mobile.png",
+            "theme": "dark",
+            "width": 1024,
+            "height": 2216,
+            "density": 2.625,
+            "feature": "Tables",
+            "surface": "Table sharing and permissions",
+            "state": "Synthetic data on the upstream Tables shares route",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "04cafe1daad4030d1df458514f4855660e778a89514a3c5a867ddb3e4ae3d6c1"
+        },
+        {
+            "scenario": "tables-shares-mobile-light",
+            "baseScenario": "tables-shares-mobile",
+            "file": "tables-shares-mobile-light.png",
+            "theme": "light",
+            "width": 1024,
+            "height": 2216,
+            "density": 2.625,
+            "feature": "Tables",
+            "surface": "Table sharing and permissions",
+            "state": "Synthetic data on the upstream Tables shares route",
+            "purpose": "state-coverage",
+            "platform": "mobile",
+            "viewport": "phone-portrait",
+            "sha256": "8a95c061fd8fad96ac8a02694dc7a0ea1c1ed69e37735c3c6bd07587bcde48dc"
         },
         {
             "scenario": "mail-workspace-desktop",
@@ -3928,7 +4120,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "f53448e0315dcea41786cdbaeffff02aa5bd1b9a616c3f4fc35debb85a42e800"
+            "sha256": "579a22dc1ba7447d034767ba5a237faf41d32862958d06a74507bbf4d5705b3e"
         },
         {
             "scenario": "guide-desktop-switch-apps-nested-light",
@@ -3944,7 +4136,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "1613844396750355e2ca71e63e7181e56c01dd6bd473f3719ba9ed8a1690ccf2"
+            "sha256": "47a48ffb10dab15279a0dbcf73db298ec60381e1c3dc822369db1b35faf65cc7"
         }
     ]
 }
