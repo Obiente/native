@@ -4,6 +4,7 @@ import java.util.prefs.Preferences
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class DesktopVirtualFileProviderPreferencesTest {
@@ -18,5 +19,21 @@ class DesktopVirtualFileProviderPreferencesTest {
         assertEquals("vfp-active.$firstAccountId", firstKey)
         assertTrue(firstKey.length <= Preferences.MAX_KEY_LENGTH)
         assertNotEquals(firstKey, secondKey)
+    }
+
+    @Test
+    fun `failed provider cleanup cannot prevent replacement detachment`() {
+        val cleanupFailure = IllegalStateException("simulated disconnect failure")
+        var detached = false
+        var recordedFailure: Throwable? = null
+
+        detachVirtualFileProviderForReplacement(
+            provider = AutoCloseable { throw cleanupFailure },
+            detach = { detached = true },
+            onCleanupFailure = { recordedFailure = it },
+        )
+
+        assertTrue(detached)
+        assertSame(cleanupFailure, recordedFailure)
     }
 }

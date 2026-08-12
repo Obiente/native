@@ -2167,6 +2167,7 @@ class WindowsCloudFilesProviderTest {
         val releaseMigration = CountDownLatch(1)
         val migrationFinished = CountDownLatch(1)
         val preservationStarted = CountDownLatch(1)
+        val preserveCount = AtomicInteger()
         val diagnostics = CopyOnWriteArrayList<SupportDiagnosticEventDraft>()
         val preserved = root.resolveSibling("preserved-migration-delayed-corruption")
         val backend = FakeBackend(ByteArray(0), listed = listOf(identity))
@@ -2181,6 +2182,7 @@ class WindowsCloudFilesProviderTest {
             directoryRefreshRetryDelayMillis = { 500L },
             recordDiagnostic = diagnostics::add,
             preserveCorruptRoot = { current ->
+                preserveCount.incrementAndGet()
                 preservationStarted.countDown()
                 api.seedState(local, WindowsCloudPlaceholderState.Absent)
                 Files.move(current, preserved)
@@ -2229,6 +2231,7 @@ class WindowsCloudFilesProviderTest {
                 Thread.yield()
             }
             assertTrue(diagnostics.any { it.outcome == "corrupt-root-recovered" })
+            assertEquals(1, preserveCount.get())
             assertEquals(preserved, provider.preservedRecoveryRoot)
         } finally {
             releaseMigration.countDown()

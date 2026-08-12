@@ -531,14 +531,14 @@ internal class WindowsCloudFilesProvider(
         syncRootIdentity: ByteArray,
         corruption: WindowsCloudFilesCorruptEntryException,
         quiescenceTimeoutSeconds: Long = DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS,
+        expectedGeneration: Long = corruptRootRecoveryGeneration.get(),
     ) {
         require(quiescenceTimeoutSeconds > 0L)
-        val observedGeneration = corruptRootRecoveryGeneration.get()
         val claimDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(quiescenceTimeoutSeconds)
         while (!claimCorruptRootRecovery()) {
             check(!runtimeStopping.get()) { "Windows Cloud Files is stopping." }
             runtimeRecoveryFailure.get()?.let { throw it }
-            if (corruptRootRecoveryGeneration.get() != observedGeneration) return
+            if (corruptRootRecoveryGeneration.get() != expectedGeneration) return
             check(System.nanoTime() < claimDeadline) {
                 "Timed out waiting for the active Windows Cloud Files corrupt-root recovery."
             }
@@ -554,7 +554,7 @@ internal class WindowsCloudFilesProvider(
         }
         try {
             runtimeRecoveryFailure.get()?.let { throw it }
-            if (corruptRootRecoveryGeneration.get() != observedGeneration) return
+            if (corruptRootRecoveryGeneration.get() != expectedGeneration) return
             performCorruptRootRecovery(syncRootIdentity, corruption, quiescenceTimeoutSeconds)
             corruptRootRecoveryGeneration.incrementAndGet()
         } catch (failure: Throwable) {
@@ -827,12 +827,15 @@ internal class WindowsCloudFilesProvider(
     fun recoverBeforeRootMigration(timeoutSeconds: Long = 120L) {
         require(timeoutSeconds > 0L)
         var deferredCorruption: WindowsCloudFilesCorruptEntryException? = null
+        var deferredCorruptionGeneration: Long? = null
         synchronized(corruptRootStableAccessLock) {
+            val inspectedGeneration = corruptRootRecoveryGeneration.get()
             runtimeRecoveryFailure.get()?.let { throw it }
             try {
                 repairRemotePlaceholderTree()
             } catch (corruption: WindowsCloudFilesCorruptEntryException) {
                 deferredCorruption = corruption
+                deferredCorruptionGeneration = inspectedGeneration
             }
             if (deferredCorruption == null) {
                 try {
@@ -840,6 +843,7 @@ internal class WindowsCloudFilesProvider(
                     recoverUnmanagedLocalEntries(failClosed = true)
                 } catch (corruption: WindowsCloudFilesCorruptEntryException) {
                     deferredCorruption = corruption
+                    deferredCorruptionGeneration = inspectedGeneration
                 }
             }
             check(initialRecoveryFinished.await(timeoutSeconds, TimeUnit.SECONDS)) {
@@ -847,7 +851,10 @@ internal class WindowsCloudFilesProvider(
             }
             runtimeRecoveryFailure.get()?.let { throw it }
             when (val failure = initialRecoveryFailure) {
-                is WindowsCloudFilesCorruptEntryException -> deferredCorruption = deferredCorruption ?: failure
+                is WindowsCloudFilesCorruptEntryException -> if (deferredCorruption == null) {
+                    deferredCorruption = failure
+                    deferredCorruptionGeneration = inspectedGeneration
+                }
                 null -> Unit
                 else -> throw failure
             }
@@ -855,11 +862,13 @@ internal class WindowsCloudFilesProvider(
             awaitWritebackRecovery(deadline)
         }
         deferredCorruption?.let { corruption ->
+            val expectedGeneration = requireNotNull(deferredCorruptionGeneration)
             val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
             recoverCorruptRoot(
                 WindowsCloudFileIdentityCodec.encode(rootIdentity),
                 corruption,
                 quiescenceTimeoutSeconds = timeoutSeconds,
+                expectedGeneration = expectedGeneration,
             )
             initialRecoveryFailure = null
             synchronized(corruptRootStableAccessLock) {

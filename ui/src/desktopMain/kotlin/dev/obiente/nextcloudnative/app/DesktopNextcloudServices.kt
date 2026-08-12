@@ -915,6 +915,15 @@ internal fun combinedAutomaticCacheExcess(
     return (total - maximumBytes).coerceAtLeast(0L)
 }
 
+internal fun detachVirtualFileProviderForReplacement(
+    provider: AutoCloseable?,
+    detach: () -> Unit,
+    onCleanupFailure: (Throwable) -> Unit,
+) {
+    detach()
+    runCatching { provider?.close() }.onFailure(onCleanupFailure)
+}
+
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
     private val onKeepRunningInBackgroundChanged: (Boolean) -> Unit = {},
@@ -1864,9 +1873,22 @@ class DesktopNextcloudServices(
                         "Windows Cloud Files are already connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
                     )
                 }
-                windowsCloudFilesProvider?.close()
-                windowsCloudFilesProvider = null
-                windowsCloudFilesIdentity = null
+                val replacedProvider = windowsCloudFilesProvider
+                detachVirtualFileProviderForReplacement(
+                    provider = replacedProvider,
+                    detach = {
+                        windowsCloudFilesProvider = null
+                        windowsCloudFilesIdentity = null
+                    },
+                    onCleanupFailure = { failure ->
+                        recordVirtualFileFailure(
+                            operation = "cloud-files.failed-provider-cleanup",
+                            accountId = accountId,
+                            root = desktopWindowsCloudFilesRoot(accountId).toPath(),
+                            failure = failure,
+                        )
+                    },
+                )
                 val root = desktopWindowsCloudFilesRoot(accountId).toPath()
                 val userHome = File(System.getProperty("user.home"))
                 val backend = DesktopNextcloudWindowsCloudFilesBackend(
