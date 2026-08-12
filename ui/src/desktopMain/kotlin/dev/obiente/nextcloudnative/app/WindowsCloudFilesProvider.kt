@@ -475,6 +475,7 @@ internal class WindowsCloudFilesProvider(
         Thread(work, "nextcloud-windows-local-changes").apply { isDaemon = true }
     }
     private val pendingLocalChanges = ConcurrentHashMap<Path, ScheduledFuture<*>>()
+    private val deferredLocalChanges = ConcurrentHashMap.newKeySet<Path>()
     private val initialPopulationStarted = AtomicBoolean(false)
     private val initialPopulationFinished = CountDownLatch(1)
     @Volatile private var initialPopulationSucceeded = false
@@ -650,7 +651,7 @@ internal class WindowsCloudFilesProvider(
             populateDirectory("", root)
             if (restartWatcher && !runtimeStopping.get()) startLocalWatcher()
             recoverUnmanagedLocalEntries(failClosed = true)
-            if (!runtimeStopping.get()) callbacksPaused.set(false)
+            resumeCallbacksAndReplayLocalChanges()
         } catch (retryFailure: Throwable) {
             retryFailure.addSuppressed(corruption)
             throw retryFailure
@@ -1142,9 +1143,17 @@ internal class WindowsCloudFilesProvider(
 
     /** Handles local files or complete directory trees that do not have Cloud Files identities yet. */
     fun localEntryChanged(path: Path) {
-        if (callbacksPaused.get()) return
         val normalized = path.toAbsolutePath().normalize()
         if (!normalized.startsWith(root.toAbsolutePath().normalize()) || normalized == root) return
+        val deferred = synchronized(namespaceMutationLock) {
+            if (callbacksPaused.get()) {
+                if (!runtimeStopping.get()) deferredLocalChanges.add(normalized)
+                true
+            } else {
+                false
+            }
+        }
+        if (deferred) return
         if (!Files.exists(normalized) || api.placeholderState(normalized) != WindowsCloudPlaceholderState.Absent) return
         val relative = root.toAbsolutePath().normalize().relativize(normalized)
             .joinToString("/") { it.toString() }.windowsCloudPath()
@@ -1317,6 +1326,16 @@ internal class WindowsCloudFilesProvider(
         watchService = null
         pendingLocalChanges.values.forEach { it.cancel(false) }
         pendingLocalChanges.clear()
+        deferredLocalChanges.clear()
+    }
+
+    private fun resumeCallbacksAndReplayLocalChanges() {
+        val replay = synchronized(namespaceMutationLock) {
+            if (runtimeStopping.get()) return
+            callbacksPaused.set(false)
+            deferredLocalChanges.toList().also(deferredLocalChanges::removeAll)
+        }
+        replay.forEach(::scheduleLocalChange)
     }
 
     private fun closeApi() {
