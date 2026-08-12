@@ -104,8 +104,10 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
+import dev.obiente.nextcloudnative.app.JvmNetworkResponseTruncatedIOException
 import dev.obiente.nextcloudnative.app.isReadOnlyJvmNetworkMethod
 import dev.obiente.nextcloudnative.app.isJvmLocalUploadSourceFailure
+import dev.obiente.nextcloudnative.app.requireExactJvmNetworkResponseBytes
 import dev.obiente.nextcloudnative.app.toJvmLocalUploadSourceDiagnosticEvent
 import dev.obiente.nextcloudnative.app.toJvmNetworkFailureDiagnostic
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
@@ -1769,6 +1771,8 @@ internal class AndroidNextcloudServices(
                 "If-Match" to safeEtag,
             ),
             maxResponseBytes = length.toLong(),
+            expectedSuccessResponseBytes = length,
+            expectedSuccessResponseStatus = 206,
             client = noRedirectHttpClient,
         )
         check(response.status == 206) {
@@ -1776,9 +1780,6 @@ internal class AndroidNextcloudServices(
         }
         check(isExactHttpByteContentRange(response.contentRange, offset, endInclusive)) {
             "The server returned a different file range than requested."
-        }
-        check(response.body.size == length) {
-            "The server returned an incomplete file range."
         }
         response.body
     }
@@ -1842,14 +1843,14 @@ internal class AndroidNextcloudServices(
                             }
                             val responseBody = response.body
                             val contentLength = responseBody.contentLength()
+                            if (contentLength in 0 until length.toLong()) {
+                                throw JvmNetworkResponseTruncatedIOException()
+                            }
                             check(contentLength == length.toLong() || contentLength == -1L) {
                                 "The server returned an incomplete file range."
                             }
-                            responseBody.byteStream().readBounded(length.toLong()).also { bytes ->
-                                check(bytes.size == length) {
-                                    "The server returned an incomplete file range."
-                                }
-                            }
+                            responseBody.byteStream().readBounded(length.toLong())
+                                .requireExactJvmNetworkResponseBytes(length)
                         }
                     } catch (failure: Throwable) {
                         recordStreamingFailure(
@@ -1938,14 +1939,14 @@ internal class AndroidNextcloudServices(
                                 }
                             val responseBody = response.body
                             val contentLength = responseBody.contentLength()
+                            if (contentLength in 0 until length.toLong()) {
+                                throw JvmNetworkResponseTruncatedIOException()
+                            }
                             check(contentLength == length.toLong() || contentLength == -1L) {
                                 "The Memories stream returned an incomplete file range."
                             }
-                            responseBody.byteStream().readBounded(length.toLong()).also { bytes ->
-                                check(bytes.size == length) {
-                                    "The Memories stream returned an incomplete file range."
-                                }
-                            }
+                            responseBody.byteStream().readBounded(length.toLong())
+                                .requireExactJvmNetworkResponseBytes(length)
                         }
                     }
                     result.exceptionOrNull()?.let { failure ->
@@ -2834,10 +2835,13 @@ internal class AndroidNextcloudServices(
         headers: Map<String, String> = emptyMap(),
         rawBody: ByteArray? = null,
         maxResponseBytes: Long = MAX_API_RESPONSE_BYTES,
+        expectedSuccessResponseBytes: Int? = null,
+        expectedSuccessResponseStatus: Int? = null,
         client: OkHttpClient = httpClient,
         streamingBody: RequestBody? = null,
     ): HttpResponse {
         val started = System.nanoTime()
+        require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
         check(appContext.isAllowedTestRequest(method, url)) {
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
         }
@@ -2870,9 +2874,13 @@ internal class AndroidNextcloudServices(
                 check(contentLength <= readLimit || contentLength == -1L) {
                     "The server response is larger than the allowed ${formatByteLimit(readLimit)} limit."
                 }
+                val bodyBytes = responseBody.byteStream().readBounded(readLimit)
+                if (response.code == expectedSuccessResponseStatus && expectedSuccessResponseBytes != null) {
+                    bodyBytes.requireExactJvmNetworkResponseBytes(expectedSuccessResponseBytes)
+                }
                 HttpResponse(
                     status = response.code,
-                    body = responseBody.byteStream().readBounded(readLimit),
+                    body = bodyBytes,
                     contentType = responseBody.contentType()?.toString(),
                     etag = response.header("ETag") ?: response.header("OC-Etag"),
                     location = if (session == null) {

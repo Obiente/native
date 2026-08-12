@@ -18,6 +18,15 @@ import okhttp3.EventListener
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
+class JvmNetworkResponseTruncatedIOException :
+    IOException("The network response ended before the expected byte count.")
+
+fun ByteArray.requireExactJvmNetworkResponseBytes(expectedBytes: Int): ByteArray {
+    require(expectedBytes >= 0)
+    if (size < expectedBytes) throw JvmNetworkResponseTruncatedIOException()
+    return this
+}
+
 enum class JvmNetworkFailurePhase(val storageValue: String) {
     Unknown("unknown"),
     Dns("dns"),
@@ -132,6 +141,8 @@ fun Throwable.toJvmNetworkFailureDiagnostic(
             ClassifiedJvmNetworkFailure("NETWORK_CONNECT_FAILED", retryable = true)
         causes.any { it is SocketTimeoutException } ->
             ClassifiedJvmNetworkFailure(attempt.phase.timeoutCode(), retryable = true)
+        causes.any { it is JvmNetworkResponseTruncatedIOException } ->
+            ClassifiedJvmNetworkFailure("NETWORK_RESPONSE_TRUNCATED", retryable = true)
         causes.any { failure ->
             attempt.phase == JvmNetworkFailurePhase.ResponseBody &&
                 failure is ProtocolException &&

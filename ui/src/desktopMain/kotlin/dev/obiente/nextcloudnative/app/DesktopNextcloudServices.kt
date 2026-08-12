@@ -4079,12 +4079,14 @@ class DesktopNextcloudServices(
                             }
                             val responseBody = response.body
                             val contentLength = responseBody.contentLength()
+                            if (contentLength in 0 until length.toLong()) {
+                                throw JvmNetworkResponseTruncatedIOException()
+                            }
                             check(contentLength == -1L || contentLength == length.toLong()) {
                                 "The server returned an incomplete file range."
                             }
-                            responseBody.byteStream().readBounded(length.toLong()).also { bytes ->
-                                check(bytes.size == length) { "The server returned an incomplete file range." }
-                            }
+                            responseBody.byteStream().readBounded(length.toLong())
+                                .requireExactJvmNetworkResponseBytes(length)
                         }
                     } catch (failure: Throwable) {
                         recordDesktopStreamingFailure(
@@ -4143,6 +4145,8 @@ class DesktopNextcloudServices(
                 "If-Match" to safeEtag,
             ),
             maxResponseBytes = length.toLong(),
+            expectedSuccessResponseBytes = length,
+            expectedSuccessResponseStatus = 206,
             client = noRedirectHttpClient,
         )
         check(response.status == 206) {
@@ -4162,9 +4166,6 @@ class DesktopNextcloudServices(
             check(requireSafeFileRangeEtag(returnedEtag) == safeEtag) {
                 "The Memories stream returned a different file generation."
             }
-        }
-        check(response.body.size == length) {
-            "The Memories stream returned an incomplete file range."
         }
         response.body
     }
@@ -5113,12 +5114,15 @@ class DesktopNextcloudServices(
         headers: Map<String, String> = emptyMap(),
         rawBody: ByteArray? = null,
         maxResponseBytes: Long = MAX_API_RESPONSE_BYTES,
+        expectedSuccessResponseBytes: Int? = null,
+        expectedSuccessResponseStatus: Int? = null,
         client: OkHttpClient = httpClient,
         streamingBody: RequestBody? = null,
         mutationExecutor: DesktopHttpMutationExecutor? = null,
         onAmbiguousMutationResult: () -> Unit = {},
     ): HttpResponse {
         val started = System.nanoTime()
+        require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
         val requestBody = when {
             streamingBody != null -> streamingBody
             rawBody != null -> rawBody.toRequestBody(contentType?.toMediaType())
@@ -5148,6 +5152,9 @@ class DesktopNextcloudServices(
                 runCatching { responseBody.byteStream().readBounded(readLimit) }.getOrDefault(byteArrayOf())
             } else {
                 responseBody.byteStream().readBounded(readLimit)
+            }
+            if (response.code == expectedSuccessResponseStatus && expectedSuccessResponseBytes != null) {
+                bodyBytes.requireExactJvmNetworkResponseBytes(expectedSuccessResponseBytes)
             }
             return HttpResponse(
                 response.code,

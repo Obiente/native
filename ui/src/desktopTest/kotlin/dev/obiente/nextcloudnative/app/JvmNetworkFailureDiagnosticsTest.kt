@@ -28,6 +28,29 @@ import okhttp3.internal.http2.StreamResetException
 
 class JvmNetworkFailureDiagnosticsTest {
     @Test
+    fun cleanShortResponseIsTypedAndClassifiedAsTruncation() {
+        val failure = assertFailsWith<JvmNetworkResponseTruncatedIOException> {
+            byteArrayOf(1, 2, 3).requireExactJvmNetworkResponseBytes(4)
+        }
+        val attempt = JvmNetworkRequestAttempt().apply {
+            markPhase(JvmNetworkFailurePhase.ResponseBody)
+            markExchangeStarted()
+        }
+
+        val diagnostic = failure.toJvmNetworkFailureDiagnostic(attempt, true, true)
+
+        assertEquals("NETWORK_RESPONSE_TRUNCATED", diagnostic.code)
+        assertTrue(diagnostic.retryable)
+    }
+
+    @Test
+    fun exactResponseLengthIsAccepted() {
+        val bytes = byteArrayOf(1, 2, 3)
+
+        assertSame(bytes, bytes.requireExactJvmNetworkResponseBytes(3))
+    }
+
+    @Test
     fun localUploadFailureProducesAStorageDiagnosticWithoutLocationFields() {
         val failure = JvmLocalUploadSourceIOException(IOException("/private/path/report.pdf"))
 
