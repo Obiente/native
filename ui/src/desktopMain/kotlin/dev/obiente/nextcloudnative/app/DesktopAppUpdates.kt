@@ -44,7 +44,7 @@ internal fun canUseDirectDesktopUpdates(
     target: DesktopUpdateTarget?,
 ): Boolean = target != null &&
     buildIdentity.versionCode > 0 &&
-    (!buildIdentity.releaseBuild || buildIdentity.directPackageUpdates)
+    buildIdentity.directPackageUpdates
 
 internal enum class DesktopPackageInstallerOutcome {
     InstallerHandoffStarted,

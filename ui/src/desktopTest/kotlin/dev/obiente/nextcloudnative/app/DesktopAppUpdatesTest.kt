@@ -315,15 +315,22 @@ class DesktopAppUpdatesTest {
                     10_000_001,
                     "0.1.0",
                     releaseBuild = false,
-                    directPackageUpdates = false,
+                    directPackageUpdates = true,
                 ),
+                target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
+                updateDirectory = directory,
+                openInstaller = { DesktopPackageInstallerOutcome.InstallerHandoffStarted },
+            )
+            val optedOutDevelopment = DesktopAppUpdater(
+                preferences = node,
+                buildIdentity = DesktopUpdateBuildIdentity("development", 10_000_001, "0.1.0", false, false),
                 target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
                 updateDirectory = directory,
                 openInstaller = { DesktopPackageInstallerOutcome.InstallerHandoffStarted },
             )
             val unversionedDevelopment = DesktopAppUpdater(
                 preferences = node,
-                buildIdentity = DesktopUpdateBuildIdentity("development", 0, "0.1.0", false, false),
+                buildIdentity = DesktopUpdateBuildIdentity("development", 0, "0.1.0", false, true),
                 target = DesktopUpdateTarget("linux", "rpm", "x86_64"),
                 updateDirectory = directory,
                 openInstaller = { DesktopPackageInstallerOutcome.InstallerHandoffStarted },
@@ -336,6 +343,8 @@ class DesktopAppUpdatesTest {
             assertEquals(AppDistributionChannel.DirectDesktopPackage, development.support().channel)
             assertTrue(development.support().canCheckDirectUpdates)
             assertTrue(development.support().explanation.contains("development build"))
+            assertEquals(AppDistributionChannel.Development, optedOutDevelopment.support().channel)
+            assertFalse(optedOutDevelopment.support().canCheckDirectUpdates)
             assertEquals(AppDistributionChannel.Development, unversionedDevelopment.support().channel)
             assertFalse(unversionedDevelopment.support().canCheckDirectUpdates)
             val distributionManaged = DesktopAppUpdater(
