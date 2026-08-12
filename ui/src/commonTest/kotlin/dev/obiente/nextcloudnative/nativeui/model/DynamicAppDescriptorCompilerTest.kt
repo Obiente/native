@@ -999,6 +999,60 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
+    fun `nested collections prefer the exact plural parent over a singular sibling resource`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Inventory","version":"1"},
+              "paths":{
+                "/apps/example/api/config/table/{id}":{
+                  "parameters":[
+                    {"name":"id","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"config-get-table",
+                    "tags":["table"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object","properties":{"displayMode":{"type":"string"}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/tables":{
+                  "get":{
+                    "operationId":"tables-index",
+                    "tags":["tables"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array","items":{"type":"object","properties":{"id":{"type":"integer"}}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/tables/{tableId}/columns":{
+                  "parameters":[
+                    {"name":"tableId","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"columns-index",
+                    "tags":["columns"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array","items":{"type":"object","properties":{"id":{"type":"integer"}}}
+                    }}}}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val columnsLink = descriptor.links.single { link ->
+            (link.target as? DynamicLinkTarget.Action)?.actionId == "columns-index"
+        }
+
+        assertEquals("tables", columnsLink.resourceId)
+        assertEquals("id", columnsLink.sourceFieldId)
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
     fun `binary artwork reads are not exposed as JSON detail views`() {
         val document = """
             {

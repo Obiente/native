@@ -2231,10 +2231,19 @@ private fun String.hierarchyParent(
     val parentSegment = segments.take(parameterIndex).asReversed().firstOrNull { segment ->
         !segment.startsWith('{') && segment.stableId() !in NON_RESOURCE_PATH_SEGMENTS
     } ?: return null
-    val parentVariants = parentSegment.semanticBaseVariants()
-    return resources.firstOrNull { resource ->
-        resource.id.semanticBaseVariants().intersect(parentVariants).isNotEmpty()
-    }
+    val normalizedParent = parentSegment.stableId()
+    val parentVariants = normalizedParent.semanticBaseVariants()
+    return resources
+        .asSequence()
+        .filter { resource ->
+            resource.id.semanticBaseVariants().intersect(parentVariants).isNotEmpty()
+        }
+        .sortedWith(
+            compareByDescending<DynamicResource> { resource -> resource.id == normalizedParent }
+                .thenByDescending(DynamicResource::collection)
+                .thenBy(DynamicResource::id),
+        )
+        .firstOrNull()
 }
 
 private fun layoutPreference(
