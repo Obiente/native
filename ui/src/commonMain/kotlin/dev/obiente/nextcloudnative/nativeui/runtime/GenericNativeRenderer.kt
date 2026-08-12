@@ -4071,7 +4071,7 @@ private fun GenericFinancialAccountCollection(
         rows.filter { (_, account) -> account.kind == NativeFinancialAccountKind.Liability }
     }
     val other = remember(rows) { rows.filter { (_, account) -> account.kind == NativeFinancialAccountKind.Other } }
-    val assetTotal = accounts.filter { it.kind != NativeFinancialAccountKind.Liability }
+    val assetTotal = accounts.filter { it.kind == NativeFinancialAccountKind.Asset }
         .mapNotNull(::convertedBalance).sum()
     val liabilityTotal = accounts.filter { it.kind == NativeFinancialAccountKind.Liability }
         .mapNotNull(::convertedBalance).sumOf { amount -> kotlin.math.abs(amount) }
@@ -4400,7 +4400,12 @@ private fun GenericFinanceCollection(
                         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                     ) {
-                        NativeFinanceLedgerFilter.entries.forEach { option ->
+                        val representedDirections = presentations.mapTo(hashSetOf(), NativeFinancePresentation::direction)
+                        NativeFinanceLedgerFilter.entries.filter { option ->
+                            option == NativeFinanceLedgerFilter.All ||
+                                option == NativeFinanceLedgerFilter.Income && NativeFinanceDirection.Credit in representedDirections ||
+                                option == NativeFinanceLedgerFilter.Expenses && NativeFinanceDirection.Debit in representedDirections
+                        }.forEach { option ->
                             FilterChip(
                                 selected = filter == option,
                                 onClick = { filter = option },
