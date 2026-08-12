@@ -544,6 +544,18 @@ enum class MarketingCaptureScenario(
         MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
         width = 1_080, height = 1_800, density = 2.625f,
     ),
+    BudgetPlanDesktop(
+        "budget-plan-desktop", "budget-plan-desktop.png", NextcloudPresentation.Desktop,
+        "Budget", "Budget plan", "Synthetic report from GET /apps/budget/api/reports/budget",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetPlanMobile(
+        "budget-plan-mobile", "budget-plan-mobile.png", NextcloudPresentation.Adaptive,
+        "Budget", "Budget plan", "Synthetic report from GET /apps/budget/api/reports/budget",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
     FileSyncSetupDesktop(
         "file-sync-setup-desktop", "file-sync-setup-desktop.png", NextcloudPresentation.Desktop,
         "File sync", "Folder pair configuration", "Guided RAW-first setup",

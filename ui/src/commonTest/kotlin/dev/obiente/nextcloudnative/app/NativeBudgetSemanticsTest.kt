@@ -25,7 +25,8 @@ import kotlin.test.assertTrue
 class NativeBudgetSemanticsTest {
     @Test
     fun mapsBudgetRoutesToRecognizableProductLanguage() {
-        assertEquals("Budget", nativeBudgetDestinationSemantics("budget", "recurring-budgets")?.label)
+        assertEquals("Budget", nativeBudgetDestinationSemantics("budget", "budget")?.label)
+        assertEquals("Recurring budgets", nativeBudgetDestinationSemantics("budget", "recurring-budgets")?.label)
         assertEquals("Income", nativeBudgetDestinationSemantics("budget", "recurring_income")?.label)
         assertEquals("Shared expenses", nativeBudgetDestinationSemantics("budget", "settlements")?.label)
         assertEquals("Forecast", nativeBudgetDestinationSemantics("budget", "trends")?.label)
@@ -46,10 +47,26 @@ class NativeBudgetSemanticsTest {
     }
 
     @Test
+    fun prefersRichBudgetReportWhilePreservingRecurringFallback() {
+        assertEquals(
+            setOf("accounts", "budget"),
+            nativeBudgetVisibleRootResourceIds("budget", listOf("accounts", "recurring-budgets", "budget")),
+        )
+        assertEquals(
+            setOf("accounts", "recurring-budgets"),
+            nativeBudgetVisibleRootResourceIds("budget", listOf("accounts", "recurring-budgets")),
+        )
+        assertEquals(
+            setOf("budget", "recurring-budgets"),
+            nativeBudgetVisibleRootResourceIds("tables", listOf("budget", "recurring-budgets")),
+        )
+    }
+
+    @Test
     fun coversEveryVerifiedBudgetRootFromTheSignedContract() {
         val resources = setOf(
             "accounts", "alerts", "assets", "balances", "banking-institutions", "bills",
-            "budget-snapshots", "categories", "contacts", "debt-scenarios", "debts",
+            "budget", "budget-snapshots", "categories", "contacts", "debt-scenarios", "debts",
             "duplicates", "pensions", "progress", "recurring-budgets", "recurring-income",
             "report-mutes", "saved", "savings-goals", "scan-matches", "settlements",
             "snapshots", "status", "suggestions", "tag-sets", "transaction-counts",
@@ -87,12 +104,26 @@ class NativeBudgetSemanticsTest {
             requiresConfirmation = false,
             confidence = Confidence.verified,
         )
+        val budgetReport = ActionSpec(
+            id = "reports.budget",
+            label = "Budget report",
+            resourceId = "reports",
+            binding = dev.obiente.nextcloudnative.nativeui.model.ApiBinding(
+                method = HttpMethod.GET,
+                path = "/apps/budget/api/reports/budget",
+                operationId = "budgetReport",
+            ),
+            intent = ActionIntent.read,
+            risk = ActionRisk.readOnly,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        )
         val schema = NativeAppSchema(
             schemaVersion = "test",
             app = AppIdentity("budget", "Budget", "2.39.1"),
             confidence = Confidence.verified,
             views = listOf(accounts),
-            actions = listOf(createTransaction),
+            actions = listOf(createTransaction, budgetReport),
         )
         val adapted = schema.withNativeBudgetDashboard()
         val dashboard = adapted.views.first()
@@ -100,7 +131,48 @@ class NativeBudgetSemanticsTest {
         assertEquals(NativeComponent.dashboard, dashboard.component)
         assertEquals(accounts.sourceActionId, dashboard.sourceActionId)
         assertEquals(accounts.resourceId, dashboard.resourceId)
-        assertEquals("Add transaction", adapted.actions.single().label)
+        assertEquals("Add transaction", adapted.actions.first { it.id == createTransaction.id }.label)
+        val budgetPlan = adapted.views.first { it.id == NATIVE_BUDGET_PLAN_VIEW_ID }
+        assertEquals("budget", budgetPlan.resourceId)
+        assertEquals(budgetReport.id, budgetPlan.sourceActionId)
+        assertEquals("Budget", adapted.resources.first { it.id == "budget" }.name)
+    }
+
+    @Test
+    fun promotesExactDescriptorBudgetReportWhenLegacySchemaOmitsFallbackReads() {
+        val accounts = ViewSpec(
+            id = "accounts.list",
+            title = "Accounts",
+            resourceId = "accounts",
+            component = NativeComponent.collectionList,
+            sourceActionId = "accounts.list",
+            confidence = Confidence.verified,
+        )
+        val descriptorReport = DynamicAction(
+            id = "route-report-budget",
+            label = "Budget report",
+            resourceId = "reports",
+            intent = ActionIntent.read,
+            risk = ActionRisk.readOnly,
+            requiresConfirmation = false,
+            binding = DynamicHttpBinding(HttpMethod.GET, "/apps/budget/api/reports/budget"),
+            fallbackOnly = true,
+            confidence = Confidence.high,
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "test",
+            app = AppIdentity("budget", "Budget", "2.39.1"),
+            confidence = Confidence.verified,
+            views = listOf(accounts),
+        )
+
+        val adapted = schema.withNativeBudgetDashboard(listOf(descriptorReport))
+
+        assertEquals(
+            descriptorReport.id,
+            adapted.views.first { it.id == NATIVE_BUDGET_PLAN_VIEW_ID }.sourceActionId,
+        )
+        assertTrue(adapted.actions.none { it.id == descriptorReport.id })
     }
 
     @Test

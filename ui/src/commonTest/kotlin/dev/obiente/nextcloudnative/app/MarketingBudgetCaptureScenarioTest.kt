@@ -5,6 +5,7 @@ import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeFinancialAccountKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCategoryKind
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeCategoryPresentation
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeBudgetPlanPresentation
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeFinancePresentation
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeFinancialAccountPresentation
 import kotlin.test.Test
@@ -22,6 +23,8 @@ class MarketingBudgetCaptureScenarioTest {
             MarketingCaptureScenario.BudgetAccountsMobile,
             MarketingCaptureScenario.BudgetCategoriesDesktop,
             MarketingCaptureScenario.BudgetCategoriesMobile,
+            MarketingCaptureScenario.BudgetPlanDesktop,
+            MarketingCaptureScenario.BudgetPlanMobile,
         )
 
         assertEquals(
@@ -41,6 +44,7 @@ class MarketingBudgetCaptureScenarioTest {
         val accounts = assertNotNull(marketingBudgetSchema.action("route-account-index"))
         val transactions = assertNotNull(marketingBudgetSchema.action("route-transaction-index"))
         val categories = assertNotNull(marketingBudgetSchema.action("route-category-index"))
+        val budget = assertNotNull(marketingBudgetSchema.action("route-report-budget"))
 
         assertEquals(HttpMethod.GET, accounts.binding.method)
         assertEquals("/apps/budget/api/accounts", accounts.binding.path)
@@ -48,6 +52,8 @@ class MarketingBudgetCaptureScenarioTest {
         assertEquals("/apps/budget/api/transactions", transactions.binding.path)
         assertEquals(HttpMethod.GET, categories.binding.method)
         assertEquals("/apps/budget/api/categories", categories.binding.path)
+        assertEquals(HttpMethod.GET, budget.binding.method)
+        assertEquals("/apps/budget/api/reports/budget", budget.binding.path)
         assertEquals(
             "/apps/budget/api/categories/tree",
             assertNotNull(marketingBudgetSchema.action("route-category-tree")).binding.path,
@@ -63,6 +69,7 @@ class MarketingBudgetCaptureScenarioTest {
         assertTrue(marketingBudgetAccountRecords.all { it.actionSafeIdentity.not() })
         assertTrue(marketingBudgetTransactionRecords.all { it.actionSafeIdentity.not() })
         assertTrue(marketingBudgetCategoryRecords.all { it.actionSafeIdentity.not() })
+        assertTrue(marketingBudgetPlanRecords.all { it.actionSafeIdentity.not() })
     }
 
     @Test
@@ -76,6 +83,7 @@ class MarketingBudgetCaptureScenarioTest {
         val categories = marketingBudgetCategoryRecords.map { record ->
             assertNotNull(nativeCategoryPresentation(marketingBudgetCategories, record))
         }
+        val plan = assertNotNull(nativeBudgetPlanPresentation(marketingBudgetPlanRecords.single()))
 
         assertTrue(accounts.any { it.kind == NativeFinancialAccountKind.Asset })
         assertTrue(accounts.any { it.kind == NativeFinancialAccountKind.Liability })
@@ -86,5 +94,10 @@ class MarketingBudgetCaptureScenarioTest {
         assertTrue(categories.any { it.kind == NativeCategoryKind.Income })
         assertTrue(categories.any { it.parentId != null })
         assertTrue(categories.any { it.shared && !it.writable && it.mutedFromReports })
+        assertEquals(2630.0, plan.budgeted)
+        assertEquals(2399.95, plan.spent)
+        assertEquals(5, plan.categories.size)
+        assertEquals("Leisure", plan.categories.first().name)
+        assertTrue(plan.categories.any { it.carried == 40.0 })
     }
 }
