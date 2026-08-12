@@ -1944,11 +1944,13 @@ class DesktopNextcloudServices(
                 )
                 windowsCloudFilesProvider = provider
                 windowsCloudFilesIdentity = accountId
+                // Clear an earlier activation error before this provider can report a runtime
+                // failure. Never clear it after startup, where that would race the callback.
+                windowsCloudFilesFailure = null
                 try {
                     provider.start()
                     provider.recoverAfterStartup()
                     provider.runtimeRecoveryFailure()?.let { throw it }
-                    windowsCloudFilesFailure = null
                     preferences.put(
                         windowsCloudFilesRootPreferenceKey(accountId),
                         root.toAbsolutePath().toString(),

@@ -1687,6 +1687,65 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun `activation waits for queued delayed corruption recovery to finish`() {
+        val root = createTempDirectory("windows-cloud-activation-waits-recovery-")
+        val local = root.resolve("Photos").createDirectory()
+        val identity = fixtureIdentity(size = 0L).copy(path = "Photos", directory = true)
+        val ordinaryFailure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x80070179.toInt(),
+        )
+        val corruptFailure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x8007016B.toInt(),
+        )
+        val preservationStarted = CountDownLatch(1)
+        val releasePreservation = CountDownLatch(1)
+        val activationFinished = CountDownLatch(1)
+        val activationFailure = AtomicReference<Throwable?>()
+        val preserved = root.resolveSibling("preserved-activation-waits-recovery")
+        val api = FakeApi(expectedPlaceholderUpdates = 2).apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, identity)
+            scriptUpdatePlaceholderFailures(local, ordinaryFailure, corruptFailure)
+        }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0), listed = listOf(identity)),
+            api = api,
+            directoryRefreshRetryDelayMillis = { 0L },
+            preserveCorruptRoot = { current ->
+                preservationStarted.countDown()
+                check(releasePreservation.await(5, TimeUnit.SECONDS))
+                api.seedState(local, WindowsCloudPlaceholderState.Absent)
+                Files.move(current, preserved)
+            },
+        )
+        val activation = Thread {
+            runCatching { provider.recoverAfterStartup(timeoutSeconds = 5L) }
+                .onFailure(activationFailure::set)
+            activationFinished.countDown()
+        }
+
+        try {
+            provider.start()
+            activation.start()
+            assertTrue(preservationStarted.await(5, TimeUnit.SECONDS))
+            assertFalse(activationFinished.await(100, TimeUnit.MILLISECONDS))
+
+            releasePreservation.countDown()
+            assertTrue(activationFinished.await(5, TimeUnit.SECONDS))
+            activationFailure.get()?.let { throw it }
+            assertEquals(preserved, provider.preservedRecoveryRoot)
+        } finally {
+            releasePreservation.countDown()
+            activation.join(TimeUnit.SECONDS.toMillis(5))
+            provider.close()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `corrupt placeholder update after writeback rebuilds without replaying the upload`() {
         val root = createTempDirectory("windows-cloud-writeback-update-corrupt-")
         val localBytes = "locally edited once".encodeToByteArray()
@@ -2080,17 +2139,10 @@ class WindowsCloudFilesProviderTest {
 
         try {
             provider.start()
-            val recoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-            while (
-                diagnostics.none { it.outcome == "corrupt-root-recovered" } &&
-                System.nanoTime() < recoveryDeadline
-            ) {
-                Thread.yield()
-            }
-
             provider.recoverAfterStartup(timeoutSeconds = 5L)
             assertEquals(1, preserveCount.get())
             assertEquals(preserved, provider.preservedRecoveryRoot)
+            assertTrue(diagnostics.any { it.outcome == "corrupt-root-recovered" })
         } finally {
             provider.close()
             root.toFile().deleteRecursively()
@@ -2135,21 +2187,29 @@ class WindowsCloudFilesProviderTest {
             },
         )
         val migrationFailure = AtomicReference<Throwable?>()
-        val migration = Thread {
-            runCatching { provider.recoverBeforeRootMigration(timeoutSeconds = 5L) }
+        lateinit var migration: Thread
+        migration = Thread {
+            runCatching { provider.recoverBeforeRootMigration(timeoutSeconds = 15L) }
                 .onFailure(migrationFailure::set)
             migrationFinished.countDown()
-        }
+        }.apply { name = "legacy-root-migration-test" }
 
         try {
             provider.start()
-            provider.recoverAfterStartup(timeoutSeconds = 5L)
+            val initialRecoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (backend.listedPaths.size < 2 && System.nanoTime() < initialRecoveryDeadline) {
+                Thread.yield()
+            }
+            assertTrue(backend.listedPaths.size >= 2)
             backend.beforeList = {
-                migrationEntered.countDown()
-                check(releaseMigration.await(5, TimeUnit.SECONDS))
+                if (Thread.currentThread() === migration) {
+                    migrationEntered.countDown()
+                    check(releaseMigration.await(15, TimeUnit.SECONDS))
+                }
             }
             migration.start()
             assertTrue(migrationEntered.await(5, TimeUnit.SECONDS))
+            assertTrue(api.awaitPlaceholderUpdates())
 
             val recoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             while (!provider.isCorruptRootRecoveryInProgress() && System.nanoTime() < recoveryDeadline) {
@@ -2757,10 +2817,7 @@ class WindowsCloudFilesProviderTest {
             remoteIdentities[path]
         }
         override fun list(path: String): List<WindowsCloudFileIdentity> = synchronized(this) {
-            beforeList?.also { hook ->
-                beforeList = null
-                hook(path)
-            }
+            beforeList?.invoke(path)
             listedPaths += path
             if (scriptedLists.isNotEmpty()) return@synchronized scriptedLists.removeFirst()
             listed.mapNotNull { identity -> remoteIdentities[identity.path] }
