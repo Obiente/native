@@ -915,6 +915,13 @@ internal fun combinedAutomaticCacheExcess(
     return (total - maximumBytes).coerceAtLeast(0L)
 }
 
+internal fun closeVirtualFileProviderForReplacement(
+    provider: AutoCloseable?,
+    detach: () -> Unit,
+): Throwable? = runCatching { provider?.close() }
+    .onSuccess { detach() }
+    .exceptionOrNull()
+
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
     private val onKeepRunningInBackgroundChanged: (Boolean) -> Unit = {},
@@ -969,8 +976,11 @@ class DesktopNextcloudServices(
     private var linuxVirtualMetadataBackend: CachingLinuxVirtualFileBackend? = null
     private var linuxVirtualFileMountIdentity: String? = null
     private var linuxVirtualFileFailure: String? = null
+    @Volatile
     private var windowsCloudFilesProvider: WindowsCloudFilesProvider? = null
+    @Volatile
     private var windowsCloudFilesIdentity: String? = null
+    @Volatile
     private var windowsCloudFilesFailure: String? = null
     private val dynamicApiReadCache = DynamicApiResponseCache(
         desktopContractCacheDirectory("responses"),
@@ -1667,11 +1677,13 @@ class DesktopNextcloudServices(
         val windows = isWindowsDesktop()
         val cacheTiers = if (linux) desktopVirtualFileCacheTiers(preferences, accountId).configuration else null
         val overflowUnavailable = ranges != null && ranges.overflowCachedBytes > 0L && !ranges.overflowAvailable
+        val windowsFailure = windowsCloudFilesFailure
         val active = synchronized(virtualFileProviderLock) {
             (linux && linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) ||
-                (windows && windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId)
+                (windows && windowsFailure == null && windowsCloudFilesProvider != null &&
+                    windowsCloudFilesIdentity == accountId)
         }
-        val windowsSummary = windowsVirtualFileSummary(accountId)
+        val windowsSummary = if (windowsFailure == null) windowsVirtualFileSummary(accountId) else null
         val writebacks = defaultDesktopLinuxWritebackStore(session).pendingWritebacks()
         VirtualFileStorageSnapshot(
             support = if (linux || windows) VirtualFileStorageSupport.Available else VirtualFileStorageSupport.CacheOnly,
@@ -1706,7 +1718,7 @@ class DesktopNextcloudServices(
                     add("Cache tier movement needs attention: $failure")
                 }
                 linuxVirtualFileFailure?.let { add("The last Linux mount attempt failed: $it") }
-                windowsCloudFilesFailure?.let { add("The last Windows Cloud Files activation failed: $it") }
+                windowsFailure?.let { add("The Windows Cloud Files integration needs recovery: $it") }
                 if (windows) {
                     add("Windows can dehydrate in-sync placeholders automatically when space is needed.")
                 }
@@ -1724,9 +1736,9 @@ class DesktopNextcloudServices(
                 (windowsSummary?.failedWritebackCount ?: 0) > 0 || windowsCloudFilesRecoveryNotice != null ->
                     VirtualFileProviderState.NeedsAttention
                 overflowUnavailable || ranges?.tierAttention != null -> VirtualFileProviderState.NeedsAttention
-                active -> VirtualFileProviderState.Active
-                rangeCacheResult.isFailure || linuxVirtualFileFailure != null || windowsCloudFilesFailure != null ->
+                rangeCacheResult.isFailure || linuxVirtualFileFailure != null || windowsFailure != null ->
                     VirtualFileProviderState.NeedsAttention
+                active -> VirtualFileProviderState.Active
                 linux || windows -> VirtualFileProviderState.Inactive
                 else -> VirtualFileProviderState.NotApplicable
             },
@@ -1851,14 +1863,31 @@ class DesktopNextcloudServices(
                 val recordCloudFilesDiagnostic: (SupportDiagnosticEventDraft) -> Unit = { event ->
                     supportDiagnostics.recordForAccountIdentity(accountId, event)
                 }
-                if (windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId) {
+                if (
+                    windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId &&
+                    windowsCloudFilesFailure == null && windowsCloudFilesProvider?.runtimeRecoveryFailure() == null
+                ) {
                     return@withContext VirtualFileStorageActionResult.Completed(
                         "Windows Cloud Files are already connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
                     )
                 }
-                windowsCloudFilesProvider?.close()
-                windowsCloudFilesProvider = null
-                windowsCloudFilesIdentity = null
+                val replacedProvider = windowsCloudFilesProvider
+                closeVirtualFileProviderForReplacement(
+                    provider = replacedProvider,
+                    detach = {
+                        windowsCloudFilesProvider = null
+                        windowsCloudFilesIdentity = null
+                    },
+                )?.let { failure ->
+                    windowsCloudFilesFailure = failure.message ?: "Unknown Cloud Files cleanup failure"
+                    recordVirtualFileFailure(
+                        operation = "cloud-files.failed-provider-cleanup",
+                        accountId = accountId,
+                        root = desktopWindowsCloudFilesRoot(accountId).toPath(),
+                        failure = failure,
+                    )
+                    throw failure
+                }
                 val root = desktopWindowsCloudFilesRoot(accountId).toPath()
                 val userHome = File(System.getProperty("user.home"))
                 val backend = DesktopNextcloudWindowsCloudFilesBackend(
@@ -1912,7 +1941,8 @@ class DesktopNextcloudServices(
                     throw failure
                 }
                 val api = JnaWindowsCloudFilesApi(recordDiagnostic = recordCloudFilesDiagnostic)
-                val provider = WindowsCloudFilesProvider(
+                lateinit var provider: WindowsCloudFilesProvider
+                provider = WindowsCloudFilesProvider(
                     root = root,
                     backend = backend,
                     api = api,
@@ -1921,13 +1951,27 @@ class DesktopNextcloudServices(
                         persistWindowsCloudFilesPreservedRoot(preferences, accountId, preserved)
                         windowsCloudFilesRecoveryNotice = windowsCloudFilesRecoveryNoticeMessage(preserved)
                     },
+                    onRuntimeFailure = { failure ->
+                        if (windowsCloudFilesProvider === provider) {
+                            windowsCloudFilesFailure = failure.message ?: "Unknown Cloud Files recovery failure"
+                        }
+                        recordVirtualFileFailure(
+                            operation = "cloud-files.runtime-recovery",
+                            accountId = accountId,
+                            root = root,
+                            failure = failure,
+                        )
+                    },
                 )
+                windowsCloudFilesProvider = provider
+                windowsCloudFilesIdentity = accountId
+                // Clear an earlier activation error before this provider can report a runtime
+                // failure. Never clear it after startup, where that would race the callback.
+                windowsCloudFilesFailure = null
                 try {
                     provider.start()
                     provider.recoverAfterStartup()
-                    windowsCloudFilesProvider = provider
-                    windowsCloudFilesIdentity = accountId
-                    windowsCloudFilesFailure = null
+                    provider.runtimeRecoveryFailure()?.let { throw it }
                     preferences.put(
                         windowsCloudFilesRootPreferenceKey(accountId),
                         root.toAbsolutePath().toString(),
@@ -1936,6 +1980,10 @@ class DesktopNextcloudServices(
                     preferences.putBoolean(virtualFileProviderPreferenceKey(accountId), true)
                 } catch (failure: Throwable) {
                     runCatching(provider::close)
+                    if (windowsCloudFilesProvider === provider) {
+                        windowsCloudFilesProvider = null
+                        windowsCloudFilesIdentity = null
+                    }
                     windowsCloudFilesFailure = failure.message ?: "Unknown Cloud Files activation failure"
                     recordVirtualFileFailure(
                         operation = "cloud-files.activation",

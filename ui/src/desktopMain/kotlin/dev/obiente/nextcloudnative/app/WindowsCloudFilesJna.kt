@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 internal const val MAX_WINDOWS_CLOUD_PLACEHOLDER_DIAGNOSTIC_RESULTS = 16
 private const val ERROR_FILE_NOT_FOUND = 2
 private const val ERROR_PATH_NOT_FOUND = 3
-private const val ERROR_CLOUD_FILE_METADATA_CORRUPT = 363
+internal const val WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT = 363
 private const val CF_PLACEHOLDER_STATE_PLACEHOLDER = 0x1
 private const val CF_PLACEHOLDER_STATE_IN_SYNC = 0x8
 private const val CF_PLACEHOLDER_STATE_INVALID = -1
@@ -61,7 +61,7 @@ internal fun windowsCloudPlaceholderInspection(
             ERROR_FILE_NOT_FOUND,
             ERROR_PATH_NOT_FOUND,
             -> WindowsCloudPlaceholderEntryState.Missing
-            ERROR_CLOUD_FILE_METADATA_CORRUPT -> WindowsCloudPlaceholderEntryState.Corrupt
+            WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT -> WindowsCloudPlaceholderEntryState.Corrupt
             else -> WindowsCloudPlaceholderEntryState.Unreadable
         }
         return WindowsCloudPlaceholderInspection(state = state, win32Error = error)
@@ -76,7 +76,7 @@ internal fun windowsCloudPlaceholderInspection(
         null
     }
     val state = when {
-        stateBits == CF_PLACEHOLDER_STATE_INVALID && stateError == ERROR_CLOUD_FILE_METADATA_CORRUPT ->
+        stateBits == CF_PLACEHOLDER_STATE_INVALID && stateError == WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT ->
             WindowsCloudPlaceholderEntryState.Corrupt
         stateBits == CF_PLACEHOLDER_STATE_INVALID -> WindowsCloudPlaceholderEntryState.Unreadable
         stateBits and CF_PLACEHOLDER_STATE_PLACEHOLDER == 0 -> WindowsCloudPlaceholderEntryState.Local
@@ -865,6 +865,9 @@ internal fun isWindowsCloudFilesConnectionAbsentResult(result: Int): Boolean =
 
 internal fun isWindowsCloudFilesPlaceholderAlreadyExistsResult(result: Int): Boolean =
     result == 0x800700B7.toInt() // HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)
+
+internal fun isWindowsCloudFilesPlaceholderMetadataCorruptResult(result: Int): Boolean =
+    result == 0x8007016B.toInt() // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_METADATA_CORRUPT)
 
 internal class WindowsCloudFilesOperationException(
     operation: String,
