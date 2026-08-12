@@ -297,6 +297,8 @@ internal fun MarketingDynamicUiScenario(
         scenario == MarketingCaptureScenario.HomepageAppsDesktopDark ||
             scenario == MarketingCaptureScenario.HomepageAppsDesktopLight ||
             scenario == MarketingCaptureScenario.AdaptiveApp ||
+            scenario == MarketingCaptureScenario.TablesRowsDesktop ||
+            scenario == MarketingCaptureScenario.TablesRowFormDesktop ||
             scenario == MarketingCaptureScenario.AdaptiveAppMobile ||
             scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile ||
             scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
@@ -337,7 +339,26 @@ internal fun MarketingDynamicUiScenario(
                 showCollectionCreateAction = true,
             )
         } else if (desktop) {
-            MarketingDynamicDesktopCapture(fixture, Modifier.weight(1f))
+            val view = when (scenario) {
+                MarketingCaptureScenario.TablesRowsDesktop -> marketingDynamicListView
+                MarketingCaptureScenario.TablesRowFormDesktop -> marketingDynamicFormView
+                else -> marketingDynamicInsightsView
+            }
+            MarketingDynamicDesktopCapture(
+                fixture = fixture,
+                view = view,
+                contentTitle = if (view == marketingDynamicFormView) {
+                    "Add inventory row"
+                } else {
+                    "Community inventory"
+                },
+                contentSubtitle = when (view) {
+                    marketingDynamicListView -> "Rows"
+                    marketingDynamicFormView -> "Community inventory"
+                    else -> "Overview"
+                },
+                modifier = Modifier.weight(1f),
+            )
         } else if (scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile) {
             MarketingTablesMobileScaffold(
                 fixture = fixture,
@@ -437,6 +458,9 @@ private fun MarketingTablesMobileScaffold(
 @Composable
 private fun MarketingDynamicDesktopCapture(
     fixture: MarketingDynamicUiFixture,
+    view: ViewSpec,
+    contentTitle: String,
+    contentSubtitle: String,
     modifier: Modifier,
 ) {
     val destinations = listOf(
@@ -482,12 +506,15 @@ private fun MarketingDynamicDesktopCapture(
     NextcloudCollectionWorkspaceScaffold(
         model = NextcloudCollectionNavigationModel.create(
             destinations = destinations,
-            selectedDestinationId = marketingDynamicInsightsView.id,
+            selectedDestinationId = when (view) {
+                marketingDynamicFormView -> marketingDynamicListView.id
+                else -> view.id
+            },
         ),
         mode = NextcloudCollectionNavigationMode.Sidebar,
         workspaceLabel = fixture.appName,
-        contentTitle = "Community inventory",
-        contentSubtitle = "Insights",
+        contentTitle = contentTitle,
+        contentSubtitle = contentSubtitle,
         onBack = {},
         hasHierarchyBack = true,
         onDestinationSelected = {},
@@ -505,12 +532,14 @@ private fun MarketingDynamicDesktopCapture(
     ) {
         GenericNativeAppScreen(
             schema = marketingDynamicUiSchema,
-            view = marketingDynamicInsightsView,
-            state = NativeScreenState.Ready(marketingDynamicWorkItemRecords),
+            view = view,
+            state = NativeScreenState.Ready(
+                if (view == marketingDynamicFormView) emptyList() else marketingDynamicWorkItemRecords,
+            ),
             actionExecutor = marketingCaptureActionExecutor,
             modifier = Modifier.fillMaxSize(),
             datasetContext = marketingDynamicDatasetContext,
-            showCollectionCreateAction = true,
+            showCollectionCreateAction = view != marketingDynamicFormView,
         )
     }
 }

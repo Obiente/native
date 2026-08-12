@@ -7353,7 +7353,7 @@ private fun GenericBudgetPlanDashboard(plan: NativeBudgetPlanPresentation) {
             }
         }
     }
-    val period = listOfNotNull(plan.startDate, plan.endDate).joinToString(" – ")
+    val period = listOfNotNull(plan.startDate, plan.endDate).joinToString(" - ")
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),

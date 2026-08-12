@@ -606,8 +606,20 @@ enum class MarketingCaptureScenario(
     ),
     AdaptiveApp(
         "tables-insights-desktop", "tables-insights-desktop.png", NextcloudPresentation.Desktop,
-        "Tables", "Inventory insights and rows", "Synthetic Tables data",
+        "Tables", "Inventory overview and category chart", "Synthetic Tables data",
         MarketingCapturePurpose.Showcase,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    TablesRowsDesktop(
+        "tables-rows-desktop", "tables-rows-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Inventory rows and actions", "Synthetic Tables data",
+        MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    TablesRowFormDesktop(
+        "tables-row-form-desktop", "tables-row-form-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Add inventory row", "Synthetic Tables data",
+        MarketingCapturePurpose.StateCoverage,
         "desktop", "wide", width = 1_440, height = 900, density = 1f,
     ),
     AdaptiveAppMobile(
@@ -2154,6 +2166,8 @@ internal fun MarketingAdaptiveAppScenario(scenario: MarketingCaptureScenario) {
         scenario == MarketingCaptureScenario.HomepageAppsDesktopDark ||
             scenario == MarketingCaptureScenario.HomepageAppsDesktopLight ||
             scenario == MarketingCaptureScenario.AdaptiveApp ||
+            scenario == MarketingCaptureScenario.TablesRowsDesktop ||
+            scenario == MarketingCaptureScenario.TablesRowFormDesktop ||
             scenario == MarketingCaptureScenario.AdaptiveAppMobile ||
             scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile ||
             scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile,

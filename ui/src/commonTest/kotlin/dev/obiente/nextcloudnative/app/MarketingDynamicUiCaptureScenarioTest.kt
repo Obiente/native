@@ -18,27 +18,24 @@ import kotlin.test.assertTrue
 class MarketingDynamicUiCaptureScenarioTest {
     @Test
     fun `Tables visual evidence is paired across desktop and phone`() {
-        val desktop = MarketingCaptureScenario.AdaptiveApp
-        val phone = MarketingCaptureScenario.AdaptiveAppMobile
-        val phoneCollection = MarketingCaptureScenario.AdaptiveAppCollectionMobile
-        val phoneContextMenu = MarketingCaptureScenario.AdaptiveAppContextMenuMobile
+        val pairs = listOf(
+            MarketingCaptureScenario.AdaptiveApp to
+                MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
+            MarketingCaptureScenario.TablesRowsDesktop to
+                MarketingCaptureScenario.AdaptiveAppCollectionMobile,
+            MarketingCaptureScenario.TablesRowFormDesktop to
+                MarketingCaptureScenario.AdaptiveAppMobile,
+        )
 
-        assertEquals(NextcloudPresentation.Desktop, desktop.presentation)
-        assertEquals(NextcloudPresentation.Adaptive, phone.presentation)
-        assertEquals("Inventory insights and rows", desktop.surface)
-        assertEquals("Add inventory row", phone.surface)
-        assertEquals("Synthetic Tables data", desktop.state)
-        assertEquals(desktop.state, phone.state)
-        assertEquals(MarketingCapturePurpose.Showcase, desktop.purpose)
-        assertEquals(MarketingCapturePurpose.StateCoverage, phone.purpose)
-        assertEquals(1_440 to 900, desktop.width to desktop.height)
-        assertEquals(1_024 to 2_216, phone.width to phone.height)
-        assertEquals(NextcloudPresentation.Adaptive, phoneCollection.presentation)
-        assertEquals("Inventory rows and actions", phoneCollection.surface)
-        assertEquals(1_024 to 2_216, phoneCollection.width to phoneCollection.height)
-        assertEquals(NextcloudPresentation.Adaptive, phoneContextMenu.presentation)
-        assertEquals("Inventory overview and category chart", phoneContextMenu.surface)
-        assertEquals(1_024 to 2_216, phoneContextMenu.width to phoneContextMenu.height)
+        pairs.forEach { (desktop, phone) ->
+            assertEquals(NextcloudPresentation.Desktop, desktop.presentation)
+            assertEquals(NextcloudPresentation.Adaptive, phone.presentation)
+            assertEquals(desktop.surface, phone.surface)
+            assertEquals(desktop.state, phone.state)
+            assertEquals("Synthetic Tables data", desktop.state)
+            assertEquals(1_440 to 900, desktop.width to desktop.height)
+            assertEquals(1_024 to 2_216, phone.width to phone.height)
+        }
     }
 
     @Test
