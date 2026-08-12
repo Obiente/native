@@ -25,6 +25,9 @@ import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeScreenState
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredEntry
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
 import dev.obiente.nextcloudnative.nativeui.runtime.GenericNativeAppScreen
 import dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeFinanceCurrency
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
@@ -96,6 +99,12 @@ internal val marketingBudgetCategories = ResourceSpec(
     ),
 )
 private val marketingBudgetBudgets = budgetResource("recurring-budgets", "Budgets", "amount", "Budgeted")
+private val marketingBudgetPlan = ResourceSpec(
+    id = "budget",
+    name = "Budget",
+    confidence = Confidence.verified,
+    fields = emptyList(),
+)
 private val marketingBudgetBills = budgetResource("bills", "Bills", "amount", "Amount")
 private val marketingBudgetGoals = budgetResource("savings-goals", "Savings goals", "current", "Saved")
 
@@ -121,6 +130,14 @@ private val marketingBudgetCategoriesView = ViewSpec(
     "categories",
     NativeComponent.collectionList,
     "route-category-index",
+    Confidence.verified,
+)
+private val marketingBudgetPlanView = ViewSpec(
+    NATIVE_BUDGET_PLAN_VIEW_ID,
+    "Budget",
+    "budget",
+    NativeComponent.detail,
+    "route-report-budget",
     Confidence.verified,
 )
 
@@ -151,6 +168,7 @@ internal val marketingBudgetSchema = NativeAppSchema(
         marketingBudgetAccounts,
         marketingBudgetTransactions,
         marketingBudgetCategories,
+        marketingBudgetPlan,
         marketingBudgetBudgets,
         marketingBudgetBills,
         marketingBudgetGoals,
@@ -167,6 +185,7 @@ internal val marketingBudgetSchema = NativeAppSchema(
         marketingBudgetAccountsView,
         marketingBudgetTransactionsView,
         marketingBudgetCategoriesView,
+        marketingBudgetPlanView,
     ),
     actions = listOf(
         marketingBudgetCollectionRead(
@@ -198,6 +217,11 @@ internal val marketingBudgetSchema = NativeAppSchema(
             "route-category-report-mutes",
             "categories",
             "/apps/budget/api/categories/report-mutes",
+        ),
+        marketingBudgetCollectionRead(
+            "route-report-budget",
+            "budget",
+            "/apps/budget/api/reports/budget",
         ),
     ),
 )
@@ -232,6 +256,68 @@ internal val marketingBudgetCategoryRecords = listOf(
     NativeRecord("31", mapOf("name" to "Freelance", "type" to "income", "icon" to "work", "color" to "#4AA96C", "transactionCount" to "5")),
     NativeRecord("40", mapOf("name" to "Shared household", "type" to "expense", "icon" to "people", "color" to "#8B6BB1", "transactionCount" to "12", "_shared" to "true", "_sharedByName" to "Morgan", "_canWrite" to "false", "excludedFromReports" to "true")),
 ).map { record -> record.copy(actionSafeIdentity = false) }
+
+private fun budgetScalar(
+    value: String?,
+    kind: NativeStructuredScalarKind = NativeStructuredScalarKind.number,
+): NativeStructuredValue = NativeStructuredValue.Scalar(value, kind)
+
+private fun budgetObject(
+    vararg values: Pair<String, NativeStructuredValue>,
+): NativeStructuredValue = NativeStructuredValue.ObjectValue(
+    values.map { (key, value) -> NativeStructuredEntry(key, key, value) },
+)
+
+private fun budgetCategory(
+    id: String,
+    name: String,
+    budgeted: Double,
+    baseBudget: Double,
+    carried: Double,
+    spent: Double,
+    status: String,
+    color: String,
+): NativeStructuredValue = budgetObject(
+    "categoryId" to budgetScalar(id, NativeStructuredScalarKind.string),
+    "categoryName" to budgetScalar(name, NativeStructuredScalarKind.string),
+    "budgeted" to budgetScalar(budgeted.toString()),
+    "baseBudget" to budgetScalar(baseBudget.toString()),
+    "carried" to budgetScalar(carried.toString()),
+    "spent" to budgetScalar(spent.toString()),
+    "remaining" to budgetScalar((budgeted - spent).toString()),
+    "percentage" to budgetScalar((spent / budgeted * 100.0).toString()),
+    "status" to budgetScalar(status, NativeStructuredScalarKind.string),
+    "color" to budgetScalar(color, NativeStructuredScalarKind.string),
+)
+
+internal val marketingBudgetPlanRecords = listOf(
+    NativeRecord(
+        id = "august-2026",
+        values = emptyMap(),
+        actionSafeIdentity = false,
+        structuredValues = mapOf(
+            "period" to budgetObject(
+                "startDate" to budgetScalar("2026-08-01", NativeStructuredScalarKind.string),
+                "endDate" to budgetScalar("2026-08-31", NativeStructuredScalarKind.string),
+            ),
+            "categories" to NativeStructuredValue.ListValue(
+                listOf(
+                    budgetCategory("40", "Leisure", 240.0, 240.0, 0.0, 286.40, "over", "#8B6BB1"),
+                    budgetCategory("20", "Housing", 1450.0, 1450.0, 0.0, 1450.0, "limit", "#4C84C4"),
+                    budgetCategory("10", "Groceries", 520.0, 520.0, 0.0, 412.35, "warning", "#D35D6E"),
+                    budgetCategory("50", "Utilities", 200.0, 160.0, 40.0, 133.0, "on_track", "#E29A3A"),
+                    budgetCategory("30", "Transport", 220.0, 220.0, 0.0, 118.20, "on_track", "#4AA96C"),
+                ),
+            ),
+            "totals" to budgetObject(
+                "budgeted" to budgetScalar("2630.0"),
+                "spent" to budgetScalar("2399.95"),
+                "remaining" to budgetScalar("230.05"),
+            ),
+            "overallStatus" to budgetScalar("watch", NativeStructuredScalarKind.string),
+        ),
+    ),
+)
 
 private val marketingBudgetRecords = mapOf(
     "accounts" to marketingBudgetAccountRecords,
@@ -300,7 +386,7 @@ internal fun MarketingBudgetDashboardScenario(scenario: MarketingCaptureScenario
         NextcloudCollectionDestination(NATIVE_BUDGET_DASHBOARD_VIEW_ID, "Dashboard", supportingText = "Net worth and finance overview"),
         NextcloudCollectionDestination("accounts", "Accounts"),
         NextcloudCollectionDestination("transactions", "Transactions"),
-        NextcloudCollectionDestination("recurring-budgets", "Budget"),
+        NextcloudCollectionDestination(marketingBudgetPlanView.id, "Budget"),
         NextcloudCollectionDestination("bills", "Bills"),
         NextcloudCollectionDestination("savings-goals", "Savings goals"),
     )
@@ -330,19 +416,23 @@ internal fun MarketingBudgetDynamicWorkspaceScenario(scenario: MarketingCaptureS
         scenario == MarketingCaptureScenario.BudgetAccountsMobile
     val categories = scenario == MarketingCaptureScenario.BudgetCategoriesDesktop ||
         scenario == MarketingCaptureScenario.BudgetCategoriesMobile
+    val plan = scenario == MarketingCaptureScenario.BudgetPlanDesktop ||
+        scenario == MarketingCaptureScenario.BudgetPlanMobile
     require(
-        accounts || categories || scenario == MarketingCaptureScenario.BudgetTransactionsDesktop ||
+        accounts || categories || plan || scenario == MarketingCaptureScenario.BudgetTransactionsDesktop ||
             scenario == MarketingCaptureScenario.BudgetTransactionsMobile,
     ) { "${scenario.id} is not a Budget dynamic workspace capture." }
     val desktop = scenario.presentation == dev.obiente.nextcloudnative.app.design.NextcloudPresentation.Desktop
     val selectedView = when {
         accounts -> marketingBudgetAccountsView
         categories -> marketingBudgetCategoriesView
+        plan -> marketingBudgetPlanView
         else -> marketingBudgetTransactionsView
     }
     val records = when {
         accounts -> marketingBudgetAccountRecords
         categories -> marketingBudgetCategoryRecords
+        plan -> marketingBudgetPlanRecords
         else -> marketingBudgetTransactionRecords
     }
     val destinations = listOf(
@@ -350,6 +440,7 @@ internal fun MarketingBudgetDynamicWorkspaceScenario(scenario: MarketingCaptureS
         NextcloudCollectionDestination(marketingBudgetAccountsView.id, "Accounts"),
         NextcloudCollectionDestination(marketingBudgetTransactionsView.id, "Transactions"),
         NextcloudCollectionDestination(marketingBudgetCategoriesView.id, "Categories"),
+        NextcloudCollectionDestination(marketingBudgetPlanView.id, "Budget"),
     )
     NextcloudCollectionWorkspaceScaffold(
         model = NextcloudCollectionNavigationModel.create(destinations, selectedView.id),
@@ -359,6 +450,7 @@ internal fun MarketingBudgetDynamicWorkspaceScenario(scenario: MarketingCaptureS
         contentSubtitle = when {
             accounts -> "Balances and account health"
             categories -> "Organize income and expenses"
+            plan -> "Plan category limits and track progress"
             else -> "Search, review and categorize activity"
         },
         onBack = {},

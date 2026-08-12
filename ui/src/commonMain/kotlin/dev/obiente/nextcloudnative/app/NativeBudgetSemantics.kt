@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
+import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 
 /**
@@ -34,6 +35,7 @@ internal fun nativeBudgetDestinationSemantics(
 internal fun isNativeBudgetApp(appId: String): Boolean = appId.equals("budget", ignoreCase = true)
 
 internal const val NATIVE_BUDGET_DASHBOARD_VIEW_ID = "nextcloud-native.budget.dashboard"
+internal const val NATIVE_BUDGET_PLAN_VIEW_ID = "nextcloud-native.budget.plan"
 
 internal fun nativeBudgetDashboardReadDestinations(
     appId: String,
@@ -109,14 +111,46 @@ internal fun nativeBudgetDashboardReads(
     }
 }
 
-internal fun NativeAppSchema.withNativeBudgetDashboard(): NativeAppSchema {
+internal fun NativeAppSchema.withNativeBudgetDashboard(
+    descriptorActions: List<DynamicAction> = emptyList(),
+): NativeAppSchema {
     if (!isNativeBudgetApp(app.id) || views.any { it.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID }) return this
     val accounts = views.firstOrNull { view ->
         view.resourceId.normalizedBudgetResourceId() == "accounts" &&
             view.component != NativeComponent.form &&
             view.sourceActionId.isNotBlank()
     } ?: return this
+    val budgetReport = actions.firstOrNull { action ->
+        action.binding.method == HttpMethod.GET &&
+            action.binding.path.endsWith("/api/reports/budget") &&
+            action.binding.requiredPathParameterNames.isEmpty() &&
+            action.binding.requiredQueryParameterNames.isEmpty() &&
+            action.intent == dev.obiente.nextcloudnative.nativeui.model.ActionIntent.read &&
+            action.risk == dev.obiente.nextcloudnative.nativeui.model.ActionRisk.readOnly &&
+            action.confidence in setOf(Confidence.high, Confidence.verified)
+    }
+    val dynamicBudgetReport = descriptorActions.firstOrNull { action ->
+        action.binding.method == HttpMethod.GET &&
+            action.binding.path.endsWith("/api/reports/budget") &&
+            action.binding.pathParameters.none { parameter -> parameter.required } &&
+            action.binding.queryParameters.none { parameter -> parameter.required } &&
+            action.intent == dev.obiente.nextcloudnative.nativeui.model.ActionIntent.read &&
+            action.risk == dev.obiente.nextcloudnative.nativeui.model.ActionRisk.readOnly &&
+            action.confidence in setOf(Confidence.high, Confidence.verified)
+    }
+    val budgetReportActionId = budgetReport?.id ?: dynamicBudgetReport?.id
+    val budgetReportConfidence = budgetReport?.confidence ?: dynamicBudgetReport?.confidence
+    val budgetPlanResource = budgetReportConfidence?.let { confidence ->
+        ResourceSpec(
+            id = "budget",
+            name = "Budget",
+            confidence = confidence,
+        )
+    }
     return copy(
+        resources = resources + listOfNotNull(
+            budgetPlanResource?.takeUnless { resource -> resources.any { it.id == resource.id } },
+        ),
         actions = actions.map { action ->
             if (
                 action.resourceId.normalizedBudgetResourceId() == "transactions" &&
@@ -134,6 +168,17 @@ internal fun NativeAppSchema.withNativeBudgetDashboard(): NativeAppSchema {
                 sourceActionId = accounts.sourceActionId,
                 confidence = Confidence.verified,
             ),
+        ) + listOfNotNull(
+            budgetReportActionId?.let { actionId ->
+                ViewSpec(
+                    id = NATIVE_BUDGET_PLAN_VIEW_ID,
+                    title = "Budget",
+                    resourceId = "budget",
+                    component = NativeComponent.detail,
+                    sourceActionId = actionId,
+                    confidence = requireNotNull(budgetReportConfidence),
+                )
+            },
         ) + views,
     )
 }
@@ -151,8 +196,11 @@ private val budgetDestinationSemantics = mapOf(
     "categories" to NativeBudgetDestinationSemantics(
         "Categories", "Organize income and spending", NextcloudCollectionDestinationSection.Primary, 30,
     ),
+    "budget" to NativeBudgetDestinationSemantics(
+        "Budget", "Plan category limits and track progress", NextcloudCollectionDestinationSection.Primary, 40,
+    ),
     "recurring-budgets" to NativeBudgetDestinationSemantics(
-        "Budget", "Plan recurring category limits", NextcloudCollectionDestinationSection.Primary, 40,
+        "Recurring budgets", "Recurring category limit data", NextcloudCollectionDestinationSection.Manage, 41,
     ),
     "recurring-income" to NativeBudgetDestinationSemantics(
         "Income", "Track expected recurring income", NextcloudCollectionDestinationSection.Primary, 50,
@@ -236,3 +284,18 @@ private val budgetDestinationSemantics = mapOf(
         "Debt scenarios", "Compare payoff scenarios", NextcloudCollectionDestinationSection.Manage, 340,
     ),
 )
+
+/**
+ * Keeps the richer verified budget report as the user-facing planning destination when available.
+ * The recurring-budget collection remains a supported fallback for older server contracts.
+ */
+internal fun nativeBudgetVisibleRootResourceIds(
+    appId: String,
+    resourceIds: List<String>,
+): Set<String> {
+    if (!isNativeBudgetApp(appId)) return resourceIds.toSet()
+    val hasBudgetReport = resourceIds.any { it.normalizedBudgetResourceId() == "budget" }
+    return resourceIds.filterNot { resourceId ->
+        hasBudgetReport && resourceId.normalizedBudgetResourceId() == "recurring-budgets"
+    }.toSet()
+}

@@ -1192,6 +1192,8 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.BudgetAccountsMobile,
                     MarketingCaptureScenario.BudgetCategoriesDesktop,
                     MarketingCaptureScenario.BudgetCategoriesMobile,
+                    MarketingCaptureScenario.BudgetPlanDesktop,
+                    MarketingCaptureScenario.BudgetPlanMobile,
                     -> MarketingBudgetDynamicWorkspaceScenario(scenario)
                     MarketingCaptureScenario.FileSyncSetupDesktop -> MarketingFileSyncSetupDesktopScenario()
                     MarketingCaptureScenario.GuideLinuxFolderSyncLocations ->
@@ -2678,7 +2680,7 @@ private fun DynamicDiscoveredAppScreen(
     val schema = remember(descriptor, discovery.versionStatus) {
         descriptor.toNativeAppSchema()
             .forDynamicContractVersion(discovery.versionStatus)
-            .withNativeBudgetDashboard()
+            .withNativeBudgetDashboard(descriptor.actions)
     }
     val initialViewId = remember(descriptor, schema) {
         val rootDestinations = descriptor.planDynamicNavigation().rootDestinations
@@ -3647,6 +3649,16 @@ private fun DynamicDiscoveredAppScreen(
                         ) to dashboard,
                     )
                 }
+                schema.views.firstOrNull { it.id == NATIVE_BUDGET_PLAN_VIEW_ID }?.let { budgetPlan ->
+                    add(
+                        DynamicNavigationDestination(
+                            layoutId = budgetPlan.id,
+                            label = budgetPlan.title,
+                            resourceId = budgetPlan.resourceId,
+                            actionId = budgetPlan.sourceActionId,
+                        ) to budgetPlan,
+                    )
+                }
                 navigationPlan.rootDestinations.mapNotNullTo(this) { destination ->
                     schema.views.firstOrNull { it.id == destination.layoutId }?.let { view -> destination to view }
                 }
@@ -3698,7 +3710,15 @@ private fun DynamicDiscoveredAppScreen(
     // technical or trash collections in the small header popup makes them unreachable on compact
     // screens once the menu exceeds the viewport. Semantic ranking still controls the preferred
     // automatic child; it must not hide an explicitly verified user destination.
-    val primaryNavigationDestinations = navigationDestinations
+    val visibleRootResourceIds = remember(descriptor.app.id, navigationDestinations) {
+        nativeBudgetVisibleRootResourceIds(
+            descriptor.app.id,
+            navigationDestinations.map { (destination, _) -> destination.resourceId },
+        )
+    }
+    val primaryNavigationDestinations = navigationDestinations.filter { (destination, _) ->
+        destination.resourceId in visibleRootResourceIds
+    }
     val secondaryNavigationDestinations =
         emptyList<Pair<DynamicNavigationDestination, ViewSpec>>()
     val selectedCollectionState = remember(schema, selectedView.sourceActionId) {

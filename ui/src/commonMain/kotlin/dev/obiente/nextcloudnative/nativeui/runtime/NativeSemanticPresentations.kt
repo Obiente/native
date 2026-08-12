@@ -228,6 +228,31 @@ internal data class NativeCategoryPresentation(
     val mutedFromReports: Boolean,
 )
 
+internal data class NativeBudgetCategoryProgress(
+    val id: String?,
+    val name: String,
+    val budgeted: Double,
+    val baseBudget: Double,
+    val carried: Double,
+    val spent: Double,
+    val remaining: Double,
+    val percentage: Double,
+    val status: String?,
+    val color: String?,
+)
+
+internal data class NativeBudgetPlanPresentation(
+    val startDate: String?,
+    val endDate: String?,
+    val budgeted: Double,
+    val spent: Double,
+    val remaining: Double,
+    val overallStatus: String?,
+    val categories: List<NativeBudgetCategoryProgress>,
+) {
+    val percentage: Double = if (budgeted > 0.0) spent / budgeted * 100.0 else 0.0
+}
+
 internal data class NativeFinanceMemberStatistic(
     val name: String,
     val paid: Double,
@@ -709,6 +734,46 @@ internal fun nativeFinanceDashboardPresentation(
             .filter { point -> point.label.matches(Regex("\\d{4}-\\d{2}")) },
         categories = structured["categorystats"]?.value.semanticNamedSeries("Category"),
         paymentMethods = structured["paymentmodestats"]?.value.semanticNamedSeries("Payment method"),
+    )
+}
+
+/** Recognizes category-by-category budget reports by their nested totals and progress shape. */
+internal fun nativeBudgetPlanPresentation(record: NativeRecord): NativeBudgetPlanPresentation? {
+    val structured = record.structuredValues.entries.associateBy { (key, _) -> key.semanticKey() }
+    val totals = structured["totals"]?.value?.semanticObjectEntries() ?: return null
+    val categoryItems = (structured["categories"]?.value as? NativeStructuredValue.ListValue)?.items
+        ?: return null
+    val categories = categoryItems.mapNotNull { item ->
+        val row = item.semanticObjectEntries() ?: return@mapNotNull null
+        val name = row.semanticText("categoryname", "name", "label") ?: return@mapNotNull null
+        val budgeted = row.semanticNumber("budgeted", "budget", "limit") ?: return@mapNotNull null
+        val spent = row.semanticNumber("spent") ?: return@mapNotNull null
+        NativeBudgetCategoryProgress(
+            id = row.semanticText("categoryid", "id"),
+            name = name,
+            budgeted = budgeted,
+            baseBudget = row.semanticNumber("basebudget") ?: budgeted,
+            carried = row.semanticNumber("carried", "carryover") ?: 0.0,
+            spent = spent,
+            remaining = row.semanticNumber("remaining") ?: budgeted - spent,
+            percentage = row.semanticNumber("percentage", "percent")
+                ?: if (budgeted > 0.0) spent / budgeted * 100.0 else 0.0,
+            status = row.semanticText("status"),
+            color = row.semanticText("color"),
+        )
+    }
+    if (categories.isEmpty()) return null
+    val period = structured["period"]?.value?.semanticObjectEntries()
+    val budgeted = totals.semanticNumber("budgeted") ?: return null
+    val spent = totals.semanticNumber("spent") ?: return null
+    return NativeBudgetPlanPresentation(
+        startDate = period?.semanticText("startdate", "start"),
+        endDate = period?.semanticText("enddate", "end"),
+        budgeted = budgeted,
+        spent = spent,
+        remaining = totals.semanticNumber("remaining") ?: budgeted - spent,
+        overallStatus = structured["overallstatus"]?.value?.semanticString(),
+        categories = categories.sortedByDescending(NativeBudgetCategoryProgress::percentage),
     )
 }
 

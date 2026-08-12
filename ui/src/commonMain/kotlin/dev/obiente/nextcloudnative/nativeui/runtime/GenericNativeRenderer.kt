@@ -6064,13 +6064,18 @@ private fun GenericDatasetInsights(insights: NativeDatasetInsights, compact: Boo
 }
 
 @Composable
-private fun DatasetMetricCard(label: String, value: String) {
+private fun DatasetMetricCard(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier.width(148.dp),
+) {
     Surface(
+        modifier = modifier,
         color = NextcloudTheme.colors.appTile,
         shape = RoundedCornerShape(NextcloudRadii.Card),
     ) {
         Column(
-            modifier = Modifier.width(148.dp).padding(NextcloudSpacing.Medium),
+            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
         ) {
             Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -7212,6 +7217,11 @@ private fun GenericRecordDetail(
         GenericFinanceStatisticsDashboard(financeDashboard)
         return
     }
+    val budgetPlan = remember(record) { nativeBudgetPlanPresentation(record) }
+    if (budgetPlan != null) {
+        GenericBudgetPlanDashboard(budgetPlan)
+        return
+    }
     val groupware = remember(resource, record) { nativeGroupwarePresentation(resource, record) }
     if (groupware != null && groupware.kind != NativeGroupwareItemKind.Task) {
         GenericGroupwareDetail(groupware, onOpenLink)
@@ -7318,6 +7328,205 @@ private fun GenericRecordDetail(
                 GenericRecipeStructuredSection(record.id, section, ingredientMultiplier)
             } else {
                 GenericStructuredDetailSection(section)
+            }
+        }
+    }
+}
+
+private enum class NativeBudgetProgressFilter(val label: String) {
+    All("All"),
+    OverBudget("Over budget"),
+    Watch("Watch"),
+    OnTrack("On track"),
+}
+
+@Composable
+private fun GenericBudgetPlanDashboard(plan: NativeBudgetPlanPresentation) {
+    var filter by rememberSaveable { mutableStateOf(NativeBudgetProgressFilter.All) }
+    val visibleCategories = remember(plan.categories, filter) {
+        plan.categories.filter { category ->
+            when (filter) {
+                NativeBudgetProgressFilter.All -> true
+                NativeBudgetProgressFilter.OverBudget -> category.percentage >= 100.0
+                NativeBudgetProgressFilter.Watch -> category.percentage >= 75.0 && category.percentage < 100.0
+                NativeBudgetProgressFilter.OnTrack -> category.percentage < 75.0
+            }
+        }
+    }
+    val period = listOfNotNull(plan.startDate, plan.endDate).joinToString(" – ")
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(
+                start = NextcloudSpacing.Large,
+                top = NextcloudSpacing.Large,
+                end = NextcloudSpacing.Large,
+            ),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+        ) {
+            Text("Budget progress", style = MaterialTheme.typography.headlineSmall)
+            if (period.isNotBlank()) {
+                Text(
+                    period,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        val currency = LocalNativeFinanceCurrency.current
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large)) {
+            if (maxWidth < 600.dp) {
+                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                        DatasetMetricCard(
+                            "Budgeted",
+                            formatNativeFinanceAmount(plan.budgeted, currency),
+                            Modifier.weight(1f),
+                        )
+                        DatasetMetricCard(
+                            "Spent",
+                            formatNativeFinanceAmount(plan.spent, currency),
+                            Modifier.weight(1f),
+                        )
+                    }
+                    DatasetMetricCard(
+                        "Remaining",
+                        formatNativeFinanceAmount(plan.remaining, currency),
+                        Modifier.fillMaxWidth(),
+                    )
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                    DatasetMetricCard("Budgeted", formatNativeFinanceAmount(plan.budgeted, currency))
+                    DatasetMetricCard("Spent", formatNativeFinanceAmount(plan.spent, currency))
+                    DatasetMetricCard("Remaining", formatNativeFinanceAmount(plan.remaining, currency))
+                }
+            }
+        }
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large),
+            colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+            shape = RoundedCornerShape(NextcloudRadii.Card),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Overall", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("${plan.percentage.roundToInt()}%", style = MaterialTheme.typography.titleMedium)
+                }
+                LinearProgressIndicator(
+                    progress = { (plan.percentage / 100.0).coerceIn(0.0, 1.0).toFloat() },
+                    modifier = Modifier.fillMaxWidth().height(9.dp),
+                )
+                plan.overallStatus?.takeIf(String::isNotBlank)?.let { status ->
+                    Text(
+                        status.replaceFirstChar { character -> character.uppercase() },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(horizontal = NextcloudSpacing.Large),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            NativeBudgetProgressFilter.entries.forEach { option ->
+                val count = plan.categories.count { category ->
+                    when (option) {
+                        NativeBudgetProgressFilter.All -> true
+                        NativeBudgetProgressFilter.OverBudget -> category.percentage >= 100.0
+                        NativeBudgetProgressFilter.Watch -> category.percentage >= 75.0 && category.percentage < 100.0
+                        NativeBudgetProgressFilter.OnTrack -> category.percentage < 75.0
+                    }
+                }
+                FilterChip(
+                    selected = filter == option,
+                    onClick = { filter = option },
+                    label = { Text("${option.label} $count") },
+                )
+            }
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(
+                start = NextcloudSpacing.Large,
+                end = NextcloudSpacing.Large,
+                bottom = NextcloudSpacing.XXLarge,
+            ),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            if (visibleCategories.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                    ) {
+                        Text(
+                            "No ${filter.label.lowercase()} categories",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "Choose another progress filter to review category budgets.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            visibleCategories.forEach { category ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(
+                                category.name,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text("${category.percentage.roundToInt()}%", style = MaterialTheme.typography.labelLarge)
+                        }
+                        LinearProgressIndicator(
+                            progress = { (category.percentage / 100.0).coerceIn(0.0, 1.0).toFloat() },
+                            modifier = Modifier.fillMaxWidth().height(7.dp),
+                        )
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(
+                                "${formatNativeFinanceAmount(category.spent, currency)} spent",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                "${formatNativeFinanceAmount(category.remaining, currency)} left",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (kotlin.math.abs(category.carried) >= 0.005) {
+                            Text(
+                                "Includes ${formatNativeFinanceAmount(category.carried, currency)} carryover",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
