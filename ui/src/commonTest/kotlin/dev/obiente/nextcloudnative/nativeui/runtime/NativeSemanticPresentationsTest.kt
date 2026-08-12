@@ -990,6 +990,67 @@ class NativeSemanticPresentationsTest {
         assertEquals(null, presentation)
     }
 
+    @Test
+    fun `category fields preserve hierarchy counts and shared report state`() {
+        val categories = resource(
+            "categories",
+            "Categories",
+            "name", "type", "parentId", "transactionCount", "_shared", "_canWrite",
+            "_sharedByName", "excludedFromReports",
+        )
+        val presentation = requireNotNull(
+            nativeCategoryPresentation(
+                categories,
+                NativeRecord(
+                    "child-1",
+                    mapOf(
+                        "name" to "Shared groceries",
+                        "type" to "expense",
+                        "parentId" to "food",
+                        "transactionCount" to "14",
+                        "_shared" to "true",
+                        "_canWrite" to "false",
+                        "_sharedByName" to "Morgan",
+                        "excludedFromReports" to "true",
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals("Shared groceries", presentation.name)
+        assertEquals(NativeCategoryKind.Expense, presentation.kind)
+        assertEquals("food", presentation.parentId)
+        assertEquals(14, presentation.transactionCount)
+        assertTrue(presentation.shared)
+        assertFalse(presentation.writable)
+        assertEquals("Morgan", presentation.sharedBy)
+        assertTrue(presentation.mutedFromReports)
+    }
+
+    @Test
+    fun `category renderer does not claim transaction resources with category labels`() {
+        val transactions = resource(
+            "transactions",
+            "Transactions",
+            "description", "categoryName", "type",
+        )
+
+        assertEquals(
+            null,
+            nativeCategoryPresentation(
+                transactions,
+                NativeRecord(
+                    "transaction-1",
+                    mapOf(
+                        "description" to "Weekly groceries",
+                        "categoryName" to "Groceries",
+                        "type" to "debit",
+                    ),
+                ),
+            ),
+        )
+    }
+
     private fun resource(id: String, name: String, vararg fields: String): ResourceSpec = ResourceSpec(
         id = id,
         name = name,

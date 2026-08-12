@@ -388,6 +388,9 @@ private fun DynamicLayout.toNativeComponent(
             "project", "projects", "spending", "budget", "budgets", "income", "revenue",
         )
     }
+    val hasCategoryCollectionSemantics = hasTitle && words.any {
+        it == "category" || it == "categories"
+    }
     val hasMailboxSemantics = words.any { it in setOf("mail", "mailbox", "mailboxes", "inbox", "outbox", "email", "emails") }
     val hasMessageShape = normalizedFields.keys.any {
         it in setOf("subject", "from", "sender", "to", "recipients", "sentat", "receivedat", "unread", "flags")
@@ -456,6 +459,7 @@ private fun DynamicLayout.toNativeComponent(
         }
         hasTitle && hasCompletionShape -> NativeComponent.taskList
         hasTitle && hasBoardGrouping && hasBoardOrdering -> NativeComponent.board
+        hasCategoryCollectionSemantics -> NativeComponent.collectionList
         hasMeasure && hasFinancialSemantics -> NativeComponent.dashboard
         hasSettingsSemantics && action?.binding?.method == HttpMethod.GET -> NativeComponent.detail
         hasActivitySemantics && hasActivityShape -> NativeComponent.timeline
