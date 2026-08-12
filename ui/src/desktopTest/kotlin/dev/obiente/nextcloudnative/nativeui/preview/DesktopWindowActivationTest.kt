@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.nativeui.preview
 import dev.obiente.nextcloudnative.app.NextcloudNativeNavigationRequest
 import dev.obiente.nextcloudnative.app.NextcloudNativeRoute
 import java.awt.Frame
+import javax.swing.SwingUtilities
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -48,5 +49,16 @@ class DesktopWindowActivationTest {
     fun `background preference does not depend on tray availability`() {
         assertEquals(true, shouldKeepDesktopProcessRunningOnWindowClose(true))
         assertEquals(false, shouldKeepDesktopProcessRunningOnWindowClose(false))
+    }
+
+    @Test
+    fun `tray work already on the event thread runs synchronously`() {
+        SwingUtilities.invokeAndWait {
+            var completed = false
+
+            runOnAwtEventThread { completed = true }
+
+            assertEquals(true, completed)
+        }
     }
 }

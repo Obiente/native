@@ -1,6 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
+import java.nio.ByteBuffer
+import java.nio.channels.SeekableByteChannel
+import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
@@ -1099,6 +1103,8 @@ internal class LinuxNextcloudVirtualFileSystem(
     private val mountOwnerUid: Long = linuxEffectiveProcessUid(),
     private val mountOwnerGid: Long = linuxEffectiveProcessGid(),
 ) : FuseStubFS() {
+    @Volatile
+    private var mountedAt: Path? = null
     private val nextHandle = AtomicLong(1L)
     private val readHandles = ConcurrentHashMap<Long, LinuxVirtualFileReadHandle>()
     private val readHandlePaths = ConcurrentHashMap<Long, String>()
@@ -1363,14 +1369,19 @@ internal class LinuxNextcloudVirtualFileSystem(
                 "-o", "big_writes",
             ),
         )
+        mountedAt = mountPoint.toAbsolutePath().normalize()
     }
 
     fun unmount() {
         var detached = false
+        val fuseConnectionId = mountedAt?.let(::linuxFuseConnectionIdForMount)
+        val fuseAbortHandle = fuseConnectionId?.let(::openLinuxFuseAbortHandle)
         try {
             unmountOperation(this)
             detached = true
+            fuseAbortHandle?.abortBestEffort()
         } finally {
+            runCatching { fuseAbortHandle?.close() }
             readHandles.values.forEach { runCatching(it::close) }
             writeHandles.values.map(LinuxOpenWriteReference::shared).distinct().forEach { shared ->
                 runCatching(shared.delegate::close)
@@ -1383,7 +1394,10 @@ internal class LinuxNextcloudVirtualFileSystem(
                 openDirectoryEntries = 0L
             }
             pendingCreatedFiles.clear()
-            if (detached) backend.close()
+            if (detached) {
+                mountedAt = null
+                backend.close()
+            }
         }
     }
 
@@ -1605,6 +1619,53 @@ internal class LinuxNextcloudVirtualFileSystem(
 private fun linuxEffectiveProcessUid(): Long = Integer.toUnsignedLong(POSIXFactory.getPOSIX().geteuid())
 
 private fun linuxEffectiveProcessGid(): Long = Integer.toUnsignedLong(POSIXFactory.getPOSIX().getegid())
+
+internal fun linuxFuseConnectionIdForMount(
+    mountPoint: Path,
+    mountInfo: String = runCatching { Files.readString(Path.of("/proc/self/mountinfo")) }.getOrDefault(""),
+): Int? {
+    val encodedMountPoint = mountPoint.toAbsolutePath().normalize().toString()
+        .replace("\\", "\\134")
+        .replace(" ", "\\040")
+        .replace("\t", "\\011")
+        .replace("\n", "\\012")
+    return mountInfo.lineSequence().firstNotNullOfOrNull { line ->
+        val fields = line.split(' ')
+        val separator = fields.indexOf("-")
+        if (
+            fields.size < 7 ||
+            separator < 6 ||
+            separator + 2 >= fields.size ||
+            fields[4] != encodedMountPoint ||
+            fields[separator + 1].let { type -> type != "fuse" && !type.startsWith("fuse.") } ||
+            fields[separator + 2] != "nextcloud-native"
+        ) {
+            return@firstNotNullOfOrNull null
+        }
+        fields[2].substringAfter(':', "").toIntOrNull()
+    }
+}
+
+private fun openLinuxFuseAbortHandle(connectionId: Int): LinuxFuseAbortHandle? {
+    require(connectionId >= 0)
+    return openLinuxFuseAbortHandle(
+        Path.of("/sys/fs/fuse/connections", connectionId.toString(), "abort"),
+    )
+}
+
+internal fun openLinuxFuseAbortHandle(path: Path): LinuxFuseAbortHandle? = runCatching {
+    LinuxFuseAbortHandle(Files.newByteChannel(path, StandardOpenOption.WRITE))
+}.getOrNull()
+
+internal class LinuxFuseAbortHandle(
+    private val channel: SeekableByteChannel,
+) : AutoCloseable {
+    fun abortBestEffort() {
+        runCatching { channel.write(ByteBuffer.wrap("1\n".encodeToByteArray())) }
+    }
+
+    override fun close() = channel.close()
+}
 
 private const val MAX_UNSIGNED_UNIX_ID = 0xffff_ffffL
 

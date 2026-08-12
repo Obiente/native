@@ -27,6 +27,7 @@ import dev.obiente.nextcloudnative.app.DesktopActivationKind
 import dev.obiente.nextcloudnative.app.DesktopSingleInstance
 import dev.obiente.nextcloudnative.app.DesktopSingleInstanceStart
 import dev.obiente.nextcloudnative.app.DesktopTrayRegistration
+import dev.obiente.nextcloudnative.app.DesktopTrayAction
 import dev.obiente.nextcloudnative.app.DesktopTrayActionFeedback
 import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayPhase
 import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayPopup
@@ -168,34 +169,18 @@ fun main(arguments: Array<String>) {
         onDispose(services::close)
     }
 
-    DisposableEffect(Unit) {
-        val registration = registerDesktopTray(
-            tooltip = traySnapshot.tooltip(),
-            onActivated = {
-                SwingUtilities.invokeLater {
-                    val visible = trayPopupWindow.value?.isVisible != true
-                    trayPopupVisible.value = visible
-                    trayPopupWindow.value?.let { popup ->
-                        popup.isVisible = visible
-                        if (visible) {
-                            popup.toFront()
-                            popup.requestFocus()
-                        }
-                    }
+    fun toggleTrayPopup() {
+        runOnAwtEventThread {
+            val visible = trayPopupWindow.value?.isVisible != true
+            trayPopupVisible.value = visible
+            trayPopupWindow.value?.let { popup ->
+                popup.isVisible = visible
+                if (visible) {
+                    popup.toFront()
+                    popup.requestFocus()
                 }
-            },
-        )
-        desktopTrayRegistration.value = registration
-        trayAvailable.value = registration != null
-        trayRegistrationResolved.value = true
-        onDispose {
-            trayAvailable.value = false
-            desktopTrayRegistration.value = null
-            registration?.close()
+            }
         }
-    }
-    SideEffect {
-        desktopTrayRegistration.value?.updateTooltip(traySnapshot.tooltip())
     }
 
     fun showMainWindow() {
@@ -215,6 +200,32 @@ fun main(arguments: Array<String>) {
     fun quitDesktopApp() {
         stopLinuxUserServiceForExplicitQuit()
         exitApplication()
+    }
+
+    DisposableEffect(Unit) {
+        val registration = registerDesktopTray(
+            tooltip = traySnapshot.tooltip(),
+            onAction = { action ->
+                SwingUtilities.invokeLater {
+                    when (action) {
+                        DesktopTrayAction.ShowActivity -> toggleTrayPopup()
+                        DesktopTrayAction.OpenApp -> showMainWindow()
+                        DesktopTrayAction.Quit -> quitDesktopApp()
+                    }
+                }
+            },
+        )
+        desktopTrayRegistration.value = registration
+        trayAvailable.value = registration != null
+        trayRegistrationResolved.value = true
+        onDispose {
+            trayAvailable.value = false
+            desktopTrayRegistration.value = null
+            registration?.close()
+        }
+    }
+    SideEffect {
+        desktopTrayRegistration.value?.updateTooltip(traySnapshot.tooltip())
     }
 
     LaunchedEffect(singleInstance) {
@@ -374,6 +385,14 @@ internal fun nextDesktopFocusRequestSequence(current: Long): Long =
 internal fun shouldKeepDesktopProcessRunningOnWindowClose(
     keepRunningInBackground: Boolean,
 ): Boolean = keepRunningInBackground
+
+internal fun runOnAwtEventThread(action: () -> Unit) {
+    if (SwingUtilities.isEventDispatchThread()) {
+        action()
+    } else {
+        SwingUtilities.invokeLater(action)
+    }
+}
 
 private fun FileSyncCenterActionResult.trayMessage(): String = when (this) {
     is FileSyncCenterActionResult.Completed -> message

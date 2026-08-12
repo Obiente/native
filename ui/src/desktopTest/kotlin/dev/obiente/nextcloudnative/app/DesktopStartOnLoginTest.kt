@@ -235,6 +235,24 @@ class DesktopStartOnLoginTest {
     }
 
     @Test
+    fun supervisedExplicitQuitLetsTheCurrentProcessExitCleanly() {
+        val commands = mutableListOf<List<String>>()
+
+        assertTrue(
+            stopLinuxUserServiceForExplicitQuit(
+                osName = "Linux",
+                currentProcessIsLinuxUserService = { true },
+                processRunner = { command ->
+                    commands += command
+                    0
+                },
+            ),
+        )
+
+        assertTrue(commands.isEmpty())
+    }
+
+    @Test
     fun windowsRegistrationUsesTheCurrentUserRunKey() {
         val root = createTempDirectory("nextcloud-native-startup-windows").toFile()
         val launcher = File(root, "NextcloudNative.exe").apply { writeText("launcher") }
