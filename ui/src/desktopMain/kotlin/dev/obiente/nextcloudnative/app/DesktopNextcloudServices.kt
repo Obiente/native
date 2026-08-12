@@ -3570,20 +3570,8 @@ class DesktopNextcloudServices(
                     .header("User-Agent", USER_AGENT)
                     .header("Authorization", "Basic $authorization")
                     .build()
-                try {
-                    noRedirectHttpClient.newCall(request).execute().use { response ->
-                        check(response.isSuccessful) {
-                            "Opening the Deck attachment failed (HTTP ${response.code})."
-                        }
-                        val responseBody = response.body
-                        val contentLength = responseBody.contentLength()
-                        check(contentLength <= maximumBytes || contentLength == -1L) {
-                            "The Deck attachment is larger than the external handoff limit."
-                        }
-                        DesktopDetachedDownload(
-                            responseBody.byteStream().copyBoundedTo(output, maximumBytes),
-                        )
-                    }
+                val response = try {
+                    noRedirectHttpClient.newCall(request).execute()
                 } catch (failure: Throwable) {
                     recordDesktopStreamingFailure(
                         session = session,
@@ -3593,6 +3581,34 @@ class DesktopNextcloudServices(
                         failure = failure,
                     )
                     throw failure
+                }
+                response.use {
+                    check(response.isSuccessful) {
+                        "Opening the Deck attachment failed (HTTP ${response.code})."
+                    }
+                    val responseBody = response.body
+                    val contentLength = responseBody.contentLength()
+                    check(contentLength <= maximumBytes || contentLength == -1L) {
+                        "The Deck attachment is larger than the external handoff limit."
+                    }
+                    DesktopDetachedDownload(
+                        responseBody.byteStream().copyBoundedNetworkResponseTo(
+                            output = output,
+                            maxBytes = maximumBytes,
+                            onLimitExceeded = {
+                                error("The Deck attachment is larger than the external handoff limit.")
+                            },
+                            onNetworkReadFailure = { failure ->
+                                recordDesktopStreamingFailure(
+                                    session = session,
+                                    streamKind = "deck_attachment",
+                                    startedNanos = started,
+                                    attempt = networkAttempt,
+                                    failure = failure,
+                                )
+                            },
+                        ),
+                    )
                 }
             }
         }
@@ -5246,6 +5262,7 @@ class DesktopNextcloudServices(
             readOnlyRequest = true,
             replayableRequest = true,
         )
+        if (networkFailure.isCancellation) return
         recordDesktopRequestDiagnostic(
             session,
             SupportDiagnosticEventDraft(
@@ -5280,25 +5297,6 @@ class DesktopNextcloudServices(
             output.write(buffer, 0, read)
         }
         return output.toByteArray()
-    }
-
-    private fun java.io.InputStream.copyBoundedTo(
-        output: java.io.OutputStream,
-        maxBytes: Long,
-    ): Long {
-        require(maxBytes > 0L)
-        val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
-        var total = 0L
-        while (true) {
-            val read = read(buffer)
-            if (read == -1) break
-            total += read
-            check(total <= maxBytes) {
-                "The Deck attachment is larger than the external handoff limit."
-            }
-            output.write(buffer, 0, read)
-        }
-        return total
     }
 
     private fun formatByteLimit(bytes: Long): String = when {

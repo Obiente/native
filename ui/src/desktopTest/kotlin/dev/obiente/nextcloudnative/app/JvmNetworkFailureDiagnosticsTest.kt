@@ -1,14 +1,24 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.ByteArrayInputStream
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.ProtocolException
+import java.net.ServerSocket
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.cert.CertificateException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLHandshakeException
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import okhttp3.Dns
 import okhttp3.OkHttpClient
@@ -17,6 +27,48 @@ import okhttp3.internal.http2.ErrorCode
 import okhttp3.internal.http2.StreamResetException
 
 class JvmNetworkFailureDiagnosticsTest {
+    @Test
+    fun localOutputFailureIsNotReportedAsANetworkReadFailure() {
+        val outputFailure = IOException("local storage unavailable")
+        var reportedFailure: IOException? = null
+
+        val thrown = assertFailsWith<IOException> {
+            ByteArrayInputStream(byteArrayOf(1, 2, 3)).copyBoundedNetworkResponseTo(
+                output = object : OutputStream() {
+                    override fun write(value: Int) {
+                        throw outputFailure
+                    }
+                },
+                maxBytes = 3L,
+                onLimitExceeded = { error("unexpected limit") },
+                onNetworkReadFailure = { reportedFailure = it },
+            )
+        }
+
+        assertSame(outputFailure, thrown)
+        assertNull(reportedFailure)
+    }
+
+    @Test
+    fun responseReadFailureIsReportedBeforeItPropagates() {
+        val networkFailure = IOException("response stream failed")
+        var reportedFailure: IOException? = null
+
+        val thrown = assertFailsWith<IOException> {
+            object : InputStream() {
+                override fun read(): Int = throw networkFailure
+            }.copyBoundedNetworkResponseTo(
+                output = OutputStream.nullOutputStream(),
+                maxBytes = 3L,
+                onLimitExceeded = { error("unexpected limit") },
+                onNetworkReadFailure = { reportedFailure = it },
+            )
+        }
+
+        assertSame(networkFailure, thrown)
+        assertSame(networkFailure, reportedFailure)
+    }
+
     @Test
     fun clientListenerTracksDnsPhaseForTaggedRequests() {
         val attempt = JvmNetworkRequestAttempt()
@@ -33,6 +85,44 @@ class JvmNetworkFailureDiagnosticsTest {
 
         assertEquals(JvmNetworkFailurePhase.Dns, attempt.phase)
         assertFalse(attempt.exchangeStarted)
+    }
+
+    @Test
+    fun clientListenerMarksTheResponseWaitAsAReadPhase() {
+        val releaseServer = CountDownLatch(1)
+        ServerSocket(0).use { server ->
+            val worker = thread(name = "network-response-wait-test") {
+                server.accept().use { socket ->
+                    val input = socket.getInputStream().bufferedReader()
+                    while (true) {
+                        if (input.readLine().isNullOrEmpty()) break
+                    }
+                    releaseServer.await(5L, TimeUnit.SECONDS)
+                }
+            }
+            try {
+                val attempt = JvmNetworkRequestAttempt()
+                val client = OkHttpClient.Builder()
+                    .readTimeout(100L, TimeUnit.MILLISECONDS)
+                    .trackJvmNetworkFailures()
+                    .build()
+                val request = Request.Builder()
+                    .url("http://127.0.0.1:${server.localPort}/wait")
+                    .tag(JvmNetworkRequestAttempt::class.java, attempt)
+                    .build()
+
+                val failure = assertFailsWith<SocketTimeoutException> {
+                    client.newCall(request).execute().close()
+                }
+                val diagnostic = failure.toJvmNetworkFailureDiagnostic(attempt, true, true)
+
+                assertEquals(JvmNetworkFailurePhase.ResponseHeaders, attempt.phase)
+                assertEquals("NETWORK_READ_TIMEOUT", diagnostic.code)
+            } finally {
+                releaseServer.countDown()
+                worker.join(5_000L)
+            }
+        }
     }
 
     @Test
@@ -69,6 +159,45 @@ class JvmNetworkFailureDiagnosticsTest {
         assertEquals("NETWORK_HTTP2_STREAM_RESET", diagnostic.code)
         assertEquals("REFUSED_STREAM", diagnostic.http2Error)
         assertTrue(diagnostic.retryable)
+    }
+
+    @Test
+    fun exactOkHttpResponseEndFailureIsClassifiedAsTruncation() {
+        val attempt = JvmNetworkRequestAttempt().apply {
+            markPhase(JvmNetworkFailurePhase.ResponseBody)
+            markExchangeStarted()
+        }
+
+        val diagnostic = ProtocolException("unexpected end of stream")
+            .toJvmNetworkFailureDiagnostic(attempt, true, true)
+
+        assertEquals("NETWORK_RESPONSE_TRUNCATED", diagnostic.code)
+        assertTrue(diagnostic.retryable)
+    }
+
+    @Test
+    fun otherProtocolFailuresRemainNonRetryable() {
+        val attempt = JvmNetworkRequestAttempt().apply {
+            markPhase(JvmNetworkFailurePhase.ResponseBody)
+        }
+
+        val diagnostic = ProtocolException("unexpected status line")
+            .toJvmNetworkFailureDiagnostic(attempt, true, true)
+
+        assertEquals("NETWORK_PROTOCOL_FAILED", diagnostic.code)
+        assertFalse(diagnostic.retryable)
+    }
+
+    @Test
+    fun callerCancellationCanBeSuppressedByStreamingCallers() {
+        val attempt = JvmNetworkRequestAttempt().apply { markCancelled() }
+
+        val diagnostic = IOException("Canceled")
+            .toJvmNetworkFailureDiagnostic(attempt, true, true)
+
+        assertEquals("NETWORK_CANCELLED", diagnostic.code)
+        assertTrue(diagnostic.isCancellation)
+        assertFalse(diagnostic.retryable)
     }
 
     @Test

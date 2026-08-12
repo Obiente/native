@@ -16,6 +16,7 @@ import okhttp3.Call
 import okhttp3.Connection
 import okhttp3.EventListener
 import okhttp3.OkHttpClient
+import okhttp3.Request
 
 enum class JvmNetworkFailurePhase(val storageValue: String) {
     Unknown("unknown"),
@@ -79,6 +80,9 @@ data class JvmNetworkFailureDiagnostic(
     val protocol: String?,
     val http2Error: String? = null,
 ) {
+    val isCancellation: Boolean
+        get() = code == "NETWORK_CANCELLED"
+
     fun fields(): List<SupportDiagnosticFieldDraft> = buildList {
         add(SupportDiagnosticFieldDraft("failure_phase", phase.storageValue))
         add(SupportDiagnosticFieldDraft("retryable", retryable.toString()))
@@ -128,6 +132,11 @@ fun Throwable.toJvmNetworkFailureDiagnostic(
             ClassifiedJvmNetworkFailure("NETWORK_CONNECT_FAILED", retryable = true)
         causes.any { it is SocketTimeoutException } ->
             ClassifiedJvmNetworkFailure(attempt.phase.timeoutCode(), retryable = true)
+        causes.any { failure ->
+            attempt.phase == JvmNetworkFailurePhase.ResponseBody &&
+                failure is ProtocolException &&
+                failure.message == OKHTTP_UNEXPECTED_END_OF_STREAM
+        } -> ClassifiedJvmNetworkFailure("NETWORK_RESPONSE_TRUNCATED", retryable = true)
         causes.any { it is EOFException } ->
             ClassifiedJvmNetworkFailure("NETWORK_RESPONSE_TRUNCATED", retryable = true)
         causes.any { failure ->
@@ -179,9 +188,17 @@ private class JvmNetworkEventListener(
         attempt.markExchangeStarted()
     }
 
+    override fun requestHeadersEnd(call: Call, request: Request) {
+        attempt.markPhase(JvmNetworkFailurePhase.ResponseHeaders)
+    }
+
     override fun requestBodyStart(call: Call) {
         attempt.markPhase(JvmNetworkFailurePhase.RequestBody)
         attempt.markExchangeStarted()
+    }
+
+    override fun requestBodyEnd(call: Call, byteCount: Long) {
+        attempt.markPhase(JvmNetworkFailurePhase.ResponseHeaders)
     }
 
     override fun responseHeadersStart(call: Call) {
@@ -245,6 +262,7 @@ private const val OKHTTP_CONNECTION_SHUTDOWN_EXCEPTION =
     "okhttp3.internal.http2.ConnectionShutdownException"
 private const val MAX_DIAGNOSTIC_CAUSE_DEPTH = 8
 private const val MAX_DIAGNOSTIC_NETWORK_ATTEMPTS = 16
+private const val OKHTTP_UNEXPECTED_END_OF_STREAM = "unexpected end of stream"
 private val READ_ONLY_NETWORK_METHODS = setOf("GET", "HEAD", "OPTIONS", "PROPFIND", "REPORT", "SEARCH")
 private val SAFE_NETWORK_PROTOCOLS = setOf("h2", "http/1.1")
 private val RETRYABLE_HTTP2_ERRORS = setOf("REFUSED_STREAM", "INTERNAL_ERROR")
