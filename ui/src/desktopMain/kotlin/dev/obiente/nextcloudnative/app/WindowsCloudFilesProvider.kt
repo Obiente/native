@@ -463,6 +463,7 @@ internal class WindowsCloudFilesProvider(
     private val namespaceMutationLock = Any()
     private val callbacksPaused = AtomicBoolean(false)
     private val corruptRootRecoveryLifecycleLock = Any()
+    private val corruptRootStableAccessLock = Any()
     private val corruptRootRecoveryClaimed = AtomicBoolean(false)
     private val corruptRootRecoveryGeneration = AtomicLong(0L)
     private val runtimeRecoveryFailure = AtomicReference<Throwable?>(null)
@@ -566,6 +567,18 @@ internal class WindowsCloudFilesProvider(
         syncRootIdentity: ByteArray,
         corruption: WindowsCloudFilesCorruptEntryException,
         quiescenceTimeoutSeconds: Long,
+    ) = synchronized(corruptRootStableAccessLock) {
+        performCorruptRootRecoveryWithExclusiveRootAccess(
+            syncRootIdentity,
+            corruption,
+            quiescenceTimeoutSeconds,
+        )
+    }
+
+    private fun performCorruptRootRecoveryWithExclusiveRootAccess(
+        syncRootIdentity: ByteArray,
+        corruption: WindowsCloudFilesCorruptEntryException,
+        quiescenceTimeoutSeconds: Long,
     ) {
         require(quiescenceTimeoutSeconds > 0L)
         val restartWatcher = watchService != null
@@ -632,9 +645,10 @@ internal class WindowsCloudFilesProvider(
             prepareRootDirectory()
             api.registerSyncRoot(root, backend.displayName, syncRootIdentity)
             connection.set(api.connect(root, this))
-            callbacksPaused.set(false)
             populateDirectory("", root)
-            if (restartWatcher) startLocalWatcher()
+            if (restartWatcher && !runtimeStopping.get()) startLocalWatcher()
+            recoverUnmanagedLocalEntries(failClosed = true)
+            if (!runtimeStopping.get()) callbacksPaused.set(false)
         } catch (retryFailure: Throwable) {
             retryFailure.addSuppressed(corruption)
             throw retryFailure
@@ -682,6 +696,9 @@ internal class WindowsCloudFilesProvider(
                 DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS,
             )
             corruptRootRecoveryGeneration.incrementAndGet()
+            if (initialRecoveryFailure is WindowsCloudFilesCorruptEntryException) {
+                initialRecoveryFailure = null
+            }
         } catch (failure: Throwable) {
             if (failure is InterruptedException) Thread.currentThread().interrupt()
             if (failure.suppressed.none { it === recovery.corruption }) {
@@ -706,6 +723,8 @@ internal class WindowsCloudFilesProvider(
     }
 
     fun runtimeRecoveryFailure(): Throwable? = runtimeRecoveryFailure.get()
+
+    internal fun isCorruptRootRecoveryInProgress(): Boolean = corruptRootRecoveryClaimed.get()
 
     private fun claimCorruptRootRecovery(): Boolean = synchronized(corruptRootRecoveryLifecycleLock) {
         !runtimeStopping.get() && corruptRootRecoveryClaimed.compareAndSet(false, true)
@@ -1025,7 +1044,12 @@ internal class WindowsCloudFilesProvider(
         }
     }
 
-    fun freeUpSpace(requestedBytes: Long): Long {
+    fun freeUpSpace(requestedBytes: Long): Long = synchronized(corruptRootStableAccessLock) {
+        if (corruptRootRecoveryClaimed.get() || runtimeStopping.get()) return@synchronized 0L
+        freeUpSpaceWithStableRoot(requestedBytes)
+    }
+
+    private fun freeUpSpaceWithStableRoot(requestedBytes: Long): Long {
         require(requestedBytes >= 0L)
         var freed = 0L
         knownIdentities.values.asSequence()
@@ -1044,7 +1068,15 @@ internal class WindowsCloudFilesProvider(
         return freed
     }
 
-    fun enforcePolicy(policy: VirtualFileCachePolicy, nowEpochMillis: Long = System.currentTimeMillis()): Long {
+    fun enforcePolicy(
+        policy: VirtualFileCachePolicy,
+        nowEpochMillis: Long = System.currentTimeMillis(),
+    ): Long = synchronized(corruptRootStableAccessLock) {
+        if (corruptRootRecoveryClaimed.get() || runtimeStopping.get()) return@synchronized 0L
+        enforcePolicyWithStableRoot(policy, nowEpochMillis)
+    }
+
+    private fun enforcePolicyWithStableRoot(policy: VirtualFileCachePolicy, nowEpochMillis: Long): Long {
         if (!policy.automaticCleanup) return 0L
         val entries = knownIdentities.values.mapNotNull { identity ->
             if (identity.directory) return@mapNotNull null
@@ -1085,7 +1117,11 @@ internal class WindowsCloudFilesProvider(
         return freed
     }
 
-    fun summary(): WindowsCloudFilesSummary {
+    fun summary(): WindowsCloudFilesSummary = synchronized(corruptRootStableAccessLock) {
+        summaryWithStableRoot()
+    }
+
+    private fun summaryWithStableRoot(): WindowsCloudFilesSummary {
         var cached = 0L
         var reclaimable = 0L
         var pinned = 0L
@@ -1132,10 +1168,10 @@ internal class WindowsCloudFilesProvider(
             runtimeStopping.set(true)
             callbacksPaused.set(true)
         }
-        localChangeScheduler.shutdownNow()
         awaitCorruptRootRecoveryCompletion(
             System.nanoTime() + TimeUnit.SECONDS.toNanos(DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS),
         )
+        localChangeScheduler.shutdownNow()
         val key = connection.get()
         if (key != 0L) {
             api.disconnect(key)
