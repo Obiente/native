@@ -261,14 +261,14 @@ class ProjectNewsAndUpdatesTest {
     @Test
     fun updateChannelPreferencesAcceptStableIdentifiersAndSafelyDefault() {
         assertEquals(
-            AndroidUpdateChannel.Alpha,
+            AndroidUpdateChannel.Nightly,
             parseAndroidUpdateChannel(AndroidUpdateChannel.Alpha.manifestChannel),
         )
         assertEquals(
             AndroidUpdateChannel.Nightly,
             parseAndroidUpdateChannel(AndroidUpdateChannel.Nightly.name),
         )
-        assertEquals(AndroidUpdateChannel.Alpha, parseAndroidUpdateChannel(null))
-        assertEquals(AndroidUpdateChannel.Alpha, parseAndroidUpdateChannel("stable-v1"))
+        assertEquals(AndroidUpdateChannel.Nightly, parseAndroidUpdateChannel(null))
+        assertEquals(AndroidUpdateChannel.Nightly, parseAndroidUpdateChannel("stable-v1"))
     }
 }

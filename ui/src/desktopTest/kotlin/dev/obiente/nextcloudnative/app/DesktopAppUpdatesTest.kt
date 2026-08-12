@@ -462,6 +462,7 @@ class DesktopAppUpdatesTest {
         val node = Preferences.userRoot().node("desktop-update-channel-test-${UUID.randomUUID()}")
         val directory = Files.createTempDirectory("desktop-update-channel-test").toFile()
         try {
+            node.put("app-update-channel", AndroidUpdateChannel.Alpha.storageValue)
             val updater = DesktopAppUpdater(
                 preferences = node,
                 buildIdentity = DesktopUpdateBuildIdentity(
@@ -492,7 +493,10 @@ class DesktopAppUpdatesTest {
                 releaseNotesUrl = "https://github.com/Obiente/nc-native/releases/tag/v0.1.0-alpha.2",
             )
 
-            assertTrue(updater.saveUpdateChannel(AndroidUpdateChannel.Nightly))
+            assertEquals(AndroidUpdateChannel.Nightly, updater.updateChannel())
+            assertEquals(AndroidUpdateChannel.Nightly.storageValue, node.get("app-update-channel", null))
+            assertFalse(updater.saveUpdateChannel(AndroidUpdateChannel.Alpha))
+            assertFalse(updater.saveUpdateChannel(AndroidUpdateChannel.Nightly))
             val result = runBlocking { updater.beginUpdate(alphaRelease) }
             val rejected = assertIs<AppUpdateInstallResult.Rejected>(result)
             assertTrue(rejected.message.contains("channel changed", ignoreCase = true))

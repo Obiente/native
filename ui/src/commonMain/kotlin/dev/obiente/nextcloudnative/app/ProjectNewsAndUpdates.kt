@@ -202,6 +202,16 @@ enum class AndroidUpdateChannel(
     Stable("stable", "stable-v1", "channel-stable", false),
 }
 
+/**
+ * The direct release track is intentionally pinned to Nightly while the product is pre-alpha.
+ *
+ * Keep the other channel contracts intact so selection can be restored without another storage
+ * migration once curated prereleases accurately describe the product's maturity.
+ */
+val enforcedAppUpdateChannel: AndroidUpdateChannel = AndroidUpdateChannel.Nightly
+
+val appUpdateChannelSelectionLocked: Boolean = true
+
 fun AndroidUpdateChannel.manifestUrl(): String {
     require(available) { "$name updates are not available yet." }
     return "https://github.com/Obiente/nc-native/releases/download/$pointerTag/update-manifest.json"
@@ -214,7 +224,10 @@ fun AndroidUpdateChannel.desktopManifestUrl(): String {
 }
 
 fun parseAndroidUpdateChannel(value: String?): AndroidUpdateChannel =
-    AndroidUpdateChannel.entries
+    if (appUpdateChannelSelectionLocked) {
+        enforcedAppUpdateChannel
+    } else {
+        AndroidUpdateChannel.entries
         .singleOrNull { channel ->
             channel.available &&
                 (
@@ -223,7 +236,8 @@ fun parseAndroidUpdateChannel(value: String?): AndroidUpdateChannel =
                         channel.manifestChannel == value
                     )
         }
-        ?: AndroidUpdateChannel.Alpha
+        ?: enforcedAppUpdateChannel
+    }
 
 sealed interface AppUpdateCheckResult {
     data class Current(val support: AppUpdateSupport) : AppUpdateCheckResult

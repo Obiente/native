@@ -627,8 +627,14 @@ internal class AndroidProjectContentClient(
         const val UPDATE_PROGRESS_STEP_BYTES = 256L * 1024L
     }
 
-    private fun storedUpdateChannel(): AndroidUpdateChannel =
-        parseAndroidUpdateChannel(preferences.getString(KEY_UPDATE_CHANNEL, null))
+    private fun storedUpdateChannel(): AndroidUpdateChannel {
+        val storedValue = preferences.getString(KEY_UPDATE_CHANNEL, null)
+        val channel = parseAndroidUpdateChannel(storedValue)
+        if (storedValue != channel.storageValue) {
+            preferences.edit().putString(KEY_UPDATE_CHANNEL, channel.storageValue).apply()
+        }
+        return channel
+    }
 }
 
 internal fun isRetryableAppUpdateHttpStatus(status: Int): Boolean =
