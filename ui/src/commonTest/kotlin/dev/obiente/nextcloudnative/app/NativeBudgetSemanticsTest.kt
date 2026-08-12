@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestinationSect
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
+import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
 import dev.obiente.nextcloudnative.nativeui.model.DynamicHttpBinding
@@ -72,11 +73,26 @@ class NativeBudgetSemanticsTest {
             sourceActionId = "accounts.list",
             confidence = Confidence.verified,
         )
+        val createTransaction = ActionSpec(
+            id = "transactions.create",
+            label = "Create",
+            resourceId = "transactions",
+            binding = dev.obiente.nextcloudnative.nativeui.model.ApiBinding(
+                method = HttpMethod.POST,
+                path = "/apps/budget/api/transactions",
+                operationId = "createTransaction",
+            ),
+            intent = ActionIntent.create,
+            risk = ActionRisk.mutating,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        )
         val schema = NativeAppSchema(
             schemaVersion = "test",
             app = AppIdentity("budget", "Budget", "2.39.1"),
             confidence = Confidence.verified,
             views = listOf(accounts),
+            actions = listOf(createTransaction),
         )
         val adapted = schema.withNativeBudgetDashboard()
         val dashboard = adapted.views.first()
@@ -84,6 +100,7 @@ class NativeBudgetSemanticsTest {
         assertEquals(NativeComponent.dashboard, dashboard.component)
         assertEquals(accounts.sourceActionId, dashboard.sourceActionId)
         assertEquals(accounts.resourceId, dashboard.resourceId)
+        assertEquals("Add transaction", adapted.actions.single().label)
     }
 
     @Test

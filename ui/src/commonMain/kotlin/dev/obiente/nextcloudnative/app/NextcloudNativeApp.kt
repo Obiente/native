@@ -153,6 +153,7 @@ import dev.obiente.nextcloudnative.nativeui.model.toNativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.resolveDynamicRecordReadParameters
 import dev.obiente.nextcloudnative.nativeui.model.sameDynamicResourceAs
 import dev.obiente.nextcloudnative.nativeui.runtime.GenericNativeAppScreen
+import dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeFinanceCurrency
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
@@ -2942,11 +2943,16 @@ private fun DynamicDiscoveredAppScreen(
     }
 
     LaunchedEffect(descriptor, selectedView?.id, loadAttempt) {
-        if (selectedView?.id != NATIVE_BUDGET_DASHBOARD_VIEW_ID) return@LaunchedEffect
-        val dashboardReads = nativeBudgetDashboardReads(
+        if (!isNativeBudgetApp(descriptor.app.id)) return@LaunchedEffect
+        val allDashboardReads = nativeBudgetDashboardReads(
             appId = descriptor.app.id,
             actions = descriptor.actions,
-        ).filterNot { read -> read.action.id == selectedView.sourceActionId }
+        )
+        val dashboardReads = if (selectedView?.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID) {
+            allDashboardReads.filterNot { read -> read.action.id == selectedView.sourceActionId }
+        } else {
+            allDashboardReads.filter { read -> read.kind == NativeBudgetDashboardDataKind.ReportSummary }
+        }
         coroutineScope {
             dashboardReads.map { read ->
                 async {
@@ -4486,7 +4492,13 @@ private fun DynamicDiscoveredAppScreen(
                             }
                         },
                     )
-                } else GenericNativeAppScreen(
+                } else CompositionLocalProvider(
+                    LocalNativeFinanceCurrency provides buildNativeBudgetDashboardModel(
+                        dashboardReads = nativeBudgetDashboardReads(descriptor.app.id, descriptor.actions),
+                        dashboardRecordsByActionId = budgetDashboardRecordsByActionId,
+                    ).currency,
+                ) {
+                    GenericNativeAppScreen(
                     schema = schema,
                     view = selectedView,
                     state = viewState,
@@ -4537,8 +4549,9 @@ private fun DynamicDiscoveredAppScreen(
                     onLoadMore = onLoadMore.takeUnless { showFallbackRecordDetail },
                     loadingMore = loadingMore,
                     loadMoreError = loadMoreError,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
             Box(modifier = Modifier.weight(1f)) {
                 if (musicWorkspaceIntent == null) {
