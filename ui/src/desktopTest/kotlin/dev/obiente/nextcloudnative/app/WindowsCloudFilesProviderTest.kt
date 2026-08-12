@@ -300,6 +300,46 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun placeholderFetchWaitsForInitialPopulation() {
+        val root = createTempDirectory("windows-cloud-initial-population")
+        val child = WindowsCloudFileIdentity("account-01", "Apps", "revision", 0L, true)
+        val rootIdentity = child.copy(path = "", remoteRevision = "root")
+        val createStarted = CountDownLatch(1)
+        val releaseCreate = CountDownLatch(1)
+        val api = FakeApi(expectedPlaceholderFetches = 1).apply {
+            createPlaceholdersHook = { _, _ ->
+                createStarted.countDown()
+                check(releaseCreate.await(5, TimeUnit.SECONDS))
+            }
+        }
+        val provider = WindowsCloudFilesProvider(root, FakeBackend(ByteArray(0), listOf(child)), api)
+        val startupFailure = AtomicReference<Throwable?>()
+        val startup = Thread {
+            runCatching(provider::start).exceptionOrNull()?.let(startupFailure::set)
+        }
+
+        try {
+            startup.start()
+            assertTrue(createStarted.await(5, TimeUnit.SECONDS))
+
+            provider.fetchPlaceholders(callbackInfo(root, rootIdentity), pattern = null)
+
+            assertFalse(api.awaitPlaceholderFetches(100))
+            releaseCreate.countDown()
+            startup.join(TimeUnit.SECONDS.toMillis(5))
+            assertFalse(startup.isAlive)
+            startupFailure.get()?.let { throw it }
+            assertTrue(api.awaitPlaceholderFetches())
+            assertEquals(listOf("Apps"), api.completedPlaceholders.map(WindowsCloudPlaceholder::name))
+        } finally {
+            releaseCreate.countDown()
+            startup.join(TimeUnit.SECONDS.toMillis(5))
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun collisionRecoveryPreservesTheAuthoritativeNewerGeneration() {
         val root = createTempDirectory("windows-cloud-placeholder-generation")
         val old = WindowsCloudFileIdentity("account-01", "report.txt", "old", 5L, false)
@@ -1879,7 +1919,8 @@ class WindowsCloudFilesProviderTest {
         fun awaitConversions(): Boolean = conversionLatch.await(5, TimeUnit.SECONDS)
         fun awaitRenames(): Boolean = renameLatch.await(5, TimeUnit.SECONDS)
         fun awaitIdentityReads(): Boolean = identityReadLatch.await(5, TimeUnit.SECONDS)
-        fun awaitPlaceholderFetches(): Boolean = placeholderFetchLatch.await(5, TimeUnit.SECONDS)
+        fun awaitPlaceholderFetches(timeoutMillis: Long = TimeUnit.SECONDS.toMillis(5)): Boolean =
+            placeholderFetchLatch.await(timeoutMillis, TimeUnit.MILLISECONDS)
 
         fun decodedIdentity(path: Path): WindowsCloudFileIdentity? =
             placeholderIdentity(path)?.let(WindowsCloudFileIdentityCodec::decode)
