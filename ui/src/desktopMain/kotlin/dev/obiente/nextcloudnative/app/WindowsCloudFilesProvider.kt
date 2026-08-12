@@ -1384,15 +1384,7 @@ internal class WindowsCloudFilesProvider(
                 ),
             )
             if (corruptMetadata) {
-                throw corruptPlaceholder(
-                    identity = current,
-                    localDirectory = localPath.parent ?: root,
-                    inspection = WindowsCloudPlaceholderInspection(
-                        state = WindowsCloudPlaceholderEntryState.Corrupt,
-                        win32Error = WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT,
-                    ),
-                    cause = failure,
-                )
+                throw corruptPlaceholderUpdate(localPath, current, failure)
             }
             if (!unchangedDirectoryRefresh) throw failure
             scheduleUnchangedDirectoryRefresh(localPath, current, attempt = 1)
@@ -1428,7 +1420,7 @@ internal class WindowsCloudFilesProvider(
         identity: WindowsCloudFileIdentity,
         attempt: Int,
     ) {
-        synchronized(namespaceMutationLock) {
+        val corruption = synchronized(namespaceMutationLock) {
             if (callbacksPaused.get()) return
             val inspection = api.inspectPlaceholder(localPath)
             val currentIdentity = if (
@@ -1452,9 +1444,16 @@ internal class WindowsCloudFilesProvider(
                         SupportDiagnosticFieldDraft("identity_matches", (currentIdentity == identity).toString()),
                     ),
                 )
-                return
+                return@synchronized null
             }
             retryVerifiedUnchangedDirectoryRefresh(localPath, identity, attempt)
+        }
+        if (corruption != null) {
+            val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
+            recoverCorruptRoot(
+                WindowsCloudFileIdentityCodec.encode(rootIdentity),
+                corruption,
+            )
         }
     }
 
@@ -1462,7 +1461,7 @@ internal class WindowsCloudFilesProvider(
         localPath: Path,
         identity: WindowsCloudFileIdentity,
         attempt: Int,
-    ) {
+    ): WindowsCloudFilesCorruptEntryException? {
         try {
             api.updatePlaceholder(localPath, placeholder(identity), invalidateContent = false)
             recordPlaceholderDiagnostic(
@@ -1473,20 +1472,48 @@ internal class WindowsCloudFilesProvider(
                 identity = identity,
                 fields = listOf(SupportDiagnosticFieldDraft("attempt", attempt.toString())),
             )
+            return null
         } catch (failure: WindowsCloudFilesOperationException) {
+            val corruptMetadata = isWindowsCloudFilesPlaceholderMetadataCorruptResult(failure.hResult)
             val exhausted = attempt >= MAX_WINDOWS_DIRECTORY_REFRESH_ATTEMPTS
             recordPlaceholderDiagnostic(
-                severity = SupportDiagnosticSeverity.Warning,
+                severity = if (corruptMetadata) {
+                    SupportDiagnosticSeverity.Error
+                } else {
+                    SupportDiagnosticSeverity.Warning
+                },
                 operation = "cloud-files.placeholder-update",
-                outcome = if (exhausted) "unchanged-refresh-stale" else "unchanged-refresh-retry-failed",
+                outcome = when {
+                    corruptMetadata -> "corrupt-metadata-detected"
+                    exhausted -> "unchanged-refresh-stale"
+                    else -> "unchanged-refresh-retry-failed"
+                },
                 code = "HRESULT:0x${failure.hResult.toUInt().toString(16)}",
                 localDirectory = localPath.parent ?: root,
                 identity = identity,
                 fields = listOf(SupportDiagnosticFieldDraft("attempt", attempt.toString())),
             )
+            if (corruptMetadata) {
+                return corruptPlaceholderUpdate(localPath, identity, failure)
+            }
             if (!exhausted) scheduleUnchangedDirectoryRefresh(localPath, identity, attempt + 1)
+            return null
         }
     }
+
+    private fun corruptPlaceholderUpdate(
+        localPath: Path,
+        identity: WindowsCloudFileIdentity,
+        failure: WindowsCloudFilesOperationException,
+    ): WindowsCloudFilesCorruptEntryException = corruptPlaceholder(
+        identity = identity,
+        localDirectory = localPath.parent ?: root,
+        inspection = WindowsCloudPlaceholderInspection(
+            state = WindowsCloudPlaceholderEntryState.Corrupt,
+            win32Error = WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT,
+        ),
+        cause = failure,
+    )
 
     private fun placeholderContentChanged(
         previous: WindowsCloudFileIdentity,
