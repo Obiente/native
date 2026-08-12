@@ -219,6 +219,8 @@ internal fun NativeBudgetDashboard(
     recordsByResourceId: Map<String, List<NativeRecord>>,
     dashboardReads: List<NativeBudgetDashboardRead> = emptyList(),
     dashboardRecordsByActionId: Map<String, List<NativeRecord>> = emptyMap(),
+    dashboardErrorsByActionId: Map<String, String> = emptyMap(),
+    onRetryDashboardReads: () -> Unit = {},
     onOpenSection: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -249,6 +251,9 @@ internal fun NativeBudgetDashboard(
         buildNativeBudgetDashboardModel(effectiveReads, effectiveDashboardRecords)
     }
     val initialLoading = state is NativeScreenState.Loading && model.loadedSectionCount == 0
+    val availableSectionIds = remember(schema.views) {
+        schema.views.mapTo(hashSetOf()) { view -> view.resourceId.normalizedBudgetResourceId() }
+    }
 
     if (initialLoading) {
         NativeBudgetDashboardLoading(modifier)
@@ -282,7 +287,27 @@ internal fun NativeBudgetDashboard(
             }
         }
         item("planning") {
-            NativeBudgetPlanningRow(model, onOpenSection)
+            NativeBudgetPlanningRow(model, availableSectionIds, onOpenSection)
+        }
+        if (dashboardErrorsByActionId.isNotEmpty()) {
+            item("partial-errors") {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Some dashboard data could not be loaded", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "${dashboardErrorsByActionId.size} section(s) may be incomplete.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        TextButton(onClick = onRetryDashboardReads) { Text("Retry") }
+                    }
+                }
+            }
         }
         if (state is NativeScreenState.Error && model.loadedSectionCount == 0) {
             item("error") {
@@ -594,6 +619,7 @@ private fun NativeBudgetAccountsCard(
 @Composable
 private fun NativeBudgetPlanningRow(
     model: NativeBudgetDashboardModel,
+    availableSectionIds: Set<String>,
     onOpenSection: (String) -> Unit,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -604,19 +630,21 @@ private fun NativeBudgetPlanningRow(
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             maxItemsInEachRow = columns,
         ) {
-            if ((model.alertCount ?: 0) > 0) {
+            if ((model.alertCount ?: 0) > 0 && "alerts" in availableSectionIds) {
                 NativeBudgetStatusCard(
                     width, "Budget alerts", "${model.alertCount} need attention",
                     "alerts", onOpenSection,
                 )
             }
-            if (model.upcomingBills.isEmpty()) {
+            if (model.upcomingBills.isEmpty() && "bills" in availableSectionIds) {
                 NativeBudgetStatusCard(
                     width, "Upcoming bills", model.billCount?.let { "$it scheduled" } ?: "No summary available",
                     "bills", onOpenSection,
                 )
             }
-            NativeBudgetStatusCard(
+            val planningDestination = listOf("savings-goals", "budget", "debts", "assets", "trends")
+                .firstOrNull { destination -> destination in availableSectionIds }
+            if (planningDestination != null) NativeBudgetStatusCard(
                 width, "Planning", listOfNotNull(
                     model.budgetCategoryCount?.let { "$it budget categories" },
                     model.savingsGoalCount?.let { "$it savings goals" },
@@ -624,7 +652,7 @@ private fun NativeBudgetPlanningRow(
                     model.assetTotal?.takeIf { abs(it) >= 0.005 }
                         ?.let { "Assets ${formatNativeBudgetMoney(it, model.currency)}" },
                 ).joinToString(" · ").ifBlank { "Goals, debt and forecast" },
-                "savings-goals", onOpenSection,
+                planningDestination, onOpenSection,
             )
         }
     }

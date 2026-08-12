@@ -95,6 +95,22 @@ class ActivityFeedSemanticsTest {
     }
 
     @Test
+    fun `media presentation retains the parent folder for files activity`() {
+        val item = activity(
+            id = 11,
+            app = "files",
+            type = "file_changed",
+            subject = "Photo updated",
+            objectName = "/Photos/Summer/beach.jpg",
+        )
+
+        val action = item.activityOpenAction(setOf("files", "photos"), "https://cloud.example.test")
+
+        assertEquals("Show in Files", action?.label)
+        assertEquals("Photos/Summer", action?.filesParentPath)
+    }
+
+    @Test
     fun `activity actions prefer native apps and only permit same origin browser links`() {
         val talk = activity(
             id = 4,

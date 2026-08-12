@@ -9,6 +9,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertNotNull
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class DynamicDiscoveryPersistenceTest {
     @Test
@@ -41,6 +43,22 @@ class DynamicDiscoveryPersistenceTest {
         val encoded = assertNotNull(encodePersistedDynamicDiscovery(verifiedDiscovery()))
 
         assertNull(decodePersistedDynamicDiscovery(encoded, "mail"))
+    }
+
+    @Test
+    fun cachedContractMustMatchTheExactInstalledAppVersion() {
+        val discovery = verifiedDiscovery()
+
+        assertTrue(cachedDynamicDiscoveryMatchesInstalledVersion(discovery, "tables", "1.0.9"))
+        assertFalse(cachedDynamicDiscoveryMatchesInstalledVersion(discovery, "tables", "2.0.0"))
+        assertFalse(cachedDynamicDiscoveryMatchesInstalledVersion(discovery, "mail", "1.0.9"))
+    }
+
+    @Test
+    fun dynamicDiscoveryCacheUsesTheFullSupportedAppIdGrammar() {
+        assertTrue("My-App.reader_2".isSafeDynamicDiscoveryCacheAppId())
+        assertFalse("bad/app".isSafeDynamicDiscoveryCacheAppId())
+        assertFalse("a".repeat(129).isSafeDynamicDiscoveryCacheAppId())
     }
 
     private fun verifiedDiscovery() = DynamicDescriptorDiscovery(

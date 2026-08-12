@@ -158,7 +158,11 @@ fun NextcloudActivity.activityOpenAction(
     installedAppIds: Set<String>,
     serverUrl: String,
 ): ActivityOpenAction? {
-    if (semantic() == NextcloudActivitySemantic.File && installedAppIds.any { it.equals("files", true) }) {
+    val hasFilesDestination = installedAppIds.any { it.equals("files", true) }
+    val producedByFiles = app.equals("files", ignoreCase = true) ||
+        type.startsWith("file_", ignoreCase = true) ||
+        objectType?.contains("file", ignoreCase = true) == true
+    if (hasFilesDestination && producedByFiles) {
         safeActivityFilesParentPath(objectName)?.let { parentPath ->
             return ActivityOpenAction(label = "Show in Files", filesParentPath = parentPath)
         }

@@ -18,6 +18,7 @@ internal fun MarketingCalendarWorkspaceScenario(
 ) {
     val calendars = marketingCalendarCalendars
     val events = marketingCalendarEvents
+    val view = scenario.marketingCalendarView()
     val editor = scenario == MarketingCaptureScenario.CalendarEventEditorMobile ||
         scenario == MarketingCaptureScenario.CalendarEventEditorDesktop
     if (scenario.presentation == NextcloudPresentation.Desktop) {
@@ -31,7 +32,7 @@ internal fun MarketingCalendarWorkspaceScenario(
             DesktopGroupwareCalendarWorkspace(
                 month = CalendarMonth(2026, 8),
                 selectedDate = "20260804",
-                view = CalendarWorkspaceView.Month,
+                view = view,
                 calendars = calendars,
                 events = events,
                 hiddenCalendarHrefs = emptySet(),
@@ -57,7 +58,7 @@ internal fun MarketingCalendarWorkspaceScenario(
             MobileGroupwareCalendarWorkspace(
                 month = CalendarMonth(2026, 8),
                 selectedDate = "20260804",
-                view = CalendarWorkspaceView.Month,
+                view = view,
                 calendars = calendars,
                 events = events,
                 hiddenCalendarHrefs = emptySet(),
@@ -77,6 +78,13 @@ internal fun MarketingCalendarWorkspaceScenario(
     }
     if (editor) MarketingCalendarEventEditorCapture()
 }
+
+internal fun MarketingCaptureScenario.marketingCalendarView(): CalendarWorkspaceView =
+    if (surface.contains("agenda", ignoreCase = true) || state.contains("agenda", ignoreCase = true)) {
+        CalendarWorkspaceView.Agenda
+    } else {
+        CalendarWorkspaceView.Month
+    }
 
 private fun marketingCalendar(
     id: String,

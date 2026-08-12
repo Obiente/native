@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -633,7 +634,12 @@ internal fun MobileGroupwareCalendarWorkspace(
                 modifier = Modifier.weight(1f),
             )
             CalendarWorkspaceView.Week -> CalendarAgenda(
-                events = presentation.visibleEvents.filter { event -> event.start.take(8) in presentation.weekDates },
+                events = presentation.visibleEvents.filter { event ->
+                    event.overlapsCalendarDateRange(
+                        presentation.weekDates.firstOrNull(),
+                        presentation.weekDates.lastOrNull(),
+                    )
+                },
                 onSelectEvent = onSelectEvent,
                 modifier = Modifier.weight(1f),
             )
@@ -716,7 +722,7 @@ internal fun MonthCalendar(
                 }
             }
         }
-        items(cells, key = { week -> week.joinToString(",") }) { week ->
+        itemsIndexed(cells, key = { index, _ -> calendarMonthWeekKey(month, index) }) { _, week ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -800,6 +806,20 @@ internal fun MonthCalendar(
             }
         }
     }
+}
+
+internal fun calendarMonthWeekKey(month: CalendarMonth, weekIndex: Int): String =
+    "${month.isoPrefix}-week-$weekIndex"
+
+internal fun GroupwareCalendarEvent.overlapsCalendarDateRange(
+    firstDate: String?,
+    lastDate: String?,
+): Boolean {
+    val rangeStart = firstDate ?: return false
+    val rangeEnd = lastDate ?: return false
+    val eventStart = start.take(8)
+    val eventEnd = end?.take(8)?.takeIf { it.length == 8 } ?: eventStart
+    return eventStart <= rangeEnd && eventEnd >= rangeStart
 }
 
 @Composable

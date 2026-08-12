@@ -3426,7 +3426,7 @@ class DesktopNextcloudServices(
     }
 
     private fun dynamicDiscoveryCacheFile(session: NextcloudSession, appId: String): File? {
-        if (!appId.matches(Regex("[a-z0-9_]{1,128}"))) return null
+        if (!appId.isSafeDynamicDiscoveryCacheAppId()) return null
         return File(dynamicDiscoveryCacheDirectory, "${desktopFileCacheAccountId(session)}-$appId.json")
     }
 

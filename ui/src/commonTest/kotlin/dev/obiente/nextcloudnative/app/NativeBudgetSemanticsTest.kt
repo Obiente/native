@@ -139,7 +139,7 @@ class NativeBudgetSemanticsTest {
     }
 
     @Test
-    fun promotesExactDescriptorBudgetReportWhenLegacySchemaOmitsFallbackReads() {
+    fun excludesFallbackOnlyDescriptorBudgetReportWhenLegacySchemaOmitsIt() {
         val accounts = ViewSpec(
             id = "accounts.list",
             title = "Accounts",
@@ -168,10 +168,7 @@ class NativeBudgetSemanticsTest {
 
         val adapted = schema.withNativeBudgetDashboard(listOf(descriptorReport))
 
-        assertEquals(
-            descriptorReport.id,
-            adapted.views.first { it.id == NATIVE_BUDGET_PLAN_VIEW_ID }.sourceActionId,
-        )
+        assertTrue(adapted.views.none { it.id == NATIVE_BUDGET_PLAN_VIEW_ID })
         assertTrue(adapted.actions.none { it.id == descriptorReport.id })
     }
 
@@ -272,6 +269,14 @@ class NativeBudgetSemanticsTest {
         assertEquals("Main account", model.accounts.single().name)
         assertEquals(listOf("Jan", "Feb"), model.trends.map(NativeBudgetTrendPoint::label))
         assertEquals(4500.0, model.trends.last().income)
+    }
+
+    @Test
+    fun dashboardReadsExcludeFallbackOnlyRoutes() {
+        val fallback = budgetRead("budget-fallback", "budget", "/apps/budget/api/reports/budget")
+            .copy(fallbackOnly = true)
+
+        assertTrue(nativeBudgetDashboardReads("budget", listOf(fallback)).isEmpty())
     }
 
     private fun budgetRead(id: String, resourceId: String, path: String) = DynamicAction(
