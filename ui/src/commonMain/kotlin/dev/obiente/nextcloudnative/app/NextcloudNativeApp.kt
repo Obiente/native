@@ -1164,6 +1164,8 @@ fun NextcloudNativeMarketingCapture(
                         MarketingCalendarRecurringEventDetailCapture()
                     MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers ->
                         MarketingOfflineFileTransferScenario()
+                    MarketingCaptureScenario.GuideAndroidOfflineFilesStorage ->
+                        MarketingVirtualFileStorageOverviewMobileScenario()
                     MarketingCaptureScenario.GuideWindowsCloudFilesSettings ->
                         MarketingVirtualFileStorageDesktopScenario(scenario)
                     MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary ->
@@ -1212,7 +1214,6 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.GuideDesktopGettingStartedApps,
                     MarketingCaptureScenario.GuideDesktopGettingStartedSettings,
                     MarketingCaptureScenario.GuideAndroidOfflineFilesBrowse,
-                    MarketingCaptureScenario.GuideAndroidOfflineFilesStorage,
                     MarketingCaptureScenario.GuideAndroidFolderSyncStatus,
                     MarketingCaptureScenario.GuideLinuxFolderSyncWorkspace,
                     MarketingCaptureScenario.GuideWindowsCloudFilesStorage,

@@ -72,23 +72,35 @@ internal fun MarketingCalendarWorkspaceScenario(
                 IconButton(onClick = {}) {
                     Icon(NextcloudIcons.Back, contentDescription = "Previous month")
                 }
+                IconButton(onClick = {}) {
+                    Icon(NextcloudIcons.ChevronRight, contentDescription = "Next month")
+                }
                 val month = scenario == MarketingCaptureScenario.CalendarMonthMobile
                 FilterChip(selected = month, onClick = {}, label = { Text("Month") })
                 FilterChip(selected = !month, onClick = {}, label = { Text("Agenda") })
                 TextButton(onClick = {}, modifier = Modifier.weight(1f)) { Text("Today") }
                 IconButton(onClick = {}) {
+                    Icon(NextcloudIcons.Refresh, contentDescription = "Refresh calendars")
+                }
+                IconButton(onClick = {}) {
                     Icon(NextcloudIcons.Add, contentDescription = "Create event")
                 }
             }
             if (scenario == MarketingCaptureScenario.CalendarMonthMobile) {
-                MonthCalendar(
-                    month = CalendarMonth(2026, 8),
-                    selectedDate = "20260804",
-                    events = events,
-                    onSelectDate = {},
-                    onSelectEvent = {},
-                    modifier = Modifier.weight(1f),
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Personal  •  Product team  •  Community",
+                        modifier = Modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
+                    )
+                    MonthCalendar(
+                        month = CalendarMonth(2026, 8),
+                        selectedDate = "20260804",
+                        events = events,
+                        onSelectDate = {},
+                        onSelectEvent = {},
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             } else {
                 CalendarAgenda(events, onSelectEvent = {}, modifier = Modifier.weight(1f))
             }

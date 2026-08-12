@@ -305,7 +305,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistorySection.kt": "321ecbc2e388ec3e9befa2f7486f5357e02a9e333f7643b901626d15a2674750",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FilesWorkspace.kt": "e6854c18811f03674555d32184e2e1a7aea5ea7b421fecd614780869c26c81b7",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GenericNativeFallback.kt": "768f8704a9999b45d06e39c61529bd9af370315ff1f33d7eb4f8b463aaaedbbf",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt": "b5bd2e6004bd89ee03b67d8717c731ae26a17a589e33fcba4ee2c98ba0fe07c3",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt": "b19e3a15e3b61d9ce5a0f5cc871cbebcad311b7997f32b0d128750490b65ac8e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsScreen.kt": "9c8a681ec205fec05eadec0a49e7fc2e76eae6d9a2b8e3add5bd8060730b092b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt": "269c032877536751fe5e8be8bdcd83b0ee0e13a3e04ad82fc3633a649b62fd13",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/HomeWorkspaceLayout.kt": "95c8b7c8e01244df96999cfb5afb48191fd78369eaf748d2c0b73ca9b8aa45db",
@@ -315,8 +315,8 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LivePhotos.kt": "380a1f135dd50b1746967a6805b69dd4e48ab77dc864aeef394440c021c223d7",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LocalFileUpload.kt": "7cbabc9eaea160376f3e7ba31cd4b47421741b4ac60363046988fb27b98023a8",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt": "74ed912eef556a53b7eb0008946aa5b4425cb69456bea75368d309a39052a331",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCalendarWorkspaceScenario.kt": "c958d18fb29aabb5160e6e06cca4066ddee0a4733b7a40faa5e5691e1d25eb59",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "22e1c0dd7d553b770071e3d9ca597bcd997fbec9d2f72fba518ade2ffc4af725",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCalendarWorkspaceScenario.kt": "bcdddc56f8ba4fa15892d455e875dd9ea6be4b4f48bf73f2c4a64ad5a3c2ab87",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "3f7d9ea8bf54bef5e08212d674d119ae1192ad4de653382a1e3f076d30e57740",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt": "75ab130cd489712673b9402a8e2da7b9edab84b4bb3f3f5c8dacb8a03bd86390",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt": "d0d144beece62dec0b26f9bc245693386b98752384294b9d90080d54c25d139e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingLivePhotoCaptureScenarios.kt": "20a74e6b425a56b0ba6d32f28b89c5722f2f9569f1dceeaa621f2f226bec9101",
@@ -352,7 +352,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudFileListing.kt": "4372cbb72541993c53169f861ebb00efc306670d41b860cc0c3c010b431f43b4",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt": "53cc22fed51fe03ef0aaab6a3f849222b0dbfb04fac9c4e3a73057b85c524290",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewerActions.kt": "48aaed6948d1423113d300cc3ab86d244ab76e8225e24988e9855edf74553944",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "d3d51d6e8069f8f588e1eabcd5ebbb27034dc4190c75b1b3ad676d70087543e3",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "3183356dd48382be407e518a827e28e7882e3968e6df4c8eef2b8420c689e381",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt": "944103dba7d35abd17d21cb2bf5818c19b8148abf6b8d37fcdafdab029abe56b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotesCache.kt": "9223dd455c6a1c35a10769616fceb9dfb2d92ef4d43b0a52c2c29e40f1a196cf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPeople.kt": "cff910ea2cc77211ef81779c49ee0c957851f2b4a3ed32b857b12ded1cee643b",
@@ -813,7 +813,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "pullRequest": 273,
-            "sha256": "2cc4f53abe71042860648d040c1731f76a17cc0e4c20d940a0d57508e7c5d4d9"
+            "sha256": "85875ea5e586bf15ee054d8d728fdcd628439e69c8d9bdab847dac5cce22482b"
         },
         {
             "scenario": "calendar-workspace-mobile-light",
@@ -830,7 +830,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "pullRequest": 273,
-            "sha256": "19b755657362134b5312451a455504c05da2d7f3637fdfc75e59db21621b4ce9"
+            "sha256": "770229aa95fa1edea369281c1a5397e54c49b8d06e1319e0cb40a5ccab9b9bc8"
         },
         {
             "scenario": "calendar-month-mobile",
@@ -846,7 +846,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "7537644ee961d5379c2a2dd6a8756d70d0ac9e4e886ee689420ffbb3b980f875"
+            "sha256": "8fbf162c704398319b09a929d55d2a18d726112e392e65dd1babe776db061182"
         },
         {
             "scenario": "calendar-month-mobile-light",
@@ -862,7 +862,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "bf1d6b7bb569ce2aab0e7aa5865891bfe41c8b235f3a66fbd9588549f71c80ba"
+            "sha256": "4f878951ddb0e6ec859b751521872f048fa93ae1dfb791247c9794ecc69c8815"
         },
         {
             "scenario": "calendar-event-editor-mobile",
@@ -878,7 +878,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "7e998873ea8513fc271bc7e2b77a8ab04c0a8678ae8525e99d77e6ea6c2575b6"
+            "sha256": "409a8b8e1b8181429646f323e3b5c49bb49f5c21499e43fa2a9c31728f84ee05"
         },
         {
             "scenario": "calendar-event-editor-mobile-light",
@@ -894,7 +894,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "5602af3590b1afd86f3c1ad649778f51e299baa976bd01aaaf99dcd895c88e2d"
+            "sha256": "6a6db41b7f5933e52a83a0f48a448502caba8418d52cdfc8a91f8ab55291a156"
         },
         {
             "scenario": "calendar-event-editor-desktop",
@@ -910,7 +910,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "f69f26a54e435ef2c17caebd1da2d5e6be87ce9eb5b193903764c0ea32ff7599"
+            "sha256": "0e578fc435703b61bb036ea9812b7a96c5f6b7cdd816c3a06ecec1ebb138b6b5"
         },
         {
             "scenario": "calendar-event-editor-desktop-light",
@@ -926,7 +926,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "2118a19d993925962b128bfd2dad630e373f7b2dedd851ae5edd691e7df80658"
+            "sha256": "e87b682e05e0f7568aeaf2f829ad67df6bd1627dae84f825f3a101e8b10d91a6"
         },
         {
             "scenario": "desktop-home",
@@ -2640,7 +2640,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "2cc4f53abe71042860648d040c1731f76a17cc0e4c20d940a0d57508e7c5d4d9"
+            "sha256": "85875ea5e586bf15ee054d8d728fdcd628439e69c8d9bdab847dac5cce22482b"
         },
         {
             "scenario": "guide-android-getting-started-calendar-light",
@@ -2656,7 +2656,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "19b755657362134b5312451a455504c05da2d7f3637fdfc75e59db21621b4ce9"
+            "sha256": "770229aa95fa1edea369281c1a5397e54c49b8d06e1319e0cb40a5ccab9b9bc8"
         },
         {
             "scenario": "guide-desktop-getting-started-home",
@@ -2800,7 +2800,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "10e53bcf769fdff327a577c00f52a729251f27f58ef9eb089867c33d6cd5bb98"
+            "sha256": "34ae1b0aa1e78e71593ad572d95c44a47e94a9e9663079fea8fa9218089bb1c7"
         },
         {
             "scenario": "guide-android-offline-files-storage-light",
@@ -2816,7 +2816,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "8082f10bd1135b19da54b3bf8540b099ef1dd584c1af7efcf4293dcb2f649c1f"
+            "sha256": "0783b631ce621605aee9c3dd821096eb3e5a3f52803962ed8290204da8c4d83b"
         },
         {
             "scenario": "guide-android-offline-files-transfers",
@@ -3248,7 +3248,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "7537644ee961d5379c2a2dd6a8756d70d0ac9e4e886ee689420ffbb3b980f875"
+            "sha256": "8fbf162c704398319b09a929d55d2a18d726112e392e65dd1babe776db061182"
         },
         {
             "scenario": "guide-android-calendar-month-light",
@@ -3264,7 +3264,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "bf1d6b7bb569ce2aab0e7aa5865891bfe41c8b235f3a66fbd9588549f71c80ba"
+            "sha256": "4f878951ddb0e6ec859b751521872f048fa93ae1dfb791247c9794ecc69c8815"
         },
         {
             "scenario": "guide-android-calendar-agenda",
@@ -3280,7 +3280,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "2cc4f53abe71042860648d040c1731f76a17cc0e4c20d940a0d57508e7c5d4d9"
+            "sha256": "85875ea5e586bf15ee054d8d728fdcd628439e69c8d9bdab847dac5cce22482b"
         },
         {
             "scenario": "guide-android-calendar-agenda-light",
@@ -3296,7 +3296,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "19b755657362134b5312451a455504c05da2d7f3637fdfc75e59db21621b4ce9"
+            "sha256": "770229aa95fa1edea369281c1a5397e54c49b8d06e1319e0cb40a5ccab9b9bc8"
         },
         {
             "scenario": "guide-android-calendar-edit",
@@ -3312,7 +3312,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "18f208868a88d12164e1478008a868530308f0749835053eaf0dfda1bf116fd5"
+            "sha256": "9e17ae7b3bc1c4bbedae9f86f21d7577a1c395822a088234e5167159190ce2e4"
         },
         {
             "scenario": "guide-android-calendar-edit-light",
@@ -3328,7 +3328,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "42e7d3f78643f759096c4a85d9dc818fa5b94435fc1c2e3731adb541d9bf3366"
+            "sha256": "ef8dc75dd03410ab96bb1a2bdf097423cd8e49af768d78706f72cd1babe503ad"
         },
         {
             "scenario": "guide-desktop-calendar-month",
@@ -3408,7 +3408,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "f69f26a54e435ef2c17caebd1da2d5e6be87ce9eb5b193903764c0ea32ff7599"
+            "sha256": "0e578fc435703b61bb036ea9812b7a96c5f6b7cdd816c3a06ecec1ebb138b6b5"
         },
         {
             "scenario": "guide-desktop-calendar-edit-light",
@@ -3424,7 +3424,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "2118a19d993925962b128bfd2dad630e373f7b2dedd851ae5edd691e7df80658"
+            "sha256": "e87b682e05e0f7568aeaf2f829ad67df6bd1627dae84f825f3a101e8b10d91a6"
         },
         {
             "scenario": "guide-desktop-switch-apps-catalog",

@@ -192,7 +192,10 @@ const relatedPosts = computed(() =>
 );
 const relatedGuides = computed(() =>
   guides
-    .filter((guide) => guide.path !== currentGuide.value?.path)
+    .filter((guide) =>
+      guide.path !== currentGuide.value?.path &&
+      guide.platforms.some((platform) => currentGuide.value?.platforms.includes(platform)),
+    )
     .sort((left, right) => {
       const leftPlatform = left.platform === currentGuide.value?.platform ? 0 : 1;
       const rightPlatform = right.platform === currentGuide.value?.platform ? 0 : 1;

@@ -841,7 +841,7 @@ internal fun MarketingCaptureScenario.guideCaptureSourceScenarioOrNull(): Market
         MarketingCaptureScenario.GuideDesktopGettingStartedApps -> MarketingCaptureScenario.AppsWorkspaceDesktopDark
         MarketingCaptureScenario.GuideDesktopGettingStartedSettings -> MarketingCaptureScenario.DesktopStartupSettings
         MarketingCaptureScenario.GuideAndroidOfflineFilesBrowse -> MarketingCaptureScenario.HomepageFilesMobileDark
-        MarketingCaptureScenario.GuideAndroidOfflineFilesStorage -> MarketingCaptureScenario.VirtualFileStorageMobile
+        MarketingCaptureScenario.GuideAndroidOfflineFilesStorage -> null
         MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers -> null
         MarketingCaptureScenario.GuideAndroidFolderSyncLocations,
         MarketingCaptureScenario.GuideAndroidFolderSyncRules,
@@ -1816,6 +1816,31 @@ internal fun MarketingVirtualFileStorageMobileScenario() {
                 androidx.compose.material3.Button(onClick = {}) { Text("Save rules") }
             }
         }
+    }
+}
+
+@Composable
+internal fun MarketingVirtualFileStorageOverviewMobileScenario() {
+    Column(modifier = Modifier.fillMaxSize()) {
+        ScreenHeader(title = "Virtual files", subtitle = "System Files and offline storage", onBack = {})
+        VirtualFileStorageCard(
+            snapshot = marketingVirtualFileStorageSnapshot(
+                support = VirtualFileStorageSupport.Available,
+                integration = VirtualFilePlatformIntegration.AndroidDocumentsProvider,
+            ),
+            loading = false,
+            busy = false,
+            onManage = {},
+            onFreeUp = {},
+            onActivateProvider = {},
+            onDeactivateProvider = {},
+            onAcknowledgeRecovery = {},
+            onChangeLocation = {},
+            onChangeCacheTiers = {},
+            onChoosePinnedFolder = {},
+            onReleaseFolder = {},
+            onRetryFolder = {},
+        )
     }
 }
 

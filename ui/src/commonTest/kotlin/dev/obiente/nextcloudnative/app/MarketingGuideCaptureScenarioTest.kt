@@ -20,6 +20,7 @@ class MarketingGuideCaptureScenarioTest {
             MarketingCaptureScenario.GuideLinuxFolderSyncRules,
             MarketingCaptureScenario.GuideAndroidCalendarEdit,
             MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers,
+            MarketingCaptureScenario.GuideAndroidOfflineFilesStorage,
             MarketingCaptureScenario.GuideWindowsCloudFilesSettings,
             MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary,
         )
