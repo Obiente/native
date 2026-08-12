@@ -199,6 +199,22 @@ internal data class NativeFinancePresentation(
 
 internal enum class NativeFinanceDirection { Credit, Debit, Unspecified }
 
+internal enum class NativeFinancialAccountKind { Asset, Liability, Other }
+
+internal data class NativeFinancialAccountPresentation(
+    val name: String,
+    val balance: Double,
+    val currency: String?,
+    val type: String?,
+    val kind: NativeFinancialAccountKind,
+    val institution: String?,
+    val accountNumber: String?,
+    val lastReconciled: String?,
+    val convertedBalance: Double?,
+    val baseCurrency: String?,
+    val excludedFromReports: Boolean,
+)
+
 internal data class NativeFinanceMemberStatistic(
     val name: String,
     val paid: Double,
@@ -530,6 +546,54 @@ internal fun nativeFinancePresentation(
             ?.takeUnless { it.equals(title, ignoreCase = true) },
         direction = direction,
     )
+}
+
+/**
+ * Recognizes an account balance record without confusing transaction rows that merely reference an
+ * account. Account collections need asset/liability semantics, not ledger income/expense filters.
+ */
+internal fun nativeFinancialAccountPresentation(
+    resource: ResourceSpec,
+    record: NativeRecord,
+): NativeFinancialAccountPresentation? {
+    val resourceWords = semanticTokens(resource.id, resource.name)
+    if (resourceWords.none { word -> word == "account" || word == "accounts" }) return null
+    val values = NativeSemanticValues(record)
+    val balance = values.number("balance", "currentbalance") ?: return null
+    val type = values.string("type", "accounttype")?.trim()?.lowercase()?.takeIf(String::isNotBlank)
+    val kind = when (type) {
+        "checking", "savings", "investment", "cash", "cryptocurrency", "money_market" ->
+            NativeFinancialAccountKind.Asset
+        "credit_card", "loan", "mortgage", "line_of_credit" ->
+            NativeFinancialAccountKind.Liability
+        else -> NativeFinancialAccountKind.Other
+    }
+    return NativeFinancialAccountPresentation(
+        name = values.string("name", "accountname", "title", "label")
+            ?: nativeRecordPresentation(resource, record).title,
+        balance = balance,
+        currency = values.string("currency", "currencycode", "currencyname", "unit"),
+        type = type,
+        kind = kind,
+        institution = values.string("institution", "bank", "provider"),
+        accountNumber = values.string("accountnumber", "number", "ibanmasked", "maskednumber"),
+        lastReconciled = values.string("lastreconciled", "lastreconciledat")
+            ?.compactSemanticDateTime(),
+        convertedBalance = values.number("convertedbalance", "basebalance"),
+        baseCurrency = values.string("basecurrency", "reportingcurrency"),
+        excludedFromReports = values.boolean("excludedfromreports", "excluded", "isexcluded") == true,
+    )
+}
+
+internal fun nativeFinancialAccountCollectionPresentations(
+    resource: ResourceSpec,
+    records: List<NativeRecord>,
+): List<Pair<NativeRecord, NativeFinancialAccountPresentation>>? {
+    if (records.isEmpty()) return null
+    val rows = records.mapNotNull { record ->
+        nativeFinancialAccountPresentation(resource, record)?.let { presentation -> record to presentation }
+    }
+    return rows.takeIf { it.size == records.size }
 }
 
 internal fun nativeFinanceCollectionPresentations(

@@ -237,6 +237,9 @@ object NextcloudIcons {
      * null; they are never interpreted as URLs, file paths, CSS classes, or remote assets.
      */
     fun semantic(iconKey: String): ImageVector? = when (iconKey.normalizedSemanticIconKey()) {
+        "checking", "cash", "money-market" -> Icons.Outlined.AccountBalanceWallet
+        "savings", "investment", "cryptocurrency" -> Icons.Outlined.Savings
+        "credit-card", "loan", "mortgage", "line-of-credit" -> Icons.Outlined.AccountBalanceWallet
         "clipboard-check", "format-list-checks", "checklist", "task", "todo" -> FormatChecklist
         "clipboard-list", "list" -> ListView
         "cart", "shopping" -> Icons.Outlined.ShoppingCart

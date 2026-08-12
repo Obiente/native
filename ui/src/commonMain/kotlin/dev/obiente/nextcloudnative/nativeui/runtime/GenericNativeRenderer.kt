@@ -3555,6 +3555,20 @@ private fun GenericRecordCollection(
         GenericGroupwareCollection(groupware, onSelectRecord)
         return
     }
+    val financialAccounts = remember(resource, records) {
+        nativeFinancialAccountCollectionPresentations(resource, records)
+    }
+    if (financialAccounts != null) {
+        GenericFinancialAccountCollection(
+            resource = resource,
+            rows = financialAccounts,
+            onSelectRecord = onSelectRecord,
+            onLoadMore = onLoadMore,
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+        )
+        return
+    }
     val finance = remember(resource, records) {
         nativeFinanceCollectionPresentations(resource, records)
     }
@@ -3786,6 +3800,292 @@ private fun GenericOverviewMetric(label: String, value: String) {
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
+    }
+}
+
+@Composable
+private fun GenericFinancialAccountCollection(
+    resource: ResourceSpec,
+    rows: List<Pair<NativeRecord, NativeFinancialAccountPresentation>>,
+    onSelectRecord: ((NativeRecord) -> Unit)?,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
+) {
+    val contextualCurrency = LocalNativeFinanceCurrency.current
+    val accounts = remember(rows) { rows.map { (_, account) -> account } }
+    val currency = remember(accounts, contextualCurrency) {
+        accounts.mapNotNull(NativeFinancialAccountPresentation::baseCurrency).distinct().singleOrNull()
+            ?: accounts.mapNotNull(NativeFinancialAccountPresentation::currency).distinct().singleOrNull()
+            ?: contextualCurrency
+    }
+    fun convertedBalance(account: NativeFinancialAccountPresentation): Double? =
+        account.convertedBalance
+            ?: account.balance.takeIf {
+                currency == null || account.currency == null || account.currency == currency
+            }
+    val assets = remember(rows) { rows.filter { (_, account) -> account.kind == NativeFinancialAccountKind.Asset } }
+    val liabilities = remember(rows) {
+        rows.filter { (_, account) -> account.kind == NativeFinancialAccountKind.Liability }
+    }
+    val other = remember(rows) { rows.filter { (_, account) -> account.kind == NativeFinancialAccountKind.Other } }
+    val assetTotal = accounts.filter { it.kind != NativeFinancialAccountKind.Liability }
+        .mapNotNull(::convertedBalance).sum()
+    val liabilityTotal = accounts.filter { it.kind == NativeFinancialAccountKind.Liability }
+        .mapNotNull(::convertedBalance).sumOf { amount -> kotlin.math.abs(amount) }
+    val netWorth = assetTotal - liabilityTotal
+    val unconvertedCount = accounts.count { convertedBalance(it) == null }
+    val listState = rememberLazyListState()
+    NativeCollectionAutoPager(listState, rows.size, onLoadMore, loadingMore, loadMoreError)
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        ) {
+            Column(
+                modifier = Modifier.padding(
+                    horizontal = NextcloudSpacing.Large,
+                    vertical = NextcloudSpacing.Medium,
+                ),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    if (maxWidth < 600.dp) {
+                        Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            ) {
+                                FinancialAccountMetric(
+                                    label = "Assets",
+                                    value = formatNativeFinanceAmount(assetTotal, currency),
+                                    modifier = Modifier.weight(1f),
+                                )
+                                FinancialAccountMetric(
+                                    label = "Liabilities",
+                                    value = formatNativeFinanceAmount(liabilityTotal, currency),
+                                    negative = liabilityTotal > 0.0,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            FinancialAccountMetric(
+                                label = "Net worth",
+                                value = formatNativeFinanceAmount(netWorth, currency),
+                                negative = netWorth < 0.0,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        ) {
+                            FinancialAccountMetric(
+                                label = "Assets",
+                                value = formatNativeFinanceAmount(assetTotal, currency),
+                                modifier = Modifier.weight(1f),
+                            )
+                            FinancialAccountMetric(
+                                label = "Liabilities",
+                                value = formatNativeFinanceAmount(liabilityTotal, currency),
+                                negative = liabilityTotal > 0.0,
+                                modifier = Modifier.weight(1f),
+                            )
+                            FinancialAccountMetric(
+                                label = "Net worth",
+                                value = formatNativeFinanceAmount(netWorth, currency),
+                                negative = netWorth < 0.0,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+                if (unconvertedCount > 0) {
+                    Text(
+                        "$unconvertedCount ${if (unconvertedCount == 1) "account is" else "accounts are"} excluded from totals because no exchange rate is available.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(
+                start = NextcloudSpacing.Large,
+                top = NextcloudSpacing.Medium,
+                end = NextcloudSpacing.Large,
+                bottom = NextcloudSpacing.XXLarge,
+            ),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            fun section(
+                key: String,
+                label: String,
+                sectionRows: List<Pair<NativeRecord, NativeFinancialAccountPresentation>>,
+            ) {
+                if (sectionRows.isEmpty()) return
+                item(key = "$key-header") {
+                    val subtotal = sectionRows.mapNotNull { (_, account) -> convertedBalance(account) }
+                        .sumOf { amount -> if (key == "liabilities") kotlin.math.abs(amount) else amount }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.XSmall),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            formatNativeFinanceAmount(subtotal, currency),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                items(sectionRows, key = { (record, _) -> record.id }) { (record, account) ->
+                    FinancialAccountCard(resource, account, onSelectRecord?.let { callback -> { callback(record) } })
+                }
+            }
+            section("assets", "Assets", assets)
+            section("liabilities", "Liabilities", liabilities)
+            section("other", "Other accounts", other)
+            NativeCollectionPagingFooter(loadingMore, loadMoreError, onLoadMore)
+        }
+    }
+}
+
+@Composable
+private fun FinancialAccountMetric(
+    label: String,
+    value: String,
+    negative: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Column(
+            modifier = Modifier.padding(NextcloudSpacing.Medium),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+        ) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (negative) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FinancialAccountCard(
+    resource: ResourceSpec,
+    account: NativeFinancialAccountPresentation,
+    onClick: (() -> Unit)?,
+) {
+    val interaction = onClick?.let { Modifier.clickable(onClick = it) } ?: Modifier
+    val liability = account.kind == NativeFinancialAccountKind.Liability
+    val displayedBalance = if (liability) kotlin.math.abs(account.balance) else account.balance
+    val balanceLabel = when {
+        liability && account.balance < 0.0 -> "Owed"
+        liability && account.balance > 0.0 -> "Credit"
+        else -> "Balance"
+    }
+    Card(
+        modifier = interaction.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GenericResourceIcon(resource, account.type?.replace('_', '-'))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        account.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val metadata = listOfNotNull(
+                        account.type?.replace('_', ' ')?.replaceFirstChar(Char::uppercase),
+                        account.institution,
+                    ).distinct().joinToString(" · ")
+                    if (metadata.isNotBlank()) {
+                        Text(
+                            metadata,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        balanceLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        formatNativeFinanceAmount(displayedBalance, account.currency),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if ((liability && account.balance < 0.0) || (!liability && account.balance < 0.0)) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            Color(0xFF3F8F50)
+                        },
+                        maxLines = 1,
+                    )
+                }
+            }
+            val footer = listOfNotNull(
+                account.accountNumber,
+                account.lastReconciled?.let { "Reconciled $it" },
+            ).joinToString(" · ")
+            if (footer.isNotBlank() || account.excludedFromReports || account.convertedBalance != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        footer,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val trailing = when {
+                        account.excludedFromReports -> "Excluded"
+                        account.convertedBalance != null -> "≈ ${formatNativeFinanceAmount(account.convertedBalance, account.baseCurrency)}"
+                        else -> null
+                    }
+                    trailing?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
