@@ -1,9 +1,11 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
+import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -11,6 +13,7 @@ class DesktopStartOnLoginTest {
     @Test
     fun linuxAutostartEntryIsOwnedQuotedAndReversible() {
         val root = createTempDirectory("nextcloud-native-startup").toFile()
+        val commands = mutableListOf<List<String>>()
         val launcher = File(root, "Nextcloud Native/bin/Nextcloud Native").apply {
             parentFile.mkdirs()
             writeText("launcher")
@@ -20,16 +23,233 @@ class DesktopStartOnLoginTest {
             userHome = root,
             linuxConfigHome = File(root, ".config"),
             launcherPath = launcher.absolutePath,
+            processRunner = { command ->
+                commands += command
+                if (command.takeLast(2) == listOf("stop", "nextcloud-native.service")) {
+                    assertTrue(File(root, ".config/autostart/nextcloud-native.desktop").isFile)
+                    assertTrue(File(root, ".config/systemd/user/nextcloud-native.service").isFile)
+                }
+                0
+            },
+            linuxSystemdAvailable = { true },
+            linuxGraphicalSessionManaged = { true },
+            currentProcessIsLinuxUserService = { false },
         )
 
         assertTrue(controller.configure(enabled = true).configured)
         val entry = File(root, ".config/autostart/nextcloud-native.desktop")
         assertTrue(entry.isFile)
-        assertTrue(entry.readText().contains("Exec=${desktopEntryExecArgument(launcher.absolutePath)} --background"))
+        assertTrue(entry.readText().contains("TryExec=${desktopEntryStringValue(launcher.absolutePath)}"))
+        assertTrue(entry.readText().contains("Exec=${desktopEntryExecArgument(launcher.absolutePath)} --autostart"))
+        assertFalse(entry.readText().contains("X-systemd-skip"))
         assertFalse(entry.readText().contains("Terminal=true"))
+        val service = File(root, ".config/systemd/user/nextcloud-native.service")
+        assertTrue(service.isFile)
+        assertTrue(
+            service.readText().contains(
+                "ExecStart=${systemdExecArgument(launcher.absolutePath)} --background --service",
+            ),
+        )
+        assertTrue(service.readText().contains("PartOf=graphical-session.target"))
+        assertTrue(service.readText().contains("Restart=on-failure"))
+        assertTrue(Files.isSymbolicLink(File(root, ".config/systemd/user/graphical-session.target.wants/nextcloud-native.service").toPath()))
 
+        commands.clear()
         assertTrue(controller.configure(enabled = false).configured)
         assertFalse(entry.exists())
+        assertFalse(service.exists())
+        assertEquals(
+            listOf(
+                listOf("systemctl", "--user", "--no-block", "stop", "nextcloud-native.service"),
+                listOf("systemctl", "--user", "daemon-reload"),
+            ),
+            commands,
+        )
+    }
+
+    @Test
+    fun linuxPortableAutostartHandsOffToTheConfiguredUserService() {
+        val root = createTempDirectory("nextcloud-native-startup-handoff").toFile()
+        File(root, ".config/systemd/user").mkdirs()
+        File(root, ".config/systemd/user/nextcloud-native.service").writeText("configured")
+        var command: List<String>? = null
+
+        assertTrue(
+            handoffLinuxAutostartToUserService(
+                osName = "Linux",
+                userHome = root,
+                linuxConfigHome = File(root, ".config"),
+                processRunner = {
+                    command = it
+                    0
+                },
+            ),
+        )
+        assertEquals(listOf("systemctl", "--user", "start", "nextcloud-native.service"), command)
+    }
+
+    @Test
+    fun disablingLinuxAutostartPreservesConfigurationWhenTheActiveServiceCannotStop() {
+        val root = createTempDirectory("nextcloud-native-startup-stop-failure").toFile()
+        val launcher = File(root, "NextcloudNative").apply { writeText("launcher") }
+        val controller = DesktopStartOnLoginController(
+            osName = "Linux",
+            userHome = root,
+            linuxConfigHome = File(root, ".config"),
+            launcherPath = launcher.absolutePath,
+            processRunner = { command -> if (command.contains("stop")) 1 else 0 },
+            linuxSystemdAvailable = { true },
+            linuxGraphicalSessionManaged = { true },
+            currentProcessIsLinuxUserService = { false },
+        )
+        assertTrue(controller.configure(enabled = true).configured)
+
+        assertFailsWith<IllegalStateException> { controller.configure(enabled = false) }
+
+        assertTrue(File(root, ".config/autostart/nextcloud-native.desktop").isFile)
+        assertTrue(File(root, ".config/systemd/user/nextcloud-native.service").isFile)
+        assertTrue(
+            Files.isSymbolicLink(
+                File(
+                    root,
+                    ".config/systemd/user/graphical-session.target.wants/nextcloud-native.service",
+                ).toPath(),
+            ),
+        )
+    }
+
+    @Test
+    fun disablingLinuxAutostartDoesNotStopTheSupervisedPrimaryProcess() {
+        val root = createTempDirectory("nextcloud-native-startup-supervised-primary").toFile()
+        val launcher = File(root, "NextcloudNative").apply { writeText("launcher") }
+        val commands = mutableListOf<List<String>>()
+        val controller = DesktopStartOnLoginController(
+            osName = "Linux",
+            userHome = root,
+            linuxConfigHome = File(root, ".config"),
+            launcherPath = launcher.absolutePath,
+            processRunner = { command ->
+                commands += command
+                0
+            },
+            linuxSystemdAvailable = { true },
+            linuxGraphicalSessionManaged = { true },
+            currentProcessIsLinuxUserService = { true },
+        )
+        assertTrue(controller.configure(enabled = true).configured)
+
+        commands.clear()
+        assertTrue(controller.configure(enabled = false).configured)
+
+        assertEquals(listOf(listOf("systemctl", "--user", "daemon-reload")), commands)
+        assertFalse(File(root, ".config/autostart/nextcloud-native.desktop").exists())
+        assertFalse(File(root, ".config/systemd/user/nextcloud-native.service").exists())
+    }
+
+    @Test
+    fun systemdIdentityRecognizesDirectAndCgroupOwnedServiceProcesses() {
+        assertTrue(isCurrentProcessOwnedByLinuxUserService("2048", currentPid = 2_048L, cgroup = ""))
+        assertTrue(
+            isCurrentProcessOwnedByLinuxUserService(
+                systemdExecPid = null,
+                currentPid = 2_048L,
+                cgroup = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/nextcloud-native.service\n",
+            ),
+        )
+        assertFalse(isCurrentProcessOwnedByLinuxUserService("2047", currentPid = 2_048L, cgroup = "0::/"))
+        assertFalse(isCurrentProcessOwnedByLinuxUserService("not-a-pid", currentPid = 2_048L, cgroup = ""))
+        assertFalse(isCurrentProcessOwnedByLinuxUserService(null, currentPid = 2_048L, cgroup = ""))
+    }
+
+    @Test
+    fun linuxForegroundLaunchStartsAndActivatesTheConfiguredUserService() {
+        val root = createTempDirectory("nextcloud-native-startup-foreground-handoff").toFile()
+        File(root, ".config/systemd/user").mkdirs()
+        File(root, ".config/systemd/user/nextcloud-native.service").writeText("configured")
+        var command: List<String>? = null
+        var forwarded = false
+
+        assertTrue(
+            handoffLinuxForegroundLaunchToUserService(
+                osName = "Linux",
+                userHome = root,
+                linuxConfigHome = File(root, ".config"),
+                processRunner = {
+                    command = it
+                    0
+                },
+                activationForwarder = {
+                    forwarded = true
+                    true
+                },
+            ),
+        )
+        assertEquals(listOf("systemctl", "--user", "start", "nextcloud-native.service"), command)
+        assertTrue(forwarded)
+    }
+
+    @Test
+    fun explicitQuitStopsTheConfiguredUserServiceWithoutWaitingForItself() {
+        val root = createTempDirectory("nextcloud-native-startup-explicit-quit").toFile()
+        File(root, ".config/systemd/user").mkdirs()
+        File(root, ".config/systemd/user/nextcloud-native.service").writeText("configured")
+        var command: List<String>? = null
+
+        assertTrue(
+            stopLinuxUserServiceForExplicitQuit(
+                osName = "Linux",
+                userHome = root,
+                linuxConfigHome = File(root, ".config"),
+                processRunner = {
+                    command = it
+                    0
+                },
+            ),
+        )
+        assertEquals(
+            listOf("systemctl", "--user", "--no-block", "stop", "nextcloud-native.service"),
+            command,
+        )
+    }
+
+    @Test
+    fun explicitQuitStopsAnAlreadyLoadedUserServiceAfterItsUnitFileWasRemoved() {
+        val root = createTempDirectory("nextcloud-native-startup-explicit-quit-removed").toFile()
+        var command: List<String>? = null
+
+        assertTrue(
+            stopLinuxUserServiceForExplicitQuit(
+                osName = "Linux",
+                userHome = root,
+                linuxConfigHome = File(root, ".config"),
+                processRunner = {
+                    command = it
+                    0
+                },
+            ),
+        )
+        assertEquals(
+            listOf("systemctl", "--user", "--no-block", "stop", "nextcloud-native.service"),
+            command,
+        )
+    }
+
+    @Test
+    fun supervisedExplicitQuitLetsTheCurrentProcessExitCleanly() {
+        val commands = mutableListOf<List<String>>()
+
+        assertTrue(
+            stopLinuxUserServiceForExplicitQuit(
+                osName = "Linux",
+                currentProcessIsLinuxUserService = { true },
+                processRunner = { command ->
+                    commands += command
+                    0
+                },
+            ),
+        )
+
+        assertTrue(commands.isEmpty())
     }
 
     @Test
@@ -46,6 +266,7 @@ class DesktopStartOnLoginTest {
                 command = it
                 0
             },
+            linuxSystemdAvailable = { false },
         ).configure(enabled = true)
 
         assertTrue(result.configured)
@@ -55,12 +276,36 @@ class DesktopStartOnLoginTest {
     }
 
     @Test
+    fun linuxWithoutSystemdKeepsThePortableDesktopAutostartPath() {
+        val root = createTempDirectory("nextcloud-native-startup-portable").toFile()
+        val launcher = File(root, "NextcloudNative").apply { writeText("launcher") }
+        val controller = DesktopStartOnLoginController(
+            osName = "Linux",
+            userHome = root,
+            linuxConfigHome = File(root, ".config"),
+            launcherPath = launcher.absolutePath,
+            processRunner = { 1 },
+            linuxSystemdAvailable = { false },
+            linuxGraphicalSessionManaged = { false },
+        )
+
+        assertTrue(controller.configure(enabled = true).configured)
+        val entry = File(root, ".config/autostart/nextcloud-native.desktop")
+        assertTrue(entry.isFile)
+        assertFalse(entry.readText().contains("X-systemd-skip=true"))
+        assertTrue(entry.readText().contains(" --autostart"))
+        assertFalse(File(root, ".config/systemd/user/nextcloud-native.service").exists())
+    }
+
+    @Test
     fun developmentLaunchDoesNotWriteStartupState() {
         val result = DesktopStartOnLoginController(
             osName = "Linux",
             userHome = createTempDirectory("nextcloud-native-startup-dev").toFile(),
             linuxConfigHome = createTempDirectory("nextcloud-native-startup-dev-config").toFile(),
             launcherPath = null,
+            linuxSystemdAvailable = { false },
+            linuxGraphicalSessionManaged = { false },
         ).configure(enabled = true)
 
         assertFalse(result.configured)

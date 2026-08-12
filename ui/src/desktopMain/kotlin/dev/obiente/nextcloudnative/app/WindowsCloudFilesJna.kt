@@ -17,9 +17,84 @@ import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
+internal const val MAX_WINDOWS_CLOUD_PLACEHOLDER_DIAGNOSTIC_RESULTS = 16
+private const val ERROR_FILE_NOT_FOUND = 2
+private const val ERROR_PATH_NOT_FOUND = 3
+private const val ERROR_CLOUD_FILE_METADATA_CORRUPT = 363
+private const val CF_PLACEHOLDER_STATE_PLACEHOLDER = 0x1
+private const val CF_PLACEHOLDER_STATE_IN_SYNC = 0x8
+private const val CF_PLACEHOLDER_STATE_INVALID = -1
+private const val CF_OPEN_FILE_FLAG_EXCLUSIVE = 0x1
+private const val CF_OPEN_FILE_FLAG_WRITE_ACCESS = 0x2
+
+internal fun windowsCloudPlaceholderDiagnosticSampleSize(availableCount: Int): Int {
+    require(availableCount >= 0)
+    return minOf(availableCount, MAX_WINDOWS_CLOUD_PLACEHOLDER_DIAGNOSTIC_RESULTS)
+}
+
+internal fun windowsCloudFailedPlaceholderIndex(
+    firstFailedEntryIndex: Int?,
+    processedCount: Int,
+    placeholderCount: Int,
+): Int? {
+    require(processedCount in 0..placeholderCount)
+    require(firstFailedEntryIndex == null || firstFailedEntryIndex in 0 until placeholderCount)
+    return firstFailedEntryIndex
+        ?: processedCount.takeIf { it in 0 until placeholderCount }
+        ?: (processedCount - 1).takeIf { it in 0 until placeholderCount }
+}
+
+internal fun windowsCloudOpenFileFlags(write: Boolean, exclusive: Boolean): Int =
+    (if (write) CF_OPEN_FILE_FLAG_WRITE_ACCESS else 0) or
+        (if (exclusive) CF_OPEN_FILE_FLAG_EXCLUSIVE else 0)
+
+internal fun windowsCloudPlaceholderInspection(
+    findSucceeded: Boolean,
+    win32Error: Int? = null,
+    fileAttributes: Int? = null,
+    reparseTag: Int? = null,
+    placeholderStateBits: Int? = null,
+): WindowsCloudPlaceholderInspection {
+    if (!findSucceeded) {
+        val error = requireNotNull(win32Error)
+        val state = when (error) {
+            ERROR_FILE_NOT_FOUND,
+            ERROR_PATH_NOT_FOUND,
+            -> WindowsCloudPlaceholderEntryState.Missing
+            ERROR_CLOUD_FILE_METADATA_CORRUPT -> WindowsCloudPlaceholderEntryState.Corrupt
+            else -> WindowsCloudPlaceholderEntryState.Unreadable
+        }
+        return WindowsCloudPlaceholderInspection(state = state, win32Error = error)
+    }
+    val attributes = requireNotNull(fileAttributes)
+    val tag = requireNotNull(reparseTag)
+    val stateBits = requireNotNull(placeholderStateBits)
+    val stateError = if (stateBits == CF_PLACEHOLDER_STATE_INVALID) {
+        requireNotNull(win32Error)
+    } else {
+        require(win32Error == null)
+        null
+    }
+    val state = when {
+        stateBits == CF_PLACEHOLDER_STATE_INVALID && stateError == ERROR_CLOUD_FILE_METADATA_CORRUPT ->
+            WindowsCloudPlaceholderEntryState.Corrupt
+        stateBits == CF_PLACEHOLDER_STATE_INVALID -> WindowsCloudPlaceholderEntryState.Unreadable
+        stateBits and CF_PLACEHOLDER_STATE_PLACEHOLDER == 0 -> WindowsCloudPlaceholderEntryState.Local
+        stateBits and CF_PLACEHOLDER_STATE_IN_SYNC != 0 -> WindowsCloudPlaceholderEntryState.InSync
+        else -> WindowsCloudPlaceholderEntryState.Dirty
+    }
+    return WindowsCloudPlaceholderInspection(
+        state = state,
+        win32Error = stateError,
+        fileAttributes = attributes,
+        reparseTag = tag,
+    )
+}
+
 /** 64-bit Windows CldApi.dll binding kept behind [WindowsCloudFilesApi] for deterministic tests. */
 internal class JnaWindowsCloudFilesApi(
     private val shellRegistrar: WindowsCloudShellRegistrar = PackagedWindowsCloudShellRegistrar(),
+    private val recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit = {},
 ) : WindowsCloudFilesApi {
     private val cldApi: CldApi
     private val kernelFiles: KernelFileApi
@@ -169,16 +244,79 @@ internal class JnaWindowsCloudFilesApi(
         if (placeholders.isEmpty()) return
         val native = NativePlaceholderArray(placeholders)
         val processed = IntByReference()
-        checkHResult(
-            cldApi.CfCreatePlaceholders(
-                WString(baseDirectory.toAbsolutePath().toString()),
-                native.firstPointer,
-                placeholders.size,
-                CF_CREATE_FLAG_STOP_ON_ERROR,
-                processed,
-            ),
-            "create Windows Cloud Files placeholders",
+        val result = cldApi.CfCreatePlaceholders(
+            WString(baseDirectory.toAbsolutePath().toString()),
+            native.firstPointer,
+            placeholders.size,
+            CF_CREATE_FLAG_STOP_ON_ERROR,
+            processed,
         )
+        if (result < 0) {
+            val processedCount = processed.value.coerceIn(0, placeholders.size)
+            val firstFailedEntryIndex = runCatching { native.firstFailedResultIndex() }.getOrNull()
+            val failedIndex = windowsCloudFailedPlaceholderIndex(
+                firstFailedEntryIndex = firstFailedEntryIndex,
+                processedCount = processedCount,
+                placeholderCount = placeholders.size,
+            )
+            val failed = failedIndex?.let(placeholders::get)
+            val failedState = failed?.let { placeholder ->
+                runCatching { placeholderState(baseDirectory.resolve(placeholder.name)) }
+                    .getOrNull()
+            }
+            runCatching {
+                recordDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.VirtualFiles,
+                        operation = "cloud-files.placeholder-create",
+                        outcome = "failed",
+                        code = "HRESULT:0x${result.toUInt().toString(16)}",
+                        fields = buildList {
+                            add(
+                                SupportDiagnosticFieldDraft(
+                                    "base_directory",
+                                    baseDirectory.toAbsolutePath().toString(),
+                                    SupportDiagnosticValuePrivacy.LocalPath,
+                                ),
+                            )
+                            add(SupportDiagnosticFieldDraft("batch_size", placeholders.size.toString()))
+                            add(SupportDiagnosticFieldDraft("entries_processed", processedCount.toString()))
+                            val diagnosticResultCount = maxOf(processedCount, failedIndex?.plus(1) ?: 0)
+                            runCatching { native.resultSample(diagnosticResultCount) }
+                                .getOrNull()
+                                ?.takeIf(String::isNotEmpty)
+                                ?.let { sample -> add(SupportDiagnosticFieldDraft("entry_results", sample)) }
+                            failedIndex?.let { index ->
+                                add(SupportDiagnosticFieldDraft("failed_index", index.toString()))
+                                runCatching { native.resultAt(index) }.getOrNull()?.let { failedResult ->
+                                    add(
+                                        SupportDiagnosticFieldDraft(
+                                            "failed_entry_result",
+                                            "0x${failedResult.toUInt().toString(16)}",
+                                        ),
+                                    )
+                                }
+                            }
+                            failed?.let { placeholder ->
+                                add(
+                                    SupportDiagnosticFieldDraft(
+                                        "failed_name",
+                                        placeholder.name,
+                                        SupportDiagnosticValuePrivacy.RemotePath,
+                                    ),
+                                )
+                                add(SupportDiagnosticFieldDraft("failed_directory", placeholder.directory.toString()))
+                            }
+                            failedState?.let { state ->
+                                add(SupportDiagnosticFieldDraft("failed_placeholder_state", state.name.lowercase()))
+                            }
+                        },
+                    ),
+                )
+            }
+        }
+        checkHResult(result, "create Windows Cloud Files placeholders")
         check(processed.value == placeholders.size) { "Windows created only some requested placeholders." }
         native.requireSuccessful()
         placeholders.filter { it.directory }.forEach { placeholder ->
@@ -260,13 +398,37 @@ internal class JnaWindowsCloudFilesApi(
     }
 
     override fun placeholderState(path: Path): WindowsCloudPlaceholderState {
-        return withFindData(path, WindowsCloudPlaceholderState.Absent) { findData ->
-            val state = cldApi.CfGetPlaceholderStateFromFindData(findData.pointer)
-            when {
-                state and CF_PLACEHOLDER_STATE_PLACEHOLDER == 0 -> WindowsCloudPlaceholderState.Absent
-                state and CF_PLACEHOLDER_STATE_IN_SYNC != 0 -> WindowsCloudPlaceholderState.InSync
-                else -> WindowsCloudPlaceholderState.Dirty
+        return inspectPlaceholder(path).placeholderState
+    }
+
+    override fun inspectPlaceholder(path: Path): WindowsCloudPlaceholderInspection {
+        val findData = WinBase.WIN32_FIND_DATA()
+        Native.setLastError(0)
+        val handle = Kernel32.INSTANCE.FindFirstFile(path.toAbsolutePath().toString(), findData.pointer)
+        if (WinBase.INVALID_HANDLE_VALUE == handle) {
+            return windowsCloudPlaceholderInspection(
+                findSucceeded = false,
+                win32Error = Native.getLastError(),
+            )
+        }
+        return try {
+            findData.read()
+            Native.setLastError(0)
+            val placeholderStateBits = cldApi.CfGetPlaceholderStateFromFindData(findData.pointer)
+            val placeholderStateError = if (placeholderStateBits == CF_PLACEHOLDER_STATE_INVALID) {
+                Native.getLastError()
+            } else {
+                null
             }
+            windowsCloudPlaceholderInspection(
+                findSucceeded = true,
+                win32Error = placeholderStateError,
+                fileAttributes = findData.dwFileAttributes,
+                reparseTag = findData.dwReserved0,
+                placeholderStateBits = placeholderStateBits,
+            )
+        } finally {
+            Kernel32.INSTANCE.FindClose(handle)
         }
     }
 
@@ -319,7 +481,7 @@ internal class JnaWindowsCloudFilesApi(
         preserveSyncState: Boolean,
     ) {
         require(!invalidateContent || !preserveSyncState)
-        withFileHandle(path, write = true, exclusive = invalidateContent) { handle ->
+        withCloudFileHandle(path, write = true, exclusive = invalidateContent) { handle ->
             val metadata = placeholder.windowsMetadata(fallbackEpochMillis = null)
             val identity = placeholder.identity.nativeMemory()
             val flags = if (preserveSyncState) {
@@ -499,6 +661,29 @@ internal class JnaWindowsCloudFilesApi(
         }
     }
 
+    /**
+     * Cloud Files updates use a protected handle so Explorer can break the oplock cleanly instead
+     * of racing a background CreateFile call with a transient sharing violation.
+     */
+    private inline fun <T> withCloudFileHandle(
+        path: Path,
+        write: Boolean,
+        exclusive: Boolean = false,
+        block: (WinNT.HANDLE) -> T,
+    ): T {
+        val handle = WinNT.HANDLEByReference()
+        val flags = windowsCloudOpenFileFlags(write, exclusive)
+        checkHResult(
+            cldApi.CfOpenFileWithOplock(WString(path.toAbsolutePath().toString()), flags, handle),
+            "open a Windows Cloud Files placeholder for update",
+        )
+        return try {
+            block(handle.value)
+        } finally {
+            cldApi.CfCloseHandle(handle.value)
+        }
+    }
+
     private inline fun <T> withFindData(path: Path, fallback: T, block: (WinBase.WIN32_FIND_DATA) -> T): T {
         if (!Files.exists(path)) return fallback
         val findData = WinBase.WIN32_FIND_DATA()
@@ -542,10 +727,41 @@ internal class JnaWindowsCloudFilesApi(
         }
         val firstPointer: Pointer? get() = entries.firstOrNull()?.pointer
 
+        fun resultAt(index: Int): Int {
+            val entry = entries[index]
+            entry.read()
+            return entry.result
+        }
+
+        fun firstFailedResultIndex(): Int? {
+            for (index in entries.indices) {
+                if (resultAt(index) < 0) return index
+            }
+            return null
+        }
+
+        fun resultSample(endExclusive: Int): String {
+            val availableCount = endExclusive.coerceIn(0, entries.size)
+            val sampledCount = windowsCloudPlaceholderDiagnosticSampleSize(availableCount)
+            return buildString {
+                for (index in 0 until sampledCount) {
+                    if (isNotEmpty()) append(',')
+                    append(index)
+                    append("=0x")
+                    append(resultAt(index).toUInt().toString(16))
+                }
+                if (availableCount > sampledCount) {
+                    if (isNotEmpty()) append(',')
+                    append("truncated=")
+                    append(availableCount - sampledCount)
+                }
+            }
+        }
+
         fun requireSuccessful() {
-            entries.forEach { entry ->
-                entry.read()
-                check(entry.result >= 0) { "Windows rejected a Cloud Files placeholder (HRESULT 0x${entry.result.toUInt().toString(16)})." }
+            for (index in entries.indices) {
+                val result = resultAt(index)
+                check(result >= 0) { "Windows rejected a Cloud Files placeholder (HRESULT 0x${result.toUInt().toString(16)})." }
             }
         }
     }
@@ -663,6 +879,8 @@ internal interface CldApi : StdCallLibrary {
     fun CfCreatePlaceholders(path: WString, placeholders: Pointer?, count: Int, flags: Int, processed: IntByReference): Int
     fun CfExecute(operationInfo: Pointer, operationParameters: Pointer): Int
     fun CfGetPlaceholderStateFromFindData(findData: Pointer): Int
+    fun CfOpenFileWithOplock(path: WString, flags: Int, protectedHandle: WinNT.HANDLEByReference): Int
+    fun CfCloseHandle(protectedHandle: WinNT.HANDLE)
     fun CfGetPlaceholderInfo(
         handle: WinNT.HANDLE,
         infoClass: Int,

@@ -4,6 +4,8 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class DesktopVirtualFileProviderLocationTest {
     @Test
@@ -70,6 +72,65 @@ class DesktopVirtualFileProviderLocationTest {
                 )
             }
             assertEquals(false, missingParent.exists())
+        } finally {
+            temporary.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun cacheTierValidationAcceptsAnExistingLocalFolderAndRejectsAMissingParent() {
+        val temporary = Files.createTempDirectory("virtual-cache-tier-").toFile()
+        val cache = temporary.resolve("fast-cache").apply { mkdirs() }
+        try {
+            assertEquals(cache.toPath(), validateDesktopVirtualFileCacheTierPath(cache.absolutePath))
+            assertFailsWith<IllegalArgumentException> {
+                validateDesktopVirtualFileCacheTierPath(temporary.resolve("missing/cache").absolutePath)
+            }
+            assertEquals(false, temporary.resolve("missing").exists())
+        } finally {
+            temporary.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun cacheTierValidationDetectsDirectoriesAliasedThroughAnAncestorSymlink() {
+        val temporary = Files.createTempDirectory("virtual-cache-tier-alias-")
+        try {
+            val physical = Files.createDirectories(temporary.resolve("physical/nested/cache"))
+            val alias = temporary.resolve("alias")
+            Files.createSymbolicLink(alias, temporary.resolve("physical"))
+            val aliased = alias.resolve("nested/cache")
+
+            val primary = validateDesktopVirtualFileCacheTierPath(physical.toString())
+            val overflow = validateDesktopVirtualFileCacheTierPath(aliased.toString())
+
+            assertTrue(desktopVirtualFileCacheTierPathsOverlap(primary, overflow))
+            assertFalse(
+                desktopVirtualFileCacheTierPathsOverlap(
+                    primary,
+                    Files.createDirectories(temporary.resolve("separate/cache")),
+                ),
+            )
+        } finally {
+            temporary.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aMissingOverflowRootIsReportedWithoutBeingRecreated() {
+        val temporary = Files.createTempDirectory("virtual-cache-overflow-missing-").toFile()
+        val primary = temporary.resolve("primary").apply { mkdirs() }
+        val missingOverflow = temporary.resolve("detached-overflow")
+        try {
+            val cache = DesktopVirtualRangeCache(
+                root = primary,
+                overflowRoot = missingOverflow,
+                policy = { VirtualFileCachePolicy(automaticCleanup = false) },
+                createParentDirectories = false,
+            )
+
+            assertEquals(false, cache.summary("0".repeat(64)).overflowAvailable)
+            assertEquals(false, missingOverflow.exists())
         } finally {
             temporary.deleteRecursively()
         }

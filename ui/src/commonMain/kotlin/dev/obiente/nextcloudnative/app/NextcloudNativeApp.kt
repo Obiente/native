@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -94,8 +95,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -1298,36 +1301,15 @@ private fun MarketingDesktopStartupSettingsScenario(
                 syncLabel = "4 active syncs",
                 storageLabel = "34.2 GB of 100 GB used",
             ),
-            initialSection = SettingsWorkspaceSection.SyncAndStorage,
+            initialSection = SettingsWorkspaceSection.DesktopApp,
         ) { section ->
             when (section) {
-                SettingsWorkspaceSection.SyncAndStorage -> {
-                    SettingsActionCard(
-                        title = "Folder sync workspace",
-                        description = "4 active pairs · 341 downloads · 87 uploads · 1.2 GB queued",
-                        icon = NextcloudIcons.Cloud,
-                        onClick = {},
-                        trailing = "Healthy",
-                    )
-                    SettingsActionCard(
-                        title = "Virtual files",
-                        description = "123.4 GB represented locally · 8.6 GB hydrated",
-                        icon = NextcloudIcons.FolderOpen,
-                        onClick = {},
-                        trailing = "On",
-                    )
-                    SettingsActionCard(
-                        title = "Media transfers",
-                        description = "2 active · 5 queued · 1 retry available",
-                        icon = NextcloudIcons.Refresh,
-                        onClick = {},
-                    )
-                    SettingsActionCard(
-                        title = "Storage policy",
-                        description = "Keep pinned files and recently opened work available offline",
-                        icon = NextcloudIcons.Favorite,
-                        onClick = {},
-                        trailing = "Balanced",
+                SettingsWorkspaceSection.DesktopApp -> {
+                    DesktopBackgroundSettingsCard(enabled = true, onEnabledChanged = {})
+                    DesktopStartOnLoginSettingsCard(
+                        enabled = true,
+                        message = "Nextcloud Native will start in your desktop session and recover after a crash.",
+                        onEnabledChanged = {},
                     )
                 }
                 else -> SettingsActionCard(
@@ -11693,6 +11675,9 @@ private fun SettingsScreen(
     var capabilityRefresh by remember { mutableStateOf(0) }
     var startOnLogin by remember(services) { mutableStateOf(services.loadStartOnLoginPreference()) }
     var startOnLoginMessage by remember(services) { mutableStateOf<String?>(null) }
+    var keepRunningInBackground by remember(services) {
+        mutableStateOf(services.loadKeepRunningInBackgroundPreference())
+    }
     val platformCapabilities = remember(services, capabilityRefresh, platformCapabilityRefreshRequest) {
         services.platformCapabilities()
     }
@@ -11862,6 +11847,15 @@ private fun SettingsScreen(
                 }
 
                 SettingsWorkspaceSection.DesktopApp -> {
+                    if (services.supportsKeepRunningInBackground) {
+                        DesktopBackgroundSettingsCard(
+                            enabled = keepRunningInBackground,
+                            onEnabledChanged = { enabled ->
+                                services.saveKeepRunningInBackgroundPreference(enabled)
+                                keepRunningInBackground = services.loadKeepRunningInBackgroundPreference()
+                            },
+                        )
+                    }
                     if (services.supportsStartOnLogin) {
                         DesktopStartOnLoginSettingsCard(
                             enabled = startOnLogin,
@@ -11878,6 +11872,8 @@ private fun SettingsScreen(
                     services = services,
                     platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
                 )
+
+                SettingsWorkspaceSection.Diagnostics -> SupportDiagnosticsSettingsCard(services)
 
                 SettingsWorkspaceSection.HelpAndGuides -> {
                     SettingsActionCard(
@@ -11967,17 +11963,28 @@ private fun SettingsScreen(
                     }
                 }
             }
-            if (services.supportsStartOnLogin) {
+            if (services.supportsStartOnLogin || services.supportsKeepRunningInBackground) {
                 item {
                     SectionTitle("Desktop")
-                    DesktopStartOnLoginSettingsCard(
-                        enabled = startOnLogin,
-                        message = startOnLoginMessage,
-                        onEnabledChanged = { enabled ->
-                            startOnLoginMessage = services.saveStartOnLoginPreference(enabled)
-                            startOnLogin = services.loadStartOnLoginPreference()
-                        },
-                    )
+                    if (services.supportsKeepRunningInBackground) {
+                        DesktopBackgroundSettingsCard(
+                            enabled = keepRunningInBackground,
+                            onEnabledChanged = { enabled ->
+                                services.saveKeepRunningInBackgroundPreference(enabled)
+                                keepRunningInBackground = services.loadKeepRunningInBackgroundPreference()
+                            },
+                        )
+                    }
+                    if (services.supportsStartOnLogin) {
+                        DesktopStartOnLoginSettingsCard(
+                            enabled = startOnLogin,
+                            message = startOnLoginMessage,
+                            onEnabledChanged = { enabled ->
+                                startOnLoginMessage = services.saveStartOnLoginPreference(enabled)
+                                startOnLogin = services.loadStartOnLoginPreference()
+                            },
+                        )
+                    }
                 }
             }
             item {
@@ -12226,6 +12233,8 @@ private fun SettingsScreen(
                     services = services,
                     platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
                 )
+                Spacer(Modifier.height(NextcloudSpacing.Medium))
+                SupportDiagnosticsSettingsCard(services)
             }
             item {
                 SectionTitle("Administration")
@@ -12311,6 +12320,249 @@ internal fun logoutCleanupFailureMessage(failure: Throwable): String {
 }
 
 @Composable
+private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) {
+    val scope = rememberCoroutineScope()
+    var refresh by remember { mutableStateOf(0) }
+    val diagnosticsRevision by remember(services) {
+        services.supportDiagnosticsRevisions()
+    }.collectAsState(0L)
+    var summary by remember(services) {
+        mutableStateOf(
+            SupportDiagnosticsSummary(
+                available = false,
+                eventCount = 0,
+                warningCount = 0,
+                errorCount = 0,
+                oldestEventAtEpochMillis = null,
+                newestEventAtEpochMillis = null,
+                components = emptySet(),
+                storedBytes = 0L,
+                includedFiles = SUPPORT_BUNDLE_INCLUDED_FILES,
+                explanation = "Loading private diagnostic history...",
+            ),
+        )
+    }
+    LaunchedEffect(services, diagnosticsRevision, refresh) {
+        summary = services.loadSupportDiagnosticsSummary()
+    }
+    var reproductionSteps by remember { mutableStateOf("") }
+    var exporting by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var confirmClear by remember { mutableStateOf(false) }
+    var showPreview by rememberSaveable { mutableStateOf(false) }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Clear diagnostic history?") },
+            text = {
+                Text(
+                    "This permanently removes the recorded diagnostic events on this device. " +
+                        "It does not remove reports you already exported.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    onClick = {
+                        confirmClear = false
+                        scope.launch {
+                            status = if (services.clearSupportDiagnostics()) {
+                                refresh += 1
+                                "Diagnostic history cleared."
+                            } else {
+                                "Diagnostic history could not be cleared."
+                            }
+                        }
+                    },
+                ) { Text("Clear history") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = NextcloudTheme.colors.appTile,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
+                    Icon(
+                        NextcloudIcons.Activity,
+                        contentDescription = null,
+                        modifier = Modifier.padding(12.dp).size(26.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Anonymized support report", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Export bounded app events and failure context when you choose. Nothing is uploaded automatically.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (summary.available) {
+                Text(
+                    "${summary.eventCount} events · ${summary.errorCount} errors · " +
+                        "${summary.warningCount} warnings · ${formatVirtualFileBytes(summary.storedBytes)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    summary.components
+                        .sortedBy { component -> component.name }
+                        .joinToString(prefix = "Areas: ", separator = ", ") { it.name }
+                        .takeIf { summary.components.isNotEmpty() }
+                        ?: "No diagnostic events have been recorded yet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text(
+                    summary.explanation ?: "Diagnostic storage is unavailable on this device.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
+            OutlinedTextField(
+                value = reproductionSteps,
+                onValueChange = { reproductionSteps = it.take(MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH) },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = summary.available && !exporting,
+                label = { Text("What happened? (optional)") },
+                placeholder = { Text("Describe what you did, what you expected, and what happened.") },
+                supportingText = {
+                    Text(
+                        "Recognizable credentials, account details, URLs, and paths are anonymized. " +
+                            "Review your description before sharing.",
+                    )
+                },
+                minLines = 3,
+                maxLines = 7,
+            )
+
+            Text(
+                "Includes: ${summary.includedFiles.joinToString()}. " +
+                    "Does not include file contents, request bodies, credentials, cookies, or the private alias key.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (summary.recentEvents.isNotEmpty()) {
+                OutlinedButton(
+                    onClick = {
+                        refresh += 1
+                        showPreview = !showPreview
+                    },
+                ) {
+                    Text(if (showPreview) "Hide event preview" else "Preview recent events")
+                }
+                if (showPreview) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(NextcloudRadii.Small),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                "Latest ${summary.recentEvents.size} sanitized events",
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            summary.recentEvents.asReversed().forEach { event ->
+                                Text(
+                                    buildString {
+                                        append(event.severity.name)
+                                        append(" · ")
+                                        append(event.component.name)
+                                        append(" · ")
+                                        append(event.operation)
+                                        append(" · ")
+                                        append(event.outcome)
+                                        event.code?.let { append(" · ").append(it) }
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                Button(
+                    enabled = summary.available && !exporting,
+                    onClick = {
+                        exporting = true
+                        status = null
+                        refresh += 1
+                        scope.launch {
+                            try {
+                                status = when (val result = services.exportSupportDiagnostics(reproductionSteps)) {
+                                    is SupportDiagnosticsExportResult.Exported ->
+                                        "Report prepared: ${result.destination}"
+                                    SupportDiagnosticsExportResult.Cancelled -> "Report export cancelled."
+                                    is SupportDiagnosticsExportResult.Failed -> result.message
+                                    is SupportDiagnosticsExportResult.Unsupported -> result.reason
+                                }
+                            } catch (cancellation: CancellationException) {
+                                throw cancellation
+                            } catch (_: Throwable) {
+                                status = "The anonymized support report could not be saved."
+                            } finally {
+                                exporting = false
+                                refresh += 1
+                            }
+                        }
+                    },
+                ) {
+                    if (exporting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.size(8.dp))
+                    }
+                    Text(if (exporting) "Preparing..." else "Export report")
+                }
+                if (summary.eventCount > 0) {
+                    OutlinedButton(
+                        enabled = !exporting,
+                        onClick = { confirmClear = true },
+                    ) { Text("Clear history") }
+                }
+            }
+            status?.let { message ->
+                Text(
+                    message,
+                    modifier = Modifier.semantics {
+                        contentDescription = message
+                        liveRegion = LiveRegionMode.Polite
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 internal fun DesktopStartOnLoginSettingsCard(
     enabled: Boolean,
     message: String?,
@@ -12341,7 +12593,7 @@ internal fun DesktopStartOnLoginSettingsCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text("Start on login", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Keep folder sync and virtual files available after signing in to this computer.",
+                    "With your confirmation, keep folder sync, virtual files, and the tray available after you sign in.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -12353,6 +12605,46 @@ internal fun DesktopStartOnLoginSettingsCard(
                         modifier = Modifier.padding(top = NextcloudSpacing.Small),
                     )
                 }
+            }
+            Switch(checked = enabled, onCheckedChange = null)
+        }
+    }
+}
+
+@Composable
+internal fun DesktopBackgroundSettingsCard(
+    enabled: Boolean,
+    onEnabledChanged: (Boolean) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
+        color = NextcloudTheme.colors.appTile,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().toggleable(
+                value = enabled,
+                role = Role.Switch,
+                onValueChange = onEnabledChanged,
+            ).padding(NextcloudSpacing.Large),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
+                Icon(
+                    NextcloudIcons.Cloud,
+                    contentDescription = null,
+                    modifier = Modifier.padding(12.dp).size(26.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Keep running when the window closes", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Keep sync and virtual files active in the tray. Use Quit from the activity panel to stop the app.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Switch(checked = enabled, onCheckedChange = null)
         }

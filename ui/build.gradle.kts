@@ -191,7 +191,9 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
-        val androidMain by getting
+        val androidMain by getting {
+            kotlin.srcDir("src/jvmMain/kotlin")
+        }
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
             implementation(libs.androidx.lifecycle.runtime.compose)
@@ -203,7 +205,9 @@ kotlin {
             implementation(libs.videolan.libvlc)
             implementation(libs.okhttp)
         }
-        val desktopMain by getting
+        val desktopMain by getting {
+            kotlin.srcDir("src/jvmMain/kotlin")
+        }
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(project(":contractAcquisition"))
@@ -218,6 +222,8 @@ kotlin {
             implementation(libs.jse.spi.mp3)
             implementation(libs.jse.spi.aac)
             implementation("com.github.serceman:jnr-fuse:0.5.8")
+            implementation("com.github.hypfvieh:dbus-java-core:5.2.0")
+            implementation("com.github.hypfvieh:dbus-java-transport-native-unixsocket:5.2.0")
             implementation("net.java.dev.jna:jna:5.19.1")
             implementation("net.java.dev.jna:jna-platform:5.19.1")
         }
@@ -245,6 +251,7 @@ compose.desktop {
         )
 
         nativeDistributions {
+            modules("jdk.security.auth")
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
             packageName = "NextcloudNative"
             packageVersion = ncDesktopPackageVersion
@@ -387,6 +394,28 @@ tasks.register<JavaExec>("captureFileSyncTrayVisualQa") {
     )
     mainClass.set(
         "dev.obiente.nextcloudnative.nativeui.preview.FileSyncTrayVisualQaMainKt",
+    )
+    environment(
+        "NEXTCLOUD_NATIVE_TRAY_QA_OUTPUT",
+        layout.buildDirectory.file("visual-qa/tray.png").get().asFile.absolutePath,
+    )
+    workingDir(rootProject.projectDir)
+}
+
+tasks.register<JavaExec>("captureDesktopBackgroundSettingsVisualQa") {
+    group = "verification"
+    description = "Captures desktop background and startup settings with isolated synthetic state."
+    dependsOn(desktopCaptureCompilation.compileTaskProvider)
+    classpath(
+        desktopCaptureCompilation.output.allOutputs,
+        desktopCaptureCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set(
+        "dev.obiente.nextcloudnative.nativeui.preview.DesktopBackgroundSettingsVisualQaMainKt",
+    )
+    environment(
+        "NEXTCLOUD_NATIVE_BACKGROUND_SETTINGS_QA_OUTPUT",
+        layout.buildDirectory.file("visual-qa/background-settings.png").get().asFile.absolutePath,
     )
     workingDir(rootProject.projectDir)
 }

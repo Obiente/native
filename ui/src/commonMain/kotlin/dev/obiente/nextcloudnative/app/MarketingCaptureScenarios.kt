@@ -515,7 +515,7 @@ enum class MarketingCaptureScenario(
     ),
     DesktopStartupSettings(
         "desktop-startup-settings", "desktop-startup-settings.png", NextcloudPresentation.Desktop,
-        "File sync", "Desktop settings", "Start on login enabled",
+        "File sync", "Desktop settings", "Background sync and start on login enabled",
         MarketingCapturePurpose.StateCoverage, "desktop", "wide",
         width = 1_440, height = 900, density = 1f,
     ),
@@ -1881,7 +1881,9 @@ internal fun MarketingVirtualFileStorageDesktopScenario(scenario: MarketingCaptu
                     onFreeUp = {},
                     onActivateProvider = {},
                     onDeactivateProvider = {},
+                    onAcknowledgeRecovery = {},
                     onChangeLocation = {},
+                    onChangeCacheTiers = {},
                     onChoosePinnedFolder = {},
                     onReleaseFolder = {},
                     onRetryFolder = {},
@@ -1914,6 +1916,7 @@ private fun marketingVirtualFileStorageSnapshot(
     storageCapacityBytes = 512L * 1024L * 1024L * 1024L,
     limitations = limitations,
     providerState = VirtualFileProviderState.Active,
+    providerActive = true,
     providerLocation = when (integration) {
         VirtualFilePlatformIntegration.AndroidDocumentsProvider -> "System Files / Nextcloud Native"
         VirtualFilePlatformIntegration.WindowsCloudFiles -> "Nextcloud Native in File Explorer"

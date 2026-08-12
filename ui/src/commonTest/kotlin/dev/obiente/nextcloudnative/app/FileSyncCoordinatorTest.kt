@@ -192,6 +192,42 @@ class FileSyncCoordinatorTest {
     }
 
     @Test
+    fun `resolved deletion decisions retain child before parent execution order`() {
+        val parent = FileSyncBaseline("Photos", SyncEntryKind.Directory, "local-dir", "remote-dir")
+        val child = baseline("Photos/image.jpg", "local-file", "remote-file")
+        val remoteEntries = listOf(
+            RemoteSyncEntry(parent.relativePath, SyncEntryKind.Directory, "remote-dir"),
+            remote(child.relativePath, "remote-file"),
+        )
+        var coordinator = scanFileSyncPair(
+            state(baselines = listOf(parent, child)),
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = remoteEntries,
+            nowEpochMillis = 10L,
+        )
+        coordinator.pair().workItems.forEach { work ->
+            coordinator = resolveFileSyncDecision(
+                coordinator,
+                PAIR_ID,
+                work.id,
+                FileSyncDecisionChoice.PropagateDeletion,
+            )
+        }
+
+        val rescanned = scanFileSyncPair(
+            coordinator,
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = remoteEntries,
+            nowEpochMillis = 20L,
+        ).pair()
+
+        assertEquals(listOf(child.relativePath, parent.relativePath), rescanned.workItems.map { it.relativePath })
+        assertTrue(rescanned.workItems.all { it.operation is FileSyncOperation.DeleteRemote })
+    }
+
+    @Test
     fun `explicit recovery resets only failures that exhausted automatic retries`() {
         var coordinator = scanFileSyncPair(
             state(),
@@ -383,9 +419,143 @@ class FileSyncCoordinatorTest {
         }
     }
 
+    @Test
+    fun `the complete supported tree is planned in one priority ordered pass`() {
+        val entries = (0 until MAX_FILE_SYNC_ENTRIES).map { index ->
+            local("Archive/file-${index.toString().padStart(5, '0')}.jpg", "local-$index")
+        }
+
+        val scanned = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            entries,
+            emptyList(),
+            nowEpochMillis = 10L,
+        ).pair()
+
+        assertEquals(MAX_FILE_SYNC_ENTRIES, scanned.workItems.size)
+        assertEquals("Archive/file-00000.jpg", scanned.workItems.first().relativePath)
+        assertEquals("Archive/file-99999.jpg", scanned.workItems.last().relativePath)
+        assertEquals(100_001L, scanned.nextWorkId)
+    }
+
+    @Test
+    fun `non executable work cannot crowd transfers out of a reserved desktop batch`() {
+        val excludedLocal = (0 until 10_000).map { index ->
+            local("Local/file-${index.toString().padStart(5, '0')}.jpg", "local-$index")
+        }
+        val configuration = FileSyncConfiguration(
+            direction = FileSyncDirection.DownloadOnly,
+            deviceLabel = "Workstation",
+        )
+
+        val scanned = scanFileSyncPair(
+            state(configuration = configuration),
+            PAIR_ID,
+            localEntries = excludedLocal,
+            remoteEntries = listOf(remote("Remote/download.jpg", "remote-download")),
+            nowEpochMillis = 10L,
+            maximumWorkItems = 20_000,
+            reservedNonExecutableWorkItems = 10_000,
+        ).pair()
+
+        assertEquals(10_001, scanned.workItems.size)
+        assertEquals(10_000, scanned.workItems.count { it.state == FileSyncExecutionState.Skipped })
+        assertIs<FileSyncOperation.Download>(
+            scanned.workItems.single { it.state == FileSyncExecutionState.Ready }.operation,
+        )
+    }
+
+    @Test
+    fun `exhausted failures cannot crowd transfers out of a reserved desktop batch`() {
+        val exhaustedLocal = (0 until 10_000).map { index ->
+            local("Archive/file-${index.toString().padStart(5, '0')}.jpg", "local-$index")
+        }
+        val exhaustedWork = exhaustedLocal.mapIndexed { index, entry ->
+            FileSyncWorkItem(
+                id = index + 1L,
+                relativePath = entry.relativePath,
+                observedLocal = entry,
+                observedRemote = null,
+                observedBaseline = null,
+                operation = FileSyncOperation.Upload(entry.relativePath, expectedRemoteEtag = null),
+                state = FileSyncExecutionState.Failed,
+                attemptCount = MAX_FILE_SYNC_ATTEMPTS,
+                lastAttemptEpochMillis = 9L,
+                failureMessage = "Automatic retries exhausted",
+            )
+        }
+        val initial = state(
+            workItems = exhaustedWork,
+            nextWorkId = 10_001L,
+        )
+
+        val scanned = scanFileSyncPair(
+            initial,
+            PAIR_ID,
+            localEntries = exhaustedLocal,
+            remoteEntries = listOf(remote("Remote/download.jpg", "remote-download")),
+            nowEpochMillis = 10L,
+            maximumWorkItems = 20_000,
+            reservedNonExecutableWorkItems = 10_000,
+        ).pair()
+
+        assertEquals(10_001, scanned.workItems.size)
+        assertEquals(
+            10_000,
+            scanned.workItems.count {
+                it.state == FileSyncExecutionState.Failed && it.attemptCount == MAX_FILE_SYNC_ATTEMPTS
+            },
+        )
+        assertIs<FileSyncOperation.Download>(
+            scanned.workItems.single { it.state == FileSyncExecutionState.Ready }.operation,
+        )
+    }
+
+    @Test
+    fun `new conflicts displace retained skips in a reserved desktop batch`() {
+        val skippedLocal = (0 until 10_000).map { index ->
+            local("Local/file-${index.toString().padStart(5, '0')}.jpg", "local-$index")
+        }
+        val configuration = FileSyncConfiguration(
+            direction = FileSyncDirection.DownloadOnly,
+            deviceLabel = "Workstation",
+        )
+        val initial = scanFileSyncPair(
+            state(configuration = configuration),
+            PAIR_ID,
+            localEntries = skippedLocal,
+            remoteEntries = emptyList(),
+            nowEpochMillis = 9L,
+            maximumWorkItems = 20_000,
+            reservedNonExecutableWorkItems = 10_000,
+        )
+        val collisionLocal = local("Remote/collision.jpg", "local-collision")
+
+        val scanned = scanFileSyncPair(
+            initial,
+            PAIR_ID,
+            localEntries = skippedLocal + collisionLocal,
+            remoteEntries = listOf(
+                RemoteSyncEntry(collisionLocal.relativePath, SyncEntryKind.Directory, "remote-collision"),
+            ),
+            nowEpochMillis = 10L,
+            maximumWorkItems = 20_000,
+            reservedNonExecutableWorkItems = 10_000,
+        ).pair()
+
+        assertEquals(10_000, scanned.workItems.size)
+        assertEquals(9_999, scanned.workItems.count { it.state == FileSyncExecutionState.Skipped })
+        assertIs<FileSyncOperation.NeedsDecision>(
+            scanned.workItems.single { it.state == FileSyncExecutionState.AwaitingDecision }.operation,
+        )
+    }
+
     private fun state(
         baselines: List<FileSyncBaseline> = emptyList(),
         configuration: FileSyncConfiguration = FileSyncConfiguration(deviceLabel = "Test phone"),
+        workItems: List<FileSyncWorkItem> = emptyList(),
+        nextWorkId: Long = 1L,
     ) = FileSyncCoordinatorState(
         pairs = listOf(
             FileSyncPair(
@@ -395,6 +565,8 @@ class FileSyncCoordinatorTest {
                 remoteRootPath = "Notes",
                 configuration = configuration,
                 baselines = baselines,
+                workItems = workItems,
+                nextWorkId = nextWorkId,
             ),
         ),
     )

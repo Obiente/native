@@ -463,6 +463,46 @@ interface NextcloudPlatformServices {
     /** Returns a user-facing limitation when the preference could not be applied immediately. */
     fun saveStartOnLoginPreference(enabled: Boolean): String? = null
 
+    /** Summary of bounded, already-sanitized application diagnostics kept in private storage. */
+    suspend fun loadSupportDiagnosticsSummary(): SupportDiagnosticsSummary = SupportDiagnosticsSummary(
+        available = false,
+        eventCount = 0,
+        warningCount = 0,
+        errorCount = 0,
+        oldestEventAtEpochMillis = null,
+        newestEventAtEpochMillis = null,
+        components = emptySet(),
+        storedBytes = 0L,
+        includedFiles = SUPPORT_BUNDLE_INCLUDED_FILES,
+        explanation = "Anonymized support reports are unavailable on this platform.",
+    )
+
+    /** Emits after the visible diagnostic history changes so an open support card stays current. */
+    fun supportDiagnosticsRevisions(): Flow<Long> = flowOf(0L)
+
+    /** Creates a local sanitized report and opens the platform-owned save or share flow. */
+    suspend fun exportSupportDiagnostics(reproductionSteps: String): SupportDiagnosticsExportResult =
+        SupportDiagnosticsExportResult.Unsupported(
+            "Anonymized support reports are unavailable on this platform.",
+        )
+
+    /** Clears only diagnostic history. The private alias key remains stable across reports. */
+    suspend fun clearSupportDiagnostics(): Boolean = false
+
+    /** Records a structured event. Implementations sanitize it before app-private persistence. */
+    fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) = Unit
+
+    /** Registers a private value for exact in-memory removal from later diagnostic messages. */
+    fun registerSupportDiagnosticPrivateValue(value: String?) = Unit
+
+    /** Desktop-only close behavior; unsupported platforms keep this setting hidden. */
+    val supportsKeepRunningInBackground: Boolean
+        get() = false
+
+    fun loadKeepRunningInBackgroundPreference(): Boolean = false
+
+    fun saveKeepRunningInBackgroundPreference(enabled: Boolean) = Unit
+
     fun loadLastOpenedAppId(): String
 
     fun saveLastOpenedAppId(appId: String)
@@ -672,8 +712,28 @@ interface NextcloudPlatformServices {
         "A system virtual file provider is not available on this platform.",
     )
 
+    /** Acknowledges a durable provider recovery notice without deleting preserved local files. */
+    suspend fun acknowledgeVirtualFileProviderRecovery(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "A virtual file recovery notice is not available on this platform.",
+    )
+
     /** Opens a native directory chooser for the parent of the visible virtual-file folder. */
     suspend fun chooseVirtualFileProviderParent(initialParentPath: String?): String? = null
+
+    /** Opens a native directory chooser for a physical virtual-file cache tier. */
+    suspend fun chooseVirtualFileCacheLocation(initialPath: String?): String? = null
+
+    /** Moves cache storage without changing the visible virtual-files namespace. */
+    suspend fun saveVirtualFileCacheTiers(
+        session: NextcloudSession,
+        userId: String,
+        configuration: VirtualFileCacheTierConfiguration,
+    ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
+        "Tiered virtual-file storage is not available on this platform.",
+    )
 
     /** Persists a validated provider location. Active providers must be migrated explicitly. */
     suspend fun saveVirtualFileProviderLocation(
