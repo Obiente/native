@@ -105,6 +105,8 @@ class VirtualFileCacheTest {
     fun `invalid policies and duplicate entries fail closed`() {
         assertFailsWith<IllegalArgumentException> { VirtualFileCachePolicy(maximumCacheBytes = 0L) }
         assertFailsWith<IllegalArgumentException> { VirtualFileCachePolicy(minimumFreeSpaceBytes = -1L) }
+        assertFailsWith<IllegalArgumentException> { VirtualFileCachePolicy(overflowMaximumCacheBytes = 0L) }
+        assertFailsWith<IllegalArgumentException> { VirtualFileCachePolicy(overflowMinimumFreeSpaceBytes = -1L) }
         val duplicate = entry("same.jpg")
         assertFailsWith<IllegalArgumentException> {
             planVirtualFileEviction(

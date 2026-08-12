@@ -163,6 +163,10 @@ private const val KEY_WINDOWS_CLOUD_FILES_PRESERVED_ROOT_PREFIX = "wcfpr."
 private const val KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR = "windows-cloud-files-recovery-cursor"
 private const val MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOTS_PER_ATTEMPT = 16
 private const val KEY_VIRTUAL_FILE_ROOT_PREFIX = "vfp-root."
+private const val KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX = "vfpc-primary."
+private const val KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX = "vfpc-overflow."
+private const val VIRTUAL_FILE_PRIMARY_PREFERENCE_VERSION = "v2"
+private const val VIRTUAL_FILE_OVERFLOW_PREFERENCE_VERSION = "v2"
 private const val WINDOWS_CLOUD_FILES_ROOT_SUFFIX = "-v2"
 
 private fun isLinuxDesktop(): Boolean =
@@ -197,6 +201,158 @@ private fun desktopLinuxVirtualFileMountPoint(
 private fun virtualFileProviderRootPreferenceKey(accountId: String): String {
     require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
     return "$KEY_VIRTUAL_FILE_ROOT_PREFIX$accountId".also { key -> check(key.length <= Preferences.MAX_KEY_LENGTH) }
+}
+
+private fun virtualFileCachePreferenceKey(prefix: String, accountId: String): String {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return "$prefix$accountId".also { key -> check(key.length <= Preferences.MAX_KEY_LENGTH) }
+}
+
+private data class DesktopVirtualFileCacheTiers(
+    val configuration: VirtualFileCacheTierConfiguration,
+    val primaryIdentity: String?,
+    val primaryIdentityRequired: Boolean,
+    val overflowIdentity: String?,
+)
+
+private fun encodeDesktopVirtualFilePrimaryPreference(path: String, identity: String): String {
+    require(identity.isValidDesktopVirtualCacheRootIdentity())
+    return "$VIRTUAL_FILE_PRIMARY_PREFERENCE_VERSION:$identity:$path".also { encoded ->
+        require(encoded.length <= Preferences.MAX_VALUE_LENGTH) { "The selected primary cache path is too long." }
+    }
+}
+
+private fun decodeDesktopVirtualFilePrimaryPreference(value: String): Pair<String, String?>? {
+    val prefix = "$VIRTUAL_FILE_PRIMARY_PREFERENCE_VERSION:"
+    if (!value.startsWith(prefix)) return value to null
+    val identityEnd = value.indexOf(':', prefix.length)
+    if (identityEnd < 0) return null
+    val identity = value.substring(prefix.length, identityEnd)
+    val path = value.substring(identityEnd + 1)
+    return if (identity.isValidDesktopVirtualCacheRootIdentity() && path.isNotBlank()) {
+        path to identity
+    } else {
+        null
+    }
+}
+
+private fun encodeDesktopVirtualFileOverflowPreference(path: String, identity: String): String {
+    require(identity.isValidDesktopVirtualCacheRootIdentity())
+    return "$VIRTUAL_FILE_OVERFLOW_PREFERENCE_VERSION:$identity:$path".also { encoded ->
+        require(encoded.length <= Preferences.MAX_VALUE_LENGTH) { "The selected overflow cache path is too long." }
+    }
+}
+
+private fun decodeDesktopVirtualFileOverflowPreference(value: String): Pair<String, String?>? {
+    val prefix = "$VIRTUAL_FILE_OVERFLOW_PREFERENCE_VERSION:"
+    if (!value.startsWith(prefix)) return value to null
+    val identityEnd = value.indexOf(':', prefix.length)
+    if (identityEnd < 0) return null
+    val identity = value.substring(prefix.length, identityEnd)
+    val path = value.substring(identityEnd + 1)
+    return if (identity.isValidDesktopVirtualCacheRootIdentity() && path.isNotBlank()) {
+        path to identity
+    } else {
+        null
+    }
+}
+
+private fun desktopVirtualFileCacheTiers(
+    preferences: Preferences,
+    accountId: String,
+): DesktopVirtualFileCacheTiers {
+    val providerLocation = desktopVirtualFileProviderLocation(preferences, accountId)
+    val defaultPrimary = File(providerLocation.parentPath, INTERNAL_VIRTUAL_FILE_CACHE_FOLDER_NAME)
+        .absoluteFile.normalize().path
+    fun normalizedStoredPath(value: String?): String? = value
+        ?.takeIf { it.length <= Preferences.MAX_VALUE_LENGTH }
+        ?.let(::File)
+        ?.absoluteFile
+        ?.normalize()
+        ?.path
+    val storedPrimaryPreference = preferences
+        .get(virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX, accountId), null)
+        ?.takeIf { it.length <= Preferences.MAX_VALUE_LENGTH }
+        ?.let(::decodeDesktopVirtualFilePrimaryPreference)
+    val storedPrimary = normalizedStoredPath(storedPrimaryPreference?.first)
+    var primaryIdentity = storedPrimaryPreference?.second
+    if (storedPrimary != null && primaryIdentity == null) {
+        primaryIdentity = DesktopVirtualRangeCache.adoptPrimaryRootIdentity(File(storedPrimary))
+        if (primaryIdentity != null) {
+            preferences.put(
+                virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX, accountId),
+                encodeDesktopVirtualFilePrimaryPreference(storedPrimary, primaryIdentity),
+            )
+            preferences.flush()
+        }
+    }
+    val storedOverflow = preferences
+        .get(virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX, accountId), null)
+        ?.takeIf { it.length <= Preferences.MAX_VALUE_LENGTH }
+        ?.let(::decodeDesktopVirtualFileOverflowPreference)
+    val overflowPath = normalizedStoredPath(storedOverflow?.first)
+    var overflowIdentity = storedOverflow?.second
+    if (overflowPath != null && overflowIdentity == null) {
+        overflowIdentity = DesktopVirtualRangeCache.adoptOverflowRootIdentity(File(overflowPath))
+        if (overflowIdentity != null) {
+            preferences.put(
+                virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX, accountId),
+                encodeDesktopVirtualFileOverflowPreference(overflowPath, overflowIdentity),
+            )
+            preferences.flush()
+        }
+    }
+    return DesktopVirtualFileCacheTiers(
+        configuration = VirtualFileCacheTierConfiguration(
+            primaryPath = storedPrimary ?: defaultPrimary,
+            overflowPath = overflowPath,
+        ),
+        primaryIdentity = primaryIdentity,
+        primaryIdentityRequired = storedPrimary != null,
+        overflowIdentity = overflowIdentity,
+    )
+}
+
+internal fun validateDesktopVirtualFileCacheTierPath(path: String): Path {
+    require(path.isValidVirtualFileCachePath()) { "Choose a valid local cache folder." }
+    val target = File(path).toPath().toAbsolutePath().normalize()
+    require(target.toString().length <= Preferences.MAX_VALUE_LENGTH) { "The selected cache path is too long." }
+    val parent = target.parent ?: error("Choose a cache folder below a local drive root.")
+    require(Files.isDirectory(parent, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(parent)) {
+        "Choose a cache folder on an available local drive, not a symbolic link."
+    }
+    require(Files.isWritable(parent)) { "The selected cache drive is not writable." }
+    if (Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+        require(Files.isDirectory(target, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(target)) {
+            "The selected cache location is not a regular directory."
+        }
+        require(Files.isWritable(target)) { "The selected cache location is not writable." }
+    }
+    return target
+}
+
+internal fun desktopVirtualFileCacheTierPathsOverlap(first: Path, second: Path): Boolean {
+    fun filesystemPath(path: Path): Path = if (Files.exists(path, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+        path.toRealPath()
+    } else {
+        requireNotNull(path.parent).toRealPath().resolve(path.fileName).normalize()
+    }
+    fun sameExistingDirectoryOrAncestor(ancestor: Path, candidate: Path): Boolean {
+        if (!Files.exists(ancestor) || !Files.exists(candidate)) return false
+        var current: Path? = candidate
+        while (current != null) {
+            if (runCatching { Files.isSameFile(ancestor, current) }.getOrDefault(false)) return true
+            current = current.parent
+        }
+        return false
+    }
+    val resolvedFirst = filesystemPath(first)
+    val resolvedSecond = filesystemPath(second)
+    return resolvedFirst == resolvedSecond ||
+        resolvedFirst.startsWith(resolvedSecond) ||
+        resolvedSecond.startsWith(resolvedFirst) ||
+        sameExistingDirectoryOrAncestor(first, second) ||
+        sameExistingDirectoryOrAncestor(second, first)
 }
 
 internal fun validateDesktopVirtualFileProviderLocation(location: VirtualFileProviderLocation): Path {
@@ -808,6 +964,7 @@ class DesktopNextcloudServices(
     @Volatile
     private var sessionClearing = false
     private val virtualFileProviderLock = Any()
+    private val virtualFileCacheTierMutations = mutableSetOf<String>()
     private var linuxVirtualFileSystem: LinuxNextcloudVirtualFileSystem? = null
     private var linuxVirtualMetadataBackend: CachingLinuxVirtualFileBackend? = null
     private var linuxVirtualFileMountIdentity: String? = null
@@ -834,9 +991,13 @@ class DesktopNextcloudServices(
         val cache = synchronized(virtualRangeCaches) {
             virtualRangeCaches.getOrPut(accountId) {
                 if (isLinuxDesktop()) {
-                    val location = desktopVirtualFileProviderLocation(preferences, accountId)
+                    val tiers = desktopVirtualFileCacheTiers(preferences, accountId)
                     DesktopVirtualRangeCache(
-                        root = File(location.parentPath, INTERNAL_VIRTUAL_FILE_CACHE_FOLDER_NAME),
+                        root = File(tiers.configuration.primaryPath),
+                        overflowRoot = tiers.configuration.overflowPath?.let(::File),
+                        expectedPrimaryIdentity = tiers.primaryIdentity,
+                        requirePrimaryIdentity = tiers.primaryIdentityRequired,
+                        expectedOverflowIdentity = tiers.overflowIdentity,
                         policy = fileReadCache::loadPolicy,
                         createParentDirectories = false,
                     )
@@ -857,6 +1018,8 @@ class DesktopNextcloudServices(
         cache: DesktopVirtualRangeCache,
     ) {
         if (sessionClearing) return
+        if (synchronized(virtualFileProviderLock) { accountId in virtualFileCacheTierMutations }) return
+        if (cache.hasUnavailableRetainedOverflowRecords(accountId, relativePath)) return
         val jobKey = "$accountId\u0000$relativePath"
         synchronized(virtualFolderHydrationJobs) {
             if (sessionClearing) return
@@ -894,6 +1057,9 @@ class DesktopNextcloudServices(
         job = serviceScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
                 try {
                     virtualFolderHydrationMutex.withLock {
+                        check(!cache.hasUnavailableRetainedOverflowRecords(accountId, relativePath)) {
+                            "Reconnect the overflow cache drive before refreshing kept folders."
+                        }
                         if (!wasAvailableOffline) {
                             cache.setFolderHydrationStatus(
                                 accountId,
@@ -1035,6 +1201,9 @@ class DesktopNextcloudServices(
                                     size,
                                 )
                                 if (revision == null || revision in completeRevisions) return@forEach
+                                check(!cache.hasUnavailableRetainedOverflowRecords(accountId, relativePath)) {
+                                    "Reconnect the overflow cache drive before refreshing kept folders."
+                                }
                                 cache.requireRevisionCapacity(
                                     accountId,
                                     fullPath,
@@ -1042,9 +1211,8 @@ class DesktopNextcloudServices(
                                     VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES,
                                     retentionSnapshot,
                                 )
-                                val reserve = fileReadCache.loadPolicy().minimumFreeSpaceBytes
-                                val required = if (Long.MAX_VALUE - size < reserve) Long.MAX_VALUE else size + reserve
-                                check(cache.availableFreeBytes() >= required) {
+                                cache.freeUp(accountId, requestedBytes = 0L)
+                                check(cache.hasRetainedRevisionStorageCapacity(accountId, fullPath, size)) {
                                     "There is not enough free space to finish keeping $relativePath offline."
                                 }
                                 val node = document.toLinuxVirtualFileNode()
@@ -1060,6 +1228,7 @@ class DesktopNextcloudServices(
                                         offset += length
                                     }
                                 }
+                                cache.freeUp(accountId, requestedBytes = 0L)
                             }
                             val stable = listings.all { (parent, documents) ->
                                 currentCoroutineContext().ensureActive()
@@ -1243,9 +1412,15 @@ class DesktopNextcloudServices(
                     }
                 }
         }
-        val accepted = synchronized(virtualFolderHydrationJobs) {
-            if (sessionClearing || virtualFolderHydrationJobs[jobKey].occupiesVirtualFolderHydrationSlot()) false
-            else true.also { virtualFolderHydrationJobs[jobKey] = job }
+        val accepted = synchronized(virtualFileProviderLock) {
+            synchronized(virtualFolderHydrationJobs) {
+                if (
+                    sessionClearing ||
+                    accountId in virtualFileCacheTierMutations ||
+                    virtualFolderHydrationJobs[jobKey].occupiesVirtualFolderHydrationSlot()
+                ) false
+                else true.also { virtualFolderHydrationJobs[jobKey] = job }
+            }
         }
         if (accepted) job.start() else job.cancel()
     }
@@ -1284,24 +1459,26 @@ class DesktopNextcloudServices(
         accountId: String,
         path: String,
     ) {
-        runCatching { invalidateDesktopFileMetadata(accountId, path) }
-        val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
-        val roots = runCatching {
-            cache.retainedFoldersAffectedByListingChanges(accountId, listOf(path))
-        }
-            .getOrDefault(emptyList())
-        synchronized(virtualFolderMutationLock) {
-            advanceAffectedVirtualFolderGenerations(
-                virtualFolderMutationGenerationsByJob,
-                virtualFolderCompletedGenerations,
-                accountId,
-                roots,
-            )
-        }
-        runCatching { cache.invalidate(accountId, path) }
-        runCatching { cache.queueRetainedFoldersForRefresh(accountId, path) }
-        roots.forEach { root ->
-            runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+        synchronized(virtualFileProviderLock) {
+            runCatching { invalidateDesktopFileMetadata(accountId, path) }
+            val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
+            val roots = runCatching {
+                cache.retainedFoldersAffectedByListingChanges(accountId, listOf(path))
+            }
+                .getOrDefault(emptyList())
+            synchronized(virtualFolderMutationLock) {
+                advanceAffectedVirtualFolderGenerations(
+                    virtualFolderMutationGenerationsByJob,
+                    virtualFolderCompletedGenerations,
+                    accountId,
+                    roots,
+                )
+            }
+            runCatching { cache.invalidate(accountId, path) }
+            runCatching { cache.queueRetainedFoldersForRefresh(accountId, path) }
+            roots.forEach { root ->
+                runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+            }
         }
     }
 
@@ -1311,19 +1488,21 @@ class DesktopNextcloudServices(
         accountId: String,
         changedPaths: Set<String>,
     ) {
-        val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
-        val roots = runCatching { cache.queueRetainedFoldersForListingRefresh(accountId, changedPaths) }
-            .getOrDefault(emptyList())
-        synchronized(virtualFolderMutationLock) {
-            advanceAffectedVirtualFolderGenerations(
-                virtualFolderMutationGenerationsByJob,
-                virtualFolderCompletedGenerations,
-                accountId,
-                roots,
-            )
-        }
-        roots.forEach { root ->
-            runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+        synchronized(virtualFileProviderLock) {
+            val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
+            val roots = runCatching { cache.queueRetainedFoldersForListingRefresh(accountId, changedPaths) }
+                .getOrDefault(emptyList())
+            synchronized(virtualFolderMutationLock) {
+                advanceAffectedVirtualFolderGenerations(
+                    virtualFolderMutationGenerationsByJob,
+                    virtualFolderCompletedGenerations,
+                    accountId,
+                    roots,
+                )
+            }
+            roots.forEach { root ->
+                runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+            }
         }
     }
 
@@ -1463,6 +1642,17 @@ class DesktopNextcloudServices(
         }
         val rangeCache = rangeCacheResult.getOrNull()?.first
         val folderRetention = rangeCacheResult.getOrNull()?.second ?: VirtualFolderRetentionState()
+        val unavailableRetainedRoots = if (rangeCache == null) {
+            emptySet()
+        } else {
+            folderRetention.rules.asSequence()
+                .filter { rule -> rule.retention == VirtualFolderRetention.KeepOnDevice }
+                .filter { rule -> rangeCache.hasUnavailableRetainedOverflowRecords(accountId, rule.relativePath) }
+                .mapTo(linkedSetOf(), VirtualFolderRetentionRule::relativePath)
+        }
+        unavailableRetainedRoots.forEach { retainedRoot ->
+            cancelVirtualFolderHydration(accountId, retainedRoot)
+        }
         if (rangeCache != null) {
             folderRetention.rules.filter { rule ->
                 rule.retention == VirtualFolderRetention.KeepOnDevice
@@ -1475,6 +1665,8 @@ class DesktopNextcloudServices(
         val ranges = rangeCacheResult.getOrNull()?.third
         val linux = isLinuxDesktop()
         val windows = isWindowsDesktop()
+        val cacheTiers = if (linux) desktopVirtualFileCacheTiers(preferences, accountId).configuration else null
+        val overflowUnavailable = ranges != null && ranges.overflowCachedBytes > 0L && !ranges.overflowAvailable
         val active = synchronized(virtualFileProviderLock) {
             (linux && linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) ||
                 (windows && windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId)
@@ -1507,6 +1699,12 @@ class DesktopNextcloudServices(
                 rangeCacheResult.exceptionOrNull()?.let { failure ->
                     add("The selected virtual-file storage drive is unavailable: ${failure.message ?: "unknown error"}")
                 }
+                if (overflowUnavailable) {
+                    add("Reconnect the overflow cache drive to open files stored there.")
+                }
+                ranges?.tierAttention?.let { failure ->
+                    add("Cache tier movement needs attention: $failure")
+                }
                 linuxVirtualFileFailure?.let { add("The last Linux mount attempt failed: $it") }
                 windowsCloudFilesFailure?.let { add("The last Windows Cloud Files activation failed: $it") }
                 if (windows) {
@@ -1525,6 +1723,7 @@ class DesktopNextcloudServices(
             providerState = when {
                 (windowsSummary?.failedWritebackCount ?: 0) > 0 || windowsCloudFilesRecoveryNotice != null ->
                     VirtualFileProviderState.NeedsAttention
+                overflowUnavailable || ranges?.tierAttention != null -> VirtualFileProviderState.NeedsAttention
                 active -> VirtualFileProviderState.Active
                 rangeCacheResult.isFailure || linuxVirtualFileFailure != null || windowsCloudFilesFailure != null ->
                     VirtualFileProviderState.NeedsAttention
@@ -1555,11 +1754,41 @@ class DesktopNextcloudServices(
                         rule.relativePath == status.relativePath &&
                             rule.retention == VirtualFolderRetention.KeepOnDevice
                     }
+                }.map { status ->
+                    virtualFolderHydrationStatusForStorageAvailability(
+                        status,
+                        status.relativePath in unavailableRetainedRoots,
+                    )
                 }
             } else {
                 emptyList()
             },
             pendingWritebackCount = writebacks.size + (windowsSummary?.pendingWritebackCount ?: 0),
+            cacheTiers = cacheTiers,
+            primaryCache = cacheTiers?.let { configured ->
+                VirtualFileCacheTierSnapshot(
+                    path = configured.primaryPath,
+                    cachedBytes = ranges?.primaryCachedBytes ?: 0L,
+                    reclaimableBytes = ranges?.primaryReclaimableBytes ?: 0L,
+                    pinnedBytes = ranges?.primaryPinnedBytes ?: 0L,
+                    managedAutomaticBytes = cache.cachedBytes +
+                        ((ranges?.primaryCachedBytes ?: 0L) - (ranges?.primaryPinnedBytes ?: 0L)),
+                    availableFreeBytes = ranges?.availableFreeBytes,
+                    available = rangeCacheResult.isSuccess,
+                )
+            },
+            overflowCache = cacheTiers?.overflowPath?.let { overflowPath ->
+                VirtualFileCacheTierSnapshot(
+                    path = overflowPath,
+                    cachedBytes = ranges?.overflowCachedBytes ?: 0L,
+                    reclaimableBytes = ranges?.overflowReclaimableBytes ?: 0L,
+                    pinnedBytes = ranges?.overflowPinnedBytes ?: 0L,
+                    managedAutomaticBytes = (ranges?.overflowCachedBytes ?: 0L) -
+                        (ranges?.overflowPinnedBytes ?: 0L),
+                    availableFreeBytes = ranges?.overflowAvailableFreeBytes,
+                    available = ranges?.overflowAvailable == true,
+                )
+            },
         )
     }
 
@@ -1882,6 +2111,181 @@ class DesktopNextcloudServices(
             VirtualFileProviderLocation(selected.toString(), "Nextcloud Native").parentPath
         }
 
+    override suspend fun chooseVirtualFileCacheLocation(initialPath: String?): String? =
+        withContext(Dispatchers.IO) {
+            val selectedFile = invokeOnSwingEventThread {
+                val chooser = JFileChooser().apply {
+                    dialogTitle = "Choose a virtual-file cache folder"
+                    fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                    isAcceptAllFileFilterUsed = false
+                    initialPath?.let(::File)?.takeIf(File::isDirectory)?.let { currentDirectory = it }
+                }
+                if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile else null
+            }
+            val selected = selectedFile?.toPath()?.toAbsolutePath()?.normalize() ?: return@withContext null
+            validateDesktopVirtualFileCacheTierPath(selected.toString()).toString()
+        }
+
+    override suspend fun saveVirtualFileCacheTiers(
+        session: NextcloudSession,
+        userId: String,
+        configuration: VirtualFileCacheTierConfiguration,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        if (!isLinuxDesktop()) {
+            return@withContext VirtualFileStorageActionResult.Unsupported(
+                "Tiered virtual-file cache locations are currently available on Linux.",
+            )
+        }
+        val accountId = desktopFileCacheAccountId(session)
+        synchronized(virtualFileProviderLock) {
+            if (linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "Disconnect the file-manager integration before changing cache drives.",
+                )
+            }
+            val primary = validateDesktopVirtualFileCacheTierPath(configuration.primaryPath)
+            val overflow = configuration.overflowPath?.let(::validateDesktopVirtualFileCacheTierPath)
+            if (
+                runCatching {
+                    encodeDesktopVirtualFilePrimaryPreference(
+                        primary.toString(),
+                        "00000000-0000-0000-0000-000000000000",
+                    )
+                }.isFailure
+            ) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "The selected primary cache path is too long.",
+                )
+            }
+            if (
+                overflow != null &&
+                runCatching {
+                    encodeDesktopVirtualFileOverflowPreference(
+                        overflow.toString(),
+                        "00000000-0000-0000-0000-000000000000",
+                    )
+                }.isFailure
+            ) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "The selected overflow cache path is too long.",
+                )
+            }
+            if (overflow != null && desktopVirtualFileCacheTierPathsOverlap(primary, overflow)) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "Choose separate, non-nested folders for the primary and overflow caches.",
+                )
+            }
+            val mountPoint = desktopLinuxVirtualFileMountPoint(preferences, accountId).toPath()
+                .toAbsolutePath().normalize()
+            if (
+                desktopVirtualFileCacheTierPathsOverlap(primary, mountPoint) ||
+                overflow != null && desktopVirtualFileCacheTierPathsOverlap(overflow, mountPoint)
+            ) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "Cache folders must stay outside the visible virtual-files folder.",
+                )
+            }
+            val currentTiers = desktopVirtualFileCacheTiers(preferences, accountId)
+            val currentConfiguration = currentTiers.configuration
+            val currentCache = virtualRangeCache(accountId)
+            val normalizedOverflow = overflow?.toString()
+            val primaryChanges = primary.toString() != currentConfiguration.primaryPath
+            val overflowChanges = normalizedOverflow != currentConfiguration.overflowPath
+            if (!primaryChanges && !overflowChanges) {
+                return@withContext VirtualFileStorageActionResult.Completed(
+                    "The virtual-file cache already uses these locations.",
+                )
+            }
+            if (!virtualFileCacheTierMutations.add(accountId)) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "A virtual-file cache location change is already in progress.",
+                )
+            }
+            try {
+                val hydrationActive = synchronized(virtualFolderHydrationJobs) {
+                    virtualFolderHydrationJobs.any { (key, job) ->
+                        key.startsWith("$accountId\u0000") && job.occupiesVirtualFolderHydrationSlot()
+                    }
+                }
+                if (hydrationActive) {
+                    return@withContext VirtualFileStorageActionResult.Rejected(
+                        "Wait for kept-folder downloads to finish before changing cache drives.",
+                    )
+                }
+                if (overflowChanges) {
+                    runCatching { currentCache.consolidateOverflow(accountId) }.getOrElse { failure ->
+                        return@withContext VirtualFileStorageActionResult.Rejected(
+                            failure.message ?: "Could not preserve the current overflow cache.",
+                        )
+                    }
+                }
+                val targetCache = runCatching {
+                    val primaryIdentity = if (!primaryChanges) currentTiers.primaryIdentity else null
+                    val overflowIdentity = overflow?.let { selected ->
+                        if (!overflowChanges) {
+                            currentTiers.overflowIdentity
+                                ?: DesktopVirtualRangeCache.initializeOverflowRootIdentity(selected.toFile())
+                        } else {
+                            DesktopVirtualRangeCache.initializeOverflowRootIdentity(selected.toFile())
+                        }
+                    }
+                    DesktopVirtualRangeCache(
+                        root = primary.toFile(),
+                        overflowRoot = overflow?.toFile(),
+                        initializePrimaryMarker = primaryChanges || primaryIdentity == null,
+                        expectedPrimaryIdentity = primaryIdentity,
+                        requirePrimaryIdentity = true,
+                        expectedOverflowIdentity = overflowIdentity,
+                        policy = fileReadCache::loadPolicy,
+                        createParentDirectories = false,
+                    )
+                }.getOrElse { failure ->
+                    return@withContext VirtualFileStorageActionResult.Rejected(
+                        failure.message ?: "Could not prepare the selected cache folders.",
+                    )
+                }
+                if (primaryChanges) {
+                    runCatching { currentCache.copyPrimaryAccountTo(accountId, targetCache) }.getOrElse { failure ->
+                        return@withContext VirtualFileStorageActionResult.Rejected(
+                            failure.message ?: "Could not move the primary cache safely.",
+                        )
+                    }
+                }
+                preferences.put(
+                    virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX, accountId),
+                    encodeDesktopVirtualFilePrimaryPreference(
+                        primary.toString(),
+                        requireNotNull(targetCache.primaryIdentity()),
+                    ),
+                )
+                val overflowKey = virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX, accountId)
+                if (overflow == null) {
+                    preferences.remove(overflowKey)
+                } else {
+                    preferences.put(
+                        overflowKey,
+                        encodeDesktopVirtualFileOverflowPreference(
+                            overflow.toString(),
+                            requireNotNull(targetCache.overflowIdentity()),
+                        ),
+                    )
+                }
+                preferences.flush()
+                synchronized(virtualRangeCaches) { virtualRangeCaches.remove(accountId) }
+                if (primaryChanges) runCatching { currentCache.removeCopiedPrimaryAccount(accountId) }
+                VirtualFileStorageActionResult.Completed(
+                    if (overflow == null) {
+                        "Primary virtual-file cache saved. Overflow storage is off."
+                    } else {
+                        "Primary and overflow virtual-file cache locations saved."
+                    },
+                )
+            } finally {
+                virtualFileCacheTierMutations.remove(accountId)
+            }
+        }
+    }
+
     override suspend fun saveVirtualFileProviderLocation(
         session: NextcloudSession,
         userId: String,
@@ -1906,7 +2310,11 @@ class DesktopNextcloudServices(
                 )
             }
             val currentLocation = desktopVirtualFileProviderLocation(preferences, accountId)
-            if (desktopVirtualFileCacheRootChanges(currentLocation, target)) {
+            val primaryCacheIsExplicit = preferences.get(
+                virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX, accountId),
+                null,
+            ) != null
+            if (!primaryCacheIsExplicit && desktopVirtualFileCacheRootChanges(currentLocation, target)) {
                 val currentCacheResult = runCatching { virtualRangeCache(accountId) }
                 val currentCache = currentCacheResult.getOrNull()
                 if (currentCache == null) {
@@ -2427,7 +2835,7 @@ class DesktopNextcloudServices(
             return combinedAutomaticCacheExcess(
                 maximumBytes,
                 fileReadCache.virtualFileSummary(accountId).cachedBytes,
-                ranges.cachedBytes - ranges.pinnedBytes,
+                ranges.primaryCachedBytes - ranges.primaryPinnedBytes,
                 windows?.cachedBytes ?: 0L,
                 windows?.pinnedBytes ?: 0L,
             )
@@ -2438,7 +2846,7 @@ class DesktopNextcloudServices(
             windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }?.freeUpSpace(excess)
         }
         excess = currentExcess()
-        if (excess > 0L) virtualRangeCache(accountId).freeUp(accountId, excess)
+        if (excess > 0L) virtualRangeCache(accountId).relievePrimaryPressure(accountId, excess)
         excess = currentExcess()
         if (excess > 0L) fileReadCache.freeUpVirtualFiles(accountId, excess)
     }
@@ -5056,6 +5464,21 @@ internal fun shouldScheduleVirtualFolderHydration(
     }
     val age = nowEpochMillis - verifiedAt
     return age < 0L || age >= refreshIntervalMillis
+}
+
+internal fun virtualFolderHydrationStatusForStorageAvailability(
+    status: VirtualFolderHydrationStatus,
+    retainedOverflowUnavailable: Boolean,
+): VirtualFolderHydrationStatus = if (retainedOverflowUnavailable) {
+    status.copy(
+        phase = VirtualFolderHydrationPhase.Failed,
+        detail = "Reconnect the overflow cache drive to use this offline folder.",
+        refreshFailure = null,
+        refreshing = false,
+        refreshRetryAtEpochMillis = null,
+    )
+} else {
+    status
 }
 
 internal fun virtualFolderRefreshRetryAt(

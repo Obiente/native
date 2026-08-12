@@ -332,13 +332,21 @@ internal class DesktopFileReadCache(
             KEY_MINIMUM_FREE_BYTES,
             DEFAULT_VIRTUAL_FILE_MINIMUM_FREE_BYTES,
         ).coerceAtLeast(0L),
+        overflowMaximumCacheBytes = preferences.getLong(
+            KEY_OVERFLOW_MAXIMUM_CACHE_BYTES,
+            UNLIMITED_SENTINEL,
+        ).optionalPositiveOrDefault(defaultValue = null),
+        overflowMinimumFreeSpaceBytes = preferences.getLong(
+            KEY_OVERFLOW_MINIMUM_FREE_BYTES,
+            DEFAULT_VIRTUAL_FILE_MINIMUM_FREE_BYTES,
+        ).coerceAtLeast(0L),
         unusedFileAgeMillis = preferences.getLong(
             KEY_UNUSED_FILE_AGE,
             DEFAULT_VIRTUAL_FILE_UNUSED_AGE_MILLIS,
         ).optionalPositiveOrDefault(DEFAULT_VIRTUAL_FILE_UNUSED_AGE_MILLIS),
     )
 
-    private fun Long.optionalPositiveOrDefault(defaultValue: Long): Long? = when {
+    private fun Long.optionalPositiveOrDefault(defaultValue: Long?): Long? = when {
         this == UNLIMITED_SENTINEL -> null
         this > 0L -> this
         else -> defaultValue
@@ -349,6 +357,11 @@ internal class DesktopFileReadCache(
         preferences.putBoolean(KEY_AUTOMATIC_CLEANUP, policy.automaticCleanup)
         preferences.putLong(KEY_MAXIMUM_CACHE_BYTES, policy.maximumCacheBytes ?: UNLIMITED_SENTINEL)
         preferences.putLong(KEY_MINIMUM_FREE_BYTES, policy.minimumFreeSpaceBytes)
+        preferences.putLong(
+            KEY_OVERFLOW_MAXIMUM_CACHE_BYTES,
+            policy.overflowMaximumCacheBytes ?: UNLIMITED_SENTINEL,
+        )
+        preferences.putLong(KEY_OVERFLOW_MINIMUM_FREE_BYTES, policy.overflowMinimumFreeSpaceBytes)
         preferences.putLong(KEY_UNUSED_FILE_AGE, policy.unusedFileAgeMillis ?: UNLIMITED_SENTINEL)
         root.listFiles().orEmpty()
             .filter { it.isDirectory && it.name.isSha256Hex() }
@@ -1323,6 +1336,8 @@ internal class DesktopFileReadCache(
         const val KEY_AUTOMATIC_CLEANUP = "automatic-cleanup"
         const val KEY_MAXIMUM_CACHE_BYTES = "maximum-cache-bytes"
         const val KEY_MINIMUM_FREE_BYTES = "minimum-free-bytes"
+        const val KEY_OVERFLOW_MAXIMUM_CACHE_BYTES = "overflow-maximum-cache-bytes"
+        const val KEY_OVERFLOW_MINIMUM_FREE_BYTES = "overflow-minimum-free-bytes"
         const val KEY_UNUSED_FILE_AGE = "unused-file-age"
         const val UNLIMITED_SENTINEL = -1L
         const val EMPTY_JSON_ARRAY_BYTES = 2L
