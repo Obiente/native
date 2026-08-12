@@ -57,5 +57,18 @@ fun decodePersistedDynamicDiscovery(
         ?.copy(versionStatus = DynamicContractVersionStatus.LastKnownReadOnly)
 }
 
+internal fun cachedDynamicDiscoveryMatchesInstalledVersion(
+    discovery: DynamicDescriptorDiscovery,
+    expectedAppId: String,
+    installedAppVersion: String?,
+): Boolean = discovery.descriptor.app.id == expectedAppId &&
+    discovery.acquisition != DynamicDescriptorAcquisition.MetadataFallback &&
+    installedAppVersion?.trim()?.takeIf(String::isNotEmpty)?.let { installedVersion ->
+        discovery.descriptor.app.version == installedVersion
+    } != false
+
+fun String.isSafeDynamicDiscoveryCacheAppId(): Boolean =
+    matches(Regex("[A-Za-z0-9_.-]{1,128}"))
+
 private const val MAX_PERSISTED_DYNAMIC_DIAGNOSTICS = 24
 private const val MAX_PERSISTED_DYNAMIC_DIAGNOSTIC_LENGTH = 1_024

@@ -43,6 +43,7 @@ import dev.obiente.nextcloudnative.app.NextcloudFileListingSource
 import dev.obiente.nextcloudnative.app.FileVersionDavRecord
 import dev.obiente.nextcloudnative.app.FileVersionHistory
 import dev.obiente.nextcloudnative.app.NextcloudFileVersion
+import dev.obiente.nextcloudnative.app.isSafeDynamicDiscoveryCacheAppId
 import dev.obiente.nextcloudnative.app.FileOfflineAvailability
 import dev.obiente.nextcloudnative.app.FileOfflineCenterActionResult
 import dev.obiente.nextcloudnative.app.FileOfflineCenterSnapshot
@@ -605,7 +606,7 @@ internal class AndroidNextcloudServices(
     }
 
     private fun dynamicDiscoveryCacheFile(session: NextcloudSession, appId: String): File? {
-        if (!appId.matches(Regex("[a-z0-9_]{1,128}"))) return null
+        if (!appId.isSafeDynamicDiscoveryCacheAppId()) return null
         return File(
             dynamicDiscoveryCacheDirectory,
             "${NextcloudDocumentIds.cacheAccountId(session)}-$appId.json",

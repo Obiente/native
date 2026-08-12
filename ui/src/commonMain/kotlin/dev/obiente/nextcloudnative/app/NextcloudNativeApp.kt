@@ -2546,7 +2546,9 @@ private fun AppInfoScreen(
         } else {
             null
         }
-        val retainedDiscovery = cachedDiscovery ?: persistedDiscovery
+        val retainedDiscovery = (cachedDiscovery ?: persistedDiscovery)?.takeIf { candidate ->
+            cachedDynamicDiscoveryMatchesInstalledVersion(candidate, app.id, installedAppVersionHint)
+        }
         if (retainedDiscovery != null) {
             discovery = retainedDiscovery
             onDiscovery(retainedDiscovery)
@@ -2752,6 +2754,9 @@ private fun DynamicDiscoveredAppScreen(
     }
     var budgetDashboardRecordsByActionId by remember(descriptor) {
         mutableStateOf<Map<String, List<NativeRecord>>>(emptyMap())
+    }
+    var budgetDashboardErrorsByActionId by remember(descriptor) {
+        mutableStateOf<Map<String, String>>(emptyMap())
     }
     var formRelationCache by remember(
         session.serverUrl,
@@ -2970,6 +2975,8 @@ private fun DynamicDiscoveredAppScreen(
         } else {
             allDashboardReads.filter { read -> read.kind == NativeBudgetDashboardDataKind.ReportSummary }
         }
+        val attemptedActionIds = dashboardReads.mapTo(hashSetOf()) { read -> read.action.id }
+        budgetDashboardErrorsByActionId = budgetDashboardErrorsByActionId - attemptedActionIds
         coroutineScope {
             dashboardReads.map { read ->
                 async {
@@ -2987,11 +2994,11 @@ private fun DynamicDiscoveredAppScreen(
                         currentCoroutineContext().ensureActive()
                         budgetDashboardRecordsByActionId = budgetDashboardRecordsByActionId +
                             (read.action.id to records)
+                        budgetDashboardErrorsByActionId = budgetDashboardErrorsByActionId - read.action.id
                     }.onFailure { failure ->
                         if (failure is CancellationException) throw failure
-                        // The overview is deliberately progressive: a failed secondary card must
-                        // not block verified sections that are already useful. Its full collection
-                        // remains available in navigation with ordinary inline retry handling.
+                        budgetDashboardErrorsByActionId = budgetDashboardErrorsByActionId +
+                            (read.action.id to (failure.message ?: "Could not load this dashboard section."))
                     }
                 }
             }.awaitAll()
@@ -4518,9 +4525,11 @@ private fun DynamicDiscoveredAppScreen(
                         recordsByResourceId = recordsByResourceId,
                         dashboardReads = nativeBudgetDashboardReads(descriptor.app.id, descriptor.actions),
                         dashboardRecordsByActionId = budgetDashboardRecordsByActionId,
+                        dashboardErrorsByActionId = budgetDashboardErrorsByActionId,
+                        onRetryDashboardReads = { loadAttempt += 1 },
                         onOpenSection = { resourceId ->
                             collectionDestinationEntries.firstOrNull { (destination, _) ->
-                                destination.resourceId == resourceId
+                                destination.resourceId.normalizedBudgetResourceId() == resourceId
                             }?.let { (destination, item) ->
                                 schema.views.firstOrNull { view -> view.id == item.id }
                                     ?.let { view -> selectCollectionDestination(destination, view) }
@@ -5927,6 +5936,7 @@ private fun ActivityScreen(
     var serverFilters by remember(session, activityInstalled) {
         mutableStateOf(listOf(NextcloudActivityFilterOption("all", "All activities", 0)))
     }
+    var serverFilterError by remember(session, activityInstalled) { mutableStateOf<String?>(null) }
     var timeline by remember(session, activityInstalled) {
         mutableStateOf(ActivityWorkspaceMemoryCache.get(session, selectedServerFilterId) ?: ActivityTimelineState())
     }
@@ -5977,13 +5987,17 @@ private fun ActivityScreen(
         }
     }
 
-    LaunchedEffect(session, activityInstalled) {
+    LaunchedEffect(session, activityInstalled, loadAttempt) {
         if (!activityInstalled) return@LaunchedEffect
+        serverFilterError = null
         runCatching {
             loadNextcloudActivityFilters { request -> services.executeNextcloudApi(session, request) }
         }.onSuccess { filters ->
             serverFilters = filters
             if (filters.none { it.id == selectedServerFilterId }) selectServerFilter("all")
+        }.onFailure { failure ->
+            if (failure is CancellationException) throw failure
+            serverFilterError = failure.message ?: "Could not load activity filters."
         }
     }
 
@@ -6004,20 +6018,23 @@ private fun ActivityScreen(
             }
     }
 
-    LaunchedEffect(session, activityInstalled, olderPageAttempt) {
+    LaunchedEffect(session, activityInstalled, selectedServerFilterId, olderPageAttempt) {
         if (!activityInstalled || olderPageAttempt == 0) return@LaunchedEffect
+        val filterId = selectedServerFilterId
         val cursor = timeline.nextSince ?: return@LaunchedEffect
         timeline = timeline.beginNextActivityPage()
         runCatching {
-            loadNextcloudActivityPage(since = cursor, filterId = selectedServerFilterId) { request ->
+            loadNextcloudActivityPage(since = cursor, filterId = filterId) { request ->
                 services.executeNextcloudApi(session, request)
             }
         }
             .onSuccess { page ->
+                if (selectedServerFilterId != filterId) return@onSuccess
                 timeline = timeline.applyNextActivityPage(page)
-                ActivityWorkspaceMemoryCache.store(session, selectedServerFilterId, timeline)
+                ActivityWorkspaceMemoryCache.store(session, filterId, timeline)
             }
             .onFailure { failure ->
+                if (selectedServerFilterId != filterId || failure is CancellationException) return@onFailure
                 timeline = timeline.failActivityLoad(failure.message ?: "Could not load more activity.")
             }
     }
@@ -6025,6 +6042,9 @@ private fun ActivityScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         if (!desktopWorkspace && (!activityInstalled || !timeline.initialized || timeline.activities.isEmpty())) {
             ProductHeader(title = "Activity")
+        }
+        serverFilterError?.let { message ->
+            RetainedRefreshError(message = message, onRetry = { loadAttempt += 1 })
         }
         when {
             !activityInstalled -> Box(

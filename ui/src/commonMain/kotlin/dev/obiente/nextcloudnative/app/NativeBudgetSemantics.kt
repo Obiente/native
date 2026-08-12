@@ -104,6 +104,7 @@ internal fun nativeBudgetDashboardReads(
     return desired.mapNotNull { (kind, suffix, values) ->
         actions.firstOrNull { action ->
             action.binding.method == HttpMethod.GET &&
+                !action.fallbackOnly &&
                 action.binding.path.endsWith(suffix) &&
                 action.binding.pathParameters.none { it.required } &&
                 action.binding.queryParameters.none { it.required }
@@ -131,6 +132,7 @@ internal fun NativeAppSchema.withNativeBudgetDashboard(
     }
     val dynamicBudgetReport = descriptorActions.firstOrNull { action ->
         action.binding.method == HttpMethod.GET &&
+            !action.fallbackOnly &&
             action.binding.path.endsWith("/api/reports/budget") &&
             action.binding.pathParameters.none { parameter -> parameter.required } &&
             action.binding.queryParameters.none { parameter -> parameter.required } &&
@@ -183,7 +185,7 @@ internal fun NativeAppSchema.withNativeBudgetDashboard(
     )
 }
 
-private fun String.normalizedBudgetResourceId(): String =
+internal fun String.normalizedBudgetResourceId(): String =
     lowercase().substringAfterLast('/').replace('_', '-')
 
 private val budgetDestinationSemantics = mapOf(

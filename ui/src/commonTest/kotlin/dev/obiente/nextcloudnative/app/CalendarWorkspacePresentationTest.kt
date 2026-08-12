@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class CalendarWorkspacePresentationTest {
     @Test
@@ -70,6 +71,37 @@ class CalendarWorkspacePresentationTest {
         )
     }
 
+    @Test
+    fun `week includes events that started before the displayed range`() {
+        val ongoing = event(
+            calendarId = "team",
+            start = "20260725T090000Z",
+            title = "Conference",
+            end = "20260729T170000Z",
+        )
+
+        assertTrue(ongoing.overlapsCalendarDateRange("20260727", "20260802"))
+        assertFalse(ongoing.overlapsCalendarDateRange("20260803", "20260809"))
+    }
+
+    @Test
+    fun `padded calendar weeks always have unique positional keys`() {
+        val month = CalendarMonth(2026, 2)
+        assertEquals(6, (0 until 6).map { calendarMonthWeekKey(month, it) }.distinct().size)
+    }
+
+    @Test
+    fun `agenda capture scenarios select the agenda presentation`() {
+        assertEquals(
+            CalendarWorkspaceView.Agenda,
+            MarketingCaptureScenario.CalendarWorkspaceMobileDark.marketingCalendarView(),
+        )
+        assertEquals(
+            CalendarWorkspaceView.Month,
+            MarketingCaptureScenario.CalendarMonthMobile.marketingCalendarView(),
+        )
+    }
+
     private fun calendar(id: String, name: String) = GroupwareCalendar(
         href = "/remote.php/dav/calendars/synthetic/$id/",
         displayName = name,
@@ -80,6 +112,7 @@ class CalendarWorkspacePresentationTest {
         calendarId: String,
         start: String,
         title: String,
+        end: String? = null,
         location: String? = null,
         description: String? = null,
     ) = GroupwareCalendarEvent(
@@ -89,7 +122,7 @@ class CalendarWorkspacePresentationTest {
         uid = "synthetic-$calendarId-$start",
         title = title,
         start = start,
-        end = start.take(8) + "T100000Z",
+        end = end ?: start.take(8) + "T100000Z",
         allDay = false,
         location = location,
         description = description,

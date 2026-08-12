@@ -29,6 +29,7 @@ import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
@@ -369,9 +370,7 @@ private fun NextcloudCollectionTabbedScaffold(
     modifier: Modifier,
     content: @Composable () -> Unit,
 ) {
-    val selectedIndex = model.destinations.indexOfFirst { destination ->
-        destination.id == model.selectedDestinationId
-    }.coerceAtLeast(0)
+    val selectedIndex = resolveNextcloudCollectionSelectedIndex(model)
     Column(modifier.fillMaxSize()) {
         NextcloudCollectionHeader(
             title = contentTitle,
@@ -383,7 +382,16 @@ private fun NextcloudCollectionTabbedScaffold(
             compact = compactHeader,
             actions = headerActions,
         )
-        PrimaryTabRow(selectedTabIndex = selectedIndex) {
+        PrimaryTabRow(
+            selectedTabIndex = selectedIndex.coerceAtLeast(0),
+            indicator = {
+                if (selectedIndex >= 0) {
+                    TabRowDefaults.PrimaryIndicator(
+                        modifier = Modifier.tabIndicatorOffset(selectedIndex, matchContentSize = true),
+                    )
+                }
+            },
+        ) {
             model.destinations.forEach { destination ->
                 Tab(
                     selected = destination.id == model.selectedDestinationId,
@@ -418,6 +426,9 @@ private fun NextcloudCollectionTabbedScaffold(
         }
     }
 }
+
+internal fun resolveNextcloudCollectionSelectedIndex(model: NextcloudCollectionNavigationModel): Int =
+    model.destinations.indexOfFirst { destination -> destination.id == model.selectedDestinationId }
 
 @Composable
 private fun NextcloudCollectionDrawerScaffold(

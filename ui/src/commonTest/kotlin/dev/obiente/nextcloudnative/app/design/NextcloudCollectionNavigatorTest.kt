@@ -200,6 +200,7 @@ class NextcloudCollectionNavigatorTest {
 
         assertNull(model.selectedDestinationId)
         assertNull(model.selectedDestination)
+        assertEquals(-1, resolveNextcloudCollectionSelectedIndex(model))
     }
 
     @Test
