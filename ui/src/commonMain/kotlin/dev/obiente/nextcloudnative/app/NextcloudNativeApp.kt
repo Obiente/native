@@ -1142,6 +1142,8 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.HomepageAppsDesktopDark,
                     MarketingCaptureScenario.HomepageAppsDesktopLight,
                     MarketingCaptureScenario.AdaptiveApp,
+                    MarketingCaptureScenario.TablesRowsDesktop,
+                    MarketingCaptureScenario.TablesRowFormDesktop,
                     MarketingCaptureScenario.AdaptiveAppMobile,
                     MarketingCaptureScenario.AdaptiveAppCollectionMobile,
                     MarketingCaptureScenario.AdaptiveAppContextMenuMobile,

@@ -322,9 +322,9 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt": "74ed912eef556a53b7eb0008946aa5b4425cb69456bea75368d309a39052a331",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingBudgetCaptureScenario.kt": "e28c89ee88d466abab6a8412d87d0ae2c0c5812a2b7b4104851f8d0ae0f640fc",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCalendarWorkspaceScenario.kt": "e901934af65cfba3f2849567ff257894847c56691781924422bab99b4a529a24",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "003945bf8ee5045e1757a6d63e5873f125fd0d2e70d76df597ddc3b133711320",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "684c6ff3c076f2cb51d60a669a014c14c2d285bcda6217df321fea254755315d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt": "75ab130cd489712673b9402a8e2da7b9edab84b4bb3f3f5c8dacb8a03bd86390",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt": "55fb7997a203341a5757ed244354f31a652573d3ec4fcf2552fda94893d7b0dd",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt": "d5bcc115852dc985c3bdea16146610ce6461be64d9a279d04b6861fb5cb0c73b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingLivePhotoCaptureScenarios.kt": "20a74e6b425a56b0ba6d32f28b89c5722f2f9569f1dceeaa621f2f226bec9101",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingMusicWorkspaceCaptureScenarios.kt": "0b0d389bad369beae37b9044c372abd4c0dbb5049a958fb2ba46bed56e7cda16",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingPhotoFolderCaptureScenarios.kt": "ddd84d1422d0198e948f38e994b886a70b5f6862d9d0eba4d5acbdf1517f3361",
@@ -360,7 +360,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudFileListing.kt": "1f3de4f31d44d3ead139686d3fbcfbd27ccb520a9dab06ccc1d3e582ee25fb71",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt": "53cc22fed51fe03ef0aaab6a3f849222b0dbfb04fac9c4e3a73057b85c524290",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewerActions.kt": "48aaed6948d1423113d300cc3ab86d244ab76e8225e24988e9855edf74553944",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "1752109a90239a1d0614e533bdfa22c5a662fb5466fd5f31cbf91bafadb3d026",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "c4a1f9d2779a0b15f0bab65769fda7a9dabea2f62581bfc2512d82bda83ed367",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt": "944103dba7d35abd17d21cb2bf5818c19b8148abf6b8d37fcdafdab029abe56b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotesCache.kt": "9223dd455c6a1c35a10769616fceb9dfb2d92ef4d43b0a52c2c29e40f1a196cf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPeople.kt": "cff910ea2cc77211ef81779c49ee0c957851f2b4a3ed32b857b12ded1cee643b",
@@ -435,7 +435,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/SemanticConceptTokens.kt": "14bf3d4fcdf65ebc1c6cd8071ccacde698b68415adb3132a27a51b9c56bf89b8",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/NativeRuntimePreviewApp.kt": "5c578985b0651f665c29900a68d8582c852f8ab2862dc9d533604e16653c7a0f",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/AdaptiveNativeScreen.kt": "7be3f023a4e75e097b26d57232b48b917bd279b717bd18eb68ae29a9afc1400d",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRenderer.kt": "40293d57042282ede68d01acb1a4d0b674cd5ee2912a75eec4019935d33182f8",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRenderer.kt": "0bf9296cf07b3de6d75dcf1160f7ba7b20c83ec637f1aeb1a0735045e6bf20a0",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRendererState.kt": "3e9aeffec25a4c007a2aac7e9e2d95dba78c5c1ae4fc6fa6d7ab23b8324ef119",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericRecipeSurface.kt": "4361de556a4ac05c50b8ca5999548ad750c6774927917e2aea9453ce0aa9550b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeAudioLibrary.kt": "9beb05d3fd9321ebd0d6e4da79aac29975489cbc11d812ed7a6e30001c4756ac",
@@ -1494,7 +1494,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "81346b3d97dbef48d330db1f9e4c427d4113522c372506cb2cd701f1ca147d3b"
+            "sha256": "39722d309ffa8e3b9fa8d05b9ba585183d3df865ffc7cc55e05d93677c55628f"
         },
         {
             "scenario": "budget-plan-desktop-light",
@@ -1510,7 +1510,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "2de4cb27196c78542e2bb780fc33be6995036138092b71edc12f71a9ae6b71a7"
+            "sha256": "c1fb26bef9445334b82d20fe47776516f5f5a26e29530ba774f7b0930a1aa0cb"
         },
         {
             "scenario": "budget-plan-mobile",
@@ -1526,7 +1526,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "cf6d1b07dc8aa5d318b3853b40175c20df1da7ba14ce1663e22cfe99ed6a99f2"
+            "sha256": "16cbd15451dbf4ef136123aa7c4dbe55abb3bb63bc28f0a5d072af992ae1e260"
         },
         {
             "scenario": "budget-plan-mobile-light",
@@ -1542,7 +1542,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "c9dbb0eac2030d621316b75efba48aca347261232411168339e382d63107ea99"
+            "sha256": "9d70ffd9936656ac31fe30b56a5917a2b4c0d5c1bd19a4a3848a8a994e42fb0a"
         },
         {
             "scenario": "file-sync-setup-desktop",
@@ -1809,12 +1809,12 @@
             "height": 900,
             "density": 1.0,
             "feature": "Tables",
-            "surface": "Inventory insights and rows",
+            "surface": "Inventory overview and category chart",
             "state": "Synthetic Tables data",
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "9a307c8535dc5f04b2e0f4bb400427c757a8ae418ee5f6bbca7f6613540008da"
+            "sha256": "f53448e0315dcea41786cdbaeffff02aa5bd1b9a616c3f4fc35debb85a42e800"
         },
         {
             "scenario": "tables-insights-desktop-light",
@@ -1825,12 +1825,76 @@
             "height": 900,
             "density": 1.0,
             "feature": "Tables",
-            "surface": "Inventory insights and rows",
+            "surface": "Inventory overview and category chart",
             "state": "Synthetic Tables data",
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "f5dae5de5ac582ddc54a832c8a4d732e62edfa36ed6f89faf41998f80b3fa803"
+            "sha256": "1613844396750355e2ca71e63e7181e56c01dd6bd473f3719ba9ed8a1690ccf2"
+        },
+        {
+            "scenario": "tables-rows-desktop",
+            "baseScenario": "tables-rows-desktop",
+            "file": "tables-rows-desktop.png",
+            "theme": "dark",
+            "width": 1440,
+            "height": 900,
+            "density": 1.0,
+            "feature": "Tables",
+            "surface": "Inventory rows and actions",
+            "state": "Synthetic Tables data",
+            "purpose": "state-coverage",
+            "platform": "desktop",
+            "viewport": "wide",
+            "sha256": "0b16ed867eca4a4449d598e7413cb67b7f6dcbdcc04aa3a915b0aa71c376c5ac"
+        },
+        {
+            "scenario": "tables-rows-desktop-light",
+            "baseScenario": "tables-rows-desktop",
+            "file": "tables-rows-desktop-light.png",
+            "theme": "light",
+            "width": 1440,
+            "height": 900,
+            "density": 1.0,
+            "feature": "Tables",
+            "surface": "Inventory rows and actions",
+            "state": "Synthetic Tables data",
+            "purpose": "state-coverage",
+            "platform": "desktop",
+            "viewport": "wide",
+            "sha256": "ce47509d927dd53f68c7801062cbf7710b447a0421bf18c417acfdbaad9d3394"
+        },
+        {
+            "scenario": "tables-row-form-desktop",
+            "baseScenario": "tables-row-form-desktop",
+            "file": "tables-row-form-desktop.png",
+            "theme": "dark",
+            "width": 1440,
+            "height": 900,
+            "density": 1.0,
+            "feature": "Tables",
+            "surface": "Add inventory row",
+            "state": "Synthetic Tables data",
+            "purpose": "state-coverage",
+            "platform": "desktop",
+            "viewport": "wide",
+            "sha256": "37deb86a40382649d4cced6addfe5028fc671801758810909acf82413a5f5f63"
+        },
+        {
+            "scenario": "tables-row-form-desktop-light",
+            "baseScenario": "tables-row-form-desktop",
+            "file": "tables-row-form-desktop-light.png",
+            "theme": "light",
+            "width": 1440,
+            "height": 900,
+            "density": 1.0,
+            "feature": "Tables",
+            "surface": "Add inventory row",
+            "state": "Synthetic Tables data",
+            "purpose": "state-coverage",
+            "platform": "desktop",
+            "viewport": "wide",
+            "sha256": "bbf172b2ba3178d64657bcc07737a6a7daf9dc2ed6f585d8c2f7dec95ffd0231"
         },
         {
             "scenario": "tables-row-form-mobile",
@@ -3864,7 +3928,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "9a307c8535dc5f04b2e0f4bb400427c757a8ae418ee5f6bbca7f6613540008da"
+            "sha256": "f53448e0315dcea41786cdbaeffff02aa5bd1b9a616c3f4fc35debb85a42e800"
         },
         {
             "scenario": "guide-desktop-switch-apps-nested-light",
@@ -3880,7 +3944,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "f5dae5de5ac582ddc54a832c8a4d732e62edfa36ed6f89faf41998f80b3fa803"
+            "sha256": "1613844396750355e2ca71e63e7181e56c01dd6bd473f3719ba9ed8a1690ccf2"
         }
     ]
 }
